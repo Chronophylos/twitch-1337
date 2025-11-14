@@ -618,8 +618,26 @@ async fn setup_and_verify_twitch_client()
                 ServerMessage::Notice(NoticeMessage { message_text, .. })
                     if message_text == "Login authentication failed" =>
                 {
-                    error!("Authentication with Twitch IRC Servers failed");
-                    bail!("Failed to authenticate with Twitch");
+                    error!(
+                        "Authentication with Twitch IRC Servers failed: {}",
+                        message_text
+                    );
+                    bail!(
+                        "Failed to authenticate with Twitch. This is likely due to missing token scopes. \
+                        Ensure your token has 'chat:read' and 'chat:edit' scopes."
+                    );
+                }
+                ServerMessage::Notice(NoticeMessage { message_text, .. })
+                    if message_text == "Login unsuccessful" =>
+                {
+                    error!(
+                        "Authentication with Twitch IRC Servers failed: {}",
+                        message_text
+                    );
+                    bail!(
+                        "Failed to authenticate with Twitch. This is likely due to an invalid or expired token. \
+                        Check your TWITCH_ACCESS_TOKEN and TWITCH_REFRESH_TOKEN."
+                    );
                 }
                 ServerMessage::GlobalUserState(_) => {
                     info!("Connection verified and authenticated");
