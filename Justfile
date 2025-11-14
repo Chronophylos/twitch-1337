@@ -6,11 +6,11 @@ default:
 
 # Build the Docker image
 build:
-    docker build -t chronophylos/twitch-1337:latest .
+    podman build -t chronophylos/twitch-1337:latest .
 
 # Build with no cache (force full rebuild)
 build-no-cache:
-    docker build --no-cache -t chronophylos/twitch-1337:latest .
+    podman build --no-cache -t chronophylos/twitch-1337:latest .
 
 # Push the image to docker host
 push:
