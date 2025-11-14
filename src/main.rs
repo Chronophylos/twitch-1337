@@ -141,11 +141,18 @@ async fn sleep_until_hms(hour: u32, minute: u32, second: u32) {
     }
 }
 
+/// Checks if a username belongs to an ignored bot.
+///
+/// Returns true if the username matches any bot in the ignore list.
+fn is_ignored_bot(username: &str) -> bool {
+    ["supibot", "potatbotat"].contains(&username)
+}
+
 /// Determines if a message should be counted as a valid 1337 message.
 ///
 /// Filters out bot messages and checks for keywords "1337" or "DANKIES".
 fn is_valid_1337_message(message: &PrivmsgMessage) -> bool {
-    if ["supibot", "potatbotat"].contains(&message.sender.login.as_str()) {
+    if is_ignored_bot(&message.sender.login) {
         return false;
     }
     if message.message_text.contains("DANKIES") || message.message_text.contains("1337") {
@@ -419,6 +426,11 @@ async fn process_minecraft_message(
     privmsg: &PrivmsgMessage,
     client: &Arc<AuthenticatedTwitchClient>,
 ) -> bool {
+    // Ignore messages from bots
+    if is_ignored_bot(&privmsg.sender.login) {
+        return false;
+    }
+
     let text = privmsg.message_text.to_lowercase();
     if text.contains("wannminecraft") || text.contains("wann minecraft") {
         debug!(user = %privmsg.sender.login, "User asked about Minecraft");
