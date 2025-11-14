@@ -301,12 +301,17 @@ fn get_session_times(
 fn is_server_online(now: chrono::DateTime<chrono_tz::Tz>) -> bool {
     let date = now.date_naive();
 
+    debug!(date = %date, now = %now, "Checking if server is online");
+
     // Check today's session
-    if let Some((start, end)) = get_session_times(date)
-        && now >= start
-        && now < end
-    {
-        return true;
+    if let Some((start, end)) = get_session_times(date) {
+        debug!(start = %start, end = %end, "Today's session times");
+        if now >= start && now < end {
+            debug!("Server is online (current session)");
+            return true;
+        }
+    } else {
+        debug!("No session found for today");
     }
 
     // Check if we're in the early hours of a day following a late-night session
@@ -316,10 +321,12 @@ fn is_server_online(now: chrono::DateTime<chrono_tz::Tz>) -> bool {
         if let Some((_, end)) = get_session_times(yesterday)
             && now < end
         {
+            debug!("Server is online (late-night session from yesterday)");
             return true;
         }
     }
 
+    debug!("Server is offline");
     false
 }
 
@@ -329,22 +336,29 @@ fn is_server_online(now: chrono::DateTime<chrono_tz::Tz>) -> bool {
 fn get_next_session_start(now: chrono::DateTime<chrono_tz::Tz>) -> chrono::DateTime<chrono_tz::Tz> {
     let mut check_date = now.date_naive();
 
+    debug!(now = %now, "Calculating next session start");
+
     // Check if there's a session today that hasn't started yet
-    if let Some((start, _)) = get_session_times(check_date)
-        && now < start
-    {
-        return start;
+    if let Some((start, _)) = get_session_times(check_date) {
+        debug!(today = %check_date, start = %start, "Found session today");
+        if now < start {
+            debug!(next_start = %start, "Session today hasn't started yet");
+            return start;
+        }
     }
 
-    // Otherwise, check the next 7 days
-    for _ in 0..7 {
+    // Otherwise, check the next 30 days (should find the first session starting 2025-11-29)
+    for i in 0..30 {
         check_date += chrono::Duration::days(1);
+        debug!(checking_date = %check_date, iteration = i, "Checking next day");
         if let Some((start, _)) = get_session_times(check_date) {
+            debug!(next_start = %start, "Found next session");
             return start;
         }
     }
 
     // This should never happen, but return a fallback
+    error!("Could not find next session within 30 days, using fallback");
     now + chrono::Duration::days(1)
 }
 
@@ -403,13 +417,21 @@ async fn process_minecraft_message(
         debug!(user = %privmsg.sender.login, "User asked about Minecraft");
 
         let now = Utc::now().with_timezone(&chrono_tz::Europe::Berlin);
+        info!(current_time = %now, "Processing Minecraft query");
 
         let response = if is_server_online(now) {
             "Der Server ist online Okayge 👉 gameserver.chrono:255652 PogChamp".to_string()
         } else {
             let next_start = get_next_session_start(now);
             let duration = next_start - now;
+            info!(
+                next_start = %next_start,
+                duration_seconds = duration.num_seconds(),
+                duration_days = duration.num_days(),
+                "Calculated next session"
+            );
             let countdown = format_countdown(duration);
+            info!(countdown = %countdown, "Formatted countdown");
             format!("Noch {} WannMinecraft", countdown)
         };
 
