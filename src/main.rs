@@ -194,6 +194,13 @@ fn generate_stats_message(count: usize, user_list: &[String]) -> String {
     }
 }
 
+/// Encodes a string into hexadecimal representation.
+///
+/// Each byte of the input string is converted to its two-digit hex representation.
+fn encode_hex(input: &str) -> String {
+    input.bytes().map(|b| format!("{:02x}", b)).collect()
+}
+
 /// Monitors broadcast messages and tracks users who say 1337 during the target minute.
 ///
 /// Runs in a loop until the broadcast channel closes or an error occurs.
@@ -419,7 +426,7 @@ async fn process_minecraft_message(
         let now = Utc::now().with_timezone(&chrono_tz::Europe::Berlin);
         info!(current_time = %now, "Processing Minecraft query");
 
-        let response = if is_server_online(now) {
+        let mut response = if is_server_online(now) {
             "Der Server ist online Okayge 👉 REDACTED_HOST:255652 PogChamp".to_string()
         } else {
             let next_start = get_next_session_start(now);
@@ -430,10 +437,21 @@ async fn process_minecraft_message(
                 duration_days = duration.num_days(),
                 "Calculated next session"
             );
-            let countdown = format_countdown(duration);
-            info!(countdown = %countdown, "Formatted countdown");
-            format!("Noch {} WannMinecraft", countdown)
+
+            // Special response for REDACTED_USER: raw milliseconds only
+            if privmsg.sender.login == "REDACTED_USER" {
+                duration.num_milliseconds().to_string()
+            } else {
+                let countdown = format_countdown(duration);
+                info!(countdown = %countdown, "Formatted countdown");
+                format!("Noch {} WannMinecraft", countdown)
+            }
         };
+
+        // Hex-encode all replies to REDACTED_USER
+        if privmsg.sender.login == "REDACTED_USER" {
+            response = encode_hex(&response);
+        }
 
         if let Err(e) = client.say_in_reply_to(privmsg, response).await {
             error!(error = ?e, "Failed to send Minecraft response");
