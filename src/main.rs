@@ -177,7 +177,7 @@ fn generate_stats_message(count: usize, user_list: &[String]) -> String {
         2..=3 if !user_list.contains(&"gargoyletec".to_string()) => {
             format!(
                 "{count}, nichtmal gnocci {}",
-                one_of(&["Sadding", "Sadge", "Sadeg", "SadgeCry"])
+                one_of(&["Sadding", "Sadge", "Sadeg", "SadgeCry", "Saddies"])
             )
         }
         2..=3 => format!(
