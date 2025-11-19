@@ -133,7 +133,7 @@ async fn sleep_until_hms(hour: u32, minute: u32, second: u32, expected_latency: 
         .expect("Ambiguous time during DST transition");
 
     let wait_duration =
-        (time.with_timezone(&Utc) - Utc::now() - TimeDelta::microseconds(expected_latency as i64))
+        (time.with_timezone(&Utc) - Utc::now() - TimeDelta::milliseconds(expected_latency as i64))
             .to_std()
             .unwrap_or(Duration::from_secs(0));
 
