@@ -27,6 +27,9 @@ twitch-irc = { version = "5.0.1", default-features = false, features = [
   "refreshing-token-rustls-webpki-roots",
   "transport-tcp-rustls-webpki-roots",
 ] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls-webpki-roots",
+] }
 eyre = "0.6.12"
 regex = "1.12.2"
