@@ -1131,6 +1131,7 @@ async fn toggle_ping_command(
     command_name: Option<&str>,
 ) -> Result<()> {
     const CHANNEL_ID: &str = "REDACTED_SE_ID";
+    const PING_COMMANDS: &[&str] = &["ron", "vicky", "euv"];
 
     let Some(command_name) = command_name else {
         // Best-effort reply, log but don't fail if this specific reply fails
@@ -1143,6 +1144,16 @@ async fn toggle_ping_command(
         return Ok(());
     };
 
+    if !PING_COMMANDS.contains(&command_name) {
+        if let Err(e) = client
+            .say_in_reply_to(privmsg, String::from("Das finde ich nicht FDM"))
+            .await
+        {
+            error!(error = ?e, "Failed to send 'command not found' error message");
+        }
+        return Ok(());
+    }
+
     // Fetch all commands from StreamElements
     let commands = se_client
         .get_all_commands(CHANNEL_ID)
@@ -1152,12 +1163,11 @@ async fn toggle_ping_command(
     // Find the matching command with "pinger" keyword
     let Some(mut command) = commands
         .into_iter()
-        .filter(|command| command.keywords.contains(&String::from("pinger")))
         .find(|command| command.command == command_name)
     else {
         // Best-effort reply
         if let Err(e) = client
-            .say_in_reply_to(privmsg, String::from("Das finde ich nicht FDM"))
+            .say_in_reply_to(privmsg, String::from("Das gibt es nicht FDM"))
             .await
         {
             error!(error = ?e, "Failed to send 'command not found' error message");
@@ -1176,10 +1186,7 @@ async fn toggle_ping_command(
         // Remove user's mention
         let new_reply = re.replace_all(&command.reply, "").to_string();
         // Clean up extra whitespace
-        new_reply
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
+        new_reply.split_whitespace().collect::<Vec<_>>().join(" ")
     } else {
         // Add user's mention
         if let Some(insert_location) = command.reply.find('@') {
@@ -1213,4 +1220,3 @@ async fn toggle_ping_command(
 
     Ok(())
 }
-
