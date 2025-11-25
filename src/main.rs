@@ -1195,12 +1195,12 @@ async fn toggle_ping_command(
         .wrap_err("Failed to create username regex")?;
 
     // Toggle user's mention in the command reply
-    command.reply = if re.is_match(&command.reply) {
+    let mut has_added_ping = false;
+    let new_reply = if re.is_match(&command.reply) {
         // Remove user's mention
-        let new_reply = re.replace_all(&command.reply, "").to_string();
-        // Clean up extra whitespace
-        new_reply.split_whitespace().collect::<Vec<_>>().join(" ")
+        re.replace_all(&command.reply, "").to_string()
     } else {
+        has_added_ping = true;
         // Add user's mention
         if let Some(insert_location) = command.reply.find('@') {
             // Insert after first @ symbol
@@ -1211,6 +1211,9 @@ async fn toggle_ping_command(
             format!("@{} {}", privmsg.sender.name, command.reply)
         }
     };
+
+    // Clean up whitespaces
+    command.reply = new_reply.split_whitespace().collect::<Vec<_>>().join(" ");
 
     debug!(
         command_name = %command_name,
@@ -1227,7 +1230,16 @@ async fn toggle_ping_command(
 
     // Confirm success to the user
     client
-        .say_in_reply_to(privmsg, String::from("Hab ich gemacht Okayge"))
+        .say_in_reply_to(
+            privmsg,
+            format!(
+                "Hab ich {} gemacht Okayge",
+                match has_added_ping {
+                    true => "an",
+                    false => "aus",
+                }
+            ),
+        )
         .await
         .wrap_err("Failed to send success confirmation message")?;
 
