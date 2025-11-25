@@ -55,7 +55,8 @@ mod streamelements {
         pub access_level: i64,
         #[serde(rename = "_id")]
         pub id: String,
-        pub regex: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub regex: Option<String>,
         pub reply: String,
         pub command: String,
         pub channel: String,
