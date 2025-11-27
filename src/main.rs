@@ -185,6 +185,12 @@ const MAX_USERS: usize = 10_000;
 /// Will adjust all schedules by the latency in order to increase accuracy
 const EXPECTED_LATENCY: u32 = 90;
 
+/// Scheduled message configuration: (message, hours_between_posts)
+const SCHEDULED_MESSAGES: &[(&str, u64)] = &[(
+    "DinkDonk An alle Wichtel: Vergesst nicht eure Adresse im Textfeld einzutragen, falls ihr es noch nicht getan habt DinkDonk Wer keine Adresse einträgt, kriegt keine Geschenke DinkDonk",
+    1,
+)];
+
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 static CHANNEL_LOGIN: LazyLock<String> = LazyLock::new(|| {
@@ -790,13 +796,22 @@ pub async fn main() -> Result<()> {
         async move { run_generic_command_handler(broadcast_tx, client).await }
     });
 
+    let handler_scheduled_messages = tokio::spawn({
+        let client = client.clone();
+        async move { run_scheduled_message_handler(client).await }
+    });
+
     info!(
-        "Bot running with continuous connection. Handlers: 1337 tracker, Minecraft responder, Generic commands"
+        "Bot running with continuous connection. Handlers: 1337 tracker, Minecraft responder, Generic commands, Scheduled messages"
     );
     info!(
         "1337 tracker scheduled to run daily at {}:{:02} (Europe/Berlin)",
         TARGET_HOUR,
         TARGET_MINUTE - 1
+    );
+    info!(
+        "Scheduled messages: {} message(s) configured",
+        SCHEDULED_MESSAGES.len()
     );
 
     // Keep the program running until shutdown signal or any task exits
@@ -816,6 +831,9 @@ pub async fn main() -> Result<()> {
         }
         result = handler_generic_commands => {
             error!("Generic Command Handler exited unexpectedly: {result:?}");
+        }
+        result = handler_scheduled_messages => {
+            error!("Scheduled message handler exited unexpectedly: {result:?}");
         }
     }
 
@@ -1319,6 +1337,62 @@ async fn list_pings_command(
     }
 
     Ok(())
+}
+
+/// Handler for sending scheduled messages at configured intervals.
+///
+/// Spawns a separate task for each scheduled message. Each task runs independently
+/// and posts its message at its configured interval.
+async fn run_scheduled_message_handler(client: Arc<AuthenticatedTwitchClient>) {
+    info!("Scheduled message handler started");
+
+    let mut handles = Vec::new();
+
+    for (index, (message, interval_hours)) in SCHEDULED_MESSAGES.iter().enumerate() {
+        let client = client.clone();
+        let message = message.to_string();
+        let interval_hours = *interval_hours;
+
+        let handle = tokio::spawn(async move {
+            info!(
+                message_index = index,
+                interval_hours = interval_hours,
+                "Starting scheduled message task"
+            );
+
+            loop {
+                // Sleep for the configured interval
+                sleep(Duration::from_secs(interval_hours * 3600)).await;
+
+                info!(
+                    message_index = index,
+                    message = %message,
+                    "Posting scheduled message"
+                );
+
+                // Post the message
+                if let Err(e) = client.say(CHANNEL_LOGIN.clone(), message.clone()).await {
+                    error!(
+                        error = ?e,
+                        message_index = index,
+                        "Failed to send scheduled message"
+                    );
+                }
+            }
+        });
+
+        handles.push(handle);
+    }
+
+    // Wait for all tasks (they run forever, so this will only exit on error)
+    for (index, handle) in handles.into_iter().enumerate() {
+        let result = handle.await;
+        error!(
+            error = ?result,
+            message_index = index,
+            "Scheduled message task exited unexpectedly"
+        );
+    }
 }
 
 mod database {
