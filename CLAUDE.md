@@ -8,6 +8,7 @@ A Rust-based Twitch IRC bot with multiple features:
 1. **1337 Tracker**: Monitors for "1337"/"DANKIES" messages at 13:37 Berlin time, posts stats at 13:38
 2. **Minecraft Responder**: Answers "WannMinecraft" queries with server status and countdown
 3. **Ping Toggle**: Allows users to toggle their @mention in StreamElements ping commands
+4. **Scheduled Messages**: Dynamic message scheduling via Google Sheets with 5-minute polling
 
 Uses a persistent IRC connection with broadcast-based message routing to multiple handlers.
 
@@ -94,6 +95,13 @@ docker logs -f twitch-1337
 - `TWITCH_CHANNEL` - Channel to monitor (default: "euterheissgetraenk")
 - `RUST_LOG` - Logging level (default: "info", options: trace, debug, info, warn, error)
 
+**Google Sheets Configuration (Optional - for scheduled messages):**
+- `GOOGLE_SHEETS_SPREADSHEET_ID` - Spreadsheet ID from the Google Sheets URL
+- `GOOGLE_SHEETS_SHEET_NAME` - Sheet name within spreadsheet (default: "ScheduledMessages")
+- `GOOGLE_SERVICE_ACCOUNT_PATH` - Path to service account JSON key file
+
+If Google Sheets variables are not configured, scheduled messages feature will be disabled with a warning.
+
 ## Token Storage
 
 The bot persists refreshed OAuth tokens to `./token.ron` (Rust Object Notation format):
@@ -101,6 +109,15 @@ The bot persists refreshed OAuth tokens to `./token.ron` (Rust Object Notation f
 - Falls back to environment variables on first run if file doesn't exist
 - Eliminates need to manually update tokens when they expire
 - Uses `FileBasedTokenStorage` implementing the `TokenStorage` trait
+
+## Schedule Cache
+
+Scheduled messages are cached to `./schedule_cache.ron` for offline fallback:
+- Automatically saved when schedules are fetched from Google Sheets
+- Used as fallback if Google Sheets is unavailable
+- Contains schedule data, last update timestamp, and version number
+- Persists across bot restarts
+- RON format for human-readable storage
 
 ## Architecture
 
@@ -120,10 +137,12 @@ The bot maintains a **single persistent IRC connection** and uses a **broadcast 
    - Runs until connection closes
 
 3. **Handler Tasks** (parallel, continuous):
+   - **Schedule Loader Service**: Polls Google Sheets every 5 minutes (if configured)
+   - **Scheduled Message Handler**: Posts messages based on Google Sheets schedules (if configured)
    - **1337 Handler**: Daily scheduled monitoring (13:36-13:38)
    - **Minecraft Handler**: Responds to "WannMinecraft" queries 24/7
    - **Generic Command Handler**: Processes `!toggle-ping` commands 24/7
-   - Each handler subscribes to broadcast channel independently
+   - Each handler runs independently
    - Handlers filter for relevant messages and act accordingly
 
 4. **Graceful Shutdown**:
@@ -145,6 +164,10 @@ The bot maintains a **single persistent IRC connection** and uses a **broadcast 
 **IRC & Networking:**
 - `twitch-irc` - Twitch IRC client (features: refreshing-token-rustls-webpki-roots, transport-tcp-rustls-webpki-roots)
 - `reqwest` - HTTP client for StreamElements API (features: json, rustls-tls-webpki-roots)
+- `google-sheets4` - Google Sheets API client (version 6.0+)
+- `hyper` - HTTP client library (version 1.5)
+- `hyper-util` - HTTP utilities (features: client, client-legacy, http1, tokio)
+- `yup-oauth2` - OAuth2 authentication (version 12.1)
 
 **Time Handling:**
 - `chrono` - Date/time operations
@@ -177,8 +200,18 @@ The bot maintains a **single persistent IRC connection** and uses a **broadcast 
 - Shared between handler task and monitoring subtask via tokio::sync::Mutex
 - Maximum capacity: 10,000 users (prevents unbounded memory growth)
 
+**Scheduled Messages State:**
+- `schedule_cache`: `Arc<RwLock<ScheduleCache>>` - Shared cache of schedules loaded from Google Sheets
+- Contains vector of schedules, last update timestamp, and version number
+- Updated every 5 minutes by loader service
+- Version increments trigger task manager to spawn/stop message tasks
+- Persisted to disk (`schedule_cache.ron`) for offline fallback
+
+**Persistent State:**
+- OAuth tokens in `token.ron`
+- Schedule cache in `schedule_cache.ron`
+
 **No Persistent State:**
-- Bot is stateless between runs
 - Minecraft schedule hardcoded in `get_session_times()` (first session: 2025-11-30)
 - StreamElements commands fetched/updated via API on demand
 
@@ -376,6 +409,89 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 - Responds with "Hab ich gemacht Okayge" on success
 - Error responses: "Das kann ich nicht FDM" (no name), "Das finde ich nicht FDM" (not found)
 
+### Handler: Scheduled Messages (Dynamic Google Sheets)
+
+**Only runs if Google Sheets is configured** (`GOOGLE_SHEETS_SPREADSHEET_ID` and `GOOGLE_SERVICE_ACCOUNT_PATH` set).
+
+**`run_schedule_loader_service(cache)` (src/main.rs:~1960)**
+- Polls Google Sheets every 5 minutes for schedule updates
+- Initial load on startup: Google Sheets → disk cache → empty cache (fallback chain)
+- Saves fetched schedules to disk cache (`schedule_cache.ron`)
+- Increments cache version on each update
+- Logs consecutive failures (warns after 10 failures)
+- Runs continuously in background
+
+**`run_scheduled_message_handler(client, cache)` (src/main.rs:~1433)**
+- Monitors cache for version changes every 30 seconds
+- Spawns new tasks for added schedules
+- Stops tasks for removed schedules
+- Each schedule runs in independent task
+- Dynamic task management without bot restart
+
+**`run_schedule_task(schedule, client, cache)` (src/main.rs:~1361)**
+- Runs single schedule in loop
+- Sleeps for configured interval between posts
+- Checks if schedule still exists in cache before each post
+- Validates schedule is active (respects date range and time window)
+- Posts message to Twitch chat
+- Exits gracefully if schedule removed from cache
+
+**`fetch_schedules_from_sheets() -> Result<Vec<Schedule>>` (src/main.rs:~1762)**
+- Authenticates with Google Sheets API using service account
+- Fetches data from configured spreadsheet and sheet
+- Parses rows into `Schedule` objects
+- Validates each schedule (interval >= 1 minute, valid date ranges, etc.)
+- Skips invalid rows with error logging (includes row numbers)
+- Returns vector of validated schedules
+
+**`parse_schedule_row(row, row_num) -> Result<Schedule>` (src/main.rs:~1860)**
+- Parses Google Sheets row into Schedule struct
+- Expected columns: Name, Message, Interval, Start Date, End Date, Active Start, Active End
+- Required: Name, Message, Interval
+- Optional: Date range and time window fields
+- Validates formats: ISO 8601 for dates, HH:MM for times, "30m"/"1h"/"2h30m" for intervals
+
+**Google Sheets Format:**
+```
+Column A: Name (required) - Unique identifier
+Column B: Message (required) - Text to post
+Column C: Interval (required) - e.g., "30m", "1h", "2h30m"
+Column D: Start Date (optional) - "2025-12-01T00:00:00"
+Column E: End Date (optional) - "2025-12-15T23:59:59"
+Column F: Active Time Start (optional) - "18:00"
+Column G: Active Time End (optional) - "23:00"
+```
+
+**Time Windows:**
+- If Active Time Start/End are empty: Posts 24/7 at interval
+- If set: Only posts during daily time window (Europe/Berlin)
+- Handles midnight-spanning windows (e.g., "22:00" to "02:00")
+
+**Cache Files:**
+- `save_cache_to_disk(cache) -> Result<()>`: Serializes cache to RON format
+- `load_cache_from_disk() -> Result<ScheduleCache>`: Deserializes from disk
+- Path: `./schedule_cache.ron`
+- Contains schedules, last_updated, version
+
+### Database Module
+
+**`database::Schedule` (src/main.rs:~1537)**
+- Stores schedule configuration from Google Sheets
+- Fields: name, start_date, end_date, active_time_start, active_time_end, interval, message
+- Methods:
+  - `is_active(now)`: Checks if schedule active based on date range and time window
+  - `parse_interval(s)`: Parses "30m"/"1h"/"2h30m" format to TimeDelta
+  - `validate()`: Validates required fields and logical consistency
+- Derives: Debug, Clone, Deserialize, Serialize
+
+**`database::ScheduleCache` (src/main.rs:~1696)**
+- Container for loaded schedules with metadata
+- Fields: schedules (Vec<Schedule>), last_updated, version
+- Methods:
+  - `new()`: Creates empty cache
+  - `update(schedules)`: Updates schedules, increments version
+- Version number enables change detection for task manager
+
 ### StreamElements Module
 
 **`streamelements::SEClient` (src/main.rs:94-168)**
@@ -496,6 +612,34 @@ Continuous → Listens for "!toggle-ping <command>"
            → Updates command via API, confirms success
 ```
 
+### Scheduled Messages (Conditional - Only if Google Sheets configured)
+```
+Startup    → Try Google Sheets → disk cache → empty cache (fallback chain)
+           → Spawn loader service and message handler
+           → Spawn tasks for each active schedule
+
+Every 5min → Poll Google Sheets for schedule updates
+           → Update cache if successful
+           → Save to disk (schedule_cache.ron)
+
+Every 30s  → Task manager checks cache version
+           → Spawn tasks for new schedules
+           → Stop tasks for removed schedules
+
+Per Task   → Sleep for schedule's interval
+           → Check if schedule still in cache
+           → Check if schedule is active (date range + time window)
+           → Post message to chat
+           → Repeat or exit if removed
+```
+
+**If Google Sheets NOT configured:**
+```
+Startup    → Log warning: "Google Sheets not configured. Scheduled messages disabled."
+           → Do not spawn loader service or message handler
+           → Bot continues with other handlers
+```
+
 ## Development Tips
 
 ### General
@@ -530,3 +674,59 @@ Continuous → Listens for "!toggle-ping <command>"
 - Never commit `.env` to git (already in .gitignore)
 - Get OAuth credentials from your Twitch application at https://dev.twitch.tv/console
 - StreamElements API token from StreamElements dashboard
+
+### Google Sheets Setup (Optional - for Scheduled Messages)
+
+**1. Create Google Cloud Project:**
+- Visit https://console.cloud.google.com/
+- Create new project or select existing
+- Enable Google Sheets API
+
+**2. Create Service Account:**
+- Navigate to "IAM & Admin" → "Service Accounts"
+- Click "Create Service Account"
+- Name it (e.g., "twitch-bot-scheduler")
+- Click "Create and Continue"
+- Skip role assignment (not needed for Sheets access)
+- Click "Done"
+
+**3. Generate JSON Key:**
+- Click on created service account
+- Go to "Keys" tab
+- Click "Add Key" → "Create new key"
+- Select "JSON" format
+- Download and save securely (e.g., `/path/to/service-account.json`)
+
+**4. Create Google Sheet:**
+- Create new Google Sheet
+- Name first sheet "ScheduledMessages" (or custom name)
+- Add header row:
+  ```
+  Name | Message | Interval | Start Date | End Date | Active Start | Active End
+  ```
+- Share sheet with service account email (found in JSON key as `client_email`)
+- Grant "Editor" permissions
+
+**5. Configure Environment Variables:**
+```bash
+GOOGLE_SHEETS_SPREADSHEET_ID=<from URL: docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit>
+GOOGLE_SHEETS_SHEET_NAME=ScheduledMessages  # Optional, default is "ScheduledMessages"
+GOOGLE_SERVICE_ACCOUNT_PATH=/path/to/service-account.json
+```
+
+**6. Test:**
+- Add test schedule row
+- Start bot
+- Check logs for "Google Sheets configured, starting scheduled message system"
+- Schedule should post after configured interval
+
+**Example Schedule Row:**
+```
+wichtel-reminder | DinkDonk Don't forget your address! | 1h | 2025-12-01T00:00:00 | 2025-12-15T23:59:59 | 18:00 | 23:00
+```
+
+**Troubleshooting:**
+- **"Failed to read service account key"**: Check file path and permissions
+- **"Failed to fetch data from Google Sheets"**: Verify spreadsheet ID and sheet name
+- **"No data found"**: Check sheet has data rows (not just headers)
+- **"Schedule validation failed"**: Check interval format (e.g., "1h" not "1 hour")
