@@ -33,3 +33,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 eyre = "0.6.12"
 regex = "1.12.2"
+google-sheets4 = "6.0"
+hyper = "1.5"
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"] }
+yup-oauth2 = "12.1"

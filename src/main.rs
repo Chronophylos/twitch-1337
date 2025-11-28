@@ -6,7 +6,7 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{Datelike, TimeDelta, Timelike, Utc, Weekday};
-use color_eyre::eyre::{self, Result, WrapErr, bail};
+use color_eyre::eyre::{self, Result, WrapErr, bail, eyre};
 use rand::seq::IndexedRandom as _;
 use regex::Regex;
 use secrecy::{ExposeSecret, SecretString};
@@ -16,7 +16,7 @@ use tokio::{
     sync::{Mutex, broadcast, mpsc::UnboundedReceiver},
     time::{Duration, sleep},
 };
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, error, info, instrument, trace, warn};
 use twitch_irc::{
     ClientConfig, SecureTCPTransport, TwitchIRCClient,
     login::{RefreshingLoginCredentials, TokenStorage, UserAccessToken},
@@ -189,12 +189,6 @@ const MAX_USERS: usize = 10_000;
 /// Expected Latency of the Twitch IRC Server
 /// Will adjust all schedules by the latency in order to increase accuracy
 const EXPECTED_LATENCY: u32 = 89;
-
-/// Scheduled message configuration: (message, hours_between_posts)
-const SCHEDULED_MESSAGES: &[(&str, u64)] = &[(
-    "DinkDonk An alle Wichtel: Vergesst nicht eure Adresse im Textfeld einzutragen, falls ihr es noch nicht getan habt DinkDonk Wer keine Adresse einträgt, kriegt keine Geschenke DinkDonk",
-    1,
-)];
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
@@ -783,6 +777,38 @@ pub async fn main() -> Result<()> {
     // Spawn message router task
     let router_handle = tokio::spawn(run_message_router(incoming_messages, broadcast_tx.clone()));
 
+    // Check if Google Sheets is configured for scheduled messages
+    let sheets_configured = std::env::var("GOOGLE_SHEETS_SPREADSHEET_ID").is_ok()
+        && std::env::var("GOOGLE_SERVICE_ACCOUNT_PATH").is_ok();
+
+    // Optionally spawn schedule loader service and handler
+    let (loader_service, handler_scheduled_messages) = if sheets_configured {
+        info!("Google Sheets configured, starting scheduled message system");
+
+        // Create schedule cache for dynamic scheduled messages
+        let schedule_cache = Arc::new(tokio::sync::RwLock::new(database::ScheduleCache::new()));
+
+        // Spawn schedule loader service
+        let loader = tokio::spawn({
+            let cache = schedule_cache.clone();
+            async move {
+                run_schedule_loader_service(cache).await;
+            }
+        });
+
+        // Spawn scheduled message handler
+        let handler = tokio::spawn({
+            let client = client.clone();
+            let cache = schedule_cache.clone();
+            async move { run_scheduled_message_handler(client, cache).await }
+        });
+
+        (Some(loader), Some(handler))
+    } else {
+        warn!("Google Sheets not configured (GOOGLE_SHEETS_SPREADSHEET_ID and GOOGLE_SERVICE_ACCOUNT_PATH required). Scheduled messages disabled.");
+        (None, None)
+    };
+
     // Spawn 1337 handler task
     let handler_1337 = tokio::spawn({
         let broadcast_tx = broadcast_tx.clone();
@@ -807,44 +833,70 @@ pub async fn main() -> Result<()> {
         async move { run_generic_command_handler(broadcast_tx, client).await }
     });
 
-    let handler_scheduled_messages = tokio::spawn({
-        let client = client.clone();
-        async move { run_scheduled_message_handler(client).await }
-    });
-
-    info!(
-        "Bot running with continuous connection. Handlers: 1337 tracker, Minecraft responder, Generic commands, Scheduled messages"
-    );
+    if sheets_configured {
+        info!(
+            "Bot running with continuous connection. Handlers: Schedule loader, 1337 tracker, Minecraft responder, Generic commands, Scheduled messages"
+        );
+        info!("Scheduled messages: Loaded dynamically from Google Sheets or cache");
+    } else {
+        info!(
+            "Bot running with continuous connection. Handlers: 1337 tracker, Minecraft responder, Generic commands"
+        );
+    }
     info!(
         "1337 tracker scheduled to run daily at {}:{:02} (Europe/Berlin)",
         TARGET_HOUR,
         TARGET_MINUTE - 1
     );
-    info!(
-        "Scheduled messages: {} message(s) configured",
-        SCHEDULED_MESSAGES.len()
-    );
 
     // Keep the program running until shutdown signal or any task exits
     info!("Bot is running. Press Ctrl+C to stop.");
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            info!("Shutdown signal received, exiting gracefully");
+
+    // Handle optional scheduled message handlers
+    match (loader_service, handler_scheduled_messages) {
+        (Some(loader), Some(handler)) => {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Shutdown signal received, exiting gracefully");
+                }
+                result = router_handle => {
+                    error!("Message router exited unexpectedly: {result:?}");
+                }
+                result = loader => {
+                    error!("Schedule loader service exited unexpectedly: {result:?}");
+                }
+                result = handler_1337 => {
+                    error!("1337 handler exited unexpectedly: {result:?}");
+                }
+                result = handler_minecraft => {
+                    error!("Minecraft handler exited unexpectedly: {result:?}");
+                }
+                result = handler_generic_commands => {
+                    error!("Generic Command Handler exited unexpectedly: {result:?}");
+                }
+                result = handler => {
+                    error!("Scheduled message handler exited unexpectedly: {result:?}");
+                }
+            }
         }
-        result = router_handle => {
-            error!("Message router exited unexpectedly: {result:?}");
-        }
-        result = handler_1337 => {
-            error!("1337 handler exited unexpectedly: {result:?}");
-        }
-        result = handler_minecraft => {
-            error!("Minecraft handler exited unexpectedly: {result:?}");
-        }
-        result = handler_generic_commands => {
-            error!("Generic Command Handler exited unexpectedly: {result:?}");
-        }
-        result = handler_scheduled_messages => {
-            error!("Scheduled message handler exited unexpectedly: {result:?}");
+        _ => {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Shutdown signal received, exiting gracefully");
+                }
+                result = router_handle => {
+                    error!("Message router exited unexpectedly: {result:?}");
+                }
+                result = handler_1337 => {
+                    error!("1337 handler exited unexpectedly: {result:?}");
+                }
+                result = handler_minecraft => {
+                    error!("Minecraft handler exited unexpectedly: {result:?}");
+                }
+                result = handler_generic_commands => {
+                    error!("Generic Command Handler exited unexpectedly: {result:?}");
+                }
+            }
         }
     }
 
@@ -1358,76 +1410,727 @@ async fn list_pings_command(
     Ok(())
 }
 
-/// Handler for sending scheduled messages at configured intervals.
-///
-/// Spawns a separate task for each scheduled message. Each task runs independently
-/// and posts its message at its configured interval.
-#[instrument]
-async fn run_scheduled_message_handler(client: Arc<AuthenticatedTwitchClient>) {
-    info!("Scheduled message handler started");
+/// Run a single schedule task.
+/// This task will run the schedule at its configured interval,
+/// checking if it's still active before each post.
+#[instrument(skip(client, cache), fields(schedule = %schedule.name))]
+async fn run_schedule_task(
+    schedule: database::Schedule,
+    client: Arc<AuthenticatedTwitchClient>,
+    cache: Arc<tokio::sync::RwLock<database::ScheduleCache>>,
+) {
+    use chrono::Utc;
+    use tokio::time::{sleep, Duration};
 
-    let mut handles = Vec::new();
+    info!(
+        schedule = %schedule.name,
+        interval_seconds = schedule.interval.num_seconds(),
+        "Schedule task started"
+    );
 
-    for (index, (message, interval_hours)) in SCHEDULED_MESSAGES.iter().enumerate() {
-        let client = client.clone();
-        let message = message.to_string();
-        let interval_hours = *interval_hours;
+    loop {
+        // Wait for the configured interval
+        let interval_duration = Duration::from_secs(schedule.interval.num_seconds() as u64);
+        sleep(interval_duration).await;
 
-        let handle = tokio::spawn(async move {
+        // Check if schedule still exists in cache
+        let still_exists = {
+            let cache_guard = cache.read().await;
+            cache_guard
+                .schedules
+                .iter()
+                .any(|s| s.name == schedule.name)
+        };
+
+        if !still_exists {
             info!(
-                message_index = index,
-                interval_hours = interval_hours,
-                "Starting scheduled message task"
+                schedule = %schedule.name,
+                "Schedule no longer in cache, stopping task"
             );
+            break;
+        }
 
-            loop {
-                // Sleep for the configured interval
-                sleep(Duration::from_secs(interval_hours * 3600)).await;
+        // Check if schedule is currently active (respects date range and time window)
+        let now = Utc::now().with_timezone(&chrono_tz::Europe::Berlin);
 
-                info!(
-                    message_index = index,
-                    message = %message,
-                    "Posting scheduled message"
-                );
+        if !schedule.is_active(now) {
+            debug!(
+                schedule = %schedule.name,
+                "Schedule not active at current time, skipping post"
+            );
+            continue;
+        }
 
-                // Post the message
-                if let Err(e) = client.say(CHANNEL_LOGIN.clone(), message.clone()).await {
-                    error!(
-                        error = ?e,
-                        message_index = index,
-                        "Failed to send scheduled message"
-                    );
-                }
-            }
-        });
+        // Post the message
+        info!(
+            schedule = %schedule.name,
+            message = %schedule.message,
+            "Posting scheduled message"
+        );
 
-        handles.push(handle);
+        if let Err(e) = client.say(CHANNEL_LOGIN.clone(), schedule.message.clone()).await {
+            error!(
+                error = ?e,
+                schedule = %schedule.name,
+                "Failed to send scheduled message"
+            );
+        } else {
+            debug!(schedule = %schedule.name, "Scheduled message posted successfully");
+        }
     }
 
-    // Wait for all tasks (they run forever, so this will only exit on error)
-    for (index, handle) in handles.into_iter().enumerate() {
-        let result = handle.await;
-        error!(
-            error = ?result,
-            message_index = index,
-            "Scheduled message task exited unexpectedly"
-        );
+    info!(schedule = %schedule.name, "Schedule task exiting");
+}
+
+/// Dynamic scheduled message handler that monitors cache for changes.
+/// Spawns and stops tasks dynamically based on cache updates.
+#[instrument]
+async fn run_scheduled_message_handler(
+    client: Arc<AuthenticatedTwitchClient>,
+    cache: Arc<tokio::sync::RwLock<database::ScheduleCache>>,
+) {
+    use std::collections::HashMap;
+    use tokio::task::JoinHandle;
+    use tokio::time::{interval, Duration};
+
+    info!("Dynamic scheduled message handler started");
+
+    // Track running tasks by schedule name
+    let mut running_tasks: HashMap<String, JoinHandle<()>> = HashMap::new();
+    let mut current_version = 0u64;
+
+    // Monitor cache for changes every 30 seconds
+    let mut check_interval = interval(Duration::from_secs(30));
+
+    loop {
+        check_interval.tick().await;
+
+        let (schedules, version) = {
+            let cache_guard = cache.read().await;
+            (cache_guard.schedules.clone(), cache_guard.version)
+        };
+
+        // Check if cache version has changed
+        if version != current_version {
+            info!(
+                old_version = current_version,
+                new_version = version,
+                schedule_count = schedules.len(),
+                "Cache version changed, updating tasks"
+            );
+
+            current_version = version;
+
+            // Build set of schedule names that should be running
+            let desired_schedules: HashMap<String, database::Schedule> =
+                schedules.into_iter().map(|s| (s.name.clone(), s)).collect();
+
+            // Stop tasks for schedules that no longer exist or have changed
+            running_tasks.retain(|name, handle| {
+                if !desired_schedules.contains_key(name) {
+                    info!(schedule = %name, "Stopping task for removed/changed schedule");
+                    handle.abort();
+                    false
+                } else {
+                    true
+                }
+            });
+
+            // Start tasks for new schedules
+            for (name, schedule) in desired_schedules {
+                running_tasks.entry(name.clone()).or_insert_with(|| {
+                    info!(schedule = %name, "Starting task for new schedule");
+
+                    tokio::spawn(run_schedule_task(
+                        schedule.clone(),
+                        client.clone(),
+                        cache.clone(),
+                    ))
+                });
+            }
+
+            info!(active_tasks = running_tasks.len(), "Task update complete");
+        }
     }
 }
 
 mod database {
+    use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeDelta, Utc};
+    use chrono_tz::Tz;
+    use eyre::{eyre, Result};
+    use serde::{Deserialize, Serialize};
+
     struct CaffeineProduct {
-        id: u64,
         name: String,
         unit: String,
         mg_coffeine: f64,
     }
 
     struct CaffeineConsumption {
-        id: u64,
-        user_id: String,
-        product_id: u64,
+        username: String,
+        product: u64,
         amount: f64,
         timestamp: chrono::NaiveDateTime,
     }
+
+    #[derive(Debug, Clone, Deserialize, Serialize)]
+    pub struct Schedule {
+        pub name: String,
+        pub start_date: Option<NaiveDateTime>,
+        pub end_date: Option<NaiveDateTime>,
+        pub active_time_start: Option<NaiveTime>,
+        pub active_time_end: Option<NaiveTime>,
+        pub interval: TimeDelta,
+        pub message: String,
+    }
+
+    impl Schedule {
+        /// Check if the schedule is currently active based on date range and time window.
+        pub fn is_active(&self, now: DateTime<Tz>) -> bool {
+            // Check date range
+            if let Some(start) = self.start_date {
+                let start_utc = start.and_utc();
+                if now < start_utc {
+                    return false;
+                }
+            }
+
+            if let Some(end) = self.end_date {
+                let end_utc = end.and_utc();
+                if now > end_utc {
+                    return false;
+                }
+            }
+
+            // Check time window (if specified)
+            if let (Some(start_time), Some(end_time)) =
+                (self.active_time_start, self.active_time_end)
+            {
+                let current_time = now.time();
+
+                // Handle midnight-spanning windows (e.g., 22:00 - 02:00)
+                if end_time < start_time {
+                    // Window spans midnight: active if time >= start OR time < end
+                    if !(current_time >= start_time || current_time < end_time) {
+                        return false;
+                    }
+                } else {
+                    // Normal window: active if time is within range
+                    if !(current_time >= start_time && current_time < end_time) {
+                        return false;
+                    }
+                }
+            }
+
+            true
+        }
+
+        /// Parse interval string (e.g., "30m", "1h", "2h30m") into TimeDelta.
+        /// Supports formats like: "10s", "5m", "2h", "1h30m", "2h15m30s"
+        pub fn parse_interval(s: &str) -> Result<TimeDelta> {
+            let s = s.trim().to_lowercase();
+            if s.is_empty() {
+                return Err(eyre!("Interval string is empty"));
+            }
+
+            let mut total_seconds = 0i64;
+            let mut current_num = String::new();
+
+            for ch in s.chars() {
+                if ch.is_ascii_digit() {
+                    current_num.push(ch);
+                } else if ch == 'h' || ch == 'm' || ch == 's' {
+                    if current_num.is_empty() {
+                        return Err(eyre!("No number before unit '{}'", ch));
+                    }
+
+                    let num: i64 = current_num
+                        .parse()
+                        .map_err(|_| eyre!("Invalid number: {}", current_num))?;
+
+                    total_seconds += match ch {
+                        'h' => num * 3600,
+                        'm' => num * 60,
+                        's' => num,
+                        _ => unreachable!(),
+                    };
+
+                    current_num.clear();
+                } else {
+                    return Err(eyre!("Invalid character in interval: '{}'", ch));
+                }
+            }
+
+            if !current_num.is_empty() {
+                return Err(eyre!(
+                    "Number without unit at end of interval: {}",
+                    current_num
+                ));
+            }
+
+            if total_seconds == 0 {
+                return Err(eyre!("Interval must be greater than zero"));
+            }
+
+            // Enforce minimum interval of 1 minute to prevent spam
+            if total_seconds < 60 {
+                return Err(eyre!(
+                    "Interval must be at least 1 minute (got {} seconds)",
+                    total_seconds
+                ));
+            }
+
+            TimeDelta::try_seconds(total_seconds)
+                .ok_or_else(|| eyre!("Interval too large: {} seconds", total_seconds))
+        }
+
+        /// Validate the schedule for required fields and logical consistency.
+        pub fn validate(&self) -> Result<()> {
+            // Name is required and must not be empty
+            if self.name.trim().is_empty() {
+                return Err(eyre!("Schedule name cannot be empty"));
+            }
+
+            // Message is required and must not be empty
+            if self.message.trim().is_empty() {
+                return Err(eyre!("Schedule message cannot be empty"));
+            }
+
+            // Interval must be positive
+            if self.interval.num_seconds() <= 0 {
+                return Err(eyre!("Interval must be positive"));
+            }
+
+            // Interval must be at least 1 minute
+            if self.interval.num_seconds() < 60 {
+                return Err(eyre!("Interval must be at least 1 minute"));
+            }
+
+            // If both start_date and end_date are set, end must be after start
+            if let (Some(start), Some(end)) = (self.start_date, self.end_date)
+                && end <= start
+            {
+                return Err(eyre!("End date must be after start date"));
+            }
+
+            // Time window validation: both or neither must be set
+            match (self.active_time_start, self.active_time_end) {
+                (Some(_), None) => {
+                    return Err(eyre!(
+                        "active_time_end must be set if active_time_start is set"
+                    ))
+                }
+                (None, Some(_)) => {
+                    return Err(eyre!(
+                        "active_time_start must be set if active_time_end is set"
+                    ))
+                }
+                _ => {} // Both set or both None is valid
+            }
+
+            Ok(())
+        }
+    }
+
+    /// Cache structure for storing loaded schedules with metadata.
+    #[derive(Debug, Clone, Deserialize, Serialize)]
+    pub struct ScheduleCache {
+        pub schedules: Vec<Schedule>,
+        pub last_updated: DateTime<Utc>,
+        pub version: u64,
+    }
+
+    impl ScheduleCache {
+        /// Create a new empty cache.
+        pub fn new() -> Self {
+            Self {
+                schedules: Vec::new(),
+                last_updated: Utc::now(),
+                version: 0,
+            }
+        }
+
+        /// Update cache with new schedules, incrementing version.
+        pub fn update(&mut self, schedules: Vec<Schedule>) {
+            self.schedules = schedules;
+            self.last_updated = Utc::now();
+            self.version += 1;
+        }
+    }
+}
+
+/// Save the schedule cache to disk in RON format.
+fn save_cache_to_disk(cache: &database::ScheduleCache) -> Result<()> {
+    let cache_path = "schedule_cache.ron";
+
+    // Serialize to RON format
+    let ron_string = ron::ser::to_string_pretty(cache, ron::ser::PrettyConfig::default())
+        .wrap_err("Failed to serialize cache to RON")?;
+
+    // Write to file
+    std::fs::write(cache_path, ron_string)
+        .wrap_err_with(|| format!("Failed to write cache to {}", cache_path))?;
+
+    debug!(path = cache_path, version = cache.version, "Cache saved to disk");
+    Ok(())
+}
+
+/// Load the schedule cache from disk.
+fn load_cache_from_disk() -> Result<database::ScheduleCache> {
+    let cache_path = "schedule_cache.ron";
+
+    // Read file contents
+    let contents = std::fs::read_to_string(cache_path)
+        .wrap_err_with(|| format!("Failed to read cache from {}", cache_path))?;
+
+    // Deserialize from RON
+    let cache: database::ScheduleCache = ron::from_str(&contents)
+        .wrap_err("Failed to deserialize cache from RON")?;
+
+    info!(
+        path = cache_path,
+        version = cache.version,
+        schedule_count = cache.schedules.len(),
+        last_updated = %cache.last_updated,
+        "Cache loaded from disk"
+    );
+
+    Ok(cache)
+}
+
+/// Fetch schedules from Google Sheets.
+/// Returns a vector of validated schedules.
+async fn fetch_schedules_from_sheets() -> Result<Vec<database::Schedule>> {
+    use google_sheets4::api::Sheets;
+    use hyper_util::client::legacy::connect::HttpConnector;
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
+    use google_sheets4::yup_oauth2::ServiceAccountAuthenticator;
+
+    // Get configuration from environment
+    let spreadsheet_id = std::env::var("GOOGLE_SHEETS_SPREADSHEET_ID")
+        .wrap_err("GOOGLE_SHEETS_SPREADSHEET_ID environment variable not set")?;
+
+    let sheet_name = std::env::var("GOOGLE_SHEETS_SHEET_NAME")
+        .unwrap_or_else(|_| "ScheduledMessages".to_string());
+
+    let service_account_path = std::env::var("GOOGLE_SERVICE_ACCOUNT_PATH")
+        .wrap_err("GOOGLE_SERVICE_ACCOUNT_PATH environment variable not set")?;
+
+    debug!(
+        spreadsheet_id = %spreadsheet_id,
+        sheet_name = %sheet_name,
+        service_account_path = %service_account_path,
+        "Fetching schedules from Google Sheets"
+    );
+
+    // Load service account credentials
+    let service_account_key = google_sheets4::yup_oauth2::read_service_account_key(&service_account_path)
+        .await
+        .wrap_err_with(|| {
+            format!(
+                "Failed to read service account key from {}",
+                service_account_path
+            )
+        })?;
+
+    // Create authenticator
+    let auth = ServiceAccountAuthenticator::builder(service_account_key)
+        .build()
+        .await
+        .wrap_err("Failed to create service account authenticator")?;
+
+    // Create HTTP client
+    let client = Client::builder(TokioExecutor::new()).build(HttpConnector::new());
+
+    // Create Sheets hub
+    let hub = Sheets::new(client, auth);
+
+    // Fetch data from sheet (A2:G to skip header row, read 7 columns)
+    let range = format!("'{}'!A2:G", sheet_name);
+
+    let result = hub
+        .spreadsheets()
+        .values_get(&spreadsheet_id, &range)
+        .doit()
+        .await
+        .wrap_err("Failed to fetch data from Google Sheets")?;
+
+    let values = result
+        .1
+        .values
+        .ok_or_else(|| eyre!("No data found in Google Sheets"))?;
+
+    info!(row_count = values.len(), "Fetched rows from Google Sheets");
+
+    // Parse rows into Schedule objects
+    let mut schedules = Vec::new();
+    let mut skipped_rows = 0;
+
+    for (index, row) in values.iter().enumerate() {
+        let row_num = index + 2; // +2 because we skip header (row 1) and are 0-indexed
+
+        match parse_schedule_row(row, row_num) {
+            Ok(schedule) => {
+                // Validate schedule
+                if let Err(e) = schedule.validate() {
+                    error!(row = row_num, error = %e, "Schedule validation failed");
+                    skipped_rows += 1;
+                } else {
+                    schedules.push(schedule);
+                }
+            }
+            Err(e) => {
+                error!(row = row_num, error = %e, "Failed to parse schedule row");
+                skipped_rows += 1;
+            }
+        }
+    }
+
+    info!(
+        loaded = schedules.len(),
+        skipped = skipped_rows,
+        "Parsed schedules from Google Sheets"
+    );
+
+    Ok(schedules)
+}
+
+/// Parse a Google Sheets row into a Schedule.
+/// Expected columns: Name, Message, Interval, Start Date, End Date, Active Start, Active End
+fn parse_schedule_row(row: &[serde_json::Value], row_num: usize) -> Result<database::Schedule> {
+    use chrono::NaiveDateTime;
+    use chrono::NaiveTime;
+
+    // Helper to get string value from column
+    let get_string = |index: usize| -> Result<String> {
+        row.get(index)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| eyre!("Column {} is missing or not a string", index))
+    };
+
+    // Helper to get optional string value
+    let get_optional_string = |index: usize| -> Option<String> {
+        row.get(index)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string())
+    };
+
+    // Parse required fields
+    let name = get_string(0)
+        .wrap_err_with(|| format!("Row {}: Name (column A) is required", row_num))?;
+
+    let message = get_string(1)
+        .wrap_err_with(|| format!("Row {}: Message (column B) is required", row_num))?;
+
+    let interval_str = get_string(2)
+        .wrap_err_with(|| format!("Row {}: Interval (column C) is required", row_num))?;
+
+    let interval = database::Schedule::parse_interval(&interval_str)
+        .wrap_err_with(|| format!("Row {}: Invalid interval format", row_num))?;
+
+    // Parse optional date fields (ISO 8601 format)
+    let start_date = if let Some(s) = get_optional_string(3) {
+        Some(
+            NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S")
+                .wrap_err_with(|| {
+                    format!(
+                        "Row {}: Invalid start date format (expected YYYY-MM-DDTHH:MM:SS)",
+                        row_num
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+
+    let end_date = if let Some(s) = get_optional_string(4) {
+        Some(
+            NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S")
+                .wrap_err_with(|| {
+                    format!(
+                        "Row {}: Invalid end date format (expected YYYY-MM-DDTHH:MM:SS)",
+                        row_num
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+
+    // Parse optional time window fields (HH:MM format)
+    let active_time_start = if let Some(s) = get_optional_string(5) {
+        Some(
+            NaiveTime::parse_from_str(&s, "%H:%M")
+                .wrap_err_with(|| {
+                    format!(
+                        "Row {}: Invalid active time start format (expected HH:MM)",
+                        row_num
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+
+    let active_time_end = if let Some(s) = get_optional_string(6) {
+        Some(
+            NaiveTime::parse_from_str(&s, "%H:%M")
+                .wrap_err_with(|| {
+                    format!(
+                        "Row {}: Invalid active time end format (expected HH:MM)",
+                        row_num
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+
+    Ok(database::Schedule {
+        name,
+        start_date,
+        end_date,
+        active_time_start,
+        active_time_end,
+        interval,
+        message,
+    })
+}
+
+/// Schedule loader service that polls Google Sheets and updates the cache.
+/// Runs continuously in a background task.
+#[instrument]
+async fn run_schedule_loader_service(
+    cache: Arc<tokio::sync::RwLock<database::ScheduleCache>>,
+) {
+    use tokio::time::{interval, Duration};
+
+    info!("Schedule loader service started");
+
+    // Initial load on startup
+    let initial_schedules = match try_load_schedules_from_any_source().await {
+        Ok(schedules) => {
+            info!(count = schedules.len(), "Initial schedules loaded");
+            schedules
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to load initial schedules, starting with empty cache");
+            Vec::new()
+        }
+    };
+
+    // Update cache with initial schedules
+    {
+        let mut cache_guard = cache.write().await;
+        cache_guard.update(initial_schedules);
+    }
+
+    // Save initial cache to disk
+    {
+        let cache_guard = cache.read().await;
+        if let Err(e) = save_cache_to_disk(&cache_guard) {
+            error!(error = %e, "Failed to save initial cache to disk");
+        }
+    }
+
+    // Start polling loop (every 5 minutes)
+    let mut poll_interval = interval(Duration::from_secs(300)); // 5 minutes
+    poll_interval.tick().await; // Skip first tick (we just did initial load)
+
+    let mut consecutive_failures = 0;
+
+    loop {
+        poll_interval.tick().await;
+
+        debug!("Polling Google Sheets for schedule updates");
+
+        match fetch_schedules_from_sheets().await {
+            Ok(schedules) => {
+                consecutive_failures = 0;
+
+                info!(
+                    count = schedules.len(),
+                    "Successfully fetched schedules from Google Sheets"
+                );
+
+                // Update cache
+                {
+                    let mut cache_guard = cache.write().await;
+                    cache_guard.update(schedules);
+                    info!(version = cache_guard.version, "Cache updated");
+                }
+
+                // Save to disk
+                {
+                    let cache_guard = cache.read().await;
+                    if let Err(e) = save_cache_to_disk(&cache_guard) {
+                        error!(error = %e, "Failed to save cache to disk");
+                    }
+                }
+            }
+            Err(e) => {
+                consecutive_failures += 1;
+
+                error!(
+                    error = %e,
+                    consecutive_failures,
+                    "Failed to fetch schedules from Google Sheets"
+                );
+
+                if consecutive_failures >= 10 {
+                    warn!(
+                        consecutive_failures,
+                        "Many consecutive failures, cache may be stale"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Try to load schedules from any available source in priority order:
+/// 1. Google Sheets (if configured)
+/// 2. Disk cache
+/// 3. Empty (last resort)
+async fn try_load_schedules_from_any_source() -> Result<Vec<database::Schedule>> {
+    // Check if Google Sheets is configured
+    let sheets_configured = std::env::var("GOOGLE_SHEETS_SPREADSHEET_ID").is_ok()
+        && std::env::var("GOOGLE_SERVICE_ACCOUNT_PATH").is_ok();
+
+    if sheets_configured {
+        info!("Google Sheets configured, attempting to load from Google Sheets");
+
+        match fetch_schedules_from_sheets().await {
+            Ok(schedules) => {
+                info!(count = schedules.len(), "Loaded schedules from Google Sheets");
+                return Ok(schedules);
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to load from Google Sheets, trying disk cache");
+            }
+        }
+    } else {
+        info!("Google Sheets not configured, skipping");
+    }
+
+    // Try disk cache
+    match load_cache_from_disk() {
+        Ok(cache) => {
+            info!(
+                count = cache.schedules.len(),
+                "Loaded schedules from disk cache"
+            );
+            return Ok(cache.schedules);
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to load from disk cache");
+        }
+    }
+
+    // Last resort: empty cache
+    warn!("No schedules available from any source, starting with empty cache");
+    Ok(Vec::new())
 }
