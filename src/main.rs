@@ -2034,7 +2034,7 @@ async fn run_schedule_loader_service(cache: Arc<tokio::sync::RwLock<database::Sc
             schedules
         }
         Err(e) => {
-            warn!(error = %e, "Failed to load initial schedules, starting with empty cache");
+            warn!(error = ?e, "Failed to load initial schedules, starting with empty cache");
             Vec::new()
         }
     };
@@ -2049,7 +2049,7 @@ async fn run_schedule_loader_service(cache: Arc<tokio::sync::RwLock<database::Sc
     {
         let cache_guard = cache.read().await;
         if let Err(e) = save_cache_to_disk(&cache_guard) {
-            error!(error = %e, "Failed to save initial cache to disk");
+            error!(error = ?e, "Failed to save initial cache to disk");
         }
     }
 
@@ -2084,7 +2084,7 @@ async fn run_schedule_loader_service(cache: Arc<tokio::sync::RwLock<database::Sc
                 {
                     let cache_guard = cache.read().await;
                     if let Err(e) = save_cache_to_disk(&cache_guard) {
-                        error!(error = %e, "Failed to save cache to disk");
+                        error!(error = ?e, "Failed to save cache to disk");
                     }
                 }
             }
@@ -2092,7 +2092,7 @@ async fn run_schedule_loader_service(cache: Arc<tokio::sync::RwLock<database::Sc
                 consecutive_failures += 1;
 
                 error!(
-                    error = %e,
+                    error = ?e,
                     consecutive_failures,
                     "Failed to fetch schedules from Google Sheets"
                 );
@@ -2129,7 +2129,7 @@ async fn try_load_schedules_from_any_source() -> Result<Vec<database::Schedule>>
                 return Ok(schedules);
             }
             Err(e) => {
-                warn!(error = %e, "Failed to load from Google Sheets, trying disk cache");
+                warn!(error = ?e, "Failed to load from Google Sheets, trying disk cache");
             }
         }
     } else {
@@ -2146,7 +2146,7 @@ async fn try_load_schedules_from_any_source() -> Result<Vec<database::Schedule>>
             return Ok(cache.schedules);
         }
         Err(e) => {
-            warn!(error = %e, "Failed to load from disk cache");
+            warn!(error = ?e, "Failed to load from disk cache");
         }
     }
 
