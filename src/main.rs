@@ -406,7 +406,7 @@ fn one_of<const L: usize, T>(array: &[T; L]) -> &T {
 ///
 /// Runs in a loop until the broadcast channel closes or an error occurs.
 /// Only tracks messages sent during the configured TARGET_HOUR:TARGET_MINUTE.
-#[instrument]
+#[instrument(skip(broadcast_rx, total_users))]
 async fn monitor_1337_messages(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
     total_users: Arc<Mutex<HashSet<String>>>,
@@ -620,7 +620,7 @@ fn format_countdown(duration: chrono::Duration) -> String {
 /// Processes a PRIVMSG to check if it's asking about Minecraft and sends a response.
 ///
 /// Returns true if a response was sent, false otherwise.
-#[instrument]
+#[instrument(skip(privmsg, client))]
 async fn process_minecraft_message(
     privmsg: &PrivmsgMessage,
     client: &Arc<AuthenticatedTwitchClient>,
@@ -650,7 +650,7 @@ async fn process_minecraft_message(
             );
 
             let time = next_start.time().to_string();
-            if duration.num_hours() < 24 {
+            if duration.num_days() > 0 {
                 format!("Morgen um {time} WannMinecraft")
             } else {
                 format!("Heute um {time} WannMinecraft")
@@ -2020,7 +2020,7 @@ fn parse_schedule_row(row: &[serde_json::Value], row_num: usize) -> Result<datab
 
 /// Schedule loader service that polls Google Sheets and updates the cache.
 /// Runs continuously in a background task.
-#[instrument]
+#[instrument(skip(cache))]
 async fn run_schedule_loader_service(cache: Arc<tokio::sync::RwLock<database::ScheduleCache>>) {
     use tokio::time::{Duration, interval};
 
