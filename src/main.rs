@@ -649,20 +649,14 @@ async fn process_minecraft_message(
                 "Calculated next session"
             );
 
-            // Special response for magie_023: raw milliseconds only
-            //if privmsg.sender.login == "magie_023" {
-            //    duration.num_milliseconds().to_string()
-            //} else {
-            let countdown = format_countdown(duration);
-            info!(countdown = %countdown, "Formatted countdown");
-            format!("Noch {} WannMinecraft", countdown)
-            //}
-        };
+            let time = next_start.time().to_string();
 
-        // Hex-encode all replies to magie_023
-        //if privmsg.sender.login == "magie_023" {
-        //    response = encode_hex(&response);
-        //}
+            if duration.num_days() >= 0 {
+                format!("Morgen um {time} WannMinecraft")
+            } else {
+                format!("Heute um {time} WannMinecraft")
+            }
+        };
 
         if let Err(e) = client.say_in_reply_to(privmsg, response).await {
             error!(error = ?e, "Failed to send Minecraft response");
