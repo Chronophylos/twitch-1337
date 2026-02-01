@@ -310,18 +310,25 @@ async fn sleep_until_hms(hour: u32, minute: u32, second: u32, expected_latency: 
     }
 }
 
-/// Checks if a username belongs to an ignored bot.
+/// Checks if a given user is a clanker
 ///
-/// Returns true if the username matches any bot in the ignore list.
-fn is_ignored_bot(username: &str) -> bool {
-    ["supibot", "potatbotat", "streamelements"].contains(&username)
+/// Returns true if the login name matches any bot in the ignore list.
+fn is_clanker(login: &str) -> bool {
+    [
+        "supibot",
+        "potatbotat",
+        "streamelements",
+        "koknuts",
+        "thedagothur",
+    ]
+    .contains(&login)
 }
 
 /// Determines if a message should be counted as a valid 1337 message.
 ///
-/// Filters out bot messages and checks for keywords "1337" or "DANKIES".
+/// Filters out clanker messages and checks for keywords "1337" or "DANKIES".
 fn is_valid_1337_message(message: &PrivmsgMessage) -> bool {
-    if is_ignored_bot(&message.sender.login) {
+    if is_clanker(&message.sender.login) {
         return false;
     }
     if message.message_text.contains("DANKIES") || message.message_text.contains("1337") {
@@ -627,7 +634,7 @@ async fn process_minecraft_message(
     client: &Arc<AuthenticatedTwitchClient>,
 ) -> bool {
     // Ignore messages from bots
-    if is_ignored_bot(&privmsg.sender.login) {
+    if is_clanker(&privmsg.sender.login) {
         return false;
     }
 
