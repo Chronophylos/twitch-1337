@@ -28,15 +28,26 @@ api_token = "your_streamelements_api_token"
 # StreamElements channel ID (numeric ID, not channel name)
 channel_id = "your_channel_id"
 
-# Optional: Google Sheets configuration for dynamic scheduled messages
-# If not configured, scheduled messages feature will be disabled
+# Optional: Scheduled messages configuration
+# Add [[schedules]] sections to define scheduled messages.
+# The bot watches config.toml for changes and reloads schedules automatically.
 #
-# [google_sheets]
-# # Google Sheets spreadsheet ID (from the URL)
-# spreadsheet_id = "your_spreadsheet_id"
+# Example schedule (uncomment to use):
 #
-# # Sheet name within the spreadsheet (default: "ScheduledMessages")
-# sheet_name = "ScheduledMessages"
+# [[schedules]]
+# name = "hydration"
+# message = "Stay hydrated! DinkDonk"
+# interval = "00:30"  # Post every 30 minutes (hh:mm format)
+# enabled = true
 #
-# # Path to Google service account JSON key file
-# service_account_path = "/path/to/service-account.json"
+# [[schedules]]
+# name = "stream-reminder"
+# message = "Don't forget to follow!"
+# interval = "01:00"  # Post every hour
+# # Optional: Only post during specific dates
+# start_date = "2025-01-01T00:00:00"  # ISO 8601 format
+# end_date = "2025-12-31T23:59:59"
+# # Optional: Only post during specific daily time window (Europe/Berlin)
+# active_time_start = "18:00"  # HH:MM format
+# active_time_end = "23:00"
+# enabled = true

@@ -1,12 +1,12 @@
 use std::{
     collections::HashSet,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
 use async_trait::async_trait;
 use chrono::{TimeDelta, Timelike, Utc};
-use color_eyre::eyre::{self, Result, WrapErr, bail, eyre};
+use color_eyre::eyre::{self, Result, WrapErr, bail};
 use rand::seq::IndexedRandom as _;
 use regex::Regex;
 use secrecy::{ExposeSecret, SecretString};
@@ -212,16 +212,32 @@ struct StreamelementsConfig {
     channel_id: String,
 }
 
+/// Configuration for a scheduled message loaded from config.toml.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-struct GoogleSheetsConfig {
-    spreadsheet_id: String,
-    #[serde(default = "default_sheet_name")]
-    sheet_name: String,
-    service_account_path: PathBuf,
+struct ScheduleConfig {
+    name: String,
+    message: String,
+    /// Interval in "hh:mm" format (e.g., "01:30" for 1 hour 30 minutes)
+    interval: String,
+    /// Start date in ISO 8601 format (YYYY-MM-DDTHH:MM:SS)
+    #[serde(default)]
+    start_date: Option<String>,
+    /// End date in ISO 8601 format (YYYY-MM-DDTHH:MM:SS)
+    #[serde(default)]
+    end_date: Option<String>,
+    /// Daily active time start in HH:MM format
+    #[serde(default)]
+    active_time_start: Option<String>,
+    /// Daily active time end in HH:MM format
+    #[serde(default)]
+    active_time_end: Option<String>,
+    /// Whether the schedule is enabled (default: true)
+    #[serde(default = "default_enabled")]
+    enabled: bool,
 }
 
-fn default_sheet_name() -> String {
-    "ScheduledMessages".to_string()
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -229,7 +245,7 @@ struct Configuration {
     twitch: TwitchConfiguration,
     streamelements: StreamelementsConfig,
     #[serde(default)]
-    google_sheets: Option<GoogleSheetsConfig>,
+    schedules: Vec<ScheduleConfig>,
 }
 
 fn serialize_secret_string<S>(secret: &SecretString, serializer: S) -> Result<S::Ok, S::Error>
@@ -257,16 +273,20 @@ impl Configuration {
             bail!("streamelements.channel_id cannot be empty");
         }
 
-        if let Some(ref sheets) = self.google_sheets {
-            if sheets.spreadsheet_id.trim().is_empty() {
-                bail!("google_sheets.spreadsheet_id cannot be empty");
+        // Validate each schedule config
+        for schedule in &self.schedules {
+            if schedule.name.trim().is_empty() {
+                bail!("Schedule name cannot be empty");
             }
-            if !sheets.service_account_path.exists() {
-                warn!(
-                    "Google Sheets service account file not found: {}",
-                    sheets.service_account_path.display()
-                );
+            if schedule.message.trim().is_empty() {
+                bail!("Schedule '{}' message cannot be empty", schedule.name);
             }
+            if schedule.interval.trim().is_empty() {
+                bail!("Schedule '{}' interval cannot be empty", schedule.name);
+            }
+            // Validate interval format by parsing it
+            database::Schedule::parse_interval(&schedule.interval)
+                .wrap_err_with(|| format!("Schedule '{}' has invalid interval format", schedule.name))?;
         }
 
         Ok(())
@@ -581,9 +601,9 @@ fn install_tracing() {
         .init();
 }
 
-async fn load_configuration() -> Result<Configuration> {
-    const CONFIG_PATH: &str = "./config.toml";
+const CONFIG_PATH: &str = "./config.toml";
 
+async fn load_configuration() -> Result<Configuration> {
     let data = tokio::fs::read_to_string(CONFIG_PATH)
         .await
         .wrap_err_with(|| format!(
@@ -599,6 +619,208 @@ async fn load_configuration() -> Result<Configuration> {
     config.validate()?;
 
     Ok(config)
+}
+
+/// Parse a datetime string in ISO 8601 format (YYYY-MM-DDTHH:MM:SS).
+fn parse_datetime(s: &str) -> Result<chrono::NaiveDateTime> {
+    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
+        .wrap_err_with(|| format!("Invalid datetime format '{}' (expected YYYY-MM-DDTHH:MM:SS)", s))
+}
+
+/// Parse a time string in HH:MM format.
+fn parse_time(s: &str) -> Result<chrono::NaiveTime> {
+    chrono::NaiveTime::parse_from_str(s, "%H:%M")
+        .wrap_err_with(|| format!("Invalid time format '{}' (expected HH:MM)", s))
+}
+
+/// Convert a ScheduleConfig from config.toml into a database::Schedule.
+fn schedule_config_to_schedule(config: &ScheduleConfig) -> Result<database::Schedule> {
+    let interval = database::Schedule::parse_interval(&config.interval)?;
+
+    let start_date = config.start_date.as_ref()
+        .map(|s| parse_datetime(s))
+        .transpose()?;
+
+    let end_date = config.end_date.as_ref()
+        .map(|s| parse_datetime(s))
+        .transpose()?;
+
+    let active_time_start = config.active_time_start.as_ref()
+        .map(|s| parse_time(s))
+        .transpose()?;
+
+    let active_time_end = config.active_time_end.as_ref()
+        .map(|s| parse_time(s))
+        .transpose()?;
+
+    let schedule = database::Schedule {
+        name: config.name.clone(),
+        start_date,
+        end_date,
+        active_time_start,
+        active_time_end,
+        interval,
+        message: config.message.clone(),
+    };
+
+    schedule.validate()?;
+
+    Ok(schedule)
+}
+
+/// Load schedules from the Configuration struct.
+/// Filters out disabled schedules and validates all enabled ones.
+fn load_schedules_from_config(config: &Configuration) -> Vec<database::Schedule> {
+    let mut schedules = Vec::new();
+
+    for schedule_config in &config.schedules {
+        if !schedule_config.enabled {
+            debug!(schedule = %schedule_config.name, "Skipping disabled schedule");
+            continue;
+        }
+
+        match schedule_config_to_schedule(schedule_config) {
+            Ok(schedule) => schedules.push(schedule),
+            Err(e) => {
+                error!(
+                    schedule = %schedule_config.name,
+                    error = ?e,
+                    "Failed to parse schedule config, skipping"
+                );
+            }
+        }
+    }
+
+    schedules
+}
+
+/// Reload configuration from config.toml and extract schedules.
+/// Returns None if config cannot be loaded or parsed.
+fn reload_schedules_from_config() -> Option<Vec<database::Schedule>> {
+    let data = match std::fs::read_to_string(CONFIG_PATH) {
+        Ok(data) => data,
+        Err(e) => {
+            error!(error = ?e, "Failed to read config.toml for reload");
+            return None;
+        }
+    };
+
+    let config: Configuration = match toml::from_str(&data) {
+        Ok(config) => config,
+        Err(e) => {
+            error!(error = ?e, "Failed to parse config.toml for reload");
+            return None;
+        }
+    };
+
+    if let Err(e) = config.validate() {
+        error!(error = ?e, "Config validation failed during reload");
+        return None;
+    }
+
+    Some(load_schedules_from_config(&config))
+}
+
+/// Config file watcher service that monitors config.toml for changes.
+/// Uses notify-debouncer-mini with 2 second debounce to avoid rapid reloads.
+#[instrument(skip(cache))]
+async fn run_config_watcher_service(
+    cache: Arc<tokio::sync::RwLock<database::ScheduleCache>>,
+) {
+    use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode};
+    use std::time::Duration as StdDuration;
+
+    info!("Config watcher service started");
+
+    // Create channel for receiving file change events
+    let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+
+    // Get absolute path to config file for watching
+    let config_path = match std::fs::canonicalize(CONFIG_PATH) {
+        Ok(p) => p,
+        Err(e) => {
+            error!(error = ?e, "Failed to get absolute path for config.toml");
+            return;
+        }
+    };
+
+    // Spawn blocking task for the file watcher (notify is sync)
+    let watcher_config_path = config_path.clone();
+    let mut watcher_handle = tokio::task::spawn_blocking(move || {
+        let tx = tx;
+        let config_path = watcher_config_path;
+
+        // Create debouncer with 2 second timeout
+        let mut debouncer = match new_debouncer(
+            StdDuration::from_secs(2),
+            move |res: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify_debouncer_mini::notify::Error>| {
+                match res {
+                    Ok(events) => {
+                        for event in events {
+                            debug!(path = ?event.path, "File change event received");
+                            // Use blocking_send since we're in a sync context
+                            if tx.blocking_send(()).is_err() {
+                                // Channel closed, watcher should stop
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!(error = ?e, "File watcher error");
+                    }
+                }
+            },
+        ) {
+            Ok(d) => d,
+            Err(e) => {
+                error!(error = ?e, "Failed to create file watcher");
+                return;
+            }
+        };
+
+        // Watch the config file's parent directory
+        let watch_path = config_path.parent().unwrap_or(Path::new("."));
+        if let Err(e) = debouncer.watcher().watch(watch_path, RecursiveMode::NonRecursive) {
+            error!(error = ?e, path = ?watch_path, "Failed to watch config directory");
+            return;
+        }
+
+        info!(path = ?watch_path, "Watching for config changes");
+
+        // Keep the watcher alive by parking the thread
+        // The watcher will be dropped when the main task exits
+        loop {
+            std::thread::park();
+        }
+    });
+
+    // Main loop: handle file change events
+    loop {
+        tokio::select! {
+            Some(()) = rx.recv() => {
+                info!("Config file changed, reloading schedules");
+
+                if let Some(schedules) = reload_schedules_from_config() {
+                    let mut cache_guard = cache.write().await;
+                    let old_count = cache_guard.schedules.len();
+                    cache_guard.update(schedules);
+
+                    info!(
+                        old_count,
+                        new_count = cache_guard.schedules.len(),
+                        version = cache_guard.version,
+                        "Schedules reloaded from config"
+                    );
+                } else {
+                    warn!("Failed to reload config, keeping existing schedules");
+                }
+            }
+            _ = &mut watcher_handle => {
+                error!("File watcher task exited unexpectedly");
+                break;
+            }
+        }
+    }
 }
 
 /// Main entry point for the twitch-1337 bot.
@@ -623,12 +845,15 @@ pub async fn main() -> Result<()> {
 
     let local = Utc::now().with_timezone(&chrono_tz::Europe::Berlin);
 
+    let schedules_enabled = !config.schedules.is_empty();
+
     info!(
         local_time = ?local,
         utc_time = ?Utc::now(),
         channel = %config.twitch.channel,
         username = %config.twitch.username,
-        google_sheets_enabled = config.google_sheets.is_some(),
+        schedules_enabled,
+        schedule_count = config.schedules.len(),
         "Starting twitch-1337 bot"
     );
 
@@ -646,23 +871,30 @@ pub async fn main() -> Result<()> {
     // Spawn message router task
     let router_handle = tokio::spawn(run_message_router(incoming_messages, broadcast_tx.clone()));
 
-    // Optionally spawn schedule loader service and handler
-    let (loader_service, handler_scheduled_messages) = if let Some(ref sheets_config) = config.google_sheets {
-        info!("Google Sheets configured, starting scheduled message system");
+    // Optionally spawn config watcher service and scheduled message handler
+    let (watcher_service, handler_scheduled_messages) = if schedules_enabled {
+        info!(
+            count = config.schedules.len(),
+            "Schedules configured, starting scheduled message system"
+        );
+
+        // Load initial schedules from config
+        let initial_schedules = load_schedules_from_config(&config);
+        info!(
+            loaded = initial_schedules.len(),
+            "Loaded initial schedules from config"
+        );
 
         // Create schedule cache for dynamic scheduled messages
-        let schedule_cache = Arc::new(tokio::sync::RwLock::new(
-            load_cache_from_disk()
-                .inspect_err(|e| warn!("Failed to load cache from disk: {:?}", e))
-                .unwrap_or_else(|_| database::ScheduleCache::new())
-        ));
+        let mut cache = database::ScheduleCache::new();
+        cache.update(initial_schedules);
+        let schedule_cache = Arc::new(tokio::sync::RwLock::new(cache));
 
-        // Spawn schedule loader service
-        let loader = tokio::spawn({
+        // Spawn config watcher service
+        let watcher = tokio::spawn({
             let cache = schedule_cache.clone();
-            let sheets_config = sheets_config.clone();
             async move {
-                run_schedule_loader_service(cache, sheets_config).await;
+                run_config_watcher_service(cache).await;
             }
         });
 
@@ -674,9 +906,9 @@ pub async fn main() -> Result<()> {
             async move { run_scheduled_message_handler(client, cache, channel).await }
         });
 
-        (Some(loader), Some(handler))
+        (Some(watcher), Some(handler))
     } else {
-        info!("Google Sheets not configured, scheduled messages disabled");
+        info!("No schedules configured, scheduled messages disabled");
         (None, None)
     };
 
@@ -698,11 +930,11 @@ pub async fn main() -> Result<()> {
         async move { run_generic_command_handler(broadcast_tx, client, se_config).await }
     });
 
-    if config.google_sheets.is_some() {
+    if schedules_enabled {
         info!(
-            "Bot running with continuous connection. Handlers: Schedule loader, 1337 tracker, Generic commands, Scheduled messages"
+            "Bot running with continuous connection. Handlers: Config watcher, 1337 tracker, Generic commands, Scheduled messages"
         );
-        info!("Scheduled messages: Loaded dynamically from Google Sheets or cache");
+        info!("Scheduled messages: Loaded from config.toml, reloads on file change");
     } else {
         info!(
             "Bot running with continuous connection. Handlers: 1337 tracker, Generic commands"
@@ -718,8 +950,8 @@ pub async fn main() -> Result<()> {
     info!("Bot is running. Press Ctrl+C to stop.");
 
     // Handle optional scheduled message handlers
-    match (loader_service, handler_scheduled_messages) {
-        (Some(loader), Some(handler)) => {
+    match (watcher_service, handler_scheduled_messages) {
+        (Some(watcher), Some(handler)) => {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
                     info!("Shutdown signal received, exiting gracefully");
@@ -727,8 +959,8 @@ pub async fn main() -> Result<()> {
                 result = router_handle => {
                     error!("Message router exited unexpectedly: {result:?}");
                 }
-                result = loader => {
-                    error!("Schedule loader service exited unexpectedly: {result:?}");
+                result = watcher => {
+                    error!("Config watcher service exited unexpectedly: {result:?}");
                 }
                 result = handler_1337 => {
                     error!("1337 handler exited unexpectedly: {result:?}");
@@ -1489,7 +1721,7 @@ mod database {
                     .parse()
                     .map_err(|_| eyre!("Invalid minutes in hh:mm format: {}", parts[1]))?;
 
-                if hours < 0 || minutes < 0 || minutes >= 60 {
+                if hours < 0 || !(0..60).contains(&minutes) {
                     return Err(eyre!(
                         "Invalid hh:mm values (hours={}, minutes={})",
                         hours,
@@ -1636,517 +1868,3 @@ mod database {
     }
 }
 
-fn get_schedule_cache_dir() -> PathBuf {
-    get_data_dir().join("schedule_cache.ron")
-}
-
-/// Save the schedule cache to disk in RON format.
-fn save_cache_to_disk(cache: &database::ScheduleCache) -> Result<()> {
-    let cache_path = get_schedule_cache_dir();
-
-    // Serialize to RON format
-    let ron_string = ron::ser::to_string_pretty(cache, ron::ser::PrettyConfig::default())
-        .wrap_err("Failed to serialize cache to RON")?;
-
-    // Write to file
-    std::fs::write(&cache_path, ron_string)
-        .wrap_err_with(|| format!("Failed to write cache to {}", cache_path.display()))?;
-
-    debug!(
-        path = %cache_path.display(),
-        version = cache.version,
-        "Cache saved to disk"
-    );
-    Ok(())
-}
-
-/// Load the schedule cache from disk.
-fn load_cache_from_disk() -> Result<database::ScheduleCache> {
-    let cache_path = get_schedule_cache_dir();
-
-    // Read file contents
-    let contents = std::fs::read_to_string(&cache_path)
-        .wrap_err_with(|| format!("Failed to read cache from {}", cache_path.display()))?;
-
-    // Deserialize from RON
-    let cache: database::ScheduleCache =
-        ron::from_str(&contents).wrap_err("Failed to deserialize cache from RON")?;
-
-    info!(
-        path = %cache_path.display(),
-        version = cache.version,
-        schedule_count = cache.schedules.len(),
-        last_updated = %cache.last_updated,
-        "Cache loaded from disk"
-    );
-
-    Ok(cache)
-}
-
-/// Custom HTTP client builder for yup-oauth2 that uses webpki-roots instead of native certs.
-/// This is required for FROM scratch containers that don't have system CA certificates.
-struct WebPkiHyperClient;
-
-impl yup_oauth2::authenticator::HyperClientBuilder for WebPkiHyperClient {
-    type Connector =
-        hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
-
-    fn build_hyper_client(
-        self,
-    ) -> std::result::Result<
-        hyper_util::client::legacy::Client<Self::Connector, String>,
-        yup_oauth2::Error,
-    > {
-        let connector = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_webpki_roots() // Use webpki-roots instead of native-roots
-            .https_or_http()
-            .enable_http1()
-            .build();
-
-        Ok(
-            hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-                .build(connector),
-        )
-    }
-
-    fn build_test_hyper_client(
-        self,
-    ) -> hyper_util::client::legacy::Client<Self::Connector, String> {
-        self.build_hyper_client().unwrap()
-    }
-}
-
-/// Build a mapping of column names to their indices from the header row.
-/// Returns a HashMap with normalized (lowercase, trimmed) column names as keys.
-fn build_column_map(
-    header_row: &[serde_json::Value],
-) -> Result<std::collections::HashMap<String, usize>> {
-    use std::collections::HashMap;
-
-    let mut map = HashMap::new();
-
-    for (index, cell) in header_row.iter().enumerate() {
-        if let Some(name) = cell.as_str() {
-            let normalized = name.trim().to_lowercase();
-            if !normalized.is_empty() {
-                map.insert(normalized, index);
-            }
-        }
-    }
-
-    // Check for required columns
-    let required_columns = ["schedule name", "message", "interval"];
-    for col in &required_columns {
-        if !map.contains_key(*col) {
-            return Err(eyre!(
-                "Required column '{}' not found in header row. Available columns: {:?}",
-                col,
-                map.keys().collect::<Vec<_>>()
-            ));
-        }
-    }
-
-    Ok(map)
-}
-
-/// Fetch schedules from Google Sheets.
-/// Returns a vector of validated schedules.
-async fn fetch_schedules_from_sheets(
-    sheets_config: &GoogleSheetsConfig,
-) -> Result<Vec<database::Schedule>> {
-    use google_sheets4::api::Sheets;
-
-    debug!(
-        spreadsheet_id = %sheets_config.spreadsheet_id,
-        sheet_name = %sheets_config.sheet_name,
-        service_account_path = %sheets_config.service_account_path.display(),
-        "Fetching schedules from Google Sheets"
-    );
-
-    // Load service account credentials
-    let service_account_key = yup_oauth2::read_service_account_key(&sheets_config.service_account_path)
-        .await
-        .wrap_err_with(|| {
-            format!(
-                "Failed to read service account key from {}",
-                sheets_config.service_account_path.display()
-            )
-        })?;
-
-    // Create authenticator with custom HTTP client that uses webpki-roots
-    // The default yup-oauth2 client uses native-roots which won't work in FROM scratch containers
-    let auth = yup_oauth2::ServiceAccountAuthenticator::with_client(
-        service_account_key,
-        WebPkiHyperClient,
-    )
-    .build()
-    .await
-    .wrap_err("Failed to create service account authenticator")?;
-
-    // Build HTTP client with webpki roots for the Sheets API
-    // This must match the connector type from WebPkiHyperClient
-    let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_webpki_roots()
-        .https_or_http()
-        .enable_http1()
-        .build();
-
-    // Create hyper client for google-sheets4 (uses BoxBody as the body type)
-    let hyper_client =
-        hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-            .build(https_connector);
-
-    // Create Sheets hub
-    let hub = Sheets::new(hyper_client, auth);
-
-    // First, fetch the header row to determine column positions
-    let header_range = format!("'{}'!A1:Z1", sheets_config.sheet_name);
-    let header_result = hub
-        .spreadsheets()
-        .values_get(&sheets_config.spreadsheet_id, &header_range)
-        .doit()
-        .await
-        .wrap_err("Failed to fetch header row from Google Sheets")?;
-
-    let header_values = header_result
-        .1
-        .values
-        .ok_or_else(|| eyre!("No header row found in Google Sheets"))?;
-
-    let header_row = header_values
-        .first()
-        .ok_or_else(|| eyre!("Header row is empty"))?;
-
-    // Build column name -> index mapping (case-insensitive)
-    let column_map = build_column_map(header_row)?;
-
-    debug!(columns = ?column_map, "Column mapping created");
-
-    // Determine the last column to fetch based on max index
-    let max_index = column_map.values().max().copied().unwrap_or(0);
-    let last_column = std::char::from_u32(65 + max_index as u32)
-        .ok_or_else(|| eyre!("Column index too large"))?;
-
-    // Fetch data from sheet (A2:LAST to skip header row)
-    let range = format!("'{}'!A2:{}", sheets_config.sheet_name, last_column);
-
-    let result = hub
-        .spreadsheets()
-        .values_get(&sheets_config.spreadsheet_id, &range)
-        .doit()
-        .await
-        .wrap_err("Failed to fetch data from Google Sheets")?;
-
-    let values = result
-        .1
-        .values
-        .ok_or_else(|| eyre!("No data found in Google Sheets"))?;
-
-    info!(row_count = values.len(), "Fetched rows from Google Sheets");
-
-    // Parse rows into Schedule objects
-    let mut schedules = Vec::new();
-    let mut skipped_rows = 0;
-
-    for (index, row) in values.iter().enumerate() {
-        let row_num = index + 2; // +2 because we skip header (row 1) and are 0-indexed
-
-        match parse_schedule_row(row, row_num, &column_map) {
-            Ok(Some(schedule)) => {
-                // Validate schedule
-                if let Err(e) = schedule.validate() {
-                    error!(row = row_num, error = ?e, "Schedule validation failed");
-                    skipped_rows += 1;
-                } else {
-                    schedules.push(schedule);
-                }
-            }
-            Ok(None) => {
-                // Schedule is disabled, skip silently (already logged at debug level)
-            }
-            Err(e) => {
-                error!(row = row_num, content = ?row, error = ?e, "Failed to parse schedule row");
-                skipped_rows += 1;
-            }
-        }
-    }
-
-    info!(
-        loaded = schedules.len(),
-        skipped = skipped_rows,
-        "Parsed schedules from Google Sheets"
-    );
-
-    Ok(schedules)
-}
-
-/// Parse a Google Sheets row into a Schedule using the column mapping.
-/// Required columns: Schedule Name, Message, Interval
-/// Optional columns: Start Date, End Date, Active Time Start, Active Time End, Enabled
-/// Returns Ok(None) if schedule is disabled (no error logged).
-fn parse_schedule_row(
-    row: &[serde_json::Value],
-    row_num: usize,
-    column_map: &std::collections::HashMap<String, usize>,
-) -> Result<Option<database::Schedule>> {
-    use chrono::{NaiveDateTime, NaiveTime};
-
-    // Helper to get string value from named column
-    let get_string = |col_name: &str| -> Result<String> {
-        let index = column_map
-            .get(col_name)
-            .ok_or_else(|| eyre!("Column '{}' not found in mapping", col_name))?;
-
-        row.get(*index)
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| {
-                eyre!(
-                    "Column '{}' (index {}) is missing or not a string",
-                    col_name,
-                    index
-                )
-            })
-    };
-
-    // Helper to get optional string value from named column
-    let get_optional_string = |col_name: &str| -> Option<String> {
-        let index = *column_map.get(col_name)?;
-        row.get(index)
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| s.to_string())
-    };
-
-    // Parse required fields
-    let name = get_string("schedule name")
-        .wrap_err_with(|| format!("Row {}: Schedule Name is required", row_num))?;
-
-    let message =
-        get_string("message").wrap_err_with(|| format!("Row {}: Message is required", row_num))?;
-
-    let interval_str = get_string("interval")
-        .wrap_err_with(|| format!("Row {}: Interval is required", row_num))?;
-
-    let interval = database::Schedule::parse_interval(&interval_str).wrap_err_with(|| {
-        format!(
-            "Row {}: Invalid interval format '{}'",
-            row_num, interval_str
-        )
-    })?;
-
-    // Check if schedule is enabled (if Enabled column exists)
-    // Silently skip disabled schedules by returning Ok(None)
-    if let Some(enabled_str) = get_optional_string("enabled") {
-        let enabled = enabled_str.to_lowercase();
-        if enabled == "false" || enabled == "no" || enabled == "0" {
-            debug!(row = row_num, name = %name, "Skipping disabled schedule");
-            return Ok(None);
-        }
-    }
-
-    // Parse optional date fields
-    // Support multiple date formats: ISO 8601, DD/MM/YYYY, and DD/MM/YYYY HH:MM
-    let parse_date = |s: &str| -> Result<NaiveDateTime> {
-        // Try ISO 8601 format first (YYYY-MM-DDTHH:MM:SS)
-        if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-            return Ok(dt);
-        }
-
-        // Try DD/MM/YYYY HH:MM format
-        if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%d/%m/%Y %H:%M") {
-            return Ok(dt);
-        }
-
-        // Try DD/MM/YYYY format (assume midnight)
-        if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%d/%m/%Y") {
-            return Ok(date.and_hms_opt(0, 0, 0).unwrap());
-        }
-
-        Err(eyre!(
-            "Invalid date format '{}' (expected YYYY-MM-DDTHH:MM:SS, DD/MM/YYYY HH:MM, or DD/MM/YYYY)",
-            s
-        ))
-    };
-
-    let start_date = if let Some(s) = get_optional_string("start date") {
-        Some(
-            parse_date(&s)
-                .wrap_err_with(|| format!("Row {}: Invalid start date format", row_num))?,
-        )
-    } else {
-        None
-    };
-
-    let end_date = if let Some(s) = get_optional_string("end date") {
-        Some(parse_date(&s).wrap_err_with(|| format!("Row {}: Invalid end date format", row_num))?)
-    } else {
-        None
-    };
-
-    // Parse optional time window fields (HH:MM format)
-    let active_time_start = if let Some(s) = get_optional_string("active time start") {
-        Some(NaiveTime::parse_from_str(&s, "%H:%M").wrap_err_with(|| {
-            format!(
-                "Row {}: Invalid active time start format '{}' (expected HH:MM)",
-                row_num, s
-            )
-        })?)
-    } else {
-        None
-    };
-
-    let active_time_end = if let Some(s) = get_optional_string("active time end") {
-        Some(NaiveTime::parse_from_str(&s, "%H:%M").wrap_err_with(|| {
-            format!(
-                "Row {}: Invalid active time end format '{}' (expected HH:MM)",
-                row_num, s
-            )
-        })?)
-    } else {
-        None
-    };
-
-    Ok(Some(database::Schedule {
-        name,
-        start_date,
-        end_date,
-        active_time_start,
-        active_time_end,
-        interval,
-        message,
-    }))
-}
-
-/// Schedule loader service that polls Google Sheets and updates the cache.
-/// Runs continuously in a background task.
-#[instrument(skip(cache, sheets_config))]
-async fn run_schedule_loader_service(
-    cache: Arc<tokio::sync::RwLock<database::ScheduleCache>>,
-    sheets_config: GoogleSheetsConfig,
-) {
-    use tokio::time::{Duration, interval};
-
-    info!("Schedule loader service started");
-
-    // Initial load on startup
-    let initial_schedules = match try_load_schedules_from_any_source(&sheets_config).await {
-        Ok(schedules) => {
-            info!(count = schedules.len(), "Initial schedules loaded");
-            schedules
-        }
-        Err(e) => {
-            warn!(error = ?e, "Failed to load initial schedules, starting with empty cache");
-            Vec::new()
-        }
-    };
-
-    // Update cache with initial schedules
-    {
-        let mut cache_guard = cache.write().await;
-        cache_guard.update(initial_schedules);
-    }
-
-    // Save initial cache to disk
-    {
-        let cache_guard = cache.read().await;
-        if let Err(e) = save_cache_to_disk(&cache_guard) {
-            error!(error = ?e, "Failed to save initial cache to disk");
-        }
-    }
-
-    // Start polling loop (every 5 minutes)
-    let mut poll_interval = interval(Duration::from_secs(300)); // 5 minutes
-    poll_interval.tick().await; // Skip first tick (we just did initial load)
-
-    let mut consecutive_failures = 0;
-
-    loop {
-        poll_interval.tick().await;
-
-        debug!("Polling Google Sheets for schedule updates");
-
-        match fetch_schedules_from_sheets(&sheets_config).await {
-            Ok(schedules) => {
-                consecutive_failures = 0;
-
-                info!(
-                    count = schedules.len(),
-                    "Successfully fetched schedules from Google Sheets"
-                );
-
-                // Update cache
-                {
-                    let mut cache_guard = cache.write().await;
-                    cache_guard.update(schedules);
-                    info!(version = cache_guard.version, "Cache updated");
-                }
-
-                // Save to disk
-                {
-                    let cache_guard = cache.read().await;
-                    if let Err(e) = save_cache_to_disk(&cache_guard) {
-                        error!(error = ?e, "Failed to save cache to disk");
-                    }
-                }
-            }
-            Err(e) => {
-                consecutive_failures += 1;
-
-                error!(
-                    error = ?e,
-                    consecutive_failures,
-                    "Failed to fetch schedules from Google Sheets"
-                );
-
-                if consecutive_failures >= 10 {
-                    warn!(
-                        consecutive_failures,
-                        "Many consecutive failures, cache may be stale"
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// Try to load schedules from any available source in priority order:
-/// 1. Google Sheets
-/// 2. Disk cache
-/// 3. Empty (last resort)
-async fn try_load_schedules_from_any_source(
-    sheets_config: &GoogleSheetsConfig,
-) -> Result<Vec<database::Schedule>> {
-    info!("Google Sheets configured, attempting to load from Google Sheets");
-
-    match fetch_schedules_from_sheets(sheets_config).await {
-        Ok(schedules) => {
-            info!(
-                count = schedules.len(),
-                "Loaded schedules from Google Sheets"
-            );
-            return Ok(schedules);
-        }
-        Err(e) => {
-            warn!(error = ?e, "Failed to load from Google Sheets, trying disk cache");
-        }
-    }
-
-    // Try disk cache
-    match load_cache_from_disk() {
-        Ok(cache) => {
-            info!(
-                count = cache.schedules.len(),
-                "Loaded schedules from disk cache"
-            );
-            return Ok(cache.schedules);
-        }
-        Err(e) => {
-            warn!(error = ?e, "Failed to load from disk cache");
-        }
-    }
-
-    // Last resort: empty cache
-    warn!("No schedules available from any source, starting with empty cache");
-    Ok(Vec::new())
-}
