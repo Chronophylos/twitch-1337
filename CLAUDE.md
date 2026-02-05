@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Rust-based Twitch IRC bot with multiple features:
 1. **1337 Tracker**: Monitors for "1337"/"DANKIES" messages at 13:37 Berlin time, posts stats at 13:38
 2. **Ping Toggle**: Allows users to toggle their @mention in StreamElements ping commands
-3. **Scheduled Messages**: Dynamic message scheduling via Google Sheets with 5-minute polling
+3. **Scheduled Messages**: Dynamic message scheduling via config.toml with file watching
 
 Uses a persistent IRC connection with broadcast-based message routing to multiple handlers.
 
@@ -98,10 +98,15 @@ The config.toml file has three sections:
 - `api_token` - StreamElements API token
 - `channel_id` - StreamElements channel ID (numeric)
 
-**[google_sheets]** (optional) - Dynamic scheduled messages
-- `spreadsheet_id` - Google Sheets spreadsheet ID
-- `sheet_name` - Sheet name (default: "ScheduledMessages")
-- `service_account_path` - Path to service account JSON key
+**[[schedules]]** (optional, repeatable) - Scheduled messages
+- `name` - Unique identifier for the schedule
+- `message` - Text to post in chat
+- `interval` - Posting frequency in "hh:mm" format (e.g., "01:00" for 1 hour)
+- `start_date` - (optional) When to start posting (ISO 8601: YYYY-MM-DDTHH:MM:SS)
+- `end_date` - (optional) When to stop posting
+- `active_time_start` - (optional) Daily start time in HH:MM format
+- `active_time_end` - (optional) Daily end time in HH:MM format
+- `enabled` - (optional, default: true) Set to false to disable without deleting
 
 See `config.toml.example` for a complete annotated example.
 
@@ -135,15 +140,6 @@ The bot persists refreshed OAuth tokens to `./token.ron` (Rust Object Notation f
 - Eliminates need to manually update tokens when they expire
 - Uses `FileBasedTokenStorage` implementing the `TokenStorage` trait
 
-## Schedule Cache
-
-Scheduled messages are cached to `./schedule_cache.ron` for offline fallback:
-- Automatically saved when schedules are fetched from Google Sheets
-- Used as fallback if Google Sheets is unavailable
-- Contains schedule data, last update timestamp, and version number
-- Persists across bot restarts
-- RON format for human-readable storage
-
 ## Architecture
 
 ### Persistent Connection with Broadcast-Based Message Routing
@@ -162,8 +158,8 @@ The bot maintains a **single persistent IRC connection** and uses a **broadcast 
    - Runs until connection closes
 
 3. **Handler Tasks** (parallel, continuous):
-   - **Schedule Loader Service**: Polls Google Sheets every 5 minutes (if configured)
-   - **Scheduled Message Handler**: Posts messages based on Google Sheets schedules (if configured)
+   - **Config Watcher Service**: Watches config.toml for changes (2s debounce)
+   - **Scheduled Message Handler**: Posts messages based on config.toml schedules (if configured)
    - **1337 Handler**: Daily scheduled monitoring (13:36-13:38)
    - **Generic Command Handler**: Processes `!toggle-ping` commands 24/7
    - Each handler runs independently
@@ -188,10 +184,9 @@ The bot maintains a **single persistent IRC connection** and uses a **broadcast 
 **IRC & Networking:**
 - `twitch-irc` - Twitch IRC client (features: refreshing-token-rustls-webpki-roots, transport-tcp-rustls-webpki-roots)
 - `reqwest` - HTTP client for StreamElements API (features: json, rustls-tls-webpki-roots)
-- `google-sheets4` - Google Sheets API client (version 6.0+)
-- `hyper` - HTTP client library (version 1.5)
-- `hyper-util` - HTTP utilities (features: client, client-legacy, http1, tokio)
-- `yup-oauth2` - OAuth2 authentication (version 12.1)
+
+**File Watching:**
+- `notify-debouncer-mini` - File system watcher with debouncing for config reload
 
 **Time Handling:**
 - `chrono` - Date/time operations
@@ -210,6 +205,7 @@ The bot maintains a **single persistent IRC connection** and uses a **broadcast 
 - `serde` - Serialization framework (derive feature)
 - `serde_json` - JSON serialization for StreamElements API
 - `ron` - Rust Object Notation for token storage
+- `toml` - Configuration file parsing
 
 **Other:**
 - `regex` - For username matching in ping command
@@ -225,18 +221,17 @@ The bot maintains a **single persistent IRC connection** and uses a **broadcast 
 - Maximum capacity: 10,000 users (prevents unbounded memory growth)
 
 **Scheduled Messages State:**
-- `schedule_cache`: `Arc<RwLock<ScheduleCache>>` - Shared cache of schedules loaded from Google Sheets
+- `schedule_cache`: `Arc<RwLock<ScheduleCache>>` - Shared cache of schedules loaded from config.toml
 - Contains vector of schedules, last update timestamp, and version number
-- Updated every 5 minutes by loader service
+- Updated when config.toml changes (file watcher with 2s debounce)
 - Version increments trigger task manager to spawn/stop message tasks
-- Persisted to disk (`schedule_cache.ron`) for offline fallback
 
 **Persistent State:**
 - OAuth tokens in `token.ron`
-- Schedule cache in `schedule_cache.ron`
 
 **No Persistent State:**
 - StreamElements commands fetched/updated via API on demand
+- Schedules loaded from config.toml on startup and file changes
 
 ### Configuration Files
 
@@ -305,7 +300,8 @@ services:
   twitch-1337:
     image: chronophylos/twitch-1337:latest
     restart: unless-stopped
-    env_file: .env
+    volumes:
+      - ./config.toml:/app/config.toml:ro
 ```
 
 **Systemd service (musl binary):**
@@ -323,7 +319,7 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 
 ### Main Entry Point
 
-**`main() -> Result<()>` (src/main.rs:~745-915)**
+**`main() -> Result<()>` (src/main.rs)**
 - Initializes error handling (color-eyre) and logging (tracing-subscriber)
 - Loads and validates configuration from `config.toml`
 - Calls `setup_and_verify_twitch_client()` to establish authenticated connection
@@ -333,28 +329,28 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 
 ### Connection Management
 
-**`setup_and_verify_twitch_client() -> Result<(UnboundedReceiver, Client)>` (src/main.rs:829-893)**
+**`setup_and_verify_twitch_client() -> Result<(UnboundedReceiver, Client)>`**
 - Creates IRC client with `RefreshingLoginCredentials<FileBasedTokenStorage>`
 - Connects to Twitch IRC and joins configured channel
 - Waits for `GlobalUserState` message to verify authentication (30s timeout)
 - Returns verified client and incoming message receiver
 - Detects and reports authentication failures with helpful error messages
 
-**`setup_twitch_client() -> (UnboundedReceiver, Client)` (src/main.rs:806-818)**
+**`setup_twitch_client() -> (UnboundedReceiver, Client)`**
 - Creates `RefreshingLoginCredentials` with client ID, secret, and token storage
 - Builds `ClientConfig` and `TwitchIRCClient`
 - Returns receiver and client for connection setup
 
 ### Message Distribution
 
-**`run_message_router(incoming_messages, broadcast_tx)` (src/main.rs:899-913)**
+**`run_message_router(incoming_messages, broadcast_tx)`**
 - Reads from twitch-irc's UnboundedReceiver
 - Broadcasts all ServerMessages to subscribed handlers
 - Exits when connection closes
 
 ### Handler: 1337 Tracker
 
-**`run_1337_handler(broadcast_tx, client)` (src/main.rs:919-983)**
+**`run_1337_handler(broadcast_tx, client)`**
 - Infinite loop: waits until 13:36 Berlin time each day
 - Creates fresh `HashSet` for today's users
 - Spawns `monitor_1337_messages()` subtask
@@ -362,13 +358,13 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 - At 13:38: generates and posts stats message
 - Aborts monitor subtask and repeats next day
 
-**`monitor_1337_messages(broadcast_rx, total_users)` (src/main.rs:380-430)**
+**`monitor_1337_messages(broadcast_rx, total_users)`**
 - Filters for PRIVMSG messages at exactly 13:37:xx Berlin time
 - Checks if message contains "1337" or "DANKIES" via `is_valid_1337_message()`
 - Ignores known bots: "supibot", "potatbotat"
 - Inserts unique usernames into shared HashSet (max 10,000)
 
-**`generate_stats_message(count, user_list) -> String` (src/main.rs:325-360)**
+**`generate_stats_message(count, user_list) -> String`**
 - Returns contextual German message based on count:
   - 0: "Erm" or "fuh"
   - 1: "@user zumindest einer..."
@@ -380,16 +376,16 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 
 ### Handler: Generic Commands
 
-**`run_generic_command_handler(broadcast_tx, client)` (src/main.rs:1026-1072)**
+**`run_generic_command_handler(broadcast_tx, client)`**
 - Initializes `SEClient` (StreamElements API client)
 - Subscribes to broadcast channel
 - Dispatches commands to `handle_generic_commands()`
 
-**`handle_generic_commands(privmsg, client, se_client) -> Result<()>` (src/main.rs:1082-1097)**
+**`handle_generic_commands(privmsg, client, se_client) -> Result<()>`**
 - Parses first word of message
 - Routes to specialized handlers (currently only `toggle_ping_command`)
 
-**`toggle_ping_command(privmsg, client, se_client, command_name) -> Result<()>` (src/main.rs:1126-1214)**
+**`toggle_ping_command(privmsg, client, se_client, command_name) -> Result<()>`**
 - Fetches all StreamElements commands with "pinger" keyword
 - Finds command matching `command_name`
 - Toggles user's @mention in command reply using regex
@@ -397,26 +393,25 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 - Responds with "Hab ich gemacht Okayge" on success
 - Error responses: "Das kann ich nicht FDM" (no name), "Das finde ich nicht FDM" (not found)
 
-### Handler: Scheduled Messages (Dynamic Google Sheets)
+### Handler: Scheduled Messages (Config-Based)
 
-**Only runs if Google Sheets is configured** (the `[google_sheets]` section in `config.toml`).
+**Only runs if schedules are configured** (the `[[schedules]]` sections in `config.toml`).
 
-**`run_schedule_loader_service(cache)` (src/main.rs:~1960)**
-- Polls Google Sheets every 5 minutes for schedule updates
-- Initial load on startup: Google Sheets → disk cache → empty cache (fallback chain)
-- Saves fetched schedules to disk cache (`schedule_cache.ron`)
-- Increments cache version on each update
-- Logs consecutive failures (warns after 10 failures)
-- Runs continuously in background
+**`run_config_watcher_service(cache)`**
+- Uses `notify-debouncer-mini` to watch config.toml for changes
+- 2-second debounce to avoid rapid reloads
+- Reloads and validates config on change
+- Updates cache (increments version) on successful reload
+- Keeps existing schedules if reload fails
 
-**`run_scheduled_message_handler(client, cache)` (src/main.rs:~1433)**
+**`run_scheduled_message_handler(client, cache)`**
 - Monitors cache for version changes every 30 seconds
 - Spawns new tasks for added schedules
 - Stops tasks for removed schedules
 - Each schedule runs in independent task
 - Dynamic task management without bot restart
 
-**`run_schedule_task(schedule, client, cache)` (src/main.rs:~1361)**
+**`run_schedule_task(schedule, client, cache)`**
 - Runs single schedule in loop
 - Sleeps for configured interval between posts
 - Checks if schedule still exists in cache before each post
@@ -424,80 +419,30 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 - Posts message to Twitch chat
 - Exits gracefully if schedule removed from cache
 
-**`build_column_map(header_row) -> Result<HashMap<String, usize>>` (src/main.rs:~1914)**
-- Builds mapping of column names to indices from header row
-- Normalizes column names (lowercase, trimmed) for case-insensitive matching
-- Validates that required columns exist
-- Returns HashMap for flexible column ordering
-
-**`fetch_schedules_from_sheets() -> Result<Vec<Schedule>>` (src/main.rs:~1945)**
-- Authenticates with Google Sheets API using service account
-- Fetches header row first to build column mapping
-- Fetches data from configured spreadsheet and sheet
-- Parses rows into `Schedule` objects using column names (not positions)
-- Validates each schedule (interval >= 1 minute, valid date ranges, etc.)
-- Skips invalid rows with error logging (includes row numbers)
+**`load_schedules_from_config(config) -> Vec<Schedule>`**
+- Iterates through `config.schedules` array
+- Skips disabled schedules
+- Converts `ScheduleConfig` to `database::Schedule`
+- Validates each schedule
 - Returns vector of validated schedules
 
-**`parse_schedule_row(row, row_num, column_map) -> Result<Schedule>` (src/main.rs:~2081)**
-- Parses Google Sheets row into Schedule struct using column mapping
-- Required columns (by name): Schedule Name, Message, Interval
-- Optional columns: Start Date, End Date, Active Time Start, Active Time End, Enabled
-- Supports flexible column ordering (uses header row to determine positions)
-- Validates formats:
-  - Dates: ISO 8601 (YYYY-MM-DDTHH:MM:SS), DD/MM/YYYY HH:MM, or DD/MM/YYYY
-  - Times: HH:MM format
-  - Intervals: "hh:mm" format (e.g., "01:30" for 1 hour 30 minutes) or legacy "30m"/"1h"/"2h30m"
-- Skips disabled schedules (Enabled column = FALSE, NO, or 0)
-
-**Google Sheets Format:**
-The bot reads the header row to determine column positions, so columns can be in any order. Column names are case-insensitive.
-
-Required columns:
-- **Schedule Name** - Unique identifier for the schedule
-- **Message** - Text to post in chat
-- **Interval** - Posting frequency in "hh:mm" format (e.g., "01:00" for 1 hour, "00:30" for 30 minutes)
-
-Optional columns:
-- **Start Date** - When to start posting (formats: "DD/MM/YYYY", "DD/MM/YYYY HH:MM", or "YYYY-MM-DDTHH:MM:SS")
-- **End Date** - When to stop posting (same formats as Start Date)
-- **Active Time Start** - Daily start time in "HH:MM" format (e.g., "18:00")
-- **Active Time End** - Daily end time in "HH:MM" format (e.g., "23:00")
-- **Enabled** - Set to FALSE, NO, or 0 to disable a schedule without deleting it
-
-Example header row:
-```
-Schedule Name | Start Date | End Date | Active Time Start | Active Time End | Interval | Enabled | Message
-```
-
-Example data row:
-```
-wichtel-reminder | 27/12/2025 | | 08:00 | 01:00 | 01:00 | TRUE | DinkDonk Don't forget your address!
-```
-
-**Time Windows:**
-- If Active Time Start/End are empty: Posts 24/7 at interval
-- If set: Only posts during daily time window (Europe/Berlin)
-- Handles midnight-spanning windows (e.g., "22:00" to "02:00")
-
-**Cache Files:**
-- `save_cache_to_disk(cache) -> Result<()>`: Serializes cache to RON format
-- `load_cache_from_disk() -> Result<ScheduleCache>`: Deserializes from disk
-- Path: `./schedule_cache.ron`
-- Contains schedules, last_updated, version
+**`reload_schedules_from_config() -> Option<Vec<Schedule>>`**
+- Reads config.toml from disk (sync, called from file watcher)
+- Parses and validates configuration
+- Returns None on error (keeps existing schedules)
 
 ### Database Module
 
-**`database::Schedule` (src/main.rs:~1537)**
-- Stores schedule configuration from Google Sheets
+**`database::Schedule`**
+- Stores schedule configuration
 - Fields: name, start_date, end_date, active_time_start, active_time_end, interval, message
 - Methods:
   - `is_active(now)`: Checks if schedule active based on date range and time window
-  - `parse_interval(s)`: Parses "30m"/"1h"/"2h30m" format to TimeDelta
+  - `parse_interval(s)`: Parses "hh:mm" format or legacy "30m"/"1h"/"2h30m" to TimeDelta
   - `validate()`: Validates required fields and logical consistency
 - Derives: Debug, Clone, Deserialize, Serialize
 
-**`database::ScheduleCache` (src/main.rs:~1696)**
+**`database::ScheduleCache`**
 - Container for loaded schedules with metadata
 - Fields: schedules (Vec<Schedule>), last_updated, version
 - Methods:
@@ -507,93 +452,55 @@ wichtel-reminder | 27/12/2025 | | 08:00 | 01:00 | 01:00 | TRUE | DinkDonk Don't 
 
 ### StreamElements Module
 
-**`streamelements::SEClient` (src/main.rs:94-168)**
+**`streamelements::SEClient`**
 - HTTP client for StreamElements API with Bearer auth
 - `new(token) -> Result<Self>`: Creates client with auth headers
 - `get_all_commands(channel_id) -> Result<Vec<Command>>`: Fetches all bot commands
 - `update_command(channel_id, command) -> Result<()>`: Updates a command
 
-**`streamelements::Command` (src/main.rs:42-64)**
+**`streamelements::Command`**
 - Represents a StreamElements bot command
 - Fields: cooldown, aliases, keywords, enabled flags, reply text, etc.
 
 ### Token Storage
 
-**`FileBasedTokenStorage` (src/main.rs:~658-720)**
+**`FileBasedTokenStorage`**
 - Implements `TokenStorage` trait for twitch-irc
 - Stores tokens in `./token.ron` file
 - `load_token()`: Reads from file, falls back to refresh token from config.toml on first run
 - `update_token()`: Writes updated tokens to file (called automatically by twitch-irc)
 
-### Utility Functions
-
-**`calculate_next_occurrence(hour, minute) -> DateTime<Utc>` (src/main.rs:228-252)**
-- Calculates next occurrence of daily Berlin time
-- Handles DST transitions
-
-**`wait_until_schedule(hour, minute)` (src/main.rs:255-273)**
-- Sleeps until next occurrence of daily Berlin time
-- Logs wait duration
-
-**`sleep_until_hms(hour, minute, second, latency)` (src/main.rs:278-300)**
-- Sleeps until specific time today (Berlin)
-- Adjusts for expected latency (90ms)
-- Used for precise timing within 1337 handler
-
-**`is_ignored_bot(username) -> bool` (src/main.rs:305-307)**
-- Returns true if username is "supibot" or "potatbotat"
-
-**`is_valid_1337_message(message) -> bool` (src/main.rs:312-320)**
-- Checks if PRIVMSG should count toward 1337 stats
-- Filters bots and checks for "1337" or "DANKIES" keywords
-
-**`one_of<T>(array) -> &T` (src/main.rs:372-374)**
-- Returns random element from array using rand::rng()
-
-### Types
-
-**`AuthenticatedTwitchClient` (type alias, src/main.rs:174-175)**
-- `TwitchIRCClient<SecureTCPTransport, RefreshingLoginCredentials<FileBasedTokenStorage>>`
-
-**`streamelements::Command` (struct, src/main.rs:42-64)**
-- Represents a StreamElements bot command
-- Key fields: `id`, `command`, `reply`, `keywords`, `enabled`, `cooldown`
-
-**`streamelements::CommandCooldown` (struct, src/main.rs:69-75)**
-- `user: i64` - Per-user cooldown in seconds
-- `global: i64` - Global cooldown in seconds
-
 ### Configuration Types
 
-**`Configuration` (src/main.rs:~260-265)**
+**`Configuration`**
 - Main configuration struct loaded from config.toml
-- Contains: `twitch`, `streamelements`, `google_sheets` (optional)
+- Contains: `twitch`, `streamelements`, `schedules` (Vec<ScheduleConfig>)
 - `validate()` method ensures all required fields are present and valid
 
-**`TwitchConfiguration` (src/main.rs:~233-244)**
+**`TwitchConfiguration`**
 - `channel`, `username` - Twitch channel and bot username
 - `refresh_token`, `client_id`, `client_secret` - OAuth credentials (SecretString)
 - `expected_latency` - IRC latency adjustment in milliseconds
 
-**`StreamelementsConfig` (src/main.rs:~246-251)**
+**`StreamelementsConfig`**
 - `api_token` - StreamElements API token (SecretString)
 - `channel_id` - StreamElements channel ID
 
-**`GoogleSheetsConfig` (src/main.rs:~253-258)**
-- `spreadsheet_id` - Google Sheets spreadsheet ID
-- `sheet_name` - Sheet name (defaults to "ScheduledMessages")
-- `service_account_path` - Path to service account JSON key
-
-### Static Configuration
-
-- `APP_USER_AGENT: &str` - User agent for HTTP requests (src/main.rs:~192)
+**`ScheduleConfig`**
+- Configuration for a scheduled message in config.toml
+- `name` - Unique identifier
+- `message` - Text to post
+- `interval` - Posting frequency ("hh:mm" format)
+- `start_date`, `end_date` - Optional date range (ISO 8601)
+- `active_time_start`, `active_time_end` - Optional daily time window (HH:MM)
+- `enabled` - Whether schedule is active (default: true)
 
 ### Constants
 
-- `TARGET_HOUR: u32 = 13` - Hour for 1337 tracking (src/main.rs:177)
-- `TARGET_MINUTE: u32 = 37` - Minute for 1337 tracking (src/main.rs:178)
-- `MAX_USERS: usize = 10_000` - Maximum tracked users (src/main.rs:181)
-- `EXPECTED_LATENCY: u32 = 90` - Twitch IRC latency in milliseconds (src/main.rs:185)
+- `TARGET_HOUR: u32 = 13` - Hour for 1337 tracking
+- `TARGET_MINUTE: u32 = 37` - Minute for 1337 tracking
+- `MAX_USERS: usize = 10_000` - Maximum tracked users
+- `CONFIG_PATH: &str = "./config.toml"` - Configuration file path
 
 ## Important Notes
 
@@ -608,51 +515,54 @@ wichtel-reminder | 27/12/2025 | | 08:00 | 01:00 | 01:00 | TRUE | DinkDonk Don't 
 - **Logging**: Structured logs with tracing, configurable via `RUST_LOG`
 - **Broadcast Architecture**: Message router distributes to independent handlers
 - **Token Refresh**: Tokens automatically refreshed and saved to `./token.ron`
+- **Hot Reload**: Schedules reload automatically when config.toml changes (2s debounce)
 
 ## Feature Timelines
 
 ### 1337 Tracker (Daily)
 ```
-13:36:00 → Handler wakes, creates fresh HashSet, subscribes to broadcast
-13:36:30 → Posts "PausersHype" reminder
-13:37:00-13:37:59 → Monitoring subtask tracks "1337"/"DANKIES" messages (unique users)
-13:38:00 → Posts stats message with contextual response
-         → Aborts monitor subtask, waits for next day
+13:36:00 -> Handler wakes, creates fresh HashSet, subscribes to broadcast
+13:36:30 -> Posts "PausersHype" reminder
+13:37:00-13:37:59 -> Monitoring subtask tracks "1337"/"DANKIES" messages (unique users)
+13:38:00 -> Posts stats message with contextual response
+         -> Aborts monitor subtask, waits for next day
 ```
 
 ### Ping Toggle (24/7)
 ```
-Continuous → Listens for "!toggle-ping <command>"
-           → Fetches StreamElements commands, toggles user's @mention
-           → Updates command via API, confirms success
+Continuous -> Listens for "!toggle-ping <command>"
+           -> Fetches StreamElements commands, toggles user's @mention
+           -> Updates command via API, confirms success
 ```
 
-### Scheduled Messages (Conditional - Only if Google Sheets configured)
+### Scheduled Messages (Conditional - Only if schedules configured)
 ```
-Startup    → Try Google Sheets → disk cache → empty cache (fallback chain)
-           → Spawn loader service and message handler
-           → Spawn tasks for each active schedule
+Startup    -> Load schedules from config.toml
+           -> Spawn config watcher service and message handler
+           -> Spawn tasks for each active schedule
 
-Every 5min → Poll Google Sheets for schedule updates
-           → Update cache if successful
-           → Save to disk (schedule_cache.ron)
+On config.toml change:
+           -> Debounce 2 seconds
+           -> Reload and validate config
+           -> Update cache (increment version)
+           -> Keep old schedules if reload fails
 
-Every 30s  → Task manager checks cache version
-           → Spawn tasks for new schedules
-           → Stop tasks for removed schedules
+Every 30s  -> Task manager checks cache version
+           -> Spawn tasks for new schedules
+           -> Stop tasks for removed schedules
 
-Per Task   → Sleep for schedule's interval
-           → Check if schedule still in cache
-           → Check if schedule is active (date range + time window)
-           → Post message to chat
-           → Repeat or exit if removed
+Per Task   -> Sleep for schedule's interval
+           -> Check if schedule still in cache
+           -> Check if schedule is active (date range + time window)
+           -> Post message to chat
+           -> Repeat or exit if removed
 ```
 
-**If Google Sheets NOT configured:**
+**If no schedules configured:**
 ```
-Startup    → Log warning: "Google Sheets not configured. Scheduled messages disabled."
-           → Do not spawn loader service or message handler
-           → Bot continues with other handlers
+Startup    -> Log info: "No schedules configured, scheduled messages disabled"
+           -> Do not spawn watcher service or message handler
+           -> Bot continues with other handlers
 ```
 
 ## Development Tips
@@ -663,7 +573,7 @@ Startup    → Log warning: "Google Sheets not configured. Scheduled messages di
 - Handlers are independent - errors in one handler don't crash others
 - Broadcast channel capacity: 100 messages (handlers warned if lagging)
 - All handlers run in infinite loops - only exit on channel close or panic
-- Configuration is loaded from `config.toml` at startup and validated before connecting
+- Configuration is loaded from `config.toml` at startup and reloaded on file changes
 
 ### Adding New Handlers
 1. Create handler function: `async fn run_my_handler(broadcast_tx, client)`
@@ -690,72 +600,48 @@ Startup    → Log warning: "Google Sheets not configured. Scheduled messages di
 - Get OAuth credentials from your Twitch application at https://dev.twitch.tv/console
 - StreamElements API token from StreamElements dashboard
 - All configuration is in `config.toml` - no environment variables needed
+- Edit config.toml while running to add/modify/remove schedules (auto-reloads)
 
-### Google Sheets Setup (Optional - for Scheduled Messages)
+### Schedule Configuration
 
-**1. Create Google Cloud Project:**
-- Visit https://console.cloud.google.com/
-- Create new project or select existing
-- Enable Google Sheets API
+Add `[[schedules]]` sections to config.toml:
 
-**2. Create Service Account:**
-- Navigate to "IAM & Admin" → "Service Accounts"
-- Click "Create Service Account"
-- Name it (e.g., "twitch-bot-scheduler")
-- Click "Create and Continue"
-- Skip role assignment (not needed for Sheets access)
-- Click "Done"
-
-**3. Generate JSON Key:**
-- Click on created service account
-- Go to "Keys" tab
-- Click "Add Key" → "Create new key"
-- Select "JSON" format
-- Download and save securely (e.g., `/path/to/service-account.json`)
-
-**4. Create Google Sheet:**
-- Create new Google Sheet
-- Name first sheet "ScheduledMessages" (or custom name)
-- Add header row (columns can be in any order, names are case-insensitive):
-  ```
-  Schedule Name | Message | Interval | Start Date | End Date | Active Time Start | Active Time End | Enabled
-  ```
-  Required columns: Schedule Name, Message, Interval
-  Optional columns: Start Date, End Date, Active Time Start, Active Time End, Enabled
-- Share sheet with service account email (found in JSON key as `client_email`)
-- Grant "Editor" permissions
-
-**5. Configure in config.toml:**
 ```toml
-[google_sheets]
-spreadsheet_id = "SPREADSHEET_ID"  # from URL: docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit
-sheet_name = "ScheduledMessages"   # Optional, default is "ScheduledMessages"
-service_account_path = "/path/to/service-account.json"
+[[schedules]]
+name = "hydration"
+message = "Stay hydrated! DinkDonk"
+interval = "00:30"  # Every 30 minutes
+enabled = true
+
+[[schedules]]
+name = "stream-reminder"
+message = "Don't forget to follow!"
+interval = "01:00"  # Every hour
+start_date = "2025-01-01T00:00:00"  # Optional: start date
+end_date = "2025-12-31T23:59:59"    # Optional: end date
+active_time_start = "18:00"         # Optional: only during evening
+active_time_end = "23:00"
+enabled = true
 ```
 
-**6. Test:**
-- Add test schedule row
-- Start bot
-- Check logs for "Google Sheets configured, starting scheduled message system"
-- Schedule should post after configured interval
+**Schedule Fields:**
+- `name` (required) - Unique identifier for the schedule
+- `message` (required) - Text to post in chat
+- `interval` (required) - Posting frequency in "hh:mm" format
+- `start_date` (optional) - ISO 8601 datetime (YYYY-MM-DDTHH:MM:SS)
+- `end_date` (optional) - ISO 8601 datetime
+- `active_time_start` (optional) - Daily start time in HH:MM format
+- `active_time_end` (optional) - Daily end time in HH:MM format
+- `enabled` (optional, default: true) - Set to false to disable
 
-**Example Schedule Row:**
-```
-Schedule Name: wichtel-reminder
-Start Date: 27/12/2025
-End Date: (empty)
-Active Time Start: 08:00
-Active Time End: 01:00
-Interval: 01:00
-Enabled: TRUE
-Message: DinkDonk Don't forget your address!
-```
+**Time Windows:**
+- If active_time_start/end are empty: Posts 24/7 at interval
+- If set: Only posts during daily time window (Europe/Berlin)
+- Handles midnight-spanning windows (e.g., "22:00" to "02:00")
 
 **Troubleshooting:**
-- **"Failed to read service account key"**: Check file path and permissions
-- **"Failed to fetch data from Google Sheets"**: Verify spreadsheet ID and sheet name
-- **"No data found"**: Check sheet has data rows (not just headers)
-- **"Required column not found"**: Ensure header row has "Schedule Name", "Message", and "Interval" columns
 - **"Invalid interval format"**: Use "hh:mm" format (e.g., "01:00" for 1 hour, "00:30" for 30 minutes)
-- **"Invalid date format"**: Use DD/MM/YYYY, DD/MM/YYYY HH:MM, or YYYY-MM-DDTHH:MM:SS format
-- use ?error instead of %error when logging errors to include the backtrace as well
+- **"Invalid datetime format"**: Use ISO 8601 format (YYYY-MM-DDTHH:MM:SS)
+- **Schedule not posting**: Check `enabled = true` and time window settings
+- **Config not reloading**: Wait 2+ seconds after saving (debounce delay)
+- Use `?error` instead of `%error` when logging errors to include the backtrace
