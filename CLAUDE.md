@@ -6,9 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Rust-based Twitch IRC bot with multiple features:
 1. **1337 Tracker**: Monitors for "1337"/"DANKIES" messages at 13:37 Berlin time, posts stats at 13:38
-2. **Minecraft Responder**: Answers "WannMinecraft" queries with server status and countdown
-3. **Ping Toggle**: Allows users to toggle their @mention in StreamElements ping commands
-4. **Scheduled Messages**: Dynamic message scheduling via Google Sheets with 5-minute polling
+2. **Ping Toggle**: Allows users to toggle their @mention in StreamElements ping commands
+3. **Scheduled Messages**: Dynamic message scheduling via Google Sheets with 5-minute polling
 
 Uses a persistent IRC connection with broadcast-based message routing to multiple handlers.
 
@@ -166,7 +165,6 @@ The bot maintains a **single persistent IRC connection** and uses a **broadcast 
    - **Schedule Loader Service**: Polls Google Sheets every 5 minutes (if configured)
    - **Scheduled Message Handler**: Posts messages based on Google Sheets schedules (if configured)
    - **1337 Handler**: Daily scheduled monitoring (13:36-13:38)
-   - **Minecraft Handler**: Responds to "WannMinecraft" queries 24/7
    - **Generic Command Handler**: Processes `!toggle-ping` commands 24/7
    - Each handler runs independently
    - Handlers filter for relevant messages and act accordingly
@@ -238,7 +236,6 @@ The bot maintains a **single persistent IRC connection** and uses a **broadcast 
 - Schedule cache in `schedule_cache.ron`
 
 **No Persistent State:**
-- Minecraft schedule hardcoded in `get_session_times()` (first session: 2025-11-30)
 - StreamElements commands fetched/updated via API on demand
 
 ### Configuration Files
@@ -380,41 +377,6 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
   - 5-7: "gute Auslese"
   - 8+: "insane quota Pag"
 - Uses `one_of()` to randomly select from message variants
-
-### Handler: Minecraft Responder
-
-**`run_minecraft_handler(broadcast_tx, client)` (src/main.rs:989-1017)**
-- Subscribes to broadcast channel
-- Filters for PRIVMSG messages
-- Calls `process_minecraft_message()` for each message
-
-**`process_minecraft_message(privmsg, client) -> bool` (src/main.rs:593-642)**
-- Checks if message contains "wannminecraft" or "wann minecraft"
-- Ignores known bots
-- Gets current Berlin time and checks `is_server_online()`
-- If online: responds with server address
-- If offline: calculates countdown via `get_next_session_start()` and `format_countdown()`
-- Special handling for user "magie_023": hex-encoded responses only
-
-**`get_session_times(date) -> Option<(DateTime, DateTime)>` (src/main.rs:441-478)**
-- Returns Minecraft server online hours for a given date
-- Schedule varies by weekday:
-  - Mon-Thu: 18:00-23:00
-  - Fri: 18:00-01:00 (next day)
-  - Sat: 15:00-01:00 (next day)
-  - Sun: 15:00-23:00
-- First session: 2025-11-30
-
-**`is_server_online(now) -> bool` (src/main.rs:483-513)**
-- Checks if current Berlin time falls within session window
-- Handles late-night sessions spanning midnight
-
-**`get_next_session_start(now) -> DateTime` (src/main.rs:518-545)**
-- Scans up to 30 days ahead for next session start
-- Used for countdown calculations
-
-**`format_countdown(duration) -> String` (src/main.rs:550-588)**
-- Formats chrono::Duration as German text: "X Tage, Y Stunden, Z Minuten, W Sekunden"
 
 ### Handler: Generic Commands
 
@@ -585,10 +547,6 @@ wichtel-reminder | 27/12/2025 | | 08:00 | 01:00 | 01:00 | TRUE | DinkDonk Don't 
 - Checks if PRIVMSG should count toward 1337 stats
 - Filters bots and checks for "1337" or "DANKIES" keywords
 
-**`encode_hex(input) -> String` (src/main.rs:365-367)**
-- Converts string to hex representation
-- Used for magie_023's special response encoding
-
 **`one_of<T>(array) -> &T` (src/main.rs:372-374)**
 - Returns random element from array using rand::rng()
 
@@ -650,7 +608,6 @@ wichtel-reminder | 27/12/2025 | | 08:00 | 01:00 | 01:00 | TRUE | DinkDonk Don't 
 - **Logging**: Structured logs with tracing, configurable via `RUST_LOG`
 - **Broadcast Architecture**: Message router distributes to independent handlers
 - **Token Refresh**: Tokens automatically refreshed and saved to `./token.ron`
-- **Special Users**: magie_023 gets hex-encoded responses for Minecraft queries
 
 ## Feature Timelines
 
@@ -661,13 +618,6 @@ wichtel-reminder | 27/12/2025 | | 08:00 | 01:00 | 01:00 | TRUE | DinkDonk Don't 
 13:37:00-13:37:59 → Monitoring subtask tracks "1337"/"DANKIES" messages (unique users)
 13:38:00 → Posts stats message with contextual response
          → Aborts monitor subtask, waits for next day
-```
-
-### Minecraft Responder (24/7)
-```
-Continuous → Listens for "wannminecraft" / "wann minecraft"
-           → Responds with server status or countdown to next session
-           → Uses hardcoded schedule (Mon-Thu 18-23, Fri 18-01, Sat 15-01, Sun 15-23)
 ```
 
 ### Ping Toggle (24/7)

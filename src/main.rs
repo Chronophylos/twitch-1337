@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::{Datelike, TimeDelta, Timelike, Utc, Weekday};
+use chrono::{TimeDelta, Timelike, Utc};
 use color_eyre::eyre::{self, Result, WrapErr, bail, eyre};
 use rand::seq::IndexedRandom as _;
 use regex::Regex;
@@ -502,168 +502,6 @@ async fn monitor_1337_messages(
     }
 }
 
-/// Returns the session start and end times for a given date in Berlin timezone.
-///
-/// Schedule:
-/// - Monday-Thursday: 18:00 - 00:00
-/// - Friday: 18:00 - 02:00 (next day)
-/// - Saturday: 12:00 - 02:00 (next day)
-/// - Sunday: 12:00 - 00:00
-///
-/// Returns None if the date is before the first session (2025-11-29) or if time calculation fails.
-fn get_session_times(
-    date: chrono::NaiveDate,
-) -> Option<(
-    chrono::DateTime<chrono_tz::Tz>,
-    chrono::DateTime<chrono_tz::Tz>,
-)> {
-    // Server doesn't exist before 2025-11-29
-    let first_session = chrono::NaiveDate::from_ymd_opt(2025, 11, 30)?;
-    if date < first_session {
-        return None;
-    }
-
-    let weekday = date.weekday();
-    let (start_hour, end_hour, end_next_day) = match weekday {
-        Weekday::Mon | Weekday::Tue | Weekday::Wed | Weekday::Thu => (18, 0, true),
-        Weekday::Fri => (18, 2, true),
-        Weekday::Sat => (12, 2, true),
-        Weekday::Sun => (12, 0, true),
-    };
-
-    let start = date
-        .and_hms_opt(start_hour, 0, 0)?
-        .and_local_timezone(chrono_tz::Europe::Berlin)
-        .single()?;
-
-    let end_date = if end_next_day {
-        date + chrono::Duration::days(1)
-    } else {
-        date
-    };
-
-    let end = end_date
-        .and_hms_opt(end_hour, 0, 0)?
-        .and_local_timezone(chrono_tz::Europe::Berlin)
-        .single()?;
-
-    Some((start, end))
-}
-
-/// Checks if the Minecraft server is currently online based on the schedule.
-///
-/// Returns true if the current time falls within an active session window.
-fn is_server_online(now: chrono::DateTime<chrono_tz::Tz>) -> bool {
-    let date = now.date_naive();
-
-    debug!(date = %date, now = %now, "Checking if server is online");
-
-    // Check today's session
-    if let Some((start, end)) = get_session_times(date) {
-        debug!(start = %start, end = %end, "Today's session times");
-        if now >= start && now < end {
-            debug!("Server is online (current session)");
-            return true;
-        }
-    } else {
-        debug!("No session found for today");
-    }
-
-    // Check if we're in the early hours of a day following a late-night session
-    // (between 00:00 and 01:00 after Friday or Saturday)
-    if now.hour() == 0 {
-        let yesterday = date - chrono::Duration::days(1);
-        if let Some((_, end)) = get_session_times(yesterday)
-            && now < end
-        {
-            debug!("Server is online (late-night session from yesterday)");
-            return true;
-        }
-    }
-
-    debug!("Server is offline");
-    false
-}
-
-/// Calculates the next session start time based on the current time.
-///
-/// Returns the DateTime when the next Minecraft session will begin.
-fn get_next_session_start(now: chrono::DateTime<chrono_tz::Tz>) -> chrono::DateTime<chrono_tz::Tz> {
-    let mut check_date = now.date_naive();
-
-    debug!(now = %now, "Calculating next session start");
-
-    // Check if there's a session today that hasn't started yet
-    if let Some((start, _)) = get_session_times(check_date) {
-        debug!(today = %check_date, start = %start, "Found session today");
-        if now < start {
-            debug!(next_start = %start, "Session today hasn't started yet");
-            return start;
-        }
-    }
-
-    // Otherwise, check the next 30 days (should find the first session starting 2025-11-29)
-    for i in 0..30 {
-        check_date += chrono::Duration::days(1);
-        debug!(checking_date = %check_date, iteration = i, "Checking next day");
-        if let Some((start, _)) = get_session_times(check_date) {
-            debug!(next_start = %start, "Found next session");
-            return start;
-        }
-    }
-
-    // This should never happen, but return a fallback
-    error!("Could not find next session within 30 days, using fallback");
-    now + chrono::Duration::days(1)
-}
-
-/// Processes a PRIVMSG to check if it's asking about Minecraft and sends a response.
-///
-/// Returns true if a response was sent, false otherwise.
-#[instrument(skip(privmsg, client))]
-async fn process_minecraft_message(
-    privmsg: &PrivmsgMessage,
-    client: &Arc<AuthenticatedTwitchClient>,
-) -> bool {
-    // Ignore messages from bots
-    if is_clanker(&privmsg.sender.login) {
-        return false;
-    }
-
-    let text = privmsg.message_text.to_lowercase();
-    if text.contains("wannminecraft") || text.contains("wann minecraft") {
-        debug!(user = %privmsg.sender.login, "User asked about Minecraft");
-
-        let now = Utc::now().with_timezone(&chrono_tz::Europe::Berlin);
-        info!(current_time = %now, "Processing Minecraft query");
-
-        let response = if is_server_online(now) {
-            "Der Server ist online Okayge 👉 192.168.196.166:25565 PogChamp".to_string()
-        } else {
-            let next_start = get_next_session_start(now);
-            let duration = next_start - now;
-            info!(
-                next_start = %next_start,
-                duration_seconds = duration.num_seconds(),
-                duration_days = duration.num_days(),
-                "Calculated next session"
-            );
-
-            let time = next_start.time().to_string();
-            if duration.num_days() > 0 {
-                format!("Morgen um {time} WannMinecraft")
-            } else {
-                format!("Heute um {time} WannMinecraft")
-            }
-        };
-
-        if let Err(e) = client.say_in_reply_to(privmsg, response).await {
-            error!(error = ?e, "Failed to send Minecraft response");
-        }
-        return true;
-    }
-    false
-}
 
 /// Token storage implementation that persists tokens to disk.
 ///
@@ -767,7 +605,7 @@ async fn load_configuration() -> Result<Configuration> {
 ///
 /// Establishes a persistent Twitch IRC connection and runs multiple handlers in parallel:
 /// - Daily 1337 tracker: monitors 13:37 messages, posts stats at 13:38
-/// - Minecraft responder: replies to "WannMinecraft"/"Wann Minecraft" messages
+/// - Generic commands: handles !toggle-ping and other bot commands
 ///
 /// # Errors
 ///
@@ -853,15 +691,6 @@ pub async fn main() -> Result<()> {
         }
     });
 
-    // Spawn Minecraft handler task
-    let handler_minecraft = tokio::spawn({
-        let broadcast_tx = broadcast_tx.clone();
-        let client = client.clone();
-        async move {
-            run_minecraft_handler(broadcast_tx, client).await;
-        }
-    });
-
     let handler_generic_commands = tokio::spawn({
         let broadcast_tx = broadcast_tx.clone();
         let client = client.clone();
@@ -871,12 +700,12 @@ pub async fn main() -> Result<()> {
 
     if config.google_sheets.is_some() {
         info!(
-            "Bot running with continuous connection. Handlers: Schedule loader, 1337 tracker, Minecraft responder, Generic commands, Scheduled messages"
+            "Bot running with continuous connection. Handlers: Schedule loader, 1337 tracker, Generic commands, Scheduled messages"
         );
         info!("Scheduled messages: Loaded dynamically from Google Sheets or cache");
     } else {
         info!(
-            "Bot running with continuous connection. Handlers: 1337 tracker, Minecraft responder, Generic commands"
+            "Bot running with continuous connection. Handlers: 1337 tracker, Generic commands"
         );
     }
     info!(
@@ -904,9 +733,6 @@ pub async fn main() -> Result<()> {
                 result = handler_1337 => {
                     error!("1337 handler exited unexpectedly: {result:?}");
                 }
-                result = handler_minecraft => {
-                    error!("Minecraft handler exited unexpectedly: {result:?}");
-                }
                 result = handler_generic_commands => {
                     error!("Generic Command Handler exited unexpectedly: {result:?}");
                 }
@@ -925,9 +751,6 @@ pub async fn main() -> Result<()> {
                 }
                 result = handler_1337 => {
                     error!("1337 handler exited unexpectedly: {result:?}");
-                }
-                result = handler_minecraft => {
-                    error!("Minecraft handler exited unexpectedly: {result:?}");
                 }
                 result = handler_generic_commands => {
                     error!("Generic Command Handler exited unexpectedly: {result:?}");
@@ -1140,40 +963,6 @@ async fn run_1337_handler(
     }
 }
 
-/// Handler for responding to "WannMinecraft" messages.
-///
-/// Monitors chat for users asking about Minecraft and responds.
-/// Runs continuously.
-#[instrument(skip(broadcast_tx, client))]
-async fn run_minecraft_handler(
-    broadcast_tx: broadcast::Sender<ServerMessage>,
-    client: Arc<AuthenticatedTwitchClient>,
-) {
-    info!("Minecraft handler started");
-
-    // Subscribe to the broadcast channel
-    let mut broadcast_rx = broadcast_tx.subscribe();
-
-    loop {
-        match broadcast_rx.recv().await {
-            Ok(message) => {
-                let ServerMessage::Privmsg(privmsg) = message else {
-                    continue;
-                };
-
-                process_minecraft_message(&privmsg, &client).await;
-            }
-            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                error!(skipped, "Minecraft handler lagged, skipped messages");
-                continue;
-            }
-            Err(broadcast::error::RecvError::Closed) => {
-                debug!("Broadcast channel closed, Minecraft handler exiting");
-                break;
-            }
-        }
-    }
-}
 
 /// Handler for generic text commands that start with `!`.
 ///
@@ -1282,7 +1071,7 @@ const PING_COMMANDS: &[&str] = &[
 
 /// Toggles a user's mention in a StreamElements ping command.
 ///
-/// Ping commands are used to notify community members about game sessions (e.g., Minecraft).
+/// Ping commands are used to notify community members about game sessions.
 /// This function adds the requesting user's @mention to the command reply if not present,
 /// or removes it if already present.
 ///
