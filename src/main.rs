@@ -178,6 +178,351 @@ mod streamelements {
     }
 }
 
+/// SimBrief API client for fetching flight plans and aircraft data.
+///
+/// This module provides an HTTP client for interacting with the SimBrief API
+/// to retrieve flight plans, available aircraft types, and generate dispatch URLs.
+/// No authentication is required for these endpoints.
+#[allow(dead_code)]
+mod simbrief {
+    use std::collections::HashMap;
+
+    use eyre::{Result, WrapErr as _};
+    use serde::Deserialize;
+    use tracing::instrument;
+
+    use crate::APP_USER_AGENT;
+
+    /// Airport information from SimBrief flight plan.
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct Airport {
+        /// ICAO airport code (e.g., "EDDF")
+        pub icao_code: String,
+        /// Full airport name
+        #[serde(default)]
+        pub name: String,
+    }
+
+    /// General flight information from SimBrief flight plan.
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct GeneralInfo {
+        /// Flight route string
+        #[serde(default)]
+        pub route: String,
+        /// Flight number (e.g., "DLH123")
+        #[serde(default)]
+        pub flight_number: String,
+        /// Airline ICAO code (e.g., "DLH")
+        #[serde(default)]
+        pub icao_airline: String,
+        /// Total air distance in nautical miles
+        #[serde(default)]
+        pub air_distance: String,
+        /// Route distance in nautical miles
+        #[serde(default)]
+        pub route_distance: String,
+    }
+
+    /// Fuel information from SimBrief flight plan.
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct FuelInfo {
+        /// Planned ramp fuel in pounds
+        #[serde(default)]
+        pub plan_ramp: String,
+        /// Enroute burn in pounds
+        #[serde(default)]
+        pub enroute_burn: String,
+        /// Reserve fuel in pounds
+        #[serde(default)]
+        pub reserve: String,
+        /// Alternate fuel in pounds
+        #[serde(default)]
+        pub alternate_burn: String,
+        /// Contingency fuel in pounds
+        #[serde(default)]
+        pub contingency: String,
+        /// Taxi out fuel in pounds
+        #[serde(default)]
+        pub taxi: String,
+    }
+
+    /// Weight information from SimBrief flight plan.
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct WeightInfo {
+        /// Payload weight in pounds
+        #[serde(default)]
+        pub payload: String,
+        /// Zero fuel weight in pounds
+        #[serde(default)]
+        pub est_zfw: String,
+        /// Passenger count
+        #[serde(default)]
+        pub pax_count: String,
+        /// Cargo weight in pounds
+        #[serde(default)]
+        pub cargo: String,
+    }
+
+    /// Time information from SimBrief flight plan.
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct TimeInfo {
+        /// Estimated time enroute in seconds
+        #[serde(default)]
+        pub est_time_enroute: String,
+        /// Scheduled out time (gate departure) as Unix timestamp
+        #[serde(default)]
+        pub sched_out: String,
+        /// Scheduled off time (takeoff) as Unix timestamp
+        #[serde(default)]
+        pub sched_off: String,
+        /// Scheduled on time (landing) as Unix timestamp
+        #[serde(default)]
+        pub sched_on: String,
+        /// Scheduled in time (gate arrival) as Unix timestamp
+        #[serde(default)]
+        pub sched_in: String,
+    }
+
+    /// Aircraft information from SimBrief flight plan.
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct AircraftInfo {
+        /// Aircraft ICAO type code (e.g., "B738")
+        #[serde(default)]
+        pub icaocode: String,
+        /// Aircraft name
+        #[serde(default)]
+        pub name: String,
+        /// Aircraft registration
+        #[serde(default)]
+        pub reg: String,
+    }
+
+    /// A SimBrief Operational Flight Plan (OFP).
+    ///
+    /// Contains the essential fields from SimBrief's flight plan response.
+    /// The full API response is very large; only the most useful fields are parsed.
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct FlightPlan {
+        /// Origin airport
+        pub origin: Airport,
+        /// Destination airport
+        pub destination: Airport,
+        /// General flight information
+        pub general: GeneralInfo,
+        /// Fuel planning data
+        pub fuel: FuelInfo,
+        /// Weight and balance data
+        pub weights: WeightInfo,
+        /// Time scheduling data
+        pub times: TimeInfo,
+        /// Aircraft information
+        #[serde(default)]
+        pub aircraft: Option<AircraftInfo>,
+    }
+
+    /// Wrapper for SimBrief API response.
+    #[derive(Debug, Clone, Deserialize)]
+    struct SimBriefResponse {
+        #[serde(flatten)]
+        plan: FlightPlan,
+    }
+
+    /// Information about an available aircraft type in SimBrief.
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct AircraftTypeInfo {
+        /// Aircraft name (e.g., "Boeing 737-800")
+        #[serde(default)]
+        pub name: String,
+        /// SimBrief accuracy rating
+        #[serde(default)]
+        pub ac_data_accuracy: String,
+    }
+
+    /// Information about an OFP layout in SimBrief.
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct LayoutInfo {
+        /// Short name for the layout
+        #[serde(default)]
+        pub name_short: String,
+        /// Full name for the layout
+        #[serde(default)]
+        pub name_long: String,
+    }
+
+    /// List of available aircraft types and OFP layouts from SimBrief.
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct AircraftList {
+        /// Map of aircraft type code to aircraft info
+        #[serde(default)]
+        pub aircraft: HashMap<String, AircraftTypeInfo>,
+        /// Map of layout ID to layout info
+        #[serde(default)]
+        pub layouts: HashMap<String, LayoutInfo>,
+    }
+
+    /// Parameters for generating a SimBrief dispatch URL.
+    #[derive(Debug, Clone, Default)]
+    pub struct DispatchParams {
+        /// Origin airport ICAO code (required)
+        pub origin: String,
+        /// Destination airport ICAO code (required)
+        pub destination: String,
+        /// Aircraft type code (e.g., "B738", "A320")
+        pub aircraft: String,
+        /// Route string (optional)
+        pub route: Option<String>,
+        /// Alternate airport ICAO code (optional)
+        pub alternate: Option<String>,
+        /// Airline ICAO code (optional)
+        pub airline: Option<String>,
+        /// Flight number (optional)
+        pub flight_number: Option<String>,
+    }
+
+    /// HTTP client for the SimBrief API.
+    ///
+    /// Provides methods to fetch flight plans, aircraft data, and generate dispatch URLs.
+    /// No authentication is required for SimBrief's public API endpoints.
+    #[derive(Debug, Clone)]
+    pub struct SimBriefClient(reqwest::Client);
+
+    impl SimBriefClient {
+        /// Creates a new SimBrief API client.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the HTTP client cannot be built.
+        #[instrument]
+        pub fn new() -> Result<Self> {
+            let http = reqwest::Client::builder()
+                .user_agent(APP_USER_AGENT)
+                .build()
+                .wrap_err("Failed to build HTTP Client")?;
+
+            Ok(Self(http))
+        }
+
+        /// Fetches the latest flight plan for a SimBrief user.
+        ///
+        /// The `user` parameter can be either:
+        /// - A numeric user ID (e.g., "123456")
+        /// - A username/pilot ID (e.g., "pilotname")
+        ///
+        /// The function auto-detects which format is used and makes the appropriate request.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if:
+        /// - The user is not found
+        /// - The user has no flight plans
+        /// - The API request fails
+        /// - The response cannot be parsed
+        #[instrument]
+        pub async fn get_latest_flight_plan(&self, user: &str) -> Result<FlightPlan> {
+            // Auto-detect if user is numeric (userid) or string (username)
+            let param = if user.chars().all(|c| c.is_ascii_digit()) {
+                format!("userid={user}")
+            } else {
+                format!("username={user}")
+            };
+
+            let url = format!(
+                "https://www.simbrief.com/api/xml.fetcher.php?{param}&json=1"
+            );
+
+            let response = self
+                .0
+                .get(&url)
+                .send()
+                .await
+                .wrap_err("Failed to send request to SimBrief API")?;
+
+            // SimBrief returns 400 for user not found or no flight plans
+            if response.status().is_client_error() {
+                return Err(eyre::eyre!(
+                    "SimBrief user '{}' not found or has no flight plans",
+                    user
+                ));
+            }
+
+            response
+                .error_for_status()
+                .wrap_err("SimBrief API returned an error")?
+                .json::<SimBriefResponse>()
+                .await
+                .map(|r| r.plan)
+                .wrap_err("Failed to parse SimBrief flight plan response")
+        }
+
+        /// Fetches the list of available aircraft types and OFP layouts.
+        ///
+        /// Returns information about all aircraft types supported by SimBrief
+        /// (approximately 286 aircraft) and available OFP layout formats (28 layouts).
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the API request fails or the response cannot be parsed.
+        #[instrument]
+        pub async fn get_available_aircraft(&self) -> Result<AircraftList> {
+            let url = "http://www.simbrief.com/api/inputs.list.json";
+
+            self.0
+                .get(url)
+                .send()
+                .await
+                .wrap_err("Failed to send request to SimBrief API")?
+                .error_for_status()
+                .wrap_err("SimBrief API returned an error")?
+                .json::<AircraftList>()
+                .await
+                .wrap_err("Failed to parse SimBrief aircraft list response")
+        }
+
+        /// Generates a SimBrief dispatch URL for creating a new flight plan.
+        ///
+        /// The returned URL can be opened in a browser to complete flight planning.
+        /// This does not make any API calls; it simply constructs the URL.
+        ///
+        /// # Example
+        ///
+        /// ```ignore
+        /// let url = client.create_dispatch_url(DispatchParams {
+        ///     origin: "EDDF".into(),
+        ///     destination: "LIRF".into(),
+        ///     aircraft: "A320".into(),
+        ///     ..Default::default()
+        /// });
+        /// // Returns: https://www.simbrief.com/system/dispatch.php?orig=EDDF&dest=LIRF&type=A320
+        /// ```
+        pub fn create_dispatch_url(&self, params: DispatchParams) -> String {
+            let mut url = format!(
+                "https://www.simbrief.com/system/dispatch.php?orig={}&dest={}&type={}",
+                params.origin, params.destination, params.aircraft
+            );
+
+            if let Some(route) = &params.route {
+                // URL-encode the route as it may contain spaces and special characters
+                let encoded_route = urlencoding::encode(route);
+                url.push_str(&format!("&route={encoded_route}"));
+            }
+
+            if let Some(alternate) = &params.alternate {
+                url.push_str(&format!("&altn={alternate}"));
+            }
+
+            if let Some(airline) = &params.airline {
+                url.push_str(&format!("&airline={airline}"));
+            }
+
+            if let Some(flight_number) = &params.flight_number {
+                url.push_str(&format!("&fltnum={flight_number}"));
+            }
+
+            url
+        }
+    }
+}
+
 use crate::streamelements::SEClient;
 
 /// Type alias for the authenticated Twitch IRC client
