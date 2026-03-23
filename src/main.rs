@@ -700,17 +700,19 @@ async fn execute_ai_request(
         .ok_or_else(|| eyre::eyre!("No text response from OpenRouter"))
 }
 
-/// Truncates a string to the maximum length at a word boundary.
-fn truncate_response(text: &str, max_len: usize) -> String {
+/// Truncates a string to the maximum number of characters at a word boundary.
+fn truncate_response(text: &str, max_chars: usize) -> String {
     // Collapse whitespace and newlines
     let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
 
-    if collapsed.len() <= max_len {
-        return collapsed;
-    }
+    // Find the byte index corresponding to the max_chars boundary
+    let byte_limit = match collapsed.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => byte_idx,
+        None => return collapsed, // Fewer than max_chars characters
+    };
 
-    // Find last space before max_len
-    let truncated = &collapsed[..max_len];
+    // Find last space before the character limit
+    let truncated = &collapsed[..byte_limit];
     if let Some(last_space) = truncated.rfind(' ') {
         format!("{}...", &truncated[..last_space])
     } else {
