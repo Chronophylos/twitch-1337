@@ -1495,6 +1495,9 @@ async fn run_1337_handler(
         // Wait until 13:38 to post stats
         sleep_until_hms(TARGET_HOUR, TARGET_MINUTE + 1, 0, expected_latency).await;
 
+        // Abort the monitor - no more insertions after this point
+        monitor_handle.abort();
+
         // Get user list, count, and fastest
         let (count, user_list, fastest) = {
             let users = total_users.lock().await;
@@ -1564,9 +1567,6 @@ async fn run_1337_handler(
         } else {
             info!("Stats posted successfully");
         }
-
-        // Abort the monitor task
-        monitor_handle.abort();
 
         info!("Daily 1337 session completed, waiting for next day");
     }
