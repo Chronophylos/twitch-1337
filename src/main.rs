@@ -249,6 +249,7 @@ mod openrouter {
     #[derive(Debug, Clone, Deserialize)]
     pub struct Choice {
         pub message: Message,
+        #[allow(dead_code)]
         pub finish_reason: Option<String>,
     }
 
