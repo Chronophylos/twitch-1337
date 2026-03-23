@@ -1855,10 +1855,13 @@ async fn toggle_ping_command(
     } else {
         has_added_ping = true;
         // Add user's mention
-        if let Some(insert_location) = command.reply.find('@') {
-            // Insert after first @ symbol
-            let (head, tail) = command.reply.split_at(insert_location);
-            format!("{head} @{} {tail}", privmsg.sender.name)
+        if let Some(at_pos) = command.reply.find('@') {
+            // Insert after first @username token
+            let after_at = &command.reply[at_pos..];
+            let token_end = after_at.find(' ').unwrap_or(after_at.len());
+            let insert_pos = at_pos + token_end;
+            let (head, tail) = command.reply.split_at(insert_pos);
+            format!("{head} @{}{tail}", privmsg.sender.name)
         } else {
             // No @ found, add at the beginning
             format!("@{} {}", privmsg.sender.name, command.reply)
