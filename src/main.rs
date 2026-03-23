@@ -1085,6 +1085,7 @@ async fn run_config_watcher_service(
 
     // Spawn blocking task for the file watcher (notify is sync)
     let watcher_config_path = config_path.clone();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let mut watcher_handle = tokio::task::spawn_blocking(move || {
         let tx = tx;
         let config_path = watcher_config_path;
@@ -1126,11 +1127,8 @@ async fn run_config_watcher_service(
 
         info!(path = ?watch_path, "Watching for config changes");
 
-        // Keep the watcher alive by parking the thread
-        // The watcher will be dropped when the main task exits
-        loop {
-            std::thread::park();
-        }
+        // Keep the watcher alive until shutdown is signaled
+        let _ = shutdown_rx.blocking_recv();
     });
 
     // Main loop: handle file change events
@@ -1160,6 +1158,9 @@ async fn run_config_watcher_service(
             }
         }
     }
+
+    // Signal the watcher thread to exit cleanly
+    drop(shutdown_tx);
 }
 
 /// Main entry point for the twitch-1337 bot.
