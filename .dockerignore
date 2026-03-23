@@ -15,5 +15,9 @@ target/
 # Ignore documentation (not needed in container)
 *.md
 
+# Ignore secrets and runtime state
+config.toml
+token.ron
+
 # Ignore CI/CD files
 .github/
