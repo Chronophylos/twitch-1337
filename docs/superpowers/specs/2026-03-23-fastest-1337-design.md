@@ -25,7 +25,7 @@ struct PersonalBest {
 // File contains: HashMap<String, PersonalBest>
 ```
 
-- Loaded at 13:36 when the handler wakes
+- Loaded at 13:36 when the handler wakes, stored as a local variable in `run_1337_handler`'s loop body
 - Updated and saved at 13:38 after processing today's results
 - Each user's entry is only updated if today's time is better than their stored best
 - File created fresh if missing; logged warning and fresh start if corrupted
@@ -44,14 +44,14 @@ In `monitor_1337_messages()`, after validating the message:
 At 13:38, before sending the message:
 
 1. Lock the HashMap, get user count and list
-2. Generate the existing count-based message via `generate_stats_message()`
-3. Find the day's fastest: filter for `Some(ms)`, pick the minimum value
+2. Generate the existing count-based message via `generate_stats_message()` (signature unchanged)
+3. Find the day's fastest: filter for `Some(ms)`, pick the minimum value. If multiple users share the same minimum, any one may be picked (arbitrary).
 4. Load leaderboard from `leaderboard.ron`
-5. Update leaderboard: for each sub-1s user today, update their personal best if this time is better
-6. Determine if the day's fastest is a new all-time record (beats the best `ms` across all leaderboard entries)
+5. Determine if the day's fastest is a new all-time record (beats the best `ms` across all leaderboard entries) — checked **before** updating the leaderboard
+6. Update leaderboard: for each sub-1s user today, update their personal best if this time is better
 7. If there is a fastest user, append to the message: `" | {user} war mass schnellste mit {ms}ms"`
 8. If it is a new all-time record, further append: `" - neuer Rekord!"`
-9. Save updated leaderboard to `leaderboard.ron`
+9. Save updated leaderboard to `leaderboard.ron` (log and continue on write failure)
 10. Send the message
 
 ## Edge Cases
@@ -59,7 +59,7 @@ At 13:38, before sending the message:
 - **No sub-1s messages:** No fastest mention appended. Normal stats message only.
 - **Leaderboard file missing:** Created as empty HashMap on first load.
 - **Leaderboard file corrupted:** Log warning, start with empty HashMap, don't crash.
-- **Millisecond tie:** First user inserted into the HashMap wins for the day.
+- **Millisecond tie:** Arbitrary — whichever the HashMap iterator yields first when finding the minimum.
 - **`expected_latency` config:** Not factored in. Raw server timestamps used for consistency.
 - **All-time record on first day:** Any sub-1s time is automatically a record when leaderboard is empty.
 
@@ -68,8 +68,9 @@ At 13:38, before sending the message:
 - `src/main.rs`:
   - `monitor_1337_messages()` — HashMap instead of HashSet, compute and store ms
   - `run_1337_handler()` — load leaderboard at 13:36, update and save at 13:38
-  - `generate_stats_message()` — accept fastest info, append to message
+  - `run_1337_handler()` stats block — append fastest/record suffix to message returned by `generate_stats_message()` (that function's signature stays unchanged)
   - New: `PersonalBest` struct, leaderboard load/save functions
+- `.gitignore` — add `leaderboard.ron`
 - New file: `leaderboard.ron` (created at runtime, gitignored)
 
 ## Out of Scope
