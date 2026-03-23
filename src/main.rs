@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -361,6 +361,8 @@ const TARGET_MINUTE: u32 = 37;
 
 /// Maximum number of unique users to track (prevents unbounded memory growth)
 const MAX_USERS: usize = 10_000;
+
+const LEADERBOARD_PATH: &str = "./leaderboard.ron";
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
@@ -773,6 +775,65 @@ async fn monitor_1337_messages(
     }
 }
 
+
+/// A user's personal best time for the 1337 challenge.
+///
+/// Tracks the fastest sub-1-second message time and the date it was achieved.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersonalBest {
+    /// Milliseconds after 13:37:00.000 (0-999)
+    ms: u64,
+    /// The date (Europe/Berlin) when this record was set
+    date: chrono::NaiveDate,
+}
+
+/// Loads the all-time leaderboard from disk.
+///
+/// Returns an empty HashMap if the file doesn't exist or is corrupted.
+async fn load_leaderboard() -> HashMap<String, PersonalBest> {
+    match fs::read_to_string(LEADERBOARD_PATH).await {
+        Ok(contents) => match ron::from_str::<HashMap<String, PersonalBest>>(&contents) {
+            Ok(leaderboard) => {
+                info!(
+                    entries = leaderboard.len(),
+                    "Loaded leaderboard from {}",
+                    LEADERBOARD_PATH
+                );
+                leaderboard
+            }
+            Err(e) => {
+                warn!(error = ?e, "Failed to parse leaderboard file, starting fresh");
+                HashMap::new()
+            }
+        },
+        Err(_) => {
+            info!("No leaderboard file found, starting fresh");
+            HashMap::new()
+        }
+    }
+}
+
+/// Saves the all-time leaderboard to disk.
+///
+/// Logs a warning and continues if the write fails.
+async fn save_leaderboard(leaderboard: &HashMap<String, PersonalBest>) {
+    match ron::to_string(leaderboard) {
+        Ok(serialized) => {
+            if let Err(e) = fs::write(LEADERBOARD_PATH, serialized.as_bytes()).await {
+                error!(error = ?e, "Failed to write leaderboard file");
+            } else {
+                info!(
+                    entries = leaderboard.len(),
+                    "Saved leaderboard to {}",
+                    LEADERBOARD_PATH
+                );
+            }
+        }
+        Err(e) => {
+            error!(error = ?e, "Failed to serialize leaderboard");
+        }
+    }
+}
 
 /// Token storage implementation that persists tokens to disk.
 ///
