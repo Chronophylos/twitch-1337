@@ -806,8 +806,12 @@ async fn load_leaderboard() -> HashMap<String, PersonalBest> {
                 HashMap::new()
             }
         },
-        Err(_) => {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             info!("No leaderboard file found, starting fresh");
+            HashMap::new()
+        }
+        Err(e) => {
+            warn!(error = ?e, "Failed to read leaderboard file, starting fresh");
             HashMap::new()
         }
     }
@@ -815,7 +819,7 @@ async fn load_leaderboard() -> HashMap<String, PersonalBest> {
 
 /// Saves the all-time leaderboard to disk.
 ///
-/// Logs a warning and continues if the write fails.
+/// Logs an error and continues if the write fails.
 async fn save_leaderboard(leaderboard: &HashMap<String, PersonalBest>) {
     match ron::to_string(leaderboard) {
         Ok(serialized) => {
