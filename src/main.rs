@@ -1489,7 +1489,7 @@ async fn run_1337_handler(
         let total_users = Arc::new(Mutex::new(HashMap::with_capacity(MAX_USERS)));
 
         // Spawn message monitoring subtask
-        let monitor_handle = tokio::spawn({
+        let mut monitor_handle = tokio::spawn({
             let total_users = total_users.clone();
             // Subscribe fresh when we wake up - only see messages from now on
             let broadcast_rx = broadcast_tx.subscribe();
@@ -1513,8 +1513,9 @@ async fn run_1337_handler(
         // Wait until 13:38 to post stats
         sleep_until_hms(TARGET_HOUR, TARGET_MINUTE + 1, 0, expected_latency).await;
 
-        // Abort the monitor - no more insertions after this point
+        // Abort the monitor and wait for it to fully stop before reading results
         monitor_handle.abort();
+        let _ = (&mut monitor_handle).await;
 
         // Get user list, count, and fastest
         let (count, user_list, fastest) = {
