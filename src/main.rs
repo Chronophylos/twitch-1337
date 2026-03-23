@@ -1464,6 +1464,9 @@ async fn run_1337_handler(
 
         info!("Starting daily 1337 monitoring session");
 
+        // Load the all-time leaderboard
+        let mut leaderboard = load_leaderboard().await;
+
         // Fresh HashMap for today's users (maps username -> ms_since_minute if sub-second)
         let total_users = Arc::new(Mutex::new(HashMap::with_capacity(MAX_USERS)));
 
@@ -1492,12 +1495,12 @@ async fn run_1337_handler(
         // Wait until 13:38 to post stats
         sleep_until_hms(TARGET_HOUR, TARGET_MINUTE + 1, 0, expected_latency).await;
 
-        // Get user list and count
+        // Get user list, count, and fastest
         let (count, user_list, fastest) = {
             let users = total_users.lock().await;
             let count = users.len();
             let mut user_vec: Vec<String> = users.keys().cloned().collect();
-            user_vec.sort(); // Sort alphabetically for consistency
+            user_vec.sort();
 
             let fastest: Option<(String, u64)> = users
                 .iter()
@@ -1507,7 +1510,52 @@ async fn run_1337_handler(
             (count, user_vec, fastest)
         };
 
-        let message = generate_stats_message(count, &user_list);
+        let mut message = generate_stats_message(count, &user_list);
+
+        if let Some((ref fastest_user, fastest_ms)) = fastest {
+            // Check if this is a new all-time record BEFORE updating the leaderboard
+            let previous_best = leaderboard
+                .values()
+                .map(|pb| pb.ms)
+                .min();
+            let is_record = match previous_best {
+                Some(best) => fastest_ms < best,
+                None => true, // First ever sub-1s time
+            };
+
+            message.push_str(&format!(
+                " | {fastest_user} war mass schnellste mit {fastest_ms}ms"
+            ));
+            if is_record {
+                message.push_str(" - neuer Rekord!");
+            }
+        }
+
+        // Update leaderboard with today's sub-1s times
+        let today = Utc::now()
+            .with_timezone(&chrono_tz::Europe::Berlin)
+            .date_naive();
+        {
+            let users = total_users.lock().await;
+            for (username, timing) in users.iter() {
+                if let Some(ms) = timing {
+                    let update = match leaderboard.get(username) {
+                        Some(existing) => *ms < existing.ms,
+                        None => true,
+                    };
+                    if update {
+                        leaderboard.insert(
+                            username.clone(),
+                            PersonalBest {
+                                ms: *ms,
+                                date: today,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        save_leaderboard(&leaderboard).await;
 
         // Post stats message
         info!(count = count, "Posting stats to channel");
