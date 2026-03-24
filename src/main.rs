@@ -1683,10 +1683,6 @@ async fn run_1337_handler(
 ///
 /// The handler is fully independent — PING failures or PONG timeouts are logged
 /// but never crash the handler or affect the EMA.
-///
-/// Note: The spec lists `initial_latency: u32` as an input, but we pass the
-/// `Arc<AtomicU32>` directly since it's created in main() and shared with the
-/// 1337 handler — the initial value is already loaded into the atomic.
 #[instrument(skip(client, broadcast_tx, latency))]
 async fn run_latency_handler(
     client: Arc<AuthenticatedTwitchClient>,
@@ -1703,16 +1699,16 @@ async fn run_latency_handler(
         sleep(LATENCY_PING_INTERVAL).await;
 
         let nonce = format!("{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
-        let send_time = tokio::time::Instant::now();
+
+        // Subscribe before sending so we don't miss the PONG on fast connections
+        let mut broadcast_rx = broadcast_tx.subscribe();
 
         // Send PING with unique nonce
+        let send_time = tokio::time::Instant::now();
         if let Err(e) = client.send_message(irc!["PING", nonce.clone()]).await {
             warn!(error = ?e, "Failed to send PING");
             continue;
         }
-
-        // Listen for matching PONG
-        let mut broadcast_rx = broadcast_tx.subscribe();
         let pong_result = tokio::time::timeout(LATENCY_PING_TIMEOUT, async {
             loop {
                 match broadcast_rx.recv().await {
@@ -1724,7 +1720,11 @@ async fn run_latency_handler(
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         warn!("Broadcast channel closed during PONG wait");
-                        return send_time.elapsed(); // will be discarded by caller
+                        return send_time.elapsed();
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(skipped = n, "Latency handler lagged during PONG wait");
+                        continue;
                     }
                     _ => continue,
                 }
