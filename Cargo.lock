@@ -1342,6 +1342,7 @@ dependencies = [
 [[package]]
 name = "random-flight"
 version = "0.1.0"
+source = "git+https://github.com/Chronophylos/random-flight.git#d198a1127332d0ea6decd632ae7ada83e4b8112f"
 dependencies = [
  "clap",
  "csv",
