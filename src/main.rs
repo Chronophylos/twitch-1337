@@ -21,8 +21,9 @@ use tokio::{
     time::{Duration, sleep},
 };
 use tracing::{debug, error, info, instrument, trace, warn};
+use twitch_irc::irc;
 use twitch_irc::{
-    ClientConfig, SecureTCPTransport, TwitchIRCClient, irc,
+    ClientConfig, SecureTCPTransport, TwitchIRCClient,
     login::{RefreshingLoginCredentials, TokenStorage, UserAccessToken},
     message::{NoticeMessage, PongMessage, PrivmsgMessage, ServerMessage},
 };
