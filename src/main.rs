@@ -941,17 +941,20 @@ fn install_tracing() {
         .init();
 }
 
-const CONFIG_PATH: &str = "./config.toml";
+fn get_config_path() -> PathBuf {
+    get_data_dir().join("config.toml")
+}
 
 async fn load_configuration() -> Result<Configuration> {
-    let data = tokio::fs::read_to_string(CONFIG_PATH)
+    let config_path = get_config_path();
+    let data = tokio::fs::read_to_string(&config_path)
         .await
         .wrap_err_with(|| format!(
             "Failed to read config file: {}\nPlease create config.toml from config.toml.example",
-            CONFIG_PATH
+            config_path.display()
         ))?;
 
-    info!("Loading configuration from {}", CONFIG_PATH);
+    info!("Loading configuration from {}", config_path.display());
 
     let config: Configuration = toml::from_str(&data)
         .wrap_err("Failed to parse config.toml - check for syntax errors")?;
@@ -1037,10 +1040,11 @@ fn load_schedules_from_config(config: &Configuration) -> Vec<database::Schedule>
 /// Reload configuration from config.toml and extract schedules.
 /// Returns None if config cannot be loaded or parsed.
 fn reload_schedules_from_config() -> Option<Vec<database::Schedule>> {
-    let data = match std::fs::read_to_string(CONFIG_PATH) {
+    let config_path = get_config_path();
+    let data = match std::fs::read_to_string(&config_path) {
         Ok(data) => data,
         Err(e) => {
-            error!(error = ?e, "Failed to read config.toml for reload");
+            error!(error = ?e, path = %config_path.display(), "Failed to read config for reload");
             return None;
         }
     };
@@ -1048,7 +1052,7 @@ fn reload_schedules_from_config() -> Option<Vec<database::Schedule>> {
     let config: Configuration = match toml::from_str(&data) {
         Ok(config) => config,
         Err(e) => {
-            error!(error = ?e, "Failed to parse config.toml for reload");
+            error!(error = ?e, path = %config_path.display(), "Failed to parse config for reload");
             return None;
         }
     };
@@ -1076,7 +1080,7 @@ async fn run_config_watcher_service(
     let (tx, mut rx) = tokio::sync::mpsc::channel(10);
 
     // Get absolute path to config file for watching
-    let config_path = match std::fs::canonicalize(CONFIG_PATH) {
+    let config_path = match std::fs::canonicalize(get_config_path()) {
         Ok(p) => p,
         Err(e) => {
             error!(error = ?e, "Failed to get absolute path for config.toml");

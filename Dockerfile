@@ -40,7 +40,7 @@ RUN cargo build --release --target x86_64-unknown-linux-musl
 
 # 4. Runtime stage - minimal FROM scratch image
 FROM scratch
-WORKDIR /
+ENV DATA_DIR=/data
 
 # Copy the static binary
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/twitch-1337 /twitch-1337
