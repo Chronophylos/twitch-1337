@@ -663,6 +663,40 @@ fn one_of<const L: usize, T>(array: &[T; L]) -> &T {
     array.choose(&mut rand::rng()).unwrap()
 }
 
+/// Parse a compact duration string like "1h", "30m", "2h30m" into a Duration.
+fn parse_flight_duration(s: &str) -> Option<std::time::Duration> {
+    let s = s.trim().to_lowercase();
+    if s.is_empty() {
+        return None;
+    }
+
+    let mut total_secs: u64 = 0;
+    let mut current_num = String::new();
+
+    for ch in s.chars() {
+        if ch.is_ascii_digit() {
+            current_num.push(ch);
+        } else if ch == 'h' {
+            let hours: u64 = current_num.parse().ok()?;
+            total_secs += hours * 3600;
+            current_num.clear();
+        } else if ch == 'm' {
+            let minutes: u64 = current_num.parse().ok()?;
+            total_secs += minutes * 60;
+            current_num.clear();
+        } else {
+            return None;
+        }
+    }
+
+    // Reject if there are leftover digits (no unit suffix) or zero duration
+    if !current_num.is_empty() || total_secs == 0 {
+        return None;
+    }
+
+    Some(std::time::Duration::from_secs(total_secs))
+}
+
 /// System prompt for the AI command, instructing the model how to behave.
 const AI_SYSTEM_PROMPT: &str = r#"You are a helpful Twitch chat bot assistant. Keep responses brief (2-3 sentences max) since they'll appear in chat. Be friendly and casual. Respond in the same language the user writes in (German or English)."#;
 
