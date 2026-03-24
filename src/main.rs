@@ -367,6 +367,10 @@ const LEADERBOARD_FILENAME: &str = "leaderboard.ron";
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
+fn default_expected_latency() -> u32 {
+    100
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct TwitchConfiguration {
     channel: String,
@@ -377,6 +381,7 @@ struct TwitchConfiguration {
     client_id: SecretString,
     #[serde(serialize_with = "serialize_secret_string")]
     client_secret: SecretString,
+    #[serde(default = "default_expected_latency")]
     expected_latency: u32,
 }
 
