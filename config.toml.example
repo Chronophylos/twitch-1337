@@ -17,9 +17,9 @@ client_id = "your_client_id"
 # Twitch application client secret
 client_secret = "your_client_secret"
 
-# Expected IRC message latency in milliseconds (used for precise 13:37 timing)
-# Typical values: 50-150ms. Adjust based on your connection.
-expected_latency = 89
+# Initial seed for IRC latency estimate in milliseconds (optional, default: 100)
+# The bot measures actual latency via PING/PONG every 5 minutes and auto-adjusts.
+# expected_latency = 89
 
 [streamelements]
 # StreamElements API token for managing bot commands
