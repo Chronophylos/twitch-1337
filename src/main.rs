@@ -1,7 +1,10 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 
 use async_trait::async_trait;
@@ -21,7 +24,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use twitch_irc::{
     ClientConfig, SecureTCPTransport, TwitchIRCClient,
     login::{RefreshingLoginCredentials, TokenStorage, UserAccessToken},
-    message::{NoticeMessage, PrivmsgMessage, ServerMessage},
+    message::{NoticeMessage, PongMessage, PrivmsgMessage, ServerMessage},
 };
 
 /// StreamElements API client and types for managing bot commands.
@@ -362,6 +365,18 @@ const TARGET_MINUTE: u32 = 37;
 
 /// Maximum number of unique users to track (prevents unbounded memory growth)
 const MAX_USERS: usize = 10_000;
+
+/// Interval between PING measurements
+const LATENCY_PING_INTERVAL: Duration = Duration::from_secs(300);
+
+/// Timeout waiting for PONG response
+const LATENCY_PING_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// EMA smoothing factor (0.2 = moderate responsiveness)
+const LATENCY_EMA_ALPHA: f64 = 0.2;
+
+/// Only log EMA changes at info level when delta exceeds this threshold
+const LATENCY_LOG_THRESHOLD: u32 = 10;
 
 const LEADERBOARD_FILENAME: &str = "leaderboard.ron";
 
