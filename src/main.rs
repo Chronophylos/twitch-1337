@@ -22,7 +22,7 @@ use tokio::{
 };
 use tracing::{debug, error, info, instrument, trace, warn};
 use twitch_irc::{
-    ClientConfig, SecureTCPTransport, TwitchIRCClient,
+    ClientConfig, SecureTCPTransport, TwitchIRCClient, irc,
     login::{RefreshingLoginCredentials, TokenStorage, UserAccessToken},
     message::{NoticeMessage, PongMessage, PrivmsgMessage, ServerMessage},
 };
@@ -1653,6 +1653,97 @@ async fn run_1337_handler(
     }
 }
 
+
+/// Periodically measures IRC latency via PING/PONG and updates a shared EMA estimate.
+///
+/// Sends a PING with a unique nonce every 5 minutes, measures the round-trip time
+/// from the matching PONG response, and updates an exponential moving average (EMA)
+/// of the one-way latency. The EMA is stored in a shared `AtomicU32` that other
+/// handlers (e.g., the 1337 handler) read for timing adjustments.
+///
+/// The handler is fully independent — PING failures or PONG timeouts are logged
+/// but never crash the handler or affect the EMA.
+///
+/// Note: The spec lists `initial_latency: u32` as an input, but we pass the
+/// `Arc<AtomicU32>` directly since it's created in main() and shared with the
+/// 1337 handler — the initial value is already loaded into the atomic.
+#[instrument(skip(client, broadcast_tx, latency))]
+async fn run_latency_handler(
+    client: Arc<AuthenticatedTwitchClient>,
+    broadcast_tx: broadcast::Sender<ServerMessage>,
+    latency: Arc<AtomicU32>,
+) {
+    let initial = latency.load(Ordering::Relaxed);
+    info!(initial_latency_ms = initial, "Latency handler started");
+
+    let mut ema: f64 = initial as f64;
+    let mut last_logged_ema: u32 = initial;
+
+    loop {
+        sleep(LATENCY_PING_INTERVAL).await;
+
+        let nonce = format!("{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let send_time = tokio::time::Instant::now();
+
+        // Send PING with unique nonce
+        if let Err(e) = client.send_message(irc!["PING", nonce.clone()]).await {
+            warn!(error = ?e, "Failed to send PING");
+            continue;
+        }
+
+        // Listen for matching PONG
+        let mut broadcast_rx = broadcast_tx.subscribe();
+        let pong_result = tokio::time::timeout(LATENCY_PING_TIMEOUT, async {
+            loop {
+                match broadcast_rx.recv().await {
+                    Ok(ServerMessage::Pong(PongMessage { source, .. })) => {
+                        if source.params.get(1).map(String::as_str) == Some(nonce.as_str()) {
+                            return send_time.elapsed();
+                        }
+                        // Nonce mismatch — likely library keepalive, ignore
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        warn!("Broadcast channel closed during PONG wait");
+                        return send_time.elapsed(); // will be discarded by caller
+                    }
+                    _ => continue,
+                }
+            }
+        })
+        .await;
+
+        let rtt = match pong_result {
+            Ok(elapsed) => elapsed,
+            Err(_) => {
+                warn!("PONG timeout after {:?}", LATENCY_PING_TIMEOUT);
+                continue;
+            }
+        };
+
+        let one_way_ms = rtt.as_millis() as f64 / 2.0;
+        ema = LATENCY_EMA_ALPHA * one_way_ms + (1.0 - LATENCY_EMA_ALPHA) * ema;
+        let ema_rounded = ema.round() as u32;
+
+        latency.store(ema_rounded, Ordering::Relaxed);
+
+        debug!(
+            rtt_ms = rtt.as_millis() as u64,
+            one_way_ms = one_way_ms as u64,
+            ema_ms = ema_rounded,
+            "Latency measurement"
+        );
+
+        // Log at info level only when EMA shifts significantly
+        if ema_rounded.abs_diff(last_logged_ema) >= LATENCY_LOG_THRESHOLD {
+            info!(
+                previous_ms = last_logged_ema,
+                current_ms = ema_rounded,
+                "Latency EMA changed"
+            );
+            last_logged_ema = ema_rounded;
+        }
+    }
+}
 
 /// Handler for generic text commands that start with `!`.
 ///
