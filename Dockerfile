@@ -30,10 +30,11 @@ FROM base AS builder
 COPY --from=cacher /app/target target
 COPY --from=cacher /usr/local/cargo /usr/local/cargo
 
-# Copy source code
+# Copy source code and embedded data
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo .cargo
 COPY src src
+COPY data data
 
 # Build the application with musl target (produces fully static binary)
 RUN cargo build --release --target x86_64-unknown-linux-musl
