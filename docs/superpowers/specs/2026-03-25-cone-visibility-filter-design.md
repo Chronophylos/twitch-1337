@@ -58,10 +58,11 @@ const UP_CONE_REFERENCE_ALT_FT: f64 = 35_000.0;
 A small pure function computing great-circle distance in nautical miles:
 
 ```rust
+/// All inputs in degrees. Returns distance in nautical miles.
 fn haversine_distance_nm(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64
 ```
 
-Uses the standard haversine formula with Earth radius in NM (3440.065). No external crate needed (~10 lines).
+Uses the standard haversine formula. Converts degrees to radians internally. Uses `EARTH_RADIUS_NM = 3440.065` (mean Earth radius 6371 km / 1.852 km/NM). No external crate needed (~10 lines).
 
 ### Cone filter
 
@@ -117,6 +118,7 @@ let candidates: Vec<_> = aircraft
 ### Modified: `src/main.rs` (aviation module)
 - Add `lat: Option<f64>`, `lon: Option<f64>` to `NearbyAircraft`
 - Add `UP_CONE_REFERENCE_ALT_FT` constant
+- Add `EARTH_RADIUS_NM` constant
 - Add `haversine_distance_nm()` function
 - Add `is_within_cone()` function
 - Insert cone filter into candidates pipeline in `up_command`
