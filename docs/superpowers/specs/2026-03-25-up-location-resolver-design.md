@@ -18,13 +18,20 @@ Extend the `!up` command to accept ICAO codes, IATA codes, and free-text place n
 
 ## Input Parsing
 
-The `up_command` function currently takes `Option<&str>` (single word via `words.next()`). This changes to collecting all remaining words after `!up` into a single trimmed string.
+The `up_command` function currently takes `Option<&str>` (single word via `words.next()`). This changes to collecting all remaining words after `!up` into a single trimmed string. If the collected input is empty after trimming, return the usage message immediately.
 
-Detection logic:
-1. **5 ASCII digits** → PLZ lookup
-2. **4 ASCII letters** (case-insensitive) → ICAO lookup
-3. **3 ASCII letters** (case-insensitive) → IATA lookup
-4. **Anything else** → Nominatim geocoding
+New function signature:
+```rust
+pub async fn up_command(
+    privmsg: &PrivmsgMessage,
+    client: &Arc<AuthenticatedTwitchClient>,
+    aviation_client: &AviationClient,
+    input: &str,  // was: plz: Option<&str>
+    cooldowns: &Arc<Mutex<HashMap<String, std::time::Instant>>>,
+) -> Result<()>
+```
+
+Call site changes from `words.next()` to `words.collect::<Vec<_>>().join(" ")`.
 
 ## ResolvedLocation Type
 
@@ -47,14 +54,14 @@ async fn resolve_location(
 ) -> Result<Option<ResolvedLocation>>
 ```
 
-Tries each resolver in order, returns the first match:
+This is a **hybrid waterfall**: pattern-matched resolvers are tried first based on input shape, but Nominatim always serves as the final fallback regardless of input pattern. The chain tries resolvers in order and returns the first `Some` result:
 
-1. **PLZ resolver** (existing logic, offline): `is_valid_plz(input)` → `plz_to_coords(input)`
-2. **ICAO resolver** (new, offline): 4-letter check → uppercase → lookup in `AirportData.by_icao`
-3. **IATA resolver** (new, offline): 3-letter check → uppercase → lookup in `AirportData.by_iata`
-4. **Nominatim resolver** (new, network): `aviation_client.geocode_nominatim(input)`
+1. **PLZ resolver** (offline): if input is 5 ASCII digits → lookup in PLZ HashMap. If found, return. If not found, return PLZ-specific error (do not fall through — an invalid PLZ should not be sent to Nominatim).
+2. **ICAO resolver** (offline): if input is 4 ASCII letters → uppercase → lookup in `AirportData.by_icao`. If found, return. If not found, **fall through** to Nominatim.
+3. **IATA resolver** (offline): if input is 3 ASCII letters → uppercase → lookup in `AirportData.by_iata`. If found, return. If not found, **fall through** to Nominatim.
+4. **Nominatim resolver** (network): always tried as final fallback for any input that wasn't resolved by steps 1-3.
 
-If no resolver matches, returns `None`.
+If Nominatim also returns no results, returns `None`.
 
 ## Airport Data Embedding
 
@@ -87,6 +94,12 @@ struct AirportData {
 
 Loaded via `include_str!("../data/airports.csv")`, parsed on first access (same pattern as PLZ data). Keys stored as uppercase. Not all airports have IATA codes; those are only inserted into `by_icao`.
 
+**Note on the `ident` field**: OurAirports uses `ident` for ICAO-style codes, but small airports may have non-standard local identifiers (e.g., US FAA codes). The update script should include all entries — the resolver simply won't match non-4-letter codes via the ICAO pattern, and they won't interfere.
+
+### Binary size impact
+
+~80k airports at ~50-60 bytes per CSV line adds ~4-5MB of embedded string data. This roughly doubles the current ~6MB binary. This is an accepted trade-off for comprehensive coverage.
+
 ## Nominatim Integration
 
 ### Method
@@ -103,7 +116,9 @@ impl AviationClient {
 GET https://nominatim.openstreetmap.org/search?q={query}&format=json&limit=1
 ```
 
-The existing `APP_USER_AGENT` header on the reqwest client satisfies Nominatim's usage policy.
+Built using reqwest's `.query(&[("q", input), ("format", "json"), ("limit", "1")])` method (not string formatting) to ensure proper URL encoding of spaces and special characters in multi-word queries.
+
+The existing `APP_USER_AGENT` header on the reqwest client satisfies Nominatim's usage policy. Nominatim also requires max 1 request/second — the existing 30s per-user cooldown on `!up` makes this a non-issue in practice.
 
 ### Response
 
@@ -130,17 +145,17 @@ Takes the first result. `display_name` is trimmed to the first comma-separated s
 
 | Scenario | Chat response |
 |----------|--------------|
-| No argument | `"Benutzung: !up <PLZ/ICAO/IATA/Ort> FDM"` |
+| Empty input (no argument) | `"Benutzung: !up <PLZ/ICAO/IATA/Ort> FDM"` |
 | PLZ not found in dataset | `"Kenne ich nicht die PLZ FDM"` |
-| ICAO code not found in dataset | `"Kenne ich nicht den ICAO Code FDM"` |
-| IATA code not found in dataset | `"Kenne ich nicht den IATA Code FDM"` |
-| Nominatim no results | `"Kenne ich nicht FDM"` |
+| All resolvers exhausted (including Nominatim) | `"Kenne ich nicht FDM"` |
 | Nominatim/API failure | `"Da ist was schiefgelaufen FDM"` |
+
+Note: ICAO/IATA codes that don't match the embedded dataset fall through to Nominatim rather than producing code-specific errors. Only PLZ has a specific "not found" message because invalid PLZs don't fall through (a 5-digit number is unambiguously a postal code attempt).
 
 ## Edge Cases
 
 - **3-letter IATA vs place name**: "FRA" is tried as IATA first. If someone means a place called "Fra", they can type the full name.
-- **4-letter non-ICAO words**: "BIER" checked as ICAO, not found, falls through to Nominatim. No issue.
+- **4-letter non-ICAO words**: "BIER" checked as ICAO, not found, falls through to Nominatim which geocodes it as a place name.
 - **Case insensitivity**: Input is uppercased before airport code lookup. "fra", "Fra", "FRA" all resolve to Frankfurt Airport.
 - **Multi-word input with leading/trailing spaces**: Trimmed before processing.
 
