@@ -2791,6 +2791,7 @@ mod aviation {
     #[derive(Debug, Deserialize)]
     struct NearbyAircraft {
         flight: Option<String>,
+        t: Option<String>,
         alt_baro: Option<AltBaro>,
     }
 
@@ -2984,6 +2985,7 @@ mod aviation {
             for (callsign, ac) in &candidates {
                 let client = aviation_client.0.clone();
                 let cs = callsign.clone();
+                let icao_type = ac.t.clone();
                 let alt = ac.alt_baro.clone();
                 join_set.spawn(async move {
                     let url = format!("{ADSBDB_BASE_URL}/callsign/{cs}");
@@ -2998,7 +3000,7 @@ mod aviation {
                     .await;
 
                     match route {
-                        Ok(Ok(Some(fr))) => Some((cs, alt, fr)),
+                        Ok(Ok(Some(fr))) => Some((cs, icao_type, alt, fr)),
                         Ok(Ok(None)) => None,
                         Ok(Err(e)) => {
                             warn!(callsign = %cs, error = ?e, "adsbdb lookup failed");
@@ -3016,10 +3018,6 @@ mod aviation {
             while let Some(res) = join_set.join_next().await {
                 if let Ok(Some(entry)) = res {
                     results.push(entry);
-                    if results.len() >= UP_MAX_RESULTS {
-                        join_set.abort_all();
-                        break;
-                    }
                 }
             }
 
@@ -3032,20 +3030,22 @@ mod aviation {
                 format!("Nix los über {plz}")
             }
             Ok(Ok(entries)) => {
+                let total = entries.len();
                 let parts: Vec<String> = entries
                     .iter()
-                    .map(|(cs, alt, route)| {
+                    .take(UP_MAX_RESULTS)
+                    .map(|(cs, icao_type, alt, route)| {
+                        let typ = icao_type.as_deref().unwrap_or("?");
                         format!(
-                            "{cs} {origin}→{dest} {alt}",
+                            "{cs} ({typ}) {origin}→{dest} {alt}",
                             origin = route.origin.iata_code,
                             dest = route.destination.iata_code,
                             alt = format_altitude(alt),
                         )
                     })
                     .collect();
-                let count = parts.len();
                 let joined = parts.join(" | ");
-                let msg = format!("✈ {count} aircraft near {plz}: {joined}");
+                let msg = format!("✈ {total} Flieger über {plz}: {joined}");
                 truncate_response(&msg, MAX_RESPONSE_LENGTH)
             }
             Ok(Err(e)) => {
