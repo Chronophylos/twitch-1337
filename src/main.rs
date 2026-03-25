@@ -3212,7 +3212,11 @@ mod aviation {
                     ac.lon.expect("lon guaranteed by cone_distance_nm"),
                 );
                 let bearing = random_flight::geo::initial_bearing(*lat, *lon, ac_lat, ac_lon);
-                let direction = random_flight::geo::cardinal_direction(bearing);
+                let direction = match random_flight::geo::cardinal_direction(bearing) {
+                    "N" => "↑", "NE" => "↗", "E" => "→", "SE" => "↘",
+                    "S" => "↓", "SW" => "↙", "W" => "←", "NW" => "↖",
+                    _ => "?",
+                };
                 join_set.spawn(async move {
                     let url = format!("{ADSBDB_BASE_URL}/callsign/{cs}");
                     let route = tokio::time::timeout(UP_ADSBDB_TIMEOUT, async {
