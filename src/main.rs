@@ -2723,6 +2723,7 @@ mod database {
 }
 
 mod aviation {
+    use csv;
     use eyre::{Result, WrapErr};
     use serde::Deserialize;
     use std::collections::HashMap;
@@ -2778,6 +2779,81 @@ mod aviation {
 
     fn is_valid_plz(plz: &str) -> bool {
         plz.len() == 5 && plz.chars().all(|c| c.is_ascii_digit())
+    }
+
+    // --- Airport Lookup ---
+
+    const AIRPORT_DATA: &str = include_str!("../data/airports.csv");
+    const UP_NOMINATIM_TIMEOUT: Duration = Duration::from_secs(5);
+    const NOMINATIM_BASE_URL: &str = "https://nominatim.openstreetmap.org";
+
+    struct AirportData {
+        by_icao: HashMap<String, (f64, f64, String)>,
+        by_iata: HashMap<String, (f64, f64, String)>,
+    }
+
+    fn airport_data() -> &'static AirportData {
+        static DATA: OnceLock<AirportData> = OnceLock::new();
+        DATA.get_or_init(|| {
+            let mut by_icao = HashMap::new();
+            let mut by_iata = HashMap::new();
+            let mut reader = csv::ReaderBuilder::new()
+                .has_headers(false)
+                .from_reader(AIRPORT_DATA.as_bytes());
+            for result in reader.records() {
+                let Ok(record) = result else { continue };
+                if record.len() < 5 {
+                    continue;
+                }
+                let icao = record[0].trim();
+                let iata = record[1].trim();
+                let name = record[2].trim().to_string();
+                let Ok(lat) = record[3].trim().parse::<f64>() else { continue };
+                let Ok(lon) = record[4].trim().parse::<f64>() else { continue };
+
+                // Only insert 4-letter codes into by_icao
+                if icao.len() == 4 {
+                    by_icao.insert(icao.to_uppercase(), (lat, lon, name.clone()));
+                }
+                // Insert non-empty IATA codes
+                if iata.len() == 3 {
+                    by_iata.insert(iata.to_uppercase(), (lat, lon, name));
+                }
+            }
+            AirportData { by_icao, by_iata }
+        })
+    }
+
+    fn icao_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
+        let data = airport_data();
+        data.by_icao.get(&code.to_uppercase()).map(|(lat, lon, name)| (*lat, *lon, name.as_str()))
+    }
+
+    fn iata_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
+        let data = airport_data();
+        data.by_iata.get(&code.to_uppercase()).map(|(lat, lon, name)| (*lat, *lon, name.as_str()))
+    }
+
+    fn is_icao_pattern(s: &str) -> bool {
+        s.len() == 4 && s.chars().all(|c| c.is_ascii_alphabetic())
+    }
+
+    fn is_iata_pattern(s: &str) -> bool {
+        s.len() == 3 && s.chars().all(|c| c.is_ascii_alphabetic())
+    }
+
+    // --- Location Resolution ---
+
+    struct ResolvedLocation {
+        lat: f64,
+        lon: f64,
+        display_name: String,
+    }
+
+    enum ResolveResult {
+        Found(ResolvedLocation),
+        PlzNotFound,
+        NotFound,
     }
 
     // --- adsb.lol types ---
