@@ -3008,6 +3008,64 @@ mod aviation {
         }
     }
 
+    async fn resolve_location(
+        input: &str,
+        aviation_client: &AviationClient,
+    ) -> Result<ResolveResult> {
+        // 1. PLZ: 5 ASCII digits — no fallthrough on miss
+        if is_valid_plz(input) {
+            return match plz_to_coords(input) {
+                Some((lat, lon)) => Ok(ResolveResult::Found(ResolvedLocation {
+                    lat,
+                    lon,
+                    display_name: input.to_string(),
+                })),
+                None => Ok(ResolveResult::PlzNotFound),
+            };
+        }
+
+        // 2. ICAO: 4 ASCII letters — falls through to Nominatim on miss
+        if is_icao_pattern(input) {
+            if let Some((lat, lon, name)) = icao_to_coords(input) {
+                return Ok(ResolveResult::Found(ResolvedLocation {
+                    lat,
+                    lon,
+                    display_name: name.to_string(),
+                }));
+            }
+            // Fall through to Nominatim
+        }
+
+        // 3. IATA: 3 ASCII letters — falls through to Nominatim on miss
+        if is_iata_pattern(input) {
+            if let Some((lat, lon, name)) = iata_to_coords(input) {
+                return Ok(ResolveResult::Found(ResolvedLocation {
+                    lat,
+                    lon,
+                    display_name: name.to_string(),
+                }));
+            }
+            // Fall through to Nominatim
+        }
+
+        // 4. Nominatim: universal fallback
+        let result = tokio::time::timeout(
+            UP_NOMINATIM_TIMEOUT,
+            aviation_client.geocode_nominatim(input),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(Some(location))) => Ok(ResolveResult::Found(location)),
+            Ok(Ok(None)) => Ok(ResolveResult::NotFound),
+            Ok(Err(e)) => Err(e.wrap_err("Nominatim geocoding failed")),
+            Err(_) => {
+                warn!(input = %input, "Nominatim request timed out");
+                Err(eyre::eyre!("Nominatim request timed out"))
+            }
+        }
+    }
+
     // --- Command ---
 
     fn format_altitude(alt: &Option<AltBaro>) -> String {
