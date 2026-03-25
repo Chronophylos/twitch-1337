@@ -2219,6 +2219,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "color-eyre",
+ "csv",
  "eyre",
  "notify-debouncer-mini",
  "rand",
