@@ -1816,27 +1816,46 @@ async fn run_generic_command_handler(
         None
     };
 
+    // Initialize aviation client for !up command
+    let aviation_client = match aviation::AviationClient::new() {
+        Ok(client) => {
+            info!("Aviation client initialized for !up command");
+            client
+        }
+        Err(e) => {
+            error!(error = ?e, "Failed to initialize aviation client");
+            error!("!up command will be disabled");
+            return;
+        }
+    };
+
     run_generic_command_handler_inner(
         broadcast_rx,
         client,
         se_client,
         se_config.channel_id,
         openrouter_client,
+        aviation_client,
     )
     .await;
 }
 
 /// Inner loop for the generic command handler.
-#[instrument(skip(broadcast_rx, client, se_client, openrouter_client))]
+#[instrument(skip(broadcast_rx, client, se_client, openrouter_client, aviation_client))]
 async fn run_generic_command_handler_inner(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
     client: Arc<AuthenticatedTwitchClient>,
     se_client: SEClient,
     channel_id: String,
     openrouter_client: Option<OpenRouterClient>,
+    aviation_client: aviation::AviationClient,
 ) {
     // Cooldown tracking for AI command
     let ai_cooldowns: Arc<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
+        Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+    // Cooldown tracking for !up command
+    let up_cooldowns: Arc<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
         Arc::new(Mutex::new(std::collections::HashMap::new()));
 
     loop {
@@ -1854,6 +1873,8 @@ async fn run_generic_command_handler_inner(
                     &channel_id,
                     openrouter_client.as_ref(),
                     &ai_cooldowns,
+                    &aviation_client,
+                    &up_cooldowns,
                 )
                 .await
                 {
@@ -1885,7 +1906,8 @@ async fn run_generic_command_handler_inner(
 /// # Errors
 ///
 /// Returns an error if command execution fails, but does not crash the handler.
-#[instrument(skip(privmsg, client, se_client, channel_id, openrouter_client, ai_cooldowns))]
+#[allow(clippy::too_many_arguments)]
+#[instrument(skip(privmsg, client, se_client, channel_id, openrouter_client, ai_cooldowns, aviation_client, up_cooldowns))]
 async fn handle_generic_commands(
     privmsg: &PrivmsgMessage,
     client: &Arc<AuthenticatedTwitchClient>,
@@ -1893,6 +1915,8 @@ async fn handle_generic_commands(
     channel_id: &str,
     openrouter_client: Option<&OpenRouterClient>,
     ai_cooldowns: &Arc<Mutex<std::collections::HashMap<String, std::time::Instant>>>,
+    aviation_client: &aviation::AviationClient,
+    up_cooldowns: &Arc<Mutex<std::collections::HashMap<String, std::time::Instant>>>,
 ) -> Result<()> {
     let mut words = privmsg.message_text.split_whitespace();
     let Some(first_word) = words.next() else {
@@ -1915,6 +1939,8 @@ async fn handle_generic_commands(
         }
     } else if first_word == "!fl" {
         flight_command(privmsg, client, words.next(), words.next()).await?;
+    } else if first_word == "!up" {
+        aviation::up_command(privmsg, client, aviation_client, words.next(), up_cooldowns).await?;
     }
 
     Ok(())
