@@ -1603,9 +1603,9 @@ async fn handle_generic_commands(
     };
 
     if first_word == "!toggle-ping" {
-        toggle_ping_command(privmsg, client, se_client, channel_id, words.next()).await?;
-    } else if first_word == "!list-pings" {
-        list_pings_command(privmsg, client, se_client, channel_id, words.next()).await?;
+        commands::toggle_ping::toggle_ping(privmsg, client, se_client, channel_id, words.next()).await?;
+    } else if first_word == "!list-pings" || first_word == "!lp" {
+        commands::list_pings::list_pings(privmsg, client, se_client, channel_id, words.next()).await?;
     } else if first_word == "!ai" {
         // Check if AI is enabled
         if let Some(openrouter) = openrouter_client {
@@ -1626,57 +1626,6 @@ async fn handle_generic_commands(
     Ok(())
 }
 
-
-#[instrument(skip(privmsg, client, se_client, channel_id))]
-async fn list_pings_command(
-    privmsg: &PrivmsgMessage,
-    client: &Arc<AuthenticatedTwitchClient>,
-    se_client: &SEClient,
-    channel_id: &str,
-    enabled_option: Option<&str>,
-) -> Result<()> {
-    let filter = enabled_option.unwrap_or("enabled");
-
-    let commands = se_client
-        .get_all_commands(channel_id)
-        .await
-        .wrap_err("Failed to fetch commands from StreamElements API")?;
-
-    let response = match filter {
-        "enabled" => &commands
-            .iter()
-            .filter(|command| commands::toggle_ping::ping_commands().contains(&command.command.as_str()))
-            .filter(|command| {
-                command
-                    .reply
-                    .to_lowercase()
-                    .contains(&format!("@{}", privmsg.sender.login.to_lowercase()))
-            })
-            .map(|command| command.command.as_str())
-            .collect::<Vec<_>>()
-            .join(" "),
-        "disabled" => &commands
-            .iter()
-            .filter(|command| commands::toggle_ping::ping_commands().contains(&command.command.as_str()))
-            .filter(|command| {
-                !command
-                    .reply
-                    .to_lowercase()
-                    .contains(&format!("@{}", privmsg.sender.login.to_lowercase()))
-            })
-            .map(|command| command.command.as_str())
-            .collect::<Vec<_>>()
-            .join(" "),
-        "all" => &commands::toggle_ping::ping_commands().join(" "),
-        _ => "Das weiß ich nicht Sadding",
-    };
-
-    if let Err(e) = client.say_in_reply_to(privmsg, response.to_string()).await {
-        error!(error = ?e, "Failed to send response message");
-    }
-
-    Ok(())
-}
 
 /// Cooldown duration for the AI command (30 seconds).
 const AI_COMMAND_COOLDOWN: Duration = Duration::from_secs(30);
