@@ -1025,7 +1025,10 @@ pub async fn main() -> Result<()> {
         let client = client.clone();
         let se_config = config.streamelements.clone();
         let openrouter_config = config.openrouter.clone();
-        async move { run_generic_command_handler(broadcast_tx, client, se_config, openrouter_config).await }
+        let leaderboard = leaderboard.clone();
+        async move {
+            run_generic_command_handler(broadcast_tx, client, se_config, openrouter_config, leaderboard).await
+        }
     });
 
     if schedules_enabled {
@@ -1461,6 +1464,7 @@ async fn run_generic_command_handler(
     client: Arc<AuthenticatedTwitchClient>,
     se_config: StreamelementsConfig,
     openrouter_config: Option<OpenRouterConfig>,
+    leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
 ) {
     info!("Generic Command Handler started");
 
@@ -1498,48 +1502,46 @@ async fn run_generic_command_handler(
         None
     };
 
-    // Initialize aviation client for !up command
+    // Initialize aviation client for !up command (optional - failure does not prevent startup)
     let aviation_client = match aviation::AviationClient::new() {
         Ok(client) => {
             info!("Aviation client initialized for !up command");
-            client
+            Some(client)
         }
         Err(e) => {
             error!(error = ?e, "Failed to initialize aviation client");
             error!("!up command will be disabled");
-            return;
+            None
         }
     };
 
-    run_generic_command_handler_inner(
-        broadcast_rx,
-        client,
-        se_client,
-        se_config.channel_id,
-        openrouter_client,
-        aviation_client,
-    )
-    .await;
+    let data_dir = get_data_dir();
+
+    let commands: Vec<Box<dyn commands::Command>> = vec![
+        Box::new(commands::toggle_ping::TogglePingCommand {
+            se_client: se_client.clone(),
+            channel_id: se_config.channel_id.clone(),
+        }),
+        Box::new(commands::list_pings::ListPingsCommand {
+            se_client,
+            channel_id: se_config.channel_id,
+        }),
+        Box::new(commands::ai::AiCommand::new(openrouter_client)),
+        Box::new(commands::random_flight::RandomFlightCommand),
+        Box::new(commands::flights_above::FlightsAboveCommand::new(aviation_client)),
+        Box::new(commands::leaderboard::LeaderboardCommand::new(leaderboard)),
+        Box::new(commands::feedback::FeedbackCommand::new(data_dir)),
+    ];
+
+    run_command_dispatcher(broadcast_rx, client, commands).await;
 }
 
-/// Inner loop for the generic command handler.
-#[instrument(skip(broadcast_rx, client, se_client, openrouter_client, aviation_client))]
-async fn run_generic_command_handler_inner(
+/// Main dispatch loop for trait-based commands.
+async fn run_command_dispatcher(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
     client: Arc<AuthenticatedTwitchClient>,
-    se_client: SEClient,
-    channel_id: String,
-    openrouter_client: Option<OpenRouterClient>,
-    aviation_client: aviation::AviationClient,
+    commands: Vec<Box<dyn commands::Command>>,
 ) {
-    // Cooldown tracking for AI command
-    let ai_cooldowns: Arc<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
-        Arc::new(Mutex::new(std::collections::HashMap::new()));
-
-    // Cooldown tracking for !up command
-    let up_cooldowns: Arc<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
-        Arc::new(Mutex::new(std::collections::HashMap::new()));
-
     loop {
         match broadcast_rx.recv().await {
             Ok(message) => {
@@ -1547,86 +1549,39 @@ async fn run_generic_command_handler_inner(
                     continue;
                 };
 
-                // Catch any errors from command handling to prevent task crash
-                if let Err(e) = handle_generic_commands(
-                    &privmsg,
-                    &client,
-                    &se_client,
-                    &channel_id,
-                    openrouter_client.as_ref(),
-                    &ai_cooldowns,
-                    &aviation_client,
-                    &up_cooldowns,
-                )
-                .await
-                {
+                let mut words = privmsg.message_text.split_whitespace();
+                let Some(first_word) = words.next() else {
+                    continue;
+                };
+
+                let Some(cmd) = commands.iter().find(|c| c.enabled() && c.name() == first_word) else {
+                    continue;
+                };
+
+                let ctx = commands::CommandContext {
+                    privmsg: &privmsg,
+                    client: &client,
+                    args: words.collect(),
+                };
+
+                if let Err(e) = cmd.execute(ctx).await {
                     error!(
                         error = ?e,
                         user = %privmsg.sender.login,
-                        message = %privmsg.message_text,
-                        "Error handling generic command"
+                        command = %first_word,
+                        "Error handling command"
                     );
                 }
             }
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                error!(skipped, "Generic Command Handler lagged, skipped messages");
-                continue;
+                error!(skipped, "Command handler lagged, skipped messages");
             }
             Err(broadcast::error::RecvError::Closed) => {
-                debug!("Broadcast channel closed, Generic Command Handler exiting");
+                debug!("Broadcast channel closed, command handler exiting");
                 break;
             }
         }
     }
-}
-
-/// Dispatches chat messages to the appropriate command handler.
-///
-/// Parses the first word of the message and routes to specialized handlers.
-/// This acts as a simple command router for all `!` commands.
-///
-/// # Errors
-///
-/// Returns an error if command execution fails, but does not crash the handler.
-#[allow(clippy::too_many_arguments)]
-#[instrument(skip(privmsg, client, se_client, channel_id, openrouter_client, ai_cooldowns, aviation_client, up_cooldowns))]
-async fn handle_generic_commands(
-    privmsg: &PrivmsgMessage,
-    client: &Arc<AuthenticatedTwitchClient>,
-    se_client: &SEClient,
-    channel_id: &str,
-    openrouter_client: Option<&OpenRouterClient>,
-    ai_cooldowns: &Arc<Mutex<std::collections::HashMap<String, std::time::Instant>>>,
-    aviation_client: &aviation::AviationClient,
-    up_cooldowns: &Arc<Mutex<std::collections::HashMap<String, std::time::Instant>>>,
-) -> Result<()> {
-    let mut words = privmsg.message_text.split_whitespace();
-    let Some(first_word) = words.next() else {
-        return Ok(());
-    };
-
-    if first_word == "!toggle-ping" {
-        commands::toggle_ping::toggle_ping(privmsg, client, se_client, channel_id, words.next()).await?;
-    } else if first_word == "!list-pings" || first_word == "!lp" {
-        commands::list_pings::list_pings(privmsg, client, se_client, channel_id, words.next()).await?;
-    } else if first_word == "!ai" {
-        // Check if AI is enabled
-        if let Some(openrouter) = openrouter_client {
-            // Collect remaining words as the instruction
-            let instruction: String = words.collect::<Vec<_>>().join(" ");
-            commands::ai::ai_command(privmsg, client, openrouter, ai_cooldowns, &instruction).await?;
-        } else {
-            // AI not configured - silently ignore or could add a message
-            debug!("AI command received but OpenRouter not configured");
-        }
-    } else if first_word == "!fl" {
-        commands::random_flight::flight_command(privmsg, client, words.next(), words.next()).await?;
-    } else if first_word == "!up" {
-        let input: String = words.collect::<Vec<_>>().join(" ");
-        aviation::up_command(privmsg, client, aviation_client, &input, up_cooldowns).await?;
-    }
-
-    Ok(())
 }
 
 /// Run a single schedule task.
