@@ -11,8 +11,14 @@ use super::{Command, CommandContext};
 use super::toggle_ping::ping_commands;
 
 pub struct ListPingsCommand {
-    pub se_client: SEClient,
-    pub channel_id: String,
+    se_client: SEClient,
+    channel_id: String,
+}
+
+impl ListPingsCommand {
+    pub fn new(se_client: SEClient, channel_id: String) -> Self {
+        Self { se_client, channel_id }
+    }
 }
 
 #[async_trait]

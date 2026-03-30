@@ -1518,14 +1518,12 @@ async fn run_generic_command_handler(
     let data_dir = get_data_dir();
 
     let commands: Vec<Box<dyn commands::Command>> = vec![
-        Box::new(commands::toggle_ping::TogglePingCommand {
-            se_client: se_client.clone(),
-            channel_id: se_config.channel_id.clone(),
-        }),
-        Box::new(commands::list_pings::ListPingsCommand {
-            se_client,
-            channel_id: se_config.channel_id,
-        }),
+        Box::new(commands::toggle_ping::TogglePingCommand::new(
+            se_client.clone(), se_config.channel_id.clone(),
+        )),
+        Box::new(commands::list_pings::ListPingsCommand::new(
+            se_client, se_config.channel_id,
+        )),
         Box::new(commands::ai::AiCommand::new(openrouter_client)),
         Box::new(commands::random_flight::RandomFlightCommand),
         Box::new(commands::flights_above::FlightsAboveCommand::new(aviation_client)),
