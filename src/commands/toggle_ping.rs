@@ -84,7 +84,7 @@ impl Command for TogglePingCommand {
 /// Returns an error if IRC communication or StreamElements API calls fail.
 /// User-facing errors are sent as chat messages before returning the error.
 #[instrument(skip(privmsg, client, se_client, channel_id))]
-async fn toggle_ping(
+pub async fn toggle_ping(
     privmsg: &twitch_irc::message::PrivmsgMessage,
     client: &Arc<AuthenticatedTwitchClient>,
     se_client: &SEClient,
