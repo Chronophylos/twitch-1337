@@ -1343,7 +1343,7 @@ async fn run_1337_handler(
                     }
                 }
             }
-            save_leaderboard(&*leaderboard_guard).await;
+            save_leaderboard(&leaderboard_guard).await;
         }
 
         // Post stats message
