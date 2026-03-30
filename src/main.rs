@@ -28,8 +28,10 @@ use twitch_irc::{
     message::{NoticeMessage, PongMessage, PrivmsgMessage, ServerMessage},
 };
 
-mod streamelements;
+mod aviation;
+mod database;
 mod openrouter;
+mod streamelements;
 
 use crate::openrouter::{ChatCompletionRequest, Message, OpenRouterClient};
 use crate::streamelements::SEClient;
@@ -2170,6 +2172,4 @@ async fn run_scheduled_message_handler(
     }
 }
 
-mod database;
-mod aviation;
 
