@@ -35,11 +35,11 @@ src/
   main.rs                  # Entrypoint, handler spawning, connection setup
   commands/
     mod.rs                 # Command trait, CommandContext, dispatcher logic
-    toggle_ping.rs         # !toggle-ping
-    list_pings.rs          # !list-pings
+    toggle_ping.rs         # !tp (toggle-ping)
+    list_pings.rs          # !lp (list-pings)
     ai.rs                  # !ai
-    flight.rs              # !fl
-    up.rs                  # !up (delegates to aviation module)
+    random_flight.rs       # !fl
+    flights_above.rs       # !up (flights above a position)
     leaderboard.rs         # !lb
     feedback.rs            # !fb
   streamelements.rs        # Extracted from main.rs inline module
@@ -56,11 +56,11 @@ Commands are constructed and registered at startup in `run_generic_command_handl
 
 ```rust
 let commands: Vec<Box<dyn Command>> = vec![
-    Box::new(TogglePingCommand::new(se_client.clone(), channel_id.clone())),
-    Box::new(ListPingsCommand::new(se_client.clone(), channel_id.clone())),
+    Box::new(TogglePingCommand::new(se_client.clone(), channel_id.clone())),  // !tp
+    Box::new(ListPingsCommand::new(se_client.clone(), channel_id.clone())),  // !lp
     Box::new(AiCommand::new(openrouter_client)),
-    Box::new(FlightCommand::new()),
-    Box::new(UpCommand::new(aviation_client)),
+    Box::new(RandomFlightCommand::new()),                                    // !fl
+    Box::new(FlightsAboveCommand::new(aviation_client)),                     // !up
     Box::new(LeaderboardCommand::new(leaderboard)),
     Box::new(FeedbackCommand::new(data_dir)),
 ];
@@ -125,11 +125,11 @@ All five existing commands move from `main.rs` into their own files under `src/c
 
 | Command | File | Dependencies |
 |---------|------|-------------|
-| `!toggle-ping` | `toggle_ping.rs` | `SEClient`, `channel_id` |
-| `!list-pings` | `list_pings.rs` | `SEClient`, `channel_id` |
+| `!tp` | `toggle_ping.rs` | `SEClient`, `channel_id` |
+| `!lp` | `list_pings.rs` | `SEClient`, `channel_id` |
 | `!ai` | `ai.rs` | `Option<OpenRouterClient>`, cooldowns |
-| `!fl` | `flight.rs` | None |
-| `!up` | `up.rs` | `AviationClient`, cooldowns |
+| `!fl` | `random_flight.rs` | None |
+| `!up` | `flights_above.rs` | `AviationClient`, cooldowns |
 
 Each command struct owns its dependencies via `Clone`/`Arc`. The `!ai` command returns `enabled() = false` when `OpenRouterClient` is `None`.
 
