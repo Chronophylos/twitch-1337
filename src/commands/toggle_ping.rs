@@ -34,8 +34,14 @@ pub fn ping_commands() -> &'static [&'static str] {
 }
 
 pub struct TogglePingCommand {
-    pub se_client: SEClient,
-    pub channel_id: String,
+    se_client: SEClient,
+    channel_id: String,
+}
+
+impl TogglePingCommand {
+    pub fn new(se_client: SEClient, channel_id: String) -> Self {
+        Self { se_client, channel_id }
+    }
 }
 
 #[async_trait]

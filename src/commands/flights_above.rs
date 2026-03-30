@@ -33,7 +33,8 @@ impl Command for FlightsAboveCommand {
     }
 
     async fn execute(&self, ctx: CommandContext<'_>) -> Result<()> {
-        let client = self.aviation_client.as_ref().unwrap();
+        let client = self.aviation_client.as_ref()
+            .ok_or_else(|| eyre::eyre!("aviation client not available"))?;
         let input: String = ctx.args.join(" ");
         crate::aviation::up_command(ctx.privmsg, ctx.client, client, &input, &self.cooldowns).await
     }
