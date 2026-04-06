@@ -962,6 +962,35 @@ pub async fn main() -> Result<()> {
     // Wrap client in Arc for sharing across handlers
     let client = Arc::new(client);
 
+    // Create flight tracker command channel
+    let (tracker_tx, tracker_rx) = tokio::sync::mpsc::channel::<flight_tracker::TrackerCommand>(32);
+
+    // Initialize aviation client for flight tracker
+    let tracker_aviation_client = match aviation::AviationClient::new() {
+        Ok(client) => client,
+        Err(e) => {
+            error!(error = ?e, "Failed to initialize aviation client for flight tracker");
+            bail!("Cannot start flight tracker without aviation client");
+        }
+    };
+
+    // Spawn flight tracker handler
+    let handler_flight_tracker = tokio::spawn({
+        let client = client.clone();
+        let channel = config.twitch.channel.clone();
+        let data_dir = get_data_dir();
+        async move {
+            flight_tracker::run_flight_tracker(
+                tracker_rx,
+                client,
+                channel,
+                tracker_aviation_client,
+                data_dir,
+            )
+            .await;
+        }
+    });
+
     // Create broadcast channel for message distribution (capacity: 100 messages)
     let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(100);
 
@@ -1040,19 +1069,20 @@ pub async fn main() -> Result<()> {
         let se_config = config.streamelements.clone();
         let openrouter_config = config.openrouter.clone();
         let leaderboard = leaderboard.clone();
+        let tracker_tx = tracker_tx.clone();
         async move {
-            run_generic_command_handler(broadcast_tx, client, se_config, openrouter_config, leaderboard).await
+            run_generic_command_handler(broadcast_tx, client, se_config, openrouter_config, leaderboard, tracker_tx).await
         }
     });
 
     if schedules_enabled {
         info!(
-            "Bot running with continuous connection. Handlers: Config watcher, 1337 tracker, Generic commands, Scheduled messages, Latency monitor"
+            "Bot running with continuous connection. Handlers: Config watcher, 1337 tracker, Generic commands, Scheduled messages, Latency monitor, Flight tracker"
         );
         info!("Scheduled messages: Loaded from config.toml, reloads on file change");
     } else {
         info!(
-            "Bot running with continuous connection. Handlers: 1337 tracker, Generic commands, Latency monitor"
+            "Bot running with continuous connection. Handlers: 1337 tracker, Generic commands, Latency monitor, Flight tracker"
         );
     }
     info!(
@@ -1089,6 +1119,9 @@ pub async fn main() -> Result<()> {
                 result = handler_latency => {
                     error!("Latency handler exited unexpectedly: {result:?}");
                 }
+                result = handler_flight_tracker => {
+                    error!("Flight tracker exited unexpectedly: {result:?}");
+                }
             }
         }
         _ => {
@@ -1107,6 +1140,9 @@ pub async fn main() -> Result<()> {
                 }
                 result = handler_latency => {
                     error!("Latency handler exited unexpectedly: {result:?}");
+                }
+                result = handler_flight_tracker => {
+                    error!("Flight tracker exited unexpectedly: {result:?}");
                 }
             }
         }
@@ -1472,13 +1508,14 @@ async fn run_latency_handler(
 /// - `!ai <instruction>` - AI-powered responses (if OpenRouter configured)
 ///
 /// Runs continuously in a loop, processing all incoming messages.
-#[instrument(skip(broadcast_tx, client, se_config, openrouter_config))]
+#[instrument(skip(broadcast_tx, client, se_config, openrouter_config, tracker_tx))]
 async fn run_generic_command_handler(
     broadcast_tx: broadcast::Sender<ServerMessage>,
     client: Arc<AuthenticatedTwitchClient>,
     se_config: StreamelementsConfig,
     openrouter_config: Option<OpenRouterConfig>,
     leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
+    tracker_tx: tokio::sync::mpsc::Sender<flight_tracker::TrackerCommand>,
 ) {
     info!("Generic Command Handler started");
 
@@ -1542,6 +1579,10 @@ async fn run_generic_command_handler(
         Box::new(commands::flights_above::FlightsAboveCommand::new(aviation_client)),
         Box::new(commands::leaderboard::LeaderboardCommand::new(leaderboard)),
         Box::new(commands::feedback::FeedbackCommand::new(data_dir)),
+        Box::new(commands::track::TrackCommand::new(tracker_tx.clone())),
+        Box::new(commands::untrack::UntrackCommand::new(tracker_tx.clone())),
+        Box::new(commands::flights::FlightsCommand::new(tracker_tx.clone())),
+        Box::new(commands::flights::FlightCommand::new(tracker_tx)),
     ];
 
     if let (Some(client), Some(cfg)) = (openrouter_client, openrouter_config) {
