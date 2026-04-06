@@ -8,10 +8,9 @@ use tracing::{debug, info};
 
 const PINGS_PATH: &str = "./pings.ron";
 
-/// A single ping definition.
+/// A single ping definition. The ping's name is the HashMap key in PingStore.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ping {
-    pub name: String,
     pub template: String,
     pub members: HashSet<String>,
     pub cooldown: Option<u64>,
@@ -87,9 +86,8 @@ impl PingManager {
             bail!("Ping \"{}\" gibt es schon", name);
         }
         self.store.pings.insert(
-            name.clone(),
+            name,
             Ping {
-                name,
                 template,
                 members: HashSet::new(),
                 cooldown,
@@ -146,9 +144,9 @@ impl PingManager {
     /// List all ping names a user is subscribed to.
     pub fn list_pings_for_user(&self, username: &str) -> Vec<&str> {
         let username_lower = username.to_lowercase();
-        self.store.pings.values()
-            .filter(|p| p.members.contains(&username_lower))
-            .map(|p| p.name.as_str())
+        self.store.pings.iter()
+            .filter(|(_, p)| p.members.contains(&username_lower))
+            .map(|(name, _)| name.as_str())
             .collect()
     }
 
