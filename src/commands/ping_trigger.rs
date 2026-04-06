@@ -45,33 +45,31 @@ impl Command for PingTriggerCommand {
         let ping_name = trigger.strip_prefix('!').unwrap_or(trigger);
         let sender = &ctx.privmsg.sender.login;
 
-        // Acquire read lock first to check conditions
-        {
+        // Check conditions and render under read lock, then release before I/O
+        let rendered = {
             let manager = self.ping_manager.read().await;
 
-            // Only members can trigger
             if !manager.is_member(ping_name, sender) {
                 return Ok(());
             }
 
-            // Check cooldown
             if !manager.check_cooldown(ping_name, self.default_cooldown) {
                 debug!(ping = ping_name, "Ping on cooldown, ignoring");
                 return Ok(());
             }
 
-            // Render template
-            let Some(rendered) = manager.render_template(ping_name, sender) else {
-                return Ok(());
-            };
+            match manager.render_template(ping_name, sender) {
+                Some(r) => r,
+                None => return Ok(()),
+            }
+        };
 
-            // Send the ping message (not as reply, just to the channel)
-            ctx.client
-                .say(ctx.privmsg.channel_login.clone(), rendered)
-                .await?;
-        }
+        // Send outside any lock
+        ctx.client
+            .say(ctx.privmsg.channel_login.clone(), rendered)
+            .await?;
 
-        // Acquire write lock to record trigger
+        // Record trigger under write lock
         {
             let mut manager = self.ping_manager.write().await;
             manager.record_trigger(ping_name);

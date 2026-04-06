@@ -23,13 +23,11 @@ impl PingAdminCommand {
     }
 
     fn is_admin(&self, privmsg: &PrivmsgMessage) -> bool {
-        // Check Twitch badges
         for badge in &privmsg.badges {
             if badge.name == "broadcaster" || badge.name == "moderator" {
                 return true;
             }
         }
-        // Check hidden admins list (by user ID)
         self.hidden_admin_ids.contains(&privmsg.sender.id)
     }
 }
@@ -54,13 +52,13 @@ impl Command for PingAdminCommand {
                 match subcommand {
                     "create" => self.handle_create(&ctx).await,
                     "delete" => self.handle_delete(&ctx).await,
-                    "add" => self.handle_add(&ctx).await,
-                    "remove" => self.handle_remove(&ctx).await,
+                    "add" => self.handle_member_op(&ctx, "add").await,
+                    "remove" => self.handle_member_op(&ctx, "remove").await,
                     _ => unreachable!(),
                 }
             }
-            "join" => self.handle_join(&ctx).await,
-            "leave" => self.handle_leave(&ctx).await,
+            "join" => self.handle_self_op(&ctx, "join").await,
+            "leave" => self.handle_self_op(&ctx, "leave").await,
             "list" => self.handle_list(&ctx).await,
             _ => {
                 ctx.client
@@ -79,7 +77,6 @@ impl Command for PingAdminCommand {
 impl PingAdminCommand {
     /// !ping create <name> <template...>
     async fn handle_create(&self, ctx: &CommandContext<'_>) -> Result<()> {
-        // args: ["create", "dbd", "{mentions}", "Dead", "by", "Daylight!"]
         if ctx.args.len() < 3 {
             ctx.client
                 .say_in_reply_to(ctx.privmsg, "Nutze: !ping create <name> <template>".to_string())
@@ -139,44 +136,13 @@ impl PingAdminCommand {
         Ok(())
     }
 
-    /// !ping add <name> <user>
-    async fn handle_add(&self, ctx: &CommandContext<'_>) -> Result<()> {
-        if ctx.args.len() < 3 {
-            ctx.client
-                .say_in_reply_to(ctx.privmsg, "Nutze: !ping add <name> <user>".to_string())
-                .await?;
-            return Ok(());
-        }
-
-        let name = ctx.args[1].to_lowercase();
-        let user = ctx.args[2].trim_start_matches('@').to_lowercase();
-
-        let mut manager = self.ping_manager.write().await;
-        match manager.add_member(&name, &user) {
-            Ok(()) => {
-                ctx.client
-                    .say_in_reply_to(
-                        ctx.privmsg,
-                        format!("{user} zu \"{name}\" hinzugefügt Okayge"),
-                    )
-                    .await?;
-            }
-            Err(e) => {
-                ctx.client
-                    .say_in_reply_to(ctx.privmsg, format!("{e} FDM"))
-                    .await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// !ping remove <name> <user>
-    async fn handle_remove(&self, ctx: &CommandContext<'_>) -> Result<()> {
+    /// !ping add/remove <name> <user>
+    async fn handle_member_op(&self, ctx: &CommandContext<'_>, op: &str) -> Result<()> {
         if ctx.args.len() < 3 {
             ctx.client
                 .say_in_reply_to(
                     ctx.privmsg,
-                    "Nutze: !ping remove <name> <user>".to_string(),
+                    format!("Nutze: !ping {op} <name> <user>"),
                 )
                 .await?;
             return Ok(());
@@ -186,14 +152,20 @@ impl PingAdminCommand {
         let user = ctx.args[2].trim_start_matches('@').to_lowercase();
 
         let mut manager = self.ping_manager.write().await;
-        match manager.remove_member(&name, &user) {
+        let result = match op {
+            "add" => manager.add_member(&name, &user),
+            "remove" => manager.remove_member(&name, &user),
+            _ => unreachable!(),
+        };
+
+        match result {
             Ok(()) => {
-                ctx.client
-                    .say_in_reply_to(
-                        ctx.privmsg,
-                        format!("{user} aus \"{name}\" entfernt Okayge"),
-                    )
-                    .await?;
+                let msg = match op {
+                    "add" => format!("{user} zu \"{name}\" hinzugefügt Okayge"),
+                    "remove" => format!("{user} aus \"{name}\" entfernt Okayge"),
+                    _ => unreachable!(),
+                };
+                ctx.client.say_in_reply_to(ctx.privmsg, msg).await?;
             }
             Err(e) => {
                 ctx.client
@@ -204,70 +176,44 @@ impl PingAdminCommand {
         Ok(())
     }
 
-    /// !ping join <name>
-    async fn handle_join(&self, ctx: &CommandContext<'_>) -> Result<()> {
+    /// !ping join/leave <name> -- self-service membership
+    async fn handle_self_op(&self, ctx: &CommandContext<'_>, op: &str) -> Result<()> {
         let name = match ctx.args.get(1) {
             Some(n) => n.to_lowercase(),
             None => {
                 ctx.client
-                    .say_in_reply_to(ctx.privmsg, "Nutze: !ping join <name>".to_string())
+                    .say_in_reply_to(ctx.privmsg, format!("Nutze: !ping {op} <name>"))
                     .await?;
                 return Ok(());
             }
         };
 
         let mut manager = self.ping_manager.write().await;
-        if !manager.ping_exists(&name) {
-            ctx.client
-                .say_in_reply_to(ctx.privmsg, format!("Ping \"{name}\" gibt es nicht FDM"))
-                .await?;
-            return Ok(());
-        }
-
-        match manager.add_member(&name, &ctx.privmsg.sender.login) {
-            Ok(()) => {
-                ctx.client
-                    .say_in_reply_to(ctx.privmsg, "Hab ich gemacht Okayge".to_string())
-                    .await?;
-            }
-            Err(_) => {
-                ctx.client
-                    .say_in_reply_to(ctx.privmsg, "Bist du schon FDM".to_string())
-                    .await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// !ping leave <name>
-    async fn handle_leave(&self, ctx: &CommandContext<'_>) -> Result<()> {
-        let name = match ctx.args.get(1) {
-            Some(n) => n.to_lowercase(),
-            None => {
-                ctx.client
-                    .say_in_reply_to(ctx.privmsg, "Nutze: !ping leave <name>".to_string())
-                    .await?;
-                return Ok(());
-            }
+        let result = match op {
+            "join" => manager.add_member(&name, &ctx.privmsg.sender.login),
+            "leave" => manager.remove_member(&name, &ctx.privmsg.sender.login),
+            _ => unreachable!(),
         };
 
-        let mut manager = self.ping_manager.write().await;
-        if !manager.ping_exists(&name) {
-            ctx.client
-                .say_in_reply_to(ctx.privmsg, format!("Ping \"{name}\" gibt es nicht FDM"))
-                .await?;
-            return Ok(());
-        }
-
-        match manager.remove_member(&name, &ctx.privmsg.sender.login) {
+        match result {
             Ok(()) => {
                 ctx.client
                     .say_in_reply_to(ctx.privmsg, "Hab ich gemacht Okayge".to_string())
                     .await?;
             }
-            Err(_) => {
+            Err(e) => {
+                let err_str = e.to_string();
+                let msg = if err_str.contains("gibt es nicht") {
+                    format!("{err_str} FDM")
+                } else {
+                    match op {
+                        "join" => "Bist du schon FDM".to_string(),
+                        "leave" => "Bist du nicht drin FDM".to_string(),
+                        _ => unreachable!(),
+                    }
+                };
                 ctx.client
-                    .say_in_reply_to(ctx.privmsg, "Bist du nicht drin FDM".to_string())
+                    .say_in_reply_to(ctx.privmsg, msg)
                     .await?;
             }
         }
