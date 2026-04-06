@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -175,7 +175,7 @@ pub(crate) struct FlightTrackerState {
 /// Loads tracked flights from the RON file.
 ///
 /// Returns an empty state if the file doesn't exist or is corrupted.
-pub(crate) async fn load_tracker_state(data_dir: &PathBuf) -> FlightTrackerState {
+pub(crate) async fn load_tracker_state(data_dir: &Path) -> FlightTrackerState {
     let path = data_dir.join(FLIGHTS_FILENAME);
     match fs::read_to_string(&path).await {
         Ok(contents) => match ron::from_str::<FlightTrackerState>(&contents) {
@@ -204,7 +204,7 @@ pub(crate) async fn load_tracker_state(data_dir: &PathBuf) -> FlightTrackerState
 }
 
 /// Saves tracked flights to the RON file.
-pub(crate) async fn save_tracker_state(data_dir: &PathBuf, state: &FlightTrackerState) {
+pub(crate) async fn save_tracker_state(data_dir: &Path, state: &FlightTrackerState) {
     let path = data_dir.join(FLIGHTS_FILENAME);
     match ron::to_string(state) {
         Ok(serialized) => {
@@ -297,35 +297,31 @@ pub(crate) fn detect_phase(flight: &TrackedFlight, ac: &NearbyAircraft) -> Fligh
     }
 
     // Approach: descending below threshold altitude or approach mode active
-    if let Some(alt_val) = alt {
-        if (alt_val < APPROACH_MAX_ALTITUDE || has_approach_mode) && vrate.unwrap_or(0) < 0 {
+    if let Some(alt_val) = alt
+        && (alt_val < APPROACH_MAX_ALTITUDE || has_approach_mode) && vrate.unwrap_or(0) < 0 {
             return FlightPhase::Approach;
         }
-    }
 
     // Descent: negative vertical rate above approach altitude
-    if let Some(vr) = vrate {
-        if vr < DESCENT_RATE_THRESHOLD {
+    if let Some(vr) = vrate
+        && vr < DESCENT_RATE_THRESHOLD {
             return FlightPhase::Descent;
         }
-    }
 
     // Cruise: stable altitude above minimum, low vertical rate for enough polls
-    if let (Some(alt_val), Some(vr)) = (alt, vrate) {
-        if alt_val > CRUISE_MIN_ALTITUDE
+    if let (Some(alt_val), Some(vr)) = (alt, vrate)
+        && alt_val > CRUISE_MIN_ALTITUDE
             && vr.abs() < CRUISE_RATE_THRESHOLD
             && flight.polls_since_change >= CRUISE_STABLE_POLLS
         {
             return FlightPhase::Cruise;
         }
-    }
 
     // Climb: positive vertical rate
-    if let Some(vr) = vrate {
-        if vr > CLIMB_RATE_THRESHOLD {
+    if let Some(vr) = vrate
+        && vr > CLIMB_RATE_THRESHOLD {
             return FlightPhase::Climb;
         }
-    }
 
     // If we were in a phase and conditions don't clearly match something else, stay
     flight.phase
@@ -589,7 +585,7 @@ async fn process_command(
     client: &Arc<AuthenticatedTwitchClient>,
     channel: &str,
     aviation_client: &AviationClient,
-    data_dir: &PathBuf,
+    data_dir: &Path,
 ) {
     match cmd {
         TrackerCommand::Track {
@@ -635,6 +631,7 @@ async fn process_command(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_track(
     identifier: FlightIdentifier,
     requested_by: &str,
@@ -643,7 +640,7 @@ async fn handle_track(
     client: &Arc<AuthenticatedTwitchClient>,
     _channel: &str,
     aviation_client: &AviationClient,
-    data_dir: &PathBuf,
+    data_dir: &Path,
 ) {
     // Check global limit
     if state.flights.len() >= MAX_TRACKED_FLIGHTS {
@@ -803,7 +800,7 @@ async fn handle_untrack(
     reply_to: &PrivmsgMessage,
     state: &mut FlightTrackerState,
     client: &Arc<AuthenticatedTwitchClient>,
-    data_dir: &PathBuf,
+    data_dir: &Path,
 ) {
     let upper = identifier.to_uppercase();
 
@@ -896,7 +893,7 @@ async fn poll_all_flights(
     client: &Arc<AuthenticatedTwitchClient>,
     channel: &str,
     aviation_client: &AviationClient,
-    data_dir: &PathBuf,
+    data_dir: &Path,
 ) {
     let now = Utc::now();
     let mut changed = false;
@@ -969,14 +966,14 @@ async fn poll_all_flights(
         changed = true;
 
         // Resolve callsign/hex/type if not yet known
-        if flight.callsign.is_none() {
-            if let Some(cs) = ac.flight.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+        if flight.callsign.is_none()
+            && let Some(cs) = ac.flight.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
                 debug!(identifier = %flight.identifier, callsign = %cs, "Resolved callsign");
                 flight.callsign = Some(cs.clone());
 
                 // Try to fetch route now that we have a callsign
-                if flight.route.is_none() {
-                    if let Ok(Ok(Some(route))) = tokio::time::timeout(
+                if flight.route.is_none()
+                    && let Ok(Ok(Some(route))) = tokio::time::timeout(
                         Duration::from_secs(5),
                         aviation_client.get_flight_route(&cs),
                     )
@@ -990,29 +987,24 @@ async fn poll_all_flights(
                         }
                         flight.route = Some((origin, dest));
                     }
-                }
             }
-        }
-        if flight.hex.is_none() {
-            if let Some(hex) = &ac.hex {
+        if flight.hex.is_none()
+            && let Some(hex) = &ac.hex {
                 debug!(identifier = %flight.identifier, hex = %hex, "Resolved hex");
                 flight.hex = Some(hex.clone());
             }
-        }
-        if flight.aircraft_type.is_none() {
-            if let Some(t) = &ac.t {
+        if flight.aircraft_type.is_none()
+            && let Some(t) = &ac.t {
                 flight.aircraft_type = Some(t.clone());
             }
-        }
 
         // Check squawk changes
         if let Some(new_squawk) = &ac.squawk {
             let squawk_changed = flight.squawk.as_ref() != Some(new_squawk);
-            if squawk_changed {
-                if let Some(meaning) = emergency_squawk_meaning(new_squawk) {
+            if squawk_changed
+                && let Some(meaning) = emergency_squawk_meaning(new_squawk) {
                     messages.push(msg_squawk_emergency(flight, new_squawk, meaning));
                 }
-            }
         }
 
         // Store previous position for divert detection
