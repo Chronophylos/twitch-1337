@@ -31,6 +31,7 @@ mod aviation;
 mod commands;
 mod database;
 mod openrouter;
+mod flight_tracker;
 mod streamelements;
 
 use crate::openrouter::{ChatCompletionRequest, Message, OpenRouterClient};
