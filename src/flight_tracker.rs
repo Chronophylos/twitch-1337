@@ -1,13 +1,16 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
+use tokio::sync::mpsc;
 use tokio::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, error, info, warn};
 use twitch_irc::message::PrivmsgMessage;
 
-use crate::aviation::{AltBaro, NearbyAircraft};
+use crate::aviation::{AltBaro, AviationClient, NearbyAircraft, iata_to_coords};
+use crate::AuthenticatedTwitchClient;
 
 const FLIGHTS_FILENAME: &str = "flights.ron";
 
@@ -501,4 +504,608 @@ pub(crate) fn compute_poll_interval(flights: &[TrackedFlight]) -> Duration {
     }
 
     POLL_SLOW
+}
+
+// --- Handler ---
+
+/// Main flight tracker handler. Processes commands, polls adsb.lol, detects
+/// state changes, and posts chat messages.
+pub(crate) async fn run_flight_tracker(
+    mut cmd_rx: mpsc::Receiver<TrackerCommand>,
+    client: Arc<AuthenticatedTwitchClient>,
+    channel: String,
+    aviation_client: AviationClient,
+    data_dir: PathBuf,
+) {
+    let mut state = load_tracker_state(&data_dir).await;
+    info!(flights = state.flights.len(), "Flight tracker started");
+
+    loop {
+        if state.flights.is_empty() {
+            // No flights tracked: block until we get a command
+            let Some(cmd) = cmd_rx.recv().await else {
+                info!("Flight tracker command channel closed, shutting down");
+                return;
+            };
+            process_command(
+                cmd,
+                &mut state,
+                &client,
+                &channel,
+                &aviation_client,
+                &data_dir,
+            )
+            .await;
+        } else {
+            // Drain all pending commands without blocking
+            while let Ok(cmd) = cmd_rx.try_recv() {
+                process_command(
+                    cmd,
+                    &mut state,
+                    &client,
+                    &channel,
+                    &aviation_client,
+                    &data_dir,
+                )
+                .await;
+            }
+
+            // Poll all flights
+            poll_all_flights(&mut state, &client, &channel, &aviation_client, &data_dir).await;
+
+            // Sleep with adaptive interval, but wake up early for commands
+            let interval = compute_poll_interval(&state.flights);
+            debug!(interval_secs = interval.as_secs(), flights = state.flights.len(), "Sleeping until next poll");
+
+            tokio::select! {
+                _ = tokio::time::sleep(interval) => {}
+                cmd = cmd_rx.recv() => {
+                    match cmd {
+                        Some(cmd) => {
+                            process_command(
+                                cmd,
+                                &mut state,
+                                &client,
+                                &channel,
+                                &aviation_client,
+                                &data_dir,
+                            )
+                            .await;
+                        }
+                        None => {
+                            info!("Flight tracker command channel closed, shutting down");
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn process_command(
+    cmd: TrackerCommand,
+    state: &mut FlightTrackerState,
+    client: &Arc<AuthenticatedTwitchClient>,
+    channel: &str,
+    aviation_client: &AviationClient,
+    data_dir: &PathBuf,
+) {
+    match cmd {
+        TrackerCommand::Track {
+            identifier,
+            requested_by,
+            reply_to,
+        } => {
+            handle_track(
+                identifier,
+                &requested_by,
+                &reply_to,
+                state,
+                client,
+                channel,
+                aviation_client,
+                data_dir,
+            )
+            .await;
+        }
+        TrackerCommand::Untrack {
+            identifier,
+            requested_by,
+            is_mod,
+            reply_to,
+        } => {
+            handle_untrack(
+                &identifier,
+                &requested_by,
+                is_mod,
+                &reply_to,
+                state,
+                client,
+                data_dir,
+            )
+            .await;
+        }
+        TrackerCommand::Status {
+            identifier,
+            reply_to,
+        } => {
+            handle_status(identifier.as_deref(), &reply_to, state, client).await;
+        }
+    }
+}
+
+async fn handle_track(
+    identifier: FlightIdentifier,
+    requested_by: &str,
+    reply_to: &PrivmsgMessage,
+    state: &mut FlightTrackerState,
+    client: &Arc<AuthenticatedTwitchClient>,
+    _channel: &str,
+    aviation_client: &AviationClient,
+    data_dir: &PathBuf,
+) {
+    // Check global limit
+    if state.flights.len() >= MAX_TRACKED_FLIGHTS {
+        let msg = format!("Maximal {MAX_TRACKED_FLIGHTS} Flüge gleichzeitig FDM");
+        if let Err(e) = client.say_in_reply_to(reply_to, msg).await {
+            error!(error = ?e, "Failed to send limit message");
+        }
+        return;
+    }
+
+    // Check per-user limit
+    let user_count = state
+        .flights
+        .iter()
+        .filter(|f| f.tracked_by == requested_by)
+        .count();
+    if user_count >= MAX_FLIGHTS_PER_USER {
+        let msg = format!("Du trackst schon {MAX_FLIGHTS_PER_USER} Flüge FDM");
+        if let Err(e) = client.say_in_reply_to(reply_to, msg).await {
+            error!(error = ?e, "Failed to send per-user limit message");
+        }
+        return;
+    }
+
+    // Check for duplicates
+    let already_tracked = state.flights.iter().any(|f| {
+        f.identifier == identifier
+            || identifier.matches(f.callsign.as_deref(), f.hex.as_deref())
+    });
+    if already_tracked {
+        let msg = format!("{} wird schon getrackt", identifier);
+        if let Err(e) = client.say_in_reply_to(reply_to, msg).await {
+            error!(error = ?e, "Failed to send duplicate message");
+        }
+        return;
+    }
+
+    // Query adsb.lol to verify flight exists
+    let ac_result = match &identifier {
+        FlightIdentifier::Hex(hex) => {
+            tokio::time::timeout(POLL_TIMEOUT, aviation_client.get_aircraft_by_hex(hex)).await
+        }
+        FlightIdentifier::Callsign(cs) => {
+            tokio::time::timeout(POLL_TIMEOUT, aviation_client.get_aircraft_by_callsign(cs)).await
+        }
+    };
+
+    let ac = match ac_result {
+        Ok(Ok(Some(ac))) => ac,
+        Ok(Ok(None)) => {
+            let msg = format!("{} nicht gefunden auf adsb.lol FDM", identifier);
+            if let Err(e) = client.say_in_reply_to(reply_to, msg).await {
+                error!(error = ?e, "Failed to send not-found message");
+            }
+            return;
+        }
+        Ok(Err(e)) => {
+            error!(error = ?e, identifier = %identifier, "adsb.lol lookup failed");
+            if let Err(e) = client
+                .say_in_reply_to(reply_to, "adsb.lol Anfrage fehlgeschlagen FDM".to_string())
+                .await
+            {
+                error!(error = ?e, "Failed to send error message");
+            }
+            return;
+        }
+        Err(_) => {
+            if let Err(e) = client
+                .say_in_reply_to(reply_to, "adsb.lol Anfrage Timeout FDM".to_string())
+                .await
+            {
+                error!(error = ?e, "Failed to send timeout message");
+            }
+            return;
+        }
+    };
+
+    // Extract data from the aircraft
+    let callsign = ac.flight.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let hex = ac.hex.clone();
+    let aircraft_type = ac.t.clone();
+    let now = Utc::now();
+
+    let mut flight = TrackedFlight {
+        identifier: identifier.clone(),
+        callsign: callsign.clone(),
+        hex: hex.clone(),
+        phase: FlightPhase::Unknown,
+        route: None,
+        aircraft_type,
+        altitude_ft: altitude_ft(&ac),
+        vertical_rate_fpm: vertical_rate(&ac),
+        ground_speed_kts: ac.gs,
+        lat: ac.lat,
+        lon: ac.lon,
+        squawk: ac.squawk.clone(),
+        tracked_by: requested_by.to_string(),
+        tracked_at: now,
+        last_seen: Some(now),
+        last_phase_change: None,
+        polls_since_change: 0,
+        divert_consecutive_polls: 0,
+        dest_lat: None,
+        dest_lon: None,
+    };
+
+    // Detect initial phase
+    flight.phase = detect_phase(&flight, &ac);
+
+    // Fetch route if we have a callsign
+    if let Some(cs) = &callsign {
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            aviation_client.get_flight_route(cs),
+        )
+        .await
+        {
+            Ok(Ok(Some(route))) => {
+                let origin = route.origin.iata_code.clone();
+                let dest = route.destination.iata_code.clone();
+
+                // Resolve destination coordinates for divert detection
+                if let Some((lat, lon, _)) = iata_to_coords(&dest) {
+                    flight.dest_lat = Some(lat);
+                    flight.dest_lon = Some(lon);
+                }
+
+                flight.route = Some((origin, dest));
+            }
+            Ok(Ok(None)) => {
+                debug!(callsign = %cs, "No route found for flight");
+            }
+            Ok(Err(e)) => {
+                warn!(error = ?e, callsign = %cs, "Failed to fetch route");
+            }
+            Err(_) => {
+                warn!(callsign = %cs, "Route fetch timed out");
+            }
+        }
+    }
+
+    let response = msg_track_started(&flight);
+    state.flights.push(flight);
+    save_tracker_state(data_dir, state).await;
+
+    info!(identifier = %identifier, requested_by = %requested_by, "Flight tracking started");
+    // Say proactively in channel (not reply) since track confirmation is informational
+    if let Err(e) = client.say_in_reply_to(reply_to, response).await {
+        error!(error = ?e, "Failed to send track started message");
+    }
+}
+
+async fn handle_untrack(
+    identifier: &str,
+    requested_by: &str,
+    is_mod: bool,
+    reply_to: &PrivmsgMessage,
+    state: &mut FlightTrackerState,
+    client: &Arc<AuthenticatedTwitchClient>,
+    data_dir: &PathBuf,
+) {
+    let upper = identifier.to_uppercase();
+
+    // Find flight by identifier, callsign, or hex match
+    let idx = state.flights.iter().position(|f| {
+        f.identifier.as_str().eq_ignore_ascii_case(&upper)
+            || f.callsign
+                .as_ref()
+                .is_some_and(|cs| cs.eq_ignore_ascii_case(&upper))
+            || f.hex
+                .as_ref()
+                .is_some_and(|h| h.eq_ignore_ascii_case(&upper))
+    });
+
+    let Some(idx) = idx else {
+        if let Err(e) = client
+            .say_in_reply_to(reply_to, format!("{identifier} nicht gefunden FDM"))
+            .await
+        {
+            error!(error = ?e, "Failed to send not-found message");
+        }
+        return;
+    };
+
+    // Check permissions: only the user who tracked it or mods can untrack
+    let flight = &state.flights[idx];
+    if flight.tracked_by != requested_by && !is_mod {
+        if let Err(e) = client
+            .say_in_reply_to(
+                reply_to,
+                "Nur der Tracker oder Mods können das untracking machen FDM".to_string(),
+            )
+            .await
+        {
+            error!(error = ?e, "Failed to send permission message");
+        }
+        return;
+    }
+
+    let name = flight
+        .callsign
+        .as_deref()
+        .unwrap_or(flight.identifier.as_str())
+        .to_string();
+    state.flights.remove(idx);
+    save_tracker_state(data_dir, state).await;
+
+    info!(identifier = %identifier, requested_by = %requested_by, "Flight untracked");
+    if let Err(e) = client
+        .say_in_reply_to(reply_to, format!("{name} wird nicht mehr getrackt Okayge"))
+        .await
+    {
+        error!(error = ?e, "Failed to send untrack message");
+    }
+}
+
+async fn handle_status(
+    identifier: Option<&str>,
+    reply_to: &PrivmsgMessage,
+    state: &FlightTrackerState,
+    client: &Arc<AuthenticatedTwitchClient>,
+) {
+    let response = match identifier {
+        None => msg_flights_list(&state.flights),
+        Some(id) => {
+            let upper = id.to_uppercase();
+            let flight = state.flights.iter().find(|f| {
+                f.identifier.as_str().eq_ignore_ascii_case(&upper)
+                    || f.callsign
+                        .as_ref()
+                        .is_some_and(|cs| cs.eq_ignore_ascii_case(&upper))
+                    || f.hex
+                        .as_ref()
+                        .is_some_and(|h| h.eq_ignore_ascii_case(&upper))
+            });
+            match flight {
+                Some(f) => msg_flight_status(f),
+                None => format!("{id} nicht gefunden FDM"),
+            }
+        }
+    };
+
+    if let Err(e) = client.say_in_reply_to(reply_to, response).await {
+        error!(error = ?e, "Failed to send status message");
+    }
+}
+
+async fn poll_all_flights(
+    state: &mut FlightTrackerState,
+    client: &Arc<AuthenticatedTwitchClient>,
+    channel: &str,
+    aviation_client: &AviationClient,
+    data_dir: &PathBuf,
+) {
+    let now = Utc::now();
+    let mut changed = false;
+    let mut removals: Vec<usize> = Vec::new();
+    let mut messages: Vec<String> = Vec::new();
+
+    for (idx, flight) in state.flights.iter_mut().enumerate() {
+        // Fetch aircraft data
+        let ac_result = match &flight.identifier {
+            FlightIdentifier::Hex(hex) => {
+                tokio::time::timeout(POLL_TIMEOUT, aviation_client.get_aircraft_by_hex(hex)).await
+            }
+            FlightIdentifier::Callsign(cs) => {
+                // If we've resolved a hex, prefer that for lookups
+                if let Some(hex) = &flight.hex {
+                    tokio::time::timeout(POLL_TIMEOUT, aviation_client.get_aircraft_by_hex(hex))
+                        .await
+                } else {
+                    tokio::time::timeout(
+                        POLL_TIMEOUT,
+                        aviation_client.get_aircraft_by_callsign(cs),
+                    )
+                    .await
+                }
+            }
+        };
+
+        let ac = match ac_result {
+            Ok(Ok(Some(ac))) => ac,
+            Ok(Ok(None)) => {
+                // Aircraft not found -- check tracking lost threshold
+                if let Some(last_seen) = flight.last_seen {
+                    let lost_duration = now.signed_duration_since(last_seen);
+                    let removal_threshold =
+                        chrono::TimeDelta::from_std(TRACKING_LOST_REMOVAL).unwrap();
+                    if lost_duration >= removal_threshold {
+                        info!(
+                            identifier = %flight.identifier,
+                            "Removing flight: tracking lost for {}s",
+                            lost_duration.num_seconds()
+                        );
+                        messages.push(msg_tracking_lost(flight));
+                        removals.push(idx);
+                    } else {
+                        let threshold =
+                            chrono::TimeDelta::from_std(TRACKING_LOST_THRESHOLD).unwrap();
+                        if lost_duration >= threshold {
+                            debug!(
+                                identifier = %flight.identifier,
+                                last_seen_secs_ago = lost_duration.num_seconds(),
+                                "Flight not visible on adsb.lol"
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
+            Ok(Err(e)) => {
+                warn!(error = ?e, identifier = %flight.identifier, "adsb.lol poll failed");
+                continue;
+            }
+            Err(_) => {
+                warn!(identifier = %flight.identifier, "adsb.lol poll timed out");
+                continue;
+            }
+        };
+
+        // Aircraft found -- update last_seen
+        flight.last_seen = Some(now);
+        changed = true;
+
+        // Resolve callsign/hex/type if not yet known
+        if flight.callsign.is_none() {
+            if let Some(cs) = ac.flight.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+                debug!(identifier = %flight.identifier, callsign = %cs, "Resolved callsign");
+                flight.callsign = Some(cs.clone());
+
+                // Try to fetch route now that we have a callsign
+                if flight.route.is_none() {
+                    if let Ok(Ok(Some(route))) = tokio::time::timeout(
+                        Duration::from_secs(5),
+                        aviation_client.get_flight_route(&cs),
+                    )
+                    .await
+                    {
+                        let origin = route.origin.iata_code.clone();
+                        let dest = route.destination.iata_code.clone();
+                        if let Some((lat, lon, _)) = iata_to_coords(&dest) {
+                            flight.dest_lat = Some(lat);
+                            flight.dest_lon = Some(lon);
+                        }
+                        flight.route = Some((origin, dest));
+                    }
+                }
+            }
+        }
+        if flight.hex.is_none() {
+            if let Some(hex) = &ac.hex {
+                debug!(identifier = %flight.identifier, hex = %hex, "Resolved hex");
+                flight.hex = Some(hex.clone());
+            }
+        }
+        if flight.aircraft_type.is_none() {
+            if let Some(t) = &ac.t {
+                flight.aircraft_type = Some(t.clone());
+            }
+        }
+
+        // Check squawk changes
+        if let Some(new_squawk) = &ac.squawk {
+            let squawk_changed = flight.squawk.as_ref() != Some(new_squawk);
+            if squawk_changed {
+                if let Some(meaning) = emergency_squawk_meaning(new_squawk) {
+                    messages.push(msg_squawk_emergency(flight, new_squawk, meaning));
+                }
+            }
+        }
+
+        // Store previous position for divert detection
+        let prev_lat = flight.lat;
+        let prev_lon = flight.lon;
+
+        // Update flight data
+        flight.altitude_ft = altitude_ft(&ac);
+        flight.vertical_rate_fpm = vertical_rate(&ac);
+        flight.ground_speed_kts = ac.gs;
+        flight.lat = ac.lat;
+        flight.lon = ac.lon;
+        flight.squawk = ac.squawk.clone();
+
+        // Detect phase
+        let new_phase = detect_phase(flight, &ac);
+        let old_phase = flight.phase;
+
+        if new_phase != old_phase {
+            flight.phase = new_phase;
+            flight.last_phase_change = Some(now);
+            flight.polls_since_change = 0;
+
+            // Post phase change messages
+            match new_phase {
+                FlightPhase::Takeoff => messages.push(msg_takeoff(flight)),
+                FlightPhase::Cruise => messages.push(msg_cruise(flight)),
+                FlightPhase::Descent => messages.push(msg_descent(flight)),
+                FlightPhase::Approach => messages.push(msg_approach(flight)),
+                FlightPhase::Landing => messages.push(msg_landing(flight)),
+                _ => {}
+            }
+
+            // Landing transitions to Ground after posting
+            if new_phase == FlightPhase::Landing {
+                flight.phase = FlightPhase::Ground;
+            }
+        } else {
+            flight.polls_since_change += 1;
+        }
+
+        // Divert detection during Descent/Approach
+        if matches!(flight.phase, FlightPhase::Descent | FlightPhase::Approach) {
+            if let (Some(dest_lat), Some(dest_lon), Some(cur_lat), Some(cur_lon), Some(p_lat), Some(p_lon)) = (
+                flight.dest_lat,
+                flight.dest_lon,
+                flight.lat,
+                flight.lon,
+                prev_lat,
+                prev_lon,
+            ) {
+                // Ground track: bearing from previous to current position
+                let ground_track =
+                    random_flight::geo::initial_bearing(p_lat, p_lon, cur_lat, cur_lon);
+                // Bearing to destination
+                let bearing_to_dest =
+                    random_flight::geo::initial_bearing(cur_lat, cur_lon, dest_lat, dest_lon);
+
+                // Angular difference
+                let mut diff = (ground_track - bearing_to_dest).abs();
+                if diff > 180.0 {
+                    diff = 360.0 - diff;
+                }
+
+                if diff > DIVERT_BEARING_THRESHOLD {
+                    flight.divert_consecutive_polls += 1;
+                    if flight.divert_consecutive_polls == DIVERT_CONSECUTIVE_POLLS {
+                        messages.push(msg_possible_divert(flight));
+                    }
+                } else {
+                    flight.divert_consecutive_polls = 0;
+                }
+            }
+        } else {
+            flight.divert_consecutive_polls = 0;
+        }
+    }
+
+    // Remove flights in reverse order to preserve indices
+    for idx in removals.into_iter().rev() {
+        state.flights.remove(idx);
+        changed = true;
+    }
+
+    // Post messages
+    for msg in messages {
+        if let Err(e) = client.say(channel.to_string(), msg).await {
+            error!(error = ?e, "Failed to send flight tracker message");
+        }
+    }
+
+    // Persist if any state changed
+    if changed {
+        save_tracker_state(data_dir, state).await;
+    }
 }
