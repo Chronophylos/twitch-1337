@@ -30,11 +30,10 @@ use twitch_irc::{
 mod aviation;
 mod commands;
 mod database;
+mod ping;
 mod openrouter;
-mod streamelements;
 
 use crate::openrouter::{ChatCompletionRequest, Message, OpenRouterClient};
-use crate::streamelements::SEClient;
 
 /// Type alias for the authenticated Twitch IRC client
 pub(crate) type AuthenticatedTwitchClient =
@@ -78,13 +77,8 @@ struct TwitchConfiguration {
     client_secret: SecretString,
     #[serde(default = "default_expected_latency")]
     expected_latency: u32,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct StreamelementsConfig {
-    #[serde(serialize_with = "serialize_secret_string")]
-    api_token: SecretString,
-    channel_id: String,
+    #[serde(default)]
+    hidden_admins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -143,10 +137,29 @@ fn default_enabled() -> bool {
     true
 }
 
+fn default_cooldown() -> u64 {
+    300
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct PingsConfig {
+    #[serde(default = "default_cooldown")]
+    default_cooldown: u64,
+}
+
+impl Default for PingsConfig {
+    fn default() -> Self {
+        Self {
+            default_cooldown: default_cooldown(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Configuration {
     twitch: TwitchConfiguration,
-    streamelements: StreamelementsConfig,
+    #[serde(default)]
+    pings: PingsConfig,
     #[serde(default)]
     openrouter: Option<OpenRouterConfig>,
     #[serde(default)]
@@ -172,10 +185,6 @@ impl Configuration {
 
         if self.twitch.expected_latency > 1000 {
             bail!("twitch.expected_latency must be <= 1000ms (got {})", self.twitch.expected_latency);
-        }
-
-        if self.streamelements.channel_id.trim().is_empty() {
-            bail!("streamelements.channel_id cannot be empty");
         }
 
         // Validate each schedule config
@@ -1033,14 +1042,23 @@ pub async fn main() -> Result<()> {
         }
     });
 
+    let ping_manager = Arc::new(tokio::sync::RwLock::new(
+        ping::PingManager::load().wrap_err("Failed to load ping manager")?
+    ));
+
     let handler_generic_commands = tokio::spawn({
         let broadcast_tx = broadcast_tx.clone();
         let client = client.clone();
-        let se_config = config.streamelements.clone();
         let openrouter_config = config.openrouter.clone();
         let leaderboard = leaderboard.clone();
+        let ping_manager = ping_manager.clone();
+        let hidden_admin_ids = config.twitch.hidden_admins.clone();
+        let default_cooldown = config.pings.default_cooldown;
         async move {
-            run_generic_command_handler(broadcast_tx, client, se_config, openrouter_config, leaderboard).await
+            run_generic_command_handler(
+                broadcast_tx, client, openrouter_config, leaderboard,
+                ping_manager, hidden_admin_ids, default_cooldown,
+            ).await
         }
     });
 
@@ -1471,28 +1489,20 @@ async fn run_latency_handler(
 /// - `!ai <instruction>` - AI-powered responses (if OpenRouter configured)
 ///
 /// Runs continuously in a loop, processing all incoming messages.
-#[instrument(skip(broadcast_tx, client, se_config, openrouter_config))]
+#[instrument(skip(broadcast_tx, client, openrouter_config, ping_manager))]
 async fn run_generic_command_handler(
     broadcast_tx: broadcast::Sender<ServerMessage>,
     client: Arc<AuthenticatedTwitchClient>,
-    se_config: StreamelementsConfig,
     openrouter_config: Option<OpenRouterConfig>,
     leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
+    ping_manager: Arc<tokio::sync::RwLock<ping::PingManager>>,
+    hidden_admin_ids: Vec<String>,
+    default_cooldown: u64,
 ) {
     info!("Generic Command Handler started");
 
     // Subscribe to the broadcast channel
     let broadcast_rx = broadcast_tx.subscribe();
-
-    // Initialize StreamElements client
-    let se_client = match SEClient::new(se_config.api_token.expose_secret()) {
-        Ok(client) => client,
-        Err(e) => {
-            error!(error = ?e, "Failed to initialize StreamElements client");
-            error!("Generic Command Handler cannot start without valid StreamElements API token");
-            return;
-        }
-    };
 
     // Initialize OpenRouter client (optional)
     let openrouter_client = if let Some(ref openrouter_cfg) = openrouter_config {
@@ -1531,11 +1541,9 @@ async fn run_generic_command_handler(
     let data_dir = get_data_dir();
 
     let mut commands: Vec<Box<dyn commands::Command>> = vec![
-        Box::new(commands::toggle_ping::TogglePingCommand::new(
-            se_client.clone(), se_config.channel_id.clone(),
-        )),
-        Box::new(commands::list_pings::ListPingsCommand::new(
-            se_client, se_config.channel_id,
+        Box::new(commands::ping_admin::PingAdminCommand::new(
+            ping_manager.clone(),
+            hidden_admin_ids,
         )),
         Box::new(commands::random_flight::RandomFlightCommand),
         Box::new(commands::flights_above::FlightsAboveCommand::new(aviation_client)),
@@ -1550,6 +1558,13 @@ async fn run_generic_command_handler(
             cfg.instruction_template,
         )));
     }
+
+    // PingTriggerCommand must be last: it matches any !<name> that is a registered ping,
+    // so built-in commands earlier in the list take priority and can't be shadowed.
+    commands.push(Box::new(commands::ping_trigger::PingTriggerCommand::new(
+        ping_manager,
+        default_cooldown,
+    )));
 
     run_command_dispatcher(broadcast_rx, client, commands).await;
 }
@@ -1572,7 +1587,7 @@ async fn run_command_dispatcher(
                     continue;
                 };
 
-                let Some(cmd) = commands.iter().find(|c| c.enabled() && c.name() == first_word) else {
+                let Some(cmd) = commands.iter().find(|c| c.enabled() && c.matches(first_word)) else {
                     continue;
                 };
 
