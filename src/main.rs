@@ -32,6 +32,7 @@ mod commands;
 mod database;
 mod ping;
 mod openrouter;
+mod flight_tracker;
 
 use crate::openrouter::{ChatCompletionRequest, Message, OpenRouterClient};
 
@@ -970,6 +971,36 @@ pub async fn main() -> Result<()> {
     // Wrap client in Arc for sharing across handlers
     let client = Arc::new(client);
 
+    // Create flight tracker command channel
+    let (tracker_tx, tracker_rx) = tokio::sync::mpsc::channel::<flight_tracker::TrackerCommand>(32);
+
+    // Initialize shared aviation client (used by flight tracker and command handler)
+    let shared_aviation_client = match aviation::AviationClient::new() {
+        Ok(client) => client,
+        Err(e) => {
+            error!(error = ?e, "Failed to initialize aviation client");
+            bail!("Cannot start without aviation client");
+        }
+    };
+
+    // Spawn flight tracker handler
+    let handler_flight_tracker = tokio::spawn({
+        let client = client.clone();
+        let channel = config.twitch.channel.clone();
+        let data_dir = get_data_dir();
+        let aviation_client = shared_aviation_client.clone();
+        async move {
+            flight_tracker::run_flight_tracker(
+                tracker_rx,
+                client,
+                channel,
+                aviation_client,
+                data_dir,
+            )
+            .await;
+        }
+    });
+
     // Create broadcast channel for message distribution (capacity: 100 messages)
     let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(100);
 
@@ -1054,22 +1085,25 @@ pub async fn main() -> Result<()> {
         let ping_manager = ping_manager.clone();
         let hidden_admin_ids = config.twitch.hidden_admins.clone();
         let default_cooldown = config.pings.default_cooldown;
+        let tracker_tx = tracker_tx.clone();
+        let aviation_client = shared_aviation_client;
         async move {
             run_generic_command_handler(
                 broadcast_tx, client, openrouter_config, leaderboard,
                 ping_manager, hidden_admin_ids, default_cooldown,
+                tracker_tx, aviation_client,
             ).await
         }
     });
 
     if schedules_enabled {
         info!(
-            "Bot running with continuous connection. Handlers: Config watcher, 1337 tracker, Generic commands, Scheduled messages, Latency monitor"
+            "Bot running with continuous connection. Handlers: Config watcher, 1337 tracker, Generic commands, Scheduled messages, Latency monitor, Flight tracker"
         );
         info!("Scheduled messages: Loaded from config.toml, reloads on file change");
     } else {
         info!(
-            "Bot running with continuous connection. Handlers: 1337 tracker, Generic commands, Latency monitor"
+            "Bot running with continuous connection. Handlers: 1337 tracker, Generic commands, Latency monitor, Flight tracker"
         );
     }
     info!(
@@ -1106,6 +1140,9 @@ pub async fn main() -> Result<()> {
                 result = handler_latency => {
                     error!("Latency handler exited unexpectedly: {result:?}");
                 }
+                result = handler_flight_tracker => {
+                    error!("Flight tracker exited unexpectedly: {result:?}");
+                }
             }
         }
         _ => {
@@ -1124,6 +1161,9 @@ pub async fn main() -> Result<()> {
                 }
                 result = handler_latency => {
                     error!("Latency handler exited unexpectedly: {result:?}");
+                }
+                result = handler_flight_tracker => {
+                    error!("Flight tracker exited unexpectedly: {result:?}");
                 }
             }
         }
@@ -1489,7 +1529,8 @@ async fn run_latency_handler(
 /// - `!ai <instruction>` - AI-powered responses (if OpenRouter configured)
 ///
 /// Runs continuously in a loop, processing all incoming messages.
-#[instrument(skip(broadcast_tx, client, openrouter_config, ping_manager))]
+#[allow(clippy::too_many_arguments)]
+#[instrument(skip(broadcast_tx, client, openrouter_config, ping_manager, tracker_tx, aviation_client))]
 async fn run_generic_command_handler(
     broadcast_tx: broadcast::Sender<ServerMessage>,
     client: Arc<AuthenticatedTwitchClient>,
@@ -1498,6 +1539,8 @@ async fn run_generic_command_handler(
     ping_manager: Arc<tokio::sync::RwLock<ping::PingManager>>,
     hidden_admin_ids: Vec<String>,
     default_cooldown: u64,
+    tracker_tx: tokio::sync::mpsc::Sender<flight_tracker::TrackerCommand>,
+    aviation_client: aviation::AviationClient,
 ) {
     info!("Generic Command Handler started");
 
@@ -1525,18 +1568,8 @@ async fn run_generic_command_handler(
         None
     };
 
-    // Initialize aviation client for !up command (optional - failure does not prevent startup)
-    let aviation_client = match aviation::AviationClient::new() {
-        Ok(client) => {
-            info!("Aviation client initialized for !up command");
-            Some(client)
-        }
-        Err(e) => {
-            error!(error = ?e, "Failed to initialize aviation client");
-            error!("!up command will be disabled");
-            None
-        }
-    };
+    // Use the shared aviation client for !up command
+    let aviation_client = Some(aviation_client);
 
     let data_dir = get_data_dir();
 
@@ -1549,6 +1582,10 @@ async fn run_generic_command_handler(
         Box::new(commands::flights_above::FlightsAboveCommand::new(aviation_client)),
         Box::new(commands::leaderboard::LeaderboardCommand::new(leaderboard)),
         Box::new(commands::feedback::FeedbackCommand::new(data_dir)),
+        Box::new(commands::track::TrackCommand::new(tracker_tx.clone())),
+        Box::new(commands::untrack::UntrackCommand::new(tracker_tx.clone())),
+        Box::new(commands::flights::FlightsCommand::new(tracker_tx.clone())),
+        Box::new(commands::flights::FlightCommand::new(tracker_tx)),
     ];
 
     if let (Some(client), Some(cfg)) = (openrouter_client, openrouter_config) {
