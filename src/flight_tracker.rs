@@ -338,6 +338,142 @@ pub(crate) fn emergency_squawk_meaning(squawk: &str) -> Option<&'static str> {
     }
 }
 
+// --- Chat message formatting ---
+
+/// Formats altitude as FL (flight level) or feet.
+fn format_alt(alt_ft: Option<i64>) -> String {
+    match alt_ft {
+        Some(ft) if ft >= 1000 => format!("FL{}", ft / 100),
+        Some(ft) => format!("{ft}ft"),
+        None => "?".to_string(),
+    }
+}
+
+/// Formats route as "ORIG->DEST" or empty string if unknown.
+fn format_route(route: &Option<(String, String)>) -> String {
+    match route {
+        Some((orig, dest)) => format!(" {orig}\u{2192}{dest}"),
+        None => String::new(),
+    }
+}
+
+/// Formats the flight prefix: "DLH123 (A320) FRA->MUC" with graceful degradation.
+fn format_flight_prefix(flight: &TrackedFlight) -> String {
+    let name = flight
+        .callsign
+        .as_deref()
+        .unwrap_or(flight.identifier.as_str());
+    let typ = flight
+        .aircraft_type
+        .as_ref()
+        .map(|t| format!(" ({t})"))
+        .unwrap_or_default();
+    let route = format_route(&flight.route);
+    format!("{name}{typ}{route}")
+}
+
+pub(crate) fn msg_track_started(flight: &TrackedFlight) -> String {
+    format!("Tracke {} Okayge", format_flight_prefix(flight))
+}
+
+pub(crate) fn msg_takeoff(flight: &TrackedFlight) -> String {
+    format!("{} ist gestartet! \u{2708}", format_flight_prefix(flight))
+}
+
+pub(crate) fn msg_cruise(flight: &TrackedFlight) -> String {
+    format!(
+        "{} cruist auf {}",
+        format_flight_prefix(flight),
+        format_alt(flight.altitude_ft)
+    )
+}
+
+pub(crate) fn msg_descent(flight: &TrackedFlight) -> String {
+    format!("{} hat Descent eingeleitet", format_flight_prefix(flight))
+}
+
+pub(crate) fn msg_approach(flight: &TrackedFlight) -> String {
+    format!("{} ist im Approach", format_flight_prefix(flight))
+}
+
+pub(crate) fn msg_landing(flight: &TrackedFlight) -> String {
+    let duration = Utc::now().signed_duration_since(flight.tracked_at);
+    let hours = duration.num_hours();
+    let mins = duration.num_minutes() % 60;
+    let time_str = if hours > 0 {
+        format!(" Flugzeit: {hours}h{mins:02}m")
+    } else {
+        format!(" Flugzeit: {mins}m")
+    };
+    format!(
+        "{} ist gelandet!{time_str}",
+        format_flight_prefix(flight)
+    )
+}
+
+pub(crate) fn msg_squawk_emergency(flight: &TrackedFlight, code: &str, meaning: &str) -> String {
+    format!(
+        "\u{26a0} {} squawkt {code}! ({meaning})",
+        format_flight_prefix(flight)
+    )
+}
+
+pub(crate) fn msg_possible_divert(flight: &TrackedFlight) -> String {
+    format!(
+        "\u{26a0} {} scheint zu diverten!",
+        format_flight_prefix(flight)
+    )
+}
+
+pub(crate) fn msg_tracking_lost(flight: &TrackedFlight) -> String {
+    let name = flight
+        .callsign
+        .as_deref()
+        .unwrap_or(flight.identifier.as_str());
+    format!("{name} Signal verloren, wird nicht mehr getrackt")
+}
+
+pub(crate) fn msg_flight_status(flight: &TrackedFlight) -> String {
+    let prefix = format_flight_prefix(flight);
+    let alt = format_alt(flight.altitude_ft);
+    let speed = flight
+        .ground_speed_kts
+        .map(|gs| format!(" | {gs:.0}kts"))
+        .unwrap_or_default();
+    let squawk = flight
+        .squawk
+        .as_ref()
+        .map(|s| format!(" | Squawk {s}"))
+        .unwrap_or_default();
+    let elapsed = Utc::now().signed_duration_since(flight.tracked_at);
+    let hours = elapsed.num_hours();
+    let mins = elapsed.num_minutes() % 60;
+    let tracking_time = if hours > 0 {
+        format!("seit {hours}h{mins:02}m getrackt")
+    } else {
+        format!("seit {mins}m getrackt")
+    };
+    format!(
+        "{prefix} | {} {alt}{speed}{squawk} | {tracking_time}",
+        flight.phase
+    )
+}
+
+pub(crate) fn msg_flights_list(flights: &[TrackedFlight]) -> String {
+    if flights.is_empty() {
+        return "Keine Fl\u{00fc}ge getrackt".to_string();
+    }
+    let parts: Vec<String> = flights
+        .iter()
+        .map(|f| {
+            let name = f.callsign.as_deref().unwrap_or(f.identifier.as_str());
+            let alt = format_alt(f.altitude_ft);
+            format!("{name} ({} {alt})", f.phase)
+        })
+        .collect();
+    format!("Getrackte Fl\u{00fc}ge: {}", parts.join(" | "))
+}
+
 /// Determines the polling interval based on all tracked flights.
 pub(crate) fn compute_poll_interval(flights: &[TrackedFlight]) -> Duration {
     if flights.is_empty() {
