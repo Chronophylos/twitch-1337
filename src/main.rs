@@ -965,12 +965,12 @@ pub async fn main() -> Result<()> {
     // Create flight tracker command channel
     let (tracker_tx, tracker_rx) = tokio::sync::mpsc::channel::<flight_tracker::TrackerCommand>(32);
 
-    // Initialize aviation client for flight tracker
-    let tracker_aviation_client = match aviation::AviationClient::new() {
+    // Initialize shared aviation client (used by flight tracker and command handler)
+    let shared_aviation_client = match aviation::AviationClient::new() {
         Ok(client) => client,
         Err(e) => {
-            error!(error = ?e, "Failed to initialize aviation client for flight tracker");
-            bail!("Cannot start flight tracker without aviation client");
+            error!(error = ?e, "Failed to initialize aviation client");
+            bail!("Cannot start without aviation client");
         }
     };
 
@@ -979,12 +979,13 @@ pub async fn main() -> Result<()> {
         let client = client.clone();
         let channel = config.twitch.channel.clone();
         let data_dir = get_data_dir();
+        let aviation_client = shared_aviation_client.clone();
         async move {
             flight_tracker::run_flight_tracker(
                 tracker_rx,
                 client,
                 channel,
-                tracker_aviation_client,
+                aviation_client,
                 data_dir,
             )
             .await;
@@ -1070,8 +1071,9 @@ pub async fn main() -> Result<()> {
         let openrouter_config = config.openrouter.clone();
         let leaderboard = leaderboard.clone();
         let tracker_tx = tracker_tx.clone();
+        let aviation_client = shared_aviation_client;
         async move {
-            run_generic_command_handler(broadcast_tx, client, se_config, openrouter_config, leaderboard, tracker_tx).await
+            run_generic_command_handler(broadcast_tx, client, se_config, openrouter_config, leaderboard, tracker_tx, aviation_client).await
         }
     });
 
@@ -1508,7 +1510,7 @@ async fn run_latency_handler(
 /// - `!ai <instruction>` - AI-powered responses (if OpenRouter configured)
 ///
 /// Runs continuously in a loop, processing all incoming messages.
-#[instrument(skip(broadcast_tx, client, se_config, openrouter_config, tracker_tx))]
+#[instrument(skip(broadcast_tx, client, se_config, openrouter_config, tracker_tx, aviation_client))]
 async fn run_generic_command_handler(
     broadcast_tx: broadcast::Sender<ServerMessage>,
     client: Arc<AuthenticatedTwitchClient>,
@@ -1516,6 +1518,7 @@ async fn run_generic_command_handler(
     openrouter_config: Option<OpenRouterConfig>,
     leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
     tracker_tx: tokio::sync::mpsc::Sender<flight_tracker::TrackerCommand>,
+    aviation_client: aviation::AviationClient,
 ) {
     info!("Generic Command Handler started");
 
@@ -1553,18 +1556,8 @@ async fn run_generic_command_handler(
         None
     };
 
-    // Initialize aviation client for !up command (optional - failure does not prevent startup)
-    let aviation_client = match aviation::AviationClient::new() {
-        Ok(client) => {
-            info!("Aviation client initialized for !up command");
-            Some(client)
-        }
-        Err(e) => {
-            error!(error = ?e, "Failed to initialize aviation client");
-            error!("!up command will be disabled");
-            None
-        }
-    };
+    // Use the shared aviation client for !up command
+    let aviation_client = Some(aviation_client);
 
     let data_dir = get_data_dir();
 

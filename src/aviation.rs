@@ -141,7 +141,6 @@ pub(crate) struct AdsbLolResponse {
 pub(crate) struct NearbyAircraft {
     pub(crate) hex: Option<String>,
     pub(crate) flight: Option<String>,
-    pub(crate) r: Option<String>,
     pub(crate) t: Option<String>,
     pub(crate) alt_baro: Option<AltBaro>,
     pub(crate) lat: Option<f64>,
