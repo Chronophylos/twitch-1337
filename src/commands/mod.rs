@@ -8,11 +8,14 @@ use crate::AuthenticatedTwitchClient;
 
 pub mod ai;
 pub mod feedback;
+pub mod flights;
 pub mod flights_above;
 pub mod leaderboard;
 pub mod ping_admin;
 pub mod ping_trigger;
 pub mod random_flight;
+pub mod track;
+pub mod untrack;
 
 /// Context passed to every command execution.
 pub struct CommandContext<'a> {
