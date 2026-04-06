@@ -296,17 +296,24 @@ pub(crate) fn detect_phase(flight: &TrackedFlight, ac: &NearbyAircraft) -> Fligh
         return FlightPhase::Takeoff;
     }
 
-    // Approach: descending below threshold altitude or approach mode active
-    if let Some(alt_val) = alt
-        && (alt_val < APPROACH_MAX_ALTITUDE || has_approach_mode) && vrate.unwrap_or(0) < 0 {
-            return FlightPhase::Approach;
-        }
-
-    // Descent: negative vertical rate above approach altitude
+    // Descent: significant negative vertical rate
     if let Some(vr) = vrate
         && vr < DESCENT_RATE_THRESHOLD {
+            // Approach: already descending and below threshold altitude, or approach mode active
+            if let Some(alt_val) = alt
+                && (alt_val < APPROACH_MAX_ALTITUDE
+                    || has_approach_mode
+                    || matches!(flight.phase, FlightPhase::Approach))
+            {
+                return FlightPhase::Approach;
+            }
             return FlightPhase::Descent;
         }
+
+    // Approach from nav_modes even without strong descent rate
+    if has_approach_mode && vrate.unwrap_or(0) < 0 {
+        return FlightPhase::Approach;
+    }
 
     // Cruise: stable altitude above minimum, low vertical rate for enough polls
     if let (Some(alt_val), Some(vr)) = (alt, vrate)
@@ -671,7 +678,7 @@ async fn handle_track(
             || identifier.matches(f.callsign.as_deref(), f.hex.as_deref())
     });
     if already_tracked {
-        let msg = format!("{} wird schon getrackt", identifier);
+        let msg = format!("{} wird schon getrackt FDM", identifier);
         if let Err(e) = client.say_in_reply_to(reply_to, msg).await {
             error!(error = ?e, "Failed to send duplicate message");
         }
