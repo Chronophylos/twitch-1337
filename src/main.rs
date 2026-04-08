@@ -146,12 +146,15 @@ fn default_cooldown() -> u64 {
 struct PingsConfig {
     #[serde(default = "default_cooldown")]
     default_cooldown: u64,
+    #[serde(default)]
+    public: bool,
 }
 
 impl Default for PingsConfig {
     fn default() -> Self {
         Self {
             default_cooldown: default_cooldown(),
+            public: false,
         }
     }
 }
@@ -1085,12 +1088,13 @@ pub async fn main() -> Result<()> {
         let ping_manager = ping_manager.clone();
         let hidden_admin_ids = config.twitch.hidden_admins.clone();
         let default_cooldown = config.pings.default_cooldown;
+        let pings_public = config.pings.public;
         let tracker_tx = tracker_tx.clone();
         let aviation_client = shared_aviation_client;
         async move {
             run_generic_command_handler(
                 broadcast_tx, client, openrouter_config, leaderboard,
-                ping_manager, hidden_admin_ids, default_cooldown,
+                ping_manager, hidden_admin_ids, default_cooldown, pings_public,
                 tracker_tx, aviation_client,
             ).await
         }
@@ -1539,6 +1543,7 @@ async fn run_generic_command_handler(
     ping_manager: Arc<tokio::sync::RwLock<ping::PingManager>>,
     hidden_admin_ids: Vec<String>,
     default_cooldown: u64,
+    pings_public: bool,
     tracker_tx: tokio::sync::mpsc::Sender<flight_tracker::TrackerCommand>,
     aviation_client: aviation::AviationClient,
 ) {
@@ -1601,6 +1606,7 @@ async fn run_generic_command_handler(
     commands.push(Box::new(commands::ping_trigger::PingTriggerCommand::new(
         ping_manager,
         default_cooldown,
+        pings_public,
     )));
 
     run_command_dispatcher(broadcast_rx, client, commands).await;
