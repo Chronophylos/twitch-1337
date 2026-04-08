@@ -216,10 +216,11 @@ impl Configuration {
         }
 
         // Validate AI config
-        if let Some(ref ai) = self.ai {
-            if matches!(ai.backend, AiBackend::OpenAi) && ai.api_key.is_none() {
-                bail!("AI backend 'openai' requires an api_key");
-            }
+        if let Some(ref ai) = self.ai
+            && matches!(ai.backend, AiBackend::OpenAi)
+            && ai.api_key.is_none()
+        {
+            bail!("AI backend 'openai' requires an api_key");
         }
 
         // Validate each schedule config
