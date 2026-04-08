@@ -11,13 +11,15 @@ use super::{Command, CommandContext};
 pub struct PingTriggerCommand {
     ping_manager: Arc<RwLock<PingManager>>,
     default_cooldown: u64,
+    public: bool,
 }
 
 impl PingTriggerCommand {
-    pub fn new(ping_manager: Arc<RwLock<PingManager>>, default_cooldown: u64) -> Self {
+    pub fn new(ping_manager: Arc<RwLock<PingManager>>, default_cooldown: u64, public: bool) -> Self {
         Self {
             ping_manager,
             default_cooldown,
+            public,
         }
     }
 }
@@ -49,7 +51,7 @@ impl Command for PingTriggerCommand {
         let rendered = {
             let manager = self.ping_manager.read().await;
 
-            if !manager.is_member(ping_name, sender) {
+            if !self.public && !manager.is_member(ping_name, sender) {
                 return Ok(());
             }
 
