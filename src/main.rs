@@ -1530,7 +1530,7 @@ async fn run_latency_handler(
 ///
 /// Runs continuously in a loop, processing all incoming messages.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip(broadcast_tx, client, openrouter_config, ping_manager, tracker_tx, aviation_client))]
+#[instrument(skip(broadcast_tx, client, openrouter_config, leaderboard, ping_manager, tracker_tx, aviation_client))]
 async fn run_generic_command_handler(
     broadcast_tx: broadcast::Sender<ServerMessage>,
     client: Arc<AuthenticatedTwitchClient>,
