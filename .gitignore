@@ -10,6 +10,7 @@
 /data/*
 !/data/plz.csv
 !/data/airports.csv
+!/data/airlines.csv
 
 # Editor files
 *.swp

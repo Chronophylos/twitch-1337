@@ -18,6 +18,7 @@ const UP_COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const UP_ADSBLOL_TIMEOUT: Duration = Duration::from_secs(10);
 const UP_ADSBDB_TIMEOUT: Duration = Duration::from_secs(5);
 const UP_NOMINATIM_TIMEOUT: Duration = Duration::from_secs(5);
+const AIRLINE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 const UP_MAX_CANDIDATES: usize = 10;
 const UP_MAX_RESULTS: usize = 5;
 const UP_CONE_REFERENCE_ALT_FT: f64 = 35_000.0;
@@ -105,6 +106,40 @@ fn icao_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
 
 pub(crate) fn iata_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
     airport_data().by_iata.get(code).map(|(lat, lon, name)| (*lat, *lon, name.as_str()))
+}
+
+// --- Airline IATA-to-ICAO Lookup ---
+
+const AIRLINE_DATA: &str = include_str!("../data/airlines.csv");
+
+/// Returns the static IATA→ICAO airline code table (lazy-initialized).
+fn airline_table() -> &'static HashMap<&'static str, &'static str> {
+    static TABLE: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut map = HashMap::new();
+        for line in AIRLINE_DATA.lines() {
+            let Some((iata, icao)) = line.split_once(',') else {
+                continue;
+            };
+            let iata = iata.trim();
+            let icao = icao.trim();
+            if iata.len() == 2 && icao.len() == 3 {
+                map.insert(iata, icao);
+            }
+        }
+        map
+    })
+}
+
+/// Check if input looks like an IATA flight number (2 letters + 1-4 digits).
+fn is_iata_flight_number(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() < 3 || bytes.len() > 6 {
+        return false;
+    }
+    bytes[0].is_ascii_uppercase()
+        && bytes[1].is_ascii_uppercase()
+        && bytes[2..].iter().all(|b| b.is_ascii_digit())
 }
 
 fn is_icao_pattern(s: &str) -> bool {
@@ -199,6 +234,18 @@ pub(crate) struct FlightRoute {
 #[derive(Debug, Deserialize)]
 pub(crate) struct Airport {
     pub(crate) iata_code: String,
+}
+
+// --- adsbdb airline types ---
+
+#[derive(Debug, Deserialize)]
+struct AdsbDbAirlineResponse {
+    response: Vec<AdsbDbAirline>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdsbDbAirline {
+    icao: String,
 }
 
 // --- Nominatim types ---
@@ -314,6 +361,75 @@ impl AviationClient {
             .wrap_err("Failed to parse adsbdb response")?;
 
         Ok(body.response.flightroute)
+    }
+
+    /// Resolve a potential IATA flight number to an ICAO callsign.
+    pub(crate) async fn resolve_callsign(&self, input: &str) -> String {
+        if !is_iata_flight_number(input) {
+            return input.to_string();
+        }
+
+        let (airline_iata, flight_num) = input.split_at(2);
+
+        // Try static CSV lookup first
+        if let Some(&icao) = airline_table().get(airline_iata) {
+            debug!(iata = %airline_iata, icao = %icao, "Resolved airline code via CSV");
+            return format!("{icao}{flight_num}");
+        }
+
+        // Fallback: query adsbdb airline API
+        debug!(iata = %airline_iata, "Airline not in CSV, trying adsbdb API");
+        match tokio::time::timeout(
+            AIRLINE_LOOKUP_TIMEOUT,
+            self.lookup_airline_icao(airline_iata),
+        )
+        .await
+        {
+            Ok(Ok(Some(icao))) => {
+                warn!(
+                    iata = %airline_iata,
+                    icao = %icao,
+                    "Resolved airline via adsbdb API — consider adding to airlines.csv"
+                );
+                format!("{icao}{flight_num}")
+            }
+            Ok(Ok(None)) => {
+                debug!(iata = %airline_iata, "Airline not found in adsbdb");
+                input.to_string()
+            }
+            Ok(Err(e)) => {
+                warn!(error = ?e, iata = %airline_iata, "adsbdb airline lookup failed");
+                input.to_string()
+            }
+            Err(_) => {
+                warn!(iata = %airline_iata, "adsbdb airline lookup timed out");
+                input.to_string()
+            }
+        }
+    }
+
+    /// Query adsbdb for an airline's ICAO code by IATA code.
+    async fn lookup_airline_icao(&self, iata: &str) -> Result<Option<String>> {
+        let url = format!("{ADSBDB_BASE_URL}/airline/{iata}");
+        debug!(url = %url, "Fetching airline from adsbdb");
+
+        let resp = self
+            .0
+            .get(&url)
+            .send()
+            .await
+            .wrap_err("Failed to send request to adsbdb")?;
+
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+
+        let body: AdsbDbAirlineResponse = resp
+            .json()
+            .await
+            .wrap_err("Failed to parse adsbdb airline response")?;
+
+        Ok(body.response.into_iter().next().map(|a| a.icao))
     }
 
     async fn geocode_nominatim(&self, query: &str) -> Result<Option<ResolvedLocation>> {
@@ -636,4 +752,68 @@ pub async fn up_command(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn airline_table_contains_known_mappings() {
+        let table = airline_table();
+        assert_eq!(table.get("TP"), Some(&"TAP"));
+        assert_eq!(table.get("LH"), Some(&"DLH"));
+        assert_eq!(table.get("BA"), Some(&"BAW"));
+    }
+
+    #[test]
+    fn airline_table_is_nonempty() {
+        assert!(airline_table().len() > 100);
+    }
+
+    #[test]
+    fn is_iata_flight_number_valid() {
+        assert!(is_iata_flight_number("TP247"));
+        assert!(is_iata_flight_number("LH5765"));
+        assert!(is_iata_flight_number("BA12"));
+        assert!(is_iata_flight_number("AA1"));
+        assert!(is_iata_flight_number("EI1234"));
+    }
+
+    #[test]
+    fn is_iata_flight_number_rejects_icao() {
+        assert!(!is_iata_flight_number("TAP247"));
+        assert!(!is_iata_flight_number("DLH5765"));
+        assert!(!is_iata_flight_number("BAW12"));
+    }
+
+    #[test]
+    fn is_iata_flight_number_rejects_invalid() {
+        assert!(!is_iata_flight_number(""));
+        assert!(!is_iata_flight_number("T"));
+        assert!(!is_iata_flight_number("TP"));
+        assert!(!is_iata_flight_number("12345"));
+        assert!(!is_iata_flight_number("ABCDEF"));
+        assert!(!is_iata_flight_number("TP12345")); // too many digits
+    }
+
+    #[tokio::test]
+    async fn resolve_callsign_translates_iata() {
+        let client = AviationClient::new().unwrap();
+        assert_eq!(client.resolve_callsign("TP247").await, "TAP247");
+        assert_eq!(client.resolve_callsign("LH5765").await, "DLH5765");
+    }
+
+    #[tokio::test]
+    async fn resolve_callsign_passes_through_icao() {
+        let client = AviationClient::new().unwrap();
+        assert_eq!(client.resolve_callsign("TAP247").await, "TAP247");
+        assert_eq!(client.resolve_callsign("DLH5765").await, "DLH5765");
+    }
+
+    #[tokio::test]
+    async fn resolve_callsign_passes_through_hex() {
+        let client = AviationClient::new().unwrap();
+        assert_eq!(client.resolve_callsign("4CA87D").await, "4CA87D");
+    }
 }
