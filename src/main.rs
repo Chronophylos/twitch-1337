@@ -82,24 +82,36 @@ struct TwitchConfiguration {
     hidden_admins: Vec<String>,
 }
 
+/// Which LLM backend to use.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-struct OpenRouterConfig {
-    #[serde(serialize_with = "serialize_secret_string")]
-    api_key: SecretString,
-    /// OpenRouter model to use (default: "google/gemini-2.0-flash-exp:free")
-    #[serde(default = "default_openrouter_model")]
-    model: String,
-    /// System prompt sent to the model (default: built-in Twitch bot prompt)
-    #[serde(default = "default_system_prompt")]
-    system_prompt: String,
-    /// Template for the user message. Use `{message}` as placeholder for the user's text.
-    /// (default: "{message}")
-    #[serde(default = "default_instruction_template")]
-    instruction_template: String,
+#[serde(rename_all = "lowercase")]
+enum AiBackend {
+    OpenAi,
+    Ollama,
 }
 
-fn default_openrouter_model() -> String {
-    "google/gemini-2.0-flash-exp:free".to_string()
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct AiConfig {
+    /// Backend type: "openai" or "ollama"
+    backend: AiBackend,
+    /// API key (required for openai, not used for ollama)
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_secret_string"
+    )]
+    api_key: Option<SecretString>,
+    /// Base URL for the API (optional, has per-backend defaults)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base_url: Option<String>,
+    /// Model name to use
+    model: String,
+    /// System prompt sent to the model
+    #[serde(default = "default_system_prompt")]
+    system_prompt: String,
+    /// Template for the user message. Use `{message}` as placeholder.
+    #[serde(default = "default_instruction_template")]
+    instruction_template: String,
 }
 
 fn default_system_prompt() -> String {
@@ -165,7 +177,7 @@ struct Configuration {
     #[serde(default)]
     pings: PingsConfig,
     #[serde(default)]
-    openrouter: Option<OpenRouterConfig>,
+    ai: Option<AiConfig>,
     #[serde(default)]
     schedules: Vec<ScheduleConfig>,
 }
@@ -175,6 +187,19 @@ where
     S: Serializer,
 {
     serializer.serialize_str(secret.expose_secret())
+}
+
+fn serialize_optional_secret_string<S>(
+    value: &Option<SecretString>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        Some(secret) => serializer.serialize_str(secret.expose_secret()),
+        None => serializer.serialize_none(),
+    }
 }
 
 impl Configuration {
@@ -189,6 +214,13 @@ impl Configuration {
 
         if self.twitch.expected_latency > 1000 {
             bail!("twitch.expected_latency must be <= 1000ms (got {})", self.twitch.expected_latency);
+        }
+
+        // Validate AI config
+        if let Some(ref ai) = self.ai {
+            if matches!(ai.backend, AiBackend::OpenAi) && ai.api_key.is_none() {
+                bail!("AI backend 'openai' requires an api_key");
+            }
         }
 
         // Validate each schedule config
