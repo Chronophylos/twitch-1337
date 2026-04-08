@@ -7,8 +7,8 @@ use eyre::Result;
 use tokio::sync::Mutex;
 use tracing::{debug, error, instrument};
 
-use crate::openrouter::OpenRouterClient;
-use crate::{execute_ai_request, truncate_response, MAX_RESPONSE_LENGTH};
+use crate::llm::{ChatCompletionRequest, LlmClient, Message};
+use crate::{truncate_response, MAX_RESPONSE_LENGTH};
 
 use super::{Command, CommandContext};
 
@@ -16,7 +16,8 @@ use super::{Command, CommandContext};
 const AI_COMMAND_COOLDOWN: Duration = Duration::from_secs(30);
 
 pub struct AiCommand {
-    openrouter_client: OpenRouterClient,
+    llm_client: Box<dyn LlmClient>,
+    model: String,
     cooldowns: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     system_prompt: String,
     instruction_template: String,
@@ -24,12 +25,14 @@ pub struct AiCommand {
 
 impl AiCommand {
     pub fn new(
-        openrouter_client: OpenRouterClient,
+        llm_client: Box<dyn LlmClient>,
+        model: String,
         system_prompt: String,
         instruction_template: String,
     ) -> Self {
         Self {
-            openrouter_client,
+            llm_client,
+            model,
             cooldowns: Arc::new(Mutex::new(HashMap::new())),
             system_prompt,
             instruction_template,
@@ -61,7 +64,10 @@ impl Command for AiCommand {
                     );
                     if let Err(e) = ctx
                         .client
-                        .say_in_reply_to(ctx.privmsg, "Bitte warte noch ein bisschen Waiting".to_string())
+                        .say_in_reply_to(
+                            ctx.privmsg,
+                            "Bitte warte noch ein bisschen Waiting".to_string(),
+                        )
                         .await
                     {
                         error!(error = ?e, "Failed to send cooldown message");
@@ -95,10 +101,24 @@ impl Command for AiCommand {
 
         let user_message = self.instruction_template.replace("{message}", &instruction);
 
+        let request = ChatCompletionRequest {
+            model: self.model.clone(),
+            messages: vec![
+                Message {
+                    role: "system".to_string(),
+                    content: self.system_prompt.clone(),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: user_message,
+                },
+            ],
+        };
+
         // Execute AI with timeout
         let result = tokio::time::timeout(
             Duration::from_secs(30),
-            execute_ai_request(&user_message, &self.openrouter_client, &self.system_prompt),
+            self.llm_client.chat_completion(request),
         )
         .await;
 
