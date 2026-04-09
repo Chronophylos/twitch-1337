@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -1235,9 +1235,13 @@ async fn setup_and_verify_twitch_client(
     info!("Connecting to Twitch IRC");
     client.connect().await;
 
-    // Join the configured channel
+    // Join the configured channel(s)
+    let mut channels: HashSet<String> = [config.channel.clone()].into();
+    if let Some(ref admin_channel) = config.admin_channel {
+        info!(admin_channel = %admin_channel, "Joining admin channel");
+        channels.insert(admin_channel.clone());
+    }
     info!(channel = %config.channel, "Joining channel");
-    let channels = [config.channel.clone()].into();
     client.set_wanted_channels(channels)?;
 
     // Verify authentication by waiting for GlobalUserState message
