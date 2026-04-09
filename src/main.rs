@@ -1099,11 +1099,12 @@ pub async fn main() -> Result<()> {
         let pings_public = config.pings.public;
         let tracker_tx = tracker_tx.clone();
         let aviation_client = shared_aviation_client;
+        let admin_channel = config.twitch.admin_channel.clone();
         async move {
             run_generic_command_handler(
                 broadcast_tx, client, ai_config, leaderboard,
                 ping_manager, hidden_admin_ids, default_cooldown, pings_public,
-                tracker_tx, aviation_client,
+                tracker_tx, aviation_client, admin_channel,
             ).await
         }
     });
@@ -1558,6 +1559,7 @@ async fn run_generic_command_handler(
     pings_public: bool,
     tracker_tx: tokio::sync::mpsc::Sender<flight_tracker::TrackerCommand>,
     aviation_client: aviation::AviationClient,
+    admin_channel: Option<String>,
 ) {
     info!("Generic Command Handler started");
 
@@ -1638,7 +1640,7 @@ async fn run_generic_command_handler(
         pings_public,
     )));
 
-    run_command_dispatcher(broadcast_rx, client, commands).await;
+    run_command_dispatcher(broadcast_rx, client, commands, admin_channel).await;
 }
 
 /// Main dispatch loop for trait-based commands.
@@ -1646,6 +1648,7 @@ async fn run_command_dispatcher(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
     client: Arc<AuthenticatedTwitchClient>,
     commands: Vec<Box<dyn commands::Command>>,
+    admin_channel: Option<String>,
 ) {
     loop {
         match broadcast_rx.recv().await {
@@ -1653,6 +1656,14 @@ async fn run_command_dispatcher(
                 let ServerMessage::Privmsg(privmsg) = message else {
                     continue;
                 };
+
+                // In the admin channel, only the broadcaster can use commands
+                if let Some(ref admin_ch) = admin_channel
+                    && privmsg.channel_login == *admin_ch
+                    && !privmsg.badges.iter().any(|b| b.name == "broadcaster")
+                {
+                    continue;
+                }
 
                 let mut words = privmsg.message_text.split_whitespace();
                 let Some(first_word) = words.next() else {
