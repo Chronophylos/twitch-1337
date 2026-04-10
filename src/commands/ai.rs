@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, instrument};
 
 use crate::llm::{ChatCompletionRequest, LlmClient, Message};
-use crate::{truncate_response, MAX_RESPONSE_LENGTH};
+use crate::{truncate_response, ChatHistory, MAX_RESPONSE_LENGTH};
 
 use super::{Command, CommandContext};
 
@@ -22,6 +22,8 @@ pub struct AiCommand {
     system_prompt: String,
     instruction_template: String,
     timeout: Duration,
+    chat_history: Option<ChatHistory>,
+    bot_username: String,
 }
 
 impl AiCommand {
@@ -31,6 +33,8 @@ impl AiCommand {
         system_prompt: String,
         instruction_template: String,
         timeout: Duration,
+        chat_history: Option<ChatHistory>,
+        bot_username: String,
     ) -> Self {
         Self {
             llm_client,
@@ -39,6 +43,8 @@ impl AiCommand {
             system_prompt,
             instruction_template,
             timeout,
+            chat_history,
+            bot_username,
         }
     }
 }
@@ -104,6 +110,23 @@ impl Command for AiCommand {
 
         let user_message = self.instruction_template.replace("{message}", &instruction);
 
+        // Build chat history string
+        let chat_history_text = if let Some(ref history) = self.chat_history {
+            let buf = history.lock().await;
+            if buf.is_empty() {
+                String::new()
+            } else {
+                buf.iter()
+                    .map(|(user, msg)| format!("{user}: {msg}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        } else {
+            String::new()
+        };
+
+        let user_message = user_message.replace("{chat_history}", &chat_history_text);
+
         let request = ChatCompletionRequest {
             model: self.model.clone(),
             messages: vec![
@@ -126,7 +149,18 @@ impl Command for AiCommand {
         .await;
 
         let response = match result {
-            Ok(Ok(text)) => truncate_response(&text, MAX_RESPONSE_LENGTH),
+            Ok(Ok(text)) => {
+                let truncated = truncate_response(&text, MAX_RESPONSE_LENGTH);
+                // Record successful response in chat history
+                if let Some(ref history) = self.chat_history {
+                    let mut buf = history.lock().await;
+                    if buf.len() >= buf.capacity() {
+                        buf.pop_front();
+                    }
+                    buf.push_back((self.bot_username.clone(), truncated.clone()));
+                }
+                truncated
+            }
             Ok(Err(e)) => {
                 error!(error = ?e, "AI execution failed");
                 "Da ist was schiefgelaufen FDM".to_string()
