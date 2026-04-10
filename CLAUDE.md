@@ -507,6 +507,28 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
   - `update(schedules)`: Updates schedules, increments version
 - Version number enables change detection for task manager
 
+### Memory Module
+
+**`memory::Memory`**
+- A single remembered fact
+- Fields: fact, created_at (ISO 8601 string), updated_at (ISO 8601 string)
+
+**`memory::MemoryStore`**
+- Persistent store of AI memories, serialized to RON
+- Fields: memories (`HashMap<String, Memory>`, keyed by LLM-generated slug)
+- Methods:
+  - `load(data_dir) -> Result<(Self, PathBuf)>`: Loads from `ai_memory.ron`, empty store if missing
+  - `save(path) -> Result<()>`: Atomic write via `.ron.tmp` + rename
+  - `format_for_prompt() -> Option<String>`: Sorted `## Known facts` block for system prompt injection
+  - `format_for_extraction() -> String`: Sorted key:fact list for extraction prompt
+  - `execute_tool_call(call, max_memories) -> String`: Handles `save_memory` and `delete_memory` tool calls
+
+**`memory::spawn_memory_extraction(...)`**
+- Fire-and-forget tokio task for post-response memory extraction
+- Sends conversation to LLM with tool definitions, executes tool calls against MemoryStore
+- Up to 3 rounds of tool calling, persists after each round
+- Errors logged at debug level, never affects user-visible response
+
 ### Cooldown Module
 
 **`cooldown::format_cooldown_remaining(remaining: Duration) -> String`**

@@ -226,19 +226,19 @@ impl LlmClient for OllamaClient {
             .await
             .wrap_err("Failed to parse Ollama API tool response")?;
 
-        if let Some(tool_calls) = api_response.message.tool_calls {
-            if !tool_calls.is_empty() {
-                let calls = tool_calls
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, tc)| super::ToolCall {
-                        id: format!("call_{}", i),
-                        name: tc.function.name,
-                        arguments: tc.function.arguments,
-                    })
-                    .collect();
-                return Ok(ToolChatCompletionResponse::ToolCalls(calls));
-            }
+        if let Some(tool_calls) = api_response.message.tool_calls
+            && !tool_calls.is_empty()
+        {
+            let calls = tool_calls
+                .into_iter()
+                .enumerate()
+                .map(|(i, tc)| super::ToolCall {
+                    id: format!("call_{}", i),
+                    name: tc.function.name,
+                    arguments: tc.function.arguments,
+                })
+                .collect();
+            return Ok(ToolChatCompletionResponse::ToolCalls(calls));
         }
 
         let content = api_response.message.content.unwrap_or_default();

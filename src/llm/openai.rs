@@ -269,22 +269,22 @@ impl LlmClient for OpenAiClient {
             .next()
             .ok_or_else(|| eyre::eyre!("No choices in API tool response"))?;
 
-        if let Some(tool_calls) = choice.message.tool_calls {
-            if !tool_calls.is_empty() {
-                let calls = tool_calls
-                    .into_iter()
-                    .map(|tc| {
-                        let arguments: serde_json::Value =
-                            serde_json::from_str(&tc.function.arguments).unwrap_or_default();
-                        super::ToolCall {
-                            id: tc.id,
-                            name: tc.function.name,
-                            arguments,
-                        }
-                    })
-                    .collect();
-                return Ok(ToolChatCompletionResponse::ToolCalls(calls));
-            }
+        if let Some(tool_calls) = choice.message.tool_calls
+            && !tool_calls.is_empty()
+        {
+            let calls = tool_calls
+                .into_iter()
+                .map(|tc| {
+                    let arguments: serde_json::Value =
+                        serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                    super::ToolCall {
+                        id: tc.id,
+                        name: tc.function.name,
+                        arguments,
+                    }
+                })
+                .collect();
+            return Ok(ToolChatCompletionResponse::ToolCalls(calls));
         }
 
         let content = choice.message.content.unwrap_or_default();

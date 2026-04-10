@@ -54,7 +54,8 @@ pub struct ToolCall {
 /// Response from a tool-calling chat completion.
 #[derive(Debug, Clone)]
 pub enum ToolChatCompletionResponse {
-    Message(String),
+    /// The model returned a text response (content may be unused by callers).
+    Message(#[allow(dead_code)] String),
     ToolCalls(Vec<ToolCall>),
 }
 
