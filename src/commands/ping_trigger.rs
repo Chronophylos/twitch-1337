@@ -3,8 +3,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use eyre::Result;
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, error};
 
+use crate::cooldown::format_cooldown_remaining;
 use crate::ping::PingManager;
 use super::{Command, CommandContext};
 
@@ -55,8 +56,17 @@ impl Command for PingTriggerCommand {
                 return Ok(());
             }
 
-            if !manager.check_cooldown(ping_name, self.default_cooldown) {
-                debug!(ping = ping_name, "Ping on cooldown, ignoring");
+            if let Some(remaining) = manager.remaining_cooldown(ping_name, self.default_cooldown) {
+                debug!(ping = ping_name, "Ping on cooldown");
+                if let Err(e) = ctx.client
+                    .say_in_reply_to(
+                        ctx.privmsg,
+                        format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
+                    )
+                    .await
+                {
+                    error!(error = ?e, "Failed to send cooldown message");
+                }
                 return Ok(());
             }
 
