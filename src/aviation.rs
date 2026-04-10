@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tracing::{debug, error, warn};
 use twitch_irc::message::PrivmsgMessage;
 
+use crate::cooldown::format_cooldown_remaining;
 use crate::{APP_USER_AGENT, AuthenticatedTwitchClient, MAX_RESPONSE_LENGTH, truncate_response};
 
 const ADSBDB_BASE_URL: &str = "https://api.adsbdb.com/v0";
@@ -582,7 +583,7 @@ pub async fn up_command(
                 let remaining = cooldown - elapsed;
                 debug!(user = %user, remaining_secs = remaining.as_secs(), "!up on cooldown");
                 if let Err(e) = client
-                    .say_in_reply_to(privmsg, "Bitte warte noch ein bisschen Waiting".to_string())
+                    .say_in_reply_to(privmsg, format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)))
                     .await
                 {
                     error!(error = ?e, "Failed to send cooldown message");

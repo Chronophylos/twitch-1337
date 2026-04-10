@@ -7,6 +7,7 @@ use eyre::Result;
 use tokio::sync::Mutex;
 use tracing::{debug, error, instrument};
 
+use crate::cooldown::format_cooldown_remaining;
 use crate::llm::{ChatCompletionRequest, LlmClient, Message};
 use crate::{truncate_response, MAX_RESPONSE_LENGTH};
 
@@ -69,7 +70,7 @@ impl Command for AiCommand {
                         .client
                         .say_in_reply_to(
                             ctx.privmsg,
-                            "Bitte warte noch ein bisschen Waiting".to_string(),
+                            format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
                         )
                         .await
                     {

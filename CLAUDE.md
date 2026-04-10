@@ -436,7 +436,8 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 - Only members can trigger unless `public` mode is enabled in `[pings]` config
 - Checks cooldown (per-ping `cooldown` field, or global `default_cooldown` from config)
 - Renders template with `{mentions}` (space-separated @user list, sender excluded) and `{sender}` (triggering user)
-- Silent on: non-member, cooldown active, empty mentions list
+- Replies with remaining cooldown time when on cooldown (human-friendly format via `cooldown::format_cooldown_remaining`)
+- Silent on: non-member, empty mentions list
 
 ### Handler: Scheduled Messages (Config-Based)
 
@@ -495,6 +496,12 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
   - `update(schedules)`: Updates schedules, increments version
 - Version number enables change detection for task manager
 
+### Cooldown Module
+
+**`cooldown::format_cooldown_remaining(remaining: Duration) -> String`**
+- Formats a `Duration` as human-friendly cooldown text: `"30s"`, `"4m 3s"`, `"1h 5m"`
+- Used by all cooldown-gated commands for consistent chat responses
+
 ### Ping Module
 
 **`ping::Ping`**
@@ -518,7 +525,7 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
   - `ping_exists(name) -> bool`: Checks if a ping exists
   - `is_member(ping_name, username) -> bool`: Checks membership
   - `list_pings_for_user(username) -> Vec<&str>`: Lists pings user belongs to
-  - `check_cooldown(ping_name, default_cooldown) -> bool`: Returns true if cooldown expired
+  - `remaining_cooldown(ping_name, default_cooldown) -> Option<Duration>`: Returns `Some(remaining)` if on cooldown, `None` if ready
   - `record_trigger(ping_name)`: Records trigger timestamp for cooldown
   - `render_template(ping_name, sender) -> Option<String>`: Renders template with `{mentions}` (sender excluded) and `{sender}`
 
@@ -624,7 +631,8 @@ Ping triggers (!<name>):
            -> Dynamically matches any registered ping name
            -> Only members can trigger (unless public mode enabled), checks cooldown
            -> Renders template with {mentions} and {sender}
-           -> Silent on non-member, cooldown, or empty mentions
+           -> Replies with remaining cooldown time when on cooldown
+           -> Silent on non-member or empty mentions
 ```
 
 ### Scheduled Messages (Conditional - Only if schedules configured)
