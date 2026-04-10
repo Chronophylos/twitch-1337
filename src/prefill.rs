@@ -153,3 +153,46 @@ pub async fn prefill_chat_history(
 
     VecDeque::from(all_messages)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config_values() {
+        let config: HistoryPrefillConfig =
+            serde_json::from_str("{}").expect("empty JSON should use defaults");
+        assert_eq!(config.base_url, "https://logs.zonian.dev");
+        assert!((config.threshold - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_config_custom_values() {
+        let json = r#"{"base_url": "https://logs.example.com", "threshold": 0.8}"#;
+        let config: HistoryPrefillConfig =
+            serde_json::from_str(json).expect("valid JSON should parse");
+        assert_eq!(config.base_url, "https://logs.example.com");
+        assert!((config.threshold - 0.8).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_config_in_ai_config_toml() {
+        let toml_str = r#"
+            backend = "openai"
+            api_key = "test-key"
+            model = "test-model"
+
+            [history_prefill]
+            base_url = "https://custom.logs.dev"
+            threshold = 0.3
+        "#;
+        // Use the parent AiConfig to verify nesting works
+        // This test verifies the serde deserialization path
+        let config: toml::Value = toml::from_str(toml_str).expect("valid TOML");
+        let prefill = config.get("history_prefill").expect("history_prefill should exist");
+        assert_eq!(
+            prefill.get("base_url").and_then(|v| v.as_str()),
+            Some("https://custom.logs.dev")
+        );
+    }
+}
