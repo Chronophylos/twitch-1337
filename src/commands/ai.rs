@@ -23,6 +23,7 @@ pub struct AiCommand {
     instruction_template: String,
     timeout: Duration,
     chat_history: Option<ChatHistory>,
+    history_length: usize,
     bot_username: String,
 }
 
@@ -34,6 +35,7 @@ impl AiCommand {
         instruction_template: String,
         timeout: Duration,
         chat_history: Option<ChatHistory>,
+        history_length: usize,
         bot_username: String,
     ) -> Self {
         Self {
@@ -44,6 +46,7 @@ impl AiCommand {
             instruction_template,
             timeout,
             chat_history,
+            history_length,
             bot_username,
         }
     }
@@ -154,7 +157,7 @@ impl Command for AiCommand {
                 // Record successful response in chat history
                 if let Some(ref history) = self.chat_history {
                     let mut buf = history.lock().await;
-                    if buf.len() >= buf.capacity() {
+                    if buf.len() >= self.history_length {
                         buf.pop_front();
                     }
                     buf.push_back((self.bot_username.clone(), truncated.clone()));

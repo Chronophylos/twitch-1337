@@ -1664,6 +1664,7 @@ async fn run_generic_command_handler(
             cfg.instruction_template,
             Duration::from_secs(cfg.timeout),
             chat_history.clone(),
+            history_length,
             bot_username.clone(),
         )));
     }
