@@ -110,6 +110,9 @@ The config.toml file has the following sections:
 - `instruction_template` - Optional: Template with `{message}` and `{chat_history}` placeholders (default: `"{chat_history}\n{message}"`)
 - `timeout` - Optional: AI request timeout in seconds (default: 30)
 - `history_length` - Number of recent chat messages to include as context (optional, default: 0 = disabled, max: 100). All main-channel messages are buffered; admin channel messages are excluded. The history is injected via the `{chat_history}` template placeholder.
+- `history_prefill` - (optional) Sub-table to prefill chat history from a log API at startup. Requires `history_length > 0`.
+  - `base_url` - Rustlog-compatible API base URL (optional, default: `"https://logs.zonian.dev"`)
+  - `threshold` - Float 0.0-1.0: if today's messages are below this fraction of `history_length`, also fetch yesterday (optional, default: 0.5)
 
 **[[schedules]]** (optional, repeatable) - Scheduled messages
 - `name` - Unique identifier for the schedule
@@ -503,6 +506,20 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 - Formats a `Duration` as human-friendly cooldown text: `"30s"`, `"4m 3s"`, `"1h 5m"`
 - Used by all cooldown-gated commands for consistent chat responses
 
+### Prefill Module
+
+**`prefill::HistoryPrefillConfig`**
+- Configuration for startup history prefill
+- Fields: base_url (String), threshold (f64)
+- Deserialized from `[ai.history_prefill]` in config.toml
+
+**`prefill::prefill_chat_history(channel, history_length, config) -> VecDeque<(String, String)>`**
+- Fetches recent messages from a rustlog-compatible API at startup
+- Fetches today's messages; if count < threshold * history_length, also fetches yesterday
+- Merges chronologically, returns at most history_length messages
+- On any failure, logs warning and returns what it has (or empty buffer)
+- Uses Europe/Berlin timezone for date calculation
+
 ### Ping Module
 
 **`ping::Ping`**
@@ -564,6 +581,7 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 - `system_prompt` - Optional system prompt (has default)
 - `instruction_template` - Optional template with `{message}` and `{chat_history}` placeholders (has default)
 - `history_length` - Number of chat messages to keep as context (default: 0)
+- `history_prefill` - Optional `HistoryPrefillConfig` for startup history prefill
 - `timeout` - AI request timeout in seconds (default: 30)
 
 **`AiBackend`**

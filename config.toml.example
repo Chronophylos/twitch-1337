@@ -54,6 +54,12 @@ client_secret = "your_client_secret"
 # timeout = 30                                        # Optional, AI request timeout in seconds (default: 30)
 # history_length = 10                                # Optional, number of chat messages to keep as context (0 = disabled, max 100)
 #
+# Optional: Prefill chat history from a log API at startup
+# Requires history_length > 0 to have any effect
+# [ai.history_prefill]
+# base_url = "https://logs.zonian.dev"  # Rustlog-compatible API (default)
+# threshold = 0.5                        # Fetch yesterday too if today < 50% of history_length (default: 0.5)
+#
 # --- OR ---
 #
 # [ai]
@@ -64,6 +70,12 @@ client_secret = "your_client_secret"
 # instruction_template = "{chat_history}\n{message}" # Use {message} and {chat_history} as placeholders
 # timeout = 30                                        # Optional, AI request timeout in seconds (default: 30)
 # history_length = 10                                # Optional, number of chat messages to keep as context (0 = disabled, max 100)
+#
+# Optional: Prefill chat history from a log API at startup
+# Requires history_length > 0 to have any effect
+# [ai.history_prefill]
+# base_url = "https://logs.zonian.dev"  # Rustlog-compatible API (default)
+# threshold = 0.5                        # Fetch yesterday too if today < 50% of history_length (default: 0.5)
 
 # Optional: Scheduled messages configuration
 # Add [[schedules]] sections to define scheduled messages.
