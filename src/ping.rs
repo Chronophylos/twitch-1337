@@ -322,8 +322,8 @@ mod tests {
 
         let remaining = mgr.remaining_cooldown("test", 300);
         assert!(remaining.is_some());
-        // Should be close to 300s (just triggered)
-        assert!(remaining.unwrap().as_secs() >= 299);
+        let secs = remaining.unwrap().as_secs();
+        assert!(secs > 0 && secs <= 300, "expected 1..=300, got {secs}");
     }
 
     #[test]

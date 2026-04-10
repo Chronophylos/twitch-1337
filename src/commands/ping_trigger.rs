@@ -48,28 +48,34 @@ impl Command for PingTriggerCommand {
         let ping_name = trigger.strip_prefix('!').unwrap_or(trigger);
         let sender = &ctx.privmsg.sender.login;
 
-        // Check conditions and render under read lock, then release before I/O
-        let rendered = {
+        // Check membership and cooldown under read lock, then release before I/O
+        let cooldown_remaining = {
             let manager = self.ping_manager.read().await;
 
             if !self.public && !manager.is_member(ping_name, sender) {
                 return Ok(());
             }
 
-            if let Some(remaining) = manager.remaining_cooldown(ping_name, self.default_cooldown) {
-                debug!(ping = ping_name, "Ping on cooldown");
-                if let Err(e) = ctx.client
-                    .say_in_reply_to(
-                        ctx.privmsg,
-                        format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
-                    )
-                    .await
-                {
-                    error!(error = ?e, "Failed to send cooldown message");
-                }
-                return Ok(());
-            }
+            manager.remaining_cooldown(ping_name, self.default_cooldown)
+        };
 
+        if let Some(remaining) = cooldown_remaining {
+            debug!(ping = ping_name, "Ping on cooldown");
+            if let Err(e) = ctx.client
+                .say_in_reply_to(
+                    ctx.privmsg,
+                    format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
+                )
+                .await
+            {
+                error!(error = ?e, "Failed to send cooldown message");
+            }
+            return Ok(());
+        }
+
+        // Render template under read lock, then release before I/O
+        let rendered = {
+            let manager = self.ping_manager.read().await;
             match manager.render_template(ping_name, sender) {
                 Some(r) => r,
                 None => return Ok(()),
