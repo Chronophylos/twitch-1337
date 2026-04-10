@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use eyre::{Result, WrapErr, bail};
 use serde::{Deserialize, Serialize};
@@ -158,16 +158,22 @@ impl PingManager {
             .collect()
     }
 
-    /// Check if a ping is off cooldown. Returns true if it can be triggered.
-    pub fn check_cooldown(&self, ping_name: &str, default_cooldown: u64) -> bool {
-        let ping = match self.store.pings.get(ping_name) {
-            Some(p) => p,
-            None => return false,
-        };
+    /// Check if a ping is on cooldown. Returns `Some(remaining)` if on cooldown,
+    /// `None` if it can be triggered (or ping doesn't exist).
+    pub fn remaining_cooldown(&self, ping_name: &str, default_cooldown: u64) -> Option<Duration> {
+        let ping = self.store.pings.get(ping_name)?;
         let cooldown_secs = ping.cooldown.unwrap_or(default_cooldown);
+        let cooldown = Duration::from_secs(cooldown_secs);
         match self.last_triggered.get(ping_name) {
-            Some(last) => last.elapsed().as_secs() >= cooldown_secs,
-            None => true,
+            Some(last) => {
+                let elapsed = last.elapsed();
+                if elapsed < cooldown {
+                    Some(cooldown - elapsed)
+                } else {
+                    None
+                }
+            }
+            None => None,
         }
     }
 
@@ -296,5 +302,35 @@ mod tests {
         let result = mgr.render_template("test", "Alice").unwrap();
         assert!(!result.contains("@alice"), "should exclude sender case-insensitively");
         assert!(result.contains("@bob"));
+    }
+
+    #[test]
+    fn remaining_cooldown_returns_none_when_never_triggered() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut mgr = test_manager(dir.path());
+        mgr.add_member("test", "alice").unwrap();
+
+        assert!(mgr.remaining_cooldown("test", 300).is_none());
+    }
+
+    #[test]
+    fn remaining_cooldown_returns_some_when_on_cooldown() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut mgr = test_manager(dir.path());
+        mgr.add_member("test", "alice").unwrap();
+        mgr.record_trigger("test");
+
+        let remaining = mgr.remaining_cooldown("test", 300);
+        assert!(remaining.is_some());
+        // Should be close to 300s (just triggered)
+        assert!(remaining.unwrap().as_secs() >= 299);
+    }
+
+    #[test]
+    fn remaining_cooldown_returns_none_for_nonexistent_ping() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = empty_manager(dir.path());
+
+        assert!(mgr.remaining_cooldown("nope", 300).is_none());
     }
 }
