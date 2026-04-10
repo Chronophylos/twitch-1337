@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -39,6 +39,9 @@ mod cooldown;
 /// Type alias for the authenticated Twitch IRC client
 pub(crate) type AuthenticatedTwitchClient =
     TwitchIRCClient<SecureTCPTransport, RefreshingLoginCredentials<FileBasedTokenStorage>>;
+
+/// Type alias for the shared chat history buffer (username, message text).
+pub(crate) type ChatHistory = Arc<tokio::sync::Mutex<VecDeque<(String, String)>>>;
 
 const TARGET_HOUR: u32 = 13;
 const TARGET_MINUTE: u32 = 37;
@@ -111,12 +114,15 @@ struct AiConfig {
     /// System prompt sent to the model
     #[serde(default = "default_system_prompt")]
     system_prompt: String,
-    /// Template for the user message. Use `{message}` as placeholder.
+    /// Template for the user message. Use `{message}` and `{chat_history}` as placeholders.
     #[serde(default = "default_instruction_template")]
     instruction_template: String,
     /// Timeout for AI requests in seconds (default: 30)
     #[serde(default = "default_ai_timeout")]
     timeout: u64,
+    /// Number of recent chat messages to include as context (0 = disabled, max 100)
+    #[serde(default)]
+    history_length: u64,
 }
 
 fn default_system_prompt() -> String {
@@ -124,7 +130,7 @@ fn default_system_prompt() -> String {
 }
 
 fn default_instruction_template() -> String {
-    "{message}".to_string()
+    "{chat_history}\n{message}".to_string()
 }
 
 fn default_ai_timeout() -> u64 {
@@ -274,6 +280,12 @@ impl Configuration {
             && ai.api_key.is_none()
         {
             bail!("AI backend 'openai' requires an api_key");
+        }
+
+        if let Some(ref ai) = self.ai
+            && ai.history_length > 100
+        {
+            bail!("ai.history_length must be <= 100 (got {})", ai.history_length);
         }
 
         // Validate each schedule config
@@ -1143,11 +1155,12 @@ pub async fn main() -> Result<()> {
         let tracker_tx = tracker_tx.clone();
         let aviation_client = shared_aviation_client;
         let admin_channel = config.twitch.admin_channel.clone();
+        let bot_username = config.twitch.username.clone();
         async move {
             run_generic_command_handler(
                 broadcast_tx, client, ai_config, leaderboard,
                 ping_manager, hidden_admin_ids, default_cooldown, pings_public,
-                cooldowns, tracker_tx, aviation_client, admin_channel,
+                cooldowns, tracker_tx, aviation_client, admin_channel, bot_username,
             ).await
         }
     });
@@ -1604,11 +1617,15 @@ async fn run_generic_command_handler(
     tracker_tx: tokio::sync::mpsc::Sender<flight_tracker::TrackerCommand>,
     aviation_client: aviation::AviationClient,
     admin_channel: Option<String>,
+    bot_username: String,
 ) {
     info!("Generic Command Handler started");
 
     // Subscribe to the broadcast channel
     let broadcast_rx = broadcast_tx.subscribe();
+
+    // Extract history_length before ai_config is consumed
+    let history_length = ai_config.as_ref().map_or(0, |cfg| cfg.history_length) as usize;
 
     // Initialize LLM client (optional)
     let llm_client: Option<(Box<dyn llm::LlmClient>, AiConfig)> =
@@ -1647,6 +1664,15 @@ async fn run_generic_command_handler(
             None
         };
 
+    // Create chat history buffer for AI context (if history_length > 0)
+    let chat_history: Option<ChatHistory> = if history_length > 0 {
+        Some(Arc::new(tokio::sync::Mutex::new(
+            VecDeque::with_capacity(history_length),
+        )))
+    } else {
+        None
+    };
+
     // Use the shared aviation client for !up command
     let aviation_client = Some(aviation_client);
 
@@ -1675,6 +1701,9 @@ async fn run_generic_command_handler(
             cfg.instruction_template,
             Duration::from_secs(cfg.timeout),
             Duration::from_secs(cooldowns.ai),
+            chat_history.clone(),
+            history_length,
+            bot_username.clone(),
         )));
     }
 
@@ -1686,7 +1715,7 @@ async fn run_generic_command_handler(
         pings_public,
     )));
 
-    run_command_dispatcher(broadcast_rx, client, commands, admin_channel).await;
+    run_command_dispatcher(broadcast_rx, client, commands, admin_channel, chat_history, history_length).await;
 }
 
 /// Main dispatch loop for trait-based commands.
@@ -1695,6 +1724,8 @@ async fn run_command_dispatcher(
     client: Arc<AuthenticatedTwitchClient>,
     commands: Vec<Box<dyn commands::Command>>,
     admin_channel: Option<String>,
+    chat_history: Option<ChatHistory>,
+    history_length: usize,
 ) {
     loop {
         match broadcast_rx.recv().await {
@@ -1709,6 +1740,23 @@ async fn run_command_dispatcher(
                     && !privmsg.badges.iter().any(|b| b.name == "broadcaster")
                 {
                     continue;
+                }
+
+                // Record message in chat history (main channel only)
+                if let Some(ref history) = chat_history {
+                    let is_admin_channel = admin_channel
+                        .as_ref()
+                        .is_some_and(|ch| privmsg.channel_login == *ch);
+                    if !is_admin_channel {
+                        let mut buf = history.lock().await;
+                        if buf.len() >= history_length {
+                            buf.pop_front();
+                        }
+                        buf.push_back((
+                            privmsg.sender.login.clone(),
+                            privmsg.message_text.clone(),
+                        ));
+                    }
                 }
 
                 let mut words = privmsg.message_text.split_whitespace();
