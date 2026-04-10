@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 use tokio::time::Duration;
 use tracing::{error, info};
 
+use crate::cooldown::format_cooldown_remaining;
 use super::{Command, CommandContext};
 
 const FEEDBACK_COOLDOWN: Duration = Duration::from_secs(300);
@@ -56,11 +57,11 @@ impl Command for FeedbackCommand {
             if let Some(last_use) = cooldowns_guard.get(user) {
                 let elapsed = last_use.elapsed();
                 if elapsed < FEEDBACK_COOLDOWN {
-                    let remaining = (FEEDBACK_COOLDOWN - elapsed).as_secs();
+                    let remaining = FEEDBACK_COOLDOWN - elapsed;
                     if let Err(e) = ctx.client
                         .say_in_reply_to(
                             ctx.privmsg,
-                            format!("Bitte warte noch {remaining}s Waiting"),
+                            format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
                         )
                         .await
                     {
