@@ -48,23 +48,30 @@ Recording happens in `run_command_dispatcher`, which already receives every PRIV
 
 ## Request Construction
 
-When `!ai` is invoked, the history is formatted and injected into the single user message sent to the LLM. The message array remains two entries: system prompt + user message.
+The existing `instruction_template` gains a second placeholder: `{chat_history}`, alongside the existing `{message}`. The template controls how history is presented to the LLM — no hardcoded formatting.
 
-Format of the user message when history is present:
+`{chat_history}` is replaced with the formatted history (one `username: message` per line), or an empty string when there's no history. The message array remains two entries: system prompt + user message.
+
+**Default template changes** from `"{message}"` to `"{chat_history}\n{message}"`.
+
+Example with a custom template:
+
+```toml
+instruction_template = "Recent chat:\n{chat_history}\n\nRespond to: {message}"
+```
+
+Produces a user message like:
 
 ```
-[Chat History]
+Recent chat:
 user_a: hello everyone
 user_b: hey!
 user_a: !ai what were we talking about?
 
-[Current Message]
-user_a: what were we talking about?
+Respond to: what were we talking about?
 ```
 
-The current user's `!ai` message appears both in the history (as part of the chat log) and as the explicit current message, so the LLM knows which message to respond to.
-
-When history is empty (no messages recorded yet), the `[Chat History]` section is omitted entirely — the request looks identical to today's behavior.
+When `history_length` is `0` or no messages have been recorded, `{chat_history}` resolves to an empty string — the template still works, just with an empty history section.
 
 ## Thread Safety & Performance
 
@@ -91,7 +98,7 @@ When history is empty (no messages recorded yet), the `[Chat History]` section i
 2. **`src/commands/ai.rs`**
    - Add `history: Option<Arc<Mutex<VecDeque<(String, String)>>>>` and `bot_username: String` fields
    - Update `new()` constructor to accept these
-   - In `execute()`: read and format history into the user message
+   - In `execute()`: read and format history, replace `{chat_history}` in the template alongside `{message}`
    - After successful response: push `(bot_username, response)` into the buffer
 
 3. **`config.toml.example`**
