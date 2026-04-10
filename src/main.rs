@@ -34,6 +34,7 @@ mod ping;
 mod llm;
 mod flight_tracker;
 mod cooldown;
+mod prefill;
 
 
 /// Type alias for the authenticated Twitch IRC client
@@ -123,6 +124,9 @@ struct AiConfig {
     /// Number of recent chat messages to include as context (0 = disabled, max 100)
     #[serde(default)]
     history_length: u64,
+    /// Optional: Prefill chat history from a rustlog-compatible API at startup
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history_prefill: Option<prefill::HistoryPrefillConfig>,
 }
 
 fn default_system_prompt() -> String {
@@ -286,6 +290,27 @@ impl Configuration {
             && ai.history_length > 100
         {
             bail!("ai.history_length must be <= 100 (got {})", ai.history_length);
+        }
+
+        if let Some(ref ai) = self.ai
+            && let Some(ref prefill) = ai.history_prefill
+        {
+            if prefill.base_url.trim().is_empty() {
+                bail!("ai.history_prefill.base_url cannot be empty");
+            }
+            if !(0.0..=1.0).contains(&prefill.threshold) {
+                bail!(
+                    "ai.history_prefill.threshold must be between 0.0 and 1.0 (got {})",
+                    prefill.threshold
+                );
+            }
+        }
+
+        if let Some(ref ai) = self.ai
+            && ai.history_prefill.is_some()
+            && ai.history_length == 0
+        {
+            bail!("ai.history_prefill requires history_length > 0");
         }
 
         // Validate each schedule config
