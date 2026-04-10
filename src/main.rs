@@ -110,7 +110,7 @@ struct AiConfig {
     /// System prompt sent to the model
     #[serde(default = "default_system_prompt")]
     system_prompt: String,
-    /// Template for the user message. Use `{message}` as placeholder.
+    /// Template for the user message. Use `{message}` and `{chat_history}` as placeholders.
     #[serde(default = "default_instruction_template")]
     instruction_template: String,
     /// Timeout for AI requests in seconds (default: 30)
