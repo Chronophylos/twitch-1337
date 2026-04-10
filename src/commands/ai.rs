@@ -12,12 +12,10 @@ use crate::{truncate_response, MAX_RESPONSE_LENGTH};
 
 use super::{Command, CommandContext};
 
-/// Cooldown duration for the AI command (30 seconds).
-const AI_COMMAND_COOLDOWN: Duration = Duration::from_secs(30);
-
 pub struct AiCommand {
     llm_client: Box<dyn LlmClient>,
     model: String,
+    cooldown: Duration,
     cooldowns: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     system_prompt: String,
     instruction_template: String,
@@ -31,10 +29,12 @@ impl AiCommand {
         system_prompt: String,
         instruction_template: String,
         timeout: Duration,
+        cooldown: Duration,
     ) -> Self {
         Self {
             llm_client,
             model,
+            cooldown,
             cooldowns: Arc::new(Mutex::new(HashMap::new())),
             system_prompt,
             instruction_template,
@@ -58,8 +58,8 @@ impl Command for AiCommand {
             let cooldowns_guard = self.cooldowns.lock().await;
             if let Some(last_use) = cooldowns_guard.get(user) {
                 let elapsed = last_use.elapsed();
-                if elapsed < AI_COMMAND_COOLDOWN {
-                    let remaining = AI_COMMAND_COOLDOWN - elapsed;
+                if elapsed < self.cooldown {
+                    let remaining = self.cooldown - elapsed;
                     debug!(
                         user = %user,
                         remaining_secs = remaining.as_secs(),

@@ -12,18 +12,19 @@ use tracing::{error, info};
 
 use super::{Command, CommandContext};
 
-const FEEDBACK_COOLDOWN: Duration = Duration::from_secs(300);
 const FEEDBACK_FILENAME: &str = "feedback.txt";
 
 pub struct FeedbackCommand {
     data_dir: PathBuf,
+    cooldown: Duration,
     cooldowns: Arc<Mutex<HashMap<String, std::time::Instant>>>,
 }
 
 impl FeedbackCommand {
-    pub fn new(data_dir: PathBuf) -> Self {
+    pub fn new(data_dir: PathBuf, cooldown: Duration) -> Self {
         Self {
             data_dir,
+            cooldown,
             cooldowns: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -55,8 +56,8 @@ impl Command for FeedbackCommand {
             let cooldowns_guard = self.cooldowns.lock().await;
             if let Some(last_use) = cooldowns_guard.get(user) {
                 let elapsed = last_use.elapsed();
-                if elapsed < FEEDBACK_COOLDOWN {
-                    let remaining = (FEEDBACK_COOLDOWN - elapsed).as_secs();
+                if elapsed < self.cooldown {
+                    let remaining = (self.cooldown - elapsed).as_secs();
                     if let Err(e) = ctx.client
                         .say_in_reply_to(
                             ctx.privmsg,

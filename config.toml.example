@@ -32,6 +32,12 @@ client_secret = "your_client_secret"
 # default_cooldown = 300  # Cooldown in seconds between triggers (default: 300)
 # public = false  # Allow anyone to trigger pings (default: false, members-only)
 
+# Optional: Command cooldowns in seconds
+# [cooldowns]
+# ai = 30        # !ai command (default: 30)
+# up = 30        # !up command (default: 30)
+# feedback = 300 # !fb command (default: 300)
+
 # Optional: AI configuration for the !ai command
 # If not configured, the !ai command will be disabled.
 #

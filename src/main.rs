@@ -162,6 +162,38 @@ fn default_cooldown() -> u64 {
     300
 }
 
+fn default_ai_cooldown() -> u64 {
+    30
+}
+
+fn default_up_cooldown() -> u64 {
+    30
+}
+
+fn default_feedback_cooldown() -> u64 {
+    300
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct CooldownsConfig {
+    #[serde(default = "default_ai_cooldown")]
+    ai: u64,
+    #[serde(default = "default_up_cooldown")]
+    up: u64,
+    #[serde(default = "default_feedback_cooldown")]
+    feedback: u64,
+}
+
+impl Default for CooldownsConfig {
+    fn default() -> Self {
+        Self {
+            ai: default_ai_cooldown(),
+            up: default_up_cooldown(),
+            feedback: default_feedback_cooldown(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct PingsConfig {
     #[serde(default = "default_cooldown")]
@@ -184,6 +216,8 @@ struct Configuration {
     twitch: TwitchConfiguration,
     #[serde(default)]
     pings: PingsConfig,
+    #[serde(default)]
+    cooldowns: CooldownsConfig,
     #[serde(default)]
     ai: Option<AiConfig>,
     #[serde(default)]
@@ -1104,6 +1138,7 @@ pub async fn main() -> Result<()> {
         let hidden_admin_ids = config.twitch.hidden_admins.clone();
         let default_cooldown = config.pings.default_cooldown;
         let pings_public = config.pings.public;
+        let cooldowns = config.cooldowns.clone();
         let tracker_tx = tracker_tx.clone();
         let aviation_client = shared_aviation_client;
         let admin_channel = config.twitch.admin_channel.clone();
@@ -1111,7 +1146,7 @@ pub async fn main() -> Result<()> {
             run_generic_command_handler(
                 broadcast_tx, client, ai_config, leaderboard,
                 ping_manager, hidden_admin_ids, default_cooldown, pings_public,
-                tracker_tx, aviation_client, admin_channel,
+                cooldowns, tracker_tx, aviation_client, admin_channel,
             ).await
         }
     });
@@ -1564,6 +1599,7 @@ async fn run_generic_command_handler(
     hidden_admin_ids: Vec<String>,
     default_cooldown: u64,
     pings_public: bool,
+    cooldowns: CooldownsConfig,
     tracker_tx: tokio::sync::mpsc::Sender<flight_tracker::TrackerCommand>,
     aviation_client: aviation::AviationClient,
     admin_channel: Option<String>,
@@ -1621,9 +1657,9 @@ async fn run_generic_command_handler(
             hidden_admin_ids,
         )),
         Box::new(commands::random_flight::RandomFlightCommand),
-        Box::new(commands::flights_above::FlightsAboveCommand::new(aviation_client)),
+        Box::new(commands::flights_above::FlightsAboveCommand::new(aviation_client, Duration::from_secs(cooldowns.up))),
         Box::new(commands::leaderboard::LeaderboardCommand::new(leaderboard)),
-        Box::new(commands::feedback::FeedbackCommand::new(data_dir)),
+        Box::new(commands::feedback::FeedbackCommand::new(data_dir, Duration::from_secs(cooldowns.feedback))),
         Box::new(commands::track::TrackCommand::new(tracker_tx.clone())),
         Box::new(commands::untrack::UntrackCommand::new(tracker_tx.clone())),
         Box::new(commands::flights::FlightsCommand::new(tracker_tx.clone())),
@@ -1637,6 +1673,7 @@ async fn run_generic_command_handler(
             cfg.system_prompt,
             cfg.instruction_template,
             Duration::from_secs(cfg.timeout),
+            Duration::from_secs(cooldowns.ai),
         )));
     }
 

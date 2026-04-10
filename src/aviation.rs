@@ -13,7 +13,6 @@ use crate::{APP_USER_AGENT, AuthenticatedTwitchClient, MAX_RESPONSE_LENGTH, trun
 const ADSBDB_BASE_URL: &str = "https://api.adsbdb.com/v0";
 const ADSBLOL_BASE_URL: &str = "https://api.adsb.lol/v2";
 const UP_SEARCH_RADIUS_NM: u16 = 15;
-const UP_COOLDOWN: Duration = Duration::from_secs(30);
 const UP_COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const UP_ADSBLOL_TIMEOUT: Duration = Duration::from_secs(10);
 const UP_ADSBDB_TIMEOUT: Duration = Duration::from_secs(5);
@@ -557,6 +556,7 @@ pub async fn up_command(
     client: &Arc<AuthenticatedTwitchClient>,
     aviation_client: &AviationClient,
     input: &str,
+    cooldown: Duration,
     cooldowns: &Arc<Mutex<HashMap<String, std::time::Instant>>>,
 ) -> Result<()> {
     let user = &privmsg.sender.login;
@@ -578,8 +578,8 @@ pub async fn up_command(
         let cooldowns_guard = cooldowns.lock().await;
         if let Some(last_use) = cooldowns_guard.get(user) {
             let elapsed = last_use.elapsed();
-            if elapsed < UP_COOLDOWN {
-                let remaining = UP_COOLDOWN - elapsed;
+            if elapsed < cooldown {
+                let remaining = cooldown - elapsed;
                 debug!(user = %user, remaining_secs = remaining.as_secs(), "!up on cooldown");
                 if let Err(e) = client
                     .say_in_reply_to(privmsg, "Bitte warte noch ein bisschen Waiting".to_string())
