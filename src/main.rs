@@ -1181,11 +1181,12 @@ pub async fn main() -> Result<()> {
         let aviation_client = shared_aviation_client;
         let admin_channel = config.twitch.admin_channel.clone();
         let bot_username = config.twitch.username.clone();
+        let channel = config.twitch.channel.clone();
         async move {
             run_generic_command_handler(
                 broadcast_tx, client, ai_config, leaderboard,
                 ping_manager, hidden_admin_ids, default_cooldown, pings_public,
-                cooldowns, tracker_tx, aviation_client, admin_channel, bot_username,
+                cooldowns, tracker_tx, aviation_client, admin_channel, bot_username, channel,
             ).await
         }
     });
@@ -1643,6 +1644,7 @@ async fn run_generic_command_handler(
     aviation_client: aviation::AviationClient,
     admin_channel: Option<String>,
     bot_username: String,
+    channel: String,
 ) {
     info!("Generic Command Handler started");
 
@@ -1651,6 +1653,7 @@ async fn run_generic_command_handler(
 
     // Extract history_length before ai_config is consumed
     let history_length = ai_config.as_ref().map_or(0, |cfg| cfg.history_length) as usize;
+    let prefill_config = ai_config.as_ref().and_then(|cfg| cfg.history_prefill.clone());
 
     // Initialize LLM client (optional)
     let llm_client: Option<(Box<dyn llm::LlmClient>, AiConfig)> =
@@ -1691,9 +1694,12 @@ async fn run_generic_command_handler(
 
     // Create chat history buffer for AI context (if history_length > 0)
     let chat_history: Option<ChatHistory> = if history_length > 0 {
-        Some(Arc::new(tokio::sync::Mutex::new(
-            VecDeque::with_capacity(history_length),
-        )))
+        let buf = if let Some(ref prefill_cfg) = prefill_config {
+            prefill::prefill_chat_history(&channel, history_length, prefill_cfg).await
+        } else {
+            VecDeque::with_capacity(history_length)
+        };
+        Some(Arc::new(tokio::sync::Mutex::new(buf)))
     } else {
         None
     };
