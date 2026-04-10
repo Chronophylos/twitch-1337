@@ -109,6 +109,8 @@ The config.toml file has the following sections:
 - `system_prompt` - Optional: System prompt for the AI (has sensible default)
 - `instruction_template` - Optional: Template with `{message}` placeholder (default: `"{message}"`)
 - `timeout` - Optional: AI request timeout in seconds (default: 30)
+- `memory_enabled` - Enable persistent AI memory (optional, default: false)
+- `max_memories` - Maximum number of stored facts (optional, default: 50, max: 200)
 
 **[[schedules]]** (optional, repeatable) - Scheduled messages
 - `name` - Unique identifier for the schedule
@@ -244,9 +246,18 @@ The bot maintains a **single persistent IRC connection** and uses a **broadcast 
 - Cooldown tracking via in-memory `HashMap<String, Instant>` (not persisted, resets on restart)
 - Shared across `PingAdminCommand` and `PingTriggerCommand`
 
+**AI Memory State:**
+- `memory_store`: `Arc<RwLock<MemoryStore>>` - Channel-wide fact store managed by the LLM
+- Persisted to `ai_memory.ron` via atomic write+rename
+- Loaded at startup if `memory_enabled = true` in `[ai]` config
+- Read on every `!ai` request (injected into system prompt)
+- Written by fire-and-forget extraction task after each successful AI response
+- Capped at `max_memories` (default 50, max 200)
+
 **Persistent State:**
 - OAuth tokens in `token.ron`
 - Ping definitions and membership in `pings.ron`
+- AI memories in `ai_memory.ron` (if `memory_enabled = true`)
 
 **No Persistent State:**
 - Schedules loaded from config.toml on startup and file changes
@@ -563,6 +574,8 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 - `system_prompt` - Optional system prompt (has default)
 - `instruction_template` - Optional template with `{message}` placeholder (has default)
 - `timeout` - AI request timeout in seconds (default: 30)
+- `memory_enabled` - Enable persistent AI memory (default: false)
+- `max_memories` - Maximum stored facts (default: 50, max: 200)
 
 **`AiBackend`**
 - Enum: `Openai`, `Ollama`
