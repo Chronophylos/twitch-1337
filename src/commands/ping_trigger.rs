@@ -9,6 +9,13 @@ use crate::cooldown::format_cooldown_remaining;
 use crate::ping::PingManager;
 use super::{Command, CommandContext};
 
+enum PingResult {
+    NotMember,
+    OnCooldown(std::time::Duration),
+    Send(String),
+    NothingToSend,
+}
+
 pub struct PingTriggerCommand {
     ping_manager: Arc<RwLock<PingManager>>,
     default_cooldown: u64,
@@ -59,41 +66,41 @@ impl Command for PingTriggerCommand {
         };
         let sender = &ctx.privmsg.sender.login;
 
-        // Check membership and cooldown under read lock, then release before I/O
-        let cooldown_remaining = {
+        // Check membership, cooldown, and render under a single read lock
+        let result = {
             let manager = self.ping_manager.read().await;
 
             if !self.public && !manager.is_member(&ping_name, sender) {
+                PingResult::NotMember
+            } else if let Some(remaining) = manager.remaining_cooldown(&ping_name, self.default_cooldown) {
+                PingResult::OnCooldown(remaining)
+            } else {
+                match manager.render_template(&ping_name, sender) {
+                    Some(rendered) => PingResult::Send(rendered),
+                    None => PingResult::NothingToSend,
+                }
+            }
+        };
+
+        // Act on result outside the lock
+        let rendered = match result {
+            PingResult::NotMember | PingResult::NothingToSend => return Ok(()),
+            PingResult::OnCooldown(remaining) => {
+                debug!(ping = %ping_name, "Ping on cooldown");
+                if let Err(e) = ctx.client
+                    .say_in_reply_to(
+                        ctx.privmsg,
+                        format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
+                    )
+                    .await
+                {
+                    error!(error = ?e, "Failed to send cooldown message");
+                }
                 return Ok(());
             }
-
-            manager.remaining_cooldown(&ping_name, self.default_cooldown)
+            PingResult::Send(rendered) => rendered,
         };
 
-        if let Some(remaining) = cooldown_remaining {
-            debug!(ping = %ping_name, "Ping on cooldown");
-            if let Err(e) = ctx.client
-                .say_in_reply_to(
-                    ctx.privmsg,
-                    format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
-                )
-                .await
-            {
-                error!(error = ?e, "Failed to send cooldown message");
-            }
-            return Ok(());
-        }
-
-        // Render template under read lock, then release before I/O
-        let rendered = {
-            let manager = self.ping_manager.read().await;
-            match manager.render_template(&ping_name, sender) {
-                Some(r) => r,
-                None => return Ok(()),
-            }
-        };
-
-        // Send outside any lock
         ctx.client
             .say(ctx.privmsg.channel_login.clone(), rendered)
             .await?;
