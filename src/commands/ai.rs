@@ -1,10 +1,8 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use eyre::Result;
-use tokio::sync::RwLock;
 use tracing::{debug, error, instrument};
 
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
@@ -14,50 +12,47 @@ use crate::{truncate_response, ChatHistory, MAX_RESPONSE_LENGTH};
 
 use super::{Command, CommandContext};
 
+/// Groups the shared chat history buffer with its capacity and the bot's username.
+pub struct ChatContext {
+    pub history: ChatHistory,
+    pub history_length: usize,
+    pub bot_username: String,
+}
+
+/// Prompt templates for the AI command.
+pub struct AiPrompts {
+    pub system: String,
+    pub instruction_template: String,
+}
+
 pub struct AiCommand {
     llm_client: Arc<dyn LlmClient>,
     model: String,
     cooldown: PerUserCooldown,
-    system_prompt: String,
-    instruction_template: String,
+    prompts: AiPrompts,
     timeout: Duration,
-    chat_history: Option<ChatHistory>,
-    history_length: usize,
-    bot_username: String,
-    memory_store: Option<Arc<RwLock<memory::MemoryStore>>>,
-    memory_store_path: Option<PathBuf>,
-    max_memories: usize,
+    chat_ctx: Option<ChatContext>,
+    memory: Option<memory::MemoryConfig>,
 }
 
 impl AiCommand {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         llm_client: Arc<dyn LlmClient>,
         model: String,
-        system_prompt: String,
-        instruction_template: String,
+        prompts: AiPrompts,
         timeout: Duration,
         cooldown: Duration,
-        chat_history: Option<ChatHistory>,
-        history_length: usize,
-        bot_username: String,
-        memory_store: Option<Arc<RwLock<memory::MemoryStore>>>,
-        memory_store_path: Option<PathBuf>,
-        max_memories: usize,
+        chat_ctx: Option<ChatContext>,
+        memory: Option<memory::MemoryConfig>,
     ) -> Self {
         Self {
             llm_client,
             model,
             cooldown: PerUserCooldown::new(cooldown),
-            system_prompt,
-            instruction_template,
+            prompts,
             timeout,
-            chat_history,
-            history_length,
-            bot_username,
-            memory_store,
-            memory_store_path,
-            max_memories,
+            chat_ctx,
+            memory,
         }
     }
 }
@@ -107,21 +102,21 @@ impl Command for AiCommand {
         self.cooldown.record(user).await;
 
         // Build system prompt with memories injected
-        let system_prompt = if let Some(ref store) = self.memory_store {
-            let store_guard = store.read().await;
+        let system_prompt = if let Some(ref mem) = self.memory {
+            let store_guard = mem.store.read().await;
             match store_guard.format_for_prompt() {
-                Some(facts) => format!("{}{}", self.system_prompt, facts),
-                None => self.system_prompt.clone(),
+                Some(facts) => format!("{}{}", self.prompts.system, facts),
+                None => self.prompts.system.clone(),
             }
         } else {
-            self.system_prompt.clone()
+            self.prompts.system.clone()
         };
 
-        let user_message = self.instruction_template.replace("{message}", &instruction);
+        let user_message = self.prompts.instruction_template.replace("{message}", &instruction);
 
         // Build chat history string
-        let chat_history_text = if let Some(ref history) = self.chat_history {
-            let buf = history.lock().await;
+        let chat_history_text = if let Some(ref chat) = self.chat_ctx {
+            let buf = chat.history.lock().await;
             if buf.is_empty() {
                 String::new()
             } else {
@@ -161,12 +156,12 @@ impl Command for AiCommand {
             Ok(Ok(text)) => {
                 let truncated = truncate_response(&text, MAX_RESPONSE_LENGTH);
                 // Record successful response in chat history
-                if let Some(ref history) = self.chat_history {
-                    let mut buf = history.lock().await;
-                    if buf.len() >= self.history_length {
+                if let Some(ref chat) = self.chat_ctx {
+                    let mut buf = chat.history.lock().await;
+                    if buf.len() >= chat.history_length {
                         buf.pop_front();
                     }
-                    buf.push_back((self.bot_username.clone(), truncated.clone()));
+                    buf.push_back((chat.bot_username.clone(), truncated.clone()));
                 }
                 (truncated, true)
             }
@@ -186,15 +181,11 @@ impl Command for AiCommand {
         }
 
         // Spawn fire-and-forget memory extraction (only on successful AI responses)
-        if let (true, Some(store), Some(store_path)) =
-            (success, self.memory_store.as_ref(), self.memory_store_path.as_ref())
-        {
+        if let (true, Some(mem)) = (success, &self.memory) {
             memory::spawn_memory_extraction(
                 self.llm_client.clone(),
                 self.model.clone(),
-                store.clone(),
-                store_path.clone(),
-                self.max_memories,
+                mem,
                 user.to_string(),
                 instruction,
                 response,

@@ -1214,11 +1214,11 @@ pub async fn main() -> Result<()> {
         let bot_username = config.twitch.username.clone();
         let channel = config.twitch.channel.clone();
         async move {
-            run_generic_command_handler(
+            run_generic_command_handler(CommandHandlerConfig {
                 broadcast_tx, client, ai_config, leaderboard,
                 ping_manager, hidden_admin_ids, default_cooldown, pings_public,
                 cooldowns, tracker_tx, aviation_client, admin_channel, bot_username, channel,
-            ).await
+            }).await
         }
     });
 
@@ -1651,17 +1651,7 @@ async fn run_latency_handler(
     }
 }
 
-/// Handler for generic text commands that start with `!`.
-///
-/// Monitors chat for commands and dispatches them to appropriate handlers.
-/// Currently supports:
-/// - `!toggle-ping <command>` - Adds/removes user from StreamElements ping command
-/// - `!ai <instruction>` - AI-powered responses (if OpenRouter configured)
-///
-/// Runs continuously in a loop, processing all incoming messages.
-#[allow(clippy::too_many_arguments)]
-#[instrument(skip(broadcast_tx, client, ai_config, leaderboard, ping_manager, tracker_tx, aviation_client))]
-async fn run_generic_command_handler(
+struct CommandHandlerConfig {
     broadcast_tx: broadcast::Sender<ServerMessage>,
     client: Arc<AuthenticatedTwitchClient>,
     ai_config: Option<AiConfig>,
@@ -1676,15 +1666,36 @@ async fn run_generic_command_handler(
     admin_channel: Option<String>,
     bot_username: String,
     channel: String,
-) {
+}
+
+/// Handler for generic text commands that start with `!`.
+#[instrument(skip(cfg))]
+async fn run_generic_command_handler(cfg: CommandHandlerConfig) {
     info!("Generic Command Handler started");
+
+    let CommandHandlerConfig {
+        broadcast_tx,
+        client,
+        ai_config,
+        leaderboard,
+        ping_manager,
+        hidden_admin_ids,
+        default_cooldown,
+        pings_public,
+        cooldowns,
+        tracker_tx,
+        aviation_client,
+        admin_channel,
+        bot_username,
+        channel,
+    } = cfg;
 
     // Subscribe to the broadcast channel
     let broadcast_rx = broadcast_tx.subscribe();
 
     // Extract history_length before ai_config is consumed
-    let history_length = ai_config.as_ref().map_or(0, |cfg| cfg.history_length) as usize;
-    let prefill_config = ai_config.as_ref().and_then(|cfg| cfg.history_prefill.clone());
+    let history_length = ai_config.as_ref().map_or(0, |c| c.history_length) as usize;
+    let prefill_config = ai_config.as_ref().and_then(|c| c.history_prefill.clone());
 
     // Initialize LLM client (optional)
     let llm_client: Option<(Arc<dyn llm::LlmClient>, AiConfig)> =
@@ -1757,34 +1768,41 @@ async fn run_generic_command_handler(
 
     if let Some((client, cfg)) = llm_client {
         // Load memory store if enabled
-        let (memory_store, memory_store_path) = if cfg.memory_enabled {
+        let memory_config = if cfg.memory_enabled {
             match memory::MemoryStore::load(&data_dir) {
-                Ok((store, path)) => (
-                    Some(Arc::new(tokio::sync::RwLock::new(store))),
-                    Some(path),
-                ),
+                Ok((store, path)) => Some(memory::MemoryConfig {
+                    store: Arc::new(tokio::sync::RwLock::new(store)),
+                    path,
+                    max_memories: cfg.max_memories,
+                }),
                 Err(e) => {
                     error!(error = ?e, "Failed to load AI memory store, memory disabled");
-                    (None, None)
+                    None
                 }
             }
         } else {
-            (None, None)
+            None
         };
+
+        let chat_ctx = chat_history.clone().map(|history| {
+            commands::ai::ChatContext {
+                history,
+                history_length,
+                bot_username: bot_username.clone(),
+            }
+        });
 
         commands.push(Box::new(commands::ai::AiCommand::new(
             client,
             cfg.model,
-            cfg.system_prompt,
-            cfg.instruction_template,
+            commands::ai::AiPrompts {
+                system: cfg.system_prompt,
+                instruction_template: cfg.instruction_template,
+            },
             Duration::from_secs(cfg.timeout),
             Duration::from_secs(cooldowns.ai),
-            chat_history.clone(),
-            history_length,
-            bot_username.clone(),
-            memory_store,
-            memory_store_path,
-            cfg.max_memories,
+            chat_ctx,
+            memory_config,
         )));
     }
 

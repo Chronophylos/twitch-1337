@@ -550,7 +550,6 @@ pub(crate) async fn run_flight_tracker(
                 cmd,
                 &mut state,
                 &client,
-                &channel,
                 &aviation_client,
                 &data_dir,
             )
@@ -562,7 +561,6 @@ pub(crate) async fn run_flight_tracker(
                     cmd,
                     &mut state,
                     &client,
-                    &channel,
                     &aviation_client,
                     &data_dir,
                 )
@@ -585,7 +583,6 @@ pub(crate) async fn run_flight_tracker(
                                 cmd,
                                 &mut state,
                                 &client,
-                                &channel,
                                 &aviation_client,
                                 &data_dir,
                             )
@@ -606,7 +603,6 @@ async fn process_command(
     cmd: TrackerCommand,
     state: &mut FlightTrackerState,
     client: &Arc<AuthenticatedTwitchClient>,
-    channel: &str,
     aviation_client: &AviationClient,
     data_dir: &Path,
 ) {
@@ -622,7 +618,6 @@ async fn process_command(
                 &reply_to,
                 state,
                 client,
-                channel,
                 aviation_client,
                 data_dir,
             )
@@ -654,14 +649,12 @@ async fn process_command(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_track(
     identifier: FlightIdentifier,
     requested_by: &str,
     reply_to: &PrivmsgMessage,
     state: &mut FlightTrackerState,
     client: &Arc<AuthenticatedTwitchClient>,
-    _channel: &str,
     aviation_client: &AviationClient,
     data_dir: &Path,
 ) {

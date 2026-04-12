@@ -13,6 +13,13 @@ use crate::llm::{
 };
 
 const MEMORY_FILENAME: &str = "ai_memory.ron";
+
+/// Groups the memory store, its file path, and capacity limit.
+pub struct MemoryConfig {
+    pub store: Arc<RwLock<MemoryStore>>,
+    pub path: PathBuf,
+    pub max_memories: usize,
+}
 const MAX_EXTRACTION_ROUNDS: usize = 3;
 
 const EXTRACTION_SYSTEM_PROMPT: &str = "\
@@ -191,18 +198,18 @@ pub fn memory_tool_definitions() -> Vec<ToolDefinition> {
 
 /// Spawn a fire-and-forget task that asks the LLM to extract memories.
 /// Errors are logged and swallowed — never affects the user-facing response.
-#[allow(clippy::too_many_arguments)]
 pub fn spawn_memory_extraction(
     llm_client: Arc<dyn llm::LlmClient>,
     model: String,
-    store: Arc<RwLock<MemoryStore>>,
-    store_path: PathBuf,
-    max_memories: usize,
+    mem: &MemoryConfig,
     username: String,
     user_message: String,
     ai_response: String,
     timeout: std::time::Duration,
 ) {
+    let store = mem.store.clone();
+    let store_path = mem.path.clone();
+    let max_memories = mem.max_memories;
     tokio::spawn(async move {
         if let Err(e) = run_memory_extraction(
             &*llm_client,
@@ -210,9 +217,7 @@ pub fn spawn_memory_extraction(
             &store,
             &store_path,
             max_memories,
-            &username,
-            &user_message,
-            &ai_response,
+            (&username, &user_message, &ai_response),
             timeout,
         )
         .await
@@ -222,18 +227,17 @@ pub fn spawn_memory_extraction(
     });
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_memory_extraction(
     llm_client: &dyn llm::LlmClient,
     model: &str,
     store: &RwLock<MemoryStore>,
     store_path: &Path,
     max_memories: usize,
-    username: &str,
-    user_message: &str,
-    ai_response: &str,
+    conversation: (&str, &str, &str), // (username, user_message, ai_response)
     timeout: std::time::Duration,
 ) -> Result<()> {
+    let (username, user_message, ai_response) = conversation;
+
     let current_memories = {
         let store_guard = store.read().await;
         store_guard.format_for_extraction()
@@ -290,8 +294,6 @@ async fn run_memory_extraction(
                 }
                 // Persist after each round of tool calls
                 store_guard.save(store_path)?;
-                // Add assistant tool_calls message to conversation for next round
-                // (the LLM client handles this via tool_results in the request)
             }
         }
     }
