@@ -9,6 +9,11 @@ use crate::ping::PingManager;
 
 use super::{Command, CommandContext};
 
+/// Normalize a ping name from user input to the canonical lowercase form.
+fn normalize_ping_name(name: &str) -> String {
+    name.to_lowercase()
+}
+
 pub struct PingAdminCommand {
     ping_manager: Arc<RwLock<PingManager>>,
     hidden_admin_ids: Vec<String>,
@@ -85,7 +90,7 @@ impl PingAdminCommand {
             return Ok(());
         }
 
-        let name = ctx.args[1].to_lowercase();
+        let name = normalize_ping_name(ctx.args[1]);
         let template = ctx.args[2..].join(" ");
 
         let mut manager = self.ping_manager.write().await;
@@ -112,7 +117,7 @@ impl PingAdminCommand {
     /// !p delete <name>
     async fn handle_delete(&self, ctx: &CommandContext<'_>) -> Result<()> {
         let name = match ctx.args.get(1) {
-            Some(n) => n.to_lowercase(),
+            Some(n) => normalize_ping_name(n),
             None => {
                 ctx.client
                     .say_in_reply_to(ctx.privmsg, "Nutze: !p delete <name>".to_string())
@@ -146,7 +151,7 @@ impl PingAdminCommand {
             return Ok(());
         }
 
-        let name = ctx.args[1].to_lowercase();
+        let name = normalize_ping_name(ctx.args[1]);
         let template = ctx.args[2..].join(" ");
 
         let mut manager = self.ping_manager.write().await;
@@ -177,7 +182,7 @@ impl PingAdminCommand {
             return Ok(());
         }
 
-        let name = ctx.args[1].to_lowercase();
+        let name = normalize_ping_name(ctx.args[1]);
         let user = ctx.args[2].trim_start_matches('@').to_lowercase();
 
         let mut manager = self.ping_manager.write().await;
@@ -208,7 +213,7 @@ impl PingAdminCommand {
     /// !p join/leave <name> -- self-service membership
     async fn handle_self_op(&self, ctx: &CommandContext<'_>, op: &str) -> Result<()> {
         let name = match ctx.args.get(1) {
-            Some(n) => n.to_lowercase(),
+            Some(n) => normalize_ping_name(n),
             None => {
                 ctx.client
                     .say_in_reply_to(ctx.privmsg, format!("Nutze: !p {op} <name>"))

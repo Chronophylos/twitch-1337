@@ -144,17 +144,15 @@ impl PingManager {
 
     /// Check if a user is a member of a ping.
     pub fn is_member(&self, ping_name: &str, username: &str) -> bool {
-        let username_lower = username.to_lowercase();
         self.store.pings.get(ping_name)
-            .map(|p| p.members.contains(&username_lower))
+            .map(|p| p.members.contains(username))
             .unwrap_or(false)
     }
 
     /// List all ping names a user is subscribed to.
     pub fn list_pings_for_user(&self, username: &str) -> Vec<&str> {
-        let username_lower = username.to_lowercase();
         self.store.pings.iter()
-            .filter(|(_, p)| p.members.contains(&username_lower))
+            .filter(|(_, p)| p.members.contains(username))
             .map(|(name, _)| name.as_str())
             .collect()
     }
@@ -188,9 +186,8 @@ impl PingManager {
     /// (i.e., all members are the sender).
     pub fn render_template(&self, ping_name: &str, sender: &str) -> Option<String> {
         let ping = self.store.pings.get(ping_name)?;
-        let sender_lower = sender.to_lowercase();
         let mentions = ping.members.iter()
-            .filter(|m| **m != sender_lower)
+            .filter(|m| m.as_str() != sender)
             .map(|m| format!("@{m}"))
             .collect::<Vec<_>>()
             .join(" ");
@@ -294,14 +291,15 @@ mod tests {
     }
 
     #[test]
-    fn render_template_excludes_sender_case_insensitive() {
+    fn render_template_excludes_sender_lowercase() {
         let dir = tempfile::tempdir().unwrap();
         let mut mgr = test_manager(dir.path());
         mgr.add_member("test", "alice").unwrap();
         mgr.add_member("test", "bob").unwrap();
 
-        let result = mgr.render_template("test", "Alice").unwrap();
-        assert!(!result.contains("@alice"), "should exclude sender case-insensitively");
+        // Twitch IRC sender.login is always lowercase
+        let result = mgr.render_template("test", "alice").unwrap();
+        assert!(!result.contains("@alice"), "should exclude sender");
         assert!(result.contains("@bob"));
     }
 
