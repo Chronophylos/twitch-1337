@@ -1,4 +1,43 @@
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use tokio::sync::Mutex;
+
+/// Per-user cooldown tracker.
+///
+/// Stores the last usage timestamp per user and checks whether the cooldown
+/// period has elapsed. Thread-safe via internal `Mutex`.
+pub struct PerUserCooldown {
+    duration: Duration,
+    last_use: Mutex<HashMap<String, Instant>>,
+}
+
+impl PerUserCooldown {
+    pub fn new(duration: Duration) -> Self {
+        Self {
+            duration,
+            last_use: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Returns `Some(remaining)` if the user is still on cooldown, `None` if clear.
+    pub async fn check(&self, user: &str) -> Option<Duration> {
+        let guard = self.last_use.lock().await;
+        let last = guard.get(user)?;
+        let elapsed = last.elapsed();
+        if elapsed < self.duration {
+            Some(self.duration - elapsed)
+        } else {
+            None
+        }
+    }
+
+    /// Records that the user just used the command.
+    pub async fn record(&self, user: &str) {
+        let mut guard = self.last_use.lock().await;
+        guard.insert(user.to_string(), Instant::now());
+    }
+}
 
 /// Formats a duration as compact hours+minutes (e.g., "1h12m", "45m").
 /// Ignores seconds. Returns "0m" for durations under one minute.

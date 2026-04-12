@@ -1,10 +1,9 @@
 use eyre::{Result, WrapErr};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::sync::Mutex;
-use std::sync::Arc;
 use tracing::{debug, error, warn};
 use twitch_irc::message::PrivmsgMessage;
 
@@ -557,8 +556,7 @@ pub async fn up_command(
     client: &Arc<AuthenticatedTwitchClient>,
     aviation_client: &AviationClient,
     input: &str,
-    cooldown: Duration,
-    cooldowns: &Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    cooldown: &crate::cooldown::PerUserCooldown,
 ) -> Result<()> {
     let user = &privmsg.sender.login;
     let input = input.trim();
@@ -575,29 +573,18 @@ pub async fn up_command(
     }
 
     // Check cooldown
-    {
-        let cooldowns_guard = cooldowns.lock().await;
-        if let Some(last_use) = cooldowns_guard.get(user) {
-            let elapsed = last_use.elapsed();
-            if elapsed < cooldown {
-                let remaining = cooldown - elapsed;
-                debug!(user = %user, remaining_secs = remaining.as_secs(), "!up on cooldown");
-                if let Err(e) = client
-                    .say_in_reply_to(privmsg, format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)))
-                    .await
-                {
-                    error!(error = ?e, "Failed to send cooldown message");
-                }
-                return Ok(());
-            }
+    if let Some(remaining) = cooldown.check(user).await {
+        debug!(user = %user, remaining_secs = remaining.as_secs(), "!up on cooldown");
+        if let Err(e) = client
+            .say_in_reply_to(privmsg, format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)))
+            .await
+        {
+            error!(error = ?e, "Failed to send cooldown message");
         }
+        return Ok(());
     }
 
-    // Set cooldown before resolver (Nominatim is a network call)
-    {
-        let mut cooldowns_guard = cooldowns.lock().await;
-        cooldowns_guard.insert(user.to_string(), std::time::Instant::now());
-    }
+    cooldown.record(user).await;
 
     // Resolve location
     let location = match resolve_location(input, aviation_client).await {

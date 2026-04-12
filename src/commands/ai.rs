@@ -1,14 +1,13 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use eyre::Result;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::{debug, error, instrument};
 
-use crate::cooldown::format_cooldown_remaining;
+use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::llm::{ChatCompletionRequest, LlmClient, Message};
 use crate::memory;
 use crate::{truncate_response, ChatHistory, MAX_RESPONSE_LENGTH};
@@ -18,8 +17,7 @@ use super::{Command, CommandContext};
 pub struct AiCommand {
     llm_client: Arc<dyn LlmClient>,
     model: String,
-    cooldown: Duration,
-    cooldowns: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    cooldown: PerUserCooldown,
     system_prompt: String,
     instruction_template: String,
     timeout: Duration,
@@ -50,8 +48,7 @@ impl AiCommand {
         Self {
             llm_client,
             model,
-            cooldown,
-            cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            cooldown: PerUserCooldown::new(cooldown),
             system_prompt,
             instruction_template,
             timeout,
@@ -76,30 +73,19 @@ impl Command for AiCommand {
         let user = &ctx.privmsg.sender.login;
 
         // Check cooldown
-        {
-            let cooldowns_guard = self.cooldowns.lock().await;
-            if let Some(last_use) = cooldowns_guard.get(user) {
-                let elapsed = last_use.elapsed();
-                if elapsed < self.cooldown {
-                    let remaining = self.cooldown - elapsed;
-                    debug!(
-                        user = %user,
-                        remaining_secs = remaining.as_secs(),
-                        "AI command on cooldown"
-                    );
-                    if let Err(e) = ctx
-                        .client
-                        .say_in_reply_to(
-                            ctx.privmsg,
-                            format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
-                        )
-                        .await
-                    {
-                        error!(error = ?e, "Failed to send cooldown message");
-                    }
-                    return Ok(());
-                }
+        if let Some(remaining) = self.cooldown.check(user).await {
+            debug!(user = %user, remaining_secs = remaining.as_secs(), "AI command on cooldown");
+            if let Err(e) = ctx
+                .client
+                .say_in_reply_to(
+                    ctx.privmsg,
+                    format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
+                )
+                .await
+            {
+                error!(error = ?e, "Failed to send cooldown message");
             }
+            return Ok(());
         }
 
         let instruction = ctx.args.join(" ");
@@ -118,11 +104,7 @@ impl Command for AiCommand {
 
         debug!(user = %user, instruction = %instruction, "Processing AI command");
 
-        // Update cooldown before making the API call
-        {
-            let mut cooldowns_guard = self.cooldowns.lock().await;
-            cooldowns_guard.insert(user.to_string(), std::time::Instant::now());
-        }
+        self.cooldown.record(user).await;
 
         // Build system prompt with memories injected
         let system_prompt = if let Some(ref store) = self.memory_store {

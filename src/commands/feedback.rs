@@ -1,32 +1,27 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use eyre::Result;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
 use tokio::time::Duration;
 use tracing::{error, info};
 
-use crate::cooldown::format_cooldown_remaining;
+use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use super::{Command, CommandContext};
 
 const FEEDBACK_FILENAME: &str = "feedback.txt";
 
 pub struct FeedbackCommand {
     data_dir: PathBuf,
-    cooldown: Duration,
-    cooldowns: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    cooldown: PerUserCooldown,
 }
 
 impl FeedbackCommand {
     pub fn new(data_dir: PathBuf, cooldown: Duration) -> Self {
         Self {
             data_dir,
-            cooldown,
-            cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            cooldown: PerUserCooldown::new(cooldown),
         }
     }
 }
@@ -53,31 +48,20 @@ impl Command for FeedbackCommand {
         }
 
         // Check cooldown
-        {
-            let cooldowns_guard = self.cooldowns.lock().await;
-            if let Some(last_use) = cooldowns_guard.get(user) {
-                let elapsed = last_use.elapsed();
-                if elapsed < self.cooldown {
-                    let remaining = self.cooldown - elapsed;
-                    if let Err(e) = ctx.client
-                        .say_in_reply_to(
-                            ctx.privmsg,
-                            format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
-                        )
-                        .await
-                    {
-                        error!(error = ?e, "Failed to send cooldown message");
-                    }
-                    return Ok(());
-                }
+        if let Some(remaining) = self.cooldown.check(user).await {
+            if let Err(e) = ctx.client
+                .say_in_reply_to(
+                    ctx.privmsg,
+                    format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
+                )
+                .await
+            {
+                error!(error = ?e, "Failed to send cooldown message");
             }
+            return Ok(());
         }
 
-        // Update cooldown
-        {
-            let mut cooldowns_guard = self.cooldowns.lock().await;
-            cooldowns_guard.insert(user.to_string(), std::time::Instant::now());
-        }
+        self.cooldown.record(user).await;
 
         // Write feedback to file
         let now = chrono::Utc::now()
