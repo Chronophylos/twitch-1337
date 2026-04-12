@@ -429,7 +429,7 @@ async fn sleep_until_hms(hour: u32, minute: u32, second: u32, expected_latency: 
     );
 
     let wait_duration =
-        (time.with_timezone(&Utc) - Utc::now() - TimeDelta::milliseconds(expected_latency as i64))
+        (time.with_timezone(&Utc) - Utc::now() - TimeDelta::milliseconds(i64::from(expected_latency)))
             .to_std()
             .unwrap_or(Duration::from_secs(0));
 
@@ -487,8 +487,7 @@ fn generate_stats_message(count: usize, user_list: &[String]) -> String {
                 "War wohl zu viel verlangt {}",
                 one_of(&["BRUHSIT", "UltraMad", "Madeg"])
             ),
-        ])
-        .to_string(),
+        ]).clone(),
         2..=3 if !user_list.iter().any(|u| u == "gargoyletec") => {
             format!(
                 "{count}{} gnocci {}",
@@ -511,8 +510,7 @@ fn generate_stats_message(count: usize, user_list: &[String]) -> String {
         4 => one_of(&[
             "3.6, nicht gut, nicht dramatisch".to_string(),
             format!("{count}, {}", one_of(&["Standard Performance", "solide"])),
-        ])
-        .to_string(),
+        ]).clone(),
         5..=7 => {
             format!(
                 "{count}, gute Auslese {}",
@@ -634,8 +632,8 @@ async fn monitor_1337_messages(
                             // Only insert if user not already present (first message wins)
                             if !users.contains_key(privmsg.sender.login.as_str()) {
                                 let username = privmsg.sender.login.clone();
-                                let ms_since_minute = local.second() as u64 * 1000
-                                    + local.timestamp_subsec_millis() as u64;
+                                let ms_since_minute = u64::from(local.second()) * 1000
+                                    + u64::from(local.timestamp_subsec_millis());
                                 if ms_since_minute < 1000 {
                                     debug!(user = %username, ms = ms_since_minute, "User said 1337 at 13:37 (sub-second)");
                                     users.insert(username, Some(ms_since_minute));
@@ -654,7 +652,6 @@ async fn monitor_1337_messages(
             }
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
                 error!(skipped, "1337 handler lagged, skipped messages");
-                continue;
             }
             Err(broadcast::error::RecvError::Closed) => {
                 debug!("Broadcast channel closed, 1337 monitor exiting");
@@ -1218,7 +1215,7 @@ pub async fn main() -> Result<()> {
                 broadcast_tx, client, ai_config, leaderboard,
                 ping_manager, hidden_admin_ids, default_cooldown, pings_public,
                 cooldowns, tracker_tx, aviation_client, admin_channel, bot_username, channel,
-            }).await
+            }).await;
         }
     });
 
@@ -1392,7 +1389,7 @@ async fn setup_and_verify_twitch_client(
                     info!("Connection verified and authenticated");
                     return Ok(());
                 }
-                _ => continue,
+                _ => {}
             }
         }
         bail!("Connection closed during verification")
@@ -1578,7 +1575,7 @@ async fn run_latency_handler(
     let initial = latency.load(Ordering::Relaxed);
     info!(initial_latency_ms = initial, "Latency handler started");
 
-    let mut ema: f64 = initial as f64;
+    let mut ema: f64 = f64::from(initial);
     let mut last_logged_ema: u32 = initial;
 
     loop {
@@ -1610,9 +1607,8 @@ async fn run_latency_handler(
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!(skipped = n, "Latency handler lagged during PONG wait");
-                        continue;
                     }
-                    _ => continue,
+                    _ => {}
                 }
             }
         })

@@ -138,7 +138,7 @@ fn is_iata_flight_number(s: &str) -> bool {
     }
     bytes[0].is_ascii_uppercase()
         && bytes[1].is_ascii_uppercase()
-        && bytes[2..].iter().all(|b| b.is_ascii_digit())
+        && bytes[2..].iter().all(u8::is_ascii_digit)
 }
 
 fn is_icao_pattern(s: &str) -> bool {
@@ -538,7 +538,7 @@ fn cone_distance_nm(ac: &NearbyAircraft, center_lat: f64, center_lon: f64) -> Op
         _ => return None,
     };
     let distance = random_flight::geo::haversine_distance_nm(center_lat, center_lon, ac_lat, ac_lon);
-    let max_distance = alt_ft * UP_SEARCH_RADIUS_NM as f64 / UP_CONE_REFERENCE_ALT_FT;
+    let max_distance = alt_ft * f64::from(UP_SEARCH_RADIUS_NM) / UP_CONE_REFERENCE_ALT_FT;
     if distance <= max_distance { Some(distance) } else { None }
 }
 

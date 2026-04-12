@@ -186,7 +186,7 @@ impl Command for AiCommand {
                 self.llm_client.clone(),
                 self.model.clone(),
                 mem,
-                user.to_string(),
+                user.clone(),
                 instruction,
                 response,
                 self.timeout,
