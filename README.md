@@ -22,10 +22,12 @@ Known bots ("supibot", "potatbotat") are filtered out. The leaderboard is persis
 
 Community ping commands with admin management and user self-service.
 
-- `!p create <name> <template>` / `!p delete <name>` -- admin: manage pings
+- `!p create <name> <template>` / `!p edit <name> <template>` / `!p delete <name>` -- admin: manage pings
 - `!p add <name> <user>` / `!p remove <name> <user>` -- admin: manage membership
 - `!p join <name>` / `!p leave <name>` / `!p list` -- user: self-service
 - `!<name>` -- trigger a ping (mentions all members except the sender)
+
+Templates support `{mentions}` (space-separated @-mentions, sender excluded) and `{sender}`. Triggers are rate-limited via `default_cooldown` in `[pings]`; set `public = true` to let non-members trigger. State is persisted to `data/pings.ron`.
 
 ### !up \<location\>
 
