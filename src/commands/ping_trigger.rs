@@ -34,13 +34,9 @@ impl PingTriggerCommand {
 }
 
 /// Extract the ping name from a trigger word.
-/// Accepts `!name`, `!name?`, or `name?` (case-insensitive).
-/// Bare `name` without `!` or `?` does not match.
+/// Only accepts `!name` (case-insensitive).
 fn parse_ping_trigger(word: &str) -> Option<String> {
-    let name = match word.strip_prefix('!') {
-        Some(rest) => rest.strip_suffix('?').unwrap_or(rest),
-        None => word.strip_suffix('?')?,
-    };
+    let name = word.strip_prefix('!')?;
     if name.is_empty() {
         return None;
     }
@@ -55,13 +51,7 @@ impl Command for PingTriggerCommand {
     }
 
     fn matches(&self, word: &str) -> bool {
-        // Strip `!` prefix; optionally strip trailing `?`.
-        // Without `!`, trailing `?` is required (bare word must not match).
-        let name = if let Some(rest) = word.strip_prefix('!') {
-            rest.strip_suffix('?').unwrap_or(rest)
-        } else if let Some(rest) = word.strip_suffix('?') {
-            rest
-        } else {
+        let Some(name) = word.strip_prefix('!') else {
             return false;
         };
 
