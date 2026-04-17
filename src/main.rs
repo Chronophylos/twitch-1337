@@ -1050,7 +1050,7 @@ async fn run_config_watcher_service(
 ///
 /// Establishes a persistent Twitch IRC connection and runs multiple handlers in parallel:
 /// - Daily 1337 tracker: monitors 13:37 messages, posts stats at 13:38
-/// - Generic commands: handles !toggle-ping and other bot commands
+/// - Generic commands: handles !p, !up, !fl, !ai, and ping triggers
 ///
 /// # Errors
 ///

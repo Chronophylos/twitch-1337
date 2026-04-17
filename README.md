@@ -18,14 +18,14 @@ Monitors for messages containing "1337" or "DANKIES" sent at exactly 13:37 Berli
 
 Known bots ("supibot", "potatbotat") are filtered out. The leaderboard is persisted to `data/leaderboard.ron`.
 
-### !toggle-ping / !list-pings
+### Ping System
 
-Manages user @mentions in StreamElements ping commands.
+Community ping commands with admin management and user self-service.
 
-- `!toggle-ping <command>` - Adds or removes your @mention from a ping command
-- `!list-pings [enabled|disabled|all]` - Lists ping commands you're subscribed to
-
-Commands are defined at runtime via `!ping create` -- see the Ping System section in `CLAUDE.md` for details.
+- `!p create <name> <template>` / `!p delete <name>` -- admin: manage pings
+- `!p add <name> <user>` / `!p remove <name> <user>` -- admin: manage membership
+- `!p join <name>` / `!p leave <name>` / `!p list` -- user: self-service
+- `!<name>` -- trigger a ping (mentions all members except the sender)
 
 ### !up \<location\>
 
@@ -158,7 +158,7 @@ Single persistent IRC connection with a broadcast channel (capacity: 100) distri
 
 - **Message Router** - reads from twitch-irc, broadcasts to all handlers
 - **1337 Handler** - daily 13:36-13:38 monitoring cycle
-- **Generic Command Handler** - dispatches !toggle-ping, !list-pings, !up, !fl, !ai
+- **Generic Command Handler** - dispatches !p, !up, !fl, !ai, and ping triggers
 - **Latency Monitor** - PING/PONG every 5 minutes
 - **Config Watcher** - watches config.toml for schedule changes
 - **Scheduled Message Handler** - spawns/stops dynamic message tasks
