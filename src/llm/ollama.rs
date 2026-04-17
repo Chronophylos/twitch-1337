@@ -3,7 +3,9 @@ use eyre::{Result, WrapErr as _};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
-use super::{ChatCompletionRequest, LlmClient, ToolChatCompletionRequest, ToolChatCompletionResponse};
+use super::{
+    ChatCompletionRequest, LlmClient, ToolChatCompletionRequest, ToolChatCompletionResponse,
+};
 use crate::APP_USER_AGENT;
 
 // --- Internal serde types for Ollama native API ---

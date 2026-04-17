@@ -27,7 +27,10 @@ impl Command for TrackCommand {
         if input.trim().is_empty() {
             if let Err(e) = ctx
                 .client
-                .say_in_reply_to(ctx.privmsg, "Benutzung: !track <callsign/hex> FDM".to_string())
+                .say_in_reply_to(
+                    ctx.privmsg,
+                    "Benutzung: !track <callsign/hex> FDM".to_string(),
+                )
                 .await
             {
                 error!(error = ?e, "Failed to send usage message");

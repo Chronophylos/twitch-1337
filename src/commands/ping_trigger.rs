@@ -6,9 +6,9 @@ use eyre::Result;
 use tokio::sync::RwLock;
 use tracing::{debug, error};
 
+use super::{Command, CommandContext};
 use crate::cooldown::format_cooldown_remaining;
 use crate::ping::PingManager;
-use super::{Command, CommandContext};
 
 enum PingResult {
     NotMember,
@@ -24,7 +24,11 @@ pub struct PingTriggerCommand {
 }
 
 impl PingTriggerCommand {
-    pub fn new(ping_manager: Arc<RwLock<PingManager>>, default_cooldown: Duration, public: bool) -> Self {
+    pub fn new(
+        ping_manager: Arc<RwLock<PingManager>>,
+        default_cooldown: Duration,
+        public: bool,
+    ) -> Self {
         Self {
             ping_manager,
             default_cooldown,
@@ -80,7 +84,9 @@ impl Command for PingTriggerCommand {
 
             if !self.public && !manager.is_member(&ping_name, sender) {
                 PingResult::NotMember
-            } else if let Some(remaining) = manager.remaining_cooldown(&ping_name, self.default_cooldown) {
+            } else if let Some(remaining) =
+                manager.remaining_cooldown(&ping_name, self.default_cooldown)
+            {
                 PingResult::OnCooldown(remaining)
             } else {
                 match manager.render_template(&ping_name, sender) {
@@ -95,10 +101,14 @@ impl Command for PingTriggerCommand {
             PingResult::NotMember | PingResult::NothingToSend => return Ok(()),
             PingResult::OnCooldown(remaining) => {
                 debug!(ping = %ping_name, "Ping on cooldown");
-                if let Err(e) = ctx.client
+                if let Err(e) = ctx
+                    .client
                     .say_in_reply_to(
                         ctx.privmsg,
-                        format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
+                        format!(
+                            "Bitte warte noch {} Waiting",
+                            format_cooldown_remaining(remaining)
+                        ),
                     )
                     .await
                 {

@@ -29,14 +29,13 @@ use twitch_irc::{
 
 mod aviation;
 mod commands;
+mod cooldown;
 mod database;
+mod flight_tracker;
+mod llm;
 mod memory;
 mod ping;
-mod llm;
-mod flight_tracker;
-mod cooldown;
 mod prefill;
-
 
 /// Type alias for the authenticated Twitch IRC client
 pub(crate) type AuthenticatedTwitchClient =
@@ -65,7 +64,8 @@ const LATENCY_LOG_THRESHOLD: u32 = 10;
 
 const LEADERBOARD_FILENAME: &str = "leaderboard.ron";
 
-pub(crate) static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+pub(crate) static APP_USER_AGENT: &str =
+    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 fn default_expected_latency() -> u32 {
     100
@@ -277,7 +277,10 @@ impl Configuration {
         }
 
         if self.twitch.expected_latency > 1000 {
-            bail!("twitch.expected_latency must be <= 1000ms (got {})", self.twitch.expected_latency);
+            bail!(
+                "twitch.expected_latency must be <= 1000ms (got {})",
+                self.twitch.expected_latency
+            );
         }
 
         if let Some(ref admin_ch) = self.twitch.admin_channel {
@@ -300,7 +303,10 @@ impl Configuration {
         if let Some(ref ai) = self.ai
             && ai.history_length > 100
         {
-            bail!("ai.history_length must be <= 100 (got {})", ai.history_length);
+            bail!(
+                "ai.history_length must be <= 100 (got {})",
+                ai.history_length
+            );
         }
 
         if let Some(ref ai) = self.ai
@@ -334,7 +340,6 @@ impl Configuration {
             );
         }
 
-
         // Validate each schedule config
         for schedule in &self.schedules {
             if schedule.name.trim().is_empty() {
@@ -347,8 +352,9 @@ impl Configuration {
                 bail!("Schedule '{}' interval cannot be empty", schedule.name);
             }
             // Validate interval format by parsing it
-            database::Schedule::parse_interval(&schedule.interval)
-                .wrap_err_with(|| format!("Schedule '{}' has invalid interval format", schedule.name))?;
+            database::Schedule::parse_interval(&schedule.interval).wrap_err_with(|| {
+                format!("Schedule '{}' has invalid interval format", schedule.name)
+            })?;
         }
 
         Ok(())
@@ -428,10 +434,11 @@ async fn sleep_until_hms(hour: u32, minute: u32, second: u32, expected_latency: 
             .expect("Invalid stats time"),
     );
 
-    let wait_duration =
-        (time.with_timezone(&Utc) - Utc::now() - TimeDelta::milliseconds(i64::from(expected_latency)))
-            .to_std()
-            .unwrap_or(Duration::from_secs(0));
+    let wait_duration = (time.with_timezone(&Utc)
+        - Utc::now()
+        - TimeDelta::milliseconds(i64::from(expected_latency)))
+    .to_std()
+    .unwrap_or(Duration::from_secs(0));
 
     if wait_duration > Duration::from_secs(0) {
         info!(
@@ -487,7 +494,8 @@ fn generate_stats_message(count: usize, user_list: &[String]) -> String {
                 "War wohl zu viel verlangt {}",
                 one_of(&["BRUHSIT", "UltraMad", "Madeg"])
             ),
-        ]).clone(),
+        ])
+        .clone(),
         2..=3 if !user_list.iter().any(|u| u == "gargoyletec") => {
             format!(
                 "{count}{} gnocci {}",
@@ -510,7 +518,8 @@ fn generate_stats_message(count: usize, user_list: &[String]) -> String {
         4 => one_of(&[
             "3.6, nicht gut, nicht dramatisch".to_string(),
             format!("{count}, {}", one_of(&["Standard Performance", "solide"])),
-        ]).clone(),
+        ])
+        .clone(),
         5..=7 => {
             format!(
                 "{count}, gute Auslese {}",
@@ -661,7 +670,6 @@ async fn monitor_1337_messages(
     }
 }
 
-
 /// A user's personal best time for the 1337 challenge.
 ///
 /// Tracks the fastest sub-1-second message time and the date it was achieved.
@@ -779,9 +787,7 @@ impl TokenStorage for FileBasedTokenStorage {
 
                 Ok(token)
             }
-            Err(e) => {
-                Err(eyre::Report::from(e).wrap_err("Failed to read token file"))
-            }
+            Err(e) => Err(eyre::Report::from(e).wrap_err("Failed to read token file")),
         }
     }
 
@@ -828,8 +834,8 @@ async fn load_configuration() -> Result<Configuration> {
 
     info!("Loading configuration from {}", config_path.display());
 
-    let config: Configuration = toml::from_str(&data)
-        .wrap_err("Failed to parse config.toml - check for syntax errors")?;
+    let config: Configuration =
+        toml::from_str(&data).wrap_err("Failed to parse config.toml - check for syntax errors")?;
 
     config.validate()?;
 
@@ -844,8 +850,12 @@ async fn load_configuration() -> Result<Configuration> {
 
 /// Parse a datetime string in ISO 8601 format (YYYY-MM-DDTHH:MM:SS).
 fn parse_datetime(s: &str) -> Result<chrono::NaiveDateTime> {
-    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
-        .wrap_err_with(|| format!("Invalid datetime format '{}' (expected YYYY-MM-DDTHH:MM:SS)", s))
+    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").wrap_err_with(|| {
+        format!(
+            "Invalid datetime format '{}' (expected YYYY-MM-DDTHH:MM:SS)",
+            s
+        )
+    })
 }
 
 /// Parse a time string in HH:MM format.
@@ -858,19 +868,27 @@ fn parse_time(s: &str) -> Result<chrono::NaiveTime> {
 fn schedule_config_to_schedule(config: &ScheduleConfig) -> Result<database::Schedule> {
     let interval = database::Schedule::parse_interval(&config.interval)?;
 
-    let start_date = config.start_date.as_ref()
+    let start_date = config
+        .start_date
+        .as_ref()
         .map(|s| parse_datetime(s))
         .transpose()?;
 
-    let end_date = config.end_date.as_ref()
+    let end_date = config
+        .end_date
+        .as_ref()
         .map(|s| parse_datetime(s))
         .transpose()?;
 
-    let active_time_start = config.active_time_start.as_ref()
+    let active_time_start = config
+        .active_time_start
+        .as_ref()
         .map(|s| parse_time(s))
         .transpose()?;
 
-    let active_time_end = config.active_time_end.as_ref()
+    let active_time_end = config
+        .active_time_end
+        .as_ref()
         .map(|s| parse_time(s))
         .transpose()?;
 
@@ -946,9 +964,7 @@ fn reload_schedules_from_config() -> Option<Vec<database::Schedule>> {
 /// Config file watcher service that monitors config.toml for changes.
 /// Uses notify-debouncer-mini with 2 second debounce to avoid rapid reloads.
 #[instrument(skip(cache))]
-async fn run_config_watcher_service(
-    cache: Arc<tokio::sync::RwLock<database::ScheduleCache>>,
-) {
+async fn run_config_watcher_service(cache: Arc<tokio::sync::RwLock<database::ScheduleCache>>) {
     use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode};
     use std::time::Duration as StdDuration;
 
@@ -976,7 +992,10 @@ async fn run_config_watcher_service(
         // Create debouncer with 2 second timeout
         let mut debouncer = match new_debouncer(
             StdDuration::from_secs(2),
-            move |res: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify_debouncer_mini::notify::Error>| {
+            move |res: Result<
+                Vec<notify_debouncer_mini::DebouncedEvent>,
+                notify_debouncer_mini::notify::Error,
+            >| {
                 match res {
                     Ok(events) => {
                         for event in events {
@@ -1003,7 +1022,10 @@ async fn run_config_watcher_service(
 
         // Watch the config file's parent directory
         let watch_path = config_path.parent().unwrap_or(Path::new("."));
-        if let Err(e) = debouncer.watcher().watch(watch_path, RecursiveMode::NonRecursive) {
+        if let Err(e) = debouncer
+            .watcher()
+            .watch(watch_path, RecursiveMode::NonRecursive)
+        {
             error!(error = ?e, path = ?watch_path, "Failed to watch config directory");
             return;
         }
@@ -1192,7 +1214,7 @@ pub async fn main() -> Result<()> {
     });
 
     let ping_manager = Arc::new(tokio::sync::RwLock::new(
-        ping::PingManager::load(&get_data_dir()).wrap_err("Failed to load ping manager")?
+        ping::PingManager::load(&get_data_dir()).wrap_err("Failed to load ping manager")?,
     ));
 
     let handler_generic_commands = tokio::spawn({
@@ -1212,10 +1234,22 @@ pub async fn main() -> Result<()> {
         let channel = config.twitch.channel.clone();
         async move {
             run_generic_command_handler(CommandHandlerConfig {
-                broadcast_tx, client, ai_config, leaderboard,
-                ping_manager, hidden_admin_ids, default_cooldown, pings_public,
-                cooldowns, tracker_tx, aviation_client, admin_channel, bot_username, channel,
-            }).await;
+                broadcast_tx,
+                client,
+                ai_config,
+                leaderboard,
+                ping_manager,
+                hidden_admin_ids,
+                default_cooldown,
+                pings_public,
+                cooldowns,
+                tracker_tx,
+                aviation_client,
+                admin_channel,
+                bot_username,
+                channel,
+            })
+            .await;
         }
     });
 
@@ -1312,7 +1346,9 @@ async fn ensure_data_dir() -> Result<()> {
 }
 
 #[instrument(skip(config))]
-fn setup_twitch_client(config: &TwitchConfiguration) -> (UnboundedReceiver<ServerMessage>, AuthenticatedTwitchClient) {
+fn setup_twitch_client(
+    config: &TwitchConfiguration,
+) -> (UnboundedReceiver<ServerMessage>, AuthenticatedTwitchClient) {
     // Create authenticated IRC client with refreshing tokens
     let credentials = RefreshingLoginCredentials::init_with_username(
         Some(config.username.clone()),
@@ -1462,18 +1498,27 @@ async fn run_1337_handler(
         });
 
         // Wait until 13:36:30 to send reminder
-        sleep_until_hms(TARGET_HOUR, TARGET_MINUTE - 1, 30, latency.load(Ordering::Relaxed)).await;
+        sleep_until_hms(
+            TARGET_HOUR,
+            TARGET_MINUTE - 1,
+            30,
+            latency.load(Ordering::Relaxed),
+        )
+        .await;
 
         info!("Posting reminder to channel");
-        if let Err(e) = client
-            .say(channel.clone(), "PausersHype".to_string())
-            .await
-        {
+        if let Err(e) = client.say(channel.clone(), "PausersHype".to_string()).await {
             error!(error = ?e, "Failed to send reminder message");
         }
 
         // Wait until 13:38 to post stats
-        sleep_until_hms(TARGET_HOUR, TARGET_MINUTE + 1, 0, latency.load(Ordering::Relaxed)).await;
+        sleep_until_hms(
+            TARGET_HOUR,
+            TARGET_MINUTE + 1,
+            0,
+            latency.load(Ordering::Relaxed),
+        )
+        .await;
 
         // Abort the monitor and wait for it to fully stop before reading results
         monitor_handle.abort();
@@ -1499,10 +1544,7 @@ async fn run_1337_handler(
         if let Some((ref fastest_user, fastest_ms)) = fastest {
             // Check if this is a new all-time record BEFORE updating the leaderboard
             let leaderboard_guard = leaderboard.read().await;
-            let previous_best = leaderboard_guard
-                .values()
-                .map(|pb| pb.ms)
-                .min();
+            let previous_best = leaderboard_guard.values().map(|pb| pb.ms).min();
             let is_record = match previous_best {
                 Some(best) => fastest_ms < best,
                 None => true, // First ever sub-1s time
@@ -1555,7 +1597,6 @@ async fn run_1337_handler(
         info!("Daily 1337 session completed, waiting for next day");
     }
 }
-
 
 /// Periodically measures IRC latency via PING/PONG and updates a shared EMA estimate.
 ///
@@ -1694,41 +1735,39 @@ async fn run_generic_command_handler(cfg: CommandHandlerConfig) {
     let prefill_config = ai_config.as_ref().and_then(|c| c.history_prefill.clone());
 
     // Initialize LLM client (optional)
-    let llm_client: Option<(Arc<dyn llm::LlmClient>, AiConfig)> =
-        if let Some(ai_cfg) = ai_config {
-            let client_result = match ai_cfg.backend {
-                AiBackend::OpenAi => {
-                    let api_key = ai_cfg
-                        .api_key
-                        .as_ref()
-                        .expect("validated: openai backend has api_key");
-                    llm::openai::OpenAiClient::new(
-                        api_key.expose_secret(),
-                        &ai_cfg.model,
-                        ai_cfg.base_url.as_deref(),
-                    )
-                    .map(|c| Arc::new(c) as Arc<dyn llm::LlmClient>)
-                }
-                AiBackend::Ollama => llm::ollama::OllamaClient::new(
+    let llm_client: Option<(Arc<dyn llm::LlmClient>, AiConfig)> = if let Some(ai_cfg) = ai_config {
+        let client_result = match ai_cfg.backend {
+            AiBackend::OpenAi => {
+                let api_key = ai_cfg
+                    .api_key
+                    .as_ref()
+                    .expect("validated: openai backend has api_key");
+                llm::openai::OpenAiClient::new(
+                    api_key.expose_secret(),
                     &ai_cfg.model,
                     ai_cfg.base_url.as_deref(),
                 )
-                .map(|c| Arc::new(c) as Arc<dyn llm::LlmClient>),
-            };
-            match client_result {
-                Ok(client) => {
-                    info!(backend = ?ai_cfg.backend, model = %ai_cfg.model, "AI command enabled");
-                    Some((client, ai_cfg))
-                }
-                Err(e) => {
-                    error!(error = ?e, "Failed to initialize LLM client, AI command disabled");
-                    None
-                }
+                .map(|c| Arc::new(c) as Arc<dyn llm::LlmClient>)
             }
-        } else {
-            debug!("AI not configured, AI command disabled");
-            None
+            AiBackend::Ollama => {
+                llm::ollama::OllamaClient::new(&ai_cfg.model, ai_cfg.base_url.as_deref())
+                    .map(|c| Arc::new(c) as Arc<dyn llm::LlmClient>)
+            }
         };
+        match client_result {
+            Ok(client) => {
+                info!(backend = ?ai_cfg.backend, model = %ai_cfg.model, "AI command enabled");
+                Some((client, ai_cfg))
+            }
+            Err(e) => {
+                error!(error = ?e, "Failed to initialize LLM client, AI command disabled");
+                None
+            }
+        }
+    } else {
+        debug!("AI not configured, AI command disabled");
+        None
+    };
 
     // Create chat history buffer for AI context (if history_length > 0)
     let chat_history: Option<ChatHistory> = if history_length > 0 {
@@ -1753,9 +1792,15 @@ async fn run_generic_command_handler(cfg: CommandHandlerConfig) {
             hidden_admin_ids,
         )),
         Box::new(commands::random_flight::RandomFlightCommand),
-        Box::new(commands::flights_above::FlightsAboveCommand::new(aviation_client, Duration::from_secs(cooldowns.up))),
+        Box::new(commands::flights_above::FlightsAboveCommand::new(
+            aviation_client,
+            Duration::from_secs(cooldowns.up),
+        )),
         Box::new(commands::leaderboard::LeaderboardCommand::new(leaderboard)),
-        Box::new(commands::feedback::FeedbackCommand::new(data_dir.clone(), Duration::from_secs(cooldowns.feedback))),
+        Box::new(commands::feedback::FeedbackCommand::new(
+            data_dir.clone(),
+            Duration::from_secs(cooldowns.feedback),
+        )),
         Box::new(commands::track::TrackCommand::new(tracker_tx.clone())),
         Box::new(commands::untrack::UntrackCommand::new(tracker_tx.clone())),
         Box::new(commands::flights::FlightsCommand::new(tracker_tx.clone())),
@@ -1780,13 +1825,13 @@ async fn run_generic_command_handler(cfg: CommandHandlerConfig) {
             None
         };
 
-        let chat_ctx = chat_history.clone().map(|history| {
-            commands::ai::ChatContext {
+        let chat_ctx = chat_history
+            .clone()
+            .map(|history| commands::ai::ChatContext {
                 history,
                 history_length,
                 bot_username: bot_username.clone(),
-            }
-        });
+            });
 
         commands.push(Box::new(commands::ai::AiCommand::new(
             client,
@@ -1810,7 +1855,15 @@ async fn run_generic_command_handler(cfg: CommandHandlerConfig) {
         pings_public,
     )));
 
-    run_command_dispatcher(broadcast_rx, client, commands, admin_channel, chat_history, history_length).await;
+    run_command_dispatcher(
+        broadcast_rx,
+        client,
+        commands,
+        admin_channel,
+        chat_history,
+        history_length,
+    )
+    .await;
 }
 
 /// Main dispatch loop for trait-based commands.
@@ -1847,10 +1900,7 @@ async fn run_command_dispatcher(
                         if buf.len() >= history_length {
                             buf.pop_front();
                         }
-                        buf.push_back((
-                            privmsg.sender.login.clone(),
-                            privmsg.message_text.clone(),
-                        ));
+                        buf.push_back((privmsg.sender.login.clone(), privmsg.message_text.clone()));
                     }
                 }
 
@@ -1859,7 +1909,10 @@ async fn run_command_dispatcher(
                     continue;
                 };
 
-                let Some(cmd) = commands.iter().find(|c| c.enabled() && c.matches(first_word)) else {
+                let Some(cmd) = commands
+                    .iter()
+                    .find(|c| c.enabled() && c.matches(first_word))
+                else {
                     continue;
                 };
 
@@ -1949,10 +2002,7 @@ async fn run_schedule_task(
             "Posting scheduled message"
         );
 
-        if let Err(e) = client
-            .say(channel.clone(), schedule.message.clone())
-            .await
-        {
+        if let Err(e) = client.say(channel.clone(), schedule.message.clone()).await {
             error!(
                 error = ?e,
                 schedule = %schedule.name,
@@ -2053,5 +2103,3 @@ mod tests {
         assert!(!(0.0..=1.0).contains(&1.1));
     }
 }
-
-

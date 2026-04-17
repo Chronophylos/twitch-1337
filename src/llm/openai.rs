@@ -4,7 +4,9 @@ use reqwest::header::{self, HeaderValue};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
-use super::{ChatCompletionRequest, LlmClient, ToolChatCompletionRequest, ToolChatCompletionResponse};
+use super::{
+    ChatCompletionRequest, LlmClient, ToolChatCompletionRequest, ToolChatCompletionResponse,
+};
 use crate::APP_USER_AGENT;
 
 // --- Internal serde types for OpenAI-compatible API ---

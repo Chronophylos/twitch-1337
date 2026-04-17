@@ -33,9 +33,7 @@ impl Schedule {
         }
 
         // Check time window (if specified)
-        if let (Some(start_time), Some(end_time)) =
-            (self.active_time_start, self.active_time_end)
-        {
+        if let (Some(start_time), Some(end_time)) = (self.active_time_start, self.active_time_end) {
             let current_time = now.time();
 
             // Handle midnight-spanning windows (e.g., 22:00 - 02:00)

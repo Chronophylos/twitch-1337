@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use eyre::Result;
 
+use super::{Command, CommandContext};
 use crate::aviation::AviationClient;
 use crate::cooldown::PerUserCooldown;
-use super::{Command, CommandContext};
 
 pub struct FlightsAboveCommand {
     aviation_client: Option<AviationClient>,
@@ -30,7 +30,9 @@ impl Command for FlightsAboveCommand {
     }
 
     async fn execute(&self, ctx: CommandContext<'_>) -> Result<()> {
-        let client = self.aviation_client.as_ref()
+        let client = self
+            .aviation_client
+            .as_ref()
             .ok_or_else(|| eyre::eyre!("aviation client not available"))?;
         let input: String = ctx.args.join(" ");
         crate::aviation::up_command(ctx.privmsg, ctx.client, client, &input, &self.cooldown).await

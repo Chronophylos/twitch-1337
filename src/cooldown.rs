@@ -100,7 +100,10 @@ mod tests {
     fn minutes_and_seconds() {
         assert_eq!(format_cooldown_remaining(Duration::from_secs(63)), "1m 3s");
         assert_eq!(format_cooldown_remaining(Duration::from_secs(243)), "4m 3s");
-        assert_eq!(format_cooldown_remaining(Duration::from_secs(3599)), "59m 59s");
+        assert_eq!(
+            format_cooldown_remaining(Duration::from_secs(3599)),
+            "59m 59s"
+        );
     }
 
     #[test]
@@ -113,7 +116,10 @@ mod tests {
     #[test]
     fn hours_and_minutes() {
         assert_eq!(format_cooldown_remaining(Duration::from_secs(3600)), "1h");
-        assert_eq!(format_cooldown_remaining(Duration::from_secs(3900)), "1h 5m");
+        assert_eq!(
+            format_cooldown_remaining(Duration::from_secs(3900)),
+            "1h 5m"
+        );
         assert_eq!(format_cooldown_remaining(Duration::from_secs(7200)), "2h");
     }
 

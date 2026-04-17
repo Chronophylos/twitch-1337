@@ -35,10 +35,8 @@ impl PingManager {
     pub fn load(data_dir: &Path) -> Result<Self> {
         let path = data_dir.join(PINGS_FILENAME);
         let store = if path.exists() {
-            let data = std::fs::read_to_string(&path)
-                .wrap_err("Failed to read pings.ron")?;
-            ron::from_str(&data)
-                .wrap_err("Failed to parse pings.ron")?
+            let data = std::fs::read_to_string(&path).wrap_err("Failed to read pings.ron")?;
+            ron::from_str(&data).wrap_err("Failed to parse pings.ron")?
         } else {
             info!("No pings.ron found, starting with empty ping store");
             PingStore {
@@ -60,8 +58,7 @@ impl PingManager {
         let tmp_path = self.path.with_extension("ron.tmp");
         let data = ron::ser::to_string_pretty(&self.store, ron::ser::PrettyConfig::default())
             .wrap_err("Failed to serialize pings")?;
-        std::fs::write(&tmp_path, &data)
-            .wrap_err("Failed to write pings.ron.tmp")?;
+        std::fs::write(&tmp_path, &data).wrap_err("Failed to write pings.ron.tmp")?;
         std::fs::rename(&tmp_path, &self.path)
             .wrap_err("Failed to rename pings.ron.tmp to pings.ron")?;
         debug!("Saved pings to disk");
@@ -79,7 +76,10 @@ impl PingManager {
         if name.is_empty() {
             bail!("Ping-Name darf nicht leer sein");
         }
-        if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
             bail!("Ping-Name darf nur Buchstaben, Zahlen, - und _ enthalten");
         }
         if self.store.pings.contains_key(&name) {
@@ -108,7 +108,10 @@ impl PingManager {
 
     /// Edit a ping's template. Errors if ping doesn't exist.
     pub fn edit_template(&mut self, name: &str, template: String) -> Result<()> {
-        let ping = self.store.pings.get_mut(name)
+        let ping = self
+            .store
+            .pings
+            .get_mut(name)
             .ok_or_else(|| eyre::eyre!("Ping \"{}\" gibt es nicht", name))?;
         ping.template = template;
         self.save()
@@ -116,7 +119,10 @@ impl PingManager {
 
     /// Add a member to a ping. Errors if ping doesn't exist or user already a member.
     pub fn add_member(&mut self, ping_name: &str, username: &str) -> Result<()> {
-        let ping = self.store.pings.get_mut(ping_name)
+        let ping = self
+            .store
+            .pings
+            .get_mut(ping_name)
             .ok_or_else(|| eyre::eyre!("Ping \"{}\" gibt es nicht", ping_name))?;
         let username_lower = username.to_lowercase();
         if !ping.members.insert(username_lower) {
@@ -127,7 +133,10 @@ impl PingManager {
 
     /// Remove a member from a ping. Errors if ping doesn't exist or user not a member.
     pub fn remove_member(&mut self, ping_name: &str, username: &str) -> Result<()> {
-        let ping = self.store.pings.get_mut(ping_name)
+        let ping = self
+            .store
+            .pings
+            .get_mut(ping_name)
             .ok_or_else(|| eyre::eyre!("Ping \"{}\" gibt es nicht", ping_name))?;
         let username_lower = username.to_lowercase();
         if !ping.members.remove(&username_lower) {
@@ -139,19 +148,26 @@ impl PingManager {
     /// Check if any ping matches the given name case-insensitively.
     /// Avoids heap allocation compared to `name.to_lowercase()` + `contains_key`.
     pub fn ping_exists_ignore_case(&self, name: &str) -> bool {
-        self.store.pings.keys().any(|k| k.eq_ignore_ascii_case(name))
+        self.store
+            .pings
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(name))
     }
 
     /// Check if a user is a member of a ping.
     pub fn is_member(&self, ping_name: &str, username: &str) -> bool {
-        self.store.pings.get(ping_name)
+        self.store
+            .pings
+            .get(ping_name)
             .map(|p| p.members.contains(username))
             .unwrap_or(false)
     }
 
     /// List all ping names a user is subscribed to.
     pub fn list_pings_for_user(&self, username: &str) -> Vec<&str> {
-        self.store.pings.iter()
+        self.store
+            .pings
+            .iter()
             .filter(|(_, p)| p.members.contains(username))
             .map(|(name, _)| name.as_str())
             .collect()
@@ -159,7 +175,11 @@ impl PingManager {
 
     /// Check if a ping is on cooldown. Returns `Some(remaining)` if on cooldown,
     /// `None` if it can be triggered (or ping doesn't exist).
-    pub fn remaining_cooldown(&self, ping_name: &str, default_cooldown: Duration) -> Option<Duration> {
+    pub fn remaining_cooldown(
+        &self,
+        ping_name: &str,
+        default_cooldown: Duration,
+    ) -> Option<Duration> {
         let ping = self.store.pings.get(ping_name)?;
         let cooldown = ping.cooldown.map_or(default_cooldown, Duration::from_secs);
         match self.last_triggered.get(ping_name) {
@@ -177,7 +197,8 @@ impl PingManager {
 
     /// Record that a ping was triggered now.
     pub fn record_trigger(&mut self, ping_name: &str) {
-        self.last_triggered.insert(ping_name.to_string(), Instant::now());
+        self.last_triggered
+            .insert(ping_name.to_string(), Instant::now());
     }
 
     /// Render a ping's template with placeholders replaced.
@@ -185,7 +206,9 @@ impl PingManager {
     /// (i.e., all members are the sender).
     pub fn render_template(&self, ping_name: &str, sender: &str) -> Option<String> {
         let ping = self.store.pings.get(ping_name)?;
-        let mentions = ping.members.iter()
+        let mentions = ping
+            .members
+            .iter()
             .filter(|m| m.as_str() != sender)
             .map(|m| format!("@{m}"))
             .collect::<Vec<_>>()
@@ -193,7 +216,8 @@ impl PingManager {
         if mentions.is_empty() {
             return None;
         }
-        let rendered = ping.template
+        let rendered = ping
+            .template
             .replace("{mentions}", &mentions)
             .replace("{sender}", sender);
         Some(rendered)
@@ -206,7 +230,9 @@ mod tests {
 
     fn empty_manager(dir: &Path) -> PingManager {
         PingManager {
-            store: PingStore { pings: HashMap::new() },
+            store: PingStore {
+                pings: HashMap::new(),
+            },
             last_triggered: HashMap::new(),
             path: dir.join(PINGS_FILENAME),
         }
@@ -214,8 +240,13 @@ mod tests {
 
     fn test_manager(dir: &Path) -> PingManager {
         let mut mgr = empty_manager(dir);
-        mgr.create_ping("test".into(), "Hey {mentions}!".into(), "admin".into(), None)
-            .unwrap();
+        mgr.create_ping(
+            "test".into(),
+            "Hey {mentions}!".into(),
+            "admin".into(),
+            None,
+        )
+        .unwrap();
         mgr
     }
 
@@ -224,7 +255,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut mgr = test_manager(dir.path());
 
-        mgr.edit_template("test", "New template {mentions}".into()).unwrap();
+        mgr.edit_template("test", "New template {mentions}".into())
+            .unwrap();
 
         let ping = mgr.store.pings.get("test").unwrap();
         assert_eq!(ping.template, "New template {mentions}");
@@ -237,7 +269,8 @@ mod tests {
         mgr.add_member("test", "alice").unwrap();
         mgr.add_member("test", "bob").unwrap();
 
-        mgr.edit_template("test", "Updated {mentions}".into()).unwrap();
+        mgr.edit_template("test", "Updated {mentions}".into())
+            .unwrap();
 
         let ping = mgr.store.pings.get("test").unwrap();
         assert!(ping.members.contains("alice"));
@@ -259,7 +292,8 @@ mod tests {
     fn edit_template_persists_to_disk() {
         let dir = tempfile::tempdir().unwrap();
         let mut mgr = test_manager(dir.path());
-        mgr.edit_template("test", "Persisted {mentions}".into()).unwrap();
+        mgr.edit_template("test", "Persisted {mentions}".into())
+            .unwrap();
 
         // Reload from disk
         let mgr2 = PingManager::load(dir.path()).unwrap();
@@ -276,7 +310,10 @@ mod tests {
 
         let result = mgr.render_template("test", "alice").unwrap();
         assert!(result.contains("@bob"), "should mention bob");
-        assert!(!result.contains("@alice"), "should not mention sender alice");
+        assert!(
+            !result.contains("@alice"),
+            "should not mention sender alice"
+        );
     }
 
     #[test]
@@ -286,7 +323,10 @@ mod tests {
         mgr.add_member("test", "alice").unwrap();
 
         let result = mgr.render_template("test", "alice");
-        assert!(result.is_none(), "should return None when only member is sender");
+        assert!(
+            result.is_none(),
+            "should return None when only member is sender"
+        );
     }
 
     #[test]
@@ -308,7 +348,10 @@ mod tests {
         let mut mgr = test_manager(dir.path());
         mgr.add_member("test", "alice").unwrap();
 
-        assert!(mgr.remaining_cooldown("test", Duration::from_secs(300)).is_none());
+        assert!(
+            mgr.remaining_cooldown("test", Duration::from_secs(300))
+                .is_none()
+        );
     }
 
     #[test]
@@ -329,6 +372,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mgr = empty_manager(dir.path());
 
-        assert!(mgr.remaining_cooldown("nope", Duration::from_secs(300)).is_none());
+        assert!(
+            mgr.remaining_cooldown("nope", Duration::from_secs(300))
+                .is_none()
+        );
     }
 }

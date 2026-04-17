@@ -9,8 +9,8 @@ use tokio::time::Duration;
 use tracing::{debug, error, info, warn};
 use twitch_irc::message::PrivmsgMessage;
 
-use crate::aviation::{AltBaro, AviationClient, NearbyAircraft, iata_to_coords};
 use crate::AuthenticatedTwitchClient;
+use crate::aviation::{AltBaro, AviationClient, NearbyAircraft, iata_to_coords};
 
 const FLIGHTS_FILENAME: &str = "flights.ron";
 
@@ -139,7 +139,7 @@ pub(crate) struct TrackedFlight {
     pub(crate) callsign: Option<String>,
     pub(crate) hex: Option<String>,
     pub(crate) phase: FlightPhase,
-    pub(crate) route: Option<(String, String)>,   // (origin IATA, dest IATA)
+    pub(crate) route: Option<(String, String)>, // (origin IATA, dest IATA)
     pub(crate) aircraft_type: Option<String>,
 
     // Latest known data
@@ -303,17 +303,18 @@ pub(crate) fn detect_phase(flight: &TrackedFlight, ac: &NearbyAircraft) -> Fligh
 
     // Descent: significant negative vertical rate
     if let Some(vr) = vrate
-        && vr < DESCENT_RATE_THRESHOLD {
-            // Approach: already descending and below threshold altitude, or approach mode active
-            if let Some(alt_val) = alt
-                && (alt_val < APPROACH_MAX_ALTITUDE
-                    || has_approach_mode
-                    || matches!(flight.phase, FlightPhase::Approach))
-            {
-                return FlightPhase::Approach;
-            }
-            return FlightPhase::Descent;
+        && vr < DESCENT_RATE_THRESHOLD
+    {
+        // Approach: already descending and below threshold altitude, or approach mode active
+        if let Some(alt_val) = alt
+            && (alt_val < APPROACH_MAX_ALTITUDE
+                || has_approach_mode
+                || matches!(flight.phase, FlightPhase::Approach))
+        {
+            return FlightPhase::Approach;
         }
+        return FlightPhase::Descent;
+    }
 
     // Approach from nav_modes even without strong descent rate
     if has_approach_mode && vrate.unwrap_or(0) < 0 {
@@ -323,17 +324,18 @@ pub(crate) fn detect_phase(flight: &TrackedFlight, ac: &NearbyAircraft) -> Fligh
     // Cruise: stable altitude above minimum, low vertical rate for enough polls
     if let (Some(alt_val), Some(vr)) = (alt, vrate)
         && alt_val > CRUISE_MIN_ALTITUDE
-            && vr.abs() < CRUISE_RATE_THRESHOLD
-            && flight.polls_since_change >= CRUISE_STABLE_POLLS
-        {
-            return FlightPhase::Cruise;
-        }
+        && vr.abs() < CRUISE_RATE_THRESHOLD
+        && flight.polls_since_change >= CRUISE_STABLE_POLLS
+    {
+        return FlightPhase::Cruise;
+    }
 
     // Climb: positive vertical rate
     if let Some(vr) = vrate
-        && vr > CLIMB_RATE_THRESHOLD {
-            return FlightPhase::Climb;
-        }
+        && vr > CLIMB_RATE_THRESHOLD
+    {
+        return FlightPhase::Climb;
+    }
 
     // If we were in a phase and conditions don't clearly match something else, stay
     flight.phase
@@ -356,8 +358,12 @@ fn find_flight_index(flights: &[TrackedFlight], query: &str) -> Option<usize> {
     let upper = query.to_uppercase();
     flights.iter().position(|f| {
         f.identifier.as_str().eq_ignore_ascii_case(&upper)
-            || f.callsign.as_ref().is_some_and(|cs| cs.eq_ignore_ascii_case(&upper))
-            || f.hex.as_ref().is_some_and(|h| h.eq_ignore_ascii_case(&upper))
+            || f.callsign
+                .as_ref()
+                .is_some_and(|cs| cs.eq_ignore_ascii_case(&upper))
+            || f.hex
+                .as_ref()
+                .is_some_and(|h| h.eq_ignore_ascii_case(&upper))
     })
 }
 
@@ -546,25 +552,11 @@ pub(crate) async fn run_flight_tracker(
                 info!("Flight tracker command channel closed, shutting down");
                 return;
             };
-            process_command(
-                cmd,
-                &mut state,
-                &client,
-                &aviation_client,
-                &data_dir,
-            )
-            .await;
+            process_command(cmd, &mut state, &client, &aviation_client, &data_dir).await;
         } else {
             // Drain all pending commands without blocking
             while let Ok(cmd) = cmd_rx.try_recv() {
-                process_command(
-                    cmd,
-                    &mut state,
-                    &client,
-                    &aviation_client,
-                    &data_dir,
-                )
-                .await;
+                process_command(cmd, &mut state, &client, &aviation_client, &data_dir).await;
             }
 
             // Poll all flights
@@ -572,7 +564,11 @@ pub(crate) async fn run_flight_tracker(
 
             // Sleep with adaptive interval, but wake up early for commands
             let interval = compute_poll_interval(&state.flights);
-            debug!(interval_secs = interval.as_secs(), flights = state.flights.len(), "Sleeping until next poll");
+            debug!(
+                interval_secs = interval.as_secs(),
+                flights = state.flights.len(),
+                "Sleeping until next poll"
+            );
 
             tokio::select! {
                 _ = tokio::time::sleep(interval) => {}
@@ -683,8 +679,7 @@ async fn handle_track(
 
     // Check for duplicates
     let already_tracked = state.flights.iter().any(|f| {
-        f.identifier == identifier
-            || identifier.matches(f.callsign.as_deref(), f.hex.as_deref())
+        f.identifier == identifier || identifier.matches(f.callsign.as_deref(), f.hex.as_deref())
     });
     if already_tracked {
         let msg = format!("{} wird schon getrackt FDM", identifier);
@@ -742,7 +737,11 @@ async fn handle_track(
     };
 
     // Extract data from the aircraft
-    let callsign = ac.flight.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let callsign = ac
+        .flight
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let hex = ac.hex.clone();
     let aircraft_type = ac.t.clone();
     let now = Utc::now();
@@ -775,11 +774,7 @@ async fn handle_track(
 
     // Fetch route if we have a callsign
     if let Some(cs) = &callsign {
-        match tokio::time::timeout(
-            ROUTE_FETCH_TIMEOUT,
-            aviation_client.get_flight_route(cs),
-        )
-        .await
+        match tokio::time::timeout(ROUTE_FETCH_TIMEOUT, aviation_client.get_flight_route(cs)).await
         {
             Ok(Ok(Some(route))) => {
                 let origin = route.origin.iata_code.clone();
@@ -874,12 +869,10 @@ async fn handle_status(
 ) {
     let response = match identifier {
         None => msg_flights_list(&state.flights),
-        Some(id) => {
-            match find_flight_index(&state.flights, id) {
-                Some(idx) => msg_flight_status(&state.flights[idx]),
-                None => format!("{id} nicht gefunden FDM"),
-            }
-        }
+        Some(id) => match find_flight_index(&state.flights, id) {
+            Some(idx) => msg_flight_status(&state.flights[idx]),
+            None => format!("{id} nicht gefunden FDM"),
+        },
     };
 
     if let Err(e) = client.say_in_reply_to(reply_to, response).await {
@@ -901,7 +894,8 @@ async fn poll_all_flights(
 
     // Phase 1: Fetch all aircraft data in parallel using JoinSet
     use crate::aviation::NearbyAircraft;
-    type PollResult = Result<Result<Option<NearbyAircraft>, eyre::Report>, tokio::time::error::Elapsed>;
+    type PollResult =
+        Result<Result<Option<NearbyAircraft>, eyre::Report>, tokio::time::error::Elapsed>;
 
     let mut join_set = tokio::task::JoinSet::new();
     for (idx, flight) in state.flights.iter().enumerate() {
@@ -926,7 +920,8 @@ async fn poll_all_flights(
     }
 
     // Collect results indexed by flight position
-    let mut fetch_results: Vec<Option<PollResult>> = (0..state.flights.len()).map(|_| None).collect();
+    let mut fetch_results: Vec<Option<PollResult>> =
+        (0..state.flights.len()).map(|_| None).collect();
     while let Some(res) = join_set.join_next().await {
         if let Ok((idx, poll_result)) = res {
             fetch_results[idx] = Some(poll_result);
@@ -934,10 +929,10 @@ async fn poll_all_flights(
     }
 
     // Phase 2: Process results sequentially (mutates state)
-    let removal_threshold = chrono::TimeDelta::from_std(TRACKING_LOST_REMOVAL)
-        .unwrap_or(chrono::TimeDelta::zero());
-    let lost_threshold = chrono::TimeDelta::from_std(TRACKING_LOST_THRESHOLD)
-        .unwrap_or(chrono::TimeDelta::zero());
+    let removal_threshold =
+        chrono::TimeDelta::from_std(TRACKING_LOST_REMOVAL).unwrap_or(chrono::TimeDelta::zero());
+    let lost_threshold =
+        chrono::TimeDelta::from_std(TRACKING_LOST_THRESHOLD).unwrap_or(chrono::TimeDelta::zero());
 
     #[allow(clippy::needless_range_loop)]
     for idx in 0..state.flights.len() {
@@ -985,45 +980,49 @@ async fn poll_all_flights(
 
         // Resolve callsign/hex/type if not yet known
         if flight.callsign.is_none()
-            && let Some(cs) = ac.flight.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
-                debug!(identifier = %flight.identifier, callsign = %cs, "Resolved callsign");
-                flight.callsign = Some(cs.clone());
-                changed = true;
+            && let Some(cs) = ac
+                .flight
+                .as_ref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        {
+            debug!(identifier = %flight.identifier, callsign = %cs, "Resolved callsign");
+            flight.callsign = Some(cs.clone());
+            changed = true;
 
-                // Try to fetch route now that we have a callsign
-                if flight.route.is_none()
-                    && let Ok(Ok(Some(route))) = tokio::time::timeout(
-                        ROUTE_FETCH_TIMEOUT,
-                        aviation_client.get_flight_route(&cs),
-                    )
-                    .await
-                    {
-                        let origin = route.origin.iata_code.clone();
-                        let dest = route.destination.iata_code.clone();
-                        if let Some((lat, lon, _)) = iata_to_coords(&dest) {
-                            flight.dest_lat = Some(lat);
-                            flight.dest_lon = Some(lon);
-                        }
-                        flight.route = Some((origin, dest));
-                    }
+            // Try to fetch route now that we have a callsign
+            if flight.route.is_none()
+                && let Ok(Ok(Some(route))) =
+                    tokio::time::timeout(ROUTE_FETCH_TIMEOUT, aviation_client.get_flight_route(&cs))
+                        .await
+            {
+                let origin = route.origin.iata_code.clone();
+                let dest = route.destination.iata_code.clone();
+                if let Some((lat, lon, _)) = iata_to_coords(&dest) {
+                    flight.dest_lat = Some(lat);
+                    flight.dest_lon = Some(lon);
+                }
+                flight.route = Some((origin, dest));
             }
+        }
         if flight.hex.is_none()
-            && let Some(hex) = &ac.hex {
-                debug!(identifier = %flight.identifier, hex = %hex, "Resolved hex");
-                flight.hex = Some(hex.clone());
-            }
+            && let Some(hex) = &ac.hex
+        {
+            debug!(identifier = %flight.identifier, hex = %hex, "Resolved hex");
+            flight.hex = Some(hex.clone());
+        }
         if flight.aircraft_type.is_none()
-            && let Some(t) = &ac.t {
-                flight.aircraft_type = Some(t.clone());
-            }
+            && let Some(t) = &ac.t
+        {
+            flight.aircraft_type = Some(t.clone());
+        }
 
         // Check squawk changes
         if let Some(new_squawk) = &ac.squawk {
             let squawk_changed = flight.squawk.as_ref() != Some(new_squawk);
-            if squawk_changed
-                && let Some(meaning) = emergency_squawk_meaning(new_squawk) {
-                    messages.push(msg_squawk_emergency(flight, new_squawk, meaning));
-                }
+            if squawk_changed && let Some(meaning) = emergency_squawk_meaning(new_squawk) {
+                messages.push(msg_squawk_emergency(flight, new_squawk, meaning));
+            }
         }
 
         // Store previous position for divert detection
@@ -1068,7 +1067,14 @@ async fn poll_all_flights(
 
         // Divert detection during Descent/Approach
         if matches!(flight.phase, FlightPhase::Descent | FlightPhase::Approach) {
-            if let (Some(dest_lat), Some(dest_lon), Some(cur_lat), Some(cur_lon), Some(p_lat), Some(p_lon)) = (
+            if let (
+                Some(dest_lat),
+                Some(dest_lon),
+                Some(cur_lat),
+                Some(cur_lon),
+                Some(p_lat),
+                Some(p_lon),
+            ) = (
                 flight.dest_lat,
                 flight.dest_lon,
                 flight.lat,

@@ -85,7 +85,10 @@ impl PingAdminCommand {
     async fn handle_create(&self, ctx: &CommandContext<'_>) -> Result<()> {
         if ctx.args.len() < 3 {
             ctx.client
-                .say_in_reply_to(ctx.privmsg, "Nutze: !p create <name> <template>".to_string())
+                .say_in_reply_to(
+                    ctx.privmsg,
+                    "Nutze: !p create <name> <template>".to_string(),
+                )
                 .await?;
             return Ok(());
         }
@@ -174,10 +177,7 @@ impl PingAdminCommand {
     async fn handle_member_op(&self, ctx: &CommandContext<'_>, op: &str) -> Result<()> {
         if ctx.args.len() < 3 {
             ctx.client
-                .say_in_reply_to(
-                    ctx.privmsg,
-                    format!("Nutze: !p {op} <name> <user>"),
-                )
+                .say_in_reply_to(ctx.privmsg, format!("Nutze: !p {op} <name> <user>"))
                 .await?;
             return Ok(());
         }
@@ -246,9 +246,7 @@ impl PingAdminCommand {
                         _ => unreachable!(),
                     }
                 };
-                ctx.client
-                    .say_in_reply_to(ctx.privmsg, msg)
-                    .await?;
+                ctx.client.say_in_reply_to(ctx.privmsg, msg).await?;
             }
         }
         Ok(())
@@ -265,9 +263,7 @@ impl PingAdminCommand {
             pings.join(" ")
         };
 
-        ctx.client
-            .say_in_reply_to(ctx.privmsg, response)
-            .await?;
+        ctx.client.say_in_reply_to(ctx.privmsg, response).await?;
         Ok(())
     }
 }

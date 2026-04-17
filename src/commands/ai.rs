@@ -8,7 +8,7 @@ use tracing::{debug, error, instrument};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::llm::{ChatCompletionRequest, LlmClient, Message};
 use crate::memory;
-use crate::{truncate_response, ChatHistory, MAX_RESPONSE_LENGTH};
+use crate::{ChatHistory, MAX_RESPONSE_LENGTH, truncate_response};
 
 use super::{Command, CommandContext};
 
@@ -74,7 +74,10 @@ impl Command for AiCommand {
                 .client
                 .say_in_reply_to(
                     ctx.privmsg,
-                    format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
+                    format!(
+                        "Bitte warte noch {} Waiting",
+                        format_cooldown_remaining(remaining)
+                    ),
                 )
                 .await
             {
@@ -112,7 +115,10 @@ impl Command for AiCommand {
             self.prompts.system.clone()
         };
 
-        let user_message = self.prompts.instruction_template.replace("{message}", &instruction);
+        let user_message = self
+            .prompts
+            .instruction_template
+            .replace("{message}", &instruction);
 
         // Build chat history string
         let chat_history_text = if let Some(ref chat) = self.chat_ctx {
@@ -146,11 +152,8 @@ impl Command for AiCommand {
         };
 
         // Execute AI with timeout
-        let result = tokio::time::timeout(
-            self.timeout,
-            self.llm_client.chat_completion(request),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(self.timeout, self.llm_client.chat_completion(request)).await;
 
         let (response, success) = match result {
             Ok(Ok(text)) => {
@@ -176,7 +179,11 @@ impl Command for AiCommand {
         };
 
         // Send response to chat immediately
-        if let Err(e) = ctx.client.say_in_reply_to(ctx.privmsg, response.clone()).await {
+        if let Err(e) = ctx
+            .client
+            .say_in_reply_to(ctx.privmsg, response.clone())
+            .await
+        {
             error!(error = ?e, "Failed to send AI response");
         }
 

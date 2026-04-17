@@ -7,8 +7,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::Duration;
 use tracing::{error, info};
 
-use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use super::{Command, CommandContext};
+use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 
 const FEEDBACK_FILENAME: &str = "feedback.txt";
 
@@ -38,7 +38,8 @@ impl Command for FeedbackCommand {
 
         // Check for empty message
         if message.trim().is_empty() {
-            if let Err(e) = ctx.client
+            if let Err(e) = ctx
+                .client
                 .say_in_reply_to(ctx.privmsg, "Benutzung: !fb <nachricht>".to_string())
                 .await
             {
@@ -49,10 +50,14 @@ impl Command for FeedbackCommand {
 
         // Check cooldown
         if let Some(remaining) = self.cooldown.check(user).await {
-            if let Err(e) = ctx.client
+            if let Err(e) = ctx
+                .client
                 .say_in_reply_to(
                     ctx.privmsg,
-                    format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)),
+                    format!(
+                        "Bitte warte noch {} Waiting",
+                        format_cooldown_remaining(remaining)
+                    ),
                 )
                 .await
             {
@@ -79,7 +84,8 @@ impl Command for FeedbackCommand {
             Ok(mut file) => {
                 if let Err(e) = file.write_all(line.as_bytes()).await {
                     error!(error = ?e, "Failed to write feedback to file");
-                    if let Err(e) = ctx.client
+                    if let Err(e) = ctx
+                        .client
                         .say_in_reply_to(ctx.privmsg, "Da ist was schiefgelaufen FDM".to_string())
                         .await
                     {
@@ -90,7 +96,8 @@ impl Command for FeedbackCommand {
             }
             Err(e) => {
                 error!(error = ?e, "Failed to open feedback file");
-                if let Err(e) = ctx.client
+                if let Err(e) = ctx
+                    .client
                     .say_in_reply_to(ctx.privmsg, "Da ist was schiefgelaufen FDM".to_string())
                     .await
                 {
@@ -102,7 +109,8 @@ impl Command for FeedbackCommand {
 
         info!(user = %user, "Feedback saved");
 
-        if let Err(e) = ctx.client
+        if let Err(e) = ctx
+            .client
             .say_in_reply_to(ctx.privmsg, "Feedback gespeichert Okayge".to_string())
             .await
         {

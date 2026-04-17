@@ -104,10 +104,7 @@ pub async fn prefill_chat_history(
     history_length: usize,
     config: &HistoryPrefillConfig,
 ) -> VecDeque<(String, String)> {
-    let http = match reqwest::Client::builder()
-        .timeout(PREFILL_TIMEOUT)
-        .build()
-    {
+    let http = match reqwest::Client::builder().timeout(PREFILL_TIMEOUT).build() {
         Ok(client) => client,
         Err(e) => {
             warn!(error = ?e, "Failed to create HTTP client for history prefill");
@@ -189,7 +186,9 @@ mod tests {
         // Use the parent AiConfig to verify nesting works
         // This test verifies the serde deserialization path
         let config: toml::Value = toml::from_str(toml_str).expect("valid TOML");
-        let prefill = config.get("history_prefill").expect("history_prefill should exist");
+        let prefill = config
+            .get("history_prefill")
+            .expect("history_prefill should exist");
         assert_eq!(
             prefill.get("base_url").and_then(|v| v.as_str()),
             Some("https://custom.logs.dev")

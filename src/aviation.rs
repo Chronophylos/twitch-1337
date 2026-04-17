@@ -83,8 +83,12 @@ fn airport_data() -> &'static AirportData {
             let icao = record[0].trim();
             let iata = record[1].trim();
             let name = record[2].trim().to_string();
-            let Ok(lat) = record[3].trim().parse::<f64>() else { continue };
-            let Ok(lon) = record[4].trim().parse::<f64>() else { continue };
+            let Ok(lat) = record[3].trim().parse::<f64>() else {
+                continue;
+            };
+            let Ok(lon) = record[4].trim().parse::<f64>() else {
+                continue;
+            };
 
             // Only insert 4-letter codes into by_icao (codes are already uppercase in data)
             if icao.len() == 4 {
@@ -100,11 +104,17 @@ fn airport_data() -> &'static AirportData {
 }
 
 fn icao_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
-    airport_data().by_icao.get(code).map(|(lat, lon, name)| (*lat, *lon, name.as_str()))
+    airport_data()
+        .by_icao
+        .get(code)
+        .map(|(lat, lon, name)| (*lat, *lon, name.as_str()))
 }
 
 pub(crate) fn iata_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
-    airport_data().by_iata.get(code).map(|(lat, lon, name)| (*lat, *lon, name.as_str()))
+    airport_data()
+        .by_iata
+        .get(code)
+        .map(|(lat, lon, name)| (*lat, *lon, name.as_str()))
 }
 
 // --- Airline IATA-to-ICAO Lookup ---
@@ -336,10 +346,7 @@ impl AviationClient {
         Ok(resp.ac.into_iter().next())
     }
 
-    pub(crate) async fn get_flight_route(
-        &self,
-        callsign: &str,
-    ) -> Result<Option<FlightRoute>> {
+    pub(crate) async fn get_flight_route(&self, callsign: &str) -> Result<Option<FlightRoute>> {
         let url = format!("{ADSBDB_BASE_URL}/callsign/{callsign}");
         debug!(callsign = %callsign, "Fetching flight route from adsbdb");
 
@@ -468,14 +475,15 @@ impl AviationClient {
             .to_string();
 
         debug!(query = %query, lat = %lat, lon = %lon, display = %display_name, "Nominatim resolved");
-        Ok(Some(ResolvedLocation { lat, lon, display_name }))
+        Ok(Some(ResolvedLocation {
+            lat,
+            lon,
+            display_name,
+        }))
     }
 }
 
-async fn resolve_location(
-    input: &str,
-    aviation_client: &AviationClient,
-) -> Result<ResolveResult> {
+async fn resolve_location(input: &str, aviation_client: &AviationClient) -> Result<ResolveResult> {
     // 1. PLZ: 5 ASCII digits — no fallthrough on miss
     if is_valid_plz(input) {
         return match plz_to_coords(input) {
@@ -492,7 +500,9 @@ async fn resolve_location(
     let upper = input.to_uppercase();
 
     // 2. ICAO: 4 ASCII letters — falls through to Nominatim on miss
-    if is_icao_pattern(input) && let Some((lat, lon, name)) = icao_to_coords(&upper) {
+    if is_icao_pattern(input)
+        && let Some((lat, lon, name)) = icao_to_coords(&upper)
+    {
         return Ok(ResolveResult::Found(ResolvedLocation {
             lat,
             lon,
@@ -501,7 +511,9 @@ async fn resolve_location(
     }
 
     // 3. IATA: 3 ASCII letters — falls through to Nominatim on miss
-    if is_iata_pattern(input) && let Some((lat, lon, name)) = iata_to_coords(&upper) {
+    if is_iata_pattern(input)
+        && let Some((lat, lon, name)) = iata_to_coords(&upper)
+    {
         return Ok(ResolveResult::Found(ResolvedLocation {
             lat,
             lon,
@@ -537,9 +549,14 @@ fn cone_distance_nm(ac: &NearbyAircraft, center_lat: f64, center_lon: f64) -> Op
         AltBaro::Feet(ft) if *ft > 0 => *ft as f64,
         _ => return None,
     };
-    let distance = random_flight::geo::haversine_distance_nm(center_lat, center_lon, ac_lat, ac_lon);
+    let distance =
+        random_flight::geo::haversine_distance_nm(center_lat, center_lon, ac_lat, ac_lon);
     let max_distance = alt_ft * f64::from(UP_SEARCH_RADIUS_NM) / UP_CONE_REFERENCE_ALT_FT;
-    if distance <= max_distance { Some(distance) } else { None }
+    if distance <= max_distance {
+        Some(distance)
+    } else {
+        None
+    }
 }
 
 fn format_altitude(alt: &Option<AltBaro>) -> String {
@@ -564,7 +581,10 @@ pub async fn up_command(
     // Empty input
     if input.is_empty() {
         if let Err(e) = client
-            .say_in_reply_to(privmsg, "Benutzung: !up <PLZ/ICAO/IATA/Ort> FDM".to_string())
+            .say_in_reply_to(
+                privmsg,
+                "Benutzung: !up <PLZ/ICAO/IATA/Ort> FDM".to_string(),
+            )
             .await
         {
             error!(error = ?e, "Failed to send usage message");
@@ -576,7 +596,13 @@ pub async fn up_command(
     if let Some(remaining) = cooldown.check(user).await {
         debug!(user = %user, remaining_secs = remaining.as_secs(), "!up on cooldown");
         if let Err(e) = client
-            .say_in_reply_to(privmsg, format!("Bitte warte noch {} Waiting", format_cooldown_remaining(remaining)))
+            .say_in_reply_to(
+                privmsg,
+                format!(
+                    "Bitte warte noch {} Waiting",
+                    format_cooldown_remaining(remaining)
+                ),
+            )
             .await
         {
             error!(error = ?e, "Failed to send cooldown message");
@@ -619,7 +645,11 @@ pub async fn up_command(
         }
     };
 
-    let ResolvedLocation { lat, lon, display_name } = &location;
+    let ResolvedLocation {
+        lat,
+        lon,
+        display_name,
+    } = &location;
     debug!(input = %input, lat = %lat, lon = %lon, display = %display_name, "Looking up aircraft");
 
     // Wrap entire API flow in overall timeout
@@ -665,16 +695,19 @@ pub async fn up_command(
             );
             let bearing = random_flight::geo::initial_bearing(*lat, *lon, ac_lat, ac_lon);
             let direction = match random_flight::geo::cardinal_direction(bearing) {
-                "N" => "↑", "NE" => "↗", "E" => "→", "SE" => "↘",
-                "S" => "↓", "SW" => "↙", "W" => "←", "NW" => "↖",
+                "N" => "↑",
+                "NE" => "↗",
+                "E" => "→",
+                "SE" => "↘",
+                "S" => "↓",
+                "SW" => "↙",
+                "W" => "←",
+                "NW" => "↖",
                 _ => "?",
             };
             join_set.spawn(async move {
-                let route = tokio::time::timeout(
-                    UP_ADSBDB_TIMEOUT,
-                    av_client.get_flight_route(&cs),
-                )
-                .await;
+                let route =
+                    tokio::time::timeout(UP_ADSBDB_TIMEOUT, av_client.get_flight_route(&cs)).await;
 
                 match route {
                     Ok(Ok(Some(fr))) => Some((cs, icao_type, alt, fr, dist, direction)),

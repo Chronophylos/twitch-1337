@@ -8,8 +8,8 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use crate::llm::{
-    self, Message, ToolCall, ToolChatCompletionRequest, ToolChatCompletionResponse,
-    ToolDefinition, ToolResultMessage,
+    self, Message, ToolCall, ToolChatCompletionRequest, ToolChatCompletionResponse, ToolDefinition,
+    ToolResultMessage,
 };
 
 const MEMORY_FILENAME: &str = "ai_memory.ron";
@@ -49,8 +49,7 @@ impl MemoryStore {
     pub fn load(data_dir: &Path) -> Result<(Self, PathBuf)> {
         let path = data_dir.join(MEMORY_FILENAME);
         let store = if path.exists() {
-            let data =
-                std::fs::read_to_string(&path).wrap_err("Failed to read ai_memory.ron")?;
+            let data = std::fs::read_to_string(&path).wrap_err("Failed to read ai_memory.ron")?;
             ron::from_str(&data).wrap_err("Failed to parse ai_memory.ron")?
         } else {
             info!("No ai_memory.ron found, starting with empty memory store");
@@ -281,7 +280,11 @@ async fn run_memory_extraction(
                 break;
             }
             ToolChatCompletionResponse::ToolCalls(calls) => {
-                debug!(round, count = calls.len(), "Memory extraction: processing tool calls");
+                debug!(
+                    round,
+                    count = calls.len(),
+                    "Memory extraction: processing tool calls"
+                );
                 let mut store_guard = store.write().await;
                 tool_results.clear();
                 for call in &calls {

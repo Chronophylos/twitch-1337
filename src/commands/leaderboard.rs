@@ -6,8 +6,8 @@ use eyre::Result;
 use tokio::sync::RwLock;
 use tracing::error;
 
-use crate::PersonalBest;
 use super::{Command, CommandContext};
+use crate::PersonalBest;
 
 pub struct LeaderboardCommand {
     leaderboard: Arc<RwLock<HashMap<String, PersonalBest>>>,
@@ -28,9 +28,7 @@ impl Command for LeaderboardCommand {
     async fn execute(&self, ctx: CommandContext<'_>) -> Result<()> {
         let leaderboard = self.leaderboard.read().await;
 
-        let response = if let Some((username, pb)) = leaderboard
-            .iter()
-            .min_by_key(|(_, pb)| pb.ms)
+        let response = if let Some((username, pb)) = leaderboard.iter().min_by_key(|(_, pb)| pb.ms)
         {
             let date = pb.date.format("%d.%m.%Y");
             format!(
