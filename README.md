@@ -1,6 +1,6 @@
 # twitch-1337
 
-A Rust-based Twitch IRC bot for the channel [REDACTED_CHANNEL](https://twitch.tv/REDACTED_CHANNEL). Maintains a persistent IRC connection with broadcast-based message routing to multiple independent handlers.
+A Rust-based Twitch IRC bot. Maintains a persistent IRC connection with broadcast-based message routing to multiple independent handlers.
 
 ## Features
 
@@ -25,7 +25,7 @@ Manages user @mentions in StreamElements ping commands.
 - `!toggle-ping <command>` - Adds or removes your @mention from a ping command
 - `!list-pings [enabled|disabled|all]` - Lists ping commands you're subscribed to
 
-Supported commands: ackern, amra, arbeitszeitbetrug, dayz, dbd, deadlock, eft, euv, fetentiere, front, hoi, kluft, kreuzzug, ron, ttt, vicky.
+Commands are defined at runtime via `!ping create` -- see the Ping System section in `CLAUDE.md` for details.
 
 ### !up \<location\>
 
@@ -165,6 +165,6 @@ Single persistent IRC connection with a broadcast channel (capacity: 100) distri
 
 All handlers run independently in `tokio::select!` for coordinated shutdown. Errors in one handler don't affect others.
 
-## Credits
+## License
 
-Created for the Twitch channel [REDACTED_CHANNEL](https://twitch.tv/REDACTED_CHANNEL).
+See [LICENSE](LICENSE) for details.

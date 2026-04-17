@@ -202,22 +202,7 @@ use crate::streamelements::SEClient;
 use super::{Command, CommandContext};
 
 const PING_COMMANDS: &[&str] = &[
-    "ackern",
-    "amra",
-    "arbeitszeitbetrug",
-    "dayz",
-    "dbd",
-    "deadlock",
-    "eft",
-    "euv",
-    "fetentiere",
-    "front",
-    "hoi",
-    "kluft",
-    "kreuzzug",
-    "ron",
-    "ttt",
-    "vicky",
+    // ... community-specific ping names loaded from config
 ];
 
 pub struct TogglePingCommand {

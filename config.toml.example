@@ -3,7 +3,7 @@
 
 [twitch]
 # Twitch channel to monitor (without the # prefix)
-channel = "REDACTED_CHANNEL"
+channel = "your_channel"
 
 # Bot's Twitch username
 username = "your_bot_username"
