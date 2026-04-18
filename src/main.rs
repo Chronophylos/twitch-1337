@@ -1636,11 +1636,12 @@ async fn run_latency_handler(
         let pong_result = tokio::time::timeout(LATENCY_PING_TIMEOUT, async {
             loop {
                 match broadcast_rx.recv().await {
-                    Ok(ServerMessage::Pong(PongMessage { source, .. })) => {
-                        if source.params.get(1).map(String::as_str) == Some(nonce.as_str()) {
-                            return send_time.elapsed();
-                        }
-                        // Nonce mismatch — likely library keepalive, ignore
+                    // Pongs with mismatched nonces (library keepalives) fall
+                    // through the guard to the wildcard arm and keep waiting.
+                    Ok(ServerMessage::Pong(PongMessage { source, .. }))
+                        if source.params.get(1).map(String::as_str) == Some(nonce.as_str()) =>
+                    {
+                        return send_time.elapsed();
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         warn!("Broadcast channel closed during PONG wait");
