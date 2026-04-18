@@ -1542,13 +1542,9 @@ async fn run_1337_handler(
         let mut message = generate_stats_message(count, &user_list);
 
         if let Some((ref fastest_user, fastest_ms)) = fastest {
-            // Check if this is a new all-time record BEFORE updating the leaderboard
             let leaderboard_guard = leaderboard.read().await;
-            let previous_best = leaderboard_guard.values().map(|pb| pb.ms).min();
-            let is_record = match previous_best {
-                Some(best) => fastest_ms < best,
-                None => true, // First ever sub-1s time
-            };
+            let previous_pb = leaderboard_guard.get(fastest_user).map(|pb| pb.ms);
+            let is_record = previous_pb.is_none_or(|best| fastest_ms < best);
             drop(leaderboard_guard);
 
             message.push_str(&format!(
