@@ -451,8 +451,7 @@ mod tests {
         mgr.add_member("test", "alice").unwrap();
 
         // Non-member with public=false is rejected and must not consume the cooldown.
-        let decision =
-            mgr.try_record_trigger("test", "stranger", Duration::from_secs(300), false);
+        let decision = mgr.try_record_trigger("test", "stranger", Duration::from_secs(300), false);
         assert!(matches!(decision, TriggerDecision::Skip));
 
         // Alice is the sole member, so render_template produces no mentions → Skip.
@@ -468,8 +467,7 @@ mod tests {
         let mut mgr = test_manager(dir.path());
         mgr.add_member("test", "alice").unwrap();
 
-        let decision =
-            mgr.try_record_trigger("test", "stranger", Duration::from_secs(300), true);
+        let decision = mgr.try_record_trigger("test", "stranger", Duration::from_secs(300), true);
         assert!(
             matches!(decision, TriggerDecision::Fire(_)),
             "public=true should allow non-members to fire, got {decision:?}"

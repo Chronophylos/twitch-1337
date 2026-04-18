@@ -352,7 +352,10 @@ mod tests {
         assert_eq!(msgs[3]["content"], "Saved memory 'k1'");
 
         assert_eq!(msgs[4]["role"], "assistant");
-        assert_eq!(msgs[4]["tool_calls"][0]["function"]["name"], "delete_memory");
+        assert_eq!(
+            msgs[4]["tool_calls"][0]["function"]["name"],
+            "delete_memory"
+        );
 
         assert_eq!(msgs[5]["role"], "tool");
         assert_eq!(msgs[5]["tool_name"], "delete_memory");
