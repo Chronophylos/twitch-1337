@@ -5,7 +5,8 @@ use eyre::{Result, WrapErr};
 use tracing::{error, instrument, warn};
 use twitch_irc::message::PrivmsgMessage;
 
-use crate::{AuthenticatedTwitchClient, parse_flight_duration};
+use crate::AuthenticatedTwitchClient;
+use crate::util::parse_flight_duration;
 
 use super::{Command, CommandContext};
 

@@ -15,10 +15,10 @@ use crate::aviation::{AltBaro, AviationClient, NearbyAircraft, iata_to_coords};
 const FLIGHTS_FILENAME: &str = "flights.ron";
 
 /// Maximum number of simultaneously tracked flights.
-pub(crate) const MAX_TRACKED_FLIGHTS: usize = 12;
+pub const MAX_TRACKED_FLIGHTS: usize = 12;
 
 /// Maximum number of flights a single user can track.
-pub(crate) const MAX_FLIGHTS_PER_USER: usize = 3;
+pub const MAX_FLIGHTS_PER_USER: usize = 3;
 
 /// Vertical rate above which we consider the aircraft climbing.
 const CLIMB_RATE_THRESHOLD: i64 = 500; // ft/min
@@ -39,16 +39,16 @@ const TAKEOFF_MIN_SPEED: f64 = 60.0; // knots
 /// Number of stable polls required before declaring cruise.
 const CRUISE_STABLE_POLLS: u32 = 2;
 /// No data threshold before declaring tracking lost.
-pub(crate) const TRACKING_LOST_THRESHOLD: Duration = Duration::from_secs(300); // 5 min
+pub const TRACKING_LOST_THRESHOLD: Duration = Duration::from_secs(300); // 5 min
 /// Time after tracking lost before auto-removing.
-pub(crate) const TRACKING_LOST_REMOVAL: Duration = Duration::from_secs(1800); // 30 min
+pub const TRACKING_LOST_REMOVAL: Duration = Duration::from_secs(1800); // 30 min
 
 // Polling intervals
-pub(crate) const POLL_FAST: Duration = Duration::from_secs(30);
-pub(crate) const POLL_NORMAL: Duration = Duration::from_secs(60);
-pub(crate) const POLL_SLOW: Duration = Duration::from_secs(120);
+pub const POLL_FAST: Duration = Duration::from_secs(30);
+pub const POLL_NORMAL: Duration = Duration::from_secs(60);
+pub const POLL_SLOW: Duration = Duration::from_secs(120);
 /// Timeout for a single adsb.lol request.
-pub(crate) const POLL_TIMEOUT: Duration = Duration::from_secs(10);
+pub const POLL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Timeout for adsbdb route fetch.
 const ROUTE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -63,7 +63,7 @@ const SQUAWK_EMERGENCY: &str = "7700";
 
 /// Identifies a flight either by callsign or ICAO24 hex code.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) enum FlightIdentifier {
+pub enum FlightIdentifier {
     Callsign(String),
     Hex(String),
 }
@@ -73,7 +73,7 @@ impl FlightIdentifier {
     ///
     /// 6-character all-hex-digit strings are treated as ICAO24 hex codes.
     /// Everything else is treated as a callsign.
-    pub(crate) fn parse(input: &str) -> Self {
+    pub fn parse(input: &str) -> Self {
         let input = input.trim().to_uppercase();
         if input.len() == 6 && input.chars().all(|c| c.is_ascii_hexdigit()) {
             FlightIdentifier::Hex(input)
@@ -83,14 +83,14 @@ impl FlightIdentifier {
     }
 
     /// Returns the display string (the callsign or hex value).
-    pub(crate) fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         match self {
             FlightIdentifier::Callsign(s) | FlightIdentifier::Hex(s) => s,
         }
     }
 
     /// Check if this identifier matches a given callsign or hex.
-    pub(crate) fn matches(&self, callsign: Option<&str>, hex: Option<&str>) -> bool {
+    pub fn matches(&self, callsign: Option<&str>, hex: Option<&str>) -> bool {
         match self {
             FlightIdentifier::Callsign(s) => callsign.is_some_and(|cs| cs.eq_ignore_ascii_case(s)),
             FlightIdentifier::Hex(s) => hex.is_some_and(|h| h.eq_ignore_ascii_case(s)),
@@ -106,7 +106,7 @@ impl std::fmt::Display for FlightIdentifier {
 
 /// Detected flight phase.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub(crate) enum FlightPhase {
+pub enum FlightPhase {
     Unknown,
     Ground,
     Takeoff,
@@ -134,50 +134,50 @@ impl std::fmt::Display for FlightPhase {
 
 /// State of a single tracked flight.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct TrackedFlight {
-    pub(crate) identifier: FlightIdentifier,
-    pub(crate) callsign: Option<String>,
-    pub(crate) hex: Option<String>,
-    pub(crate) phase: FlightPhase,
-    pub(crate) route: Option<(String, String)>, // (origin IATA, dest IATA)
-    pub(crate) aircraft_type: Option<String>,
+pub struct TrackedFlight {
+    pub identifier: FlightIdentifier,
+    pub callsign: Option<String>,
+    pub hex: Option<String>,
+    pub phase: FlightPhase,
+    pub route: Option<(String, String)>, // (origin IATA, dest IATA)
+    pub aircraft_type: Option<String>,
 
     // Latest known data
-    pub(crate) altitude_ft: Option<i64>,
-    pub(crate) vertical_rate_fpm: Option<i64>,
-    pub(crate) ground_speed_kts: Option<f64>,
-    pub(crate) lat: Option<f64>,
-    pub(crate) lon: Option<f64>,
-    pub(crate) squawk: Option<String>,
+    pub altitude_ft: Option<i64>,
+    pub vertical_rate_fpm: Option<i64>,
+    pub ground_speed_kts: Option<f64>,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub squawk: Option<String>,
 
     // Tracking metadata
-    pub(crate) tracked_by: String,
-    pub(crate) tracked_at: DateTime<Utc>,
-    pub(crate) last_seen: Option<DateTime<Utc>>,
-    pub(crate) last_phase_change: Option<DateTime<Utc>>,
-    pub(crate) polls_since_change: u32,
+    pub tracked_by: String,
+    pub tracked_at: DateTime<Utc>,
+    pub last_seen: Option<DateTime<Utc>>,
+    pub last_phase_change: Option<DateTime<Utc>>,
+    pub polls_since_change: u32,
 
     // Divert detection
     #[serde(default)]
-    pub(crate) divert_consecutive_polls: u32,
+    pub divert_consecutive_polls: u32,
 
     // Destination coordinates (for divert detection)
     #[serde(default)]
-    pub(crate) dest_lat: Option<f64>,
+    pub dest_lat: Option<f64>,
     #[serde(default)]
-    pub(crate) dest_lon: Option<f64>,
+    pub dest_lon: Option<f64>,
 }
 
 /// Persisted state of all tracked flights.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(crate) struct FlightTrackerState {
-    pub(crate) flights: Vec<TrackedFlight>,
+pub struct FlightTrackerState {
+    pub flights: Vec<TrackedFlight>,
 }
 
 /// Loads tracked flights from the RON file.
 ///
 /// Returns an empty state if the file doesn't exist or is corrupted.
-pub(crate) async fn load_tracker_state(data_dir: &Path) -> FlightTrackerState {
+pub async fn load_tracker_state(data_dir: &Path) -> FlightTrackerState {
     let path = data_dir.join(FLIGHTS_FILENAME);
     match fs::read_to_string(&path).await {
         Ok(contents) => match ron::from_str::<FlightTrackerState>(&contents) {
@@ -206,7 +206,7 @@ pub(crate) async fn load_tracker_state(data_dir: &Path) -> FlightTrackerState {
 }
 
 /// Saves tracked flights to the RON file using atomic write+rename.
-pub(crate) async fn save_tracker_state(data_dir: &Path, state: &FlightTrackerState) {
+pub async fn save_tracker_state(data_dir: &Path, state: &FlightTrackerState) {
     let path = data_dir.join(FLIGHTS_FILENAME);
     let tmp_path = path.with_extension("ron.tmp");
     match ron::to_string(state) {
@@ -230,7 +230,7 @@ pub(crate) async fn save_tracker_state(data_dir: &Path, state: &FlightTrackerSta
 }
 
 /// Commands sent from chat command handlers to the flight tracker task.
-pub(crate) enum TrackerCommand {
+pub enum TrackerCommand {
     Track {
         identifier: FlightIdentifier,
         requested_by: String,
@@ -260,7 +260,7 @@ fn is_on_ground(ac: &NearbyAircraft) -> bool {
     }
 }
 
-pub(crate) fn altitude_ft(ac: &NearbyAircraft) -> Option<i64> {
+pub fn altitude_ft(ac: &NearbyAircraft) -> Option<i64> {
     match &ac.alt_baro {
         Some(AltBaro::Feet(ft)) => Some(*ft),
         Some(AltBaro::Ground) => Some(0),
@@ -268,12 +268,12 @@ pub(crate) fn altitude_ft(ac: &NearbyAircraft) -> Option<i64> {
     }
 }
 
-pub(crate) fn vertical_rate(ac: &NearbyAircraft) -> Option<i64> {
+pub fn vertical_rate(ac: &NearbyAircraft) -> Option<i64> {
     ac.baro_rate.or(ac.geom_rate)
 }
 
 /// Determines the new flight phase based on current ADS-B data and previous state.
-pub(crate) fn detect_phase(flight: &TrackedFlight, ac: &NearbyAircraft) -> FlightPhase {
+pub fn detect_phase(flight: &TrackedFlight, ac: &NearbyAircraft) -> FlightPhase {
     let on_ground = is_on_ground(ac);
     let alt = altitude_ft(ac);
     let vrate = vertical_rate(ac);
@@ -342,7 +342,7 @@ pub(crate) fn detect_phase(flight: &TrackedFlight, ac: &NearbyAircraft) -> Fligh
 }
 
 /// Returns a human-readable meaning if the squawk is an emergency code.
-pub(crate) fn emergency_squawk_meaning(squawk: &str) -> Option<&'static str> {
+pub fn emergency_squawk_meaning(squawk: &str) -> Option<&'static str> {
     match squawk {
         SQUAWK_HIJACK => Some("Hijack"),
         SQUAWK_RADIO_FAILURE => Some("Radio Failure"),
@@ -412,15 +412,15 @@ fn format_flight_prefix(flight: &TrackedFlight) -> String {
     format!("{name}{typ}{route}")
 }
 
-pub(crate) fn msg_track_started(flight: &TrackedFlight) -> String {
+pub fn msg_track_started(flight: &TrackedFlight) -> String {
     format!("Tracke {} Okayge", format_flight_prefix(flight))
 }
 
-pub(crate) fn msg_takeoff(flight: &TrackedFlight) -> String {
+pub fn msg_takeoff(flight: &TrackedFlight) -> String {
     format!("{} ist gestartet! \u{2708}", format_flight_prefix(flight))
 }
 
-pub(crate) fn msg_cruise(flight: &TrackedFlight) -> String {
+pub fn msg_cruise(flight: &TrackedFlight) -> String {
     format!(
         "{} cruist auf {}",
         format_flight_prefix(flight),
@@ -428,15 +428,15 @@ pub(crate) fn msg_cruise(flight: &TrackedFlight) -> String {
     )
 }
 
-pub(crate) fn msg_descent(flight: &TrackedFlight) -> String {
+pub fn msg_descent(flight: &TrackedFlight) -> String {
     format!("{} hat Descent eingeleitet", format_flight_prefix(flight))
 }
 
-pub(crate) fn msg_approach(flight: &TrackedFlight) -> String {
+pub fn msg_approach(flight: &TrackedFlight) -> String {
     format!("{} ist im Approach", format_flight_prefix(flight))
 }
 
-pub(crate) fn msg_landing(flight: &TrackedFlight) -> String {
+pub fn msg_landing(flight: &TrackedFlight) -> String {
     let duration = Utc::now().signed_duration_since(flight.tracked_at);
     format!(
         "{} ist gelandet! Flugzeit: {}",
@@ -445,21 +445,21 @@ pub(crate) fn msg_landing(flight: &TrackedFlight) -> String {
     )
 }
 
-pub(crate) fn msg_squawk_emergency(flight: &TrackedFlight, code: &str, meaning: &str) -> String {
+pub fn msg_squawk_emergency(flight: &TrackedFlight, code: &str, meaning: &str) -> String {
     format!(
         "\u{26a0} {} squawkt {code}! ({meaning})",
         format_flight_prefix(flight)
     )
 }
 
-pub(crate) fn msg_possible_divert(flight: &TrackedFlight) -> String {
+pub fn msg_possible_divert(flight: &TrackedFlight) -> String {
     format!(
         "\u{26a0} {} scheint zu diverten!",
         format_flight_prefix(flight)
     )
 }
 
-pub(crate) fn msg_tracking_lost(flight: &TrackedFlight) -> String {
+pub fn msg_tracking_lost(flight: &TrackedFlight) -> String {
     let name = flight
         .callsign
         .as_deref()
@@ -467,7 +467,7 @@ pub(crate) fn msg_tracking_lost(flight: &TrackedFlight) -> String {
     format!("{name} Signal verloren, wird nicht mehr getrackt")
 }
 
-pub(crate) fn msg_flight_status(flight: &TrackedFlight) -> String {
+pub fn msg_flight_status(flight: &TrackedFlight) -> String {
     let prefix = format_flight_prefix(flight);
     let alt = format_alt(flight.altitude_ft);
     let speed = flight
@@ -487,7 +487,7 @@ pub(crate) fn msg_flight_status(flight: &TrackedFlight) -> String {
     )
 }
 
-pub(crate) fn msg_flights_list(flights: &[TrackedFlight]) -> String {
+pub fn msg_flights_list(flights: &[TrackedFlight]) -> String {
     if flights.is_empty() {
         return "Keine Fl\u{00fc}ge getrackt".to_string();
     }
@@ -503,7 +503,7 @@ pub(crate) fn msg_flights_list(flights: &[TrackedFlight]) -> String {
 }
 
 /// Determines the polling interval based on all tracked flights.
-pub(crate) fn compute_poll_interval(flights: &[TrackedFlight]) -> Duration {
+pub fn compute_poll_interval(flights: &[TrackedFlight]) -> Duration {
     if flights.is_empty() {
         return POLL_SLOW;
     }
@@ -535,7 +535,7 @@ pub(crate) fn compute_poll_interval(flights: &[TrackedFlight]) -> Duration {
 
 /// Main flight tracker handler. Processes commands, polls adsb.lol, detects
 /// state changes, and posts chat messages.
-pub(crate) async fn run_flight_tracker(
+pub async fn run_flight_tracker(
     mut cmd_rx: mpsc::Receiver<TrackerCommand>,
     client: Arc<AuthenticatedTwitchClient>,
     channel: String,

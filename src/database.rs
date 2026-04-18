@@ -3,6 +3,8 @@ use chrono_tz::Tz;
 use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
 
+use crate::util::resolve_berlin_time;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Schedule {
     pub name: String,
@@ -19,14 +21,14 @@ impl Schedule {
     pub fn is_active(&self, now: DateTime<Tz>) -> bool {
         // Check date range (dates are Berlin local time from config)
         if let Some(start) = self.start_date {
-            let start_berlin = crate::resolve_berlin_time(start);
+            let start_berlin = resolve_berlin_time(start);
             if now < start_berlin {
                 return false;
             }
         }
 
         if let Some(end) = self.end_date {
-            let end_berlin = crate::resolve_berlin_time(end);
+            let end_berlin = resolve_berlin_time(end);
             if now > end_berlin {
                 return false;
             }
@@ -204,6 +206,12 @@ pub struct ScheduleCache {
     pub schedules: Vec<Schedule>,
     pub last_updated: DateTime<Utc>,
     pub version: u64,
+}
+
+impl Default for ScheduleCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ScheduleCache {
