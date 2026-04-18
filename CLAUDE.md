@@ -6,9 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Rust-based Twitch IRC bot with multiple features:
 1. **1337 Tracker**: Monitors for "1337"/"DANKIES" messages at 13:37 Berlin time, posts stats at 13:38
-2. **Ping System**: Local file-based ping commands with admin management, user self-service, and dynamic triggering
-3. **Scheduled Messages**: Dynamic message scheduling via config.toml with file watching
-4. **Latency Monitor**: Measures IRC latency via PING/PONG every 5 minutes, auto-adjusts timing offsets
+2. **Leaderboard** (`!lb`): Persistent sub-1s personal-best board for the 1337 challenge, persisted to `leaderboard.ron`
+3. **Ping System**: Local file-based ping commands with admin management, user self-service, and dynamic triggering
+4. **Scheduled Messages**: Dynamic message scheduling via config.toml with file watching
+5. **Latency Monitor**: Measures IRC latency via PING/PONG every 5 minutes, auto-adjusts timing offsets
+6. **AI Command** (`!ai`): OpenAI- or Ollama-backed chat with optional chat history and persistent memory
+7. **Flight Tracker**: Long-lived task that polls ADS-B APIs and posts phase/squawk/divert updates for tracked flights (`!track`, `!untrack`, `!flight`, `!flights`)
+8. **Aviation Lookups** (`!up`, `!fl`): Find flights above a PLZ/airport, generate random flight callsigns; backed by embedded CSVs in `data/`
+9. **Feedback** (`!fb`): Append user feedback to `feedback.txt`
 
 Uses a persistent IRC connection with broadcast-based message routing to multiple handlers.
 
@@ -184,9 +189,10 @@ The bot maintains a **single persistent IRC connection** and uses a **broadcast 
 3. **Handler Tasks** (parallel, continuous):
    - **Config Watcher Service**: Watches config.toml for changes (2s debounce)
    - **Scheduled Message Handler**: Posts messages based on config.toml schedules (if configured)
-   - **1337 Handler**: Daily scheduled monitoring (13:36-13:38)
-   - **Generic Command Handler**: Processes `!ping` admin/user commands and dynamic `!<name>` ping triggers 24/7
+   - **1337 Handler**: Daily scheduled monitoring (13:36-13:38), updates leaderboard
+   - **Generic Command Handler**: `CommandDispatcher` routes PRIVMSGs to registered `Command` impls 24/7 (`!p`, `!<ping>`, `!ai`, `!lb`, `!fb`, `!up`, `!fl`, `!track`, `!untrack`, `!flight`, `!flights`)
    - **Latency Monitor**: Measures IRC latency via PING/PONG every 5 minutes
+   - **Flight Tracker**: Long-lived task behind an `mpsc::Sender<TrackerCommand>`, polls ADS-B APIs, detects phase changes, posts chat updates, persists state to `flights.ron`
    - Each handler runs independently
    - Handlers filter for relevant messages and act accordingly
 
@@ -264,13 +270,32 @@ The bot maintains a **single persistent IRC connection** and uses a **broadcast 
 - Written by fire-and-forget extraction task after each successful AI response
 - Capped at `max_memories` (default 50, max 200)
 
-**Persistent State:**
+**Leaderboard State:**
+- `leaderboard`: `Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>` - All-time sub-1s personal bests for the 1337 challenge
+- Loaded at startup from `leaderboard.ron`, written back after 13:38 stats post via atomic write+rename
+- Shared between `run_1337_handler` (writer) and `LeaderboardCommand` (reader, `!lb`)
+
+**Flight Tracker State:**
+- Owned by `run_flight_tracker` task; external callers communicate via `tokio::sync::mpsc::Sender<TrackerCommand>` (channel capacity 32)
+- `FlightTrackerState { flights: Vec<TrackedFlight> }` persisted to `flights.ron` on every mutation (atomic write+rename)
+- Poll cadence adaptive (`POLL_FAST`/`POLL_NORMAL`/`POLL_SLOW` = 30/60/120s) based on current phase mix
+- Caps: `MAX_TRACKED_FLIGHTS = 12` globally, `MAX_FLIGHTS_PER_USER = 3`
+- Tracking state transitions: lost at `TRACKING_LOST_THRESHOLD = 300s`, removed at `TRACKING_LOST_REMOVAL = 1800s`
+
+**Aviation Data (read-only, embedded):**
+- `data/plz.csv`, `data/airports.csv`, `data/airlines.csv` loaded via `include_str!` into `AviationClient` at compile time — no runtime file IO, no deployment dependency
+
+**Persistent State (under `$DATA_DIR`, default `/var/lib/twitch-1337`):**
 - OAuth tokens in `token.ron`
 - Ping definitions and membership in `pings.ron`
 - AI memories in `ai_memory.ron` (if `memory_enabled = true`)
+- 1337 leaderboard in `leaderboard.ron`
+- Flight tracker state in `flights.ron`
+- User feedback log in `feedback.txt` (append-only)
 
 **No Persistent State:**
 - Schedules loaded from config.toml on startup and file changes
+- Per-command/per-user cooldown timestamps (in-memory, reset on restart)
 
 ### Configuration Files
 
@@ -426,39 +451,61 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 
 ### Handler: Generic Commands
 
-**`run_generic_command_handler(broadcast_tx, client, ai_config, leaderboard, ping_manager, hidden_admin_ids, default_cooldown, pings_public, tracker_tx, aviation_client)`**
-- Creates `CommandDispatcher` with registered commands (`PingAdminCommand`, `PingTriggerCommand`, etc.)
-- Subscribes to broadcast channel
-- Dispatches PRIVMSG messages to matching commands via `CommandDispatcher`
+**`run_generic_command_handler(CommandHandlerConfig)`**
+- Takes a `CommandHandlerConfig` struct bundling: `broadcast_tx`, `client`, `ai_config`, `leaderboard`, `ping_manager`, `hidden_admin_ids`, `default_cooldown`, `pings_public`, `cooldowns`, `tracker_tx`, `aviation_client`, `admin_channel`, `bot_username`, `channel`
+- Builds a `CommandDispatcher` with every registered command
+- Subscribes to broadcast channel and dispatches PRIVMSG messages
+- Also joins `admin_channel` (if configured) so the broadcaster can test commands privately
 
-**`CommandDispatcher`**
-- Holds `Vec<Box<dyn Command>>` of registered commands
-- On each PRIVMSG, extracts first word and finds matching command via `Command::matches()`
-- Builds `CommandContext` with privmsg, client, and args, then calls `command.execute(ctx)`
+**`CommandDispatcher` / `Command` trait** (`src/commands/mod.rs`)
+- `Command` trait: `name() -> &str`, `enabled() -> bool` (default true), `matches(word) -> bool` (default exact match on `name()`), `async execute(ctx: CommandContext) -> Result<()>`
+- `CommandContext<'a>`: `privmsg: &PrivmsgMessage`, `client: &Arc<AuthenticatedTwitchClient>`, `trigger: &str`, `args: Vec<&str>`
+- Dispatcher: on each PRIVMSG splits the first whitespace-delimited word, finds the first command whose `matches()` returns true, and invokes `execute()`
 
-### Ping Admin Command (`!ping`)
+### Registered Commands
 
-**`PingAdminCommand`**
-- Requires broadcaster/moderator badge or `hidden_admins` user ID for admin subcommands
-- Admin subcommands:
-  - `!ping create <name> <template>` - Create new ping with template text
-  - `!ping delete <name>` - Delete a ping
-  - `!ping add <name> <user>` - Add user to ping membership
-  - `!ping remove <name> <user>` - Remove user from ping membership
-- User subcommands (open to all):
-  - `!ping join <name>` - Subscribe yourself to a ping
-  - `!ping leave <name>` - Unsubscribe yourself from a ping
-  - `!ping list` - List your active ping memberships
+All command structs live under `src/commands/*.rs` and implement `Command`:
 
-### Ping Trigger Command (`!<name>`)
+- **`PingAdminCommand` (`!p`)** — `src/commands/ping_admin.rs`
+  - Admin subcommands (broadcaster/mod/hidden_admin): `!p create <name> <template>`, `!p delete <name>`, `!p add <name> <user>`, `!p remove <name> <user>`
+  - User subcommands (all): `!p join <name>`, `!p leave <name>`, `!p list`
+- **`PingTriggerCommand` (`!<ping>`)** — `src/commands/ping_trigger.rs`
+  - Overrides `matches()` to dynamically match any `!<name>` registered in `PingManager`
+  - Members-only unless `[pings].public = true`; per-ping or default cooldown; renders `{mentions}` (sender excluded) and `{sender}`
+  - Replies with remaining cooldown via `cooldown::format_cooldown_remaining`; silent on non-member / empty mentions
+- **`AiCommand` (`!ai`)** — `src/commands/ai.rs`
+  - Calls the configured `LlmClient` with optional chat history (`ChatContext`) and memory injection
+  - Spawns `memory::spawn_memory_extraction` as fire-and-forget after each response when `memory_enabled`
+- **`LeaderboardCommand` (`!lb`)** — `src/commands/leaderboard.rs`
+  - Reads the shared leaderboard, returns fastest all-time `PersonalBest` (ms + date)
+- **`FeedbackCommand` (`!fb <message>`)** — `src/commands/feedback.rs`
+  - Appends a timestamped line to `$DATA_DIR/feedback.txt`; per-user cooldown
+- **`FlightsAboveCommand` (`!up`)** — `src/commands/flights_above.rs`
+  - Queries ADS-B via `AviationClient` for aircraft above a PLZ, airport (ICAO/IATA), or raw coords; disabled if aviation init failed
+- **`RandomFlightCommand` (`!fl`)** — `src/commands/random_flight.rs`
+  - Returns a plausible random airline flight for a given aircraft ICAO type and duration, using embedded airline data
+- **`TrackCommand` (`!track <callsign|hex>`)** — `src/commands/track.rs`
+  - Sends `TrackerCommand::Track` over `tracker_tx` to the flight tracker task
+- **`UntrackCommand` (`!untrack <callsign|hex>`)** — `src/commands/untrack.rs`
+  - Sends `TrackerCommand::Untrack` with `is_mod` derived from badges (mods can force-remove anyone's flight)
+- **`FlightsCommand` (`!flights`) / `FlightCommand` (`!flight <query>`)** — `src/commands/flights.rs`
+  - Both send `TrackerCommand::Status` (optional query) and await a reply on a oneshot channel
 
-**`PingTriggerCommand`**
-- Overrides `Command::matches()` to dynamically match any `!<name>` where `<name>` is a registered ping
-- Only members can trigger unless `public` mode is enabled in `[pings]` config
-- Checks cooldown (per-ping `cooldown` field, or global `default_cooldown` from config)
-- Renders template with `{mentions}` (space-separated @user list, sender excluded) and `{sender}` (triggering user)
-- Replies with remaining cooldown time when on cooldown (human-friendly format via `cooldown::format_cooldown_remaining`)
-- Silent on: non-member, empty mentions list
+### Handler: Flight Tracker
+
+**`flight_tracker::run_flight_tracker(rx, client, channel, aviation_client, data_dir)`** (`src/flight_tracker.rs`)
+- Loads `FlightTrackerState` from `flights.ron` (empty if missing or corrupt)
+- Main loop: `tokio::select!` between `rx.recv()` (commands from chat) and a poll timer
+- `process_command` handles `TrackerCommand::{Track, Untrack, Status}`, enforces per-user and global caps, persists after mutations
+- `poll_all_flights` queries adsb.lol for every tracked hex, updates `TrackedFlight`, runs `detect_phase`, emits chat messages via `msg_*` helpers on state changes (takeoff, cruise, descent, approach, landing, divert, tracking-lost, emergency squawk)
+- `compute_poll_interval` picks `POLL_FAST`/`POLL_NORMAL`/`POLL_SLOW` based on the fastest-changing phase currently tracked
+- Emergency squawks (7500/7600/7700) annotated via `emergency_squawk_meaning`
+
+**Key types:**
+- `FlightIdentifier` enum: `Callsign(String)` | `Hex(String)` — parse input, match aircraft
+- `FlightPhase` enum: `Preflight`, `Takeoff`, `Cruise`, `Descent`, `Approach`, `Landed`, `Lost`, ...
+- `TrackedFlight`: persisted per-flight state (identifier, phase, last seen, requested_by, etc.)
+- `TrackerCommand` enum: `Track`, `Untrack`, `Status` — each carries a `oneshot` reply channel for the chat reply
 
 ### Handler: Scheduled Messages (Config-Based)
 
@@ -586,13 +633,50 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
   - `record_trigger(ping_name)`: Records trigger timestamp for cooldown
   - `render_template(ping_name, sender) -> Option<String>`: Renders template with `{mentions}` (sender excluded) and `{sender}`
 
+### Aviation Module (`src/aviation.rs`)
+
+**`AviationClient`**
+- Wraps `reqwest::Client` with custom user agent; cheap to `clone()` (internal `Arc`)
+- `new() -> Result<Self>` — builds client, fails only on TLS init
+- `get_aircraft_by_hex(hex)` / `get_aircraft_nearby(lat, lon, radius_nm)` — hit adsb.lol v2; see `reference_adsb_aggregators.md` memory for free drop-in fallbacks (airplanes.live, adsb.fi, ADSB.One)
+- `up_command(...)` — implements the `!up` behavior end-to-end (resolve location, query nearby, format reply)
+
+**Embedded CSV lookups (`include_str!` at compile time):**
+- `plz_to_coords(plz) -> Option<(f64, f64)>` — German postal code → lat/lon (from `data/plz.csv`)
+- `iata_to_coords(code)` / airport helpers — IATA/ICAO → coords + name (from `data/airports.csv`)
+- Airline IATA → ICAO mapping (from `data/airlines.csv`) — used by `RandomFlightCommand`
+- Embedding means the static musl binary has zero runtime data-file dependency
+
+**`NearbyAircraft`** — deserialized ADS-B snapshot (hex, callsign, `AltBaro::{Feet, Ground}`, coords, vertical rate, squawk, heading, ground speed, etc.)
+
+### LLM Module (`src/llm/`)
+
+**`llm::LlmClient` trait** (`mod.rs`)
+- `async fn chat_completion(req: ChatCompletionRequest) -> Result<String>` — single-shot
+- `async fn tool_chat_completion(req: ToolChatCompletionRequest) -> Result<ToolChatCompletionResponse>` — tool-calling, used by memory extraction
+- Shared request/response types: `Message { role, content }`, tool definitions, prior-round replay
+
+**`llm::openai` (`openai.rs`)** — OpenAI-compatible JSON wire format (`/v1/chat/completions`); works with OpenAI, OpenRouter, LiteLLM, vLLM, etc.
+
+**`llm::ollama` (`ollama.rs`)** — Ollama native API (`/api/chat`); tool calls use Ollama's `tool_name` field convention
+
+The correct client is built at startup from `[ai].backend` and handed to `AiCommand` and `memory::spawn_memory_extraction` as `Arc<dyn LlmClient>`.
+
 ### Token Storage
 
-**`FileBasedTokenStorage`**
-- Implements `TokenStorage` trait for twitch-irc
-- Stores tokens in `./token.ron` file
+**`FileBasedTokenStorage`** (`src/main.rs`)
+- Implements twitch-irc's `TokenStorage` trait
+- Stores tokens in `$DATA_DIR/token.ron` (default `/var/lib/twitch-1337/token.ron`)
 - `load_token()`: Reads from file, falls back to refresh token from config.toml on first run
 - `update_token()`: Writes updated tokens to file (called automatically by twitch-irc)
+
+### Data Directory
+
+**`get_data_dir() -> PathBuf`** / **`ensure_data_dir() -> Result<()>`** (`src/main.rs`)
+- Resolves `$DATA_DIR` env var, default `/var/lib/twitch-1337`
+- `ensure_data_dir` creates the directory if missing at startup
+- **All** runtime-persistent files must be placed here via `get_data_dir().join(...)` — never use hardcoded relative paths. See `ping.rs`, `memory.rs`, `flight_tracker.rs`, `feedback.rs` for the pattern.
+- The Dockerfile sets `ENV DATA_DIR=/data`; mount a volume there in production.
 
 ### Configuration Types
 
@@ -640,15 +724,21 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 
 ### Constants
 
-- `TARGET_HOUR: u32 = 13` - Hour for 1337 tracking
-- `TARGET_MINUTE: u32 = 37` - Minute for 1337 tracking
-- `MAX_USERS: usize = 10_000` - Maximum tracked users
-- `CONFIG_PATH: &str = "./config.toml"` - Configuration file path
-- `PINGS_PATH: &str = "./pings.ron"` - Ping storage file path
-- `LATENCY_PING_INTERVAL: Duration = 300s` - Time between PING measurements
-- `LATENCY_PING_TIMEOUT: Duration = 10s` - Max wait for PONG response
-- `LATENCY_EMA_ALPHA: f64 = 0.2` - EMA smoothing factor
-- `LATENCY_LOG_THRESHOLD: u32 = 10` - Minimum EMA change (ms) for info log
+`src/main.rs`:
+- `TARGET_HOUR: u32 = 13`, `TARGET_MINUTE: u32 = 37` - 1337 tracking window
+- `MAX_USERS: usize = 10_000` - Maximum tracked users per day in the 1337 HashSet
+- `CONFIG_PATH: &str = "./config.toml"` - Configuration file path (working-directory relative)
+- `LEADERBOARD_FILENAME: &str = "leaderboard.ron"` - joined with `$DATA_DIR`
+- `LATENCY_PING_INTERVAL: Duration = 300s`, `LATENCY_PING_TIMEOUT: Duration = 10s`
+- `LATENCY_EMA_ALPHA: f64 = 0.2`, `LATENCY_LOG_THRESHOLD: u32 = 10`
+
+`src/ping.rs`: `PINGS_FILENAME: &str = "pings.ron"` (joined with `$DATA_DIR`)
+
+`src/flight_tracker.rs`:
+- `FLIGHTS_FILENAME: &str = "flights.ron"`
+- `MAX_TRACKED_FLIGHTS: usize = 12`, `MAX_FLIGHTS_PER_USER: usize = 3`
+- `TRACKING_LOST_THRESHOLD: 300s`, `TRACKING_LOST_REMOVAL: 1800s`
+- `POLL_FAST: 30s`, `POLL_NORMAL: 60s`, `POLL_SLOW: 120s`, `POLL_TIMEOUT: 10s`
 
 ## Important Notes
 
@@ -662,8 +752,10 @@ sudo cp target/x86_64-unknown-linux-musl/release/twitch-1337 /usr/local/bin/
 - **Binary Size**: Optimized with minimal tokio features and single timezone (6MB)
 - **Logging**: Structured logs with tracing, configurable via `RUST_LOG`
 - **Broadcast Architecture**: Message router distributes to independent handlers
-- **Ping Persistence**: Ping definitions and membership stored in `pings.ron` (atomic write+rename)
-- **Token Refresh**: Tokens automatically refreshed and saved to `./token.ron`
+- **Ping Persistence**: Ping definitions and membership stored in `$DATA_DIR/pings.ron` (atomic write+rename)
+- **Token Refresh**: Tokens automatically refreshed and saved to `$DATA_DIR/token.ron`
+- **Data Directory**: All persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`); Dockerfile sets it to `/data`. Use `get_data_dir()` — never hardcode relative paths.
+- **Embedded Data**: `data/plz.csv`, `data/airports.csv`, `data/airlines.csv` are compiled into the binary via `include_str!` — no runtime file deps.
 - **Hot Reload**: Schedules reload automatically when config.toml changes (2s debounce)
 - **Latency Auto-Measurement**: IRC latency measured via PING/PONG every 5 min, EMA (alpha=0.2) updates shared `AtomicU32` read by timing-sensitive handlers
 
@@ -717,6 +809,24 @@ Per Task   -> Sleep for schedule's interval
            -> Check if schedule is active (date range + time window)
            -> Post message to chat
            -> Repeat or exit if removed
+```
+
+### Flight Tracker (Continuous)
+```
+Startup    -> Load FlightTrackerState from $DATA_DIR/flights.ron
+           -> Initialize AviationClient
+           -> Enter select! loop over (mpsc rx, poll timer)
+
+On command -> process_command handles Track/Untrack/Status
+           -> Enforce MAX_TRACKED_FLIGHTS=12, MAX_FLIGHTS_PER_USER=3
+           -> Persist state to flights.ron (atomic write+rename)
+           -> Reply via oneshot channel from CommandContext
+
+Every 30-120s (adaptive) -> poll_all_flights queries adsb.lol per tracked hex
+           -> detect_phase compares altitude / vertical_rate / ground state
+           -> Emit msg_* chat messages on phase change (takeoff/cruise/descent/approach/landing)
+           -> Annotate emergency squawks (7500/7600/7700)
+           -> Mark flight lost after 300s missing, remove after 1800s
 ```
 
 ### Latency Monitor (Continuous)
