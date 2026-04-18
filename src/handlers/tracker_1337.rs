@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use tokio::{
     fs,
     sync::{Mutex, broadcast},
-    time::{Duration, sleep},
 };
 use tracing::{debug, error, info, instrument, warn};
 use twitch_irc::{
@@ -26,7 +25,7 @@ use twitch_irc::{
     transport::Transport,
 };
 
-use crate::{get_data_dir, resolve_berlin_time};
+use crate::{clock::Clock, get_data_dir, resolve_berlin_time};
 
 pub const TARGET_HOUR: u32 = 13;
 pub const TARGET_MINUTE: u32 = 37;
@@ -50,10 +49,13 @@ pub struct PersonalBest {
 /// Calculates the next occurrence of a daily time in Europe/Berlin timezone.
 ///
 /// If the specified time has already passed today, returns tomorrow's occurrence.
-pub(crate) fn calculate_next_occurrence(hour: u32, minute: u32) -> chrono::DateTime<Utc> {
-    let berlin_now = Utc::now().with_timezone(&chrono_tz::Europe::Berlin);
+pub(crate) fn calculate_next_occurrence(
+    clock: &dyn Clock,
+    hour: u32,
+    minute: u32,
+) -> chrono::DateTime<Utc> {
+    let berlin_now = clock.now_utc().with_timezone(&chrono_tz::Europe::Berlin);
 
-    // Create target time today in Berlin timezone
     let mut target = resolve_berlin_time(
         berlin_now
             .date_naive()
@@ -61,7 +63,6 @@ pub(crate) fn calculate_next_occurrence(hour: u32, minute: u32) -> chrono::DateT
             .expect("Invalid hour/minute for Berlin time"),
     );
 
-    // If target time has already passed today, schedule for tomorrow
     if target <= berlin_now {
         target = resolve_berlin_time(
             (berlin_now + chrono::Duration::days(1))
@@ -75,51 +76,50 @@ pub(crate) fn calculate_next_occurrence(hour: u32, minute: u32) -> chrono::DateT
 }
 
 /// Sleeps until the next occurrence of a daily time in Europe/Berlin timezone.
-#[instrument]
-pub(crate) async fn wait_until_schedule(hour: u32, minute: u32) {
-    let next_run = calculate_next_occurrence(hour, minute);
-    let now = Utc::now();
+#[instrument(skip(clock))]
+pub(crate) async fn wait_until_schedule(clock: &dyn Clock, hour: u32, minute: u32) {
+    let next_run = calculate_next_occurrence(clock, hour, minute);
+    let now = clock.now_utc();
 
     if next_run > now {
-        let duration = (next_run - now)
-            .to_std()
-            .expect("Duration calculation failed");
-
         info!(
             next_run_utc = ?next_run,
             next_run_berlin = ?next_run.with_timezone(&chrono_tz::Europe::Berlin),
-            wait_seconds = duration.as_secs(),
+            wait_seconds = (next_run - now).num_seconds(),
             "Sleeping until next scheduled time"
         );
 
-        sleep(duration).await;
+        clock.sleep_until(next_run).await;
     }
 }
 
 /// Sleeps until a specific time today in Europe/Berlin timezone.
 ///
 /// If the target time has already passed, returns immediately.
-#[instrument]
-pub(crate) async fn sleep_until_hms(hour: u32, minute: u32, second: u32, expected_latency: u32) {
-    let now = Utc::now().with_timezone(&chrono_tz::Europe::Berlin);
-    let time = resolve_berlin_time(
+#[instrument(skip(clock))]
+pub(crate) async fn sleep_until_hms(
+    clock: &dyn Clock,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    expected_latency: u32,
+) {
+    let now = clock.now_utc().with_timezone(&chrono_tz::Europe::Berlin);
+    let target = resolve_berlin_time(
         now.date_naive()
             .and_hms_opt(hour, minute, second)
             .expect("Invalid stats time"),
-    );
+    )
+    .with_timezone(&Utc)
+        - TimeDelta::milliseconds(i64::from(expected_latency));
 
-    let wait_duration = (time.with_timezone(&Utc)
-        - Utc::now()
-        - TimeDelta::milliseconds(i64::from(expected_latency)))
-    .to_std()
-    .unwrap_or(Duration::from_secs(0));
-
-    if wait_duration > Duration::from_secs(0) {
+    let now_utc = clock.now_utc();
+    if target > now_utc {
         info!(
-            wait_seconds = wait_duration.as_secs(),
+            wait_seconds = (target - now_utc).num_seconds(),
             "Waiting until 13:38 to post stats"
         );
-        sleep(wait_duration).await;
+        clock.sleep_until(target).await;
     }
 }
 
@@ -326,13 +326,14 @@ pub(crate) async fn monitor_1337_messages(
 ///
 /// Monitors messages during the 13:37 window, tracks unique users, and posts stats at 13:38.
 /// Runs continuously, resetting state daily.
-#[instrument(skip(broadcast_tx, client, channel, latency))]
+#[instrument(skip(broadcast_tx, client, channel, latency, clock))]
 pub async fn run_1337_handler<T, L>(
     broadcast_tx: broadcast::Sender<ServerMessage>,
     client: Arc<TwitchIRCClient<T, L>>,
     channel: String,
     latency: Arc<AtomicU32>,
     leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
+    clock: Arc<dyn Clock>,
 ) where
     T: Transport,
     L: LoginCredentials,
@@ -341,7 +342,7 @@ pub async fn run_1337_handler<T, L>(
 
     loop {
         // Wait until 13:36 to start monitoring
-        wait_until_schedule(TARGET_HOUR, TARGET_MINUTE - 1).await;
+        wait_until_schedule(clock.as_ref(), TARGET_HOUR, TARGET_MINUTE - 1).await;
 
         info!("Starting daily 1337 monitoring session");
 
@@ -361,6 +362,7 @@ pub async fn run_1337_handler<T, L>(
 
         // Wait until 13:36:30 to send reminder
         sleep_until_hms(
+            clock.as_ref(),
             TARGET_HOUR,
             TARGET_MINUTE - 1,
             30,
@@ -375,6 +377,7 @@ pub async fn run_1337_handler<T, L>(
 
         // Wait until 13:38 to post stats
         sleep_until_hms(
+            clock.as_ref(),
             TARGET_HOUR,
             TARGET_MINUTE + 1,
             0,
@@ -418,7 +421,8 @@ pub async fn run_1337_handler<T, L>(
         }
 
         // Update leaderboard with today's sub-1s times
-        let today = Utc::now()
+        let today = clock
+            .now_utc()
             .with_timezone(&chrono_tz::Europe::Berlin)
             .date_naive();
         {

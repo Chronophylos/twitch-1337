@@ -1,9 +1,6 @@
 use std::{
     collections::HashSet,
-    sync::{
-        Arc,
-        atomic::AtomicU32,
-    },
+    sync::{Arc, atomic::AtomicU32},
 };
 
 use chrono::Utc;
@@ -16,13 +13,16 @@ use tokio::{
 use tracing::{error, info, instrument, trace, warn};
 use twitch_1337::{
     AuthenticatedTwitchClient, FileBasedTokenStorage, aviation,
+    clock::{Clock, SystemClock},
     config::{AiBackend, Configuration},
     database, flight_tracker, get_config_path, get_data_dir,
     handlers::{
         commands::CommandHandlerConfig,
         latency::run_latency_handler,
         router::run_message_router,
-        schedules::{load_schedules_from_config, run_config_watcher_service, run_scheduled_message_handler},
+        schedules::{
+            load_schedules_from_config, run_config_watcher_service, run_scheduled_message_handler,
+        },
         tracker_1337::{TARGET_HOUR, TARGET_MINUTE, load_leaderboard, run_1337_handler},
     },
     ping,
@@ -312,8 +312,9 @@ pub async fn main() -> Result<()> {
         let channel = config.twitch.channel.clone();
         let latency = latency.clone();
         let leaderboard = leaderboard.clone();
+        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         async move {
-            run_1337_handler(broadcast_tx, client, channel, latency, leaderboard).await;
+            run_1337_handler(broadcast_tx, client, channel, latency, leaderboard, clock).await;
         }
     });
 
