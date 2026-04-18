@@ -50,10 +50,16 @@ cargo run --release
 # Check code without building
 cargo check
 
-# Lint with clippy
-cargo clippy
+# Format (CI checks this — run before every commit)
+cargo fmt --all
 
-# Run tests (when added)
+# Verify formatting without writing (matches CI)
+cargo fmt --all -- --check
+
+# Lint with clippy — strict mode, matches CI
+cargo clippy --all-targets -- -D warnings
+
+# Run tests
 cargo test
 ```
 
@@ -731,6 +737,22 @@ Startup    -> Log info: "No schedules configured, scheduled messages disabled"
 ```
 
 ## Development Tips
+
+### Pre-commit Checks (required)
+
+CI runs `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` — any drift or warning fails the build. Before committing, always run:
+
+```bash
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+Notes:
+- Run `cargo fmt --all` (not just `cargo fmt`) so every crate in the workspace is covered.
+- Clippy lints are strict (`-D warnings`) and additional lints are enabled in `Cargo.toml` under `[lints.clippy]` — treat every warning as a build failure.
+- After any code change that introduces new functions, expressions, or imports, re-run fmt + clippy before staging. Don't rely on editors — verify with the CLI.
+- If a clippy lint feels wrong, fix the underlying issue or add a targeted `#[allow(...)]` with a one-line comment explaining why. Do not relax the CI gate.
 
 ### General
 - The `twitch_irc::irc!` macro requires a standalone `use twitch_irc::irc;` — it cannot be added to the braced `use twitch_irc::{...}` block
