@@ -7,8 +7,9 @@ use std::time::Duration;
 use tracing::{debug, error, warn};
 use twitch_irc::message::PrivmsgMessage;
 
+use crate::AuthenticatedTwitchClient;
 use crate::cooldown::format_cooldown_remaining;
-use crate::{APP_USER_AGENT, AuthenticatedTwitchClient, MAX_RESPONSE_LENGTH, truncate_response};
+use crate::util::{APP_USER_AGENT, MAX_RESPONSE_LENGTH, truncate_response};
 
 const ADSBDB_BASE_URL: &str = "https://api.adsbdb.com/v0";
 const ADSBLOL_BASE_URL: &str = "https://api.adsb.lol/v2";
@@ -110,7 +111,7 @@ fn icao_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
         .map(|(lat, lon, name)| (*lat, *lon, name.as_str()))
 }
 
-pub(crate) fn iata_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
+pub fn iata_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
     airport_data()
         .by_iata
         .get(code)
@@ -176,28 +177,28 @@ enum ResolveResult {
 // --- adsb.lol types ---
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct AdsbLolResponse {
+pub struct AdsbLolResponse {
     #[serde(default)]
-    pub(crate) ac: Vec<NearbyAircraft>,
+    pub ac: Vec<NearbyAircraft>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct NearbyAircraft {
-    pub(crate) hex: Option<String>,
-    pub(crate) flight: Option<String>,
-    pub(crate) t: Option<String>,
-    pub(crate) alt_baro: Option<AltBaro>,
-    pub(crate) lat: Option<f64>,
-    pub(crate) lon: Option<f64>,
-    pub(crate) gs: Option<f64>,
-    pub(crate) baro_rate: Option<i64>,
-    pub(crate) geom_rate: Option<i64>,
-    pub(crate) squawk: Option<String>,
-    pub(crate) nav_modes: Option<Vec<String>>,
+pub struct NearbyAircraft {
+    pub hex: Option<String>,
+    pub flight: Option<String>,
+    pub t: Option<String>,
+    pub alt_baro: Option<AltBaro>,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub gs: Option<f64>,
+    pub baro_rate: Option<i64>,
+    pub geom_rate: Option<i64>,
+    pub squawk: Option<String>,
+    pub nav_modes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum AltBaro {
+pub enum AltBaro {
     Feet(i64),
     Ground,
 }
@@ -235,14 +236,14 @@ struct AdsbDbResponseInner {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct FlightRoute {
-    pub(crate) origin: Airport,
-    pub(crate) destination: Airport,
+pub struct FlightRoute {
+    pub origin: Airport,
+    pub destination: Airport,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct Airport {
-    pub(crate) iata_code: String,
+pub struct Airport {
+    pub iata_code: String,
 }
 
 // --- adsbdb airline types ---
@@ -305,7 +306,7 @@ impl AviationClient {
         Ok(resp.ac)
     }
 
-    pub(crate) async fn get_aircraft_by_hex(&self, hex: &str) -> Result<Option<NearbyAircraft>> {
+    pub async fn get_aircraft_by_hex(&self, hex: &str) -> Result<Option<NearbyAircraft>> {
         let url = format!("{ADSBLOL_BASE_URL}/hex/{hex}");
         debug!(hex = %hex, "Fetching aircraft by hex from adsb.lol");
 
@@ -324,10 +325,7 @@ impl AviationClient {
         Ok(resp.ac.into_iter().next())
     }
 
-    pub(crate) async fn get_aircraft_by_callsign(
-        &self,
-        callsign: &str,
-    ) -> Result<Option<NearbyAircraft>> {
+    pub async fn get_aircraft_by_callsign(&self, callsign: &str) -> Result<Option<NearbyAircraft>> {
         let url = format!("{ADSBLOL_BASE_URL}/callsign/{callsign}");
         debug!(callsign = %callsign, "Fetching aircraft by callsign from adsb.lol");
 
@@ -346,7 +344,7 @@ impl AviationClient {
         Ok(resp.ac.into_iter().next())
     }
 
-    pub(crate) async fn get_flight_route(&self, callsign: &str) -> Result<Option<FlightRoute>> {
+    pub async fn get_flight_route(&self, callsign: &str) -> Result<Option<FlightRoute>> {
         let url = format!("{ADSBDB_BASE_URL}/callsign/{callsign}");
         debug!(callsign = %callsign, "Fetching flight route from adsbdb");
 
@@ -370,7 +368,7 @@ impl AviationClient {
     }
 
     /// Resolve a potential IATA flight number to an ICAO callsign.
-    pub(crate) async fn resolve_callsign(&self, input: &str) -> String {
+    pub async fn resolve_callsign(&self, input: &str) -> String {
         if !is_iata_flight_number(input) {
             return input.to_string();
         }

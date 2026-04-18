@@ -8,7 +8,7 @@ use tracing::{debug, error, instrument};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::llm::{ChatCompletionRequest, LlmClient, Message};
 use crate::memory;
-use crate::{ChatHistory, MAX_RESPONSE_LENGTH, truncate_response};
+use crate::util::{ChatHistory, MAX_RESPONSE_LENGTH, truncate_response};
 
 use super::{Command, CommandContext};
 

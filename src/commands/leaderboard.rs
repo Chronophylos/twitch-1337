@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 use tracing::error;
 
 use super::{Command, CommandContext};
-use crate::PersonalBest;
+use crate::util::PersonalBest;
 
 pub struct LeaderboardCommand {
     leaderboard: Arc<RwLock<HashMap<String, PersonalBest>>>,

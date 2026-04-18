@@ -7,42 +7,28 @@ use std::{
     },
 };
 
-use async_trait::async_trait;
-use chrono::{MappedLocalTime, TimeDelta, Timelike, Utc};
-use color_eyre::eyre::{self, Result, WrapErr, bail};
+use chrono::{TimeDelta, Timelike, Utc};
+use color_eyre::eyre::{Result, WrapErr, bail};
 use rand::seq::IndexedRandom as _;
 use secrecy::{ExposeSecret, SecretString};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::{
-    fs::{self, File},
-    io::AsyncWriteExt,
+    fs,
     sync::{Mutex, broadcast, mpsc::UnboundedReceiver},
     time::{Duration, sleep},
 };
 use tracing::{debug, error, info, instrument, trace, warn};
+use twitch_1337::{
+    AuthenticatedTwitchClient, ChatHistory, FileBasedTokenStorage, PersonalBest, aviation,
+    commands, database, flight_tracker, get_data_dir, llm, memory, ping, prefill,
+    resolve_berlin_time,
+};
 use twitch_irc::irc;
 use twitch_irc::{
     ClientConfig, SecureTCPTransport, TwitchIRCClient,
-    login::{RefreshingLoginCredentials, TokenStorage, UserAccessToken},
+    login::RefreshingLoginCredentials,
     message::{NoticeMessage, PongMessage, PrivmsgMessage, ServerMessage},
 };
-
-mod aviation;
-mod commands;
-mod cooldown;
-mod database;
-mod flight_tracker;
-mod llm;
-mod memory;
-mod ping;
-mod prefill;
-
-/// Type alias for the authenticated Twitch IRC client
-pub(crate) type AuthenticatedTwitchClient =
-    TwitchIRCClient<SecureTCPTransport, RefreshingLoginCredentials<FileBasedTokenStorage>>;
-
-/// Type alias for the shared chat history buffer (username, message text).
-pub(crate) type ChatHistory = Arc<tokio::sync::Mutex<VecDeque<(String, String)>>>;
 
 const TARGET_HOUR: u32 = 13;
 const TARGET_MINUTE: u32 = 37;
@@ -63,9 +49,6 @@ const LATENCY_EMA_ALPHA: f64 = 0.2;
 const LATENCY_LOG_THRESHOLD: u32 = 10;
 
 const LEADERBOARD_FILENAME: &str = "leaderboard.ron";
-
-pub(crate) static APP_USER_AGENT: &str =
-    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 fn default_expected_latency() -> u32 {
     100
@@ -334,18 +317,6 @@ impl Configuration {
     }
 }
 
-/// Resolves a naive datetime to Berlin local time, handling DST transitions.
-///
-/// During spring-forward (gap), interprets as UTC to land just after the gap.
-/// During fall-back (ambiguous), picks the later occurrence.
-fn resolve_berlin_time(naive: chrono::NaiveDateTime) -> chrono::DateTime<chrono_tz::Tz> {
-    match naive.and_local_timezone(chrono_tz::Europe::Berlin) {
-        MappedLocalTime::Single(t) => t,
-        MappedLocalTime::Ambiguous(_, latest) => latest,
-        MappedLocalTime::None => naive.and_utc().with_timezone(&chrono_tz::Europe::Berlin),
-    }
-}
-
 /// Calculates the next occurrence of a daily time in Europe/Berlin timezone.
 ///
 /// If the specified time has already passed today, returns tomorrow's occurrence.
@@ -515,136 +486,6 @@ fn one_of<const L: usize, T>(array: &[T; L]) -> &T {
     array.choose(&mut rand::rng()).unwrap()
 }
 
-/// Parse a compact duration string like "1h", "30m", "2h30m" into a Duration.
-pub(crate) fn parse_flight_duration(s: &str) -> Option<std::time::Duration> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-
-    let mut total_secs: u64 = 0;
-    let mut current_num = String::new();
-
-    for ch in s.chars() {
-        if ch.is_ascii_digit() {
-            current_num.push(ch);
-        } else {
-            match ch.to_ascii_lowercase() {
-                'h' => {
-                    let hours: u64 = current_num.parse().ok()?;
-                    total_secs += hours * 3600;
-                    current_num.clear();
-                }
-                'm' => {
-                    let minutes: u64 = current_num.parse().ok()?;
-                    total_secs += minutes * 60;
-                    current_num.clear();
-                }
-                _ => return None,
-            }
-        }
-    }
-
-    if !current_num.is_empty() || total_secs == 0 {
-        return None;
-    }
-
-    Some(std::time::Duration::from_secs(total_secs))
-}
-
-/// Maximum response length for Twitch chat (to stay within limits).
-pub(crate) const MAX_RESPONSE_LENGTH: usize = 500;
-
-/// Truncates a string to the maximum number of characters at a word boundary.
-pub(crate) fn truncate_response(text: &str, max_chars: usize) -> String {
-    // Collapse whitespace and newlines
-    let collapsed: String = text.split_whitespace().fold(String::new(), |mut acc, w| {
-        if !acc.is_empty() {
-            acc.push(' ');
-        }
-        acc.push_str(w);
-        acc
-    });
-
-    // Find the byte index corresponding to the max_chars boundary
-    let byte_limit = match collapsed.char_indices().nth(max_chars) {
-        Some((byte_idx, _)) => byte_idx,
-        None => return collapsed, // Fewer than max_chars characters
-    };
-
-    // Find last space before the character limit
-    let truncated = &collapsed[..byte_limit];
-    if let Some(last_space) = truncated.rfind(' ') {
-        format!("{}...", &truncated[..last_space])
-    } else {
-        format!("{}...", truncated)
-    }
-}
-
-/// Monitors broadcast messages and tracks users who say 1337 during the target minute.
-///
-/// Runs in a loop until the broadcast channel closes or an error occurs.
-/// Only tracks messages sent during the configured TARGET_HOUR:TARGET_MINUTE.
-#[instrument(skip(broadcast_rx, total_users))]
-async fn monitor_1337_messages(
-    mut broadcast_rx: broadcast::Receiver<ServerMessage>,
-    total_users: Arc<Mutex<HashMap<String, Option<u64>>>>,
-) {
-    loop {
-        match broadcast_rx.recv().await {
-            Ok(message) => {
-                let ServerMessage::Privmsg(privmsg) = message else {
-                    continue;
-                };
-
-                // Check time and message content
-                let local = privmsg
-                    .server_timestamp
-                    .with_timezone(&chrono_tz::Europe::Berlin);
-                if (local.hour(), local.minute()) != (TARGET_HOUR, TARGET_MINUTE) {
-                    continue;
-                }
-
-                if is_valid_1337_message(&privmsg) {
-                    let mut users = total_users.lock().await;
-                    if users.len() >= MAX_USERS {
-                        error!(max = MAX_USERS, "User limit reached");
-                    } else if !users.contains_key(privmsg.sender.login.as_str()) {
-                        let username = privmsg.sender.login.clone();
-                        let ms_since_minute = u64::from(local.second()) * 1000
-                            + u64::from(local.timestamp_subsec_millis());
-                        if ms_since_minute < 1000 {
-                            debug!(user = %username, ms = ms_since_minute, "User said 1337 at 13:37 (sub-second)");
-                            users.insert(username, Some(ms_since_minute));
-                        } else {
-                            debug!(user = %username, "User said 1337 at 13:37");
-                            users.insert(username, None);
-                        }
-                    }
-                }
-            }
-            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                error!(skipped, "1337 handler lagged, skipped messages");
-            }
-            Err(broadcast::error::RecvError::Closed) => {
-                debug!("Broadcast channel closed, 1337 monitor exiting");
-                break;
-            }
-        }
-    }
-}
-
-/// A user's personal best time for the 1337 challenge.
-///
-/// Tracks the fastest sub-1-second message time and the date it was achieved.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PersonalBest {
-    /// Milliseconds after 13:37:00.000 (0-999)
-    pub(crate) ms: u64,
-    /// The date (Europe/Berlin) when this record was set
-    pub(crate) date: chrono::NaiveDate,
-}
-
 /// Loads the all-time leaderboard from disk.
 ///
 /// Returns an empty HashMap if the file doesn't exist or is corrupted.
@@ -702,67 +543,56 @@ async fn save_leaderboard(leaderboard: &HashMap<String, PersonalBest>) {
     }
 }
 
-/// Token storage implementation that persists tokens to disk.
+/// Monitors broadcast messages and tracks users who say 1337 during the target minute.
 ///
-/// Falls back to initial refresh token from config on first load if no token file exists.
-#[derive(Debug)]
-struct FileBasedTokenStorage {
-    path: PathBuf,
-    initial_refresh_token: SecretString,
-}
-
-impl FileBasedTokenStorage {
-    fn new(initial_refresh_token: SecretString) -> Self {
-        Self {
-            path: get_data_dir().join("token.ron"),
-            initial_refresh_token,
-        }
-    }
-}
-
-#[async_trait]
-impl TokenStorage for FileBasedTokenStorage {
-    type LoadError = eyre::Report;
-    type UpdateError = eyre::Report;
-
-    #[instrument(skip(self))]
-    async fn load_token(&mut self) -> Result<UserAccessToken, Self::LoadError> {
-        // Try to load from file first
-        match fs::read_to_string(&self.path).await {
-            Ok(contents) => {
-                debug!(
-                    path = %self.path.display(),
-                    "Loading user access token from file"
-                );
-                Ok(ron::from_str(&contents)?)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // File doesn't exist yet, use initial refresh token from configuration
-                warn!("Token file not found, using refresh token from configuration");
-                let token = UserAccessToken {
-                    access_token: String::new(),
-                    refresh_token: self.initial_refresh_token.expose_secret().to_string(),
-                    created_at: chrono::Utc::now(),
-                    expires_at: None,
+/// Runs in a loop until the broadcast channel closes or an error occurs.
+/// Only tracks messages sent during the configured TARGET_HOUR:TARGET_MINUTE.
+#[instrument(skip(broadcast_rx, total_users))]
+async fn monitor_1337_messages(
+    mut broadcast_rx: broadcast::Receiver<ServerMessage>,
+    total_users: Arc<Mutex<HashMap<String, Option<u64>>>>,
+) {
+    loop {
+        match broadcast_rx.recv().await {
+            Ok(message) => {
+                let ServerMessage::Privmsg(privmsg) = message else {
+                    continue;
                 };
 
-                // Save the token for future use
-                self.update_token(&token).await?;
+                // Check time and message content
+                let local = privmsg
+                    .server_timestamp
+                    .with_timezone(&chrono_tz::Europe::Berlin);
+                if (local.hour(), local.minute()) != (TARGET_HOUR, TARGET_MINUTE) {
+                    continue;
+                }
 
-                Ok(token)
+                if is_valid_1337_message(&privmsg) {
+                    let mut users = total_users.lock().await;
+                    if users.len() >= MAX_USERS {
+                        error!(max = MAX_USERS, "User limit reached");
+                    } else if !users.contains_key(privmsg.sender.login.as_str()) {
+                        let username = privmsg.sender.login.clone();
+                        let ms_since_minute = u64::from(local.second()) * 1000
+                            + u64::from(local.timestamp_subsec_millis());
+                        if ms_since_minute < 1000 {
+                            debug!(user = %username, ms = ms_since_minute, "User said 1337 at 13:37 (sub-second)");
+                            users.insert(username, Some(ms_since_minute));
+                        } else {
+                            debug!(user = %username, "User said 1337 at 13:37");
+                            users.insert(username, None);
+                        }
+                    }
+                }
             }
-            Err(e) => Err(eyre::Report::from(e).wrap_err("Failed to read token file")),
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                error!(skipped, "1337 handler lagged, skipped messages");
+            }
+            Err(broadcast::error::RecvError::Closed) => {
+                debug!("Broadcast channel closed, 1337 monitor exiting");
+                break;
+            }
         }
-    }
-
-    #[instrument(skip(self, token))]
-    async fn update_token(&mut self, token: &UserAccessToken) -> Result<(), Self::UpdateError> {
-        debug!(path = %self.path.display(), "Updating token in file");
-        let buffer = ron::to_string(token)?.into_bytes();
-        let tmp_path = self.path.with_extension("ron.tmp");
-        File::create(&tmp_path).await?.write_all(&buffer).await?;
-        fs::rename(&tmp_path, &self.path).await?;
-        Ok(())
     }
 }
 
@@ -1299,18 +1129,9 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
-fn get_data_dir() -> PathBuf {
-    std::env::var("DATA_DIR")
-        .unwrap_or_else(|_| "/var/lib/twitch-1337".to_string())
-        .into()
-}
-
 #[instrument]
 async fn ensure_data_dir() -> Result<()> {
-    let data_dir = get_data_dir();
-    if !data_dir.exists() {
-        tokio::fs::create_dir_all(data_dir).await?;
-    }
+    tokio::fs::create_dir_all(get_data_dir()).await?;
     Ok(())
 }
 
