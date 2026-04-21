@@ -83,6 +83,54 @@ async fn tracker_1337_posts_reminder_and_stats() {
 
 #[tokio::test]
 #[serial]
+async fn tracker_1337_updates_leaderboard_with_sub_second_time() {
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    // Inject "1337" with tmi-sent-ts at 13:37:00.234 Berlin. The monitor
+    // computes ms_since_minute = seconds*1000 + subsec_millis; alice should
+    // be recorded as 234ms and persisted to leaderboard.ron.
+    let ts_alice_234ms = TMI_TS_13_37_BERLIN + 234;
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", ts_alice_234ms);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    yield_a_bit().await;
+
+    // Advance to 13:38:00 so the handler computes stats + persists leaderboard.
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let _stats = bot.expect_say(Duration::from_secs(3)).await;
+
+    // leaderboard.ron written under DATA_DIR.
+    let lb_path = bot.data_dir.path().join("leaderboard.ron");
+    let contents = tokio::fs::read_to_string(&lb_path)
+        .await
+        .expect("read leaderboard.ron");
+    assert!(
+        contents.contains("alice"),
+        "leaderboard missing alice: {contents}"
+    );
+    assert!(
+        contents.contains("ms:234") || contents.contains("ms: 234"),
+        "leaderboard missing sub-second time 234: {contents}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
 async fn tracker_1337_zero_users_posts_erm_or_fuh() {
     let mut bot = TestBotBuilder::new()
         .at(Berlin
