@@ -182,6 +182,7 @@ pub struct Configuration {
     pub schedules: Vec<ScheduleConfig>,
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl Configuration {
     /// Minimal configuration suitable for integration tests. Channel =
     /// "test_chan", username = "bot", no AI, no schedules, default ping
