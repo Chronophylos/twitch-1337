@@ -55,6 +55,19 @@ pub fn privmsg_as_mod(channel: &str, user: &str, text: &str) -> String {
     privmsg_with(channel, user, text, &[("mod", "1")])
 }
 
+/// Build a PRIVMSG with a specific `tmi-sent-ts` (Unix milliseconds).
+///
+/// `server_timestamp` is parsed from this tag; use it when the handler filters
+/// by clock time (e.g. the 13:37 monitor's hour/minute check).
+pub fn privmsg_at(channel: &str, user: &str, text: &str, tmi_ts_ms: i64) -> String {
+    privmsg_with(
+        channel,
+        user,
+        text,
+        &[("tmi-sent-ts", &tmi_ts_ms.to_string())],
+    )
+}
+
 /// Extract message body from a captured outgoing IRC line
 /// (`PRIVMSG #chan :body` or `@tags :prefix PRIVMSG #chan :body`).
 ///
