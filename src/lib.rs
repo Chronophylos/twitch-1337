@@ -103,7 +103,7 @@ where
 
     let schedules_enabled = !config.schedules.is_empty();
 
-    let leaderboard = Arc::new(tokio::sync::RwLock::new(load_leaderboard().await));
+    let leaderboard = Arc::new(tokio::sync::RwLock::new(load_leaderboard(&data_dir).await));
 
     let ping_manager = Arc::new(tokio::sync::RwLock::new(
         ping::PingManager::load(&data_dir).wrap_err("Failed to load ping manager")?,
@@ -193,8 +193,9 @@ where
         let lat = latency.clone();
         let lb = leaderboard.clone();
         let clk = clock.clone();
+        let dd = data_dir.clone();
         async move {
-            run_1337_handler(btx, client, channel, lat, lb, clk).await;
+            run_1337_handler(btx, client, channel, lat, lb, clk, dd).await;
         }
     });
 
@@ -218,6 +219,7 @@ where
                 admin_channel: config.twitch.admin_channel.clone(),
                 bot_username: config.twitch.username.clone(),
                 channel: config.twitch.channel.clone(),
+                data_dir: data_dir.clone(),
             })
             .await;
         }

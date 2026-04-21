@@ -25,7 +25,7 @@ use twitch_irc::{
     transport::Transport,
 };
 
-use crate::{clock::Clock, get_data_dir, resolve_berlin_time};
+use crate::{clock::Clock, resolve_berlin_time};
 
 pub const TARGET_HOUR: u32 = 13;
 pub const TARGET_MINUTE: u32 = 37;
@@ -216,8 +216,8 @@ pub(crate) fn one_of<const L: usize, T>(array: &[T; L]) -> &T {
 /// Loads the all-time leaderboard from disk.
 ///
 /// Returns an empty HashMap if the file doesn't exist or is corrupted.
-pub async fn load_leaderboard() -> HashMap<String, PersonalBest> {
-    let path = get_data_dir().join(LEADERBOARD_FILENAME);
+pub async fn load_leaderboard(data_dir: &std::path::Path) -> HashMap<String, PersonalBest> {
+    let path = data_dir.join(LEADERBOARD_FILENAME);
     match fs::read_to_string(&path).await {
         Ok(contents) => match ron::from_str::<HashMap<String, PersonalBest>>(&contents) {
             Ok(leaderboard) => {
@@ -247,8 +247,11 @@ pub async fn load_leaderboard() -> HashMap<String, PersonalBest> {
 /// Saves the all-time leaderboard to disk using atomic write+rename.
 ///
 /// Logs an error and continues if the write fails.
-pub(crate) async fn save_leaderboard(leaderboard: &HashMap<String, PersonalBest>) {
-    let path = get_data_dir().join(LEADERBOARD_FILENAME);
+pub(crate) async fn save_leaderboard(
+    leaderboard: &HashMap<String, PersonalBest>,
+    data_dir: &std::path::Path,
+) {
+    let path = data_dir.join(LEADERBOARD_FILENAME);
     let tmp_path = path.with_extension("ron.tmp");
     match ron::to_string(leaderboard) {
         Ok(serialized) => {
@@ -334,6 +337,7 @@ pub async fn run_1337_handler<T, L>(
     latency: Arc<AtomicU32>,
     leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
     clock: Arc<dyn Clock>,
+    data_dir: std::path::PathBuf,
 ) where
     T: Transport,
     L: LoginCredentials,
@@ -445,7 +449,7 @@ pub async fn run_1337_handler<T, L>(
                     }
                 }
             }
-            save_leaderboard(&leaderboard_guard).await;
+            save_leaderboard(&leaderboard_guard, &data_dir).await;
         }
 
         // Post stats message
