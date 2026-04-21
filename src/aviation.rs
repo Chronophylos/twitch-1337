@@ -14,6 +14,7 @@ use crate::util::{APP_USER_AGENT, MAX_RESPONSE_LENGTH, truncate_response};
 
 const ADSBDB_BASE_URL: &str = "https://api.adsbdb.com/v0";
 const ADSBLOL_BASE_URL: &str = "https://api.adsb.lol/v2";
+const NOMINATIM_BASE_URL: &str = "https://nominatim.openstreetmap.org";
 const UP_SEARCH_RADIUS_NM: u16 = 15;
 const UP_COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const UP_ADSBLOL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -62,7 +63,6 @@ fn is_valid_plz(plz: &str) -> bool {
 // --- Airport Lookup ---
 
 const AIRPORT_DATA: &str = include_str!("../data/airports.csv");
-const NOMINATIM_BASE_URL: &str = "https://nominatim.openstreetmap.org";
 
 struct AirportData {
     by_icao: HashMap<String, (f64, f64, String)>,
@@ -271,7 +271,12 @@ struct NominatimResult {
 // --- AviationClient ---
 
 #[derive(Clone)]
-pub struct AviationClient(reqwest::Client);
+pub struct AviationClient {
+    http: reqwest::Client,
+    adsblol_base_url: String,
+    adsbdb_base_url: String,
+    nominatim_base_url: String,
+}
 
 impl AviationClient {
     pub fn new() -> Result<Self> {
@@ -279,7 +284,26 @@ impl AviationClient {
             .user_agent(APP_USER_AGENT)
             .build()
             .wrap_err("Failed to build aviation HTTP client")?;
-        Ok(Self(http))
+        Ok(Self::new_with_base_url(
+            ADSBLOL_BASE_URL.to_owned(),
+            ADSBDB_BASE_URL.to_owned(),
+            NOMINATIM_BASE_URL.to_owned(),
+            http,
+        ))
+    }
+
+    pub fn new_with_base_url(
+        adsblol_base_url: String,
+        adsbdb_base_url: String,
+        nominatim_base_url: String,
+        http_client: reqwest::Client,
+    ) -> Self {
+        Self {
+            http: http_client,
+            adsblol_base_url,
+            adsbdb_base_url,
+            nominatim_base_url,
+        }
     }
 
     async fn get_aircraft_nearby(
@@ -288,11 +312,11 @@ impl AviationClient {
         lon: f64,
         radius_nm: u16,
     ) -> Result<Vec<NearbyAircraft>> {
-        let url = format!("{ADSBLOL_BASE_URL}/point/{lat}/{lon}/{radius_nm}");
+        let url = format!("{}/point/{lat}/{lon}/{radius_nm}", self.adsblol_base_url);
         debug!(url = %url, "Fetching nearby aircraft from adsb.lol");
 
         let resp: AdsbLolResponse = self
-            .0
+            .http
             .get(&url)
             .send()
             .await
@@ -308,11 +332,11 @@ impl AviationClient {
     }
 
     pub async fn get_aircraft_by_hex(&self, hex: &str) -> Result<Option<NearbyAircraft>> {
-        let url = format!("{ADSBLOL_BASE_URL}/hex/{hex}");
+        let url = format!("{}/hex/{hex}", self.adsblol_base_url);
         debug!(hex = %hex, "Fetching aircraft by hex from adsb.lol");
 
         let resp: AdsbLolResponse = self
-            .0
+            .http
             .get(&url)
             .send()
             .await
@@ -327,11 +351,11 @@ impl AviationClient {
     }
 
     pub async fn get_aircraft_by_callsign(&self, callsign: &str) -> Result<Option<NearbyAircraft>> {
-        let url = format!("{ADSBLOL_BASE_URL}/callsign/{callsign}");
+        let url = format!("{}/callsign/{callsign}", self.adsblol_base_url);
         debug!(callsign = %callsign, "Fetching aircraft by callsign from adsb.lol");
 
         let resp: AdsbLolResponse = self
-            .0
+            .http
             .get(&url)
             .send()
             .await
@@ -346,11 +370,11 @@ impl AviationClient {
     }
 
     pub async fn get_flight_route(&self, callsign: &str) -> Result<Option<FlightRoute>> {
-        let url = format!("{ADSBDB_BASE_URL}/callsign/{callsign}");
+        let url = format!("{}/callsign/{callsign}", self.adsbdb_base_url);
         debug!(callsign = %callsign, "Fetching flight route from adsbdb");
 
         let resp = self
-            .0
+            .http
             .get(&url)
             .send()
             .await
@@ -415,11 +439,11 @@ impl AviationClient {
 
     /// Query adsbdb for an airline's ICAO code by IATA code.
     async fn lookup_airline_icao(&self, iata: &str) -> Result<Option<String>> {
-        let url = format!("{ADSBDB_BASE_URL}/airline/{iata}");
+        let url = format!("{}/airline/{iata}", self.adsbdb_base_url);
         debug!(url = %url, "Fetching airline from adsbdb");
 
         let resp = self
-            .0
+            .http
             .get(&url)
             .send()
             .await
@@ -438,11 +462,11 @@ impl AviationClient {
     }
 
     async fn geocode_nominatim(&self, query: &str) -> Result<Option<ResolvedLocation>> {
-        let url = format!("{NOMINATIM_BASE_URL}/search");
+        let url = format!("{}/search", self.nominatim_base_url);
         debug!(query = %query, "Geocoding via Nominatim");
 
         let resp = self
-            .0
+            .http
             .get(&url)
             .query(&[("q", query), ("format", "json"), ("limit", "1")])
             .send()
