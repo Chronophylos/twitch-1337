@@ -2417,11 +2417,14 @@ name = "twitch-1337"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "chrono",
  "chrono-tz",
  "color-eyre",
  "csv",
+ "either",
  "eyre",
+ "futures-util",
  "notify-debouncer-mini",
  "rand",
  "random-flight",
@@ -2433,6 +2436,8 @@ dependencies = [
  "serial_test",
  "tempfile",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
  "tracing-error",
