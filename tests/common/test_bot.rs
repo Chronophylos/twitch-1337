@@ -91,11 +91,6 @@ impl TestBotBuilder {
     pub async fn spawn(self) -> TestBot {
         let data_dir = TempDir::new().expect("tempdir");
 
-        // SAFETY: tests are serialized via #[serial], no concurrent set_var race.
-        unsafe {
-            std::env::set_var("DATA_DIR", data_dir.path());
-        }
-
         if let Some(entries) = &self.seeded_leaderboard {
             let path = data_dir.path().join("leaderboard.ron");
             let contents = ron::ser::to_string(entries).expect("serialize leaderboard");

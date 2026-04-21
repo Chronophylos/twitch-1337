@@ -16,7 +16,7 @@ use twitch_irc::{
 use crate::{
     ChatHistory, PersonalBest, aviation, commands,
     config::{AiConfig, CooldownsConfig},
-    flight_tracker, get_data_dir, llm, memory, ping, prefill,
+    flight_tracker, llm, memory, ping, prefill,
 };
 
 /// Configuration for the generic command handler.
@@ -39,6 +39,7 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub admin_channel: Option<String>,
     pub bot_username: String,
     pub channel: String,
+    pub data_dir: std::path::PathBuf,
 }
 
 /// Handler for generic text commands that start with `!`.
@@ -66,6 +67,7 @@ where
         admin_channel,
         bot_username,
         channel,
+        data_dir,
     } = cfg;
 
     let broadcast_rx = broadcast_tx.subscribe();
@@ -97,8 +99,6 @@ where
     } else {
         None
     };
-
-    let data_dir = get_data_dir();
 
     let mut cmd_list: Vec<Box<dyn commands::Command<T, L>>> = vec![
         Box::new(commands::ping_admin::PingAdminCommand::new(
