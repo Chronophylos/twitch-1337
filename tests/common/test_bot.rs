@@ -32,7 +32,7 @@ pub struct TestBot {
     pub clock: Arc<FakeClock>,
     pub data_dir: TempDir,
     pub adsb_mock: MockServer,
-    pub rustlog_mock: MockServer,
+    pub nominatim_mock: MockServer,
     pub llm: Arc<FakeLlm>,
     pub channel: String,
     shutdown: Option<oneshot::Sender<()>>,
@@ -102,7 +102,7 @@ impl TestBotBuilder {
             std::fs::write(&path, contents).expect("write leaderboard.ron");
         }
 
-        let (adsb_mock, rustlog_mock) = tokio::join!(MockServer::start(), MockServer::start());
+        let (adsb_mock, nominatim_mock) = tokio::join!(MockServer::start(), MockServer::start());
         let llm = Arc::new(FakeLlm::new());
         let clock = FakeClock::new(self.now);
         let channel = self.config.twitch.channel.clone();
@@ -121,8 +121,8 @@ impl TestBotBuilder {
         let http = reqwest::Client::new();
         let aviation = AviationClient::new_with_base_url(
             adsb_mock.uri(),
-            adsb_mock.uri(),    // adsbdb shares the same mock server in tests
-            rustlog_mock.uri(), // nominatim
+            adsb_mock.uri(),      // adsbdb shares the same mock server in tests
+            nominatim_mock.uri(), // nominatim
             http,
         );
 
@@ -154,7 +154,7 @@ impl TestBotBuilder {
             clock,
             data_dir,
             adsb_mock,
-            rustlog_mock,
+            nominatim_mock,
             llm,
             channel,
             shutdown: Some(shutdown_tx),
