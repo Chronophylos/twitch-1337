@@ -219,8 +219,9 @@ pub(crate) fn one_of<const L: usize, T>(array: &[T; L]) -> &T {
     array.choose(&mut rand::rng()).unwrap()
 }
 
-/// Small-chance meme overrides: "777 FORSEN" when count == 7, "6-7" when count
-/// in {6, 7}. Rolls are independent so at count=7 either (or neither) may fire.
+/// Small-chance meme overrides keyed to specific counts. Each qualifying rule
+/// rolls independently; first success wins. Counts with no rule fall through
+/// to the regular `match` in `generate_stats_message`.
 fn meme_override(count: usize, rng: &mut impl rand::Rng) -> Option<String> {
     if count == 7 && rng.random::<f32>() < MEME_OVERRIDE_CHANCE {
         return Some(
@@ -234,6 +235,28 @@ fn meme_override(count: usize, rng: &mut impl rand::Rng) -> Option<String> {
     }
     if matches!(count, 6 | 7) && rng.random::<f32>() < MEME_OVERRIDE_CHANCE {
         return Some(one_of(&["6-7", "6-7 ICANT", "6-7 OOOO"]).to_string());
+    }
+    if count == 3 && rng.random::<f32>() < MEME_OVERRIDE_CHANCE {
+        return Some(one_of(&["3Head", "3Head Clueless", "3Head erm"]).to_string());
+    }
+    if count == 4 && rng.random::<f32>() < MEME_OVERRIDE_CHANCE {
+        return Some(one_of(&["4Head Keepo", "4Head", "4Head FeelsGoodMan"]).to_string());
+    }
+    if count == 5 && rng.random::<f32>() < MEME_OVERRIDE_CHANCE {
+        return Some(
+            one_of(&[
+                "5Head 🍷 Ah yes, I can feel my head throbbing with knowledge and wisdom as I sip upon this Sauvignon blanc",
+                "5Head Galaxybrain",
+                "5Head",
+            ])
+            .to_string(),
+        );
+    }
+    if count == 10 && rng.random::<f32>() < MEME_OVERRIDE_CHANCE {
+        return Some(one_of(&["10/10 IGN", "Perfect 10 Clap", "10, masterpiece Clap"]).to_string());
+    }
+    if count == 13 && rng.random::<f32>() < MEME_OVERRIDE_CHANCE {
+        return Some(one_of(&["unlucky 13 monkaW", "13 monkaW", "13, spooky monkaS"]).to_string());
     }
     None
 }
