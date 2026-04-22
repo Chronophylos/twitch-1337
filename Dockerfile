@@ -2,7 +2,7 @@
 # Uses cargo-chef for efficient dependency caching
 # Final image is FROM scratch with statically linked musl binary
 
-FROM docker.io/lukemathwalker/cargo-chef:latest-rust-1 as base
+FROM docker.io/lukemathwalker/cargo-chef:latest-rust-1 AS base
 
 WORKDIR /app
 # Install musl tools for static linking
