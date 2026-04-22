@@ -61,9 +61,7 @@ impl SuspensionManager {
     }
 
     /// Return `Some(remaining)` if `key` is currently suspended, else `None`.
-    ///
-    /// Does not remove expired entries. The map is bounded by the number of
-    /// registered commands so it cannot grow without bound in practice.
+    /// Expired entries are not removed; callers read and ignore them.
     pub async fn is_suspended(&self, key: &str) -> Option<Duration> {
         let key = key.to_ascii_lowercase();
         let guard = self.inner.read().await;
@@ -104,8 +102,7 @@ impl std::error::Error for ParseDurationError {}
 /// Parse a short duration string.
 ///
 /// Accepted forms: `30s`, `10m`, `2h`, `1d`, or a bare integer (seconds).
-/// Duration must be > 0 and <= [`MAX_SUSPEND_DURATION`] (7 days). Rejects
-/// negative values implicitly via `u64`.
+/// Duration must be > 0 and <= [`MAX_SUSPEND_DURATION`] (7 days).
 pub fn parse_duration(input: &str) -> Result<Duration, ParseDurationError> {
     let s = input.trim();
     if s.is_empty() {
@@ -252,7 +249,6 @@ mod tests {
         mgr.suspend("ai", Duration::from_secs(3600)).await;
         mgr.suspend("ai", Duration::from_millis(30)).await;
         tokio::time::sleep(Duration::from_millis(60)).await;
-        // Second call shortened the suspension; it should now be expired.
         assert!(mgr.is_suspended("ai").await.is_none());
     }
 

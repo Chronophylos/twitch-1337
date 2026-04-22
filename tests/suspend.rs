@@ -8,6 +8,13 @@ use common::{TestBot, TestBotBuilder};
 use serial_test::serial;
 use twitch_1337::PersonalBest;
 
+/// twitch-irc's default rate limiter allows 5 msgs / 150 ms per connection.
+/// When a test crosses that threshold the client opens a second connection,
+/// but FakeTransport's `install()` slot has already been drained — the
+/// second connect hangs. Tests that cross the boundary pause long enough
+/// for the earlier sends to age out of the rate window.
+const RATE_LIMIT_DRAIN_DELAY: Duration = Duration::from_millis(800);
+
 /// Insert a single seeded PB so that `!lb` produces a deterministic reply
 /// (instead of the empty-state message).
 fn seeded_lb_with_alice() -> HashMap<String, PersonalBest> {
@@ -263,12 +270,7 @@ async fn ping_can_be_suspended() {
         "expected ping trigger to mention bob, got: {before}"
     );
 
-    // twitch-irc's default rate limiter (5 msgs / 150ms per connection) kicks
-    // in around the 5th outgoing message and makes the client try to open a
-    // second connection — which fails in tests because FakeTransport's
-    // install()-backed slot has already been drained. A short pause lets the
-    // already-sent messages age out of the rate window.
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    tokio::time::sleep(RATE_LIMIT_DRAIN_DELAY).await;
 
     // Suspend the ping by name. Broadcaster-gated admin command.
     bot.send_as_broadcaster("broadcaster", "!suspend hi 1m")
@@ -283,8 +285,7 @@ async fn ping_can_be_suspended() {
     bot.send("bob", "!hi").await;
     bot.expect_silent(Duration::from_millis(500)).await;
 
-    // Another pause before the 7th outgoing to avoid the rate-limit corner.
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    tokio::time::sleep(RATE_LIMIT_DRAIN_DELAY).await;
 
     // Unsuspend.
     bot.send_as_broadcaster("broadcaster", "!unsuspend hi")
@@ -300,7 +301,7 @@ async fn ping_can_be_suspended() {
     // trigger through the handler (replying with cooldown message) instead
     // of silently dropping it, which proves the ping is no longer
     // suspended.
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    tokio::time::sleep(RATE_LIMIT_DRAIN_DELAY).await;
     bot.send("bob", "!hi").await;
     let after = bot.expect_say(Duration::from_secs(2)).await;
     assert!(
