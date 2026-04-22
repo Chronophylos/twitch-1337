@@ -222,7 +222,7 @@ pub(crate) fn one_of<const L: usize, T>(array: &[T; L]) -> &T {
 /// Small-chance meme overrides keyed to specific counts. Each qualifying rule
 /// rolls independently; first success wins. Counts with no rule fall through
 /// to the regular `match` in `generate_stats_message`.
-fn meme_override(count: usize, rng: &mut impl rand::Rng) -> Option<String> {
+fn meme_override(count: usize, rng: &mut impl rand::RngExt) -> Option<String> {
     if count == 7 && rng.random::<f32>() < MEME_OVERRIDE_CHANCE {
         return Some(
             one_of(&[
