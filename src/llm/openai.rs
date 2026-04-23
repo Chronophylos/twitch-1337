@@ -142,6 +142,29 @@ fn build_openai_messages(request: &ToolChatCompletionRequest) -> Vec<serde_json:
     messages
 }
 
+/// Parse the `arguments` string from an OpenAI-compatible tool call. Returns
+/// the parsed `Value` on success; on failure, returns `Value::Null` plus a
+/// `ToolCallArgsError` with the parse error and a truncated copy of the raw
+/// payload, and emits a `warn!` tracing event. Executors use the error to
+/// surface a useful tool-result to the model instead of silently dropping.
+fn parse_tool_call_arguments(
+    tool: &str,
+    id: &str,
+    raw: &str,
+) -> (serde_json::Value, Option<super::ToolCallArgsError>) {
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(v) => (v, None),
+        Err(e) => {
+            warn!(tool, id, error = %e, raw, "invalid tool-call JSON arguments");
+            let err = super::ToolCallArgsError {
+                error: e.to_string(),
+                raw: truncate_for_echo(raw, 512),
+            };
+            (serde_json::Value::Null, Some(err))
+        }
+    }
+}
+
 // --- Client ---
 
 /// HTTP client for any OpenAI-compatible API (OpenRouter, OpenAI, etc.).
@@ -312,24 +335,11 @@ impl LlmClient for OpenAiClient {
             let calls = tool_calls
                 .into_iter()
                 .map(|tc| {
-                    let (arguments, arguments_parse_error) =
-                        match serde_json::from_str::<serde_json::Value>(&tc.function.arguments) {
-                            Ok(v) => (v, None),
-                            Err(e) => {
-                                warn!(
-                                    tool = %tc.function.name,
-                                    id = %tc.id,
-                                    error = %e,
-                                    raw = %tc.function.arguments,
-                                    "invalid tool-call JSON arguments",
-                                );
-                                let err = super::ToolCallArgsError {
-                                    error: e.to_string(),
-                                    raw: truncate_for_echo(&tc.function.arguments, 512),
-                                };
-                                (serde_json::Value::Null, Some(err))
-                            }
-                        };
+                    let (arguments, arguments_parse_error) = parse_tool_call_arguments(
+                        &tc.function.name,
+                        &tc.id,
+                        &tc.function.arguments,
+                    );
                     super::ToolCall {
                         id: tc.id,
                         name: tc.function.name,
@@ -443,5 +453,33 @@ mod tests {
         assert_eq!(msgs[5]["role"], "tool");
         assert_eq!(msgs[5]["tool_call_id"], "Y");
         assert_eq!(msgs[5]["content"], "Deleted memory 'k2'");
+    }
+
+    #[test]
+    fn parse_tool_call_arguments_valid_json_returns_value() {
+        let (args, err) =
+            parse_tool_call_arguments("save_memory", "X", r#"{"key":"k","fact":"f"}"#);
+        assert!(err.is_none());
+        assert_eq!(args, serde_json::json!({"key": "k", "fact": "f"}));
+    }
+
+    #[test]
+    fn parse_tool_call_arguments_malformed_json_returns_error() {
+        let raw = r#"{"key":"k" "fact":"f"}"#; // missing comma
+        let (args, err) = parse_tool_call_arguments("save_memory", "X", raw);
+        assert_eq!(args, serde_json::Value::Null);
+        let err = err.expect("parse error must be set");
+        assert!(!err.error.is_empty());
+        assert_eq!(err.raw, raw);
+    }
+
+    #[test]
+    fn parse_tool_call_arguments_truncates_oversized_raw() {
+        let raw = "x".repeat(1024);
+        let (_, err) = parse_tool_call_arguments("save_memory", "X", &raw);
+        let err = err.expect("parse error must be set");
+        assert!(err.raw.starts_with(&"x".repeat(512)));
+        assert!(err.raw.contains("more chars"));
+        assert!(err.raw.chars().count() < raw.chars().count());
     }
 }

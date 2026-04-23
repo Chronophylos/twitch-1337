@@ -61,14 +61,18 @@ pub struct ToolDefinition {
 }
 
 /// A single tool call returned by the LLM.
+///
+/// Executors MUST check `arguments_parse_error` before inspecting `arguments`:
+/// when set, the provider returned an unparseable payload and `arguments` is
+/// `Value::Null`. Acting on the empty `arguments` would make a malformed call
+/// indistinguishable from a genuinely empty one.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: serde_json::Value,
     /// Set when the provider delivered `arguments` as an unparseable string
-    /// (OpenAI-compatible APIs only). Executors should surface this back to the
-    /// model instead of acting on the empty `arguments`.
+    /// (OpenAI-compatible APIs only).
     #[serde(default)]
     pub arguments_parse_error: Option<ToolCallArgsError>,
 }
