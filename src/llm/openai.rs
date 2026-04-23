@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use eyre::{Result, WrapErr as _};
 use reqwest::header::{self, HeaderValue};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use super::{
     ChatCompletionRequest, LlmClient, ToolChatCompletionRequest, ToolChatCompletionResponse,
@@ -311,8 +311,24 @@ impl LlmClient for OpenAiClient {
             let calls = tool_calls
                 .into_iter()
                 .map(|tc| {
-                    let arguments: serde_json::Value =
-                        serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                    let arguments = match serde_json::from_str::<serde_json::Value>(
+                        &tc.function.arguments,
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!(
+                                tool = %tc.function.name,
+                                id = %tc.id,
+                                error = %e,
+                                raw = %tc.function.arguments,
+                                "Tool call arguments were not valid JSON; surfacing parse error to model",
+                            );
+                            serde_json::json!({
+                                "__parse_error": e.to_string(),
+                                "__raw": tc.function.arguments,
+                            })
+                        }
+                    };
                     super::ToolCall {
                         id: tc.id,
                         name: tc.function.name,
