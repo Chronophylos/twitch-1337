@@ -105,16 +105,13 @@ impl MemoryStore {
 
     /// Execute a single tool call against the store. Returns a result message.
     pub fn execute_tool_call(&mut self, call: &ToolCall, max_memories: usize) -> String {
-        if let Some(err) = call.arguments.get("__parse_error").and_then(|v| v.as_str()) {
-            let raw = call
-                .arguments
-                .get("__raw")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+        if let Some(err) = &call.arguments_parse_error {
             return format!(
-                "Error: tool '{}' arguments were not valid JSON ({err}). Raw text: {raw}. \
-                 Resend with a valid JSON object.",
-                call.name
+                "Error: tool '{name}' arguments were not valid JSON ({error}). \
+                 Raw text: {raw}. Resend with a valid JSON object.",
+                name = call.name,
+                error = err.error,
+                raw = err.raw,
             );
         }
         match call.name.as_str() {
@@ -329,14 +326,15 @@ mod tests {
     }
 
     #[test]
-    fn execute_tool_call_surfaces_parse_error_sentinel() {
+    fn execute_tool_call_surfaces_parse_error() {
         let mut store = empty_store();
         let call = ToolCall {
             id: "c1".to_string(),
             name: "save_memory".to_string(),
-            arguments: serde_json::json!({
-                "__parse_error": "expected `,` or `}` at line 1 column 17",
-                "__raw": "{\"key\":\"k\" \"fact\":\"f\"}",
+            arguments: serde_json::Value::Null,
+            arguments_parse_error: Some(llm::ToolCallArgsError {
+                error: "expected `,` or `}` at line 1 column 17".to_string(),
+                raw: "{\"key\":\"k\" \"fact\":\"f\"}".to_string(),
             }),
         };
         let result = store.execute_tool_call(&call, 50);
@@ -353,6 +351,7 @@ mod tests {
             id: "c2".to_string(),
             name: "save_memory".to_string(),
             arguments: serde_json::Value::Null,
+            arguments_parse_error: None,
         };
         let result = store.execute_tool_call(&call, 50);
         assert!(

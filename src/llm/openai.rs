@@ -6,6 +6,7 @@ use tracing::{debug, instrument, warn};
 
 use super::{
     ChatCompletionRequest, LlmClient, ToolChatCompletionRequest, ToolChatCompletionResponse,
+    truncate_for_echo,
 };
 use crate::APP_USER_AGENT;
 
@@ -311,28 +312,29 @@ impl LlmClient for OpenAiClient {
             let calls = tool_calls
                 .into_iter()
                 .map(|tc| {
-                    let arguments = match serde_json::from_str::<serde_json::Value>(
-                        &tc.function.arguments,
-                    ) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            warn!(
-                                tool = %tc.function.name,
-                                id = %tc.id,
-                                error = %e,
-                                raw = %tc.function.arguments,
-                                "Tool call arguments were not valid JSON; surfacing parse error to model",
-                            );
-                            serde_json::json!({
-                                "__parse_error": e.to_string(),
-                                "__raw": tc.function.arguments,
-                            })
-                        }
-                    };
+                    let (arguments, arguments_parse_error) =
+                        match serde_json::from_str::<serde_json::Value>(&tc.function.arguments) {
+                            Ok(v) => (v, None),
+                            Err(e) => {
+                                warn!(
+                                    tool = %tc.function.name,
+                                    id = %tc.id,
+                                    error = %e,
+                                    raw = %tc.function.arguments,
+                                    "invalid tool-call JSON arguments",
+                                );
+                                let err = super::ToolCallArgsError {
+                                    error: e.to_string(),
+                                    raw: truncate_for_echo(&tc.function.arguments, 512),
+                                };
+                                (serde_json::Value::Null, Some(err))
+                            }
+                        };
                     super::ToolCall {
                         id: tc.id,
                         name: tc.function.name,
                         arguments,
+                        arguments_parse_error,
                     }
                 })
                 .collect();
@@ -384,6 +386,7 @@ mod tests {
                 id: "X".to_string(),
                 name: "save_memory".to_string(),
                 arguments: serde_json::json!({"key": "k1", "fact": "f1"}),
+                arguments_parse_error: None,
             }],
             results: vec![ToolResultMessage {
                 tool_call_id: "X".to_string(),
@@ -396,6 +399,7 @@ mod tests {
                 id: "Y".to_string(),
                 name: "delete_memory".to_string(),
                 arguments: serde_json::json!({"key": "k2"}),
+                arguments_parse_error: None,
             }],
             results: vec![ToolResultMessage {
                 tool_call_id: "Y".to_string(),
