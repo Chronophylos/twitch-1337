@@ -552,7 +552,11 @@ impl MemoryStore {
             mem.confidence = u8::try_from(new_conf).unwrap_or(0);
         }
         if let Some(src) = drop_source_opt {
+            let before = mem.sources.len();
             mem.sources.retain(|s| s != src);
+            if mem.sources.len() == before {
+                debug!(key, src, "drop_source target not in sources; no-op");
+            }
         }
         format!("Edited memory '{key}' (confidence={})", mem.confidence)
     }
@@ -1310,6 +1314,35 @@ mod tests {
     }
 
     #[test]
+    fn get_memory_missing_key_returns_no_memory() {
+        let s = MemoryStore::default();
+        let call = ToolCall {
+            id: "c".into(),
+            name: "get_memory".into(),
+            arguments: serde_json::json!({"key": "missing"}),
+            arguments_parse_error: None,
+        };
+        // get_memory is a read-only dispatch; we need a mut ref only because
+        // execute_consolidator_tool takes &mut self (shared with mutators).
+        let mut s = s;
+        let out = s.execute_consolidator_tool(&call, Utc::now());
+        assert!(out.contains("No memory"), "got: {out}");
+    }
+
+    #[test]
+    fn edit_memory_missing_key_returns_no_memory() {
+        let mut s = MemoryStore::default();
+        let call = ToolCall {
+            id: "c".into(),
+            name: "edit_memory".into(),
+            arguments: serde_json::json!({"key": "missing", "confidence_delta": 10}),
+            arguments_parse_error: None,
+        };
+        let out = s.execute_consolidator_tool(&call, Utc::now());
+        assert!(out.contains("No memory"), "got: {out}");
+    }
+
+    #[test]
     fn merge_memories_unions_sources_dedup() {
         use chrono::Duration;
         let now = Utc::now();
@@ -1358,8 +1391,8 @@ mod tests {
         assert!(out.contains("Merged"), "got: {out}");
         let merged = s.memories.get("user:1:tarkov-player").unwrap();
         assert_eq!(merged.sources, vec!["alice", "bob", "carol"]);
-        assert!(merged.confidence >= 70, "got {}", merged.confidence);
-        assert!(merged.confidence <= 100);
+        // max(70, 60) + 5 × (distinct_after=3 − max_single=2) = 75
+        assert_eq!(merged.confidence, 75);
         assert_eq!(merged.access_count, 7);
         assert_eq!(merged.last_accessed, now);
         assert_eq!(merged.created_at, now - Duration::days(10));
@@ -1443,6 +1476,9 @@ mod tests {
         };
         let out = s.execute_consolidator_tool(&call, now);
         assert!(out.contains("subject_id mismatch"), "got: {out}");
+        // originals untouched on reject
+        assert!(s.memories.contains_key("user:1:a"));
+        assert!(s.memories.contains_key("user:2:b"));
     }
 
     #[test]
