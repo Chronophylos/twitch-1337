@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::Utc;
 use eyre::{Result, eyre};
 use tracing::{debug, error, instrument};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
@@ -309,15 +310,20 @@ where
 
         self.cooldown.record(user).await;
 
-        let mut system_prompt = if let Some(ref mem) = self.memory {
+        let now = Utc::now();
+        let facts = if let Some(ref mem) = self.memory {
             let mut store_guard = mem.config.store.write().await;
-            match store_guard.format_for_prompt(chrono::Utc::now()) {
-                Some(facts) => format!("{}{}", self.prompts.system, facts),
-                None => self.prompts.system.clone(),
-            }
+            store_guard.format_for_prompt(now).unwrap_or_default()
         } else {
-            self.prompts.system.clone()
+            String::new()
         };
+        let mut system_prompt = format!(
+            "{}{}\n\nCurrent time: {}",
+            self.prompts.system,
+            facts,
+            now.with_timezone(&chrono_tz::Europe::Berlin)
+                .format("%Y-%m-%d %H:%M %Z")
+        );
 
         if self.chat_ctx.is_some() {
             system_prompt.push_str(CHAT_HISTORY_SYSTEM_APPENDIX);

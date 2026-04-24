@@ -26,6 +26,12 @@ async fn ai_command_returns_fake_response() {
     );
     let calls = bot.llm.tool_calls();
     assert_eq!(calls.len(), 1, "expected exactly one LLM call");
+    let system_msg = calls[0]
+        .messages
+        .iter()
+        .find(|m| m.role == "system")
+        .expect("request has a system message");
+    assert!(system_msg.content.contains("Current time:"));
 
     bot.shutdown().await;
 }
@@ -204,6 +210,7 @@ async fn ai_command_get_recent_chat_tool_returns_history() {
         Some("!ai what did people say?")
     );
     assert_eq!(messages[0]["source"].as_str(), Some("user"));
+    assert!(messages[0]["timestamp"].as_str().is_some());
     assert_eq!(json["messages_are_untrusted"].as_bool(), Some(true));
 
     bot.shutdown().await;

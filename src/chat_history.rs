@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 pub const MAX_HISTORY_LENGTH: u64 = 5_000;
@@ -22,6 +23,8 @@ pub struct ChatHistoryEntry {
     pub seq: u64,
     pub username: String,
     pub text: String,
+    #[serde(serialize_with = "serialize_timestamp")]
+    pub timestamp: DateTime<Utc>,
     pub source: ChatHistorySource,
 }
 
@@ -58,16 +61,16 @@ impl ChatHistoryBuffer {
 
     pub fn from_prefill<I>(capacity: usize, messages: I) -> Self
     where
-        I: IntoIterator<Item = (String, String)>,
+        I: IntoIterator<Item = (String, String, DateTime<Utc>)>,
     {
-        let mut items: Vec<(String, String)> = messages.into_iter().collect();
+        let mut items: Vec<(String, String, DateTime<Utc>)> = messages.into_iter().collect();
         if items.len() > capacity {
             items.drain(..items.len() - capacity);
         }
 
         let mut buffer = Self::new(capacity);
-        for (username, text) in items {
-            buffer.push_user(username, text);
+        for (username, text, timestamp) in items {
+            buffer.push(username, text, timestamp, ChatHistorySource::User);
         }
         buffer
     }
@@ -81,17 +84,18 @@ impl ChatHistoryBuffer {
     }
 
     pub fn push_user(&mut self, username: impl Into<String>, text: impl Into<String>) {
-        self.push(username, text, ChatHistorySource::User);
+        self.push(username, text, Utc::now(), ChatHistorySource::User);
     }
 
     pub fn push_bot(&mut self, username: impl Into<String>, text: impl Into<String>) {
-        self.push(username, text, ChatHistorySource::Bot);
+        self.push(username, text, Utc::now(), ChatHistorySource::Bot);
     }
 
     fn push(
         &mut self,
         username: impl Into<String>,
         text: impl Into<String>,
+        timestamp: DateTime<Utc>,
         source: ChatHistorySource,
     ) {
         if self.capacity == 0 {
@@ -106,6 +110,7 @@ impl ChatHistoryBuffer {
             seq,
             username: username.into(),
             text: text.into(),
+            timestamp,
             source,
         });
     }
@@ -167,6 +172,13 @@ impl ChatHistoryBuffer {
             next_before_seq,
         }
     }
+}
+
+fn serialize_timestamp<S>(timestamp: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&timestamp.to_rfc3339())
 }
 
 #[cfg(test)]
@@ -260,9 +272,9 @@ mod tests {
         let buffer = ChatHistoryBuffer::from_prefill(
             2,
             vec![
-                ("alice".to_string(), "one".to_string()),
-                ("bob".to_string(), "two".to_string()),
-                ("carol".to_string(), "three".to_string()),
+                ("alice".to_string(), "one".to_string(), Utc::now()),
+                ("bob".to_string(), "two".to_string(), Utc::now()),
+                ("carol".to_string(), "three".to_string(), Utc::now()),
             ],
         );
 
