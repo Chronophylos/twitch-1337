@@ -25,7 +25,9 @@ use twitch_irc::{ClientConfig, TwitchIRCClient};
 use super::fake_clock::FakeClock;
 use super::fake_llm::FakeLlm;
 use super::fake_transport::{self, FakeTransport, TransportHandle};
-use super::irc_line::{parse_privmsg_text, privmsg, privmsg_as_broadcaster, privmsg_as_mod};
+use super::irc_line::{
+    parse_privmsg_text, privmsg, privmsg_as_broadcaster, privmsg_as_mod, privmsg_with,
+};
 
 pub struct TestBot {
     pub transport: TransportHandle,
@@ -170,6 +172,14 @@ impl Default for TestBotBuilder {
 impl TestBot {
     pub async fn send(&self, user: &str, text: &str) {
         let line = privmsg(&self.channel, user, text);
+        self.transport.inject.send(line).await.expect("inject");
+    }
+
+    /// Inject a PRIVMSG with a caller-supplied `user-id` IRCv3 tag. Used by
+    /// memory tests to drive the extractor's permission matrix, which gates
+    /// on the numeric speaker id rather than the display name.
+    pub async fn send_privmsg_as(&self, user: &str, user_id: &str, text: &str) {
+        let line = privmsg_with(&self.channel, user, text, &[("user-id", user_id)]);
         self.transport.inject.send(line).await.expect("inject");
     }
 
