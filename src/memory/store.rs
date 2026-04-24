@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use eyre::{Result, WrapErr as _};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -11,6 +12,7 @@ use crate::llm::{
     self, Message, ToolCall, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse,
     ToolDefinition, ToolResultMessage,
 };
+use crate::memory::Scope;
 
 const MEMORY_FILENAME: &str = "ai_memory.ron";
 
@@ -34,8 +36,42 @@ simple questions.";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Memory {
     pub fact: String,
-    pub created_at: String,
-    pub updated_at: String,
+    pub scope: Scope,
+    pub sources: Vec<String>,
+    pub confidence: u8,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub last_accessed: DateTime<Utc>,
+    pub access_count: u32,
+}
+
+impl Memory {
+    pub fn new(
+        fact: String,
+        scope: Scope,
+        source: String,
+        confidence: u8,
+        now: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            fact,
+            scope,
+            sources: vec![source],
+            confidence,
+            created_at: now,
+            updated_at: now,
+            last_accessed: now,
+            access_count: 0,
+        }
+    }
+}
+
+/// A mapping from subject_id to the user's current display name, used to
+/// present memories without leaking numeric user IDs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Identity {
+    pub username: String,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// Persistent store of AI memories, serialized to RON.
@@ -120,7 +156,7 @@ impl MemoryStore {
                 let fact = call.arguments.get("fact").and_then(|v| v.as_str());
                 match (key, fact) {
                     (Some(key), Some(fact)) => {
-                        let now = chrono::Utc::now().to_rfc3339();
+                        let now = chrono::Utc::now();
                         if self.memories.contains_key(key) {
                             // Update existing
                             let mem = self.memories.get_mut(key).unwrap();
@@ -134,14 +170,12 @@ impl MemoryStore {
                                 max_memories
                             )
                         } else {
-                            // Create new
+                            // Create new. NOTE: this legacy dispatch is replaced
+                            // by the scope-aware dispatcher in Task 9; fields
+                            // below are interim placeholders so the build works.
                             self.memories.insert(
                                 key.to_string(),
-                                Memory {
-                                    fact: fact.to_string(),
-                                    created_at: now.clone(),
-                                    updated_at: now,
-                                },
+                                Memory::new(fact.to_string(), Scope::Lore, String::new(), 70, now),
                             );
                             format!("Saved memory '{}'", key)
                         }
@@ -323,6 +357,37 @@ mod tests {
         MemoryStore {
             memories: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn memory_new_seeds_all_fields() {
+        use chrono::Utc;
+        let mem = Memory::new(
+            "alice plays Tarkov".to_string(),
+            Scope::User {
+                subject_id: "1".to_string(),
+            },
+            "alice".to_string(),
+            70,
+            Utc::now(),
+        );
+        assert_eq!(mem.confidence, 70);
+        assert_eq!(mem.sources, vec!["alice".to_string()]);
+        assert_eq!(mem.access_count, 0);
+        assert_eq!(mem.created_at, mem.updated_at);
+        assert_eq!(mem.created_at, mem.last_accessed);
+    }
+
+    #[test]
+    fn identity_round_trip_ron() {
+        use chrono::Utc;
+        let id = Identity {
+            username: "alice".to_string(),
+            updated_at: Utc::now(),
+        };
+        let s = ron::ser::to_string_pretty(&id, ron::ser::PrettyConfig::default()).unwrap();
+        let back: Identity = ron::from_str(&s).unwrap();
+        assert_eq!(back.username, id.username);
     }
 
     #[test]
