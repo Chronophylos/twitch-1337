@@ -346,6 +346,68 @@ impl MemoryStore {
         }
     }
 
+    /// Execute a consolidator tool call. Dispatches on `call.name` to the
+    /// bounded metadata-preserving ops that the consolidation pass may issue.
+    /// Malformed arguments are surfaced as a string (same pattern as
+    /// `execute_tool_call`) so the LLM can correct and retry.
+    pub fn execute_consolidator_tool(&mut self, call: &ToolCall, now: DateTime<Utc>) -> String {
+        if let Some(err) = &call.arguments_parse_error {
+            return format!(
+                "Error: tool '{name}' arguments were not valid JSON ({error}). \
+                 Raw text: {raw}. Resend with a valid JSON object.",
+                name = call.name,
+                error = err.error,
+                raw = err.raw,
+            );
+        }
+        match call.name.as_str() {
+            "drop_memory" => self.handle_drop_memory(call),
+            "merge_memories" => self.handle_merge_memories(call, now),
+            "edit_memory" => self.handle_edit_memory(call),
+            "get_memory" => self.handle_get_memory(call),
+            other => format!("Unknown consolidator tool: {other}"),
+        }
+    }
+
+    fn handle_drop_memory(&mut self, call: &ToolCall) -> String {
+        let key = call
+            .arguments
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if self.memories.remove(key).is_some() {
+            format!("Dropped memory '{key}'")
+        } else {
+            format!("No memory with key '{key}'")
+        }
+    }
+
+    fn handle_get_memory(&self, call: &ToolCall) -> String {
+        let key = call
+            .arguments
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        match self.memories.get(key) {
+            Some(m) => format!(
+                "{}: {} (confidence={}, sources={:?}, last_accessed={}, hits={})",
+                key, m.fact, m.confidence, m.sources, m.last_accessed, m.access_count
+            ),
+            None => format!("No memory with key '{key}'"),
+        }
+    }
+
+    // Placeholders; implemented in Tasks 13 and 14. The dispatcher is
+    // exercised by tests for `drop_memory`/`get_memory` only at this point, so
+    // `unimplemented!()` here is expected until those tasks land.
+    fn handle_merge_memories(&mut self, _call: &ToolCall, _now: DateTime<Utc>) -> String {
+        unimplemented!("handle_merge_memories (Task 13)")
+    }
+
+    fn handle_edit_memory(&mut self, _call: &ToolCall) -> String {
+        unimplemented!("handle_edit_memory (Task 14)")
+    }
+
     /// Legacy dispatcher kept alive for the in-file `run_memory_extraction`
     /// path until Phase E rewrites that module. Preserves pre-Phase-C behavior
     /// so existing extraction wiring keeps compiling.
@@ -1028,6 +1090,74 @@ mod tests {
         let _ = store.execute_tool_call(&call, &ctx);
         let mem = store.memories.get("user:42:plays-tarkov").unwrap();
         assert_eq!(mem.sources, vec!["alice".to_string(), "modguy".to_string()]);
+    }
+
+    #[test]
+    fn drop_memory_removes() {
+        let mut s = MemoryStore::default();
+        let now = Utc::now();
+        s.memories.insert(
+            "lore::x".into(),
+            Memory::new("x".into(), Scope::Lore, "alice".into(), 50, now),
+        );
+        let call = ToolCall {
+            id: "c".into(),
+            name: "drop_memory".into(),
+            arguments: serde_json::json!({"key": "lore::x"}),
+            arguments_parse_error: None,
+        };
+        let out = s.execute_consolidator_tool(&call, now);
+        assert!(out.contains("Dropped"));
+        assert!(s.memories.is_empty());
+    }
+
+    #[test]
+    fn drop_memory_missing_key_is_noop_warn() {
+        let mut s = MemoryStore::default();
+        let call = ToolCall {
+            id: "c".into(),
+            name: "drop_memory".into(),
+            arguments: serde_json::json!({"key": "missing"}),
+            arguments_parse_error: None,
+        };
+        let out = s.execute_consolidator_tool(&call, Utc::now());
+        assert!(out.contains("No memory"));
+    }
+
+    #[test]
+    fn consolidator_parse_error_surfaced() {
+        let mut s = MemoryStore::default();
+        let call = ToolCall {
+            id: "c".into(),
+            name: "drop_memory".into(),
+            arguments: serde_json::Value::Null,
+            arguments_parse_error: Some(llm::ToolCallArgsError {
+                error: "boom".into(),
+                raw: "{".into(),
+            }),
+        };
+        let out = s.execute_consolidator_tool(&call, Utc::now());
+        assert!(out.contains("not valid JSON"), "got: {out}");
+    }
+
+    #[test]
+    fn get_memory_returns_entry() {
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        s.memories.insert(
+            "lore::x".into(),
+            Memory::new("a fact".into(), Scope::Lore, "alice".into(), 65, now),
+        );
+        let call = ToolCall {
+            id: "c".into(),
+            name: "get_memory".into(),
+            arguments: serde_json::json!({"key": "lore::x"}),
+            arguments_parse_error: None,
+        };
+        let out = s.execute_consolidator_tool(&call, now);
+        assert!(out.contains("lore::x"), "got: {out}");
+        assert!(out.contains("a fact"), "got: {out}");
+        assert!(out.contains("confidence=65"), "got: {out}");
     }
 
     #[test]
