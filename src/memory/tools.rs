@@ -141,4 +141,36 @@ mod tests {
         assert!(required.contains(&"slug"));
         assert!(required.contains(&"fact"));
     }
+
+    #[test]
+    fn consolidator_tool_parameters_merge_required_fields() {
+        let merge = consolidator_tools()
+            .into_iter()
+            .find(|t| t.name == "merge_memories")
+            .expect("merge_memories must be present");
+        let required: Vec<&str> = merge.parameters["required"]
+            .as_array()
+            .expect("required array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(required.contains(&"keys"));
+        assert!(required.contains(&"new_slug"));
+        assert!(required.contains(&"new_fact"));
+    }
+
+    #[test]
+    fn consolidator_tool_parameters_edit_required_key() {
+        let edit = consolidator_tools()
+            .into_iter()
+            .find(|t| t.name == "edit_memory")
+            .expect("edit_memory must be present");
+        let required: Vec<&str> = edit.parameters["required"]
+            .as_array()
+            .expect("required array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(required.contains(&"key"));
+    }
 }

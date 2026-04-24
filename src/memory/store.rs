@@ -349,7 +349,8 @@ impl MemoryStore {
     /// Legacy dispatcher kept alive for the in-file `run_memory_extraction`
     /// path until Phase E rewrites that module. Preserves pre-Phase-C behavior
     /// so existing extraction wiring keeps compiling.
-    #[allow(dead_code)] // Removed in Phase E once run_memory_extraction is rewritten.
+    // Removed in Phase E once run_memory_extraction is rewritten against
+    // ExtractionContext + the new extractor_tools() surface.
     fn legacy_execute_tool_call(&mut self, call: &ToolCall, max_memories: usize) -> String {
         if let Some(err) = &call.arguments_parse_error {
             return format!(
