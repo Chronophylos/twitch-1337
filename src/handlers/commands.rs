@@ -170,17 +170,19 @@ where
             });
 
         cmd_list.push(Box::new(commands::ai::AiCommand::new(
-            llm,
-            cfg.model,
-            commands::ai::AiPrompts {
-                system: cfg.system_prompt,
-                instruction_template: cfg.instruction_template,
+            commands::ai::AiCommandDeps {
+                llm_client: llm,
+                model: cfg.model,
+                prompts: commands::ai::AiPrompts {
+                    system: cfg.system_prompt,
+                    instruction_template: cfg.instruction_template,
+                },
+                timeout: Duration::from_secs(cfg.timeout),
+                cooldown: Duration::from_secs(cooldowns.ai),
+                chat_ctx,
+                memory: ai_memory,
+                emotes: emote_provider,
             },
-            Duration::from_secs(cfg.timeout),
-            Duration::from_secs(cooldowns.ai),
-            chat_ctx,
-            ai_memory,
-            emote_provider,
         )));
     }
 

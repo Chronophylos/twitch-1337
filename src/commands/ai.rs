@@ -59,26 +59,28 @@ pub struct AiCommand {
     emotes: Option<Arc<SevenTvEmoteProvider>>,
 }
 
+pub struct AiCommandDeps {
+    pub llm_client: Arc<dyn LlmClient>,
+    pub model: String,
+    pub prompts: AiPrompts,
+    pub timeout: Duration,
+    pub cooldown: Duration,
+    pub chat_ctx: Option<ChatContext>,
+    pub memory: Option<AiMemory>,
+    pub emotes: Option<Arc<SevenTvEmoteProvider>>,
+}
+
 impl AiCommand {
-    pub fn new(
-        llm_client: Arc<dyn LlmClient>,
-        model: String,
-        prompts: AiPrompts,
-        timeout: Duration,
-        cooldown: Duration,
-        chat_ctx: Option<ChatContext>,
-        memory: Option<AiMemory>,
-        emotes: Option<Arc<SevenTvEmoteProvider>>,
-    ) -> Self {
+    pub fn new(deps: AiCommandDeps) -> Self {
         Self {
-            llm_client,
-            model,
-            cooldown: PerUserCooldown::new(cooldown),
-            prompts,
-            timeout,
-            chat_ctx,
-            memory,
-            emotes,
+            llm_client: deps.llm_client,
+            model: deps.model,
+            cooldown: PerUserCooldown::new(deps.cooldown),
+            prompts: deps.prompts,
+            timeout: deps.timeout,
+            chat_ctx: deps.chat_ctx,
+            memory: deps.memory,
+            emotes: deps.emotes,
         }
     }
 }

@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eyre::{bail, Result, WrapErr as _};
+use eyre::{Result, WrapErr as _, bail};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
@@ -436,12 +436,8 @@ mod tests {
         ];
         let available = merge_emote_sets(
             vec![
-                SevenTvEmote {
-                    name: "A".into(),
-                },
-                SevenTvEmote {
-                    name: "B".into(),
-                },
+                SevenTvEmote { name: "A".into() },
+                SevenTvEmote { name: "B".into() },
             ],
             Vec::new(),
         );
