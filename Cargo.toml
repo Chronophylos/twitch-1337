@@ -34,6 +34,7 @@ reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls-webpki-roots",
 ] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 eyre = "0.6.12"
 tracing-error = "0.2.1"
 toml = "1.1.2"
