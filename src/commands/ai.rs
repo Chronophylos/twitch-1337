@@ -122,7 +122,10 @@ impl AiCommand {
 
             match self.llm_client.chat_completion_with_tools(request).await? {
                 ToolChatCompletionResponse::Message(text) => return Ok(text),
-                ToolChatCompletionResponse::ToolCalls(calls) => {
+                ToolChatCompletionResponse::ToolCalls {
+                    calls,
+                    reasoning_content,
+                } => {
                     debug!(
                         round,
                         count = calls.len(),
@@ -132,7 +135,11 @@ impl AiCommand {
                     for call in &calls {
                         results.push(self.execute_chat_history_tool(call).await);
                     }
-                    prior_rounds.push(ToolCallRound { calls, results });
+                    prior_rounds.push(ToolCallRound {
+                        calls,
+                        results,
+                        reasoning_content,
+                    });
                 }
             }
         }

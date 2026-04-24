@@ -160,13 +160,15 @@ async fn ai_command_get_recent_chat_tool_returns_history() {
     bot.send("user3", "good morning").await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    bot.llm
-        .push_tool(ToolChatCompletionResponse::ToolCalls(vec![ToolCall {
+    bot.llm.push_tool(ToolChatCompletionResponse::ToolCalls {
+        calls: vec![ToolCall {
             id: "history_1".into(),
             name: "get_recent_chat".into(),
             arguments: serde_json::json!({ "limit": 4 }),
             arguments_parse_error: None,
-        }]));
+        }],
+        reasoning_content: None,
+    });
     bot.llm
         .push_tool(ToolChatCompletionResponse::Message("I checked chat".into()));
 
