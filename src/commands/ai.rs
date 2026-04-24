@@ -30,6 +30,9 @@ pub struct AiPrompts {
 /// after each successful `!ai` exchange. Kept separate from chat generation
 /// so the extractor can use a different `model` / `timeout` / round budget.
 pub struct AiExtractionDeps {
+    /// Gate for spawning per-turn extraction. Mirrors `[ai.extraction].enabled`.
+    /// When `false`, the extractor never runs; chat generation is unaffected.
+    pub enabled: bool,
     pub llm: Arc<dyn LlmClient>,
     pub model: String,
     pub timeout: Duration,
@@ -209,8 +212,11 @@ where
             error!(error = ?e, "Failed to send AI response");
         }
 
-        // Spawn fire-and-forget memory extraction (only on successful AI responses).
-        if let (true, Some(mem)) = (success, &self.memory) {
+        // Spawn fire-and-forget memory extraction (only on successful AI responses
+        // AND when the `[ai.extraction].enabled` flag allows it).
+        if let (true, Some(mem)) = (success, &self.memory)
+            && mem.extraction_deps.enabled
+        {
             let ext_ctx = memory::ExtractionContext {
                 speaker_id: ctx.privmsg.sender.id.clone(),
                 speaker_username: ctx.privmsg.sender.login.clone(),

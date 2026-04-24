@@ -445,6 +445,19 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         bail!("ai.max_memories must be between 1 and 200 (got {n})");
     }
 
+    // Parsed again at scheduler spawn; bail here so a typo doesn't take the
+    // bot down after startup.
+    if let Some(ref ai) = config.ai {
+        chrono::NaiveTime::parse_from_str(&ai.consolidation.run_at, "%H:%M").wrap_err_with(
+            || {
+                format!(
+                    "ai.consolidation.run_at must be HH:MM (got {:?})",
+                    ai.consolidation.run_at
+                )
+            },
+        )?;
+    }
+
     for schedule in &config.schedules {
         if schedule.name.trim().is_empty() {
             bail!("Schedule name cannot be empty");
@@ -472,5 +485,45 @@ mod tests {
         let s = ConsolidationConfigSection::default();
         let t = chrono::NaiveTime::parse_from_str(&s.run_at, "%H:%M").unwrap();
         assert_eq!(t.format("%H:%M").to_string(), "04:00");
+    }
+
+    fn ai_with_run_at(run_at: &str) -> AiConfig {
+        AiConfig {
+            backend: AiBackend::Ollama,
+            api_key: None,
+            base_url: None,
+            model: "x".into(),
+            system_prompt: default_system_prompt(),
+            instruction_template: default_instruction_template(),
+            timeout: default_ai_timeout(),
+            history_length: 0,
+            history_prefill: None,
+            memory_enabled: false,
+            memory: MemoryConfigSection::default(),
+            extraction: ExtractionConfigSection::default(),
+            consolidation: ConsolidationConfigSection {
+                run_at: run_at.into(),
+                ..ConsolidationConfigSection::default()
+            },
+            max_memories: None,
+        }
+    }
+
+    #[test]
+    fn validate_rejects_malformed_run_at() {
+        let mut c = Configuration::test_default();
+        c.ai = Some(ai_with_run_at("not-a-time"));
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ai.consolidation.run_at"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_well_formed_run_at() {
+        let mut c = Configuration::test_default();
+        c.ai = Some(ai_with_run_at("04:00"));
+        validate_config(&c).unwrap();
     }
 }

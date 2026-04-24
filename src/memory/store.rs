@@ -345,6 +345,10 @@ impl MemoryStore {
         let now = ctx.now;
 
         if let Some(existing) = self.memories.get_mut(&key) {
+            // Confidence is deliberately NOT touched on extractor collision —
+            // that lane is adversarial (prompt injection, untrusted speakers).
+            // Confidence adjustments go through the consolidator, which runs
+            // daily and applies `corroboration_boost` from distinct sources.
             existing.fact = fact.to_string();
             existing.updated_at = now;
             if !existing.sources.iter().any(|s| s == ctx.speaker_username) {

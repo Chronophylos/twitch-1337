@@ -102,10 +102,13 @@ client_secret = "your_client_secret"
 #   - AI personality lives in [ai].system_prompt — never written by the store.
 # ────────────────────────────────────────────────────────────────────────────
 
+# Caps are channel-wide totals per scope, NOT per individual user.
+# When a scope is full, the lowest-scoring entry (across all users in that
+# scope) is evicted. Score combines confidence × exp-decay × hit-boost.
 # [ai.memory]
-# max_user = 50          # per-scope cap; eviction is score-based
+# max_user = 50          # total User-scope entries (all users combined)
 # max_lore = 50
-# max_pref = 50
+# max_pref = 50          # total Pref-scope entries (all users combined)
 # half_life_days = 30    # exponential decay; feeds the eviction score
 
 # Extractor: runs after every !ai turn to propose new memories. Tool-call

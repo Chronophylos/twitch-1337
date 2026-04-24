@@ -233,6 +233,7 @@ where
                         let ai_memory = crate::commands::ai::AiMemory {
                             config,
                             extraction_deps: crate::commands::ai::AiExtractionDeps {
+                                enabled: ai.extraction.enabled,
                                 llm: llm_arc.clone(),
                                 model: extraction_model,
                                 timeout: Duration::from_secs(
@@ -330,8 +331,9 @@ where
         consolidation_model,
     ) && ai.enabled
     {
+        // Format is validated in `validate_config`, so this cannot fail here.
         let run_at = chrono::NaiveTime::parse_from_str(&ai.run_at, "%H:%M")
-            .wrap_err("invalid ai.consolidation.run_at (expected HH:MM)")?;
+            .expect("ai.consolidation.run_at is validated at config load");
         memory::spawn_consolidation(
             llm_client,
             model,

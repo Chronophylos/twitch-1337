@@ -14,7 +14,7 @@ use std::time::Duration;
 use chrono::Utc;
 use eyre::{Result, WrapErr as _};
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::llm::{
     self, Message, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse,
@@ -68,7 +68,7 @@ same (scope, subject_id, slug).";
 pub fn spawn_memory_extraction(deps: ExtractionDeps, ctx: ExtractionContext) {
     tokio::spawn(async move {
         if let Err(e) = run_memory_extraction(deps, ctx).await {
-            debug!("Memory extraction failed (non-critical): {:#}", e);
+            warn!(error = ?e, "Memory extraction failed (non-critical)");
         }
     });
 }
