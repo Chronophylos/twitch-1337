@@ -97,6 +97,9 @@ fn default_consolidation_timeout() -> u64 {
 /// `[ai.memory]` in `config.toml.example`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MemoryConfigSection {
+    /// Enable persistent AI memory (default: false)
+    #[serde(default)]
+    pub enabled: bool,
     #[serde(default = "default_max_user")]
     pub max_user: usize,
     #[serde(default = "default_max_lore")]
@@ -110,6 +113,7 @@ pub struct MemoryConfigSection {
 impl Default for MemoryConfigSection {
     fn default() -> Self {
         Self {
+            enabled: false,
             max_user: default_max_user(),
             max_lore: default_max_lore(),
             max_pref: default_max_pref(),
@@ -118,7 +122,7 @@ impl Default for MemoryConfigSection {
     }
 }
 
-/// Knobs for the per-turn memory extractor. `model` / `timeout_secs` fall back
+/// Knobs for the per-turn memory extractor. `model` / `timeout` fall back
 /// to the main `[ai]` values when omitted. See `[ai.extraction]`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExtractionConfigSection {
@@ -127,7 +131,7 @@ pub struct ExtractionConfigSection {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
-    pub timeout_secs: Option<u64>,
+    pub timeout: Option<u64>,
     #[serde(default = "default_max_rounds")]
     pub max_rounds: usize,
 }
@@ -137,7 +141,7 @@ impl Default for ExtractionConfigSection {
         Self {
             enabled: true,
             model: None,
-            timeout_secs: None,
+            timeout: None,
             max_rounds: default_max_rounds(),
         }
     }
@@ -153,7 +157,7 @@ pub struct ConsolidationConfigSection {
     #[serde(default = "default_run_at")]
     pub run_at: String,
     #[serde(default = "default_consolidation_timeout")]
-    pub timeout_secs: u64,
+    pub timeout: u64,
 }
 
 impl Default for ConsolidationConfigSection {
@@ -162,7 +166,7 @@ impl Default for ConsolidationConfigSection {
             enabled: true,
             model: None,
             run_at: default_run_at(),
-            timeout_secs: default_consolidation_timeout(),
+            timeout: default_consolidation_timeout(),
         }
     }
 }
@@ -230,9 +234,6 @@ pub struct AiConfig {
     /// Optional: Prefill chat history from a rustlog-compatible API at startup
     #[serde(default)]
     pub history_prefill: Option<prefill::HistoryPrefillConfig>,
-    /// Enable persistent AI memory (default: false)
-    #[serde(default)]
-    pub memory_enabled: bool,
     /// Per-scope caps + decay for the memory store.
     #[serde(default)]
     pub memory: MemoryConfigSection,
@@ -489,7 +490,7 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
     }
 
     if let Some(ref ai) = config.ai
-        && ai.memory_enabled
+        && ai.memory.enabled
         && let Some(n) = ai.max_memories
         && !(1..=200).contains(&n)
     {
@@ -571,7 +572,6 @@ mod tests {
             timeout: default_ai_timeout(),
             history_length: 0,
             history_prefill: None,
-            memory_enabled: false,
             memory: MemoryConfigSection::default(),
             extraction: ExtractionConfigSection::default(),
             consolidation: ConsolidationConfigSection {
