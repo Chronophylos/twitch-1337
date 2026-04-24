@@ -12,7 +12,8 @@ use crate::llm::{
     self, Message, ToolCall, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse,
     ToolDefinition, ToolResultMessage,
 };
-use crate::memory::Scope;
+use crate::memory::scope::{is_write_allowed, seed_confidence, trust_level_for};
+use crate::memory::{Scope, UserRole};
 
 const MEMORY_FILENAME: &str = "ai_memory.ron";
 
@@ -68,8 +69,6 @@ impl Memory {
     /// Relevance score in `[0, ~confidence]` space. Combines confidence,
     /// exponential decay on `last_accessed` (half-life `half_life_days`),
     /// and a sub-linear boost from `access_count`.
-    // Eviction path (Task 18) is the first non-test caller; allowed until then.
-    #[allow(dead_code)]
     pub fn score(&self, now: DateTime<Utc>, half_life_days: u32) -> f64 {
         // i64 → f64: precision loss only matters beyond ~285 million years;
         // age_days is bounded by clock skew in practice.
@@ -172,8 +171,6 @@ impl MemoryStore {
 
     /// Evict the lowest-scoring memory whose scope matches `tag` when the
     /// scope is already at capacity. Returns the evicted key, if any.
-    // Eviction path (Task 18) is the first non-test caller; allowed until then.
-    #[allow(dead_code)]
     pub fn evict_lowest_in_scope(
         &mut self,
         tag: &str,
@@ -196,8 +193,151 @@ impl MemoryStore {
         Some(key)
     }
 
-    /// Execute a single tool call against the store. Returns a result message.
-    pub fn execute_tool_call(&mut self, call: &ToolCall, max_memories: usize) -> String {
+    /// Execute a single extractor tool call against the store. Routes
+    /// `save_memory` through the permission matrix and `get_memories` for
+    /// read-only inspection. Other tool names return an error string.
+    pub fn execute_tool_call(&mut self, call: &ToolCall, ctx: &DispatchContext<'_>) -> String {
+        if let Some(err) = &call.arguments_parse_error {
+            return format!(
+                "Error: tool '{name}' arguments were not valid JSON ({error}). \
+                 Raw text: {raw}. Resend with a valid JSON object.",
+                name = call.name,
+                error = err.error,
+                raw = err.raw,
+            );
+        }
+        match call.name.as_str() {
+            "save_memory" => self.handle_save_memory(call, ctx),
+            "get_memories" => self.handle_get_memories(call, ctx),
+            other => format!("Unknown tool: {other}"),
+        }
+    }
+
+    fn handle_save_memory(&mut self, call: &ToolCall, ctx: &DispatchContext<'_>) -> String {
+        let args = &call.arguments;
+        let scope_str = args.get("scope").and_then(|v| v.as_str()).unwrap_or("");
+        let slug = args.get("slug").and_then(|v| v.as_str()).unwrap_or("");
+        let fact = args.get("fact").and_then(|v| v.as_str()).unwrap_or("");
+        let subject_id = args
+            .get("subject_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        if slug.is_empty() || fact.is_empty() {
+            return "Error: save_memory requires non-empty 'slug' and 'fact'".into();
+        }
+        let scope = match (scope_str, subject_id) {
+            ("user", Some(s)) => Scope::User { subject_id: s },
+            ("pref", Some(s)) => Scope::Pref { subject_id: s },
+            ("lore", None) => Scope::Lore,
+            ("user" | "pref", None) => {
+                return "Error: save_memory requires 'subject_id' for user/pref scope".into();
+            }
+            ("lore", Some(_)) => {
+                return "Error: save_memory must NOT include 'subject_id' for lore scope".into();
+            }
+            _ => return format!("Error: unknown scope '{scope_str}' (expected user|lore|pref)"),
+        };
+        if !is_write_allowed(ctx.speaker_role, &scope, ctx.speaker_id) {
+            return format!(
+                "Error: not authorized to save {} for subject={:?} — speaker role is {:?}. \
+                 Regular users may write User/Pref only with subject_id == speaker_id. \
+                 Prefs are always self-only. Lore is moderator/broadcaster-only.",
+                scope.tag(),
+                scope.subject_id(),
+                ctx.speaker_role
+            );
+        }
+
+        let key = build_key(&scope, slug);
+        let level = trust_level_for(ctx.speaker_role, &scope, ctx.speaker_id);
+        let seed_conf = seed_confidence(level);
+        let now = ctx.now;
+
+        if let Some(existing) = self.memories.get_mut(&key) {
+            existing.fact = fact.to_string();
+            existing.updated_at = now;
+            if !existing.sources.iter().any(|s| s == ctx.speaker_username) {
+                existing.sources.push(ctx.speaker_username.to_string());
+            }
+            return format!("Updated memory '{key}'");
+        }
+
+        let cap = match &scope {
+            Scope::User { .. } => ctx.caps.max_user,
+            Scope::Lore => ctx.caps.max_lore,
+            Scope::Pref { .. } => ctx.caps.max_pref,
+        };
+        let count = self.count_scope(scope.tag());
+        if count >= cap {
+            if let Some(evicted) = self.evict_lowest_in_scope(scope.tag(), now, ctx.half_life_days)
+            {
+                info!(%evicted, "Evicted to make room");
+            } else {
+                return format!(
+                    "Memory full ({count}/{cap}) and no evictable entry in scope {}",
+                    scope.tag()
+                );
+            }
+        }
+
+        self.memories.insert(
+            key.clone(),
+            Memory::new(
+                fact.to_string(),
+                scope,
+                ctx.speaker_username.to_string(),
+                seed_conf,
+                now,
+            ),
+        );
+        format!("Saved memory '{key}' (confidence {seed_conf})")
+    }
+
+    fn count_scope(&self, tag: &str) -> usize {
+        self.memories
+            .values()
+            .filter(|m| m.scope.tag() == tag)
+            .count()
+    }
+
+    fn handle_get_memories(&self, call: &ToolCall, _ctx: &DispatchContext<'_>) -> String {
+        let scope_str = call
+            .arguments
+            .get("scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let subject_id = call.arguments.get("subject_id").and_then(|v| v.as_str());
+        let mut out: Vec<String> = self
+            .memories
+            .iter()
+            .filter(|(_, m)| {
+                m.scope.tag() == scope_str
+                    && match subject_id {
+                        Some(s) => m.scope.subject_id() == Some(s),
+                        None => true,
+                    }
+            })
+            .map(|(k, m)| {
+                format!(
+                    "- {}: {} (confidence={}, sources={:?})",
+                    k, m.fact, m.confidence, m.sources
+                )
+            })
+            .collect();
+        out.sort();
+        if out.is_empty() {
+            "(none)".into()
+        } else {
+            out.join("\n")
+        }
+    }
+
+    /// Legacy dispatcher kept alive for the in-file `run_memory_extraction`
+    /// path until Phase E rewrites that module. Preserves pre-Phase-C behavior
+    /// so existing extraction wiring keeps compiling.
+    #[allow(dead_code)] // Removed in Phase E once run_memory_extraction is rewritten.
+    fn legacy_execute_tool_call(&mut self, call: &ToolCall, max_memories: usize) -> String {
         if let Some(err) = &call.arguments_parse_error {
             return format!(
                 "Error: tool '{name}' arguments were not valid JSON ({error}). \
@@ -215,7 +355,6 @@ impl MemoryStore {
                     (Some(key), Some(fact)) => {
                         let now = chrono::Utc::now();
                         if self.memories.contains_key(key) {
-                            // Update existing
                             let mem = self.memories.get_mut(key).unwrap();
                             mem.fact = fact.to_string();
                             mem.updated_at = now;
@@ -227,12 +366,6 @@ impl MemoryStore {
                                 max_memories
                             )
                         } else {
-                            // Create new. NOTE: this legacy dispatch is replaced
-                            // wholesale by the scope-aware dispatcher in Task 9.
-                            // The "legacy" source sentinel matches the migration
-                            // path and is explicitly excluded by consolidation's
-                            // corroboration-boost logic, so these interim rows
-                            // never carry an empty-string source to disk.
                             self.memories.insert(
                                 key.to_string(),
                                 Memory::new(
@@ -267,12 +400,29 @@ impl MemoryStore {
     }
 }
 
+/// Per-scope maximum memory counts. Enforced by the extractor dispatcher.
+#[derive(Debug, Clone)]
+pub struct Caps {
+    pub max_user: usize,
+    pub max_lore: usize,
+    pub max_pref: usize,
+}
+
+/// Context threaded through the extractor dispatcher: who's speaking, their
+/// role, the caps that apply, and the clock.
+pub struct DispatchContext<'a> {
+    pub speaker_id: &'a str,
+    pub speaker_username: &'a str,
+    pub speaker_role: UserRole,
+    pub caps: Caps,
+    pub half_life_days: u32,
+    pub now: DateTime<Utc>,
+}
+
 /// Turn a human-readable label into a lowercase ASCII slug. Runs of
 /// non-alphanumeric characters collapse into a single `-`; leading and
 /// trailing dashes are trimmed. Non-ASCII input (e.g. emoji) is dropped
 /// the same way.
-// Dispatcher (Task 9) is the first non-test caller; allowed until then.
-#[allow(dead_code)]
 pub(crate) fn sanitize_slug(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut last_dash = true; // suppress leading dashes
@@ -294,8 +444,6 @@ pub(crate) fn sanitize_slug(s: &str) -> String {
 
 /// Compose the canonical key for a memory: `user:<uid>:<slug>`, `lore::<slug>`,
 /// or `pref:<uid>:<slug>`. The slug is sanitized before composition.
-// Dispatcher (Task 9) is the first non-test caller; allowed until then.
-#[allow(dead_code)]
 pub(crate) fn build_key(scope: &Scope, slug: &str) -> String {
     let slug = sanitize_slug(slug);
     match scope {
@@ -435,7 +583,7 @@ async fn run_memory_extraction(
                 let mut store_guard = store.write().await;
                 let mut results: Vec<ToolResultMessage> = Vec::with_capacity(calls.len());
                 for call in &calls {
-                    let result = store_guard.execute_tool_call(call, max_memories);
+                    let result = store_guard.legacy_execute_tool_call(call, max_memories);
                     info!(tool = %call.name, key = %call.arguments.get("key").and_then(|v| v.as_str()).unwrap_or("?"), result = %result, "Memory tool executed");
                     results.push(ToolResultMessage {
                         tool_call_id: call.id.clone(),
@@ -604,6 +752,23 @@ mod tests {
         assert_eq!(evicted, "lore::old");
     }
 
+    fn ctx_for(speaker_id: &'static str, role: UserRole) -> DispatchContext<'static> {
+        // Used by dispatcher tests that don't care about speaker_username or
+        // cap exhaustion; defaults are spacious.
+        DispatchContext {
+            speaker_id,
+            speaker_username: speaker_id,
+            speaker_role: role,
+            caps: Caps {
+                max_user: 50,
+                max_lore: 50,
+                max_pref: 50,
+            },
+            half_life_days: 30,
+            now: Utc::now(),
+        }
+    }
+
     #[test]
     fn execute_tool_call_surfaces_parse_error() {
         let mut store = empty_store();
@@ -613,13 +778,14 @@ mod tests {
             arguments: serde_json::Value::Null,
             arguments_parse_error: Some(llm::ToolCallArgsError {
                 error: "expected `,` or `}` at line 1 column 17".to_string(),
-                raw: "{\"key\":\"k\" \"fact\":\"f\"}".to_string(),
+                raw: "{\"slug\":\"k\" \"fact\":\"f\"}".to_string(),
             }),
         };
-        let result = store.execute_tool_call(&call, 50);
+        let ctx = ctx_for("42", UserRole::Regular);
+        let result = store.execute_tool_call(&call, &ctx);
         assert!(result.contains("not valid JSON"), "got: {result}");
         assert!(result.contains("save_memory"), "got: {result}");
-        assert!(result.contains("{\"key\":\"k\""), "got: {result}");
+        assert!(result.contains("{\"slug\":\"k\""), "got: {result}");
         assert!(store.memories.is_empty());
     }
 
@@ -632,11 +798,245 @@ mod tests {
             arguments: serde_json::Value::Null,
             arguments_parse_error: None,
         };
-        let result = store.execute_tool_call(&call, 50);
+        let ctx = ctx_for("42", UserRole::Regular);
+        let result = store.execute_tool_call(&call, &ctx);
         assert!(
-            result.contains("requires 'key' and 'fact'"),
+            result.contains("requires non-empty 'slug' and 'fact'"),
             "got: {result}"
         );
         assert!(!result.contains("not valid JSON"), "got: {result}");
+    }
+
+    #[test]
+    fn save_memory_self_claim_creates_user_scope() {
+        let mut store = MemoryStore::default();
+        let call = ToolCall {
+            id: "c1".into(),
+            name: "save_memory".into(),
+            arguments: serde_json::json!({
+                "scope": "user",
+                "subject_id": "42",
+                "slug": "plays-tarkov",
+                "fact": "alice plays tarkov",
+            }),
+            arguments_parse_error: None,
+        };
+        let ctx = DispatchContext {
+            speaker_id: "42",
+            speaker_username: "alice",
+            speaker_role: UserRole::Regular,
+            caps: Caps {
+                max_user: 50,
+                max_lore: 50,
+                max_pref: 50,
+            },
+            half_life_days: 30,
+            now: Utc::now(),
+        };
+        let out = store.execute_tool_call(&call, &ctx);
+        assert!(out.contains("Saved"), "got: {out}");
+        assert!(store.memories.contains_key("user:42:plays-tarkov"));
+    }
+
+    #[test]
+    fn save_memory_third_party_rejected() {
+        let mut store = MemoryStore::default();
+        let call = ToolCall {
+            id: "c1".into(),
+            name: "save_memory".into(),
+            arguments: serde_json::json!({
+                "scope": "user",
+                "subject_id": "99",
+                "slug": "drinks-coffee",
+                "fact": "bob drinks coffee",
+            }),
+            arguments_parse_error: None,
+        };
+        let ctx = DispatchContext {
+            speaker_id: "42", // != subject_id 99
+            speaker_username: "alice",
+            speaker_role: UserRole::Regular,
+            caps: Caps {
+                max_user: 50,
+                max_lore: 50,
+                max_pref: 50,
+            },
+            half_life_days: 30,
+            now: Utc::now(),
+        };
+        let out = store.execute_tool_call(&call, &ctx);
+        assert!(out.contains("not authorized"), "got: {out}");
+        assert!(store.memories.is_empty());
+    }
+
+    #[test]
+    fn save_memory_pref_self_only_even_for_mod() {
+        let mut store = MemoryStore::default();
+        let call = ToolCall {
+            id: "c1".into(),
+            name: "save_memory".into(),
+            arguments: serde_json::json!({
+                "scope": "pref",
+                "subject_id": "99",
+                "slug": "language",
+                "fact": "speaks German",
+            }),
+            arguments_parse_error: None,
+        };
+        let ctx = DispatchContext {
+            speaker_id: "42",
+            speaker_username: "modguy",
+            speaker_role: UserRole::Moderator,
+            caps: Caps {
+                max_user: 50,
+                max_lore: 50,
+                max_pref: 50,
+            },
+            half_life_days: 30,
+            now: Utc::now(),
+        };
+        let out = store.execute_tool_call(&call, &ctx);
+        assert!(out.contains("not authorized"), "got: {out}");
+    }
+
+    #[test]
+    fn save_memory_collision_same_speaker_keeps_single_source() {
+        // Invariant under test: re-saving the same (scope, subject_id, slug)
+        // from the same speaker must not duplicate `sources`. The plan's
+        // original test also covered a second-speaker append, but that half
+        // requires Task 10's identity wiring; kept simple and focused here.
+        use chrono::Duration;
+        let now = Utc::now();
+        let mut store = MemoryStore::default();
+        store.memories.insert(
+            "user:42:plays-tarkov".into(),
+            Memory::new(
+                "alice plays tarkov".into(),
+                Scope::User {
+                    subject_id: "42".into(),
+                },
+                "alice".into(),
+                70,
+                now - Duration::minutes(5),
+            ),
+        );
+        let call = ToolCall {
+            id: "c1".into(),
+            name: "save_memory".into(),
+            arguments: serde_json::json!({
+                "scope": "user",
+                "subject_id": "42",
+                "slug": "plays-tarkov",
+                "fact": "alice plays tarkov on wipes",
+            }),
+            arguments_parse_error: None,
+        };
+        let ctx = DispatchContext {
+            speaker_id: "42",
+            speaker_username: "alice",
+            speaker_role: UserRole::Regular,
+            caps: Caps {
+                max_user: 50,
+                max_lore: 50,
+                max_pref: 50,
+            },
+            half_life_days: 30,
+            now,
+        };
+        let _ = store.execute_tool_call(&call, &ctx);
+        let mem = store.memories.get("user:42:plays-tarkov").unwrap();
+        assert_eq!(mem.sources, vec!["alice".to_string()]);
+        assert_eq!(mem.fact, "alice plays tarkov on wipes");
+    }
+
+    #[test]
+    fn save_memory_collision_appends_new_speaker_source() {
+        // Companion to the single-speaker test: a second, distinct speaker
+        // corroborating the same key must append to `sources`.
+        let now = Utc::now();
+        let mut store = MemoryStore::default();
+        store.memories.insert(
+            "user:42:plays-tarkov".into(),
+            Memory::new(
+                "alice plays tarkov".into(),
+                Scope::User {
+                    subject_id: "42".into(),
+                },
+                "alice".into(),
+                70,
+                now,
+            ),
+        );
+        let call = ToolCall {
+            id: "c2".into(),
+            name: "save_memory".into(),
+            arguments: serde_json::json!({
+                "scope": "user",
+                "subject_id": "42",
+                "slug": "plays-tarkov",
+                "fact": "alice plays tarkov",
+            }),
+            arguments_parse_error: None,
+        };
+        let ctx = DispatchContext {
+            speaker_id: "100",
+            speaker_username: "modguy",
+            speaker_role: UserRole::Moderator,
+            caps: Caps {
+                max_user: 50,
+                max_lore: 50,
+                max_pref: 50,
+            },
+            half_life_days: 30,
+            now,
+        };
+        let _ = store.execute_tool_call(&call, &ctx);
+        let mem = store.memories.get("user:42:plays-tarkov").unwrap();
+        assert_eq!(mem.sources, vec!["alice".to_string(), "modguy".to_string()]);
+    }
+
+    #[test]
+    fn get_memories_filters_by_scope_and_subject() {
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        s.memories.insert(
+            "user:1:a".into(),
+            Memory::new(
+                "alice fact".into(),
+                Scope::User {
+                    subject_id: "1".into(),
+                },
+                "alice".into(),
+                70,
+                now,
+            ),
+        );
+        s.memories.insert(
+            "user:2:b".into(),
+            Memory::new(
+                "bob fact".into(),
+                Scope::User {
+                    subject_id: "2".into(),
+                },
+                "bob".into(),
+                70,
+                now,
+            ),
+        );
+        s.memories.insert(
+            "lore::c".into(),
+            Memory::new("channel fact".into(), Scope::Lore, "mod".into(), 90, now),
+        );
+        let call = ToolCall {
+            id: "g".into(),
+            name: "get_memories".into(),
+            arguments: serde_json::json!({"scope": "user", "subject_id": "1"}),
+            arguments_parse_error: None,
+        };
+        let ctx = ctx_for("1", UserRole::Regular);
+        let out = s.execute_tool_call(&call, &ctx);
+        assert!(out.contains("user:1:a"), "got: {out}");
+        assert!(!out.contains("user:2:b"), "got: {out}");
+        assert!(!out.contains("lore::c"), "got: {out}");
     }
 }
