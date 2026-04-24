@@ -153,3 +153,93 @@ async fn prompt_injection_does_not_poison_memory() {
 
     bot.shutdown().await;
 }
+
+/// Drive `run_consolidation` directly against a seeded in-memory store.
+/// The scripted LLM returns a `merge_memories` op on the `user` pass, then
+/// terminates every subsequent scope pass with a plain-text response.
+///
+/// This is the integration-level counterpart to
+/// `memory::consolidation::tests::run_consolidation_applies_scripted_merge`:
+/// same end-to-end flow, but driven through the shared `FakeLlm` used by
+/// the bot-driven integration tests so the test harness itself is exercised
+/// in the consolidation code path.
+#[tokio::test]
+#[serial]
+async fn consolidation_merges_dupes() {
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+    use twitch_1337::llm::LlmClient;
+    use twitch_1337::memory::{Memory, Scope, consolidation};
+
+    let fake = Arc::new(common::fake_llm::FakeLlm::new());
+
+    let dir = TempDir::new().expect("tempdir");
+    let path = dir.path().join("ai_memory.ron");
+    let now = chrono::Utc::now();
+    let mut s = MemoryStore::default();
+    s.memories.insert(
+        "user:1:a".into(),
+        Memory::new(
+            "alice plays tarkov".into(),
+            Scope::User {
+                subject_id: "1".into(),
+            },
+            "alice".into(),
+            70,
+            now,
+        ),
+    );
+    s.memories.insert(
+        "user:1:b".into(),
+        Memory::new(
+            "alice is a tarkov player".into(),
+            Scope::User {
+                subject_id: "1".into(),
+            },
+            "bob".into(),
+            60,
+            now,
+        ),
+    );
+    s.save(&path).expect("seed store");
+    let store = Arc::new(RwLock::new(s));
+
+    // Round 1 on the `user` scope: merge the two dupes.
+    fake.push_tool(ToolChatCompletionResponse::ToolCalls(vec![ToolCall {
+        id: "c1".into(),
+        name: "merge_memories".into(),
+        arguments: serde_json::json!({
+            "keys": ["user:1:a", "user:1:b"],
+            "new_slug": "tarkov-player",
+            "new_fact": "plays Escape from Tarkov",
+        }),
+        arguments_parse_error: None,
+    }]));
+    // Round 2 on `user`: terminate the loop.
+    fake.push_tool(ToolChatCompletionResponse::Message("done".into()));
+    // The `lore` and `pref` scope passes skip the LLM entirely when the
+    // scope snapshot is empty, so no further responses are required. Queue
+    // a trailing sentinel as defence-in-depth against future changes that
+    // unconditionally open each scope.
+    fake.push_tool(ToolChatCompletionResponse::Message("done".into()));
+
+    consolidation::run_consolidation(
+        fake.clone() as Arc<dyn LlmClient>,
+        "fake-model".into(),
+        store.clone(),
+        path.clone(),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("consolidation pass");
+
+    let r = store.read().await;
+    assert!(
+        r.memories.contains_key("user:1:tarkov-player"),
+        "merged entry missing; got keys: {:?}",
+        r.memories.keys().collect::<Vec<_>>()
+    );
+    assert!(!r.memories.contains_key("user:1:a"));
+    assert!(!r.memories.contains_key("user:1:b"));
+}
