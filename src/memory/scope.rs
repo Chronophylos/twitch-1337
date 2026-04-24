@@ -331,4 +331,53 @@ mod tests {
         assert_eq!(seed_confidence(TrustLevel::ModBroadcaster), 90);
         assert_eq!(seed_confidence(TrustLevel::ThirdParty), 30);
     }
+
+    use proptest::prelude::*;
+
+    fn role_strategy() -> impl Strategy<Value = UserRole> {
+        prop_oneof![
+            Just(UserRole::Regular),
+            Just(UserRole::Moderator),
+            Just(UserRole::Broadcaster),
+        ]
+    }
+
+    proptest! {
+        /// A regular user can never write User/Pref facts about a subject
+        /// whose id differs from their own. Lore is separately gated.
+        #[test]
+        fn regular_cannot_write_for_other_subject(
+            speaker_id in "[0-9]{1,8}",
+            subject_id in "[0-9]{1,8}",
+            which_scope in 0u32..3,
+        ) {
+            let scope = match which_scope {
+                0 => Scope::User { subject_id: subject_id.clone() },
+                1 => Scope::Pref { subject_id: subject_id.clone() },
+                _ => Scope::Lore,
+            };
+            if speaker_id != subject_id && !matches!(scope, Scope::Lore) {
+                prop_assert!(!is_write_allowed(UserRole::Regular, &scope, &speaker_id));
+            }
+        }
+
+        /// Pref scope is self-only for every role — the corroboration
+        /// privilege granted to moderators and broadcasters does not extend
+        /// to writing preferences on behalf of another user.
+        #[test]
+        fn pref_always_self_only(
+            role in role_strategy(),
+            speaker_id in "[0-9]{1,8}",
+            subject_id in "[0-9]{1,8}",
+        ) {
+            let scope = Scope::Pref { subject_id: subject_id.clone() };
+            if speaker_id != subject_id {
+                prop_assert!(
+                    !is_write_allowed(role, &scope, &speaker_id),
+                    "pref write by {:?} allowed for {} != {}",
+                    role, subject_id, speaker_id,
+                );
+            }
+        }
+    }
 }
