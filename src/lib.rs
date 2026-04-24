@@ -200,11 +200,31 @@ where
                     .unwrap_or_else(|| ai.model.clone());
                 match memory::MemoryStore::load(&data_dir) {
                     Ok((store, path)) => {
+                        // Back-compat: honor the deprecated `ai.max_memories`
+                        // when the user hasn't overridden `[ai.memory].max_user`.
+                        // Either way, emit a warn! so stale configs surface.
+                        let max_user = if let Some(legacy_n) = ai.max_memories {
+                            if ai.memory.max_user == crate::config::default_max_user() {
+                                warn!(
+                                    "ai.max_memories is deprecated; migrating to [ai.memory].max_user = {}. Please update your config.",
+                                    legacy_n
+                                );
+                                legacy_n
+                            } else {
+                                warn!(
+                                    "ai.max_memories={} is deprecated AND ignored because [ai.memory].max_user={} is explicitly set. Remove the deprecated field.",
+                                    legacy_n, ai.memory.max_user
+                                );
+                                ai.memory.max_user
+                            }
+                        } else {
+                            ai.memory.max_user
+                        };
                         let config = memory::MemoryConfig {
                             store: Arc::new(tokio::sync::RwLock::new(store)),
                             path,
                             caps: memory::Caps {
-                                max_user: ai.memory.max_user,
+                                max_user,
                                 max_lore: ai.memory.max_lore,
                                 max_pref: ai.memory.max_pref,
                             },

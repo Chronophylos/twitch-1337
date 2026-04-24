@@ -53,7 +53,7 @@ fn default_true() -> bool {
     true
 }
 
-fn default_max_user() -> usize {
+pub(crate) fn default_max_user() -> usize {
     50
 }
 
