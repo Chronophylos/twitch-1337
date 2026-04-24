@@ -465,7 +465,7 @@ pub async fn run_1337_handler<T, L>(
             drop(leaderboard_guard);
 
             message.push_str(&format!(
-                " | {fastest_user} war mass schnellste mit {fastest_ms}ms"
+                " | {fastest_user} war am schnellsten mit {fastest_ms}ms"
             ));
             if is_record {
                 message.push_str(" - neuer Rekord!");
