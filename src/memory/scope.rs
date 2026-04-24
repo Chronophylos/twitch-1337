@@ -57,6 +57,47 @@ pub fn classify_role(badges: &[Badge]) -> UserRole {
     role
 }
 
+/// Returns true if the given `role` speaker may write to `scope` about `speaker_id`.
+/// The caller is responsible for passing the scope constructed from whatever
+/// `subject_id` the LLM requested.
+pub fn is_write_allowed(role: UserRole, scope: &Scope, speaker_id: &str) -> bool {
+    match scope {
+        Scope::Pref { subject_id } => subject_id == speaker_id, // self-only, all roles
+        Scope::User { subject_id } => match role {
+            UserRole::Regular => subject_id == speaker_id,
+            UserRole::Moderator | UserRole::Broadcaster => true,
+        },
+        Scope::Lore => matches!(role, UserRole::Moderator | UserRole::Broadcaster),
+    }
+}
+
+/// Confidence seed for a successful write based on the trust relationship.
+/// Invariant: self-writes are always `SelfClaim` regardless of role — mods
+/// don't get the corroboration bonus when claiming facts about themselves.
+pub fn trust_level_for(role: UserRole, scope: &Scope, speaker_id: &str) -> TrustLevel {
+    match (role, scope) {
+        (UserRole::Moderator | UserRole::Broadcaster, _)
+            if scope_is_not_self(scope, speaker_id) =>
+        {
+            TrustLevel::ModBroadcaster
+        }
+        (UserRole::Moderator | UserRole::Broadcaster, Scope::Lore) => TrustLevel::ModBroadcaster,
+        _ => TrustLevel::SelfClaim, // self-write by regular/mod/broadcaster
+    }
+}
+
+fn scope_is_not_self(scope: &Scope, speaker_id: &str) -> bool {
+    matches!(scope.subject_id(), Some(s) if s != speaker_id)
+}
+
+pub fn seed_confidence(level: TrustLevel) -> u8 {
+    match level {
+        TrustLevel::SelfClaim => 70,
+        TrustLevel::ModBroadcaster => 90,
+        TrustLevel::ThirdParty => 30, // rejected in practice; defined for completeness
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +154,92 @@ mod tests {
             classify_role(&badges(&["moderator", "broadcaster"])),
             UserRole::Broadcaster
         );
+    }
+
+    #[test]
+    fn permission_matrix_table() {
+        use Scope::*;
+        use UserRole::*;
+
+        let uid_a = "1".to_string();
+        let uid_b = "2".to_string();
+
+        // Regular
+        assert!(is_write_allowed(
+            Regular,
+            &User {
+                subject_id: uid_a.clone()
+            },
+            &uid_a
+        ));
+        assert!(!is_write_allowed(
+            Regular,
+            &User {
+                subject_id: uid_b.clone()
+            },
+            &uid_a
+        ));
+        assert!(is_write_allowed(
+            Regular,
+            &Pref {
+                subject_id: uid_a.clone()
+            },
+            &uid_a
+        ));
+        assert!(!is_write_allowed(
+            Regular,
+            &Pref {
+                subject_id: uid_b.clone()
+            },
+            &uid_a
+        ));
+        assert!(!is_write_allowed(Regular, &Lore, &uid_a));
+
+        // Moderator
+        assert!(is_write_allowed(
+            Moderator,
+            &User {
+                subject_id: uid_b.clone()
+            },
+            &uid_a
+        ));
+        assert!(is_write_allowed(Moderator, &Lore, &uid_a));
+        // Pref stays self-only even for mod:
+        assert!(is_write_allowed(
+            Moderator,
+            &Pref {
+                subject_id: uid_a.clone()
+            },
+            &uid_a
+        ));
+        assert!(!is_write_allowed(
+            Moderator,
+            &Pref {
+                subject_id: uid_b.clone()
+            },
+            &uid_a
+        ));
+
+        // Broadcaster: same as mod
+        assert!(is_write_allowed(
+            Broadcaster,
+            &User {
+                subject_id: uid_b.clone()
+            },
+            &uid_a
+        ));
+        assert!(is_write_allowed(Broadcaster, &Lore, &uid_a));
+        assert!(is_write_allowed(
+            Broadcaster,
+            &Pref {
+                subject_id: uid_a.clone()
+            },
+            &uid_a
+        ));
+        assert!(!is_write_allowed(
+            Broadcaster,
+            &Pref { subject_id: uid_b },
+            &uid_a
+        ));
     }
 }
