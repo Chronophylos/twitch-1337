@@ -43,6 +43,9 @@ Thumbs.db
 # Claude Code
 .claude/
 
+# Codex
+/.codex
+
 token.ron
 schedule_cache.ron
 config.toml

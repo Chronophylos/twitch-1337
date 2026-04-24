@@ -1,4 +1,3 @@
-
 # Contributing
 
 Thanks for contributing to twitch-1337. This file covers repo conventions that aren't obvious from the code. For build/test/CI details see [CLAUDE.md](CLAUDE.md).

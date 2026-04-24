@@ -1,7 +1,7 @@
 //! 7TV emote catalog + manual glossary support for AI prompt grounding.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -66,12 +66,6 @@ struct SevenTvEmoteSet {
 #[derive(Debug, Clone, Deserialize)]
 struct SevenTvEmote {
     name: String,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum EmoteSource {
-    Global,
-    Channel,
 }
 
 impl SevenTvEmoteProvider {
@@ -164,10 +158,7 @@ impl SevenTvEmoteProvider {
         toml::from_str(&text).wrap_err("Failed to parse 7TV emote glossary")
     }
 
-    async fn fetch_available_emotes(
-        &self,
-        twitch_channel_id: &str,
-    ) -> Result<HashMap<String, EmoteSource>> {
+    async fn fetch_available_emotes(&self, twitch_channel_id: &str) -> Result<HashSet<String>> {
         let mut global = Vec::new();
         let mut channel = Vec::new();
         let mut had_error = false;
@@ -237,42 +228,35 @@ impl SevenTvEmoteProvider {
     }
 }
 
-fn merge_emote_sets(
-    global: Vec<SevenTvEmote>,
-    channel: Vec<SevenTvEmote>,
-) -> HashMap<String, EmoteSource> {
-    let mut available = HashMap::new();
+fn merge_emote_sets(global: Vec<SevenTvEmote>, channel: Vec<SevenTvEmote>) -> HashSet<String> {
+    let mut available = HashSet::new();
 
     for emote in global {
-        insert_available(&mut available, emote, EmoteSource::Global);
+        insert_available(&mut available, emote);
     }
     for emote in channel {
-        insert_available(&mut available, emote, EmoteSource::Channel);
+        insert_available(&mut available, emote);
     }
 
     available
 }
 
-fn insert_available(
-    available: &mut HashMap<String, EmoteSource>,
-    emote: SevenTvEmote,
-    source: EmoteSource,
-) {
+fn insert_available(available: &mut HashSet<String>, emote: SevenTvEmote) {
     if emote.name.trim().is_empty() {
         return;
     }
 
-    available.insert(emote.name, source);
+    available.insert(emote.name);
 }
 
 fn build_prompt_block(
     glossary: &[GlossaryEmote],
-    available: &HashMap<String, EmoteSource>,
+    available: &HashSet<String>,
     max_prompt_emotes: usize,
 ) -> Option<String> {
     let mut seen = HashSet::new();
     let mut lines = Vec::new();
-    let mut stale = Vec::new();
+    let mut stale_count = 0usize;
 
     for emote in glossary {
         let name = emote.name.trim();
@@ -280,8 +264,8 @@ fn build_prompt_block(
             continue;
         }
 
-        if !available.contains_key(name) {
-            stale.push(name.to_string());
+        if !available.contains(name) {
+            stale_count += 1;
             continue;
         }
 
@@ -320,9 +304,9 @@ fn build_prompt_block(
         }
     }
 
-    if !stale.is_empty() {
-        warn!(
-            missing = ?stale,
+    if stale_count > 0 {
+        debug!(
+            missing_count = stale_count,
             "7TV emote glossary contains entries not present in the loaded catalog"
         );
     }
@@ -375,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_prefers_channel_emote_over_global_duplicate() {
+    fn merge_deduplicates_global_and_channel_emotes() {
         let global = vec![SevenTvEmote {
             name: "KEKW".into(),
         }];
@@ -385,7 +369,8 @@ mod tests {
 
         let merged = merge_emote_sets(global, channel);
 
-        assert_eq!(merged["KEKW"], EmoteSource::Channel);
+        assert_eq!(merged.len(), 1);
+        assert!(merged.contains("KEKW"));
     }
 
     #[test]
@@ -416,6 +401,115 @@ mod tests {
         assert!(prompt.contains("KEKW"));
         assert!(prompt.contains("meaning=lachen"));
         assert!(!prompt.contains("Missing"));
+    }
+
+    #[test]
+    fn stale_glossary_entries_emit_one_debug_summary() {
+        use std::sync::{Arc, Mutex};
+        use tracing::{
+            Event, Level, Subscriber,
+            field::{Field, Visit},
+        };
+        use tracing_subscriber::{
+            layer::{Context, Layer},
+            prelude::*,
+        };
+
+        #[derive(Clone, Default)]
+        struct CaptureLayer {
+            events: Arc<Mutex<Vec<CapturedEvent>>>,
+        }
+
+        #[derive(Debug)]
+        struct CapturedEvent {
+            level: Level,
+            fields: Vec<(String, String)>,
+        }
+
+        #[derive(Default)]
+        struct FieldVisitor {
+            fields: Vec<(String, String)>,
+        }
+
+        impl Visit for FieldVisitor {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                self.fields
+                    .push((field.name().to_string(), format!("{value:?}")));
+            }
+        }
+
+        impl<S> Layer<S> for CaptureLayer
+        where
+            S: Subscriber,
+        {
+            fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+                let mut visitor = FieldVisitor::default();
+                event.record(&mut visitor);
+                self.events.lock().unwrap().push(CapturedEvent {
+                    level: *event.metadata().level(),
+                    fields: visitor.fields,
+                });
+            }
+        }
+
+        let glossary = vec![
+            GlossaryEmote {
+                name: "KEKW".into(),
+                meaning: "laughter".into(),
+                usage: None,
+                avoid: None,
+            },
+            GlossaryEmote {
+                name: "MissingA".into(),
+                meaning: "missing".into(),
+                usage: None,
+                avoid: None,
+            },
+            GlossaryEmote {
+                name: "MissingB".into(),
+                meaning: "missing".into(),
+                usage: None,
+                avoid: None,
+            },
+        ];
+        let available = merge_emote_sets(
+            vec![SevenTvEmote {
+                name: "KEKW".into(),
+            }],
+            Vec::new(),
+        );
+        let capture = CaptureLayer::default();
+        let events = Arc::clone(&capture.events);
+        let subscriber = tracing_subscriber::registry().with(capture);
+
+        tracing::subscriber::with_default(subscriber, || {
+            let prompt = build_prompt_block(&glossary, &available, 40).unwrap();
+            assert!(prompt.contains("KEKW"));
+            assert!(!prompt.contains("MissingA"));
+            assert!(!prompt.contains("MissingB"));
+        });
+
+        let events = events.lock().unwrap();
+        let stale_events = events
+            .iter()
+            .filter(|event| {
+                event.fields.iter().any(|(name, value)| {
+                    name == "message"
+                        && value.contains(
+                            "7TV emote glossary contains entries not present in the loaded catalog",
+                        )
+                })
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(stale_events.len(), 1);
+        assert_eq!(stale_events[0].level, Level::DEBUG);
+        assert!(
+            stale_events[0]
+                .fields
+                .iter()
+                .any(|(name, value)| name == "missing_count" && value == "2")
+        );
     }
 
     #[test]
