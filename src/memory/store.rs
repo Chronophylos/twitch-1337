@@ -64,6 +64,18 @@ impl Memory {
             access_count: 0,
         }
     }
+
+    /// Relevance score in `[0, ~confidence]` space. Combines confidence,
+    /// exponential decay on `last_accessed` (half-life `half_life_days`),
+    /// and a sub-linear boost from `access_count`.
+    // Eviction path (Task 18) is the first non-test caller; allowed until then.
+    #[allow(dead_code)]
+    pub fn score(&self, now: DateTime<Utc>, half_life_days: u32) -> f64 {
+        let age_days = (now - self.last_accessed).num_seconds() as f64 / 86_400.0;
+        let decay = (-(2f64.ln()) * age_days / f64::from(half_life_days)).exp();
+        let hits = (1.0 + f64::from(self.access_count).ln_1p() / 5.0).max(1.0);
+        (f64::from(self.confidence) / 100.0) * decay * hits
+    }
 }
 
 /// A mapping from subject_id to the user's current display name, used to
@@ -154,6 +166,31 @@ impl MemoryStore {
             .collect();
         lines.sort();
         lines.join("\n")
+    }
+
+    /// Evict the lowest-scoring memory whose scope matches `tag` when the
+    /// scope is already at capacity. Returns the evicted key, if any.
+    // Eviction path (Task 18) is the first non-test caller; allowed until then.
+    #[allow(dead_code)]
+    pub fn evict_lowest_in_scope(
+        &mut self,
+        tag: &str,
+        now: DateTime<Utc>,
+        half_life_days: u32,
+    ) -> Option<String> {
+        let candidates: Vec<(String, f64, DateTime<Utc>)> = self
+            .memories
+            .iter()
+            .filter(|(_, m)| m.scope.tag() == tag)
+            .map(|(k, m)| (k.clone(), m.score(now, half_life_days), m.last_accessed))
+            .collect();
+        let (key, _, _) = candidates.into_iter().min_by(|a, b| {
+            a.1.partial_cmp(&b.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.2.cmp(&b.2)) // older last_accessed wins the tie
+        })?;
+        self.memories.remove(&key);
+        Some(key)
     }
 
     /// Execute a single tool call against the store. Returns a result message.
@@ -429,6 +466,45 @@ mod tests {
         assert_eq!(mem.access_count, 0);
         assert_eq!(mem.created_at, mem.updated_at);
         assert_eq!(mem.created_at, mem.last_accessed);
+    }
+
+    fn mem_at(confidence: u8, last_accessed_days_ago: i64, access_count: u32) -> Memory {
+        use chrono::{Duration, Utc};
+        let now = Utc::now();
+        Memory {
+            fact: "f".to_string(),
+            scope: Scope::Lore,
+            sources: vec!["x".to_string()],
+            confidence,
+            created_at: now,
+            updated_at: now,
+            last_accessed: now - Duration::days(last_accessed_days_ago),
+            access_count,
+        }
+    }
+
+    #[test]
+    fn score_monotone_in_confidence() {
+        use chrono::Utc;
+        let a = mem_at(90, 0, 0);
+        let b = mem_at(50, 0, 0);
+        assert!(a.score(Utc::now(), 30) > b.score(Utc::now(), 30));
+    }
+
+    #[test]
+    fn score_decays_with_age() {
+        use chrono::Utc;
+        let fresh = mem_at(70, 0, 0);
+        let stale = mem_at(70, 60, 0);
+        assert!(fresh.score(Utc::now(), 30) > stale.score(Utc::now(), 30));
+    }
+
+    #[test]
+    fn score_boosts_with_access_count() {
+        use chrono::Utc;
+        let cold = mem_at(70, 0, 0);
+        let hot = mem_at(70, 0, 20);
+        assert!(hot.score(Utc::now(), 30) > cold.score(Utc::now(), 30));
     }
 
     #[test]
