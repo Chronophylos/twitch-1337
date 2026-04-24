@@ -202,14 +202,30 @@ impl MemoryStore {
 
     /// Format memories for injection into the system prompt.
     /// Returns None if there are no memories.
-    pub fn format_for_prompt(&self) -> Option<String> {
+    ///
+    /// Side-effect: for each memory actually rendered into the prompt, bumps
+    /// `last_accessed` to `now` and increments `access_count`. Both feed the
+    /// eviction score (see `Memory::score`).
+    ///
+    /// Buffered-write strategy: this method does NOT fsync the store. The
+    /// caller (the `!ai` handler) runs an extraction pass right after the
+    /// prompt is built, and `execute_tool_call` already persists via `save()`
+    /// after each round — so the just-bumped counters land on disk at the
+    /// end of the turn without a second write. On a crash between render and
+    /// extraction, at most one turn's worth of access bumps is lost; memories
+    /// themselves are unaffected.
+    pub fn format_for_prompt(&mut self, now: DateTime<Utc>) -> Option<String> {
         if self.memories.is_empty() {
             return None;
         }
         let mut lines: Vec<String> = self
             .memories
-            .iter()
-            .map(|(key, mem)| format!("- {}: {}", key, mem.fact))
+            .iter_mut()
+            .map(|(key, mem)| {
+                mem.last_accessed = now;
+                mem.access_count = mem.access_count.saturating_add(1);
+                format!("- {}: {}", key, mem.fact)
+            })
             .collect();
         lines.sort(); // Deterministic ordering
         Some(format!("\n\n## Known facts\n{}", lines.join("\n")))
@@ -1421,6 +1437,73 @@ mod tests {
         };
         let out = s.execute_consolidator_tool(&call, now);
         assert!(out.contains("too long"));
+    }
+
+    #[test]
+    fn format_for_prompt_bumps_access_for_rendered_memories() {
+        use chrono::Duration;
+        let t0 = Utc::now() - Duration::hours(1);
+        let mut s = MemoryStore::default();
+        s.memories.insert(
+            "user:1:a".into(),
+            Memory::new(
+                "alice fact".into(),
+                Scope::User {
+                    subject_id: "1".into(),
+                },
+                "alice".into(),
+                70,
+                t0,
+            ),
+        );
+        s.memories.insert(
+            "lore::b".into(),
+            Memory::new("channel fact".into(), Scope::Lore, "mod".into(), 80, t0),
+        );
+        // Pre-conditions: untouched counters.
+        assert_eq!(s.memories["user:1:a"].access_count, 0);
+        assert_eq!(s.memories["user:1:a"].last_accessed, t0);
+        assert_eq!(s.memories["lore::b"].access_count, 0);
+        assert_eq!(s.memories["lore::b"].last_accessed, t0);
+
+        let render_now = Utc::now();
+        let out = s.format_for_prompt(render_now);
+        assert!(out.is_some());
+        // Every memory rendered into the prompt gets its counters bumped.
+        let a = &s.memories["user:1:a"];
+        assert_eq!(a.access_count, 1);
+        assert_eq!(a.last_accessed, render_now);
+        let b = &s.memories["lore::b"];
+        assert_eq!(b.access_count, 1);
+        assert_eq!(b.last_accessed, render_now);
+    }
+
+    #[test]
+    fn format_for_prompt_empty_store_does_not_mutate() {
+        let mut s = MemoryStore::default();
+        let before = s.memories.clone();
+        let out = s.format_for_prompt(Utc::now());
+        assert!(out.is_none());
+        // Empty store: no memories to bump, identities untouched.
+        assert_eq!(s.memories.len(), before.len());
+    }
+
+    #[test]
+    fn format_for_prompt_repeated_calls_accumulate_count() {
+        // Guards the saturating_add path and confirms multiple render passes
+        // bump the same memory each time — important for the score-boost
+        // behavior over the life of a turn.
+        use chrono::Duration;
+        let t0 = Utc::now() - Duration::hours(1);
+        let mut s = MemoryStore::default();
+        s.memories.insert(
+            "lore::x".into(),
+            Memory::new("fact".into(), Scope::Lore, "alice".into(), 60, t0),
+        );
+        let _ = s.format_for_prompt(Utc::now());
+        let _ = s.format_for_prompt(Utc::now());
+        let _ = s.format_for_prompt(Utc::now());
+        assert_eq!(s.memories["lore::x"].access_count, 3);
     }
 
     #[test]

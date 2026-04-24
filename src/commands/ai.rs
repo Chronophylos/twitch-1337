@@ -127,10 +127,14 @@ where
 
         self.cooldown.record(user).await;
 
-        // Build system prompt with memories injected
+        // Build system prompt with memories injected.
+        // Write lock: `format_for_prompt` bumps `last_accessed` + `access_count`
+        // for every rendered memory. The lock is held only for the short
+        // listing build; no I/O inside. Buffered-write: the subsequent
+        // extraction pass's `save()` flushes the bumped counters.
         let system_prompt = if let Some(ref mem) = self.memory {
-            let store_guard = mem.config.store.read().await;
-            match store_guard.format_for_prompt() {
+            let mut store_guard = mem.config.store.write().await;
+            match store_guard.format_for_prompt(chrono::Utc::now()) {
                 Some(facts) => format!("{}{}", self.prompts.system, facts),
                 None => self.prompts.system.clone(),
             }
