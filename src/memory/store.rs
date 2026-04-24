@@ -193,6 +193,19 @@ impl MemoryStore {
         Some(key)
     }
 
+    /// Insert or refresh the `(user_id -> username)` mapping. Username
+    /// changes overwrite; timestamp is bumped on every call so Identity
+    /// entries reflect when the mapping was last observed.
+    pub fn upsert_identity(&mut self, user_id: &str, username: &str, now: DateTime<Utc>) {
+        self.identities.insert(
+            user_id.to_string(),
+            Identity {
+                username: username.to_string(),
+                updated_at: now,
+            },
+        );
+    }
+
     /// Execute a single extractor tool call against the store. Routes
     /// `save_memory` through the permission matrix and `get_memories` for
     /// read-only inspection. Other tool names return an error string.
@@ -734,6 +747,25 @@ mod tests {
         let s = ron::ser::to_string_pretty(&id, ron::ser::PrettyConfig::default()).unwrap();
         let back: Identity = ron::from_str(&s).unwrap();
         assert_eq!(back.username, id.username);
+    }
+
+    #[test]
+    fn upsert_identity_new() {
+        let mut s = MemoryStore::default();
+        let now = Utc::now();
+        s.upsert_identity("42", "alice", now);
+        assert_eq!(s.identities.get("42").unwrap().username, "alice");
+        assert_eq!(s.identities.get("42").unwrap().updated_at, now);
+    }
+
+    #[test]
+    fn upsert_identity_rename_overwrites() {
+        let mut s = MemoryStore::default();
+        let now = Utc::now();
+        s.upsert_identity("42", "alice", now);
+        s.upsert_identity("42", "alicette", now);
+        assert_eq!(s.identities.get("42").unwrap().username, "alicette");
+        assert_eq!(s.identities.len(), 1);
     }
 
     #[test]
