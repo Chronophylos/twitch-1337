@@ -171,6 +171,15 @@ fn parse_tool_call_arguments(
     }
 }
 
+/// Extract the error message from a 2xx response body that carries an API-level
+/// error (e.g. OpenRouter rate-limit: `{"error":{"message":"..."}}`).
+fn extract_api_error(body: &serde_json::Value) -> Option<String> {
+    body.get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .map(str::to_owned)
+}
+
 // --- Client ---
 
 /// HTTP client for any OpenAI-compatible API (OpenRouter, OpenAI, etc.).
@@ -259,9 +268,14 @@ impl LlmClient for OpenAiClient {
             ));
         }
 
-        let api_response: ApiResponse = response
+        let body: serde_json::Value = response
             .json()
             .await
+            .wrap_err("Failed to parse OpenAI-compatible API response")?;
+        if let Some(msg) = extract_api_error(&body) {
+            return Err(eyre::eyre!("OpenAI-compatible API error: {}", msg));
+        }
+        let api_response: ApiResponse = serde_json::from_value(body)
             .wrap_err("Failed to parse OpenAI-compatible API response")?;
 
         let choice = api_response
@@ -324,9 +338,14 @@ impl LlmClient for OpenAiClient {
             ));
         }
 
-        let api_response: ApiToolResponse = response
+        let body: serde_json::Value = response
             .json()
             .await
+            .wrap_err("Failed to parse OpenAI-compatible API tool response")?;
+        if let Some(msg) = extract_api_error(&body) {
+            return Err(eyre::eyre!("OpenAI-compatible API error: {}", msg));
+        }
+        let api_response: ApiToolResponse = serde_json::from_value(body)
             .wrap_err("Failed to parse OpenAI-compatible API tool response")?;
 
         let choice = api_response
@@ -534,6 +553,21 @@ mod tests {
         let err = err.expect("parse error must be set");
         assert!(!err.error.is_empty());
         assert_eq!(err.raw, raw);
+    }
+
+    #[test]
+    fn extract_api_error_returns_message_for_error_body() {
+        let body = serde_json::json!({"error": {"message": "rate limit exceeded", "type": "rate_limit_error"}});
+        assert_eq!(
+            extract_api_error(&body).as_deref(),
+            Some("rate limit exceeded")
+        );
+    }
+
+    #[test]
+    fn extract_api_error_returns_none_for_choices_body() {
+        let body = serde_json::json!({"choices": [{"message": {"content": "hi"}}]});
+        assert!(extract_api_error(&body).is_none());
     }
 
     #[test]
