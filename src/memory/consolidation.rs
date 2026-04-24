@@ -247,11 +247,13 @@ pub fn spawn_consolidation(
                         %run_at,
                         "consolidation run_at falls in a DST gap today; picking tomorrow"
                     );
+                    // DST gaps span ~1 hour; two consecutive days would require
+                    // two transitions, which Berlin does not do. `expect` is safe.
                     (today + chrono::Duration::days(1))
                         .and_time(run_at)
                         .and_local_timezone(tz)
                         .earliest()
-                        .unwrap_or(now_local)
+                        .expect("consecutive DST gaps are not possible in Europe/Berlin")
                 }
             };
             if next <= now_local {

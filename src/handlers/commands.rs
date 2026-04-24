@@ -8,7 +8,7 @@ use std::{
 };
 
 use tokio::{sync::broadcast, time::Duration};
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument};
 use twitch_irc::{
     TwitchIRCClient, login::LoginCredentials, message::ServerMessage, transport::Transport,
 };
@@ -146,13 +146,6 @@ where
     }
 
     if let Some((llm, cfg)) = llm_client {
-        if cfg.max_memories.is_some() {
-            warn!(
-                "ai.max_memories is deprecated; use [ai.memory] max_user/max_lore/max_pref \
-                 (this value is ignored)"
-            );
-        }
-
         let chat_ctx = chat_history
             .clone()
             .map(|history| commands::ai::ChatContext {

@@ -255,17 +255,32 @@ impl MemoryStore {
         Some(key)
     }
 
-    /// Insert or refresh the `(user_id -> username)` mapping. Username
-    /// changes overwrite; timestamp is bumped on every call so Identity
-    /// entries reflect when the mapping was last observed.
-    pub fn upsert_identity(&mut self, user_id: &str, username: &str, now: DateTime<Utc>) {
-        self.identities.insert(
-            user_id.to_string(),
-            Identity {
-                username: username.to_string(),
-                updated_at: now,
-            },
-        );
+    /// Insert or refresh the `(user_id -> username)` mapping. Returns `true`
+    /// when the stored username changed (new entry or rename) and `false`
+    /// when only the observation timestamp would move — the caller can skip
+    /// persisting in the latter case to avoid per-turn fsync storms.
+    pub fn upsert_identity(&mut self, user_id: &str, username: &str, now: DateTime<Utc>) -> bool {
+        match self.identities.get_mut(user_id) {
+            Some(existing) if existing.username == username => {
+                existing.updated_at = now;
+                false
+            }
+            Some(existing) => {
+                existing.username = username.to_string();
+                existing.updated_at = now;
+                true
+            }
+            None => {
+                self.identities.insert(
+                    user_id.to_string(),
+                    Identity {
+                        username: username.to_string(),
+                        updated_at: now,
+                    },
+                );
+                true
+            }
+        }
     }
 
     /// Execute a single extractor tool call against the store. Routes
@@ -853,7 +868,7 @@ mod tests {
     fn upsert_identity_new() {
         let mut s = MemoryStore::default();
         let now = Utc::now();
-        s.upsert_identity("42", "alice", now);
+        assert!(s.upsert_identity("42", "alice", now));
         assert_eq!(s.identities.get("42").unwrap().username, "alice");
         assert_eq!(s.identities.get("42").unwrap().updated_at, now);
     }
@@ -863,9 +878,20 @@ mod tests {
         let mut s = MemoryStore::default();
         let now = Utc::now();
         s.upsert_identity("42", "alice", now);
-        s.upsert_identity("42", "alicette", now);
+        assert!(s.upsert_identity("42", "alicette", now));
         assert_eq!(s.identities.get("42").unwrap().username, "alicette");
         assert_eq!(s.identities.len(), 1);
+    }
+
+    #[test]
+    fn upsert_identity_same_username_returns_false() {
+        use chrono::Duration;
+        let mut s = MemoryStore::default();
+        let t0 = Utc::now();
+        s.upsert_identity("42", "alice", t0);
+        let t1 = t0 + Duration::seconds(30);
+        assert!(!s.upsert_identity("42", "alice", t1));
+        assert_eq!(s.identities.get("42").unwrap().updated_at, t1);
     }
 
     #[test]

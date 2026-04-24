@@ -78,11 +78,14 @@ pub fn spawn_memory_extraction(deps: ExtractionDeps, ctx: ExtractionContext) {
 /// model returns a plain-text response or `deps.max_rounds` is reached.
 pub async fn run_memory_extraction(deps: ExtractionDeps, ctx: ExtractionContext) -> Result<()> {
     // Identity upsert MUST happen before the snapshot so the extractor's view
-    // reflects the most recently observed username for the speaker.
+    // reflects the most recently observed username for the speaker. Only
+    // persist when the username actually changed — timestamp-only refreshes
+    // ride along with the next tool-call round's save().
     {
         let mut w = deps.store.write().await;
-        w.upsert_identity(&ctx.speaker_id, &ctx.speaker_username, Utc::now());
-        w.save(&deps.store_path)?;
+        if w.upsert_identity(&ctx.speaker_id, &ctx.speaker_username, Utc::now()) {
+            w.save(&deps.store_path)?;
+        }
     }
 
     let snapshot = {
