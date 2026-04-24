@@ -98,8 +98,14 @@ async fn ai_command_injects_chat_history() {
     bot.shutdown().await;
 }
 
+// TODO(phase H/I): restore this test against the new ExtractionContext /
+// ExtractionDeps wiring and the scoped save_memory tool schema (scope + slug +
+// fact, not key). Phase E intentionally stubs out the extraction call site in
+// commands/ai.rs; Phase H re-enables it and Phase I adds the full adversarial
+// integration-test suite.
 #[tokio::test]
 #[serial]
+#[ignore = "extraction call site stubbed until Phase H; Phase I adds new-shape coverage"]
 async fn ai_command_saves_memory_extraction() {
     let mut bot = TestBotBuilder::new()
         .with_ai()

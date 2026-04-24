@@ -193,17 +193,11 @@ where
         }
 
         // Spawn fire-and-forget memory extraction (only on successful AI responses)
-        if let (true, Some(mem)) = (success, &self.memory) {
-            memory::spawn_memory_extraction(
-                self.llm_client.clone(),
-                self.model.clone(),
-                mem,
-                user.clone(),
-                instruction,
-                response,
-                self.timeout,
-            );
-        }
+        // TODO(phase H): restore extraction with ExtractionContext — the new
+        // entrypoint takes ExtractionDeps + ExtractionContext (built from the
+        // privmsg badges/id/login plus the user_message/ai_response pair) and
+        // needs the new [ai.extraction] model/timeout knobs from config.
+        let _ = (success, &self.memory, &instruction, &response, user);
 
         Ok(())
     }

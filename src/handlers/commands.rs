@@ -142,12 +142,21 @@ where
 
     if let Some((llm, cfg)) = llm_client {
         // Load memory store if enabled
+        // TODO(phase H): replace this stopgap Caps/half-life wiring with the
+        // dedicated [ai.memory] config section. `cfg.max_memories` is the
+        // legacy single-cap knob; here we reuse it as the user-scope cap while
+        // lore/pref and half_life_days get temporary defaults.
         let memory_config = if cfg.memory_enabled {
             match memory::MemoryStore::load(&data_dir) {
                 Ok((store, path)) => Some(memory::MemoryConfig {
                     store: Arc::new(tokio::sync::RwLock::new(store)),
                     path,
-                    max_memories: cfg.max_memories,
+                    caps: memory::Caps {
+                        max_user: cfg.max_memories,
+                        max_lore: 50,
+                        max_pref: 50,
+                    },
+                    half_life_days: 30,
                 }),
                 Err(e) => {
                     error!(error = ?e, "Failed to load AI memory store, memory disabled");
