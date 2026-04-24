@@ -82,6 +82,8 @@ struct ApiToolChoice {
 struct ApiToolResponseMessage {
     content: Option<String>,
     tool_calls: Option<Vec<ApiToolCall>>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,11 +126,15 @@ fn build_openai_messages(request: &ToolChatCompletionRequest) -> Vec<serde_json:
             })
             .collect();
 
-        messages.push(serde_json::json!({
+        let mut assistant_msg = serde_json::json!({
             "role": "assistant",
             "content": null,
             "tool_calls": tool_calls,
-        }));
+        });
+        if let Some(rc) = &round.reasoning_content {
+            assistant_msg["reasoning_content"] = serde_json::Value::String(rc.clone());
+        }
+        messages.push(assistant_msg);
 
         for tr in &round.results {
             messages.push(serde_json::json!({
@@ -163,6 +169,15 @@ fn parse_tool_call_arguments(
             (serde_json::Value::Null, Some(err))
         }
     }
+}
+
+/// Extract the error message from a 2xx response body that carries an API-level
+/// error (e.g. OpenRouter rate-limit: `{"error":{"message":"..."}}`).
+fn extract_api_error(body: &serde_json::Value) -> Option<String> {
+    body.get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .map(str::to_owned)
 }
 
 // --- Client ---
@@ -253,9 +268,14 @@ impl LlmClient for OpenAiClient {
             ));
         }
 
-        let api_response: ApiResponse = response
+        let body: serde_json::Value = response
             .json()
             .await
+            .wrap_err("Failed to parse OpenAI-compatible API response")?;
+        if let Some(msg) = extract_api_error(&body) {
+            return Err(eyre::eyre!("OpenAI-compatible API error: {}", msg));
+        }
+        let api_response: ApiResponse = serde_json::from_value(body)
             .wrap_err("Failed to parse OpenAI-compatible API response")?;
 
         let choice = api_response
@@ -318,9 +338,14 @@ impl LlmClient for OpenAiClient {
             ));
         }
 
-        let api_response: ApiToolResponse = response
+        let body: serde_json::Value = response
             .json()
             .await
+            .wrap_err("Failed to parse OpenAI-compatible API tool response")?;
+        if let Some(msg) = extract_api_error(&body) {
+            return Err(eyre::eyre!("OpenAI-compatible API error: {}", msg));
+        }
+        let api_response: ApiToolResponse = serde_json::from_value(body)
             .wrap_err("Failed to parse OpenAI-compatible API tool response")?;
 
         let choice = api_response
@@ -348,7 +373,10 @@ impl LlmClient for OpenAiClient {
                     }
                 })
                 .collect();
-            return Ok(ToolChatCompletionResponse::ToolCalls(calls));
+            return Ok(ToolChatCompletionResponse::ToolCalls {
+                calls,
+                reasoning_content: choice.message.reasoning_content,
+            });
         }
 
         let content = choice.message.content.unwrap_or_default();
@@ -403,6 +431,7 @@ mod tests {
                 tool_name: "save_memory".to_string(),
                 content: "Saved memory 'k1'".to_string(),
             }],
+            reasoning_content: None,
         };
         let round2 = ToolCallRound {
             calls: vec![ToolCall {
@@ -416,6 +445,7 @@ mod tests {
                 tool_name: "delete_memory".to_string(),
                 content: "Deleted memory 'k2'".to_string(),
             }],
+            reasoning_content: None,
         };
 
         let msgs = build_openai_messages(&req_with_rounds(vec![round1, round2]));
@@ -456,6 +486,58 @@ mod tests {
     }
 
     #[test]
+    fn build_messages_reasoning_content_included_in_assistant_turn() {
+        let round = ToolCallRound {
+            calls: vec![ToolCall {
+                id: "Z".to_string(),
+                name: "save_memory".to_string(),
+                arguments: serde_json::json!({"key": "k"}),
+                arguments_parse_error: None,
+            }],
+            results: vec![ToolResultMessage {
+                tool_call_id: "Z".to_string(),
+                tool_name: "save_memory".to_string(),
+                content: "ok".to_string(),
+            }],
+            reasoning_content: Some("I should save this fact.".to_string()),
+        };
+
+        let msgs = build_openai_messages(&req_with_rounds(vec![round]));
+
+        // [0] system, [1] user, [2] assistant, [3] tool
+        assert_eq!(msgs[2]["role"], "assistant");
+        assert_eq!(
+            msgs[2]["reasoning_content"], "I should save this fact.",
+            "reasoning_content must be echoed back in the assistant turn"
+        );
+    }
+
+    #[test]
+    fn build_messages_no_reasoning_content_omits_field() {
+        let round = ToolCallRound {
+            calls: vec![ToolCall {
+                id: "Z".to_string(),
+                name: "save_memory".to_string(),
+                arguments: serde_json::json!({"key": "k"}),
+                arguments_parse_error: None,
+            }],
+            results: vec![ToolResultMessage {
+                tool_call_id: "Z".to_string(),
+                tool_name: "save_memory".to_string(),
+                content: "ok".to_string(),
+            }],
+            reasoning_content: None,
+        };
+
+        let msgs = build_openai_messages(&req_with_rounds(vec![round]));
+
+        assert!(
+            msgs[2].get("reasoning_content").is_none(),
+            "reasoning_content must not be present when None"
+        );
+    }
+
+    #[test]
     fn parse_tool_call_arguments_valid_json_returns_value() {
         let (args, err) =
             parse_tool_call_arguments("save_memory", "X", r#"{"key":"k","fact":"f"}"#);
@@ -471,6 +553,21 @@ mod tests {
         let err = err.expect("parse error must be set");
         assert!(!err.error.is_empty());
         assert_eq!(err.raw, raw);
+    }
+
+    #[test]
+    fn extract_api_error_returns_message_for_error_body() {
+        let body = serde_json::json!({"error": {"message": "rate limit exceeded", "type": "rate_limit_error"}});
+        assert_eq!(
+            extract_api_error(&body).as_deref(),
+            Some("rate limit exceeded")
+        );
+    }
+
+    #[test]
+    fn extract_api_error_returns_none_for_choices_body() {
+        let body = serde_json::json!({"choices": [{"message": {"content": "hi"}}]});
+        assert!(extract_api_error(&body).is_none());
     }
 
     #[test]
