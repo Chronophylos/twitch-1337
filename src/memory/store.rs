@@ -510,8 +510,51 @@ impl MemoryStore {
         msg
     }
 
-    fn handle_edit_memory(&mut self, _call: &ToolCall) -> String {
-        unimplemented!("handle_edit_memory (Task 14)")
+    fn handle_edit_memory(&mut self, call: &ToolCall) -> String {
+        let key = call
+            .arguments
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let fact_opt = call.arguments.get("fact").and_then(|v| v.as_str());
+        let delta_opt = call
+            .arguments
+            .get("confidence_delta")
+            .and_then(serde_json::Value::as_i64);
+        let drop_source_opt = call.arguments.get("drop_source").and_then(|v| v.as_str());
+
+        if let Some(f) = fact_opt {
+            if f.is_empty() {
+                return "Error: 'fact' must be non-empty".into();
+            }
+            let len = f.chars().count();
+            if len > 500 {
+                return format!("Error: 'fact' too long ({len} chars > 500)");
+            }
+        }
+        if let Some(d) = delta_opt
+            && !(-50..=30).contains(&d)
+        {
+            return format!("Error: confidence_delta {d} out of range [-50, +30]");
+        }
+
+        let mem = match self.memories.get_mut(key) {
+            Some(m) => m,
+            None => return format!("No memory with key '{key}'"),
+        };
+        if let Some(f) = fact_opt {
+            mem.fact = f.to_string();
+        }
+        if let Some(d) = delta_opt {
+            // `d` is validated in `[-50, 30]`; clamp also guards against any
+            // pre-existing out-of-band `confidence` values.
+            let new_conf = (i64::from(mem.confidence) + d).clamp(0, 100);
+            mem.confidence = u8::try_from(new_conf).unwrap_or(0);
+        }
+        if let Some(src) = drop_source_opt {
+            mem.sources.retain(|s| s != src);
+        }
+        format!("Edited memory '{key}' (confidence={})", mem.confidence)
     }
 
     /// Legacy dispatcher kept alive for the in-file `run_memory_extraction`
@@ -1400,6 +1443,82 @@ mod tests {
         };
         let out = s.execute_consolidator_tool(&call, now);
         assert!(out.contains("subject_id mismatch"), "got: {out}");
+    }
+
+    #[test]
+    fn edit_memory_confidence_delta_applied_clamped() {
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        s.memories.insert(
+            "lore::x".into(),
+            Memory::new("f".into(), Scope::Lore, "alice".into(), 50, now),
+        );
+        let call = ToolCall {
+            id: "c".into(),
+            name: "edit_memory".into(),
+            arguments: serde_json::json!({"key": "lore::x", "confidence_delta": 30}),
+            arguments_parse_error: None,
+        };
+        let _ = s.execute_consolidator_tool(&call, now);
+        assert_eq!(s.memories.get("lore::x").unwrap().confidence, 80);
+    }
+
+    #[test]
+    fn edit_memory_confidence_delta_out_of_range_rejected() {
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        s.memories.insert(
+            "lore::x".into(),
+            Memory::new("f".into(), Scope::Lore, "alice".into(), 50, now),
+        );
+        let call = ToolCall {
+            id: "c".into(),
+            name: "edit_memory".into(),
+            arguments: serde_json::json!({"key": "lore::x", "confidence_delta": 99}),
+            arguments_parse_error: None,
+        };
+        let out = s.execute_consolidator_tool(&call, now);
+        assert!(out.contains("out of range"), "got: {out}");
+        assert_eq!(s.memories.get("lore::x").unwrap().confidence, 50);
+    }
+
+    #[test]
+    fn edit_memory_drop_source_removes() {
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        let mut m = Memory::new("f".into(), Scope::Lore, "alice".into(), 50, now);
+        m.sources.push("bob".into());
+        s.memories.insert("lore::x".into(), m);
+        let call = ToolCall {
+            id: "c".into(),
+            name: "edit_memory".into(),
+            arguments: serde_json::json!({"key": "lore::x", "drop_source": "bob"}),
+            arguments_parse_error: None,
+        };
+        let _ = s.execute_consolidator_tool(&call, now);
+        assert_eq!(
+            s.memories.get("lore::x").unwrap().sources,
+            vec!["alice".to_string()]
+        );
+    }
+
+    #[test]
+    fn edit_memory_fact_too_long_rejected() {
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        s.memories.insert(
+            "lore::x".into(),
+            Memory::new("f".into(), Scope::Lore, "alice".into(), 50, now),
+        );
+        let long = "a".repeat(600);
+        let call = ToolCall {
+            id: "c".into(),
+            name: "edit_memory".into(),
+            arguments: serde_json::json!({"key": "lore::x", "fact": long}),
+            arguments_parse_error: None,
+        };
+        let out = s.execute_consolidator_tool(&call, now);
+        assert!(out.contains("too long"));
     }
 
     #[test]
