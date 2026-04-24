@@ -77,7 +77,26 @@ pub struct Identity {
 /// Persistent store of AI memories, serialized to RON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryStore {
+    #[serde(default = "default_version")]
+    pub version: u32,
+    #[serde(default)]
     pub memories: HashMap<String, Memory>,
+    #[serde(default)]
+    pub identities: HashMap<String, Identity>,
+}
+
+fn default_version() -> u32 {
+    2
+}
+
+impl Default for MemoryStore {
+    fn default() -> Self {
+        Self {
+            version: 2,
+            memories: HashMap::new(),
+            identities: HashMap::new(),
+        }
+    }
 }
 
 impl MemoryStore {
@@ -89,9 +108,7 @@ impl MemoryStore {
             ron::from_str(&data).wrap_err("Failed to parse ai_memory.ron")?
         } else {
             info!("No ai_memory.ron found, starting with empty memory store");
-            Self {
-                memories: HashMap::new(),
-            }
+            Self::default()
         };
 
         info!(count = store.memories.len(), "Loaded AI memories");
@@ -354,9 +371,7 @@ mod tests {
     use super::*;
 
     fn empty_store() -> MemoryStore {
-        MemoryStore {
-            memories: HashMap::new(),
-        }
+        MemoryStore::default()
     }
 
     #[test]
@@ -376,6 +391,29 @@ mod tests {
         assert_eq!(mem.access_count, 0);
         assert_eq!(mem.created_at, mem.updated_at);
         assert_eq!(mem.created_at, mem.last_accessed);
+    }
+
+    #[test]
+    fn store_default_is_v2_and_empty() {
+        let s = MemoryStore::default();
+        assert_eq!(s.version, 2);
+        assert!(s.memories.is_empty());
+        assert!(s.identities.is_empty());
+    }
+
+    #[test]
+    fn store_save_load_round_trip() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("ai_memory.ron");
+        let s = MemoryStore {
+            version: 2,
+            memories: HashMap::new(),
+            identities: HashMap::new(),
+        };
+        s.save(&path).unwrap();
+        let (loaded, _) = MemoryStore::load(dir.path()).unwrap();
+        assert_eq!(loaded.version, 2);
     }
 
     #[test]
