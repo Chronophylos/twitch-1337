@@ -441,8 +441,8 @@ pub async fn run_1337_handler<T, L>(
         monitor_handle.abort();
         let _ = (&mut monitor_handle).await;
 
-        // Get user list, count, and fastest
-        let (count, user_list, fastest) = {
+        // Get user list, count, fastest, and slowest
+        let (count, user_list, fastest, slowest) = {
             let users = total_users.lock().await;
             let count = users.len();
             let mut user_vec: Vec<String> = users.keys().cloned().collect();
@@ -453,7 +453,12 @@ pub async fn run_1337_handler<T, L>(
                 .filter_map(|(name, ms)| ms.map(|ms| (name.clone(), ms)))
                 .min_by_key(|(_, ms)| *ms);
 
-            (count, user_vec, fastest)
+            let slowest: Option<(String, u64)> = users
+                .iter()
+                .filter_map(|(name, ms)| ms.map(|ms| (name.clone(), ms)))
+                .max_by_key(|(_, ms)| *ms);
+
+            (count, user_vec, fastest, slowest)
         };
 
         let mut message = generate_stats_message(count, &user_list);
@@ -469,6 +474,14 @@ pub async fn run_1337_handler<T, L>(
             ));
             if is_record {
                 message.push_str(" - neuer Rekord!");
+            }
+
+            if let Some((slowest_user, slowest_ms)) = slowest {
+                if slowest_user != *fastest_user || slowest_ms != fastest_ms {
+                    message.push_str(&format!(
+                        " | Am langsamsten war {slowest_user} mit {slowest_ms}ms"
+                    ));
+                }
             }
         }
 
