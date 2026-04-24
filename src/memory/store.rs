@@ -397,11 +397,117 @@ impl MemoryStore {
         }
     }
 
-    // Placeholders; implemented in Tasks 13 and 14. The dispatcher is
-    // exercised by tests for `drop_memory`/`get_memory` only at this point, so
-    // `unimplemented!()` here is expected until those tasks land.
-    fn handle_merge_memories(&mut self, _call: &ToolCall, _now: DateTime<Utc>) -> String {
-        unimplemented!("handle_merge_memories (Task 13)")
+    fn handle_merge_memories(&mut self, call: &ToolCall, now: DateTime<Utc>) -> String {
+        let keys: Vec<String> = call
+            .arguments
+            .get("keys")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let new_slug = call
+            .arguments
+            .get("new_slug")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let new_fact = call
+            .arguments
+            .get("new_fact")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if keys.len() < 2 {
+            return "Error: merge_memories requires at least 2 keys".into();
+        }
+        if new_slug.is_empty() || new_fact.is_empty() {
+            return "Error: new_slug and new_fact must be non-empty".into();
+        }
+
+        // Collect inputs; bail if any missing so we don't partially mutate.
+        let inputs: Vec<Memory> = match keys
+            .iter()
+            .map(|k| self.memories.get(k).cloned())
+            .collect::<Option<Vec<_>>>()
+        {
+            Some(v) => v,
+            None => return "Error: one or more keys not found; aborting merge".into(),
+        };
+
+        let scope = inputs[0].scope.clone();
+        // Split the "same-scope" check into tag (category) and subject_id so
+        // we can surface the more specific error message. `Scope` derives
+        // structural equality, so a direct `==` would collapse both diagnostics
+        // into "scope mismatch".
+        if !inputs.iter().all(|m| m.scope.tag() == scope.tag()) {
+            return "Error: scope mismatch across merge inputs".into();
+        }
+        if matches!(scope, Scope::User { .. } | Scope::Pref { .. }) {
+            let sid = scope.subject_id();
+            if !inputs.iter().all(|m| m.scope.subject_id() == sid) {
+                return "Error: subject_id mismatch across merge inputs".into();
+            }
+        }
+
+        // Spec (Corroboration Boost / Merge Metadata) filters BOTH sentinels
+        // — "__identity__" and "legacy" — when counting distinct sources.
+        let is_real = |s: &str| s != "__identity__" && s != "legacy";
+        let max_single_sources = inputs
+            .iter()
+            .map(|m| m.sources.iter().filter(|s| is_real(s)).count())
+            .max()
+            .unwrap_or(0);
+        let mut sources: Vec<String> = Vec::new();
+        for m in &inputs {
+            for s in &m.sources {
+                if is_real(s) && !sources.contains(s) {
+                    sources.push(s.clone());
+                }
+            }
+        }
+        let distinct_after = sources.len();
+        let max_conf = inputs.iter().map(|m| m.confidence).max().unwrap_or(0);
+        // usize → u32: source counts are bounded by per-memory cap; saturating
+        // cast is safe. `bonus` is then `5 * (distinct_after - max_single)`.
+        let bonus = u32::try_from(distinct_after.saturating_sub(max_single_sources))
+            .unwrap_or(u32::MAX)
+            .saturating_mul(5);
+        let confidence =
+            u8::try_from(u32::from(max_conf).saturating_add(bonus).min(100)).unwrap_or(100);
+        let created_at = inputs.iter().map(|m| m.created_at).min().unwrap_or(now);
+        let last_accessed = inputs.iter().map(|m| m.last_accessed).max().unwrap_or(now);
+        let access_count = inputs.iter().map(|m| m.access_count).sum();
+
+        let new_key = build_key(&scope, new_slug);
+        if self.memories.contains_key(&new_key) && !keys.contains(&new_key) {
+            return format!(
+                "Error: new_key '{new_key}' collides with existing non-merged memory; choose another slug"
+            );
+        }
+
+        let msg = format!(
+            "Merged {} memories into '{new_key}' (confidence={confidence})",
+            keys.len()
+        );
+        // Remove old keys first so an overlapping new_key slot is free.
+        for k in &keys {
+            self.memories.remove(k);
+        }
+        self.memories.insert(
+            new_key,
+            Memory {
+                fact: new_fact.to_string(),
+                scope,
+                sources,
+                confidence,
+                created_at,
+                updated_at: now,
+                last_accessed,
+                access_count,
+            },
+        );
+        msg
     }
 
     fn handle_edit_memory(&mut self, _call: &ToolCall) -> String {
@@ -1158,6 +1264,142 @@ mod tests {
         assert!(out.contains("lore::x"), "got: {out}");
         assert!(out.contains("a fact"), "got: {out}");
         assert!(out.contains("confidence=65"), "got: {out}");
+    }
+
+    #[test]
+    fn merge_memories_unions_sources_dedup() {
+        use chrono::Duration;
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        s.memories.insert(
+            "user:1:a".into(),
+            Memory {
+                fact: "plays tarkov".into(),
+                scope: Scope::User {
+                    subject_id: "1".into(),
+                },
+                sources: vec!["alice".into(), "bob".into()],
+                confidence: 70,
+                created_at: now - Duration::days(5),
+                updated_at: now - Duration::days(2),
+                last_accessed: now - Duration::days(1),
+                access_count: 2,
+            },
+        );
+        s.memories.insert(
+            "user:1:b".into(),
+            Memory {
+                fact: "tarkov player".into(),
+                scope: Scope::User {
+                    subject_id: "1".into(),
+                },
+                sources: vec!["bob".into(), "carol".into()],
+                confidence: 60,
+                created_at: now - Duration::days(10),
+                updated_at: now - Duration::days(1),
+                last_accessed: now,
+                access_count: 5,
+            },
+        );
+        let call = ToolCall {
+            id: "c".into(),
+            name: "merge_memories".into(),
+            arguments: serde_json::json!({
+                "keys": ["user:1:a", "user:1:b"],
+                "new_slug": "tarkov-player",
+                "new_fact": "plays Escape from Tarkov",
+            }),
+            arguments_parse_error: None,
+        };
+        let out = s.execute_consolidator_tool(&call, now);
+        assert!(out.contains("Merged"), "got: {out}");
+        let merged = s.memories.get("user:1:tarkov-player").unwrap();
+        assert_eq!(merged.sources, vec!["alice", "bob", "carol"]);
+        assert!(merged.confidence >= 70, "got {}", merged.confidence);
+        assert!(merged.confidence <= 100);
+        assert_eq!(merged.access_count, 7);
+        assert_eq!(merged.last_accessed, now);
+        assert_eq!(merged.created_at, now - Duration::days(10));
+        assert!(!s.memories.contains_key("user:1:a"));
+        assert!(!s.memories.contains_key("user:1:b"));
+    }
+
+    #[test]
+    fn merge_memories_rejects_scope_mismatch() {
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        s.memories.insert(
+            "user:1:a".into(),
+            Memory::new(
+                "x".into(),
+                Scope::User {
+                    subject_id: "1".into(),
+                },
+                "alice".into(),
+                70,
+                now,
+            ),
+        );
+        s.memories.insert(
+            "lore::b".into(),
+            Memory::new("y".into(), Scope::Lore, "alice".into(), 70, now),
+        );
+        let call = ToolCall {
+            id: "c".into(),
+            name: "merge_memories".into(),
+            arguments: serde_json::json!({
+                "keys": ["user:1:a", "lore::b"],
+                "new_slug": "mix",
+                "new_fact": "mixed",
+            }),
+            arguments_parse_error: None,
+        };
+        let out = s.execute_consolidator_tool(&call, now);
+        assert!(out.contains("scope mismatch"), "got: {out}");
+        assert!(s.memories.contains_key("user:1:a"));
+        assert!(s.memories.contains_key("lore::b"));
+    }
+
+    #[test]
+    fn merge_memories_rejects_subject_mismatch() {
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        s.memories.insert(
+            "user:1:a".into(),
+            Memory::new(
+                "x".into(),
+                Scope::User {
+                    subject_id: "1".into(),
+                },
+                "alice".into(),
+                70,
+                now,
+            ),
+        );
+        s.memories.insert(
+            "user:2:b".into(),
+            Memory::new(
+                "y".into(),
+                Scope::User {
+                    subject_id: "2".into(),
+                },
+                "alice".into(),
+                70,
+                now,
+            ),
+        );
+        let call = ToolCall {
+            id: "c".into(),
+            name: "merge_memories".into(),
+            arguments: serde_json::json!({
+                "keys": ["user:1:a", "user:2:b"],
+                "new_slug": "mix",
+                "new_fact": "mixed",
+            }),
+            arguments_parse_error: None,
+        };
+        let out = s.execute_consolidator_tool(&call, now);
+        assert!(out.contains("subject_id mismatch"), "got: {out}");
     }
 
     #[test]
