@@ -218,6 +218,44 @@ impl MemoryStore {
     }
 }
 
+/// Turn a human-readable label into a lowercase ASCII slug. Runs of
+/// non-alphanumeric characters collapse into a single `-`; leading and
+/// trailing dashes are trimmed. Non-ASCII input (e.g. emoji) is dropped
+/// the same way.
+// Dispatcher (Task 9) is the first non-test caller; allowed until then.
+#[allow(dead_code)]
+pub(crate) fn sanitize_slug(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_dash = true; // suppress leading dashes
+    for c in s.chars() {
+        let norm = c.to_ascii_lowercase();
+        if norm.is_ascii_alphanumeric() {
+            out.push(norm);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+/// Compose the canonical key for a memory: `user:<uid>:<slug>`, `lore::<slug>`,
+/// or `pref:<uid>:<slug>`. The slug is sanitized before composition.
+// Dispatcher (Task 9) is the first non-test caller; allowed until then.
+#[allow(dead_code)]
+pub(crate) fn build_key(scope: &Scope, slug: &str) -> String {
+    let slug = sanitize_slug(slug);
+    match scope {
+        Scope::User { subject_id } => format!("user:{}:{}", subject_id, slug),
+        Scope::Lore => format!("lore::{}", slug),
+        Scope::Pref { subject_id } => format!("pref:{}:{}", subject_id, slug),
+    }
+}
+
 pub fn memory_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
@@ -391,6 +429,40 @@ mod tests {
         assert_eq!(mem.access_count, 0);
         assert_eq!(mem.created_at, mem.updated_at);
         assert_eq!(mem.created_at, mem.last_accessed);
+    }
+
+    #[test]
+    fn sanitize_slug_basic() {
+        assert_eq!(sanitize_slug("Favorite Game"), "favorite-game");
+        assert_eq!(sanitize_slug("alice's cat!!"), "alice-s-cat");
+        assert_eq!(sanitize_slug("---weird---"), "weird");
+        assert_eq!(sanitize_slug("emoji 🙂 drop"), "emoji-drop");
+    }
+
+    #[test]
+    fn build_key_per_scope() {
+        assert_eq!(
+            build_key(
+                &Scope::User {
+                    subject_id: "42".into()
+                },
+                "plays-tarkov"
+            ),
+            "user:42:plays-tarkov"
+        );
+        assert_eq!(
+            build_key(&Scope::Lore, "channel-emote"),
+            "lore::channel-emote"
+        );
+        assert_eq!(
+            build_key(
+                &Scope::Pref {
+                    subject_id: "42".into()
+                },
+                "speaks-german"
+            ),
+            "pref:42:speaks-german"
+        );
     }
 
     #[test]
