@@ -328,7 +328,7 @@ pub(crate) async fn save_leaderboard(
 #[instrument(skip(broadcast_rx, total_users))]
 pub(crate) async fn monitor_1337_messages(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
-    total_users: Arc<Mutex<HashMap<String, Option<u64>>>>,
+    total_users: Arc<Mutex<HashMap<String, u64>>>,
 ) {
     loop {
         match broadcast_rx.recv().await {
@@ -354,11 +354,10 @@ pub(crate) async fn monitor_1337_messages(
                             + u64::from(local.timestamp_subsec_millis());
                         if ms_since_minute < 1000 {
                             debug!(user = %username, ms = ms_since_minute, "User said 1337 at 13:37 (sub-second)");
-                            users.insert(username, Some(ms_since_minute));
                         } else {
-                            debug!(user = %username, "User said 1337 at 13:37");
-                            users.insert(username, None);
+                            debug!(user = %username, ms = ms_since_minute, "User said 1337 at 13:37");
                         }
+                        users.insert(username, ms_since_minute);
                     }
                 }
             }
@@ -441,35 +440,50 @@ pub async fn run_1337_handler<T, L>(
         monitor_handle.abort();
         let _ = (&mut monitor_handle).await;
 
-        // Get user list, count, and fastest
-        let (count, user_list, fastest) = {
+        // Get user list, count, fastest, and slowest
+        let (count, user_list, fastest, slowest) = {
             let users = total_users.lock().await;
             let count = users.len();
             let mut user_vec: Vec<String> = users.keys().cloned().collect();
             user_vec.sort();
 
-            let fastest: Option<(String, u64)> = users
-                .iter()
-                .filter_map(|(name, ms)| ms.map(|ms| (name.clone(), ms)))
+            let timed_users = users.iter().map(|(name, ms)| (name.clone(), *ms));
+            let fastest: Option<(String, u64)> = timed_users
+                .clone()
+                .filter(|(_, ms)| *ms < 1000)
                 .min_by_key(|(_, ms)| *ms);
+            let slowest: Option<(String, u64)> = timed_users.max_by_key(|(_, ms)| *ms);
 
-            (count, user_vec, fastest)
+            (count, user_vec, fastest, slowest)
         };
 
         let mut message = generate_stats_message(count, &user_list);
 
         if let Some((ref fastest_user, fastest_ms)) = fastest {
-            let leaderboard_guard = leaderboard.read().await;
-            let previous_pb = leaderboard_guard.get(fastest_user).map(|pb| pb.ms);
-            let is_record = previous_pb.is_none_or(|best| fastest_ms < best);
-            drop(leaderboard_guard);
-
             message.push_str(&format!(
                 " | {fastest_user} war mass schnellste mit {fastest_ms}ms"
             ));
-            if is_record {
-                message.push_str(" - neuer Rekord!");
+
+            if fastest_ms < 1000 {
+                let leaderboard_guard = leaderboard.read().await;
+                let previous_pb = leaderboard_guard.get(fastest_user).map(|pb| pb.ms);
+                let is_record = previous_pb.is_none_or(|best| fastest_ms < best);
+                drop(leaderboard_guard);
+
+                if is_record {
+                    message.push_str(" - neuer Rekord!");
+                }
             }
+        }
+
+        if let Some((slowest_user, slowest_ms)) = slowest
+            && fastest.as_ref().is_none_or(|(fastest_user, fastest_ms)| {
+                slowest_user != *fastest_user || slowest_ms != *fastest_ms
+            })
+        {
+            message.push_str(&format!(
+                " | Am langsamsten war {slowest_user} mit {slowest_ms}ms"
+            ));
         }
 
         // Update leaderboard with today's sub-1s times
@@ -480,8 +494,8 @@ pub async fn run_1337_handler<T, L>(
         {
             let users = total_users.lock().await;
             let mut leaderboard_guard = leaderboard.write().await;
-            for (username, timing) in users.iter() {
-                if let Some(ms) = timing {
+            for (username, ms) in users.iter() {
+                if *ms < 1000 {
                     let update = match leaderboard_guard.get(username) {
                         Some(existing) => *ms < existing.ms,
                         None => true,
