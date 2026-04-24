@@ -184,7 +184,7 @@ where
     // daily consolidation task share the same store handle + path.
     // Effective model resolution: extraction falls back to the main chat
     // model; consolidation falls back to extraction and then to chat.
-    let (ai_memory, _consolidation_model): (Option<crate::commands::ai::AiMemory>, Option<String>) =
+    let (ai_memory, consolidation_model): (Option<crate::commands::ai::AiMemory>, Option<String>) =
         match (&config.ai, &llm) {
             (Some(ai), Some(llm_arc)) if ai.memory_enabled => {
                 let extraction_model = ai
@@ -256,10 +256,12 @@ where
         }
     });
 
-    // Capture the store handle + path for Task 21 consolidation spawn before
+    // Capture the store handle + path for the consolidation spawn before
     // `ai_memory` is moved into the command handler. Both `!ai` extraction
-    // (in-handler) and consolidation (below) share these clones.
-    let _consolidation_handle = ai_memory.as_ref().map(|m| {
+    // (in-handler) and consolidation (below) share these clones. We also
+    // clone the `[ai.consolidation]` knobs so the main chat `config.ai`
+    // can be consumed by the command-handler closure.
+    let consolidation_handle = ai_memory.as_ref().map(|m| {
         (
             m.config.store.clone(),
             m.config.path.clone(),
@@ -268,6 +270,7 @@ where
                 .clone(),
         )
     });
+    let consolidation_settings = config.ai.as_ref().map(|a| a.consolidation.clone());
 
     let handler_generic_commands = tokio::spawn({
         let btx = broadcast_tx.clone();
@@ -297,6 +300,32 @@ where
             .await;
         }
     });
+
+    // Daily memory consolidation pass. Shares the memory store handle with
+    // the extractor so the pass sees any writes made since the last run, and
+    // reuses `shutdown_notify` so Ctrl+C aborts the scheduler mid-sleep.
+    if let (Some(ai), Some((store, path, llm_client)), Some(model)) = (
+        consolidation_settings,
+        consolidation_handle,
+        consolidation_model,
+    ) && ai.enabled
+    {
+        let run_at = chrono::NaiveTime::parse_from_str(&ai.run_at, "%H:%M")
+            .wrap_err("invalid ai.consolidation.run_at (expected HH:MM)")?;
+        memory::spawn_consolidation(
+            llm_client,
+            model,
+            store,
+            path,
+            run_at,
+            Duration::from_secs(ai.timeout_secs),
+            shutdown_notify.clone(),
+        );
+        info!(
+            run_at = %ai.run_at,
+            "Daily AI memory consolidation scheduled"
+        );
+    }
 
     if schedules_enabled {
         info!(
