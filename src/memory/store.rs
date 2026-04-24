@@ -71,6 +71,8 @@ impl Memory {
     // Eviction path (Task 18) is the first non-test caller; allowed until then.
     #[allow(dead_code)]
     pub fn score(&self, now: DateTime<Utc>, half_life_days: u32) -> f64 {
+        // i64 → f64: precision loss only matters beyond ~285 million years;
+        // age_days is bounded by clock skew in practice.
         let age_days = (now - self.last_accessed).num_seconds() as f64 / 86_400.0;
         let decay = (-(2f64.ln()) * age_days / f64::from(half_life_days)).exp();
         let hits = (1.0 + f64::from(self.access_count).ln_1p() / 5.0).max(1.0);
@@ -185,6 +187,7 @@ impl MemoryStore {
             .map(|(k, m)| (k.clone(), m.score(now, half_life_days), m.last_accessed))
             .collect();
         let (key, _, _) = candidates.into_iter().min_by(|a, b| {
+            // score() is finite (no NaN-producing paths); unwrap_or is a defensive fallback.
             a.1.partial_cmp(&b.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.2.cmp(&b.2)) // older last_accessed wins the tie
@@ -225,11 +228,20 @@ impl MemoryStore {
                             )
                         } else {
                             // Create new. NOTE: this legacy dispatch is replaced
-                            // by the scope-aware dispatcher in Task 9; fields
-                            // below are interim placeholders so the build works.
+                            // wholesale by the scope-aware dispatcher in Task 9.
+                            // The "legacy" source sentinel matches the migration
+                            // path and is explicitly excluded by consolidation's
+                            // corroboration-boost logic, so these interim rows
+                            // never carry an empty-string source to disk.
                             self.memories.insert(
                                 key.to_string(),
-                                Memory::new(fact.to_string(), Scope::Lore, String::new(), 70, now),
+                                Memory::new(
+                                    fact.to_string(),
+                                    Scope::Lore,
+                                    "legacy".to_string(),
+                                    70,
+                                    now,
+                                ),
                             );
                             format!("Saved memory '{}'", key)
                         }
@@ -574,6 +586,22 @@ mod tests {
         let s = ron::ser::to_string_pretty(&id, ron::ser::PrettyConfig::default()).unwrap();
         let back: Identity = ron::from_str(&s).unwrap();
         assert_eq!(back.username, id.username);
+    }
+
+    #[test]
+    fn evict_tie_breaks_by_older_last_accessed() {
+        use chrono::{Duration, Utc};
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        // identical score inputs, different last_accessed
+        let mut m_old = mem_at(70, 5, 0);
+        m_old.last_accessed = now - Duration::days(5);
+        let mut m_new = mem_at(70, 5, 0);
+        m_new.last_accessed = now - Duration::days(3);
+        s.memories.insert("lore::old".into(), m_old);
+        s.memories.insert("lore::new".into(), m_new);
+        let evicted = s.evict_lowest_in_scope("lore", now, 30).unwrap();
+        assert_eq!(evicted, "lore::old");
     }
 
     #[test]
