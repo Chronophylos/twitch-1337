@@ -9,8 +9,8 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 use crate::chat_history::{ChatHistory, ChatHistoryQuery, MAX_TOOL_RESULT_MESSAGES};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::llm::{
-    ChatCompletionRequest, LlmClient, Message, ToolCall, ToolCallRound,
-    ToolChatCompletionRequest, ToolChatCompletionResponse, ToolDefinition, ToolResultMessage,
+    ChatCompletionRequest, LlmClient, Message, ToolCall, ToolCallRound, ToolChatCompletionRequest,
+    ToolChatCompletionResponse, ToolDefinition, ToolResultMessage,
 };
 use crate::memory;
 use crate::util::{MAX_RESPONSE_LENGTH, truncate_response};
@@ -183,16 +183,12 @@ impl AiCommand {
             .map(String::from);
         let before_seq = args.get("before_seq").and_then(serde_json::Value::as_u64);
 
-        let page = chat
-            .history
-            .lock()
-            .await
-            .query(ChatHistoryQuery {
-                limit,
-                user,
-                contains,
-                before_seq,
-            });
+        let page = chat.history.lock().await.query(ChatHistoryQuery {
+            limit,
+            user,
+            contains,
+            before_seq,
+        });
 
         let returned = page.messages.len();
         let messages = page.messages;
@@ -327,11 +323,8 @@ where
             .replace("{chat_history}", "");
 
         // Execute AI with timeout
-        let result = tokio::time::timeout(
-            self.timeout,
-            self.complete_ai(system_prompt, user_message),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(self.timeout, self.complete_ai(system_prompt, user_message)).await;
 
         let (response, success) = match result {
             Ok(Ok(text)) => {

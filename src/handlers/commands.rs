@@ -218,10 +218,10 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                         .as_ref()
                         .is_some_and(|ch| privmsg.channel_login == *ch);
                     if !is_admin_channel {
-                        history.lock().await.push_user(
-                            privmsg.sender.login.clone(),
-                            privmsg.message_text.clone(),
-                        );
+                        history
+                            .lock()
+                            .await
+                            .push_user(privmsg.sender.login.clone(), privmsg.message_text.clone());
                     }
                 }
 

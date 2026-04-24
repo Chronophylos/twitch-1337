@@ -68,8 +68,14 @@ async fn ai_command_empty_shows_usage() {
     // No LLM call made.
     let chat_calls = bot.llm.chat_calls();
     let tool_calls = bot.llm.tool_calls();
-    assert!(chat_calls.is_empty(), "no chat call expected, got: {chat_calls:?}");
-    assert!(tool_calls.is_empty(), "no tool call expected, got: {tool_calls:?}");
+    assert!(
+        chat_calls.is_empty(),
+        "no chat call expected, got: {chat_calls:?}"
+    );
+    assert!(
+        tool_calls.is_empty(),
+        "no tool call expected, got: {tool_calls:?}"
+    );
 
     bot.shutdown().await;
 }
@@ -221,8 +227,9 @@ async fn ai_command_saves_memory_extraction() {
         .await;
 
     // Main chat response.
-    bot.llm
-        .push_tool(ToolChatCompletionResponse::Message("nice to meet you Alice".into()));
+    bot.llm.push_tool(ToolChatCompletionResponse::Message(
+        "nice to meet you Alice".into(),
+    ));
     // Extraction round 1: one self-scoped save_memory call. user-id 67890 is
     // the default injected by `irc_line::privmsg`, so subject_id must match
     // to pass the self-claim permission check.

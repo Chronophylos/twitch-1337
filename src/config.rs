@@ -542,7 +542,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ai.history_length, crate::chat_history::DEFAULT_HISTORY_LENGTH);
+        assert_eq!(
+            ai.history_length,
+            crate::chat_history::DEFAULT_HISTORY_LENGTH
+        );
         assert_eq!(ai.instruction_template, "{message}");
     }
 
