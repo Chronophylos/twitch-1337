@@ -32,7 +32,8 @@ async fn adversarial_third_party_save_rejected() {
     bot.llm
         .push_tool(ToolChatCompletionResponse::Message("nice".into()));
     bot.llm
-        .push_tool(ToolChatCompletionResponse::ToolCalls(vec![
+        .push_tool(ToolChatCompletionResponse::ToolCalls(
+            calls: vec![
             ToolCall {
                 id: "s1".into(),
                 name: "save_memory".into(),
@@ -55,7 +56,9 @@ async fn adversarial_third_party_save_rejected() {
                 }),
                 arguments_parse_error: None,
             },
-        ]));
+        ],
+        reasoning_content: None
+    ));
     bot.llm
         .push_tool(ToolChatCompletionResponse::Message(String::new()));
 
