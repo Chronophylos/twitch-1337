@@ -98,14 +98,14 @@ async fn ai_command_injects_chat_history() {
     bot.shutdown().await;
 }
 
-// TODO(phase H/I): restore this test against the new ExtractionContext /
-// ExtractionDeps wiring and the scoped save_memory tool schema (scope + slug +
-// fact, not key). Phase E intentionally stubs out the extraction call site in
-// commands/ai.rs; Phase H re-enables it and Phase I adds the full adversarial
-// integration-test suite.
+/// End-to-end smoke test for the Phase H extractor wiring: a successful
+/// `!ai` exchange should spawn a fire-and-forget extraction pass that
+/// routes a self-scoped `save_memory` tool call through the permission
+/// matrix and persists the fact to `ai_memory.ron`. The full adversarial
+/// surface (third-party writes, prompt injection, cap enforcement) lives
+/// in `tests/memory_integration.rs` once Phase I lands.
 #[tokio::test]
 #[serial]
-#[ignore = "extraction call site stubbed until Phase H; Phase I adds new-shape coverage"]
 async fn ai_command_saves_memory_extraction() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
@@ -117,22 +117,24 @@ async fn ai_command_saves_memory_extraction() {
         .spawn()
         .await;
 
-    // Main response
+    // Main chat response.
     bot.llm.push_chat("nice to meet you Alice");
-    // Fire-and-forget memory extraction call uses chat_completion_with_tools.
-    // Return a save_memory tool call with key "alice_name", fact "alice likes coffee".
+    // Extraction round 1: one self-scoped save_memory call. user-id 67890 is
+    // the default injected by `irc_line::privmsg`, so subject_id must match
+    // to pass the self-claim permission check.
     bot.llm
         .push_tool(ToolChatCompletionResponse::ToolCalls(vec![ToolCall {
             id: "call_1".into(),
             name: "save_memory".into(),
             arguments: serde_json::json!({
-                "key": "alice_name",
-                "fact": "alice likes coffee"
+                "scope": "user",
+                "subject_id": "67890",
+                "slug": "likes-coffee",
+                "fact": "alice likes coffee",
             }),
             arguments_parse_error: None,
         }]));
-    // Memory extraction loop continues until the LLM stops returning tool calls.
-    // Second round: return a plain message to terminate the loop.
+    // Extraction round 2: plain-text response terminates the loop.
     bot.llm
         .push_tool(ToolChatCompletionResponse::Message(String::new()));
 
@@ -141,13 +143,14 @@ async fn ai_command_saves_memory_extraction() {
     let body = out.strip_prefix(". ").unwrap_or(&out);
     assert_eq!(body, "nice to meet you Alice");
 
-    // Memory extraction runs fire-and-forget after the reply. Poll briefly for
-    // the RON file to contain the expected fact.
+    // Memory extraction runs fire-and-forget after the reply. Poll briefly
+    // for the RON file to contain the expected fact under the new scoped key.
     let memory_path = bot.data_dir.path().join("ai_memory.ron");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     loop {
         if let Ok(contents) = tokio::fs::read_to_string(&memory_path).await
             && contents.contains("alice likes coffee")
+            && contents.contains("user:67890:likes-coffee")
         {
             break;
         }

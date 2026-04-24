@@ -180,6 +180,58 @@ where
 
     let suspension_manager = Arc::new(suspend::SuspensionManager::new());
 
+    // Build the memory bundle once so both `!ai` (extraction) and the
+    // daily consolidation task share the same store handle + path.
+    // Effective model resolution: extraction falls back to the main chat
+    // model; consolidation falls back to extraction and then to chat.
+    let (ai_memory, _consolidation_model): (Option<crate::commands::ai::AiMemory>, Option<String>) =
+        match (&config.ai, &llm) {
+            (Some(ai), Some(llm_arc)) if ai.memory_enabled => {
+                let extraction_model = ai
+                    .extraction
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| ai.model.clone());
+                let consolidation_model = ai
+                    .consolidation
+                    .model
+                    .clone()
+                    .or_else(|| ai.extraction.model.clone())
+                    .unwrap_or_else(|| ai.model.clone());
+                match memory::MemoryStore::load(&data_dir) {
+                    Ok((store, path)) => {
+                        let config = memory::MemoryConfig {
+                            store: Arc::new(tokio::sync::RwLock::new(store)),
+                            path,
+                            caps: memory::Caps {
+                                max_user: ai.memory.max_user,
+                                max_lore: ai.memory.max_lore,
+                                max_pref: ai.memory.max_pref,
+                            },
+                            half_life_days: ai.memory.half_life_days,
+                        };
+                        let ai_memory = crate::commands::ai::AiMemory {
+                            config,
+                            extraction_deps: crate::commands::ai::AiExtractionDeps {
+                                llm: llm_arc.clone(),
+                                model: extraction_model,
+                                timeout: Duration::from_secs(
+                                    ai.extraction.timeout_secs.unwrap_or(ai.timeout),
+                                ),
+                                max_rounds: ai.extraction.max_rounds,
+                            },
+                        };
+                        (Some(ai_memory), Some(consolidation_model))
+                    }
+                    Err(e) => {
+                        error!(error = ?e, "Failed to load AI memory store, memory disabled");
+                        (None, None)
+                    }
+                }
+            }
+            _ => (None, None),
+        };
+
     let latency = Arc::new(AtomicU32::new(config.twitch.expected_latency));
 
     let handler_latency = tokio::spawn({
@@ -204,6 +256,19 @@ where
         }
     });
 
+    // Capture the store handle + path for Task 21 consolidation spawn before
+    // `ai_memory` is moved into the command handler. Both `!ai` extraction
+    // (in-handler) and consolidation (below) share these clones.
+    let _consolidation_handle = ai_memory.as_ref().map(|m| {
+        (
+            m.config.store.clone(),
+            m.config.path.clone(),
+            llm.as_ref()
+                .expect("ai_memory only built when llm is Some")
+                .clone(),
+        )
+    });
+
     let handler_generic_commands = tokio::spawn({
         let btx = broadcast_tx.clone();
         let client = client.clone();
@@ -213,6 +278,7 @@ where
                 client,
                 ai_config: config.ai.clone(),
                 llm,
+                ai_memory,
                 leaderboard,
                 ping_manager,
                 hidden_admin_ids: config.twitch.hidden_admins.clone(),

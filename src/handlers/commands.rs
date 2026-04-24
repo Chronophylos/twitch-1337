@@ -8,7 +8,7 @@ use std::{
 };
 
 use tokio::{sync::broadcast, time::Duration};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 use twitch_irc::{
     TwitchIRCClient, login::LoginCredentials, message::ServerMessage, transport::Transport,
 };
@@ -16,7 +16,7 @@ use twitch_irc::{
 use crate::{
     ChatHistory, PersonalBest, aviation, commands,
     config::{AiConfig, CooldownsConfig, SuspendConfig},
-    flight_tracker, llm, memory, ping, prefill,
+    flight_tracker, llm, ping, prefill,
     suspend::SuspensionManager,
 };
 
@@ -29,6 +29,10 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     /// Pre-built LLM client. When `None`, `!ai` is disabled regardless of `ai_config`.
     /// Injected so tests can supply a fake and production can call [`llm::build_llm_client`].
     pub llm: Option<Arc<dyn llm::LlmClient>>,
+    /// Pre-built memory bundle (store handle + extractor deps). Built in
+    /// `run_bot` so the consolidation task in `lib.rs` can share the same
+    /// `store` handle and `path`. `None` disables memory for `!ai`.
+    pub ai_memory: Option<commands::ai::AiMemory>,
     pub leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
     pub ping_manager: Arc<tokio::sync::RwLock<ping::PingManager>>,
     pub hidden_admin_ids: Vec<String>,
@@ -59,6 +63,7 @@ where
         client,
         ai_config,
         llm,
+        ai_memory,
         leaderboard,
         ping_manager,
         hidden_admin_ids,
@@ -141,31 +146,12 @@ where
     }
 
     if let Some((llm, cfg)) = llm_client {
-        // Load memory store if enabled
-        // TODO(phase H): replace this stopgap Caps/half-life wiring with the
-        // dedicated [ai.memory] config section. `cfg.max_memories` is the
-        // legacy single-cap knob; here we reuse it as the user-scope cap while
-        // lore/pref and half_life_days get temporary defaults.
-        let memory_config = if cfg.memory_enabled {
-            match memory::MemoryStore::load(&data_dir) {
-                Ok((store, path)) => Some(memory::MemoryConfig {
-                    store: Arc::new(tokio::sync::RwLock::new(store)),
-                    path,
-                    caps: memory::Caps {
-                        max_user: cfg.max_memories.unwrap_or(50),
-                        max_lore: 50,
-                        max_pref: 50,
-                    },
-                    half_life_days: 30,
-                }),
-                Err(e) => {
-                    error!(error = ?e, "Failed to load AI memory store, memory disabled");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        if cfg.max_memories.is_some() {
+            warn!(
+                "ai.max_memories is deprecated; use [ai.memory] max_user/max_lore/max_pref \
+                 (this value is ignored)"
+            );
+        }
 
         let chat_ctx = chat_history
             .clone()
@@ -185,7 +171,7 @@ where
             Duration::from_secs(cfg.timeout),
             Duration::from_secs(cooldowns.ai),
             chat_ctx,
-            memory_config,
+            ai_memory,
         )));
     }
 
