@@ -9,6 +9,7 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::llm::{ChatCompletionRequest, LlmClient, Message};
 use crate::memory;
+use crate::seventv::SevenTvEmoteProvider;
 use crate::util::{ChatHistory, MAX_RESPONSE_LENGTH, truncate_response};
 
 use super::{Command, CommandContext};
@@ -55,6 +56,7 @@ pub struct AiCommand {
     timeout: Duration,
     chat_ctx: Option<ChatContext>,
     memory: Option<AiMemory>,
+    emotes: Option<Arc<SevenTvEmoteProvider>>,
 }
 
 impl AiCommand {
@@ -66,6 +68,7 @@ impl AiCommand {
         cooldown: Duration,
         chat_ctx: Option<ChatContext>,
         memory: Option<AiMemory>,
+        emotes: Option<Arc<SevenTvEmoteProvider>>,
     ) -> Self {
         Self {
             llm_client,
@@ -75,6 +78,7 @@ impl AiCommand {
             timeout,
             chat_ctx,
             memory,
+            emotes,
         }
     }
 }
@@ -130,7 +134,7 @@ where
 
         self.cooldown.record(user).await;
 
-        let system_prompt = if let Some(ref mem) = self.memory {
+        let mut system_prompt = if let Some(ref mem) = self.memory {
             let mut store_guard = mem.config.store.write().await;
             match store_guard.format_for_prompt(chrono::Utc::now()) {
                 Some(facts) => format!("{}{}", self.prompts.system, facts),
@@ -139,6 +143,12 @@ where
         } else {
             self.prompts.system.clone()
         };
+
+        if let Some(ref emotes) = self.emotes
+            && let Some(block) = emotes.prompt_block(&ctx.privmsg.channel_id).await
+        {
+            system_prompt.push_str(&block);
+        }
 
         let user_message = self
             .prompts
