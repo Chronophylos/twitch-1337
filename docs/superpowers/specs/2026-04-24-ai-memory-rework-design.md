@@ -190,8 +190,14 @@ Enforced in `store.rs::execute_tool_call` before any insert/update. Comparison i
 | Regular       | User   | ✓ SelfClaim             | ✗ reject |
 | Regular       | Pref   | ✓ SelfClaim             | ✗ reject |
 | Regular       | Lore   | ✗ reject                | n/a              |
-| Moderator     | any    | ✓ ModBroadcaster        | ✓ ModBroadcaster |
-| Broadcaster   | any    | ✓ ModBroadcaster        | ✓ ModBroadcaster |
+| Moderator     | User   | ✓ ModBroadcaster        | ✓ ModBroadcaster |
+| Moderator     | Pref   | ✓ SelfClaim             | ✗ reject |
+| Moderator     | Lore   | ✓ ModBroadcaster        | n/a              |
+| Broadcaster   | User   | ✓ ModBroadcaster        | ✓ ModBroadcaster |
+| Broadcaster   | Pref   | ✓ SelfClaim             | ✗ reject |
+| Broadcaster   | Lore   | ✓ ModBroadcaster        | n/a              |
+
+**Pref scope is always self-only**, regardless of role. Prefs describe how the AI should interact with a specific user ("speaks German", "prefers terse replies") — that's the user's own call, not moderation territory. Even broadcasters can't set another user's Pref entries via the AI. (Owner can still hand-edit the RON file if needed — escape hatch for the one real admin.)
 
 Rejects return a tool result string explaining the violation; LLM sees it and can retry with correct scope.
 
@@ -412,7 +418,9 @@ Add the three new sections with commented-out defaults and a prose block explain
 
 ### Property-ish
 
-- `proptest` (or loop): random `(role, scope, subject_id, speaker_id)` — assert regular users can never cause writes with `subject_id ≠ speaker_id`.
+- `proptest` (or loop): random `(role, scope, subject_id, speaker_id)` — assert two invariants:
+  1. Regular users can never cause writes with `subject_id ≠ speaker_id`.
+  2. **Pref-scope writes always have `subject_id = speaker_id`**, regardless of role (mods + broadcaster included).
 
 ### Manual smoke
 
