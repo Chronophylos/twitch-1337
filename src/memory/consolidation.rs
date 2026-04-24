@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, NaiveTime, Utc};
+use chrono::{DateTime, MappedLocalTime, NaiveTime, Utc};
 use eyre::{Result, WrapErr as _};
 use tokio::sync::{Notify, RwLock};
 use tracing::{debug, info, warn};
@@ -68,6 +68,12 @@ pub fn corroboration_boost(m: &Memory) -> u8 {
 /// the pass (the caller in `spawn_consolidation` logs and retries tomorrow).
 /// Per-op failures are surfaced to the LLM via the tool result payload, so a
 /// malformed call does not kill the pass.
+///
+/// Retry behavior: the corroboration boost (step 3) is applied in-place before
+/// the LLM pass. If the run is interrupted after this step and retried
+/// tomorrow, the boost compounds until confidence saturates at 100.
+/// Acceptable: the ceiling bounds the damage and the retry produces a valid
+/// consolidated state.
 pub async fn run_consolidation(
     llm: Arc<dyn llm::LlmClient>,
     model: String,
@@ -226,12 +232,28 @@ pub fn spawn_consolidation(
         let tz = chrono_tz::Europe::Berlin;
         loop {
             let now_local = chrono::Utc::now().with_timezone(&tz);
-            let mut next = now_local
-                .date_naive()
-                .and_time(run_at)
-                .and_local_timezone(tz)
-                .single()
-                .unwrap_or(now_local);
+            let today = now_local.date_naive();
+            // DST handling: Berlin spring-forward (e.g. 02:30 on the last
+            // Sunday in March) maps to `None`; fall-back (02:30 on the last
+            // Sunday in October) maps to `Ambiguous`. `.single()` previously
+            // discarded both, falling back to `now_local` which scheduled the
+            // run ~23h early. Prefer the earliest valid instant on ambiguity
+            // and skip to tomorrow's occurrence on gap.
+            let mut next = match today.and_time(run_at).and_local_timezone(tz) {
+                MappedLocalTime::Single(t) => t,
+                MappedLocalTime::Ambiguous(earliest, _latest) => earliest,
+                MappedLocalTime::None => {
+                    warn!(
+                        %run_at,
+                        "consolidation run_at falls in a DST gap today; picking tomorrow"
+                    );
+                    (today + chrono::Duration::days(1))
+                        .and_time(run_at)
+                        .and_local_timezone(tz)
+                        .earliest()
+                        .unwrap_or(now_local)
+                }
+            };
             if next <= now_local {
                 next += chrono::Duration::days(1);
             }
