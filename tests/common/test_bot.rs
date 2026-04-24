@@ -67,7 +67,10 @@ impl TestBotBuilder {
                 history_length: 0,
                 history_prefill: None,
                 memory_enabled: false,
-                max_memories: 50,
+                memory: twitch_1337::config::MemoryConfigSection::default(),
+                extraction: twitch_1337::config::ExtractionConfigSection::default(),
+                consolidation: twitch_1337::config::ConsolidationConfigSection::default(),
+                max_memories: None,
             });
         }
         self

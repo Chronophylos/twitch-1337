@@ -152,7 +152,7 @@ where
                     store: Arc::new(tokio::sync::RwLock::new(store)),
                     path,
                     caps: memory::Caps {
-                        max_user: cfg.max_memories,
+                        max_user: cfg.max_memories.unwrap_or(50),
                         max_lore: 50,
                         max_pref: 50,
                     },
