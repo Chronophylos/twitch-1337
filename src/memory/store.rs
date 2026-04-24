@@ -14,6 +14,20 @@ use crate::memory::{Scope, UserRole};
 
 const MEMORY_FILENAME: &str = "ai_memory.ron";
 
+#[derive(Debug, Clone, Deserialize)]
+struct LegacyMemory {
+    fact: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LegacyStore {
+    memories: HashMap<String, LegacyMemory>,
+}
+
 /// Groups the live memory store handle, its on-disk path, the per-scope caps,
 /// and the half-life used by the score/eviction policy.
 pub struct MemoryConfig {
@@ -103,19 +117,75 @@ impl Default for MemoryStore {
 }
 
 impl MemoryStore {
-    /// Load from disk. Returns empty store if file doesn't exist.
+    /// Load from disk. Tries the v2 format first; on parse failure falls back
+    /// to the pre-rework legacy shape and migrates it to v2 in-place (a
+    /// timestamped `ai_memory.ron.bak-<unix_ts>` backup is written before the
+    /// rewrite). Returns empty store if the file doesn't exist.
     pub fn load(data_dir: &Path) -> Result<(Self, PathBuf)> {
         let path = data_dir.join(MEMORY_FILENAME);
-        let store = if path.exists() {
-            let data = std::fs::read_to_string(&path).wrap_err("Failed to read ai_memory.ron")?;
-            ron::from_str(&data).wrap_err("Failed to parse ai_memory.ron")?
-        } else {
+        if !path.exists() {
             info!("No ai_memory.ron found, starting with empty memory store");
-            Self::default()
-        };
+            return Ok((Self::default(), path));
+        }
+        let data = std::fs::read_to_string(&path).wrap_err("Failed to read ai_memory.ron")?;
+        // Try v2 first
+        if let Ok(store) = ron::from_str::<MemoryStore>(&data) {
+            info!(
+                count = store.memories.len(),
+                identities = store.identities.len(),
+                "Loaded AI memories (v2)"
+            );
+            return Ok((store, path));
+        }
+        // Fall back to legacy
+        let legacy: LegacyStore = ron::from_str(&data)
+            .wrap_err("Failed to parse ai_memory.ron (neither v2 nor legacy)")?;
+        let backup = path.with_file_name(format!(
+            "ai_memory.ron.bak-{}",
+            chrono::Utc::now().timestamp()
+        ));
+        std::fs::copy(&path, &backup).wrap_err("Failed to write legacy backup")?;
+        info!(
+            backup = %backup.display(),
+            count = legacy.memories.len(),
+            "Migrating legacy AI memories to v2"
+        );
 
-        info!(count = store.memories.len(), "Loaded AI memories");
-        Ok((store, path))
+        let mut out = Self::default();
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (old_key, lm) in legacy.memories {
+            let base = sanitize_slug(&old_key);
+            let mut slug = base.clone();
+            let mut suffix = 0u32;
+            while used.contains(&format!("lore::{slug}")) {
+                suffix += 1;
+                slug = format!("{base}-{suffix}");
+            }
+            let new_key = format!("lore::{slug}");
+            used.insert(new_key.clone());
+            let parsed = chrono::DateTime::parse_from_rfc3339(&lm.updated_at)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+            let created = chrono::DateTime::parse_from_rfc3339(&lm.created_at)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or(parsed);
+            out.memories.insert(
+                new_key,
+                Memory {
+                    fact: lm.fact,
+                    scope: Scope::Lore,
+                    sources: vec!["legacy".to_string()],
+                    confidence: 40,
+                    created_at: created,
+                    updated_at: parsed,
+                    last_accessed: parsed,
+                    access_count: 0,
+                },
+            );
+        }
+        // Persist new format immediately so subsequent starts skip this path.
+        out.save(&path)?;
+        Ok((out, path))
     }
 
     /// Write current state to disk using write+rename for atomicity.
@@ -713,6 +783,42 @@ mod tests {
         s.save(&path).unwrap();
         let (loaded, _) = MemoryStore::load(dir.path()).unwrap();
         assert_eq!(loaded.version, 2);
+    }
+
+    #[test]
+    fn load_legacy_ron_migrates_to_v2() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("ai_memory.ron");
+        // Legacy shape: no version, memories keyed by arbitrary slug, Memory uses String timestamps
+        let legacy = r#"(
+            memories: {
+                "alice likes tarkov": (
+                    fact: "alice plays tarkov",
+                    created_at: "2026-01-01T00:00:00Z",
+                    updated_at: "2026-01-02T00:00:00Z",
+                ),
+            }
+        )"#;
+        std::fs::write(&path, legacy).unwrap();
+        let (store, _) = MemoryStore::load(dir.path()).unwrap();
+        assert_eq!(store.version, 2);
+        let migrated_key = store.memories.keys().next().unwrap().clone();
+        assert!(migrated_key.starts_with("lore::"));
+        let m = store.memories.get(&migrated_key).unwrap();
+        assert_eq!(m.scope, Scope::Lore);
+        assert_eq!(m.sources, vec!["legacy".to_string()]);
+        assert_eq!(m.confidence, 40);
+        // backup file exists
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .collect();
+        assert!(entries.iter().any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("ai_memory.ron.bak-")
+        }));
     }
 
     #[test]
