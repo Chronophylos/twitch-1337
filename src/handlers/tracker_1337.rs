@@ -475,15 +475,12 @@ pub async fn run_1337_handler<T, L>(
                     message.push_str(" - neuer Rekord!");
                 }
             }
-
         }
 
         if let Some((slowest_user, slowest_ms)) = slowest
-            && fastest
-                .as_ref()
-                .is_none_or(|(fastest_user, fastest_ms)| {
-                    slowest_user != *fastest_user || slowest_ms != *fastest_ms
-                })
+            && fastest.as_ref().is_none_or(|(fastest_user, fastest_ms)| {
+                slowest_user != *fastest_user || slowest_ms != *fastest_ms
+            })
         {
             message.push_str(&format!(
                 " | Am langsamsten war {slowest_user} mit {slowest_ms}ms"
