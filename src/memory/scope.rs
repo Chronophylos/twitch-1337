@@ -76,18 +76,14 @@ pub fn is_write_allowed(role: UserRole, scope: &Scope, speaker_id: &str) -> bool
 /// don't get the corroboration bonus when claiming facts about themselves.
 pub fn trust_level_for(role: UserRole, scope: &Scope, speaker_id: &str) -> TrustLevel {
     match (role, scope) {
+        (UserRole::Moderator | UserRole::Broadcaster, Scope::Lore) => TrustLevel::ModBroadcaster,
         (UserRole::Moderator | UserRole::Broadcaster, _)
-            if scope_is_not_self(scope, speaker_id) =>
+            if scope.subject_id().is_some_and(|s| s != speaker_id) =>
         {
             TrustLevel::ModBroadcaster
         }
-        (UserRole::Moderator | UserRole::Broadcaster, Scope::Lore) => TrustLevel::ModBroadcaster,
-        _ => TrustLevel::SelfClaim, // self-write by regular/mod/broadcaster
+        _ => TrustLevel::SelfClaim,
     }
-}
-
-fn scope_is_not_self(scope: &Scope, speaker_id: &str) -> bool {
-    matches!(scope.subject_id(), Some(s) if s != speaker_id)
 }
 
 pub fn seed_confidence(level: TrustLevel) -> u8 {
@@ -108,8 +104,13 @@ mod tests {
             subject_id: "12345".to_string(),
         };
         let s = ron::to_string(&scope).unwrap();
-        assert!(s.contains("User"));
-        assert!(s.contains("12345"));
+        let back: Scope = ron::from_str(&s).unwrap();
+        assert_eq!(
+            back,
+            Scope::User {
+                subject_id: "12345".to_string()
+            }
+        );
     }
 
     #[test]
@@ -241,5 +242,93 @@ mod tests {
             &Pref { subject_id: uid_b },
             &uid_a
         ));
+    }
+
+    #[test]
+    fn trust_level_regular_self_is_self_claim() {
+        let uid = "1".to_string();
+        assert_eq!(
+            trust_level_for(
+                UserRole::Regular,
+                &Scope::User {
+                    subject_id: uid.clone()
+                },
+                &uid
+            ),
+            TrustLevel::SelfClaim
+        );
+    }
+
+    #[test]
+    fn trust_level_moderator_other_user_is_mod_broadcaster() {
+        let speaker = "1".to_string();
+        let other = "2".to_string();
+        assert_eq!(
+            trust_level_for(
+                UserRole::Moderator,
+                &Scope::User { subject_id: other },
+                &speaker
+            ),
+            TrustLevel::ModBroadcaster
+        );
+    }
+
+    #[test]
+    fn trust_level_moderator_self_user_is_self_claim() {
+        // Self-write invariant: mods don't get the corroboration bonus for
+        // claims about themselves.
+        let uid = "1".to_string();
+        assert_eq!(
+            trust_level_for(
+                UserRole::Moderator,
+                &Scope::User {
+                    subject_id: uid.clone()
+                },
+                &uid
+            ),
+            TrustLevel::SelfClaim
+        );
+    }
+
+    #[test]
+    fn trust_level_moderator_lore_is_mod_broadcaster() {
+        let uid = "1".to_string();
+        assert_eq!(
+            trust_level_for(UserRole::Moderator, &Scope::Lore, &uid),
+            TrustLevel::ModBroadcaster
+        );
+    }
+
+    #[test]
+    fn trust_level_broadcaster_self_pref_is_self_claim() {
+        let uid = "1".to_string();
+        assert_eq!(
+            trust_level_for(
+                UserRole::Broadcaster,
+                &Scope::Pref {
+                    subject_id: uid.clone()
+                },
+                &uid
+            ),
+            TrustLevel::SelfClaim
+        );
+    }
+
+    #[test]
+    fn trust_level_regular_lore_is_self_claim() {
+        // Regulars can't write Lore at all (rejected by is_write_allowed),
+        // but if they did the trust level would fall through to SelfClaim.
+        let uid = "1".to_string();
+        assert_eq!(
+            trust_level_for(UserRole::Regular, &Scope::Lore, &uid),
+            TrustLevel::SelfClaim
+        );
+    }
+
+    #[test]
+    fn seed_confidence_values() {
+        assert_eq!(seed_confidence(TrustLevel::SelfClaim), 70);
+        assert_eq!(seed_confidence(TrustLevel::ModBroadcaster), 90);
+        assert_eq!(seed_confidence(TrustLevel::ThirdParty), 30);
     }
 }
