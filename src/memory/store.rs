@@ -466,7 +466,9 @@ pub(crate) fn build_key(scope: &Scope, slug: &str) -> String {
     }
 }
 
-pub fn memory_tool_definitions() -> Vec<ToolDefinition> {
+// Legacy per-turn tool set. Kept module-private to feed `run_memory_extraction`
+// until Phase E rewrites that path against `extractor_tools()` in `tools.rs`.
+fn memory_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "save_memory".to_string(),
