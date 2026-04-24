@@ -38,6 +38,25 @@ pub enum TrustLevel {
     ModBroadcaster,
 }
 
+use twitch_irc::message::Badge;
+
+/// Classify a Twitch user's role from their badge list
+/// (typically `PrivmsgMessage::badges`). Broadcaster outranks moderator.
+pub fn classify_role(badges: &[Badge]) -> UserRole {
+    let mut role = UserRole::Regular;
+    for b in badges {
+        let rank = match b.name.as_str() {
+            "broadcaster" => UserRole::Broadcaster,
+            "moderator" => UserRole::Moderator,
+            _ => continue,
+        };
+        if rank > role {
+            role = rank;
+        }
+    }
+    role
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,5 +83,35 @@ mod tests {
     fn user_role_broadcaster_outranks_moderator() {
         assert!(UserRole::Broadcaster > UserRole::Moderator);
         assert!(UserRole::Moderator > UserRole::Regular);
+    }
+
+    use twitch_irc::message::Badge;
+
+    fn badges(names: &[&str]) -> Vec<Badge> {
+        names
+            .iter()
+            .map(|b| Badge {
+                name: (*b).to_string(),
+                version: "1".to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn classify_role_regular_default() {
+        assert_eq!(classify_role(&badges(&[])), UserRole::Regular);
+    }
+
+    #[test]
+    fn classify_role_moderator_badge() {
+        assert_eq!(classify_role(&badges(&["moderator"])), UserRole::Moderator);
+    }
+
+    #[test]
+    fn classify_role_broadcaster_beats_moderator() {
+        assert_eq!(
+            classify_role(&badges(&["moderator", "broadcaster"])),
+            UserRole::Broadcaster
+        );
     }
 }
