@@ -18,6 +18,7 @@ pub mod ping;
 pub mod prefill;
 pub mod suspend;
 pub mod telemetry;
+pub mod tls;
 pub mod token_storage;
 pub mod twitch_setup;
 pub mod util;
@@ -62,6 +63,7 @@ pub type AuthenticatedTwitchClient<
 pub use config::{load_configuration, validate_config};
 pub use handlers::tracker_1337::PersonalBest;
 pub use telemetry::install_tracing;
+pub use tls::install_crypto_provider;
 pub use token_storage::FileBasedTokenStorage;
 pub use twitch_setup::{setup_and_verify_twitch_client, setup_twitch_client};
 pub use util::{

@@ -5,14 +5,15 @@ use color_eyre::eyre::Result;
 use tokio::sync::oneshot;
 use tracing::info;
 use twitch_1337::{
-    Services, aviation, clock::SystemClock, ensure_data_dir, get_data_dir, install_tracing, llm,
-    load_configuration, run_bot, setup_and_verify_twitch_client,
+    Services, aviation, clock::SystemClock, ensure_data_dir, get_data_dir, install_crypto_provider,
+    install_tracing, llm, load_configuration, run_bot, setup_and_verify_twitch_client,
 };
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
     color_eyre::install()?;
     install_tracing();
+    install_crypto_provider();
 
     let config = load_configuration().await?;
 

@@ -2500,6 +2500,7 @@ dependencies = [
  "random-flight",
  "reqwest 0.12.28",
  "ron",
+ "rustls",
  "secrecy",
  "serde",
  "serde_json",
