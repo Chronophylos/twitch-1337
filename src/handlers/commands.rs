@@ -14,6 +14,7 @@ use crate::{
     ChatHistory, ChatHistoryBuffer, PersonalBest, aviation, commands,
     config::{AiConfig, CooldownsConfig, SuspendConfig},
     flight_tracker, llm, ping, prefill,
+    seventv::SevenTvEmoteProvider,
     suspend::SuspensionManager,
 };
 
@@ -111,6 +112,20 @@ where
         None
     };
 
+    let emote_provider = llm_client
+        .as_ref()
+        .and_then(|(_, cfg)| cfg.emotes.enabled.then_some(cfg.emotes.clone()))
+        .and_then(|emotes_cfg| match SevenTvEmoteProvider::new(emotes_cfg, &data_dir) {
+            Ok(provider) => {
+                info!("7TV emote glossary prompt grounding enabled");
+                Some(Arc::new(provider))
+            }
+            Err(e) => {
+                error!(error = ?e, "Failed to initialize 7TV emote provider; AI emotes disabled");
+                None
+            }
+        });
+
     let mut cmd_list: Vec<Box<dyn commands::Command<T, L>>> = vec![
         Box::new(commands::ping_admin::PingAdminCommand::new(
             ping_manager.clone(),
@@ -145,7 +160,13 @@ where
     }
 
     if let Some((llm, cfg)) = llm_client {
-        let chat_ctx = chat_history
+        let ai_chat_ctx = chat_history
+            .clone()
+            .map(|history| commands::ai::ChatContext {
+                history,
+                bot_username: bot_username.clone(),
+            });
+        let news_chat_ctx = chat_history
             .clone()
             .map(|history| commands::ai::ChatContext {
                 history,
@@ -153,16 +174,26 @@ where
             });
 
         cmd_list.push(Box::new(commands::ai::AiCommand::new(
+            commands::ai::AiCommandDeps {
+                llm_client: llm.clone(),
+                model: cfg.model.clone(),
+                prompts: commands::ai::AiPrompts {
+                    system: cfg.system_prompt,
+                    instruction_template: cfg.instruction_template,
+                },
+                timeout: Duration::from_secs(cfg.timeout),
+                cooldown: Duration::from_secs(cooldowns.ai),
+                chat_ctx: ai_chat_ctx,
+                memory: ai_memory,
+                emotes: emote_provider,
+            },
+        )));
+        cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm,
             cfg.model,
-            commands::ai::AiPrompts {
-                system: cfg.system_prompt,
-                instruction_template: cfg.instruction_template,
-            },
             Duration::from_secs(cfg.timeout),
-            Duration::from_secs(cooldowns.ai),
-            chat_ctx,
-            ai_memory,
+            Duration::from_secs(cooldowns.news),
+            news_chat_ctx,
         )));
     }
 

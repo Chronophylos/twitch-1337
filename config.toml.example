@@ -35,6 +35,7 @@ client_secret = "your_client_secret"
 # Optional: Command cooldowns in seconds
 # [cooldowns]
 # ai = 30        # !ai command (default: 30)
+# news = 60      # !news command (default: 60)
 # up = 30        # !up command (default: 30)
 # feedback = 300 # !fb command (default: 300)
 
@@ -63,6 +64,22 @@ client_secret = "your_client_secret"
 # history_length = 10                                # Optional, number of chat messages to keep as context (0 = disabled, max 100)
 # max_memories = 50                                  # DEPRECATED: use [ai.memory] max_user instead (kept for back-compat)
 #
+# Optional: 7TV emote grounding for !ai
+# Requires a manual glossary file so the model only gets emotes with known meaning.
+# [ai.emotes]
+# enabled = true
+# include_global = true
+# refresh_interval_secs = 3600
+# max_prompt_emotes = 40
+# glossary_path = "7tv_emotes.toml"  # Relative paths resolve under the bot data dir
+#
+# Example glossary file:
+# [[emotes]]
+# name = "KEKW"
+# meaning = "laughter; something is funny"
+# usage = "jokes, fail moments, or ironic chat reactions"
+# avoid = "serious topics"
+#
 # Optional: Prefill chat history from a log API at startup
 # Requires history_length > 0 to have any effect
 # [ai.history_prefill]
@@ -82,7 +99,6 @@ client_secret = "your_client_secret"
 # memory_enabled = false                             # Enable persistent AI memory (default: false)
 # history_length = 10                                # Optional, number of chat messages to keep as context (0 = disabled, max 100)
 # max_memories = 50                                  # DEPRECATED: use [ai.memory] max_user instead (kept for back-compat)
-#
 # Optional: Prefill chat history from a log API at startup
 # Requires history_length > 0 to have any effect
 # [ai.history_prefill]
@@ -91,7 +107,7 @@ client_secret = "your_client_secret"
 
 # ────────────────────────────────────────────────────────────────────────────
 # AI memory — long-term fact store curated by the LLM.
-# Requires [ai].memory_enabled = true.
+# Requires [ai.memory].enabled = true.
 #
 # The store holds three kinds of memories:
 #   - User   (facts about a specific user, keyed by Twitch user_id)

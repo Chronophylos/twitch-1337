@@ -53,6 +53,18 @@ fn default_history_length() -> u64 {
     crate::chat_history::DEFAULT_HISTORY_LENGTH
 }
 
+fn default_emote_glossary_path() -> String {
+    "7tv_emotes.toml".to_string()
+}
+
+fn default_emote_refresh_interval() -> u64 {
+    3600
+}
+
+fn default_max_prompt_emotes() -> usize {
+    40
+}
+
 fn default_true() -> bool {
     true
 }
@@ -163,6 +175,42 @@ impl Default for ConsolidationConfigSection {
     }
 }
 
+/// Knobs for optional 7TV emote grounding in the `!ai` prompt.
+///
+/// Disabled by default. When enabled, the bot loads the current 7TV channel
+/// set, optionally global 7TV emotes, and intersects that catalog with a
+/// manually maintained glossary before adding emote hints to the model prompt.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AiEmotesConfigSection {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub include_global: bool,
+    #[serde(default = "default_emote_refresh_interval")]
+    pub refresh_interval_secs: u64,
+    #[serde(default = "default_max_prompt_emotes")]
+    pub max_prompt_emotes: usize,
+    #[serde(default = "default_emote_glossary_path")]
+    pub glossary_path: String,
+    /// Optional override for tests or private mirrors. Defaults to
+    /// `https://7tv.io/v3` when omitted.
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+impl Default for AiEmotesConfigSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            include_global: true,
+            refresh_interval_secs: default_emote_refresh_interval(),
+            max_prompt_emotes: default_max_prompt_emotes(),
+            glossary_path: default_emote_glossary_path(),
+            base_url: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AiConfig {
     /// Backend type: "openai" or "ollama"
@@ -199,6 +247,9 @@ pub struct AiConfig {
     /// Daily consolidation pass knobs.
     #[serde(default)]
     pub consolidation: ConsolidationConfigSection,
+    /// Optional 7TV emote glossary prompt grounding.
+    #[serde(default)]
+    pub emotes: AiEmotesConfigSection,
     /// Deprecated: replaced by `memory.max_user`. Logged as a warning if set.
     #[serde(default)]
     pub max_memories: Option<usize>,
@@ -210,6 +261,10 @@ fn default_cooldown() -> u64 {
 
 fn default_ai_cooldown() -> u64 {
     30
+}
+
+fn default_news_cooldown() -> u64 {
+    60
 }
 
 fn default_up_cooldown() -> u64 {
@@ -224,6 +279,8 @@ fn default_feedback_cooldown() -> u64 {
 pub struct CooldownsConfig {
     #[serde(default = "default_ai_cooldown")]
     pub ai: u64,
+    #[serde(default = "default_news_cooldown")]
+    pub news: u64,
     #[serde(default = "default_up_cooldown")]
     pub up: u64,
     #[serde(default = "default_feedback_cooldown")]
@@ -234,6 +291,7 @@ impl Default for CooldownsConfig {
     fn default() -> Self {
         Self {
             ai: default_ai_cooldown(),
+            news: default_news_cooldown(),
             up: default_up_cooldown(),
             feedback: default_feedback_cooldown(),
         }
@@ -464,6 +522,28 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         )?;
     }
 
+    if let Some(ref ai) = config.ai
+        && ai.emotes.enabled
+    {
+        if ai.emotes.refresh_interval_secs == 0 {
+            bail!("ai.emotes.refresh_interval_secs must be > 0");
+        }
+        if !(1..=200).contains(&ai.emotes.max_prompt_emotes) {
+            bail!(
+                "ai.emotes.max_prompt_emotes must be between 1 and 200 (got {})",
+                ai.emotes.max_prompt_emotes
+            );
+        }
+        if ai.emotes.glossary_path.trim().is_empty() {
+            bail!("ai.emotes.glossary_path cannot be empty when emotes are enabled");
+        }
+        if let Some(ref base_url) = ai.emotes.base_url
+            && base_url.trim().is_empty()
+        {
+            bail!("ai.emotes.base_url cannot be empty when specified");
+        }
+    }
+
     for schedule in &config.schedules {
         if schedule.name.trim().is_empty() {
             bail!("Schedule name cannot be empty");
@@ -510,6 +590,7 @@ mod tests {
                 run_at: run_at.into(),
                 ..ConsolidationConfigSection::default()
             },
+            emotes: AiEmotesConfigSection::default(),
             max_memories: None,
         }
     }
@@ -568,6 +649,44 @@ mod tests {
         let mut c = Configuration::test_default();
         let mut ai = ai_with_run_at("04:00");
         ai.history_length = 200;
+        c.ai = Some(ai);
+
+        validate_config(&c).unwrap();
+    }
+
+    #[test]
+    fn ai_emotes_default_disabled() {
+        assert!(!AiEmotesConfigSection::default().enabled);
+        assert!(AiEmotesConfigSection::default().include_global);
+        assert_eq!(
+            AiEmotesConfigSection::default().glossary_path,
+            "7tv_emotes.toml"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_invalid_emote_settings() {
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.emotes.enabled = true;
+        ai.emotes.max_prompt_emotes = 0;
+        c.ai = Some(ai);
+
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ai.emotes.max_prompt_emotes"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_enabled_emote_settings() {
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.emotes.enabled = true;
+        ai.emotes.glossary_path = "7tv_emotes.toml".into();
+        ai.emotes.refresh_interval_secs = 60;
+        ai.emotes.max_prompt_emotes = 40;
         c.ai = Some(ai);
 
         validate_config(&c).unwrap();

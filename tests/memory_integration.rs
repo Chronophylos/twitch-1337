@@ -121,8 +121,8 @@ async fn prompt_injection_does_not_poison_memory() {
 
     bot.llm
         .push_tool(ToolChatCompletionResponse::Message("ok".into()));
-    bot.llm
-        .push_tool(ToolChatCompletionResponse::ToolCalls(vec![ToolCall {
+    bot.llm.push_tool(ToolChatCompletionResponse::ToolCalls {
+        calls: vec![ToolCall {
             id: "s1".into(),
             name: "save_memory".into(),
             arguments: serde_json::json!({
