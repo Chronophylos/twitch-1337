@@ -5,10 +5,8 @@ use std::time::Duration;
 use common::TestBotBuilder;
 use serial_test::serial;
 use twitch_1337::llm::{ToolCall, ToolChatCompletionResponse};
-use wiremock::{
-    Mock, ResponseTemplate,
-    matchers::{method, path},
-};
+use wiremock::matchers::{method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 #[serial]
@@ -422,6 +420,166 @@ async fn ai_command_saves_memory_extraction() {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn ai_command_web_tool_flow_search_success() {
+    let search = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search"))
+        .and(query_param("format", "json"))
+        .and(query_param("q", "rust latest release"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "results": [
+                {
+                    "title": "Rust 1.90 released",
+                    "url": "https://example.com/rust-190",
+                    "content": "Release notes and highlights",
+                    "publishedDate": "2026-04-25",
+                    "engine": "news"
+                }
+            ]
+        })))
+        .mount(&search)
+        .await;
+
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_config(|c| {
+            let ai = c.ai.as_mut().expect("ai configured");
+            ai.web.enabled = true;
+            ai.web.base_url = format!("{}/search", search.uri());
+            ai.web.timeout = 5;
+        })
+        .spawn()
+        .await;
+
+    bot.llm.push_tool(ToolChatCompletionResponse::ToolCalls {
+        calls: vec![ToolCall {
+            id: "call_1".into(),
+            name: "web_search".into(),
+            arguments: serde_json::json!({
+                "query": "rust latest release",
+                "max_results": 1,
+            }),
+            arguments_parse_error: None,
+        }],
+        reasoning_content: None,
+    });
+    bot.llm.push_tool(ToolChatCompletionResponse::Message(
+        "Rust 1.90 just shipped with new language and tooling improvements.".into(),
+    ));
+
+    bot.send("alice", "!ai any rust news?").await;
+    let out = bot.expect_say(Duration::from_secs(2)).await;
+    let body = out.strip_prefix(". ").unwrap_or(&out);
+    assert!(body.contains("Rust 1.90"), "reply: {body}");
+
+    let calls = bot.llm.tool_calls();
+    assert_eq!(calls.len(), 2, "expected tool loop with two rounds");
+    let first_tools: Vec<String> = calls[0].tools.iter().map(|t| t.name.clone()).collect();
+    assert_eq!(first_tools, vec!["web_search", "fetch_url"]);
+    let first_round = calls[1]
+        .prior_rounds
+        .first()
+        .expect("second request includes first round");
+    assert_eq!(first_round.results[0].tool_name, "web_search");
+    assert!(
+        first_round.results[0]
+            .content
+            .contains("Rust 1.90 released"),
+        "tool result: {}",
+        first_round.results[0].content
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn ai_web_tool_rejects_memory_tool_calls() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_config(|c| {
+            let ai = c.ai.as_mut().expect("ai configured");
+            ai.web.enabled = true;
+        })
+        .spawn()
+        .await;
+
+    bot.llm.push_tool(ToolChatCompletionResponse::ToolCalls {
+        calls: vec![ToolCall {
+            id: "call_1".into(),
+            name: "save_memory".into(),
+            arguments: serde_json::json!({"scope":"user"}),
+            arguments_parse_error: None,
+        }],
+        reasoning_content: None,
+    });
+    bot.llm
+        .push_tool(ToolChatCompletionResponse::Message("done".into()));
+
+    bot.send("alice", "!ai test isolation").await;
+    let _ = bot.expect_say(Duration::from_secs(2)).await;
+
+    let calls = bot.llm.tool_calls();
+    assert_eq!(calls.len(), 2, "expected two rounds");
+    let result_content = &calls[1].prior_rounds[0].results[0].content;
+    assert!(
+        result_content.contains("\"unknown_tool\"") && result_content.contains("save_memory"),
+        "unexpected result: {result_content}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn memory_extractor_rejects_web_tool_calls() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_config(|c| {
+            let ai = c.ai.as_mut().expect("ai configured");
+            ai.memory.enabled = true;
+        })
+        .spawn()
+        .await;
+
+    bot.llm.push_chat("ok");
+    bot.llm.push_tool(ToolChatCompletionResponse::ToolCalls {
+        calls: vec![ToolCall {
+            id: "call_1".into(),
+            name: "web_search".into(),
+            arguments: serde_json::json!({"query":"x"}),
+            arguments_parse_error: None,
+        }],
+        reasoning_content: None,
+    });
+    bot.llm
+        .push_tool(ToolChatCompletionResponse::Message(String::new()));
+
+    bot.send("alice", "!ai remember this").await;
+    let _ = bot.expect_say(Duration::from_secs(2)).await;
+
+    let tool_calls = bot.llm.tool_calls();
+    assert!(tool_calls.len() >= 2, "expected extraction tool rounds");
+    let extraction_req = &tool_calls[0];
+    let extraction_tools: Vec<String> = extraction_req
+        .tools
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    assert_eq!(extraction_tools, vec!["save_memory", "get_memories"]);
+
+    let second_req = &tool_calls[1];
+    let extractor_result = &second_req.prior_rounds[0].results[0].content;
+    assert!(
+        extractor_result.contains("Unknown tool: web_search"),
+        "unexpected extractor result: {extractor_result}"
+    );
 
     bot.shutdown().await;
 }

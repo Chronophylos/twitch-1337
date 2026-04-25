@@ -24,6 +24,7 @@ pub mod tls;
 pub mod token_storage;
 pub mod twitch_setup;
 pub mod util;
+pub mod web_search;
 
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::AtomicU32};

@@ -97,6 +97,30 @@ fn default_consolidation_timeout() -> u64 {
     120
 }
 
+fn default_web_timeout() -> u64 {
+    15
+}
+
+fn default_web_max_results() -> usize {
+    5
+}
+
+fn default_web_cache_ttl_secs() -> u64 {
+    300
+}
+
+fn default_web_cache_capacity() -> usize {
+    100
+}
+
+fn default_web_user_agent_suffix() -> String {
+    "twitch-1337-web".to_string()
+}
+
+fn default_web_base_url() -> String {
+    "http://localhost:8080/search".to_string()
+}
+
 /// Per-scope caps + decay policy for the AI memory store. See
 /// `[ai.memory]` in `config.toml.example`.
 #[derive(Debug, Clone, Deserialize)]
@@ -211,6 +235,42 @@ impl Default for AiEmotesConfigSection {
     }
 }
 
+/// Tool-calling web access for `!ai` (`web_search` and `fetch_url`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct AiWebConfigSection {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_web_base_url")]
+    pub base_url: String,
+    #[serde(default = "default_web_timeout")]
+    pub timeout: u64,
+    #[serde(default = "default_web_max_results")]
+    pub max_results: usize,
+    #[serde(default = "default_max_rounds")]
+    pub max_rounds: usize,
+    #[serde(default = "default_web_cache_ttl_secs")]
+    pub cache_ttl_secs: u64,
+    #[serde(default = "default_web_cache_capacity")]
+    pub cache_capacity: usize,
+    #[serde(default = "default_web_user_agent_suffix")]
+    pub user_agent_suffix: String,
+}
+
+impl Default for AiWebConfigSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: default_web_base_url(),
+            timeout: default_web_timeout(),
+            max_results: default_web_max_results(),
+            max_rounds: default_max_rounds(),
+            cache_ttl_secs: default_web_cache_ttl_secs(),
+            cache_capacity: default_web_cache_capacity(),
+            user_agent_suffix: default_web_user_agent_suffix(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AiConfig {
     /// Backend type: "openai" or "ollama"
@@ -250,6 +310,9 @@ pub struct AiConfig {
     /// Optional 7TV emote glossary prompt grounding.
     #[serde(default)]
     pub emotes: AiEmotesConfigSection,
+    /// Optional web tool surface for `!ai` (`web_search`, `fetch_url`).
+    #[serde(default)]
+    pub web: AiWebConfigSection,
     /// Deprecated: replaced by `memory.max_user`. Logged as a warning if set.
     #[serde(default)]
     pub max_memories: Option<usize>,
@@ -509,6 +572,33 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         bail!("ai.max_memories must be between 1 and 200 (got {n})");
     }
 
+    if let Some(ref ai) = config.ai {
+        if ai.web.base_url.trim().is_empty() {
+            bail!("ai.web.base_url cannot be empty");
+        }
+        reqwest::Url::parse(&ai.web.base_url).wrap_err_with(|| {
+            format!(
+                "ai.web.base_url must be a valid URL (got {:?})",
+                ai.web.base_url
+            )
+        })?;
+        if !(1..=10).contains(&ai.web.max_results) {
+            bail!(
+                "ai.web.max_results must be between 1 and 10 (got {})",
+                ai.web.max_results
+            );
+        }
+        if !(1..=6).contains(&ai.web.max_rounds) {
+            bail!(
+                "ai.web.max_rounds must be between 1 and 6 (got {})",
+                ai.web.max_rounds
+            );
+        }
+        if ai.web.cache_capacity == 0 {
+            bail!("ai.web.cache_capacity must be > 0");
+        }
+    }
+
     // Parsed again at scheduler spawn; bail here so a typo doesn't take the
     // bot down after startup.
     if let Some(ref ai) = config.ai {
@@ -591,6 +681,7 @@ mod tests {
                 ..ConsolidationConfigSection::default()
             },
             emotes: AiEmotesConfigSection::default(),
+            web: AiWebConfigSection::default(),
             max_memories: None,
         }
     }
@@ -690,5 +781,25 @@ mod tests {
         c.ai = Some(ai);
 
         validate_config(&c).unwrap();
+    }
+
+    #[test]
+    fn validate_rejects_web_max_results_out_of_range() {
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.web.max_results = 0;
+        c.ai = Some(ai);
+        let err = validate_config(&c).unwrap_err();
+        assert!(format!("{err:#}").contains("ai.web.max_results"));
+    }
+
+    #[test]
+    fn validate_rejects_web_invalid_base_url() {
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.web.base_url = "not a url".into();
+        c.ai = Some(ai);
+        let err = validate_config(&c).unwrap_err();
+        assert!(format!("{err:#}").contains("ai.web.base_url"));
     }
 }

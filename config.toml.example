@@ -80,6 +80,18 @@ client_secret = "your_client_secret"
 # usage = "jokes, fail moments, or ironic chat reactions"
 # avoid = "serious topics"
 #
+# Optional: expose web tools to !ai (`web_search` + `fetch_url`) via SearXNG.
+# The model can search current events and fetch article text at runtime.
+# [ai.web]
+# enabled = false
+# base_url = "https://searxng.example/search"  # SearXNG /search endpoint, queried with format=json
+# timeout = 15                                  # Per outbound web HTTP call timeout in seconds
+# max_results = 5                               # Default cap for web_search (1..=10)
+# max_rounds = 3                                # Max tool-call rounds per !ai request (1..=6)
+# cache_ttl_secs = 300                          # In-memory TTL cache for search/fetch results
+# cache_capacity = 100                          # Max cache entries before oldest eviction
+# user_agent_suffix = "twitch-1337-web"        # Optional suffix appended to app user-agent
+#
 # Optional: Prefill chat history from a log API at startup
 # Requires history_length > 0 to have any effect
 # [ai.history_prefill]
@@ -99,6 +111,18 @@ client_secret = "your_client_secret"
 # memory_enabled = false                             # Enable persistent AI memory (default: false)
 # history_length = 10                                # Optional, number of chat messages to keep as context (0 = disabled, max 100)
 # max_memories = 50                                  # DEPRECATED: use [ai.memory] max_user instead (kept for back-compat)
+#
+# Optional: expose web tools to !ai (`web_search` + `fetch_url`) via SearXNG.
+# [ai.web]
+# enabled = false
+# base_url = "https://searxng.example/search"
+# timeout = 15
+# max_results = 5
+# max_rounds = 3
+# cache_ttl_secs = 300
+# cache_capacity = 100
+# user_agent_suffix = "twitch-1337-web"
+#
 # Optional: Prefill chat history from a log API at startup
 # Requires history_length > 0 to have any effect
 # [ai.history_prefill]
