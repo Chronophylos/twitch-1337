@@ -93,7 +93,11 @@ impl SearchClient {
             other => bail!("Unsupported URL scheme: {other}"),
         }
 
-        if is_blocked_host(&url) {
+        if is_blocked_host_literal(&url) {
+            bail!("Blocked target host")
+        }
+
+        if resolves_to_blocked_ip(&url).await? {
             bail!("Blocked target host")
         }
 
@@ -130,7 +134,7 @@ impl SearchClient {
         }
 
         let body = String::from_utf8_lossy(&bytes).to_string();
-        let text = if content_type.contains("text/html") {
+        let text = if is_html_content_type(&content_type) {
             extract_readable_text(&body)
         } else {
             collapse_ws(&body)
@@ -180,7 +184,40 @@ fn collapse_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn is_blocked_host(url: &reqwest::Url) -> bool {
+fn is_html_content_type(content_type: &str) -> bool {
+    let media_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+
+    matches!(
+        media_type.as_str(),
+        "text/html" | "application/xhtml+xml" | "application/xml" | "text/xml"
+    )
+}
+
+fn is_blocked_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || v4.is_documentation()
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                || v6.is_unspecified()
+        }
+    }
+}
+
+fn is_blocked_host_literal(url: &reqwest::Url) -> bool {
     let Some(host) = url.host_str() else {
         return true;
     };
@@ -190,25 +227,40 @@ fn is_blocked_host(url: &reqwest::Url) -> bool {
     }
 
     if let Ok(ip) = host.parse::<IpAddr>() {
-        return match ip {
-            IpAddr::V4(v4) => {
-                v4.is_loopback()
-                    || v4.is_private()
-                    || v4.is_link_local()
-                    || v4.is_broadcast()
-                    || v4.is_unspecified()
-                    || v4.is_documentation()
-            }
-            IpAddr::V6(v6) => {
-                v6.is_loopback()
-                    || v6.is_unique_local()
-                    || v6.is_unicast_link_local()
-                    || v6.is_unspecified()
-            }
-        };
+        return is_blocked_ip(ip);
     }
 
     false
+}
+
+async fn resolves_to_blocked_ip(url: &reqwest::Url) -> Result<bool> {
+    let Some(host) = url.host_str() else {
+        return Ok(true);
+    };
+
+    if host.parse::<IpAddr>().is_ok() {
+        return Ok(false);
+    }
+
+    let port = url.port_or_known_default().unwrap_or(80);
+    let mut saw_any_address = false;
+
+    let addrs = tokio::net::lookup_host((host, port))
+        .await
+        .wrap_err("Failed to resolve target host")?;
+
+    for addr in addrs {
+        saw_any_address = true;
+        if is_blocked_ip(addr.ip()) {
+            return Ok(true);
+        }
+    }
+
+    if !saw_any_address {
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 fn extract_readable_text(html: &str) -> String {
@@ -247,18 +299,33 @@ mod tests {
 
     #[test]
     fn blocks_localhost_and_private_ips() {
-        assert!(is_blocked_host(
+        assert!(is_blocked_host_literal(
             &reqwest::Url::parse("http://localhost/test").expect("url")
         ));
-        assert!(is_blocked_host(
+        assert!(is_blocked_host_literal(
             &reqwest::Url::parse("http://127.0.0.1/test").expect("url")
         ));
-        assert!(is_blocked_host(
+        assert!(is_blocked_host_literal(
             &reqwest::Url::parse("http://10.0.0.2/test").expect("url")
         ));
-        assert!(!is_blocked_host(
+        assert!(!is_blocked_host_literal(
             &reqwest::Url::parse("https://example.com/test").expect("url")
         ));
+    }
+
+    #[test]
+    fn detects_html_like_content_types() {
+        assert!(is_html_content_type("text/html"));
+        assert!(is_html_content_type("text/html; charset=utf-8"));
+        assert!(is_html_content_type("application/xhtml+xml"));
+        assert!(is_html_content_type("application/xml"));
+        assert!(!is_html_content_type("application/json"));
+    }
+
+    #[tokio::test]
+    async fn blocks_dns_resolution_to_loopback() {
+        let url = reqwest::Url::parse("http://localhost/test").expect("url");
+        assert!(resolves_to_blocked_ip(&url).await.expect("dns resolve"));
     }
 
     #[test]
