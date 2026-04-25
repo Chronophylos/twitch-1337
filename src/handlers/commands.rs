@@ -162,7 +162,14 @@ where
     }
 
     if let Some((llm, cfg)) = llm_client {
-        let chat_ctx = chat_history
+        let ai_chat_ctx = chat_history
+            .clone()
+            .map(|history| commands::ai::ChatContext {
+                history,
+                history_length,
+                bot_username: bot_username.clone(),
+            });
+        let news_chat_ctx = chat_history
             .clone()
             .map(|history| commands::ai::ChatContext {
                 history,
@@ -172,18 +179,25 @@ where
 
         cmd_list.push(Box::new(commands::ai::AiCommand::new(
             commands::ai::AiCommandDeps {
-                llm_client: llm,
-                model: cfg.model,
+                llm_client: llm.clone(),
+                model: cfg.model.clone(),
                 prompts: commands::ai::AiPrompts {
                     system: cfg.system_prompt,
                     instruction_template: cfg.instruction_template,
                 },
                 timeout: Duration::from_secs(cfg.timeout),
                 cooldown: Duration::from_secs(cooldowns.ai),
-                chat_ctx,
+                chat_ctx: ai_chat_ctx,
                 memory: ai_memory,
                 emotes: emote_provider,
             },
+        )));
+        cmd_list.push(Box::new(commands::news::NewsCommand::new(
+            llm,
+            cfg.model,
+            Duration::from_secs(cfg.timeout),
+            Duration::from_secs(cooldowns.news),
+            news_chat_ctx,
         )));
     }
 
