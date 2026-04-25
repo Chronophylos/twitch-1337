@@ -231,9 +231,9 @@ impl MemoryStore {
         }
 
         let mut lore: Vec<(&str, &Memory)> = Vec::new();
-        let mut user_buckets: std::collections::BTreeMap<String, Vec<&Memory>> =
+        let mut user_buckets: std::collections::BTreeMap<String, Vec<(&str, &Memory)>> =
             std::collections::BTreeMap::new();
-        let mut pref_buckets: std::collections::BTreeMap<String, Vec<&Memory>> =
+        let mut pref_buckets: std::collections::BTreeMap<String, Vec<(&str, &Memory)>> =
             std::collections::BTreeMap::new();
 
         for (key, mem) in &self.memories {
@@ -241,11 +241,17 @@ impl MemoryStore {
                 Scope::Lore => lore.push((key.as_str(), mem)),
                 Scope::User { subject_id } => {
                     let name = self.resolve_username(subject_id);
-                    user_buckets.entry(name).or_default().push(mem);
+                    user_buckets
+                        .entry(name)
+                        .or_default()
+                        .push((key.as_str(), mem));
                 }
                 Scope::Pref { subject_id } => {
                     let name = self.resolve_username(subject_id);
-                    pref_buckets.entry(name).or_default().push(mem);
+                    pref_buckets
+                        .entry(name)
+                        .or_default()
+                        .push((key.as_str(), mem));
                 }
             }
         }
@@ -254,39 +260,36 @@ impl MemoryStore {
 
         if !lore.is_empty() {
             out.push_str("\n### Channel lore");
-            let mut rows: Vec<&(&str, &Memory)> = lore.iter().collect();
-            rows.sort_by(|a, b| {
+            lore.sort_by(|a, b| {
                 b.1.confidence
                     .cmp(&a.1.confidence)
                     .then_with(|| a.0.cmp(b.0))
             });
-            for (_, mem) in rows.iter().take(caps.max_lore) {
+            for (_, mem) in lore.iter().take(caps.max_lore) {
                 out.push_str(&format!("\n- {} (conf {})", mem.fact, mem.confidence));
             }
         }
 
-        for (username, mems) in &user_buckets {
+        for (username, mems) in &mut user_buckets {
             out.push_str(&format!("\n### About {username}"));
-            let mut rows: Vec<&&Memory> = mems.iter().collect();
-            rows.sort_by(|a, b| {
-                b.confidence
-                    .cmp(&a.confidence)
-                    .then_with(|| a.fact.cmp(&b.fact))
+            mems.sort_by(|a, b| {
+                b.1.confidence
+                    .cmp(&a.1.confidence)
+                    .then_with(|| a.0.cmp(b.0))
             });
-            for mem in rows.iter().take(caps.max_user) {
+            for (_, mem) in mems.iter().take(caps.max_user) {
                 out.push_str(&format!("\n- {} (conf {})", mem.fact, mem.confidence));
             }
         }
 
-        for (username, mems) in &pref_buckets {
+        for (username, mems) in &mut pref_buckets {
             out.push_str(&format!("\n### {username}'s preferences"));
-            let mut rows: Vec<&&Memory> = mems.iter().collect();
-            rows.sort_by(|a, b| {
-                b.confidence
-                    .cmp(&a.confidence)
-                    .then_with(|| a.fact.cmp(&b.fact))
+            mems.sort_by(|a, b| {
+                b.1.confidence
+                    .cmp(&a.1.confidence)
+                    .then_with(|| a.0.cmp(b.0))
             });
-            for mem in rows.iter().take(caps.max_pref) {
+            for (_, mem) in mems.iter().take(caps.max_pref) {
                 out.push_str(&format!("\n- {} (conf {})", mem.fact, mem.confidence));
             }
         }
@@ -1553,7 +1556,7 @@ mod tests {
         let t0 = Utc::now() - Duration::hours(1);
         let mut s = MemoryStore::default();
         s.memories.insert(
-            "user::1::a".into(),
+            "user:1:likes-cats".into(),
             Memory::new(
                 "alice likes cats".into(),
                 Scope::User {
@@ -1584,7 +1587,7 @@ mod tests {
         s.upsert_identity("1", "alice", now);
         s.upsert_identity("2", "bob", now);
         s.memories.insert(
-            "user::1::likes-cats".into(),
+            "user:1:likes-cats".into(),
             Memory::new(
                 "likes cats".into(),
                 Scope::User {
@@ -1596,7 +1599,7 @@ mod tests {
             ),
         );
         s.memories.insert(
-            "user::2::is-pilot".into(),
+            "user:2:is-pilot".into(),
             Memory::new(
                 "is a pilot".into(),
                 Scope::User {
@@ -1608,7 +1611,7 @@ mod tests {
             ),
         );
         s.memories.insert(
-            "pref::1::call-me-al".into(),
+            "pref:1:call-me-al".into(),
             Memory::new(
                 "address as Al".into(),
                 Scope::Pref {
@@ -1650,7 +1653,7 @@ mod tests {
 
         let mut s2 = MemoryStore::default();
         s2.memories.insert(
-            "user::99::x".into(),
+            "user:99:x".into(),
             Memory::new(
                 "foo".into(),
                 Scope::User {
@@ -1672,7 +1675,7 @@ mod tests {
         s.upsert_identity("1", "alice", now);
         for i in 0..10u32 {
             s.memories.insert(
-                format!("user::1::fact-{i}"),
+                format!("user:1:fact-{i}"),
                 Memory::new(
                     format!("fact {i}"),
                     Scope::User {
@@ -1698,7 +1701,7 @@ mod tests {
         s.upsert_identity("1", "alice", now);
         for (i, conf) in [10u8, 90, 50, 30, 70].iter().enumerate() {
             s.memories.insert(
-                format!("user::1::f{i}"),
+                format!("user:1:f{i}"),
                 Memory::new(
                     format!("fact {i}"),
                     Scope::User {
