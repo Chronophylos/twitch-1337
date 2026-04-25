@@ -193,16 +193,17 @@ where
             });
 
         cmd_list.push(Box::new(commands::ai::AiCommand::new(
-            llm.clone(),
-            cfg.model.clone(),
-            commands::ai::AiPrompts {
-                system: cfg.system_prompt,
-                instruction_template: cfg.instruction_template,
-            },
-            Duration::from_secs(cfg.timeout),
-            Duration::from_secs(cooldowns.ai),
-            chat_ctx.clone(),
-            commands::ai::AiFeatures {
+            commands::ai::AiCommandDeps {
+                llm_client: llm.clone(),
+                model: cfg.model.clone(),
+                prompts: commands::ai::AiPrompts {
+                    system: cfg.system_prompt,
+                    instruction_template: cfg.instruction_template,
+                },
+                timeout: Duration::from_secs(cfg.timeout),
+                reasoning_effort: cfg.reasoning_effort.clone(),
+                cooldown: Duration::from_secs(cooldowns.ai),
+                chat_ctx: chat_ctx.clone(),
                 memory: ai_memory,
                 web,
                 emotes: emote_provider,
