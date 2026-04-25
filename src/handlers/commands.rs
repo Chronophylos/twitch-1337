@@ -16,6 +16,7 @@ use crate::{
     flight_tracker, llm, ping, prefill,
     seventv::SevenTvEmoteProvider,
     suspend::SuspensionManager,
+    web_search,
 };
 
 /// Configuration for the generic command handler.
@@ -160,13 +161,30 @@ where
     }
 
     if let Some((llm, cfg)) = llm_client {
-        let ai_chat_ctx = chat_history
-            .clone()
-            .map(|history| commands::ai::ChatContext {
-                history,
-                bot_username: bot_username.clone(),
-            });
-        let news_chat_ctx = chat_history
+        let web = if cfg.web.enabled {
+            match web_search::SearchClient::new(
+                &cfg.web.base_url,
+                Duration::from_secs(cfg.web.timeout),
+            ) {
+                Ok(client) => Some(commands::ai::AiWeb {
+                    executor: Arc::new(web_search::WebToolExecutor::new(
+                        client,
+                        cfg.web.max_results,
+                        Duration::from_secs(cfg.web.cache_ttl_secs),
+                        cfg.web.cache_capacity,
+                    )),
+                    max_rounds: cfg.web.max_rounds,
+                }),
+                Err(e) => {
+                    error!(error = ?e, "Failed to initialize ai.web client; disabling web tools");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let chat_ctx = chat_history
             .clone()
             .map(|history| commands::ai::ChatContext {
                 history,
@@ -184,8 +202,9 @@ where
                 timeout: Duration::from_secs(cfg.timeout),
                 reasoning_effort: cfg.reasoning_effort.clone(),
                 cooldown: Duration::from_secs(cooldowns.ai),
-                chat_ctx: ai_chat_ctx,
+                chat_ctx: chat_ctx.clone(),
                 memory: ai_memory,
+                web,
                 emotes: emote_provider,
             },
         )));
@@ -194,7 +213,7 @@ where
             cfg.model,
             Duration::from_secs(cfg.timeout),
             Duration::from_secs(cooldowns.news),
-            news_chat_ctx,
+            chat_ctx,
         )));
     }
 

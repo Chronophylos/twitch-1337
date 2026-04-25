@@ -16,10 +16,12 @@ use crate::llm::{
 use crate::memory;
 use crate::seventv::SevenTvEmoteProvider;
 use crate::util::{MAX_RESPONSE_LENGTH, truncate_response};
+use crate::web_search;
 
 use super::{Command, CommandContext};
 
 /// Groups the shared chat history buffer with its capacity and the bot's username.
+#[derive(Clone)]
 pub struct ChatContext {
     pub history: ChatHistory,
     pub bot_username: String,
@@ -53,6 +55,18 @@ pub struct AiMemory {
     pub extraction_deps: AiExtractionDeps,
 }
 
+/// Optional web tool-call dependencies for main `!ai` responses.
+pub struct AiWeb {
+    pub executor: Arc<web_search::WebToolExecutor>,
+    pub max_rounds: usize,
+}
+
+pub struct AiFeatures {
+    pub memory: Option<AiMemory>,
+    pub web: Option<AiWeb>,
+    pub emotes: Option<Arc<SevenTvEmoteProvider>>,
+}
+
 pub struct AiCommand {
     llm_client: Arc<dyn LlmClient>,
     model: String,
@@ -62,6 +76,7 @@ pub struct AiCommand {
     reasoning_effort: Option<String>,
     chat_ctx: Option<ChatContext>,
     memory: Option<AiMemory>,
+    web: Option<AiWeb>,
     emotes: Option<Arc<SevenTvEmoteProvider>>,
 }
 
@@ -74,9 +89,9 @@ pub struct AiCommandDeps {
     pub cooldown: Duration,
     pub chat_ctx: Option<ChatContext>,
     pub memory: Option<AiMemory>,
+    pub web: Option<AiWeb>,
     pub emotes: Option<Arc<SevenTvEmoteProvider>>,
 }
-
 const CHAT_HISTORY_TOOL_NAME: &str = "get_recent_chat";
 const CHAT_HISTORY_TOOL_MAX_ROUNDS: usize = 4;
 const CHAT_HISTORY_SYSTEM_APPENDIX: &str = "\
@@ -96,6 +111,7 @@ impl AiCommand {
             reasoning_effort: deps.reasoning_effort,
             chat_ctx: deps.chat_ctx,
             memory: deps.memory,
+            web: deps.web,
             emotes: deps.emotes,
         }
     }
@@ -271,6 +287,77 @@ fn recent_chat_tool_definition() -> ToolDefinition {
     }
 }
 
+enum AiResult {
+    Ok(String),
+    Timeout,
+    Error(eyre::Report),
+}
+
+impl AiCommand {
+    async fn chat_with_web_tools(
+        &self,
+        system_prompt: String,
+        user_message: String,
+        web: &AiWeb,
+    ) -> AiResult {
+        let messages = vec![
+            Message {
+                role: "system".to_string(),
+                content: system_prompt,
+            },
+            Message {
+                role: "user".to_string(),
+                content: user_message,
+            },
+        ];
+
+        let tools = web_search::ai_tools();
+        let mut prior_rounds: Vec<ToolCallRound> = Vec::new();
+
+        for round in 0..web.max_rounds {
+            let request = ToolChatCompletionRequest {
+                model: self.model.clone(),
+                messages: messages.clone(),
+                tools: tools.clone(),
+                reasoning_effort: self.reasoning_effort.clone(),
+                prior_rounds: prior_rounds.clone(),
+            };
+
+            let response = match tokio::time::timeout(
+                self.timeout,
+                self.llm_client.chat_completion_with_tools(request),
+            )
+            .await
+            {
+                Ok(Ok(resp)) => resp,
+                Ok(Err(e)) => return AiResult::Error(e),
+                Err(_) => return AiResult::Timeout,
+            };
+
+            match response {
+                ToolChatCompletionResponse::Message(content) => return AiResult::Ok(content),
+                ToolChatCompletionResponse::ToolCalls {
+                    calls,
+                    reasoning_content,
+                } => {
+                    let mut results = Vec::with_capacity(calls.len());
+                    for call in &calls {
+                        results.push(web.executor.execute_tool_call(call).await);
+                    }
+                    prior_rounds.push(ToolCallRound {
+                        calls,
+                        results,
+                        reasoning_content,
+                    });
+                    debug!(round, "Processed web tool-call round");
+                }
+            }
+        }
+
+        AiResult::Error(eyre::eyre!("AI web-tool round limit reached"))
+    }
+}
+
 #[async_trait]
 impl<T, L> Command<T, L> for AiCommand
 where
@@ -350,15 +437,48 @@ where
         let user_message = self
             .prompts
             .instruction_template
-            .replace("{message}", &instruction)
-            .replace("{chat_history}", "");
+            .replace("{message}", &instruction);
 
-        // Execute AI with timeout
-        let result =
-            tokio::time::timeout(self.timeout, self.complete_ai(system_prompt, user_message)).await;
+        let chat_history_text = if let Some(ref chat) = self.chat_ctx {
+            let buf = chat.history.lock().await;
+            if buf.is_empty() {
+                String::new()
+            } else {
+                buf.snapshot()
+                    .iter()
+                    .map(|entry| {
+                        let ts_berlin = entry.timestamp.with_timezone(&chrono_tz::Europe::Berlin);
+                        format!(
+                            "[{}] {}: {}",
+                            ts_berlin.format("%H:%M"),
+                            entry.username,
+                            entry.text
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        } else {
+            String::new()
+        };
+
+        let user_message = user_message.replace("{chat_history}", &chat_history_text);
+
+        let result = if let Some(ref web) = self.web {
+            self.chat_with_web_tools(system_prompt, user_message, web)
+                .await
+        } else {
+            match tokio::time::timeout(self.timeout, self.complete_ai(system_prompt, user_message))
+                .await
+            {
+                Ok(Ok(text)) => AiResult::Ok(text),
+                Ok(Err(e)) => AiResult::Error(e),
+                Err(_) => AiResult::Timeout,
+            }
+        };
 
         let (response, success) = match result {
-            Ok(Ok(text)) => {
+            AiResult::Ok(text) => {
                 let truncated = truncate_response(&text, MAX_RESPONSE_LENGTH);
                 // Record successful response in chat history
                 if let Some(ref chat) = self.chat_ctx {
@@ -369,11 +489,11 @@ where
                 }
                 (truncated, true)
             }
-            Ok(Err(e)) => {
+            AiResult::Error(e) => {
                 error!(error = ?e, "AI execution failed");
                 ("Da ist was schiefgelaufen FDM".to_string(), false)
             }
-            Err(_) => {
+            AiResult::Timeout => {
                 error!("AI execution timed out");
                 ("Das hat zu lange gedauert Waiting".to_string(), false)
             }

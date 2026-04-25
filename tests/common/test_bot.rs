@@ -74,6 +74,7 @@ impl TestBotBuilder {
                 extraction: twitch_1337::config::ExtractionConfigSection::default(),
                 consolidation: twitch_1337::config::ConsolidationConfigSection::default(),
                 emotes: twitch_1337::config::AiEmotesConfigSection::default(),
+                web: twitch_1337::config::AiWebConfigSection::default(),
                 max_memories: None,
             });
         }
