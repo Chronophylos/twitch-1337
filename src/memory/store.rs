@@ -200,32 +200,14 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Render a stable, prefix-cacheable snapshot of the store for injection
-    /// into the system prompt. Pure read — does NOT touch `last_accessed` or
-    /// `access_count`, so the same store state always produces byte-identical
-    /// output. Cache invalidation is therefore tied to *store mutation* (writes
-    /// via `save_memory` or consolidation), not to per-turn render calls.
-    ///
-    /// Output structure, in this fixed order:
-    ///   ## Known facts
-    ///   ### Channel lore
-    ///   - <fact> (conf <n>)
-    ///   ### About <username>     (one section per user, alphabetical by username)
-    ///   - <fact> (conf <n>)
-    ///   ### <username>'s preferences
-    ///   - <fact> (conf <n>)
-    ///
-    /// Within each section, lines are sorted by `(-confidence, slug)` so the
-    /// highest-confidence facts come first and ties are deterministic. When a
-    /// scope's entry count exceeds the matching cap, only the top-cap rows by
-    /// that ordering are rendered.
-    ///
-    /// `subject_id` is resolved to the current `username` via `identities`;
-    /// unknown ids fall back to the literal `user <id>` so output never leaks
-    /// raw numeric ids when a mapping exists.
-    ///
-    /// Returns `None` only when the store is completely empty.
+    /// Pure read; output is byte-identical for identical store state, enabling prefix caching.
     pub fn format_for_prompt(&self, caps: &Caps) -> Option<String> {
+        fn by_conf_then_slug(a: &(&str, &Memory), b: &(&str, &Memory)) -> std::cmp::Ordering {
+            b.1.confidence
+                .cmp(&a.1.confidence)
+                .then_with(|| a.0.cmp(b.0))
+        }
+
         if self.memories.is_empty() {
             return None;
         }
@@ -260,11 +242,7 @@ impl MemoryStore {
 
         if !lore.is_empty() {
             out.push_str("\n### Channel lore");
-            lore.sort_by(|a, b| {
-                b.1.confidence
-                    .cmp(&a.1.confidence)
-                    .then_with(|| a.0.cmp(b.0))
-            });
+            lore.sort_by(by_conf_then_slug);
             for (_, mem) in lore.iter().take(caps.max_lore) {
                 out.push_str(&format!("\n- {} (conf {})", mem.fact, mem.confidence));
             }
@@ -272,11 +250,7 @@ impl MemoryStore {
 
         for (username, mems) in &mut user_buckets {
             out.push_str(&format!("\n### About {username}"));
-            mems.sort_by(|a, b| {
-                b.1.confidence
-                    .cmp(&a.1.confidence)
-                    .then_with(|| a.0.cmp(b.0))
-            });
+            mems.sort_by(by_conf_then_slug);
             for (_, mem) in mems.iter().take(caps.max_user) {
                 out.push_str(&format!("\n- {} (conf {})", mem.fact, mem.confidence));
             }
@@ -284,11 +258,7 @@ impl MemoryStore {
 
         for (username, mems) in &mut pref_buckets {
             out.push_str(&format!("\n### {username}'s preferences"));
-            mems.sort_by(|a, b| {
-                b.1.confidence
-                    .cmp(&a.1.confidence)
-                    .then_with(|| a.0.cmp(b.0))
-            });
+            mems.sort_by(by_conf_then_slug);
             for (_, mem) in mems.iter().take(caps.max_pref) {
                 out.push_str(&format!("\n- {} (conf {})", mem.fact, mem.confidence));
             }
@@ -1725,6 +1695,61 @@ mod tests {
         assert!(!out.contains("(conf 50)"));
         assert!(!out.contains("(conf 30)"));
         assert!(!out.contains("(conf 10)"));
+    }
+
+    #[test]
+    fn format_for_prompt_byte_identical_across_unrelated_clock_motion() {
+        // Two stores: identical facts but memories created/accessed at different
+        // wall-clock times. Output must be byte-identical — proof that render
+        // encodes no time-varying metadata (cache-stable across turns).
+        use chrono::Duration;
+        let t0 = Utc::now() - Duration::hours(24);
+        let t1 = Utc::now(); // "later" wall clock
+
+        let mut s0 = MemoryStore::default();
+        s0.upsert_identity("1", "alice", t0);
+        s0.memories.insert(
+            "user:1:likes-cats".into(),
+            Memory::new(
+                "likes cats".into(),
+                Scope::User {
+                    subject_id: "1".into(),
+                },
+                "alice".into(),
+                80,
+                t0,
+            ),
+        );
+        s0.memories.insert(
+            "lore::vibe".into(),
+            Memory::new("channel is chill".into(), Scope::Lore, "mod".into(), 90, t0),
+        );
+
+        let mut s1 = MemoryStore::default();
+        s1.upsert_identity("1", "alice", t1);
+        s1.memories.insert(
+            "user:1:likes-cats".into(),
+            Memory::new(
+                "likes cats".into(),
+                Scope::User {
+                    subject_id: "1".into(),
+                },
+                "alice".into(),
+                80,
+                t1,
+            ),
+        );
+        s1.memories.insert(
+            "lore::vibe".into(),
+            Memory::new("channel is chill".into(), Scope::Lore, "mod".into(), 90, t1),
+        );
+
+        let caps = caps_unbounded();
+        assert_eq!(
+            s0.format_for_prompt(&caps),
+            s1.format_for_prompt(&caps),
+            "render must not encode timestamps — output must be byte-identical regardless of when memories were created/accessed"
+        );
     }
 
     #[test]
