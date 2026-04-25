@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use eyre::{Result, WrapErr as _};
 use reqwest::header::{self, HeaderValue};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, instrument, warn};
+use tracing::{debug, instrument, trace, warn};
 
 use super::{
     ChatCompletionRequest, LlmClient, ToolChatCompletionRequest, ToolChatCompletionResponse,
@@ -156,12 +156,6 @@ fn build_openai_messages(request: &ToolChatCompletionRequest) -> Vec<serde_json:
                 "tool_call_id": tr.tool_call_id,
                 "content": tr.content,
             }));
-        }
-    }
-
-    for (i, msg) in messages.iter().enumerate() {
-        if msg.get("reasoning_content").is_some() {
-            debug!(index = i, message = %msg, "Built message with reasoning_content");
         }
     }
 
@@ -377,7 +371,7 @@ impl LlmClient for OpenAiClient {
         };
 
         if let Ok(req_json) = serde_json::to_string(&api_request) {
-            debug!(request_body = %req_json, "Sending tool request to OpenAI-compatible API");
+            trace!(request_body = %req_json, "Sending tool request to OpenAI-compatible API");
         } else {
             debug!(model = %self.model, "Sending tool request to OpenAI-compatible API");
         }
@@ -404,7 +398,7 @@ impl LlmClient for OpenAiClient {
             .json()
             .await
             .wrap_err("Failed to parse OpenAI-compatible API tool response")?;
-        debug!(response_body = %body, "OpenAI-compatible API raw tool response");
+        trace!(response_body = %body, "OpenAI-compatible API raw tool response");
         if let Some(msg) = extract_api_error(&body) {
             return Err(eyre::eyre!("OpenAI-compatible API error: {}", msg));
         }
