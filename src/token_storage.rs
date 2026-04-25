@@ -50,9 +50,8 @@ impl TokenStorage for FileBasedTokenStorage {
                     access_token: String::new(),
                     refresh_token: self.initial_refresh_token.expose_secret().to_string(),
                     created_at: Utc::now(),
-                    expires_at: None,
+                    expires_at: Some(Utc::now()),
                 };
-                self.update_token(&token).await?;
                 Ok(token)
             }
             Err(e) => Err(eyre::Report::from(e).wrap_err("Failed to read token file")),
