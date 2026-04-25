@@ -9,7 +9,7 @@ A Rust-based Twitch IRC bot:
 
 - **1337 tracker** -- logs users who say "1337" or "DANKIES" at exactly 13:37 Berlin time, with a sub-second leaderboard of fastest times
 - **Community pings** -- template-based ping commands with membership, cooldowns, and self-service join/leave
-- **Chat commands** -- AI responses (`!ai`), live overhead aircraft (`!up`), random flight plans (`!fl`), flight tracking (`!track`), user feedback (`!fb`), scheduled messages
+- **Chat commands** -- AI responses (`!ai`), opt-in random AI reactions (`!aireact`), live overhead aircraft (`!up`), random flight plans (`!fl`), flight tracking (`!track`), user feedback (`!fb`), scheduled messages
 
 Single persistent IRC connection with broadcast-based message routing to independent handler tasks.
 
@@ -136,6 +136,20 @@ Optional behaviors:
 
 Per-user cooldown configurable via `[cooldowns].ai` (default 30s).
 
+### Random AI Reactions
+
+When `[ai]` is configured, users can opt in to occasional AI replies to their normal chat messages. This is disabled for every user by default and only applies to main-channel, non-command messages.
+
+- `!aireact on` / `!aireact medium` -- opt in with the medium level (5%)
+- `!aireact low` -- opt in with 1%
+- `!aireact high` -- opt in with 15%
+- `!aireact <percent>` -- set a custom chance from `0.01` to `100`
+- `!aireact off` -- opt out
+- `!aireact status` -- show your current setting
+- `!aireact global off|on|status` -- admin-only global kill switch
+
+Reaction settings are persisted in `data/ai_reactions.ron`. The global switch pauses reactions without deleting user opt-ins.
+
 Example 7TV glossary (`data/7tv_emotes.toml` by default):
 
 ```toml
@@ -209,7 +223,7 @@ Single persistent IRC connection with a broadcast channel (capacity: 100) distri
 
 - **Message Router** - reads from twitch-irc, broadcasts to all handlers
 - **1337 Handler** - daily 13:36-13:38 monitoring cycle
-- **Generic Command Handler** - dispatches `!p`, `!lb`, `!up`, `!fl`, `!ai`, `!fb`, `!track`, `!untrack`, `!flights`, `!flight`, and ping triggers
+- **Generic Command Handler** - dispatches `!p`, `!lb`, `!up`, `!fl`, `!ai`, `!aireact`, `!fb`, `!track`, `!untrack`, `!flights`, `!flight`, and ping triggers
 - **Flight Tracker** - polls adsb.lol for tracked aircraft and announces phase changes
 - **Latency Monitor** - PING/PONG every 5 minutes
 - **Config Watcher** - watches config.toml for schedule changes

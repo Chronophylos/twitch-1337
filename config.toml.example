@@ -64,6 +64,13 @@ client_secret = "your_client_secret"
 # history_length = 10                                # Optional, number of chat messages to keep as context (0 = disabled, max 100)
 # max_memories = 50                                  # DEPRECATED: use [ai.memory] max_user instead (kept for back-compat)
 #
+# Random AI reactions are controlled from chat, not config:
+#   !aireact low|medium|high|<percent>  # user opt-in; default is off for everyone
+#   !aireact off                        # user opt-out
+#   !aireact global off|on|status       # admin-only global switch
+# Levels are low=1%, medium=5%, high=15%; custom percent accepts 0.01..100.
+# Settings persist in data/ai_reactions.ron.
+#
 # Optional: 7TV emote grounding for !ai
 # Requires a manual glossary file so the model only gets emotes with known meaning.
 # [ai.emotes]
@@ -99,6 +106,7 @@ client_secret = "your_client_secret"
 # memory_enabled = false                             # Enable persistent AI memory (default: false)
 # history_length = 10                                # Optional, number of chat messages to keep as context (0 = disabled, max 100)
 # max_memories = 50                                  # DEPRECATED: use [ai.memory] max_user instead (kept for back-compat)
+# Random AI reactions use the same !aireact commands described above.
 # Optional: Prefill chat history from a log API at startup
 # Requires history_length > 0 to have any effect
 # [ai.history_prefill]
