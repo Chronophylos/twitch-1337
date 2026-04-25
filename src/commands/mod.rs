@@ -7,6 +7,7 @@ use twitch_irc::{
 };
 
 pub mod ai;
+pub mod ai_react;
 pub mod feedback;
 pub mod flights;
 pub mod flights_above;

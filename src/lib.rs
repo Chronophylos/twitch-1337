@@ -4,6 +4,7 @@
 //! `TwitchIRCClient`, and runs the bot. Integration tests (`tests/`) use a
 //! fake transport, fake clock, and fake LLM against the same handlers.
 
+pub mod ai_reactions;
 pub mod aviation;
 pub mod chat_history;
 pub mod clock;
@@ -116,6 +117,10 @@ where
 
     let ping_manager = Arc::new(tokio::sync::RwLock::new(
         ping::PingManager::load(&data_dir).wrap_err("Failed to load ping manager")?,
+    ));
+    let ai_reaction_manager = Arc::new(tokio::sync::RwLock::new(
+        ai_reactions::AiReactionManager::load(&data_dir)
+            .wrap_err("Failed to load AI reaction manager")?,
     ));
 
     // Aviation is consumed by the flight tracker; clone first so commands (!up/!fl) also get it.
@@ -311,6 +316,7 @@ where
                 ai_memory,
                 leaderboard,
                 ping_manager,
+                ai_reaction_manager,
                 hidden_admin_ids: config.twitch.hidden_admins.clone(),
                 default_cooldown: Duration::from_secs(config.pings.cooldown),
                 pings_public: config.pings.public,

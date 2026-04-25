@@ -4,14 +4,18 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use rand::RngExt as _;
 use tokio::{sync::broadcast, time::Duration};
 use tracing::{debug, error, info, instrument};
 use twitch_irc::{
-    TwitchIRCClient, login::LoginCredentials, message::ServerMessage, transport::Transport,
+    TwitchIRCClient,
+    login::LoginCredentials,
+    message::{PrivmsgMessage, ServerMessage},
+    transport::Transport,
 };
 
 use crate::{
-    ChatHistory, ChatHistoryBuffer, PersonalBest, aviation, commands,
+    ChatHistory, ChatHistoryBuffer, PersonalBest, ai_reactions, aviation, commands,
     config::{AiConfig, CooldownsConfig, SuspendConfig},
     flight_tracker, llm, ping, prefill,
     seventv::SevenTvEmoteProvider,
@@ -33,6 +37,7 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub ai_memory: Option<commands::ai::AiMemory>,
     pub leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
     pub ping_manager: Arc<tokio::sync::RwLock<ping::PingManager>>,
+    pub ai_reaction_manager: Arc<tokio::sync::RwLock<ai_reactions::AiReactionManager>>,
     pub hidden_admin_ids: Vec<String>,
     pub default_cooldown: Duration,
     pub pings_public: bool,
@@ -64,6 +69,7 @@ where
         ai_memory,
         leaderboard,
         ping_manager,
+        ai_reaction_manager,
         hidden_admin_ids,
         default_cooldown,
         pings_public,
@@ -79,6 +85,7 @@ where
     } = cfg;
 
     let default_suspend_duration = Duration::from_secs(suspend.default_duration_secs);
+    let hidden_admin_ids_for_ai_react = hidden_admin_ids.clone();
 
     let broadcast_rx = broadcast_tx.subscribe();
 
@@ -127,6 +134,11 @@ where
         });
 
     let mut cmd_list: Vec<Box<dyn commands::Command<T, L>>> = vec![
+        Box::new(commands::ai_react::AiReactCommand::new(
+            ai_reaction_manager.clone(),
+            hidden_admin_ids_for_ai_react,
+            llm_client.is_some(),
+        )),
         Box::new(commands::ping_admin::PingAdminCommand::new(
             ping_manager.clone(),
             hidden_admin_ids.clone(),
@@ -159,6 +171,8 @@ where
         cmd_list.push(Box::new(commands::flights::FlightCommand::new(tx)));
     }
 
+    let mut ai_reaction_responder = None;
+
     if let Some((llm, cfg)) = llm_client {
         let ai_chat_ctx = chat_history
             .clone()
@@ -178,8 +192,8 @@ where
                 llm_client: llm.clone(),
                 model: cfg.model.clone(),
                 prompts: commands::ai::AiPrompts {
-                    system: cfg.system_prompt,
-                    instruction_template: cfg.instruction_template,
+                    system: cfg.system_prompt.clone(),
+                    instruction_template: cfg.instruction_template.clone(),
                 },
                 timeout: Duration::from_secs(cfg.timeout),
                 cooldown: Duration::from_secs(cooldowns.ai),
@@ -188,6 +202,16 @@ where
                 emotes: emote_provider,
             },
         )));
+        ai_reaction_responder = Some(ai_reactions::AiReactionResponder::new(
+            ai_reactions::AiReactionResponderDeps {
+                llm_client: llm.clone(),
+                model: cfg.model.clone(),
+                system_prompt: cfg.system_prompt.clone(),
+                timeout: Duration::from_secs(cfg.timeout),
+                chat_history: chat_history.clone(),
+                bot_username: bot_username.clone(),
+            },
+        ));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm,
             cfg.model,
@@ -211,6 +235,9 @@ where
         cmd_list,
         admin_channel,
         chat_history,
+        ai_reaction_manager,
+        ai_reaction_responder,
+        bot_username,
         suspension_manager,
     )
     .await;
@@ -223,10 +250,13 @@ pub(crate) async fn run_command_dispatcher<T, L>(
     commands: Vec<Box<dyn crate::commands::Command<T, L>>>,
     admin_channel: Option<String>,
     chat_history: Option<ChatHistory>,
+    ai_reaction_manager: Arc<tokio::sync::RwLock<ai_reactions::AiReactionManager>>,
+    ai_reaction_responder: Option<ai_reactions::AiReactionResponder>,
+    bot_username: String,
     suspension_manager: Arc<SuspensionManager>,
 ) where
-    T: Transport,
-    L: LoginCredentials,
+    T: Transport + Send + Sync + 'static,
+    L: LoginCredentials + Send + Sync + 'static,
 {
     loop {
         match broadcast_rx.recv().await {
@@ -242,12 +272,12 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                 {
                     continue;
                 }
+                let is_admin_channel = admin_channel
+                    .as_ref()
+                    .is_some_and(|ch| privmsg.channel_login == *ch);
 
                 // Record message in chat history (main channel only)
                 if let Some(ref history) = chat_history {
-                    let is_admin_channel = admin_channel
-                        .as_ref()
-                        .is_some_and(|ch| privmsg.channel_login == *ch);
                     if !is_admin_channel {
                         history
                             .lock()
@@ -260,11 +290,22 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                 let Some(first_word) = words.next() else {
                     continue;
                 };
+                let command_like = first_word.starts_with('!');
 
                 let Some(cmd) = commands
                     .iter()
                     .find(|c| c.enabled() && c.matches(first_word))
                 else {
+                    if !command_like && !is_admin_channel {
+                        maybe_run_ai_reaction(
+                            &client,
+                            &ai_reaction_manager,
+                            ai_reaction_responder.as_ref(),
+                            &bot_username,
+                            &privmsg,
+                        )
+                        .await;
+                    }
                     continue;
                 };
 
@@ -305,4 +346,56 @@ pub(crate) async fn run_command_dispatcher<T, L>(
             }
         }
     }
+}
+
+async fn maybe_run_ai_reaction<T, L>(
+    client: &Arc<TwitchIRCClient<T, L>>,
+    manager: &Arc<tokio::sync::RwLock<ai_reactions::AiReactionManager>>,
+    responder: Option<&ai_reactions::AiReactionResponder>,
+    bot_username: &str,
+    privmsg: &PrivmsgMessage,
+) where
+    T: Transport + Send + Sync + 'static,
+    L: LoginCredentials + Send + Sync + 'static,
+{
+    let Some(responder) = responder else {
+        return;
+    };
+    if privmsg.sender.login.eq_ignore_ascii_case(bot_username) {
+        return;
+    }
+
+    let probability_percent = {
+        let guard = manager.read().await;
+        guard.probability_for(&privmsg.sender.id)
+    };
+    let Some(probability_percent) = probability_percent else {
+        return;
+    };
+
+    let roll = rand::rng().random::<f64>() * 100.0;
+    if roll >= probability_percent {
+        debug!(
+            user = %privmsg.sender.login,
+            probability_percent,
+            roll,
+            "Skipping AI random reaction"
+        );
+        return;
+    }
+
+    debug!(
+        user = %privmsg.sender.login,
+        probability_percent,
+        roll,
+        "Running AI random reaction"
+    );
+    let responder = (*responder).clone();
+    let client = client.clone();
+    let privmsg = privmsg.clone();
+    tokio::spawn(async move {
+        if let Err(e) = responder.respond_to(&client, &privmsg).await {
+            error!(error = ?e, "Failed to send AI random reaction");
+        }
+    });
 }
