@@ -208,32 +208,69 @@ impl MemoryStore {
                 .then_with(|| a.0.cmp(b.0))
         }
 
+        // Render a capped, grouped section for User or Pref scope.
+        //
+        // Sort ALL entries across all subject_ids by (-confidence, slug), take
+        // the scope-level cap once, then group survivors by subject_id for the
+        // per-user headers. This keeps per-scope budget honest regardless of how
+        // many distinct users have memories. Distinct subject_ids that happen to
+        // share a username are disambiguated with a `(user <id>)` suffix.
+        let render_keyed_section = |entries: &mut Vec<(&str, &str, &Memory)>,
+                                    cap: usize,
+                                    header_fn: &dyn Fn(&str, bool, &str) -> String,
+                                    out: &mut String| {
+            if entries.is_empty() {
+                return;
+            }
+            entries.sort_by(|a, b| by_conf_then_slug(&(a.1, a.2), &(b.1, b.2)));
+
+            // Group cap-limited survivors by subject_id.
+            let mut by_subject: std::collections::BTreeMap<&str, Vec<&Memory>> =
+                std::collections::BTreeMap::new();
+            for &(subject_id, _, mem) in entries.iter().take(cap) {
+                by_subject.entry(subject_id).or_default().push(mem);
+            }
+
+            // Detect username collisions so we can disambiguate in headers.
+            let mut name_count: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for &subject_id in by_subject.keys() {
+                *name_count
+                    .entry(self.resolve_username(subject_id))
+                    .or_default() += 1;
+            }
+
+            // Emit sections in alphabetical username order for determinism.
+            let mut subject_ids: Vec<&&str> = by_subject.keys().collect();
+            subject_ids.sort_by_key(|&&id| self.resolve_username(id));
+
+            for &&subject_id in &subject_ids {
+                let name = self.resolve_username(subject_id);
+                let collision = name_count.get(&name).copied().unwrap_or(0) > 1;
+                out.push_str(&header_fn(&name, collision, subject_id));
+                for mem in &by_subject[subject_id] {
+                    out.push_str(&format!("\n- {} (conf {})", mem.fact, mem.confidence));
+                }
+            }
+        };
+
         if self.memories.is_empty() {
             return None;
         }
 
         let mut lore: Vec<(&str, &Memory)> = Vec::new();
-        let mut user_buckets: std::collections::BTreeMap<String, Vec<(&str, &Memory)>> =
-            std::collections::BTreeMap::new();
-        let mut pref_buckets: std::collections::BTreeMap<String, Vec<(&str, &Memory)>> =
-            std::collections::BTreeMap::new();
+        // (subject_id, slug, &Memory) — keyed by subject_id to avoid username-collision merges
+        let mut user_entries: Vec<(&str, &str, &Memory)> = Vec::new();
+        let mut pref_entries: Vec<(&str, &str, &Memory)> = Vec::new();
 
         for (key, mem) in &self.memories {
             match &mem.scope {
                 Scope::Lore => lore.push((key.as_str(), mem)),
                 Scope::User { subject_id } => {
-                    let name = self.resolve_username(subject_id);
-                    user_buckets
-                        .entry(name)
-                        .or_default()
-                        .push((key.as_str(), mem));
+                    user_entries.push((subject_id.as_str(), key.as_str(), mem));
                 }
                 Scope::Pref { subject_id } => {
-                    let name = self.resolve_username(subject_id);
-                    pref_buckets
-                        .entry(name)
-                        .or_default()
-                        .push((key.as_str(), mem));
+                    pref_entries.push((subject_id.as_str(), key.as_str(), mem));
                 }
             }
         }
@@ -248,21 +285,31 @@ impl MemoryStore {
             }
         }
 
-        for (username, mems) in &mut user_buckets {
-            out.push_str(&format!("\n### About {username}"));
-            mems.sort_by(by_conf_then_slug);
-            for (_, mem) in mems.iter().take(caps.max_user) {
-                out.push_str(&format!("\n- {} (conf {})", mem.fact, mem.confidence));
-            }
-        }
+        render_keyed_section(
+            &mut user_entries,
+            caps.max_user,
+            &|name, collision, id| {
+                if collision {
+                    format!("\n### About {name} (user {id})")
+                } else {
+                    format!("\n### About {name}")
+                }
+            },
+            &mut out,
+        );
 
-        for (username, mems) in &mut pref_buckets {
-            out.push_str(&format!("\n### {username}'s preferences"));
-            mems.sort_by(by_conf_then_slug);
-            for (_, mem) in mems.iter().take(caps.max_pref) {
-                out.push_str(&format!("\n- {} (conf {})", mem.fact, mem.confidence));
-            }
-        }
+        render_keyed_section(
+            &mut pref_entries,
+            caps.max_pref,
+            &|name, collision, id| {
+                if collision {
+                    format!("\n### {name}'s preferences (user {id})")
+                } else {
+                    format!("\n### {name}'s preferences")
+                }
+            },
+            &mut out,
+        );
 
         Some(out)
     }
@@ -1695,6 +1742,97 @@ mod tests {
         assert!(!out.contains("(conf 50)"));
         assert!(!out.contains("(conf 30)"));
         assert!(!out.contains("(conf 10)"));
+    }
+
+    #[test]
+    fn format_for_prompt_cap_is_per_scope_not_per_user_bucket() {
+        // max_user=2 with 3 facts for alice and 3 for bob → only the top-2
+        // across the whole User scope should render, not top-2 per user (6 total).
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        s.upsert_identity("1", "alice", now);
+        s.upsert_identity("2", "bob", now);
+        for (slug, subj, conf) in [
+            ("a", "1", 90u8), // alice — highest
+            ("b", "1", 60),   // alice
+            ("c", "1", 40),   // alice
+            ("d", "2", 85),   // bob — second highest
+            ("e", "2", 55),   // bob
+            ("f", "2", 30),   // bob
+        ] {
+            s.memories.insert(
+                format!("user:{subj}:{slug}"),
+                Memory::new(
+                    format!("fact {slug}"),
+                    Scope::User {
+                        subject_id: subj.into(),
+                    },
+                    if subj == "1" { "alice" } else { "bob" }.into(),
+                    conf,
+                    now,
+                ),
+            );
+        }
+        let caps = Caps {
+            max_user: 2,
+            max_lore: 1000,
+            max_pref: 1000,
+        };
+        let out = s.format_for_prompt(&caps).unwrap();
+        // Top-2 across scope: alice/a (90) and bob/d (85)
+        assert!(out.contains("(conf 90)"), "got: {out}");
+        assert!(out.contains("(conf 85)"), "got: {out}");
+        assert!(!out.contains("(conf 60)"), "got: {out}");
+        assert!(!out.contains("(conf 55)"), "got: {out}");
+        assert!(!out.contains("(conf 40)"), "got: {out}");
+        assert!(!out.contains("(conf 30)"), "got: {out}");
+        // Sections for both users still present (survivors from distinct subject_ids)
+        assert!(out.contains("### About alice"), "got: {out}");
+        assert!(out.contains("### About bob"), "got: {out}");
+    }
+
+    #[test]
+    fn format_for_prompt_disambiguates_username_collision() {
+        // Two distinct subject_ids that both resolve to "alice" must not have
+        // their memories silently merged — headers get a `(user <id>)` suffix.
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        s.upsert_identity("1", "alice", now); // original alice
+        s.upsert_identity("5", "alice", now); // username reclaimed by another user
+        s.memories.insert(
+            "user:1:secret".into(),
+            Memory::new(
+                "hates spinach".into(),
+                Scope::User {
+                    subject_id: "1".into(),
+                },
+                "alice".into(),
+                80,
+                now,
+            ),
+        );
+        s.memories.insert(
+            "user:5:secret".into(),
+            Memory::new(
+                "loves spinach".into(),
+                Scope::User {
+                    subject_id: "5".into(),
+                },
+                "alice".into(),
+                80,
+                now,
+            ),
+        );
+        let out = s.format_for_prompt(&caps_unbounded()).unwrap();
+        assert!(out.contains("(user 1)"), "got: {out}");
+        assert!(out.contains("(user 5)"), "got: {out}");
+        assert!(out.contains("hates spinach"), "got: {out}");
+        assert!(out.contains("loves spinach"), "got: {out}");
+        // No un-disambiguated "### About alice" header should appear
+        assert!(
+            !out.contains("\n### About alice\n"),
+            "plain header must not appear on collision, got: {out}"
+        );
     }
 
     #[test]
