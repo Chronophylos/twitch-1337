@@ -38,7 +38,7 @@ pub struct MemoryConfig {
 }
 
 /// A single remembered fact.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Memory {
     pub fact: String,
     pub scope: Scope,
@@ -200,35 +200,105 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Format memories for injection into the system prompt.
-    /// Returns None if there are no memories.
+    /// Render a stable, prefix-cacheable snapshot of the store for injection
+    /// into the system prompt. Pure read — does NOT touch `last_accessed` or
+    /// `access_count`, so the same store state always produces byte-identical
+    /// output. Cache invalidation is therefore tied to *store mutation* (writes
+    /// via `save_memory` or consolidation), not to per-turn render calls.
     ///
-    /// Side-effect: for each memory actually rendered into the prompt, bumps
-    /// `last_accessed` to `now` and increments `access_count`. Both feed the
-    /// eviction score (see `Memory::score`).
+    /// Output structure, in this fixed order:
+    ///   ## Known facts
+    ///   ### Channel lore
+    ///   - <fact> (conf <n>)
+    ///   ### About <username>     (one section per user, alphabetical by username)
+    ///   - <fact> (conf <n>)
+    ///   ### <username>'s preferences
+    ///   - <fact> (conf <n>)
     ///
-    /// Buffered-write strategy: this method does NOT fsync the store. The
-    /// caller (the `!ai` handler) runs an extraction pass right after the
-    /// prompt is built, and `execute_tool_call` already persists via `save()`
-    /// after each round — so the just-bumped counters land on disk at the
-    /// end of the turn without a second write. On a crash between render and
-    /// extraction, at most one turn's worth of access bumps is lost; memories
-    /// themselves are unaffected.
-    pub fn format_for_prompt(&mut self, now: DateTime<Utc>) -> Option<String> {
+    /// Within each section, lines are sorted by `(-confidence, slug)` so the
+    /// highest-confidence facts come first and ties are deterministic. When a
+    /// scope's entry count exceeds the matching cap, only the top-cap rows by
+    /// that ordering are rendered.
+    ///
+    /// `subject_id` is resolved to the current `username` via `identities`;
+    /// unknown ids fall back to the literal `user <id>` so output never leaks
+    /// raw numeric ids when a mapping exists.
+    ///
+    /// Returns `None` only when the store is completely empty.
+    pub fn format_for_prompt(&self, caps: &Caps) -> Option<String> {
         if self.memories.is_empty() {
             return None;
         }
-        let mut lines: Vec<String> = self
-            .memories
-            .iter_mut()
-            .map(|(key, mem)| {
-                mem.last_accessed = now;
-                mem.access_count = mem.access_count.saturating_add(1);
-                format!("- {}: {}", key, mem.fact)
-            })
-            .collect();
-        lines.sort(); // Deterministic ordering
-        Some(format!("\n\n## Known facts\n{}", lines.join("\n")))
+
+        let mut lore: Vec<(&str, &Memory)> = Vec::new();
+        let mut user_buckets: std::collections::BTreeMap<String, Vec<&Memory>> =
+            std::collections::BTreeMap::new();
+        let mut pref_buckets: std::collections::BTreeMap<String, Vec<&Memory>> =
+            std::collections::BTreeMap::new();
+
+        for (key, mem) in &self.memories {
+            match &mem.scope {
+                Scope::Lore => lore.push((key.as_str(), mem)),
+                Scope::User { subject_id } => {
+                    let name = self.resolve_username(subject_id);
+                    user_buckets.entry(name).or_default().push(mem);
+                }
+                Scope::Pref { subject_id } => {
+                    let name = self.resolve_username(subject_id);
+                    pref_buckets.entry(name).or_default().push(mem);
+                }
+            }
+        }
+
+        let mut out = String::from("\n\n## Known facts");
+
+        if !lore.is_empty() {
+            out.push_str("\n### Channel lore");
+            let mut rows: Vec<&(&str, &Memory)> = lore.iter().collect();
+            rows.sort_by(|a, b| {
+                b.1.confidence
+                    .cmp(&a.1.confidence)
+                    .then_with(|| a.0.cmp(b.0))
+            });
+            for (_, mem) in rows.iter().take(caps.max_lore) {
+                out.push_str(&format!("\n- {} (conf {})", mem.fact, mem.confidence));
+            }
+        }
+
+        for (username, mems) in &user_buckets {
+            out.push_str(&format!("\n### About {username}"));
+            let mut rows: Vec<&&Memory> = mems.iter().collect();
+            rows.sort_by(|a, b| {
+                b.confidence
+                    .cmp(&a.confidence)
+                    .then_with(|| a.fact.cmp(&b.fact))
+            });
+            for mem in rows.iter().take(caps.max_user) {
+                out.push_str(&format!("\n- {} (conf {})", mem.fact, mem.confidence));
+            }
+        }
+
+        for (username, mems) in &pref_buckets {
+            out.push_str(&format!("\n### {username}'s preferences"));
+            let mut rows: Vec<&&Memory> = mems.iter().collect();
+            rows.sort_by(|a, b| {
+                b.confidence
+                    .cmp(&a.confidence)
+                    .then_with(|| a.fact.cmp(&b.fact))
+            });
+            for mem in rows.iter().take(caps.max_pref) {
+                out.push_str(&format!("\n- {} (conf {})", mem.fact, mem.confidence));
+            }
+        }
+
+        Some(out)
+    }
+
+    fn resolve_username(&self, subject_id: &str) -> String {
+        self.identities
+            .get(subject_id)
+            .map(|i| i.username.clone())
+            .unwrap_or_else(|| format!("user {subject_id}"))
     }
 
     /// Evict the lowest-scoring memory whose scope matches `tag` when the
@@ -1469,15 +1539,23 @@ mod tests {
         assert!(out.contains("too long"));
     }
 
+    fn caps_unbounded() -> Caps {
+        Caps {
+            max_user: 1000,
+            max_lore: 1000,
+            max_pref: 1000,
+        }
+    }
+
     #[test]
-    fn format_for_prompt_bumps_access_for_rendered_memories() {
+    fn format_for_prompt_does_not_mutate_store() {
         use chrono::Duration;
         let t0 = Utc::now() - Duration::hours(1);
         let mut s = MemoryStore::default();
         s.memories.insert(
-            "user:1:a".into(),
+            "user::1::a".into(),
             Memory::new(
-                "alice fact".into(),
+                "alice likes cats".into(),
                 Scope::User {
                     subject_id: "1".into(),
                 },
@@ -1486,54 +1564,164 @@ mod tests {
                 t0,
             ),
         );
-        s.memories.insert(
-            "lore::b".into(),
-            Memory::new("channel fact".into(), Scope::Lore, "mod".into(), 80, t0),
-        );
-        // Pre-conditions: untouched counters.
-        assert_eq!(s.memories["user:1:a"].access_count, 0);
-        assert_eq!(s.memories["user:1:a"].last_accessed, t0);
-        assert_eq!(s.memories["lore::b"].access_count, 0);
-        assert_eq!(s.memories["lore::b"].last_accessed, t0);
+        s.upsert_identity("1", "alice", t0);
 
-        let render_now = Utc::now();
-        let out = s.format_for_prompt(render_now);
-        assert!(out.is_some());
-        // Every memory rendered into the prompt gets its counters bumped.
-        let a = &s.memories["user:1:a"];
-        assert_eq!(a.access_count, 1);
-        assert_eq!(a.last_accessed, render_now);
-        let b = &s.memories["lore::b"];
-        assert_eq!(b.access_count, 1);
-        assert_eq!(b.last_accessed, render_now);
+        let snapshot_before = s.memories.clone();
+        let _ = s.format_for_prompt(&caps_unbounded());
+        assert_eq!(s.memories, snapshot_before, "render must not mutate");
     }
 
     #[test]
-    fn format_for_prompt_empty_store_does_not_mutate() {
-        let mut s = MemoryStore::default();
-        let before = s.memories.clone();
-        let out = s.format_for_prompt(Utc::now());
-        assert!(out.is_none());
-        // Empty store: no memories to bump, identities untouched.
-        assert_eq!(s.memories.len(), before.len());
+    fn format_for_prompt_empty_returns_none() {
+        let s = MemoryStore::default();
+        assert!(s.format_for_prompt(&caps_unbounded()).is_none());
     }
 
     #[test]
-    fn format_for_prompt_repeated_calls_accumulate_count() {
-        // Guards the saturating_add path and confirms multiple render passes
-        // bump the same memory each time — important for the score-boost
-        // behavior over the life of a turn.
-        use chrono::Duration;
-        let t0 = Utc::now() - Duration::hours(1);
+    fn format_for_prompt_groups_and_resolves_usernames() {
+        let now = Utc::now();
         let mut s = MemoryStore::default();
+        s.upsert_identity("1", "alice", now);
+        s.upsert_identity("2", "bob", now);
         s.memories.insert(
-            "lore::x".into(),
-            Memory::new("fact".into(), Scope::Lore, "alice".into(), 60, t0),
+            "user::1::likes-cats".into(),
+            Memory::new(
+                "likes cats".into(),
+                Scope::User {
+                    subject_id: "1".into(),
+                },
+                "alice".into(),
+                70,
+                now,
+            ),
         );
-        let _ = s.format_for_prompt(Utc::now());
-        let _ = s.format_for_prompt(Utc::now());
-        let _ = s.format_for_prompt(Utc::now());
-        assert_eq!(s.memories["lore::x"].access_count, 3);
+        s.memories.insert(
+            "user::2::is-pilot".into(),
+            Memory::new(
+                "is a pilot".into(),
+                Scope::User {
+                    subject_id: "2".into(),
+                },
+                "bob".into(),
+                85,
+                now,
+            ),
+        );
+        s.memories.insert(
+            "pref::1::call-me-al".into(),
+            Memory::new(
+                "address as Al".into(),
+                Scope::Pref {
+                    subject_id: "1".into(),
+                },
+                "alice".into(),
+                70,
+                now,
+            ),
+        );
+        s.memories.insert(
+            "lore::channel-vibe".into(),
+            Memory::new(
+                "channel is German-friendly".into(),
+                Scope::Lore,
+                "mod".into(),
+                90,
+                now,
+            ),
+        );
+
+        let out = s.format_for_prompt(&caps_unbounded()).unwrap();
+
+        let lore_idx = out.find("### Channel lore").expect("lore section");
+        let about_alice_idx = out.find("### About alice").expect("about-alice section");
+        let about_bob_idx = out.find("### About bob").expect("about-bob section");
+        let pref_alice_idx = out.find("### alice's preferences").expect("pref section");
+        assert!(lore_idx < about_alice_idx);
+        assert!(
+            about_alice_idx < about_bob_idx,
+            "users sorted alphabetically"
+        );
+        assert!(about_bob_idx < pref_alice_idx);
+
+        assert!(out.contains("- likes cats (conf 70)"));
+        assert!(out.contains("- is a pilot (conf 85)"));
+        assert!(out.contains("- channel is German-friendly (conf 90)"));
+        assert!(out.contains("- address as Al (conf 70)"));
+
+        let mut s2 = MemoryStore::default();
+        s2.memories.insert(
+            "user::99::x".into(),
+            Memory::new(
+                "foo".into(),
+                Scope::User {
+                    subject_id: "99".into(),
+                },
+                "ghost".into(),
+                50,
+                now,
+            ),
+        );
+        let out2 = s2.format_for_prompt(&caps_unbounded()).unwrap();
+        assert!(out2.contains("### About user 99"), "got: {out2}");
+    }
+
+    #[test]
+    fn format_for_prompt_is_deterministic_across_calls() {
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        s.upsert_identity("1", "alice", now);
+        for i in 0..10u32 {
+            s.memories.insert(
+                format!("user::1::fact-{i}"),
+                Memory::new(
+                    format!("fact {i}"),
+                    Scope::User {
+                        subject_id: "1".into(),
+                    },
+                    "alice".into(),
+                    70,
+                    now,
+                ),
+            );
+        }
+        let a = s.format_for_prompt(&caps_unbounded()).unwrap();
+        let b = s.format_for_prompt(&caps_unbounded()).unwrap();
+        let c = s.format_for_prompt(&caps_unbounded()).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(b, c);
+    }
+
+    #[test]
+    fn format_for_prompt_respects_per_scope_caps() {
+        let now = Utc::now();
+        let mut s = MemoryStore::default();
+        s.upsert_identity("1", "alice", now);
+        for (i, conf) in [10u8, 90, 50, 30, 70].iter().enumerate() {
+            s.memories.insert(
+                format!("user::1::f{i}"),
+                Memory::new(
+                    format!("fact {i}"),
+                    Scope::User {
+                        subject_id: "1".into(),
+                    },
+                    "alice".into(),
+                    *conf,
+                    now,
+                ),
+            );
+        }
+        let caps = Caps {
+            max_user: 2,
+            max_lore: 1000,
+            max_pref: 1000,
+        };
+        let out = s.format_for_prompt(&caps).unwrap();
+
+        assert!(out.contains("(conf 90)"));
+        assert!(out.contains("(conf 70)"));
+        assert!(!out.contains("(conf 50)"));
+        assert!(!out.contains("(conf 30)"));
+        assert!(!out.contains("(conf 10)"));
     }
 
     #[test]

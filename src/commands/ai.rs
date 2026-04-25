@@ -411,8 +411,10 @@ where
 
         let now = Utc::now();
         let facts = if let Some(ref mem) = self.memory {
-            let mut store_guard = mem.config.store.write().await;
-            store_guard.format_for_prompt(now).unwrap_or_default()
+            let store_guard = mem.config.store.read().await;
+            store_guard
+                .format_for_prompt(&mem.config.caps)
+                .unwrap_or_default()
         } else {
             String::new()
         };
