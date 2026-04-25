@@ -95,7 +95,8 @@ struct ApiToolChoice {
 struct ApiToolResponseMessage {
     content: Option<String>,
     tool_calls: Option<Vec<ApiToolCall>>,
-    #[serde(default)]
+    // DeepSeek/OpenRouter returns this as "reasoning"; standard field is "reasoning_content"
+    #[serde(default, alias = "reasoning")]
     reasoning_content: Option<String>,
 }
 
@@ -155,6 +156,12 @@ fn build_openai_messages(request: &ToolChatCompletionRequest) -> Vec<serde_json:
                 "tool_call_id": tr.tool_call_id,
                 "content": tr.content,
             }));
+        }
+    }
+
+    for (i, msg) in messages.iter().enumerate() {
+        if msg.get("reasoning_content").is_some() {
+            debug!(index = i, message = %msg, "Built message with reasoning_content");
         }
     }
 
@@ -369,7 +376,11 @@ impl LlmClient for OpenAiClient {
             reasoning,
         };
 
-        debug!(model = %self.model, "Sending tool request to OpenAI-compatible API");
+        if let Ok(req_json) = serde_json::to_string(&api_request) {
+            debug!(request_body = %req_json, "Sending tool request to OpenAI-compatible API");
+        } else {
+            debug!(model = %self.model, "Sending tool request to OpenAI-compatible API");
+        }
 
         let response = self
             .http
@@ -393,6 +404,7 @@ impl LlmClient for OpenAiClient {
             .json()
             .await
             .wrap_err("Failed to parse OpenAI-compatible API tool response")?;
+        debug!(response_body = %body, "OpenAI-compatible API raw tool response");
         if let Some(msg) = extract_api_error(&body) {
             return Err(eyre::eyre!("OpenAI-compatible API error: {}", msg));
         }
@@ -404,6 +416,13 @@ impl LlmClient for OpenAiClient {
             .into_iter()
             .next()
             .ok_or_else(|| eyre::eyre!("No choices in API tool response"))?;
+
+        debug!(
+            content = ?choice.message.content,
+            reasoning_content = ?choice.message.reasoning_content,
+            has_tool_calls = choice.message.tool_calls.is_some(),
+            "Parsed assistant message from tool response"
+        );
 
         if let Some(tool_calls) = choice.message.tool_calls
             && !tool_calls.is_empty()
