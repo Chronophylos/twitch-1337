@@ -6,11 +6,11 @@ use eyre::Result;
 use tracing::{debug, error, instrument};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use crate::ChatHistorySource;
 use crate::commands::ai::ChatContext;
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::llm::{ChatCompletionRequest, LlmClient, Message};
 use crate::util::{MAX_RESPONSE_LENGTH, truncate_response};
+use crate::{ChatHistoryEntry, ChatHistorySource};
 
 use super::{Command, CommandContext};
 
@@ -69,7 +69,7 @@ impl NewsCommand {
             .map(|idx| idx + 1);
         let previous_news_response = snapshot
             .iter()
-            .rposition(|entry| self.is_news_response(entry))
+            .rposition(|entry| is_news_response(chat, entry))
             .map(|idx| idx + 1);
         let start = previous_user_message
             .into_iter()
@@ -84,15 +84,12 @@ impl NewsCommand {
 
         Some(messages)
     }
+}
 
-    fn is_news_response(&self, entry: &crate::ChatHistoryEntry) -> bool {
-        let Some(chat) = self.chat_ctx.as_ref() else {
-            return false;
-        };
-        entry.source == ChatHistorySource::Bot
-            && entry.username.eq_ignore_ascii_case(&chat.bot_username)
-            && entry.text.trim_start().starts_with(NEWS_PREFIX)
-    }
+fn is_news_response(chat: &ChatContext, entry: &ChatHistoryEntry) -> bool {
+    entry.source == ChatHistorySource::Bot
+        && entry.username.eq_ignore_ascii_case(&chat.bot_username)
+        && entry.text.trim_start().starts_with(NEWS_PREFIX)
 }
 
 fn format_news_response(text: &str) -> String {
@@ -101,7 +98,7 @@ fn format_news_response(text: &str) -> String {
         .get(..NEWS_PREFIX.len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(NEWS_PREFIX))
     {
-        trimmed.to_string()
+        format!("{NEWS_PREFIX}{}", &trimmed[NEWS_PREFIX.len()..])
     } else {
         format!("{NEWS_PREFIX} {trimmed}")
     };
@@ -167,7 +164,7 @@ where
         self.cooldown.record(user).await;
 
         let user_message = format!(
-            "Fasse diesen Twitch-Chat seit der letzten Nachricht von {user} oder seit der letzten News-Zusammenfassung zusammen. Beginne mit \"ICYMI:\". Trenne mehrere Themen mit \" | \":\n{}",
+            "Fasse diesen Twitch-Chat seit der letzten Nachricht von {user} oder seit der letzten News-Zusammenfassung zusammen:\n{}",
             history_lines.join("\n")
         );
 

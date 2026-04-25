@@ -60,11 +60,19 @@ async fn news_command_summarizes_since_previous_user_message() {
         user_msg.content
     );
     assert!(
-        user_msg
-            .content
-            .contains("Trenne mehrere Themen mit \" | \""),
-        "missing topic separator instruction: {}",
+        !user_msg.content.contains("Trenne mehrere Themen"),
+        "duplicated format instruction in user prompt: {}",
         user_msg.content
+    );
+    let system_msg = calls[0]
+        .messages
+        .iter()
+        .find(|m| m.role == "system")
+        .expect("request has a system message");
+    assert!(
+        system_msg.content.contains("trenne sie mit \" | \""),
+        "missing topic separator instruction: {}",
+        system_msg.content
     );
 
     bot.shutdown().await;
@@ -138,9 +146,11 @@ async fn news_command_starts_after_previous_news_response() {
     bot.send("bob", "old topic").await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    bot.llm.push_chat("old topic summary");
+    bot.llm.push_chat("icymi: old topic summary");
     bot.send("alice", "!news").await;
-    let _ = bot.expect_say(Duration::from_secs(2)).await;
+    let first = bot.expect_say(Duration::from_secs(2)).await;
+    let first_body = first.strip_prefix(". ").unwrap_or(&first);
+    assert_eq!(first_body, "ICYMI: old topic summary");
 
     bot.send("carol", "fresh topic").await;
     tokio::time::sleep(Duration::from_millis(100)).await;
