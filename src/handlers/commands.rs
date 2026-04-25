@@ -165,7 +165,6 @@ where
             match web_search::SearchClient::new(
                 &cfg.web.base_url,
                 Duration::from_secs(cfg.web.timeout),
-                &cfg.web.user_agent_suffix,
             ) {
                 Ok(client) => Some(commands::ai::AiWeb {
                     executor: Arc::new(web_search::WebToolExecutor::new(

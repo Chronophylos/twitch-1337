@@ -89,7 +89,7 @@ client_secret = "your_client_secret"
 # max_rounds = 3                                # Max tool-call rounds per !ai request (1..=6)
 # cache_ttl_secs = 300                          # In-memory TTL cache for search/fetch results
 # cache_capacity = 100                          # Max cache entries before oldest eviction
-# user_agent_suffix = "twitch-1337-web"        # Optional suffix appended to app user-agent
+
 #
 # Optional: Prefill chat history from a log API at startup
 # Requires history_length > 0 to have any effect

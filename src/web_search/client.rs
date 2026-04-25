@@ -29,15 +29,9 @@ pub struct SearchClient {
 }
 
 impl SearchClient {
-    pub fn new(base_url: &str, timeout: Duration, user_agent_suffix: &str) -> Result<Self> {
-        let ua = if user_agent_suffix.trim().is_empty() {
-            APP_USER_AGENT.to_string()
-        } else {
-            format!("{APP_USER_AGENT} {}", user_agent_suffix.trim())
-        };
-
+    pub fn new(base_url: &str, timeout: Duration) -> Result<Self> {
         let http = reqwest::Client::builder()
-            .user_agent(ua)
+            .user_agent(APP_USER_AGENT)
             .build()
             .wrap_err("Failed to build web-search HTTP client")?;
 

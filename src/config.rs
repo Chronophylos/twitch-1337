@@ -113,10 +113,6 @@ fn default_web_cache_capacity() -> usize {
     100
 }
 
-fn default_web_user_agent_suffix() -> String {
-    "twitch-1337-web".to_string()
-}
-
 fn default_web_base_url() -> String {
     "http://localhost:8080/search".to_string()
 }
@@ -261,8 +257,6 @@ pub struct AiWebConfigSection {
     pub cache_ttl_secs: u64,
     #[serde(default = "default_web_cache_capacity")]
     pub cache_capacity: usize,
-    #[serde(default = "default_web_user_agent_suffix")]
-    pub user_agent_suffix: String,
 }
 
 impl Default for AiWebConfigSection {
@@ -275,7 +269,6 @@ impl Default for AiWebConfigSection {
             max_rounds: default_max_rounds(),
             cache_ttl_secs: default_web_cache_ttl_secs(),
             cache_capacity: default_web_cache_capacity(),
-            user_agent_suffix: default_web_user_agent_suffix(),
         }
     }
 }
