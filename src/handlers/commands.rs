@@ -193,17 +193,18 @@ where
             });
 
         cmd_list.push(Box::new(commands::ai::AiCommand::new(
-            commands::ai::AiCommandDeps {
-                llm_client: llm.clone(),
-                model: cfg.model.clone(),
-                prompts: commands::ai::AiPrompts {
-                    system: cfg.system_prompt,
-                    instruction_template: cfg.instruction_template,
-                },
-                timeout: Duration::from_secs(cfg.timeout),
-                cooldown: Duration::from_secs(cooldowns.ai),
-                chat_ctx: chat_ctx.clone(),
+            llm.clone(),
+            cfg.model.clone(),
+            commands::ai::AiPrompts {
+                system: cfg.system_prompt,
+                instruction_template: cfg.instruction_template,
+            },
+            Duration::from_secs(cfg.timeout),
+            Duration::from_secs(cooldowns.ai),
+            chat_ctx.clone(),
+            commands::ai::AiFeatures {
                 memory: ai_memory,
+                web,
                 emotes: emote_provider,
             },
         )));
@@ -212,13 +213,7 @@ where
             cfg.model,
             Duration::from_secs(cfg.timeout),
             Duration::from_secs(cooldowns.news),
-            chat_ctx.clone(),
-            Duration::from_secs(cooldowns.ai),
             chat_ctx,
-            commands::ai::AiFeatures {
-                memory: ai_memory,
-                web,
-            },
         )));
     }
 

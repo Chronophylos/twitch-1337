@@ -548,7 +548,10 @@ async fn memory_extractor_rejects_web_tool_calls() {
         .spawn()
         .await;
 
-    bot.llm.push_chat("ok");
+    // Main AI response (history-enabled → tool-capable completion).
+    bot.llm
+        .push_tool(ToolChatCompletionResponse::Message("ok".into()));
+    // Extraction round 1: extractor tries web_search, which should be rejected.
     bot.llm.push_tool(ToolChatCompletionResponse::ToolCalls {
         calls: vec![ToolCall {
             id: "call_1".into(),
@@ -558,6 +561,7 @@ async fn memory_extractor_rejects_web_tool_calls() {
         }],
         reasoning_content: None,
     });
+    // Extraction round 2: plain-text response terminates the loop.
     bot.llm
         .push_tool(ToolChatCompletionResponse::Message(String::new()));
 
@@ -565,8 +569,11 @@ async fn memory_extractor_rejects_web_tool_calls() {
     let _ = bot.expect_say(Duration::from_secs(2)).await;
 
     let tool_calls = bot.llm.tool_calls();
-    assert!(tool_calls.len() >= 2, "expected extraction tool rounds");
-    let extraction_req = &tool_calls[0];
+    assert!(
+        tool_calls.len() >= 3,
+        "expected main + extraction tool rounds"
+    );
+    let extraction_req = &tool_calls[1];
     let extraction_tools: Vec<String> = extraction_req
         .tools
         .iter()
@@ -574,7 +581,7 @@ async fn memory_extractor_rejects_web_tool_calls() {
         .collect();
     assert_eq!(extraction_tools, vec!["save_memory", "get_memories"]);
 
-    let second_req = &tool_calls[1];
+    let second_req = &tool_calls[2];
     let extractor_result = &second_req.prior_rounds[0].results[0].content;
     assert!(
         extractor_result.contains("Unknown tool: web_search"),

@@ -15,12 +15,13 @@ use crate::llm::{
 };
 use crate::memory;
 use crate::seventv::SevenTvEmoteProvider;
-use crate::util::{ChatHistory, MAX_RESPONSE_LENGTH, truncate_response};
+use crate::util::{MAX_RESPONSE_LENGTH, truncate_response};
 use crate::web_search;
 
 use super::{Command, CommandContext};
 
 /// Groups the shared chat history buffer with its capacity and the bot's username.
+#[derive(Clone)]
 pub struct ChatContext {
     pub history: ChatHistory,
     pub bot_username: String,
@@ -62,6 +63,7 @@ pub struct AiWeb {
 pub struct AiFeatures {
     pub memory: Option<AiMemory>,
     pub web: Option<AiWeb>,
+    pub emotes: Option<Arc<SevenTvEmoteProvider>>,
 }
 
 pub struct AiCommand {
@@ -74,17 +76,6 @@ pub struct AiCommand {
     memory: Option<AiMemory>,
     web: Option<AiWeb>,
     emotes: Option<Arc<SevenTvEmoteProvider>>,
-}
-
-pub struct AiCommandDeps {
-    pub llm_client: Arc<dyn LlmClient>,
-    pub model: String,
-    pub prompts: AiPrompts,
-    pub timeout: Duration,
-    pub cooldown: Duration,
-    pub chat_ctx: Option<ChatContext>,
-    pub memory: Option<AiMemory>,
-    pub emotes: Option<Arc<SevenTvEmoteProvider>>,
 }
 
 const CHAT_HISTORY_TOOL_NAME: &str = "get_recent_chat";
@@ -294,28 +285,6 @@ enum AiResult {
 }
 
 impl AiCommand {
-    async fn chat_without_tools(&self, system_prompt: String, user_message: String) -> AiResult {
-        let request = ChatCompletionRequest {
-            model: self.model.clone(),
-            messages: vec![
-                Message {
-                    role: "system".to_string(),
-                    content: system_prompt,
-                },
-                Message {
-                    role: "user".to_string(),
-                    content: user_message,
-                },
-            ],
-        };
-
-        match tokio::time::timeout(self.timeout, self.llm_client.chat_completion(request)).await {
-            Ok(Ok(text)) => AiResult::Ok(text),
-            Ok(Err(e)) => AiResult::Error(e),
-            Err(_) => AiResult::Timeout,
-        }
-    }
-
     async fn chat_with_web_tools(
         &self,
         system_prompt: String,
@@ -465,10 +434,16 @@ where
             if buf.is_empty() {
                 String::new()
             } else {
-                buf.iter()
-                    .map(|(user, msg, ts)| {
-                        let ts_berlin = ts.with_timezone(&chrono_tz::Europe::Berlin);
-                        format!("[{}] {user}: {msg}", ts_berlin.format("%H:%M"))
+                buf.snapshot()
+                    .iter()
+                    .map(|entry| {
+                        let ts_berlin = entry.timestamp.with_timezone(&chrono_tz::Europe::Berlin);
+                        format!(
+                            "[{}] {}: {}",
+                            ts_berlin.format("%H:%M"),
+                            entry.username,
+                            entry.text
+                        )
                     })
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -483,7 +458,13 @@ where
             self.chat_with_web_tools(system_prompt, user_message, web)
                 .await
         } else {
-            self.chat_without_tools(system_prompt, user_message).await
+            match tokio::time::timeout(self.timeout, self.complete_ai(system_prompt, user_message))
+                .await
+            {
+                Ok(Ok(text)) => AiResult::Ok(text),
+                Ok(Err(e)) => AiResult::Error(e),
+                Err(_) => AiResult::Timeout,
+            }
         };
 
         let (response, success) = match result {
