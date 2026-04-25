@@ -86,6 +86,140 @@ async fn ai_command_empty_shows_usage() {
 
 #[tokio::test]
 #[serial]
+async fn ai_reactions_are_off_by_default() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_config(|c| {
+            if let Some(ai) = c.ai.as_mut() {
+                ai.history_length = 0;
+            }
+        })
+        .spawn()
+        .await;
+
+    bot.send("alice", "hello chat").await;
+    bot.expect_silent(Duration::from_millis(500)).await;
+    assert!(bot.llm.chat_calls().is_empty());
+    assert!(bot.llm.tool_calls().is_empty());
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn ai_reactions_can_be_enabled_with_custom_probability() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_config(|c| {
+            if let Some(ai) = c.ai.as_mut() {
+                ai.history_length = 0;
+            }
+        })
+        .spawn()
+        .await;
+
+    bot.send("alice", "!aireact 100").await;
+    let confirm = bot.expect_say(Duration::from_secs(2)).await;
+    assert!(
+        confirm.contains("100%") && confirm.contains("aktiviert"),
+        "expected opt-in confirmation, got: {confirm}"
+    );
+
+    bot.llm.push_chat("random reply");
+    bot.send("alice", "hello chat").await;
+    let out = bot.expect_say(Duration::from_secs(2)).await;
+    let body = out.strip_prefix(". ").unwrap_or(&out);
+    assert_eq!(body, "random reply");
+
+    let calls = bot.llm.chat_calls();
+    assert_eq!(calls.len(), 1);
+    let user_message = calls[0]
+        .messages
+        .iter()
+        .find(|m| m.role == "user")
+        .expect("reaction request has user message");
+    assert!(user_message.content.contains("hello chat"));
+    assert!(bot.llm.tool_calls().is_empty());
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn ai_reactions_can_be_disabled_per_user() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_config(|c| {
+            if let Some(ai) = c.ai.as_mut() {
+                ai.history_length = 0;
+            }
+        })
+        .spawn()
+        .await;
+
+    bot.send("alice", "!aireact 100").await;
+    let _ = bot.expect_say(Duration::from_secs(2)).await;
+    bot.send("alice", "!aireact off").await;
+    let off = bot.expect_say(Duration::from_secs(2)).await;
+    assert!(
+        off.contains("deaktiviert"),
+        "expected opt-out confirmation, got: {off}"
+    );
+
+    bot.send("alice", "hello chat").await;
+    bot.expect_silent(Duration::from_millis(500)).await;
+    assert!(bot.llm.chat_calls().is_empty());
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn ai_reactions_global_off_blocks_opted_in_users() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_config(|c| {
+            if let Some(ai) = c.ai.as_mut() {
+                ai.history_length = 0;
+            }
+        })
+        .spawn()
+        .await;
+
+    bot.send("alice", "!aireact 100").await;
+    let _ = bot.expect_say(Duration::from_secs(2)).await;
+    bot.send_as_broadcaster("broadcaster", "!aireact global off")
+        .await;
+    let global = bot.expect_say(Duration::from_secs(2)).await;
+    assert!(
+        global.contains("global deaktiviert"),
+        "expected global-off confirmation, got: {global}"
+    );
+
+    bot.send("alice", "hello chat").await;
+    bot.expect_silent(Duration::from_millis(500)).await;
+    assert!(bot.llm.chat_calls().is_empty());
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn ai_reactions_global_command_rejects_non_admin() {
+    let mut bot = TestBotBuilder::new().with_ai().spawn().await;
+
+    bot.send("alice", "!aireact global off").await;
+    let rejection = bot.expect_say(Duration::from_secs(2)).await;
+    assert!(
+        rejection.contains("darfst du nicht"),
+        "expected admin rejection, got: {rejection}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
 async fn ai_command_does_not_inline_chat_history() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
