@@ -229,23 +229,22 @@ where
         pings_public,
     )));
 
-    run_command_dispatcher(
+    run_command_dispatcher(CommandDispatcherConfig {
         broadcast_rx,
         client,
-        cmd_list,
+        commands: cmd_list,
         admin_channel,
         chat_history,
         ai_reaction_manager,
         ai_reaction_responder,
         bot_username,
         suspension_manager,
-    )
+    })
     .await;
 }
 
-/// Main dispatch loop for trait-based commands.
-pub(crate) async fn run_command_dispatcher<T, L>(
-    mut broadcast_rx: broadcast::Receiver<ServerMessage>,
+pub(crate) struct CommandDispatcherConfig<T: Transport, L: LoginCredentials> {
+    broadcast_rx: broadcast::Receiver<ServerMessage>,
     client: Arc<TwitchIRCClient<T, L>>,
     commands: Vec<Box<dyn crate::commands::Command<T, L>>>,
     admin_channel: Option<String>,
@@ -254,10 +253,26 @@ pub(crate) async fn run_command_dispatcher<T, L>(
     ai_reaction_responder: Option<ai_reactions::AiReactionResponder>,
     bot_username: String,
     suspension_manager: Arc<SuspensionManager>,
-) where
+}
+
+/// Main dispatch loop for trait-based commands.
+pub(crate) async fn run_command_dispatcher<T, L>(cfg: CommandDispatcherConfig<T, L>)
+where
     T: Transport + Send + Sync + 'static,
     L: LoginCredentials + Send + Sync + 'static,
 {
+    let CommandDispatcherConfig {
+        mut broadcast_rx,
+        client,
+        commands,
+        admin_channel,
+        chat_history,
+        ai_reaction_manager,
+        ai_reaction_responder,
+        bot_username,
+        suspension_manager,
+    } = cfg;
+
     loop {
         match broadcast_rx.recv().await {
             Ok(message) => {
@@ -277,13 +292,13 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                     .is_some_and(|ch| privmsg.channel_login == *ch);
 
                 // Record message in chat history (main channel only)
-                if let Some(ref history) = chat_history {
-                    if !is_admin_channel {
-                        history
-                            .lock()
-                            .await
-                            .push_user(privmsg.sender.login.clone(), privmsg.message_text.clone());
-                    }
+                if let Some(ref history) = chat_history
+                    && !is_admin_channel
+                {
+                    history
+                        .lock()
+                        .await
+                        .push_user(privmsg.sender.login.clone(), privmsg.message_text.clone());
                 }
 
                 let mut words = privmsg.message_text.split_whitespace();
