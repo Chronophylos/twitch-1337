@@ -16,7 +16,7 @@ use crate::{ChatHistoryEntry, ChatHistorySource};
 use super::{Command, CommandContext};
 
 const NEWS_PREFIX: &str = "ICYMI:";
-const NEWS_SYSTEM_PROMPT: &str = "Du fasst Twitch-Chat-Verlaeufe hilfreich zusammen. Antworte auf Deutsch, erfinde keine Details und konzentriere dich auf Themen, Highlights und wichtige Antworten. Beginne die Antwort mit \"ICYMI:\". Wenn du mehrere Themen auflistest, trenne sie mit \" | \". Bleibe kompakt, aber du musst dich nicht auf eine einzelne Twitch-Chatnachricht beschraenken.";
+const NEWS_SYSTEM_PROMPT: &str = "Du fasst Twitch-Chat-Verläufe hilfreich zusammen. Antworte auf Deutsch, erfinde keine Details und konzentriere dich auf Themen, Highlights und wichtige Antworten. Beginne die Antwort mit \"ICYMI:\". Wenn du mehrere Themen auflistest, trenne sie mit \" | \". Bleibe kompakt, aber du musst dich nicht auf eine einzelne Twitch-Chatnachricht beschränken.";
 const EMPTY_HISTORY_MESSAGE: &str =
     "Ich habe noch keine Chat-Historie für eine Zusammenfassung FDM";
 const NO_NEW_MESSAGES_MESSAGE: &str =
