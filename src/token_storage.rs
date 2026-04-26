@@ -42,7 +42,16 @@ impl TokenStorage for FileBasedTokenStorage {
                     path = %self.path.display(),
                     "Loading user access token from file"
                 );
-                Ok(ron::from_str(&contents)?)
+                let mut token: UserAccessToken = ron::from_str(&contents)?;
+                // Config refresh token changed — discard stored credentials and force refresh
+                if token.refresh_token != self.initial_refresh_token.expose_secret().as_ref() {
+                    warn!("Refresh token in config differs from stored token; using config token");
+                    token.access_token = String::new();
+                    token.refresh_token =
+                        self.initial_refresh_token.expose_secret().to_string();
+                    token.expires_at = Some(Utc::now());
+                }
+                Ok(token)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 warn!("Token file not found, using refresh token from configuration");
@@ -66,5 +75,41 @@ impl TokenStorage for FileBasedTokenStorage {
         File::create(&tmp_path).await?.write_all(&buffer).await?;
         fs::rename(&tmp_path, &self.path).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use twitch_irc::login::UserAccessToken;
+
+    fn make_token(expires_at: Option<chrono::DateTime<Utc>>) -> UserAccessToken {
+        UserAccessToken {
+            access_token: "acc".into(),
+            refresh_token: "ref".into(),
+            created_at: Utc::now(),
+            expires_at,
+        }
+    }
+
+    #[test]
+    fn ron_roundtrip_expires_at_none() {
+        let t = make_token(None);
+        let s = ron::to_string(&t).unwrap();
+        let t2: UserAccessToken = ron::from_str(&s).unwrap();
+        assert_eq!(t2.expires_at, None);
+    }
+
+    #[test]
+    fn ron_roundtrip_expires_at_some() {
+        let now = Utc::now();
+        let t = make_token(Some(now));
+        let s = ron::to_string(&t).unwrap();
+        let t2: UserAccessToken = ron::from_str(&s).unwrap();
+        // subsecond precision may differ; compare at second granularity
+        assert_eq!(
+            t2.expires_at.unwrap().timestamp(),
+            now.timestamp()
+        );
     }
 }
