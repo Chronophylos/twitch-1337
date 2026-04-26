@@ -29,11 +29,10 @@ pub async fn setup_twitch_client(
         config.twitch.client_secret.expose_secret().to_string(),
         FileBasedTokenStorage::new(config.twitch.refresh_token.clone()),
     );
-    // refresh token if required
     credentials
         .get_credentials()
         .await
-        .wrap_err("cant get no token")?;
+        .wrap_err("Failed to obtain initial credentials")?;
     let twitch_config = ClientConfig::new_simple(credentials);
     Ok(TwitchIRCClient::<
         SecureTCPTransport,

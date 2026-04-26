@@ -27,6 +27,16 @@ impl FileBasedTokenStorage {
             initial_refresh_token,
         }
     }
+
+    fn fresh_token_from_config(&self) -> UserAccessToken {
+        let now = Utc::now();
+        UserAccessToken {
+            access_token: String::new(),
+            refresh_token: self.initial_refresh_token.expose_secret().to_string(),
+            created_at: now,
+            expires_at: Some(now),
+        }
+    }
 }
 
 #[async_trait]
@@ -42,26 +52,17 @@ impl TokenStorage for FileBasedTokenStorage {
                     path = %self.path.display(),
                     "Loading user access token from file"
                 );
-                let mut token: UserAccessToken = ron::from_str(&contents)?;
-                // Config refresh token changed — discard stored credentials and force refresh
-                if token.refresh_token != self.initial_refresh_token.expose_secret().as_ref() {
+                let token: UserAccessToken = ron::from_str(&contents)?;
+                let config_token = self.initial_refresh_token.expose_secret();
+                if token.refresh_token != config_token {
                     warn!("Refresh token in config differs from stored token; using config token");
-                    token.access_token = String::new();
-                    token.refresh_token =
-                        self.initial_refresh_token.expose_secret().to_string();
-                    token.expires_at = Some(Utc::now());
+                    return Ok(self.fresh_token_from_config());
                 }
                 Ok(token)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 warn!("Token file not found, using refresh token from configuration");
-                let token = UserAccessToken {
-                    access_token: String::new(),
-                    refresh_token: self.initial_refresh_token.expose_secret().to_string(),
-                    created_at: Utc::now(),
-                    expires_at: Some(Utc::now()),
-                };
-                Ok(token)
+                Ok(self.fresh_token_from_config())
             }
             Err(e) => Err(eyre::Report::from(e).wrap_err("Failed to read token file")),
         }
