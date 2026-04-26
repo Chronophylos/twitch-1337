@@ -108,9 +108,6 @@ mod tests {
         let s = ron::to_string(&t).unwrap();
         let t2: UserAccessToken = ron::from_str(&s).unwrap();
         // subsecond precision may differ; compare at second granularity
-        assert_eq!(
-            t2.expires_at.unwrap().timestamp(),
-            now.timestamp()
-        );
+        assert_eq!(t2.expires_at.unwrap().timestamp(), now.timestamp());
     }
 }
