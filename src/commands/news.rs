@@ -22,8 +22,7 @@ const EMPTY_HISTORY_MESSAGE: &str =
     "Ich habe noch keine Chat-Historie für eine Zusammenfassung FDM";
 const NO_NEW_MESSAGES_MESSAGE: &str =
     "Seit deiner letzten Nachricht ist noch nichts Neues passiert FDM";
-const NO_TLDR_MESSAGES_MESSAGE: &str =
-    "chat dead no tldr Deadge";
+const NO_TLDR_MESSAGES_MESSAGE: &str = "chat dead no tldr Deadge";
 const RECENT_USER_CONTEXT_MESSAGES: usize = 20;
 const TLDR_WINDOW_HOURS: i64 = 24;
 
