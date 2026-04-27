@@ -11,16 +11,12 @@ pub mod config;
 pub mod cooldown;
 pub mod database;
 pub mod flight_tracker;
-pub mod handlers;
 pub mod llm;
 pub mod memory;
 pub mod ping;
 pub mod prefill;
-pub mod seventv;
 pub mod suspend;
-pub mod tls;
-pub mod token_storage;
-pub mod twitch_setup;
+pub mod twitch;
 pub mod util;
 pub mod web_search;
 
@@ -41,7 +37,7 @@ use twitch_irc::{
 use crate::{
     aviation::AviationClient,
     config::Configuration,
-    handlers::{
+    twitch::handlers::{
         commands::{CommandHandlerConfig, run_generic_command_handler},
         latency::run_latency_handler,
         router::run_message_router,
@@ -58,7 +54,7 @@ use crate::{
 /// default is `SecureTCPTransport` + file-backed refreshing credentials.
 pub type AuthenticatedTwitchClient<
     T = twitch_irc::SecureTCPTransport,
-    L = RefreshingLoginCredentials<crate::token_storage::FileBasedTokenStorage>,
+    L = RefreshingLoginCredentials<crate::twitch::token_storage::FileBasedTokenStorage>,
 > = TwitchIRCClient<T, L>;
 
 pub use chat_history::{
@@ -66,11 +62,11 @@ pub use chat_history::{
     ChatHistorySource, DEFAULT_HISTORY_LENGTH, MAX_HISTORY_LENGTH, MAX_TOOL_RESULT_MESSAGES,
 };
 pub use config::{load_configuration, validate_config};
-pub use handlers::tracker_1337::PersonalBest;
+pub use twitch::handlers::tracker_1337::PersonalBest;
 pub use util::telemetry::install_tracing;
-pub use tls::install_crypto_provider;
-pub use token_storage::FileBasedTokenStorage;
-pub use twitch_setup::{setup_and_verify_twitch_client, setup_twitch_client};
+pub use twitch::tls::install_crypto_provider;
+pub use twitch::token_storage::FileBasedTokenStorage;
+pub use twitch::setup::{setup_and_verify_twitch_client, setup_twitch_client};
 pub use util::{
     APP_USER_AGENT, MAX_RESPONSE_LENGTH, ensure_data_dir, get_config_path, get_data_dir,
     parse_flight_duration, resolve_berlin_time, truncate_response,

@@ -14,7 +14,7 @@ use crate::{
     ChatHistory, ChatHistoryBuffer, PersonalBest, aviation, commands,
     config::{AiConfig, CooldownsConfig, SuspendConfig},
     flight_tracker, llm, ping, prefill,
-    seventv::SevenTvEmoteProvider,
+    twitch::seventv::SevenTvEmoteProvider,
     suspend::SuspensionManager,
     web_search,
 };

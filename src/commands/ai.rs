@@ -14,7 +14,7 @@ use crate::llm::{
     ToolChatCompletionResponse, ToolDefinition, ToolResultMessage,
 };
 use crate::memory;
-use crate::seventv::SevenTvEmoteProvider;
+use crate::twitch::seventv::SevenTvEmoteProvider;
 use crate::util::{MAX_RESPONSE_LENGTH, truncate_response};
 use crate::web_search;
 
