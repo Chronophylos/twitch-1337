@@ -6,9 +6,9 @@ use eyre::Result;
 use tracing::{debug, error, instrument};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use crate::commands::ai::ChatContext;
+use crate::ai::command::ChatContext;
+use crate::ai::llm::{ChatCompletionRequest, LlmClient, Message};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
-use crate::llm::{ChatCompletionRequest, LlmClient, Message};
 use crate::util::{MAX_RESPONSE_LENGTH, truncate_response};
 use crate::{ChatHistoryEntry, ChatHistorySource};
 

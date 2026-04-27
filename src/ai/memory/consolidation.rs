@@ -7,13 +7,13 @@ use eyre::{Result, WrapErr as _};
 use tokio::sync::{Notify, RwLock};
 use tracing::{debug, info, warn};
 
-use crate::llm::{
+use crate::ai::llm::{
     self, Message, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse,
     ToolResultMessage,
 };
-use crate::memory::Memory;
-use crate::memory::store::MemoryStore;
-use crate::memory::tools::consolidator_tools;
+use crate::ai::memory::Memory;
+use crate::ai::memory::store::MemoryStore;
+use crate::ai::memory::tools::consolidator_tools;
 
 #[derive(Clone)]
 pub struct ConsolidationLlmConfig {

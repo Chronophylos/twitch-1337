@@ -4,7 +4,7 @@ use std::time::Duration;
 use serde_json::json;
 use tokio::sync::Mutex;
 
-use crate::llm::{ToolCall, ToolResultMessage};
+use crate::ai::llm::{ToolCall, ToolResultMessage};
 
 use super::cache::TtlCache;
 use super::client::{SearchClient, SearchResult};

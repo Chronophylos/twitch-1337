@@ -16,13 +16,13 @@ use eyre::{Result, WrapErr as _};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::llm::{
+use crate::ai::llm::{
     self, Message, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse,
     ToolResultMessage,
 };
-use crate::memory::store::{Caps, DispatchContext, MemoryStore};
-use crate::memory::tools::extractor_tools;
-use crate::memory::{Scope, UserRole};
+use crate::ai::memory::store::{Caps, DispatchContext, MemoryStore};
+use crate::ai::memory::tools::extractor_tools;
+use crate::ai::memory::{Scope, UserRole};
 
 /// Per-exchange context passed into the extractor: who spoke, the text of the
 /// exchange, and the role the speaker held at the time the message arrived.

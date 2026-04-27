@@ -6,7 +6,6 @@ use twitch_irc::{
     TwitchIRCClient, login::LoginCredentials, message::PrivmsgMessage, transport::Transport,
 };
 
-pub mod ai;
 pub mod feedback;
 pub mod flights;
 pub mod flights_above;
