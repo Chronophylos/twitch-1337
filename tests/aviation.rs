@@ -12,8 +12,8 @@ use wiremock::{Mock, ResponseTemplate};
 async fn up_command_lists_aircraft_above_plz() {
     let bot = TestBotBuilder::new().spawn().await;
 
-    // Stub the adsb.lol point-radius endpoint (path: /point/{lat}/{lon}/{radius}).
-    // The test AviationClient uses adsb_mock.uri() as adsblol_base_url (no /v2 prefix).
+    // Stub the ADS-B point-radius endpoint (path: /point/{lat}/{lon}/{radius}).
+    // The test AviationClient uses adsb_mock.uri() as the live ADS-B base URL (no /v2 prefix).
     Mock::given(method("GET"))
         .and(path_regex(r"^/point/"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({

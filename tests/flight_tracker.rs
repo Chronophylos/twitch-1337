@@ -23,7 +23,7 @@ fn enable_aviationstack(config: &mut twitch_1337::config::Configuration) {
 async fn track_command_acknowledges_flight() {
     let bot = TestBotBuilder::new().spawn().await;
 
-    // Stub every adsb.lol / adsbdb route the tracker might hit.
+    // Stub every live ADS-B / adsbdb route the tracker might hit.
     // Both base URLs point to the same mock server in tests.
     Mock::given(method("GET"))
         .and(path_regex(r"^/"))

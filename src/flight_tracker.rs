@@ -51,7 +51,7 @@ pub const TRACKING_LOST_REMOVAL: Duration = Duration::from_secs(1800); // 30 min
 pub const POLL_FAST: Duration = Duration::from_secs(30);
 pub const POLL_NORMAL: Duration = Duration::from_secs(60);
 pub const POLL_SLOW: Duration = Duration::from_secs(120);
-/// Timeout for a single adsb.lol request.
+/// Timeout for a single live ADS-B lookup.
 pub const POLL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Timeout for adsbdb route fetch.
 const ROUTE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -601,7 +601,7 @@ pub(crate) fn compute_poll_interval(flights: &[TrackedFlight]) -> Duration {
 
 // --- Handler ---
 
-/// Main flight tracker handler. Processes commands, polls adsb.lol, detects
+/// Main flight tracker handler. Processes commands, polls live ADS-B, detects
 /// state changes, and posts chat messages.
 pub async fn run_flight_tracker<T, L>(
     mut cmd_rx: mpsc::Receiver<TrackerCommand>,
@@ -796,7 +796,7 @@ async fn handle_track<T, L>(
         return;
     }
 
-    // Query adsb.lol to verify flight exists
+    // Query live ADS-B aggregators to verify flight exists.
     let ac_result = match &identifier {
         FlightIdentifier::Hex(hex) => {
             tokio::time::timeout(POLL_TIMEOUT, aviation_client.get_aircraft_by_hex(hex)).await
@@ -816,16 +816,16 @@ async fn handle_track<T, L>(
     let ac = match ac_result {
         Ok(Ok(Some(ac))) => ac,
         Ok(Ok(None)) => {
-            let msg = format!("{} nicht gefunden auf adsb.lol FDM", identifier);
+            let msg = format!("{} nicht gefunden im ADS-B FDM", identifier);
             if let Err(e) = client.say_in_reply_to(reply_to, msg).await {
                 error!(error = ?e, "Failed to send not-found message");
             }
             return;
         }
         Ok(Err(e)) => {
-            error!(error = ?e, identifier = %identifier, "adsb.lol lookup failed");
+            error!(error = ?e, identifier = %identifier, "ADS-B lookup failed");
             if let Err(e) = client
-                .say_in_reply_to(reply_to, "adsb.lol Anfrage fehlgeschlagen FDM".to_string())
+                .say_in_reply_to(reply_to, "ADS-B Anfrage fehlgeschlagen FDM".to_string())
                 .await
             {
                 error!(error = ?e, "Failed to send error message");
@@ -834,7 +834,7 @@ async fn handle_track<T, L>(
         }
         Err(_) => {
             if let Err(e) = client
-                .say_in_reply_to(reply_to, "adsb.lol Anfrage Timeout FDM".to_string())
+                .say_in_reply_to(reply_to, "ADS-B Anfrage Timeout FDM".to_string())
                 .await
             {
                 error!(error = ?e, "Failed to send timeout message");
@@ -1092,18 +1092,18 @@ async fn poll_all_flights<T, L>(
                         debug!(
                             identifier = %flight.identifier,
                             last_seen_secs_ago = lost_duration.num_seconds(),
-                            "Flight not visible on adsb.lol"
+                            "Flight not visible via ADS-B"
                         );
                     }
                 }
                 continue;
             }
             Ok(Err(e)) => {
-                warn!(error = ?e, identifier = %flight.identifier, "adsb.lol poll failed");
+                warn!(error = ?e, identifier = %flight.identifier, "ADS-B poll failed");
                 continue;
             }
             Err(_) => {
-                warn!(identifier = %flight.identifier, "adsb.lol poll timed out");
+                warn!(identifier = %flight.identifier, "ADS-B poll timed out");
                 continue;
             }
         };

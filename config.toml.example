@@ -41,7 +41,7 @@ client_secret = "your_client_secret"
 
 # Optional: Aviationstack metadata enrichment for !track.
 # The bot uses this at most once per newly tracked flight to fetch route and
-# actual departure time. Live tracking still uses ADSB.lol.
+# actual departure time. Live tracking uses the ADS-B aggregator fallback chain.
 # Free Aviationstack accounts have a small monthly request quota, so keep this
 # disabled unless you have configured an API key.
 # [aviationstack]
