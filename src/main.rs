@@ -5,7 +5,7 @@ use color_eyre::eyre::Result;
 use tokio::sync::oneshot;
 use tracing::info;
 use twitch_1337::{
-    Services, aviation, clock::SystemClock, ensure_data_dir, get_data_dir, install_crypto_provider,
+    Services, aviation, util::clock::SystemClock, ensure_data_dir, get_data_dir, install_crypto_provider,
     install_tracing, llm, load_configuration, run_bot, setup_and_verify_twitch_client,
 };
 

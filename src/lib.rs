@@ -6,7 +6,6 @@
 
 pub mod aviation;
 pub mod chat_history;
-pub mod clock;
 pub mod commands;
 pub mod config;
 pub mod cooldown;
@@ -19,7 +18,6 @@ pub mod ping;
 pub mod prefill;
 pub mod seventv;
 pub mod suspend;
-pub mod telemetry;
 pub mod tls;
 pub mod token_storage;
 pub mod twitch_setup;
@@ -42,7 +40,6 @@ use twitch_irc::{
 
 use crate::{
     aviation::AviationClient,
-    clock::Clock,
     config::Configuration,
     handlers::{
         commands::{CommandHandlerConfig, run_generic_command_handler},
@@ -54,6 +51,7 @@ use crate::{
         tracker_1337::{TARGET_HOUR, TARGET_MINUTE, load_leaderboard, run_1337_handler},
     },
     llm::LlmClient,
+    util::clock::Clock,
 };
 
 /// Generic alias for any authenticated Twitch IRC client. The production
@@ -69,7 +67,7 @@ pub use chat_history::{
 };
 pub use config::{load_configuration, validate_config};
 pub use handlers::tracker_1337::PersonalBest;
-pub use telemetry::install_tracing;
+pub use util::telemetry::install_tracing;
 pub use tls::install_crypto_provider;
 pub use token_storage::FileBasedTokenStorage;
 pub use twitch_setup::{setup_and_verify_twitch_client, setup_twitch_client};
