@@ -211,14 +211,6 @@ where
                 emotes: emote_provider,
             },
         )));
-        cmd_list.push(Box::new(commands::grok::GrokCommand::new(
-            llm.clone(),
-            cfg.model.clone(),
-            Duration::from_secs(cfg.timeout),
-            Duration::from_secs(cooldowns.grok),
-            cfg.reasoning_effort.clone(),
-            web,
-        )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm,
             cfg.model,

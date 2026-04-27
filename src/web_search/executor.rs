@@ -33,6 +33,10 @@ impl WebToolExecutor {
         }
     }
 
+    pub fn max_results(&self) -> usize {
+        self.max_results
+    }
+
     pub async fn execute_tool_call(&self, call: &ToolCall) -> ToolResultMessage {
         let content = self.execute(call).await;
         ToolResultMessage {

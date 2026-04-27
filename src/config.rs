@@ -363,10 +363,6 @@ fn default_news_cooldown() -> u64 {
     60
 }
 
-fn default_grok_cooldown() -> u64 {
-    30
-}
-
 fn default_up_cooldown() -> u64 {
     30
 }
@@ -381,8 +377,6 @@ pub struct CooldownsConfig {
     pub ai: u64,
     #[serde(default = "default_news_cooldown")]
     pub news: u64,
-    #[serde(default = "default_grok_cooldown")]
-    pub grok: u64,
     #[serde(default = "default_up_cooldown")]
     pub up: u64,
     #[serde(default = "default_feedback_cooldown")]
@@ -394,7 +388,6 @@ impl Default for CooldownsConfig {
         Self {
             ai: default_ai_cooldown(),
             news: default_news_cooldown(),
-            grok: default_grok_cooldown(),
             up: default_up_cooldown(),
             feedback: default_feedback_cooldown(),
         }
