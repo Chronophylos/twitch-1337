@@ -3,22 +3,26 @@ pub mod tracker;
 
 pub use tracker::{FlightIdentifier, TrackerCommand, run_flight_tracker};
 
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
+
 use chrono::{DateTime, Utc};
 use eyre::{Result, WrapErr};
 use secrecy::ExposeSecret as _;
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::OnceLock;
-use std::time::Duration;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, trace, warn};
 use twitch_irc::{
     TwitchIRCClient, login::LoginCredentials, message::PrivmsgMessage, transport::Transport,
 };
 
-use crate::config::AviationstackConfig;
-use crate::cooldown::format_cooldown_remaining;
-use crate::util::{APP_USER_AGENT, MAX_RESPONSE_LENGTH, truncate_response};
+use crate::{
+    config::AviationstackConfig,
+    cooldown::format_cooldown_remaining,
+    util::{APP_USER_AGENT, MAX_RESPONSE_LENGTH, truncate_response},
+};
 
 const ADSBDB_BASE_URL: &str = "https://api.adsbdb.com/v0";
 const ADSBLOL_BASE_URL: &str = "https://api.adsb.lol/v2";
@@ -40,6 +44,7 @@ const PLZ_DATA: &str = include_str!("../../data/plz.csv");
 fn plz_table() -> &'static HashMap<&'static str, (f64, f64)> {
     static TABLE: OnceLock<HashMap<&'static str, (f64, f64)>> = OnceLock::new();
     TABLE.get_or_init(|| {
+        trace!("Initializing PLZ lookup table from CSV data");
         let mut map = HashMap::new();
         for line in PLZ_DATA.lines() {
             let mut parts = line.splitn(3, ',');
@@ -80,6 +85,7 @@ struct AirportData {
 fn airport_data() -> &'static AirportData {
     static DATA: OnceLock<AirportData> = OnceLock::new();
     DATA.get_or_init(|| {
+        trace!("Initializing airport lookup tables from CSV data");
         let mut by_icao = HashMap::new();
         let mut by_iata = HashMap::new();
         let mut reader = csv::ReaderBuilder::new()
@@ -135,6 +141,7 @@ const AIRLINE_DATA: &str = include_str!("../../data/airlines.csv");
 fn airline_table() -> &'static HashMap<&'static str, &'static str> {
     static TABLE: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
     TABLE.get_or_init(|| {
+        trace!("Initializing airline IATA→ICAO lookup table from CSV data");
         let mut map = HashMap::new();
         for line in AIRLINE_DATA.lines() {
             let Some((iata, icao)) = line.split_once(',') else {
