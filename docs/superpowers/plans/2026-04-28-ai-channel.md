@@ -81,7 +81,7 @@ fn ai_channel_some_distinct_value_validates() {
 - [ ] **Step 2: Run tests, expect failures**
 
 ```
-cargo test --lib config::tests::ai_channel
+cargo nextest run --lib config::tests::ai_channel --show-progress=none --cargo-quiet --status-level=fail
 ```
 
 Expected: tests fail to compile (unknown field `ai_channel`).
@@ -169,7 +169,7 @@ if let Some(ref ai_ch) = config.twitch.ai_channel {
 - [ ] **Step 6: Run config tests**
 
 ```
-cargo test --lib config::tests::ai_channel
+cargo nextest run --lib config::tests::ai_channel --show-progress=none --cargo-quiet --status-level=fail
 ```
 
 Expected: 4 passing.
@@ -719,7 +719,7 @@ If a helper used above (e.g. `with_stub_llm`, `wait_for_say`, `assert_no_say`, `
 - [ ] **Step 4: Run the new tests, expect failures**
 
 ```
-cargo test --test ai_channel
+cargo nextest run --test ai_channel --show-progress=none --cargo-quiet --status-level=fail
 ```
 
 Expected: all of them fail because `ai_channel` is not joined / dispatcher does not gate (sanity check that they are exercising the new code paths). If they already pass thanks to the prior tasks, that is the desired state; proceed to step 5.
@@ -729,7 +729,7 @@ Expected: all of them fail because `ai_channel` is not joined / dispatcher does 
 ```
 cargo fmt --all
 cargo clippy --all-targets -- -D warnings
-cargo test
+cargo nextest run --show-progress=none --cargo-quiet --status-level=fail
 ```
 
 Expected: green.
@@ -772,7 +772,7 @@ git commit -m "docs(claude): document twitch.ai_channel scope"
 ```
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
-cargo test
+cargo nextest run --show-progress=none --cargo-quiet --status-level=fail
 ```
 
 Expected: all green.
