@@ -213,7 +213,7 @@ where
                 cooldown: Duration::from_secs(cooldowns.ai),
                 chat_ctx: chat_ctx.clone(),
                 memory: ai_memory,
-                web,
+                web: web.clone(),
                 emotes: emote_provider,
             },
         )));
