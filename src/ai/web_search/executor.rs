@@ -4,7 +4,7 @@ use std::time::Duration;
 use serde_json::json;
 use tokio::sync::Mutex;
 
-use crate::llm::{ToolCall, ToolResultMessage};
+use crate::ai::llm::{ToolCall, ToolResultMessage};
 
 use super::cache::TtlCache;
 use super::client::{SearchClient, SearchResult};
@@ -31,6 +31,10 @@ impl WebToolExecutor {
             search_cache: Arc::new(Mutex::new(TtlCache::new(cache_ttl, cache_capacity))),
             fetch_cache: Arc::new(Mutex::new(TtlCache::new(cache_ttl, cache_capacity))),
         }
+    }
+
+    pub fn max_results(&self) -> usize {
+        self.max_results
     }
 
     pub async fn execute_tool_call(&self, call: &ToolCall) -> ToolResultMessage {
@@ -197,7 +201,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::ToolCallArgsError;
+    use crate::ai::llm::ToolCallArgsError;
 
     fn test_executor() -> WebToolExecutor {
         let client = SearchClient::new_with_client(
