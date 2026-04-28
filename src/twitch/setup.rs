@@ -72,6 +72,10 @@ pub async fn setup_and_verify_twitch_client(
         info!(admin_channel = %admin_channel, "Joining admin channel");
         channels.insert(admin_channel.clone());
     }
+    if let Some(ref ai_channel) = config.twitch.ai_channel {
+        info!(ai_channel = %ai_channel, "Joining ai channel");
+        channels.insert(ai_channel.clone());
+    }
     info!(channel = %config.twitch.channel, "Joining channel");
     client.set_wanted_channels(channels)?;
 
