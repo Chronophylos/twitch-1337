@@ -1,10 +1,13 @@
 //! Atomic file persistence helpers.
 //!
-//! Both helpers serialize to RON, write `<path>.tmp`, then rename onto the
-//! target so concurrent readers see either the old or the new file but never
-//! a torn write. Sync (`atomic_save_ron`) and async (`atomic_save_ron_async`)
-//! variants exist because some call-sites run inside `&` (sync) constructors
-//! and others inside `async fn`s with `tokio::fs` already in scope.
+//! Both helpers serialize to RON, write the destination with extension
+//! replaced by `ron.tmp`, then rename onto the target so concurrent readers
+//! see either the old or the new file but never a torn write. Callers should
+//! pass a path ending in `.ron`. Sync (`atomic_save_ron`) and async
+//! (`atomic_save_ron_async`) variants exist because some call-sites run
+//! inside sync constructors and others inside `async fn`s with `tokio::fs`
+//! already in scope. "Atomic" here means no torn reads; it does NOT imply
+//! crash-safety (no `fsync` is performed).
 
 use std::path::Path;
 
@@ -74,5 +77,6 @@ mod tests {
         let loaded: Sample =
             ron::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
         assert_eq!(loaded, value);
+        assert!(!path.with_extension("ron.tmp").exists());
     }
 }
