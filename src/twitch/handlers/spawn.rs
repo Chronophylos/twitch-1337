@@ -2,8 +2,8 @@
 //!
 //! `run_bot` (in `src/lib.rs`) calls [`spawn_handlers`] once with everything
 //! the long-running tasks need. The returned [`HandlerSet`] owns every
-//! `JoinHandle` plus the cross-handler channels (`tracker_tx`) and shared
-//! state needed by post-spawn code (`shutdown_notify`).
+//! `JoinHandle` plus the shared `Arc<Notify>` post-spawn code uses to drain
+//! the scheduled-message handler on shutdown.
 
 use std::{
     collections::HashMap,
@@ -52,10 +52,6 @@ pub struct HandlerSet {
     pub flight_tracker: JoinHandle<()>,
     pub config_watcher: Option<JoinHandle<()>>,
     pub scheduled_messages: Option<JoinHandle<()>>,
-    /// `mpsc::Sender` flight-tracking commands push onto. `None` when no
-    /// aviation client is configured. Cloned for callers that still need it
-    /// (e.g. command-handler config already consumed the original).
-    pub tracker_tx: Option<mpsc::Sender<aviation::TrackerCommand>>,
     /// Shared notify so consolidation/shutdown code can drain in-flight
     /// scheduled-message sends. Cloned, not consumed.
     pub shutdown_notify: Arc<Notify>,
@@ -199,9 +195,6 @@ where
         }
     });
 
-    // Clone tracker_tx for HandlerSet before the original moves into the command handler.
-    let tracker_tx_for_set = tracker_tx.clone();
-
     let generic_commands = tokio::spawn({
         let btx = broadcast_tx.clone();
         let client = client.clone();
@@ -240,7 +233,6 @@ where
         flight_tracker,
         config_watcher,
         scheduled_messages,
-        tracker_tx: tracker_tx_for_set,
         shutdown_notify,
     }
 }

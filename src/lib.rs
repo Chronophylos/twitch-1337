@@ -147,7 +147,6 @@ where
         flight_tracker,
         config_watcher,
         scheduled_messages,
-        tracker_tx: _tracker_tx,
         shutdown_notify,
     } = spawn_handlers(SpawnDeps {
         client,
