@@ -220,7 +220,6 @@ impl TestBot {
         self.transport.inject.send(line).await.expect("inject");
     }
 
-
     /// Inject a PRIVMSG with a caller-supplied `user-id` IRCv3 tag. Used by
     /// memory tests to drive the extractor's permission matrix, which gates
     /// on the numeric speaker id rather than the display name.
