@@ -15,7 +15,7 @@ use crate::{
     config::{AiConfig, CooldownsConfig, SuspendConfig},
     ping,
     suspend::SuspensionManager,
-    twitch::seventv::SevenTvEmoteProvider,
+    twitch::{seventv::SevenTvEmoteProvider, whisper::WhisperSender},
 };
 
 /// Configuration for the generic command handler.
@@ -39,6 +39,7 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub cooldowns: CooldownsConfig,
     pub tracker_tx: Option<tokio::sync::mpsc::Sender<aviation::TrackerCommand>>,
     pub aviation_client: Option<aviation::AviationClient>,
+    pub whisper: Option<Arc<dyn WhisperSender>>,
     pub admin_channel: Option<String>,
     pub bot_username: String,
     pub channel: String,
@@ -70,6 +71,7 @@ where
         cooldowns,
         tracker_tx,
         aviation_client,
+        whisper,
         admin_channel,
         bot_username,
         channel,
@@ -216,11 +218,22 @@ where
             },
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
+            llm.clone(),
+            cfg.model.clone(),
+            commands::news::NewsMode::News,
+            Duration::from_secs(cfg.timeout),
+            Duration::from_secs(cooldowns.news),
+            chat_ctx.clone(),
+            whisper.clone(),
+        )));
+        cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm,
             cfg.model,
+            commands::news::NewsMode::Tldr,
             Duration::from_secs(cfg.timeout),
             Duration::from_secs(cooldowns.news),
             chat_ctx,
+            whisper,
         )));
     }
 
@@ -276,10 +289,11 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                         .as_ref()
                         .is_some_and(|ch| privmsg.channel_login == *ch);
                     if !is_admin_channel {
-                        history
-                            .lock()
-                            .await
-                            .push_user(privmsg.sender.login.clone(), privmsg.message_text.clone());
+                        history.lock().await.push_user_at(
+                            privmsg.sender.login.clone(),
+                            privmsg.message_text.clone(),
+                            privmsg.server_timestamp,
+                        );
                     }
                 }
 

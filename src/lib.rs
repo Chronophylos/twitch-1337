@@ -42,14 +42,18 @@ use crate::{
         },
         tracker_1337::{TARGET_HOUR, TARGET_MINUTE, load_leaderboard, run_1337_handler},
     },
+    twitch::whisper::WhisperSender,
     util::clock::Clock,
 };
+
+pub type AuthenticatedLoginCredentials =
+    RefreshingLoginCredentials<crate::twitch::token_storage::FileBasedTokenStorage>;
 
 /// Generic alias for any authenticated Twitch IRC client. The production
 /// default is `SecureTCPTransport` + file-backed refreshing credentials.
 pub type AuthenticatedTwitchClient<
     T = twitch_irc::SecureTCPTransport,
-    L = RefreshingLoginCredentials<crate::twitch::token_storage::FileBasedTokenStorage>,
+    L = AuthenticatedLoginCredentials,
 > = TwitchIRCClient<T, L>;
 
 pub use ai::chat_history::{
@@ -74,6 +78,7 @@ pub struct Services {
     pub clock: Arc<dyn Clock>,
     pub llm: Option<Arc<dyn LlmClient>>,
     pub aviation: Option<AviationClient>,
+    pub whisper: Option<Arc<dyn WhisperSender>>,
     pub data_dir: PathBuf,
 }
 
@@ -97,6 +102,7 @@ where
         clock,
         llm,
         aviation,
+        whisper,
         data_dir,
     } = services;
 
@@ -327,6 +333,7 @@ where
                 cooldowns: config.cooldowns.clone(),
                 tracker_tx,
                 aviation_client: aviation_for_commands,
+                whisper,
                 admin_channel: config.twitch.admin_channel.clone(),
                 bot_username: config.twitch.username.clone(),
                 channel: config.twitch.channel.clone(),

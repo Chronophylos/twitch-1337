@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use color_eyre::eyre::Result;
+use secrecy::ExposeSecret as _;
 use tokio::sync::oneshot;
 use tracing::info;
 use twitch_1337::{
     Services, ai::llm, aviation, ensure_data_dir, get_data_dir, install_crypto_provider,
-    install_tracing, load_configuration, run_bot, setup_and_verify_twitch_client,
+    install_tracing, load_configuration, run_bot, setup_and_verify_twitch_client, twitch::whisper,
     util::clock::SystemClock,
 };
 
@@ -31,12 +32,15 @@ pub async fn main() -> Result<()> {
 
     ensure_data_dir().await?;
 
-    let (incoming, client) = setup_and_verify_twitch_client(&config).await?;
+    let (incoming, client, credentials, bot_user_id) =
+        setup_and_verify_twitch_client(&config).await?;
     let client = Arc::new(client);
 
     let llm_client = llm::build_llm_client(config.ai.as_ref())?;
 
-    let aviation_client = match aviation::AviationClient::new() {
+    let aviation_client = match aviation::AviationClient::new()
+        .map(|client| client.with_aviationstack_config(config.aviationstack.clone()))
+    {
         Ok(c) => Some(c),
         Err(e) => {
             tracing::error!(
@@ -47,10 +51,20 @@ pub async fn main() -> Result<()> {
         }
     };
 
+    let whisper = whisper::HelixWhisperSender::new(
+        credentials,
+        config.twitch.client_id.expose_secret().to_string(),
+        bot_user_id,
+        get_data_dir(),
+    )
+    .await
+    .map(|sender| Arc::new(sender) as Arc<dyn whisper::WhisperSender>)?;
+
     let services = Services {
         clock: Arc::new(SystemClock),
         llm: llm_client,
         aviation: aviation_client,
+        whisper: Some(whisper),
         data_dir: get_data_dir(),
     };
 
