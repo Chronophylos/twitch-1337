@@ -16,10 +16,10 @@ pub mod twitch;
 pub mod util;
 
 use std::path::PathBuf;
-use std::sync::{Arc, atomic::AtomicU32};
+use std::sync::Arc;
 
 use eyre::{Result, WrapErr as _};
-use tokio::sync::{broadcast, mpsc::UnboundedReceiver, oneshot};
+use tokio::sync::{mpsc::UnboundedReceiver, oneshot};
 use tokio::time::Duration;
 use tracing::{error, info, warn};
 use twitch_irc::{
@@ -34,13 +34,8 @@ use crate::{
     aviation::AviationClient,
     config::Configuration,
     twitch::handlers::{
-        commands::{CommandHandlerConfig, run_generic_command_handler},
-        latency::run_latency_handler,
-        router::run_message_router,
-        schedules::{
-            load_schedules_from_config, run_config_watcher_service, run_scheduled_message_handler,
-        },
-        tracker_1337::{TARGET_HOUR, TARGET_MINUTE, load_leaderboard, run_1337_handler},
+        spawn::{HandlerSet, SpawnDeps, spawn_handlers},
+        tracker_1337::{TARGET_HOUR, TARGET_MINUTE, load_leaderboard},
     },
     twitch::whisper::WhisperSender,
     util::clock::Clock,
@@ -114,73 +109,10 @@ where
         ping::PingManager::load(&data_dir).wrap_err("Failed to load ping manager")?,
     ));
 
+    let suspension_manager = Arc::new(suspend::SuspensionManager::new());
+
     // Aviation is consumed by the flight tracker; clone first so commands (!up/!fl) also get it.
     let aviation_for_commands = aviation.clone();
-
-    let (tracker_tx, handler_flight_tracker) = match aviation {
-        Some(av) => {
-            let (tx, rx) = tokio::sync::mpsc::channel::<aviation::TrackerCommand>(32);
-            let handle = tokio::spawn({
-                let client = client.clone();
-                let channel = config.twitch.channel.clone();
-                let dir = data_dir.clone();
-                let clk = clock.clone();
-                async move {
-                    aviation::run_flight_tracker(rx, client, channel, av, dir, clk).await;
-                }
-            });
-            (Some(tx), handle)
-        }
-        None => (None, tokio::spawn(std::future::pending::<()>())),
-    };
-
-    let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(100);
-
-    let router_handle = tokio::spawn(run_message_router(incoming, broadcast_tx.clone()));
-
-    // Notify lets the scheduled-message handler drain in-flight sends before exiting.
-    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
-
-    let (watcher_service, handler_scheduled_messages) = if schedules_enabled {
-        info!(
-            count = config.schedules.len(),
-            "Schedules configured, starting scheduled message system"
-        );
-        let initial_schedules = load_schedules_from_config(&config);
-        info!(
-            loaded = initial_schedules.len(),
-            "Loaded initial schedules from config"
-        );
-
-        let mut cache = database::ScheduleCache::new();
-        cache.update(initial_schedules);
-        let schedule_cache = Arc::new(tokio::sync::RwLock::new(cache));
-
-        let watcher = tokio::spawn({
-            let cache = schedule_cache.clone();
-            async move {
-                run_config_watcher_service(cache).await;
-            }
-        });
-
-        let handler = tokio::spawn({
-            let client = client.clone();
-            let cache = schedule_cache.clone();
-            let channel = config.twitch.channel.clone();
-            let notify = shutdown_notify.clone();
-            let clk = clock.clone();
-            async move {
-                run_scheduled_message_handler(client, cache, channel, notify, clk).await;
-            }
-        });
-
-        (Some(watcher), Some(handler))
-    } else {
-        info!("No schedules configured, scheduled messages disabled");
-        (None, None)
-    };
-
-    let suspension_manager = Arc::new(suspend::SuspensionManager::new());
 
     // Build the memory bundle once so both `!ai` (extraction) and the
     // daily consolidation task share the same store handle + path.
@@ -193,35 +125,9 @@ where
         consolidation_reasoning_effort,
     } = crate::ai::command::build_ai_memory(config.ai.as_ref(), llm.as_ref(), &data_dir);
 
-    let latency = Arc::new(AtomicU32::new(config.twitch.expected_latency));
-
-    let handler_latency = tokio::spawn({
-        let client = client.clone();
-        let btx = broadcast_tx.clone();
-        let lat = latency.clone();
-        async move {
-            run_latency_handler(client, btx, lat).await;
-        }
-    });
-
-    let handler_1337 = tokio::spawn({
-        let btx = broadcast_tx.clone();
-        let client = client.clone();
-        let channel = config.twitch.channel.clone();
-        let lat = latency.clone();
-        let lb = leaderboard.clone();
-        let clk = clock.clone();
-        let dd = data_dir.clone();
-        async move {
-            run_1337_handler(btx, client, channel, lat, lb, clk, dd).await;
-        }
-    });
-
     // Capture the store handle + path for the consolidation spawn before
     // `ai_memory` is moved into the command handler. Both `!ai` extraction
-    // (in-handler) and consolidation (below) share these clones. We also
-    // clone the `[ai.consolidation]` knobs so the main chat `config.ai`
-    // can be consumed by the command-handler closure.
+    // (in-handler) and consolidation (below) share these clones.
     let consolidation_handle = ai_memory.as_ref().map(|m| {
         (
             m.config.store.clone(),
@@ -233,34 +139,30 @@ where
     });
     let consolidation_settings = config.ai.as_ref().map(|a| a.consolidation.clone());
 
-    let handler_generic_commands = tokio::spawn({
-        let btx = broadcast_tx.clone();
-        let client = client.clone();
-        async move {
-            run_generic_command_handler(CommandHandlerConfig {
-                broadcast_tx: btx,
-                client,
-                ai_config: config.ai.clone(),
-                llm,
-                ai_memory,
-                leaderboard,
-                ping_manager,
-                hidden_admin_ids: config.twitch.hidden_admins.clone(),
-                default_cooldown: Duration::from_secs(config.pings.cooldown),
-                pings_public: config.pings.public,
-                cooldowns: config.cooldowns.clone(),
-                tracker_tx,
-                aviation_client: aviation_for_commands,
-                whisper,
-                admin_channel: config.twitch.admin_channel.clone(),
-                bot_username: config.twitch.username.clone(),
-                channel: config.twitch.channel.clone(),
-                data_dir: data_dir.clone(),
-                suspension_manager: suspension_manager.clone(),
-                suspend: config.suspend.clone(),
-            })
-            .await;
-        }
+    let HandlerSet {
+        router,
+        latency,
+        tracker_1337,
+        generic_commands,
+        flight_tracker,
+        config_watcher,
+        scheduled_messages,
+        tracker_tx: _tracker_tx,
+        shutdown_notify,
+    } = spawn_handlers(SpawnDeps {
+        client,
+        incoming,
+        config,
+        clock,
+        data_dir,
+        leaderboard,
+        ping_manager,
+        suspension_manager,
+        llm,
+        ai_memory,
+        whisper,
+        aviation,
+        aviation_for_commands,
     });
 
     // Daily memory consolidation pass. Shares the memory store handle with
@@ -310,7 +212,7 @@ where
     );
     info!("Bot is running. Press Ctrl+C to stop.");
 
-    match (watcher_service, handler_scheduled_messages) {
+    match (config_watcher, scheduled_messages) {
         (Some(watcher), Some(mut sched_handler)) => {
             tokio::select! {
                 _ = shutdown => {
@@ -320,12 +222,12 @@ where
                         warn!(?e, "Scheduled message handler did not shut down within 5s");
                     }
                 }
-                result = router_handle => { error!("Message router exited unexpectedly: {result:?}"); }
+                result = router => { error!("Message router exited unexpectedly: {result:?}"); }
                 result = watcher => { error!("Config watcher service exited unexpectedly: {result:?}"); }
-                result = handler_1337 => { error!("1337 handler exited unexpectedly: {result:?}"); }
-                result = handler_generic_commands => { error!("Generic Command Handler exited unexpectedly: {result:?}"); }
-                result = handler_latency => { error!("Latency handler exited unexpectedly: {result:?}"); }
-                result = handler_flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); }
+                result = tracker_1337 => { error!("1337 handler exited unexpectedly: {result:?}"); }
+                result = generic_commands => { error!("Generic Command Handler exited unexpectedly: {result:?}"); }
+                result = latency => { error!("Latency handler exited unexpectedly: {result:?}"); }
+                result = flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); }
                 result = &mut sched_handler => { error!("Scheduled message handler exited unexpectedly: {result:?}"); }
             }
         }
@@ -334,11 +236,11 @@ where
                 _ = shutdown => {
                     info!("Shutdown signal received, exiting gracefully");
                 }
-                result = router_handle => { error!("Message router exited unexpectedly: {result:?}"); }
-                result = handler_1337 => { error!("1337 handler exited unexpectedly: {result:?}"); }
-                result = handler_generic_commands => { error!("Generic Command Handler exited unexpectedly: {result:?}"); }
-                result = handler_latency => { error!("Latency handler exited unexpectedly: {result:?}"); }
-                result = handler_flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); }
+                result = router => { error!("Message router exited unexpectedly: {result:?}"); }
+                result = tracker_1337 => { error!("1337 handler exited unexpectedly: {result:?}"); }
+                result = generic_commands => { error!("Generic Command Handler exited unexpectedly: {result:?}"); }
+                result = latency => { error!("Latency handler exited unexpectedly: {result:?}"); }
+                result = flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); }
             }
         }
     }
