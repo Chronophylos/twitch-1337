@@ -43,6 +43,7 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub aviation_client: Option<aviation::AviationClient>,
     pub whisper: Option<Arc<dyn WhisperSender>>,
     pub admin_channel: Option<String>,
+    pub ai_channel: Option<String>,
     pub bot_username: String,
     pub channel: String,
     pub data_dir: std::path::PathBuf,
@@ -75,6 +76,7 @@ where
         aviation_client,
         whisper,
         admin_channel,
+        ai_channel,
         bot_username,
         channel,
         data_dir,
@@ -252,6 +254,7 @@ where
         client,
         cmd_list,
         admin_channel,
+        ai_channel,
         chat_history,
         suspension_manager,
     )
@@ -298,12 +301,14 @@ pub(crate) async fn run_command_dispatcher<T, L>(
     client: Arc<TwitchIRCClient<T, L>>,
     commands: Vec<Box<dyn crate::commands::Command<T, L>>>,
     admin_channel: Option<String>,
+    ai_channel: Option<String>,
     chat_history: Option<ChatHistory>,
     suspension_manager: Arc<SuspensionManager>,
 ) where
     T: Transport,
     L: LoginCredentials,
 {
+    let _ = &ai_channel;
     loop {
         match broadcast_rx.recv().await {
             Ok(message) => {
