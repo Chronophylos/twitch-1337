@@ -280,6 +280,16 @@ pub(crate) fn vertical_rate(ac: &NearbyAircraft) -> Option<i64> {
     ac.baro_rate.or(ac.geom_rate)
 }
 
+fn update_divert_counter(divert_consecutive_polls: &mut u32, is_anomalous: bool) -> bool {
+    if is_anomalous {
+        *divert_consecutive_polls = (*divert_consecutive_polls).saturating_add(1);
+        *divert_consecutive_polls >= DIVERT_CONSECUTIVE_POLLS
+    } else {
+        *divert_consecutive_polls = 0;
+        false
+    }
+}
+
 fn is_airborne_phase(phase: FlightPhase) -> bool {
     matches!(
         phase,
@@ -1237,13 +1247,11 @@ async fn poll_all_flights<T, L>(
                     diff = 360.0 - diff;
                 }
 
-                if diff > DIVERT_BEARING_THRESHOLD {
-                    flight.divert_consecutive_polls += 1;
-                    if flight.divert_consecutive_polls == DIVERT_CONSECUTIVE_POLLS {
-                        messages.push(msg_possible_divert(flight));
-                    }
-                } else {
-                    flight.divert_consecutive_polls = 0;
+                if update_divert_counter(
+                    &mut flight.divert_consecutive_polls,
+                    diff > DIVERT_BEARING_THRESHOLD,
+                ) {
+                    messages.push(msg_possible_divert(flight));
                 }
             }
         } else {
@@ -1404,6 +1412,32 @@ mod tests {
         apply_aviationstack_metadata(&mut flight, metadata);
 
         assert_eq!(flight.takeoff_at, Some(dt("2026-04-18T10:00:00Z")));
+    }
+
+    #[test]
+    fn divert_alert_repeats_after_consecutive_poll_threshold() {
+        let mut divert_consecutive_polls = 0;
+
+        assert!(!update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 1);
+        assert!(!update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 2);
+        assert!(update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 3);
+        assert!(update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 4);
+        assert!(update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 5);
+
+        assert!(!update_divert_counter(&mut divert_consecutive_polls, false));
+        assert_eq!(divert_consecutive_polls, 0);
+
+        assert!(!update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 1);
+        assert!(!update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 2);
+        assert!(update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 3);
     }
 
     #[test]
