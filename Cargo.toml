@@ -60,6 +60,9 @@ tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["codec"] }
 proptest = "1.11"
 
+[patch.crates-io]
+twitch-irc = { path = "vendor/twitch-irc" }
+
 [lints.clippy]
 cast_lossless = "warn"
 implicit_clone = "warn"
