@@ -13,7 +13,7 @@ use twitch_irc::{
 use crate::{
     ChatHistory, ChatHistoryBuffer, PersonalBest, ai, aviation, commands,
     config::{AiConfig, CooldownsConfig, SuspendConfig},
-    flight_tracker, ping,
+    ping,
     suspend::SuspensionManager,
     twitch::seventv::SevenTvEmoteProvider,
 };
@@ -37,7 +37,7 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub default_cooldown: Duration,
     pub pings_public: bool,
     pub cooldowns: CooldownsConfig,
-    pub tracker_tx: Option<tokio::sync::mpsc::Sender<flight_tracker::TrackerCommand>>,
+    pub tracker_tx: Option<tokio::sync::mpsc::Sender<aviation::TrackerCommand>>,
     pub aviation_client: Option<aviation::AviationClient>,
     pub admin_channel: Option<String>,
     pub bot_username: String,
@@ -140,8 +140,8 @@ where
             suspension_manager.clone(),
             hidden_admin_ids,
         )),
-        Box::new(commands::random_flight::RandomFlightCommand),
-        Box::new(commands::flights_above::FlightsAboveCommand::new(
+        Box::new(aviation::commands::random_flight::RandomFlightCommand),
+        Box::new(aviation::commands::flights_above::FlightsAboveCommand::new(
             aviation_client,
             Duration::from_secs(cooldowns.up),
         )),
@@ -153,10 +153,10 @@ where
     ];
 
     if let Some(tx) = tracker_tx {
-        cmd_list.push(Box::new(commands::track::TrackCommand::new(tx.clone())));
-        cmd_list.push(Box::new(commands::untrack::UntrackCommand::new(tx.clone())));
-        cmd_list.push(Box::new(commands::flights::FlightsCommand::new(tx.clone())));
-        cmd_list.push(Box::new(commands::flights::FlightCommand::new(tx)));
+        cmd_list.push(Box::new(aviation::commands::track::TrackCommand::new(tx.clone())));
+        cmd_list.push(Box::new(aviation::commands::untrack::UntrackCommand::new(tx.clone())));
+        cmd_list.push(Box::new(aviation::commands::flights::FlightsCommand::new(tx.clone())));
+        cmd_list.push(Box::new(aviation::commands::flights::FlightCommand::new(tx)));
     }
 
     if let Some((llm, cfg)) = llm_client {

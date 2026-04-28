@@ -10,7 +10,6 @@ pub mod commands;
 pub mod config;
 pub mod cooldown;
 pub mod database;
-pub mod flight_tracker;
 pub mod ping;
 pub mod suspend;
 pub mod twitch;
@@ -118,14 +117,14 @@ where
 
     let (tracker_tx, handler_flight_tracker) = match aviation {
         Some(av) => {
-            let (tx, rx) = tokio::sync::mpsc::channel::<flight_tracker::TrackerCommand>(32);
+            let (tx, rx) = tokio::sync::mpsc::channel::<aviation::TrackerCommand>(32);
             let handle = tokio::spawn({
                 let client = client.clone();
                 let channel = config.twitch.channel.clone();
                 let dir = data_dir.clone();
                 let clk = clock.clone();
                 async move {
-                    flight_tracker::run_flight_tracker(rx, client, channel, av, dir, clk).await;
+                    aviation::run_flight_tracker(rx, client, channel, av, dir, clk).await;
                 }
             });
             (Some(tx), handle)

@@ -7,16 +7,11 @@ use twitch_irc::{
 };
 
 pub mod feedback;
-pub mod flights;
-pub mod flights_above;
 pub mod leaderboard;
 pub mod news;
 pub mod ping_admin;
 pub mod ping_trigger;
-pub mod random_flight;
 pub mod suspend;
-pub mod track;
-pub mod untrack;
 
 /// German rejection reply used by admin-gated commands when the sender
 /// lacks the required badge or id.
