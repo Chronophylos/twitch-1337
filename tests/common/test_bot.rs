@@ -28,7 +28,7 @@ use super::fake_clock::FakeClock;
 use super::fake_llm::FakeLlm;
 use super::fake_transport::{self, FakeTransport, TransportHandle};
 use super::irc_line::{
-    parse_privmsg_text, privmsg, privmsg_as_broadcaster, privmsg_as_mod, privmsg_with,
+    parse_privmsg_text, privmsg, privmsg_as_broadcaster, privmsg_as_mod, privmsg_at, privmsg_with,
 };
 
 pub struct TestBot {
@@ -206,6 +206,11 @@ impl Default for TestBotBuilder {
 impl TestBot {
     pub async fn send(&self, user: &str, text: &str) {
         let line = privmsg(&self.channel, user, text);
+        self.transport.inject.send(line).await.expect("inject");
+    }
+
+    pub async fn send_at(&self, user: &str, text: &str, tmi_ts_ms: i64) {
+        let line = privmsg_at(&self.channel, user, text, tmi_ts_ms);
         self.transport.inject.send(line).await.expect("inject");
     }
 
