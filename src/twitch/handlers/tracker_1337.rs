@@ -315,11 +315,12 @@ pub(crate) async fn save_leaderboard(
 /// Monitors broadcast messages and tracks users who say 1337 during the target minute.
 ///
 /// Runs in a loop until the broadcast channel closes or an error occurs.
-/// Only tracks messages sent during the configured TARGET_HOUR:TARGET_MINUTE.
-#[instrument(skip(broadcast_rx, total_users))]
+/// Only tracks messages sent during the configured TARGET_HOUR:TARGET_MINUTE from the primary channel.
+#[instrument(skip(broadcast_rx, total_users, channel))]
 pub(crate) async fn monitor_1337_messages(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
     total_users: Arc<Mutex<HashMap<String, u64>>>,
+    channel: String,
 ) {
     loop {
         match broadcast_rx.recv().await {
@@ -327,6 +328,10 @@ pub(crate) async fn monitor_1337_messages(
                 let ServerMessage::Privmsg(privmsg) = message else {
                     continue;
                 };
+
+                if privmsg.channel_login != channel {
+                    continue;
+                }
 
                 let local = privmsg
                     .server_timestamp
@@ -396,9 +401,10 @@ pub async fn run_1337_handler<T, L>(
             let total_users = total_users.clone();
             // Subscribe fresh when we wake up - only see messages from now on
             let broadcast_rx = broadcast_tx.subscribe();
+            let monitor_channel = channel.clone();
 
             async move {
-                monitor_1337_messages(broadcast_rx, total_users).await;
+                monitor_1337_messages(broadcast_rx, total_users, monitor_channel).await;
             }
         });
 
