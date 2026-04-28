@@ -565,6 +565,8 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         if ai_ch == &config.twitch.channel {
             bail!("twitch.ai_channel must be different from twitch.channel");
         }
+        // Cross-check: admin_channel block above cannot see ai_channel, so the
+        // admin_channel == ai_channel guard lives here. Keep this branch second.
         if let Some(ref admin_ch) = config.twitch.admin_channel
             && ai_ch == admin_ch
         {
