@@ -27,6 +27,11 @@ client_secret = "your_client_secret"
 # Optional: A separate channel for testing bot commands (broadcaster-only access)
 # admin_channel = "my_test_channel"
 
+# Optional: A dedicated channel where only `!ai` is reachable. Useful for
+# moving AI command spam off the primary channel. Must differ from both
+# `channel` and `admin_channel`.
+# ai_channel = "my_bot_account"
+
 # Optional: Pings configuration
 # [pings]
 # cooldown = 300  # Cooldown in seconds between triggers (default: 300)
@@ -41,7 +46,7 @@ client_secret = "your_client_secret"
 
 # Optional: Aviationstack metadata enrichment for !track.
 # The bot uses this at most once per newly tracked flight to fetch route and
-# actual departure time. Live tracking still uses ADSB.lol.
+# actual departure time. Live tracking uses the ADS-B aggregator fallback chain.
 # Free Aviationstack accounts have a small monthly request quota, so keep this
 # disabled unless you have configured an API key.
 # [aviationstack]
