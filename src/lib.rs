@@ -21,7 +21,7 @@ use std::sync::Arc;
 use eyre::{Result, WrapErr as _};
 use tokio::sync::{mpsc::UnboundedReceiver, oneshot};
 use tokio::time::Duration;
-use tracing::{error, info, warn};
+use tracing::info;
 use twitch_irc::{
     TwitchIRCClient,
     login::{LoginCredentials, RefreshingLoginCredentials},
@@ -34,7 +34,7 @@ use crate::{
     aviation::AviationClient,
     config::Configuration,
     twitch::handlers::{
-        spawn::{HandlerSet, SpawnDeps, spawn_handlers},
+        spawn::{SpawnDeps, spawn_handlers},
         tracker_1337::{TARGET_HOUR, TARGET_MINUTE, load_leaderboard},
     },
     twitch::whisper::WhisperSender,
@@ -139,16 +139,7 @@ where
     });
     let consolidation_settings = config.ai.as_ref().map(|a| a.consolidation.clone());
 
-    let HandlerSet {
-        router,
-        latency,
-        tracker_1337,
-        generic_commands,
-        flight_tracker,
-        config_watcher,
-        scheduled_messages,
-        shutdown_notify,
-    } = spawn_handlers(SpawnDeps {
+    let handlers = spawn_handlers(SpawnDeps {
         client,
         incoming,
         config,
@@ -163,6 +154,8 @@ where
         aviation,
         aviation_for_commands,
     });
+
+    let shutdown_notify = handlers.shutdown_notify.clone();
 
     // Daily memory consolidation pass. Shares the memory store handle with
     // the extractor so the pass sees any writes made since the last run, and
@@ -211,38 +204,7 @@ where
     );
     info!("Bot is running. Press Ctrl+C to stop.");
 
-    match (config_watcher, scheduled_messages) {
-        (Some(watcher), Some(mut sched_handler)) => {
-            tokio::select! {
-                _ = shutdown => {
-                    info!("Shutdown signal received, exiting gracefully");
-                    shutdown_notify.notify_waiters();
-                    if let Err(e) = tokio::time::timeout(Duration::from_secs(5), &mut sched_handler).await {
-                        warn!(?e, "Scheduled message handler did not shut down within 5s");
-                    }
-                }
-                result = router => { error!("Message router exited unexpectedly: {result:?}"); }
-                result = watcher => { error!("Config watcher service exited unexpectedly: {result:?}"); }
-                result = tracker_1337 => { error!("1337 handler exited unexpectedly: {result:?}"); }
-                result = generic_commands => { error!("Generic Command Handler exited unexpectedly: {result:?}"); }
-                result = latency => { error!("Latency handler exited unexpectedly: {result:?}"); }
-                result = flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); }
-                result = &mut sched_handler => { error!("Scheduled message handler exited unexpectedly: {result:?}"); }
-            }
-        }
-        _ => {
-            tokio::select! {
-                _ = shutdown => {
-                    info!("Shutdown signal received, exiting gracefully");
-                }
-                result = router => { error!("Message router exited unexpectedly: {result:?}"); }
-                result = tracker_1337 => { error!("1337 handler exited unexpectedly: {result:?}"); }
-                result = generic_commands => { error!("Generic Command Handler exited unexpectedly: {result:?}"); }
-                result = latency => { error!("Latency handler exited unexpectedly: {result:?}"); }
-                result = flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); }
-            }
-        }
-    }
+    crate::twitch::handlers::spawn::await_shutdown(handlers, shutdown).await;
 
     info!("Bot shutdown complete");
     Ok(())

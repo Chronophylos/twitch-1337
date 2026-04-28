@@ -12,11 +12,11 @@ use std::{
 };
 
 use tokio::{
-    sync::{Notify, RwLock, broadcast, mpsc},
+    sync::{Notify, RwLock, broadcast, mpsc, oneshot},
     task::JoinHandle,
-    time::Duration,
+    time::{Duration, timeout},
 };
-use tracing::info;
+use tracing::{error, info, warn};
 use twitch_irc::{
     TwitchIRCClient, login::LoginCredentials, message::ServerMessage, transport::Transport,
 };
@@ -234,5 +234,52 @@ where
         config_watcher,
         scheduled_messages,
         shutdown_notify,
+    }
+}
+
+/// Awaits whichever happens first: shutdown signal, or any handler exiting.
+///
+/// On shutdown, notifies `shutdown_notify` (so the scheduled-message handler
+/// drains in-flight `say()` calls) and waits up to 5s for the scheduled
+/// handler before returning.
+///
+/// Optional handlers (`config_watcher`, `scheduled_messages`) get replaced
+/// with `tokio::spawn(std::future::pending::<()>())` when absent so every
+/// `select!` arm is a real `JoinHandle<()>`. This mirrors the existing
+/// fallback used for `flight_tracker` when no aviation client is wired.
+pub async fn await_shutdown(handlers: HandlerSet, shutdown: oneshot::Receiver<()>) {
+    let HandlerSet {
+        router,
+        latency,
+        tracker_1337,
+        generic_commands,
+        flight_tracker,
+        config_watcher,
+        scheduled_messages,
+        shutdown_notify,
+    } = handlers;
+
+    let watcher = config_watcher.unwrap_or_else(|| tokio::spawn(std::future::pending::<()>()));
+    let has_sched = scheduled_messages.is_some();
+    let mut sched =
+        scheduled_messages.unwrap_or_else(|| tokio::spawn(std::future::pending::<()>()));
+
+    tokio::select! {
+        _ = shutdown => {
+            info!("Shutdown signal received, exiting gracefully");
+            if has_sched {
+                shutdown_notify.notify_waiters();
+                if let Err(e) = timeout(Duration::from_secs(5), &mut sched).await {
+                    warn!(?e, "Scheduled message handler did not shut down within 5s");
+                }
+            }
+        }
+        result = router => { error!("Message router exited unexpectedly: {result:?}"); }
+        result = watcher => { error!("Config watcher service exited unexpectedly: {result:?}"); }
+        result = tracker_1337 => { error!("1337 handler exited unexpectedly: {result:?}"); }
+        result = generic_commands => { error!("Generic Command Handler exited unexpectedly: {result:?}"); }
+        result = latency => { error!("Latency handler exited unexpectedly: {result:?}"); }
+        result = flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); }
+        result = &mut sched => { error!("Scheduled message handler exited unexpectedly: {result:?}"); }
     }
 }
