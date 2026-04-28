@@ -56,10 +56,6 @@ pub use ai::chat_history::{
     ChatHistory, ChatHistoryBuffer, ChatHistoryEntry, ChatHistoryPage, ChatHistoryQuery,
     ChatHistorySource, DEFAULT_HISTORY_LENGTH, MAX_HISTORY_LENGTH, MAX_TOOL_RESULT_MESSAGES,
 };
-// Re-export submodules at the old paths so existing integration tests
-// that were written before the ai/ reorganisation continue to compile.
-pub use ai::llm;
-pub use ai::memory;
 pub use config::{load_configuration, validate_config};
 pub use twitch::handlers::tracker_1337::PersonalBest;
 pub use twitch::setup::{setup_and_verify_twitch_client, setup_twitch_client};

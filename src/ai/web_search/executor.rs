@@ -197,7 +197,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::ToolCallArgsError;
+    use crate::ai::llm::ToolCallArgsError;
 
     fn test_executor() -> WebToolExecutor {
         let client = SearchClient::new_with_client(

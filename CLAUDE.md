@@ -118,10 +118,10 @@ Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `fli
 
 ## Adding handler
 
-Handlers live in `src/handlers/` and are spawned from `src/lib.rs::run_bot`. Each handler is generic over `<T: Transport, L: LoginCredentials>` so integration tests can swap in a fake transport. Shared deps (clock, data_dir, llm, aviation) come from `Services` in `src/lib.rs`.
+Handlers live in `src/twitch/handlers/` and are spawned from `src/lib.rs::run_bot`. Each handler is generic over `<T: Transport, L: LoginCredentials>` so integration tests can swap in a fake transport. Shared deps (clock, data_dir, llm, aviation) come from `Services` in `src/lib.rs`.
 
 ```rust
-// src/handlers/my_handler.rs
+// src/twitch/handlers/my_handler.rs
 pub async fn run_my_handler<T, L>(
     broadcast_tx: broadcast::Sender<ServerMessage>,
     client: Arc<TwitchIRCClient<T, L>>,

@@ -208,7 +208,7 @@ fn snapshot_for_extraction(store: &MemoryStore, speaker_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::store::Memory;
+    use crate::ai::memory::store::Memory;
 
     #[test]
     fn snapshot_filters_other_users_facts() {

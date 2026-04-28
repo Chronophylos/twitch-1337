@@ -302,9 +302,9 @@ pub fn spawn_consolidation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::{ChatCompletionRequest, ToolCall};
-    use crate::memory::Scope;
-    use crate::memory::store::Memory;
+    use crate::ai::llm::{ChatCompletionRequest, ToolCall};
+    use crate::ai::memory::Scope;
+    use crate::ai::memory::store::Memory;
     use tempfile::TempDir;
 
     fn m_with(conf: u8, stale_days: i64, sources: Vec<String>) -> Memory {

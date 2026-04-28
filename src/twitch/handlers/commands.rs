@@ -153,10 +153,18 @@ where
     ];
 
     if let Some(tx) = tracker_tx {
-        cmd_list.push(Box::new(aviation::commands::track::TrackCommand::new(tx.clone())));
-        cmd_list.push(Box::new(aviation::commands::untrack::UntrackCommand::new(tx.clone())));
-        cmd_list.push(Box::new(aviation::commands::flights::FlightsCommand::new(tx.clone())));
-        cmd_list.push(Box::new(aviation::commands::flights::FlightCommand::new(tx)));
+        cmd_list.push(Box::new(aviation::commands::track::TrackCommand::new(
+            tx.clone(),
+        )));
+        cmd_list.push(Box::new(aviation::commands::untrack::UntrackCommand::new(
+            tx.clone(),
+        )));
+        cmd_list.push(Box::new(aviation::commands::flights::FlightsCommand::new(
+            tx.clone(),
+        )));
+        cmd_list.push(Box::new(aviation::commands::flights::FlightCommand::new(
+            tx,
+        )));
     }
 
     if let Some((llm, cfg)) = llm_client {

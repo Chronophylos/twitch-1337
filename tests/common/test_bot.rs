@@ -14,9 +14,9 @@ use wiremock::MockServer;
 
 use twitch_1337::{
     PersonalBest, Services,
+    ai::llm::LlmClient,
     aviation::AviationClient,
     config::{AiConfig, Configuration},
-    llm::LlmClient,
     run_bot,
 };
 use twitch_irc::login::StaticLoginCredentials;

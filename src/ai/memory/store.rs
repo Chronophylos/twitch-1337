@@ -789,7 +789,7 @@ pub(crate) fn build_key(scope: &Scope, slug: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm;
+    use crate::ai::llm;
 
     fn empty_store() -> MemoryStore {
         MemoryStore::default()
