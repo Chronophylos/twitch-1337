@@ -44,10 +44,15 @@ pub enum AtomicPersistError {
 
 pub type Result<T> = std::result::Result<T, AtomicPersistError>;
 
+fn serialize<T: Serialize>(value: &T) -> Result<String> {
+    ron::ser::to_string_pretty(value, ron::ser::PrettyConfig::default())
+        .map_err(AtomicPersistError::Serialization)
+}
+
 /// Synchronously serialize `value` as pretty RON and atomically write to `path`.
 pub fn atomic_save_ron<T: Serialize>(value: &T, path: &Path) -> Result<()> {
     let tmp = path.with_extension("ron.tmp");
-    let data = ron::ser::to_string_pretty(value, ron::ser::PrettyConfig::default())?;
+    let data = serialize(value)?;
 
     std::fs::write(&tmp, &data).map_err(|source| AtomicPersistError::WriteTmp {
         path: tmp.clone(),
@@ -68,7 +73,7 @@ pub fn atomic_save_ron<T: Serialize>(value: &T, path: &Path) -> Result<()> {
 /// behaviour; switch to pretty if a call-site needs human inspection.
 pub async fn atomic_save_ron_async<T: Serialize>(value: &T, path: &Path) -> Result<()> {
     let tmp = path.with_extension("ron.tmp");
-    let data = ron::to_string(value)?;
+    let data = serialize(value)?;
 
     tokio::fs::write(&tmp, data.as_bytes())
         .await
