@@ -200,9 +200,9 @@ enum ResolveResult {
 // --- ADS-B v2 response types ---
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct AdsbLolResponse {
-    #[serde(default, alias = "aircraft")]
-    pub(crate) ac: Vec<NearbyAircraft>,
+pub(crate) struct AdsbAircraftResponse {
+    #[serde(default, rename = "ac", alias = "aircraft")]
+    pub(crate) aircraft: Vec<NearbyAircraft>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -594,7 +594,10 @@ impl AviationClient {
         self.aviationstack.is_some()
     }
 
-    async fn fetch_adsb_response(&self, endpoint: AdsbEndpoint<'_>) -> Result<AdsbLolResponse> {
+    async fn fetch_adsb_response(
+        &self,
+        endpoint: AdsbEndpoint<'_>,
+    ) -> Result<AdsbAircraftResponse> {
         let mut last_retryable_error = None;
 
         for aggregator in &self.adsb_aggregators {
@@ -610,7 +613,7 @@ impl AviationClient {
                 Ok(resp) => {
                     debug!(
                         provider = aggregator.name,
-                        count = resp.ac.len(),
+                        count = resp.aircraft.len(),
                         "Received aircraft from ADS-B aggregator"
                     );
                     return Ok(resp);
@@ -637,7 +640,7 @@ impl AviationClient {
         &self,
         aggregator: &AdsbAggregator,
         url: &str,
-    ) -> std::result::Result<AdsbLolResponse, AdsbFetchError> {
+    ) -> std::result::Result<AdsbAircraftResponse, AdsbFetchError> {
         let resp = self
             .http
             .get(url)
@@ -682,7 +685,7 @@ impl AviationClient {
                 radius_nm,
             })
             .await?;
-        Ok(resp.ac)
+        Ok(resp.aircraft)
     }
 
     pub async fn get_aircraft_by_hex(&self, hex: &str) -> Result<Option<NearbyAircraft>> {
@@ -690,7 +693,7 @@ impl AviationClient {
 
         let resp = self.fetch_adsb_response(AdsbEndpoint::Hex(hex)).await?;
 
-        Ok(resp.ac.into_iter().next())
+        Ok(resp.aircraft.into_iter().next())
     }
 
     pub async fn get_aircraft_by_callsign(&self, callsign: &str) -> Result<Option<NearbyAircraft>> {
@@ -700,7 +703,7 @@ impl AviationClient {
             .fetch_adsb_response(AdsbEndpoint::Callsign(callsign))
             .await?;
 
-        Ok(resp.ac.into_iter().next())
+        Ok(resp.aircraft.into_iter().next())
     }
 
     pub async fn get_flight_route(&self, callsign: &str) -> Result<Option<FlightRoute>> {
@@ -1385,7 +1388,7 @@ mod tests {
 
     #[test]
     fn adsb_response_accepts_aircraft_alias() {
-        let response: AdsbLolResponse = serde_json::from_value(serde_json::json!({
+        let response: AdsbAircraftResponse = serde_json::from_value(serde_json::json!({
             "aircraft": [{
                 "hex": "3c6589",
                 "flight": "DLH1234",
@@ -1394,7 +1397,7 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(response.ac.len(), 1);
-        assert_eq!(response.ac[0].flight.as_deref(), Some("DLH1234"));
+        assert_eq!(response.aircraft.len(), 1);
+        assert_eq!(response.aircraft[0].flight.as_deref(), Some("DLH1234"));
     }
 }
