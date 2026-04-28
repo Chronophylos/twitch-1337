@@ -11,6 +11,8 @@
 !/data/airports.csv
 !/data/airlines.csv
 !/data/7tv_emotes.toml
+!/data/prompts/
+!/data/prompts/*.md
 
 
 # Editor files
