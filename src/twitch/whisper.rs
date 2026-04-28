@@ -184,7 +184,5 @@ async fn load_known_recipients(path: &Path) -> Result<HashSet<String>> {
 }
 
 async fn save_known_recipients(path: &Path, recipients: &HashSet<String>) -> Result<()> {
-    let buffer = ron::to_string(recipients)?.into_bytes();
-    crate::util::persist::atomic_write_async(&buffer, path).await?;
-    Ok(())
+    crate::util::persist::atomic_save_ron_async(recipients, path).await
 }

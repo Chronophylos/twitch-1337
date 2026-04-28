@@ -68,9 +68,7 @@ impl TokenStorage for FileBasedTokenStorage {
     #[instrument(skip(self, token))]
     async fn update_token(&mut self, token: &UserAccessToken) -> Result<(), Self::UpdateError> {
         debug!(path = %self.path.display(), "Updating token in file");
-        let buffer = ron::to_string(token)?.into_bytes();
-        crate::util::persist::atomic_write_async(&buffer, &self.path).await?;
-        Ok(())
+        crate::util::persist::atomic_save_ron_async(token, &self.path).await
     }
 }
 
