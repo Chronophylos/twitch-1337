@@ -14,7 +14,7 @@ use twitch_irc::{
 use crate::aviation::{
     AltBaro, AviationClient, AviationstackFlightMetadata, NearbyAircraft, iata_to_coords,
 };
-use crate::clock::Clock;
+use crate::util::clock::Clock;
 
 const FLIGHTS_FILENAME: &str = "flights.ron";
 
@@ -280,6 +280,16 @@ pub(crate) fn vertical_rate(ac: &NearbyAircraft) -> Option<i64> {
     ac.baro_rate.or(ac.geom_rate)
 }
 
+fn update_divert_counter(divert_consecutive_polls: &mut u32, is_anomalous: bool) -> bool {
+    if is_anomalous {
+        *divert_consecutive_polls = (*divert_consecutive_polls).saturating_add(1);
+        *divert_consecutive_polls >= DIVERT_CONSECUTIVE_POLLS
+    } else {
+        *divert_consecutive_polls = 0;
+        false
+    }
+}
+
 fn is_airborne_phase(phase: FlightPhase) -> bool {
     matches!(
         phase,
@@ -345,6 +355,7 @@ pub(crate) fn detect_phase(flight: &TrackedFlight, ac: &NearbyAircraft) -> Fligh
         && alt_val > CRUISE_MIN_ALTITUDE
         && vr.abs() < CRUISE_RATE_THRESHOLD
         && flight.polls_since_change >= CRUISE_STABLE_POLLS
+        && !matches!(flight.phase, FlightPhase::Descent | FlightPhase::Approach)
     {
         return FlightPhase::Cruise;
     }
@@ -1236,13 +1247,11 @@ async fn poll_all_flights<T, L>(
                     diff = 360.0 - diff;
                 }
 
-                if diff > DIVERT_BEARING_THRESHOLD {
-                    flight.divert_consecutive_polls += 1;
-                    if flight.divert_consecutive_polls == DIVERT_CONSECUTIVE_POLLS {
-                        messages.push(msg_possible_divert(flight));
-                    }
-                } else {
-                    flight.divert_consecutive_polls = 0;
+                if update_divert_counter(
+                    &mut flight.divert_consecutive_polls,
+                    diff > DIVERT_BEARING_THRESHOLD,
+                ) {
+                    messages.push(msg_possible_divert(flight));
                 }
             }
         } else {
@@ -1303,6 +1312,30 @@ mod tests {
             divert_consecutive_polls: 0,
             dest_lat: None,
             dest_lon: None,
+        }
+    }
+
+    fn tracked_flight_with(phase: FlightPhase, polls_since_change: u32) -> TrackedFlight {
+        TrackedFlight {
+            phase,
+            polls_since_change,
+            ..tracked_flight()
+        }
+    }
+
+    fn aircraft_at(altitude_ft: i64, baro_rate: i64) -> NearbyAircraft {
+        NearbyAircraft {
+            hex: Some("4952c3".to_string()),
+            flight: Some("TAP247".to_string()),
+            t: Some("A339".to_string()),
+            alt_baro: Some(AltBaro::Feet(altitude_ft)),
+            lat: Some(38.0),
+            lon: Some(-30.0),
+            gs: Some(450.0),
+            baro_rate: Some(baro_rate),
+            geom_rate: None,
+            squawk: Some("1000".to_string()),
+            nav_modes: None,
         }
     }
 
@@ -1379,5 +1412,55 @@ mod tests {
         apply_aviationstack_metadata(&mut flight, metadata);
 
         assert_eq!(flight.takeoff_at, Some(dt("2026-04-18T10:00:00Z")));
+    }
+
+    #[test]
+    fn divert_alert_repeats_after_consecutive_poll_threshold() {
+        let mut divert_consecutive_polls = 0;
+
+        assert!(!update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 1);
+        assert!(!update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 2);
+        assert!(update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 3);
+        assert!(update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 4);
+        assert!(update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 5);
+
+        assert!(!update_divert_counter(&mut divert_consecutive_polls, false));
+        assert_eq!(divert_consecutive_polls, 0);
+
+        assert!(!update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 1);
+        assert!(!update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 2);
+        assert!(update_divert_counter(&mut divert_consecutive_polls, true));
+        assert_eq!(divert_consecutive_polls, 3);
+    }
+
+    #[test]
+    fn detect_phase_keeps_descent_during_high_altitude_level_off() {
+        let flight = tracked_flight_with(FlightPhase::Descent, CRUISE_STABLE_POLLS);
+        let ac = aircraft_at(34_000, 0);
+
+        assert_eq!(detect_phase(&flight, &ac), FlightPhase::Descent);
+    }
+
+    #[test]
+    fn detect_phase_keeps_approach_during_high_altitude_level_off() {
+        let flight = tracked_flight_with(FlightPhase::Approach, CRUISE_STABLE_POLLS);
+        let ac = aircraft_at(12_000, 0);
+
+        assert_eq!(detect_phase(&flight, &ac), FlightPhase::Approach);
+    }
+
+    #[test]
+    fn detect_phase_still_detects_cruise_from_non_descent_phase() {
+        let flight = tracked_flight_with(FlightPhase::Climb, CRUISE_STABLE_POLLS);
+        let ac = aircraft_at(34_000, 0);
+
+        assert_eq!(detect_phase(&flight, &ac), FlightPhase::Cruise);
     }
 }
