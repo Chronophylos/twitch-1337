@@ -41,6 +41,25 @@ pub async fn atomic_save_ron_async<T: Serialize>(value: &T, path: &Path) -> Resu
     Ok(())
 }
 
+/// Async atomic write of pre-serialized bytes (callers that don't use RON).
+///
+/// Tmp path is `<original-extension>.tmp` (e.g. `token.ron` → `token.ron.tmp`).
+/// If `path` has no extension, falls back to `path.tmp`.
+pub async fn atomic_write_async(bytes: &[u8], path: &Path) -> Result<()> {
+    let tmp = path.with_extension(
+        path.extension()
+            .map(|e| format!("{}.tmp", e.to_string_lossy()))
+            .unwrap_or_else(|| "tmp".into()),
+    );
+    tokio::fs::write(&tmp, bytes)
+        .await
+        .wrap_err_with(|| format!("Failed to write tmp file {}", tmp.display()))?;
+    tokio::fs::rename(&tmp, path)
+        .await
+        .wrap_err_with(|| format!("Failed to rename {} -> {}", tmp.display(), path.display()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +97,16 @@ mod tests {
             ron::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
         assert_eq!(loaded, value);
         assert!(!path.with_extension("ron.tmp").exists());
+    }
+
+    #[tokio::test]
+    async fn async_write_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("blob.bin");
+        atomic_write_async(b"hello", &path).await.unwrap();
+        let loaded = tokio::fs::read(&path).await.unwrap();
+        assert_eq!(loaded, b"hello");
+        // tmp gone after rename (extension `bin` → `bin.tmp`)
+        assert!(!path.with_extension("bin.tmp").exists());
     }
 }
