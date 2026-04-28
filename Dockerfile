@@ -5,9 +5,10 @@
 FROM docker.io/lukemathwalker/cargo-chef:latest-rust-1@sha256:00c3c07c51d092325df88f0df2d626cd4302e12933f179ba154509cc314d6c2a AS base
 
 WORKDIR /app
-# Install musl tools for static linking
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=clang
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 RUN apt-get update \
-  && apt-get install --no-install-recommends --assume-yes musl-tools \
+  && apt-get install --no-install-recommends --assume-yes musl-tools mold clang \
   && rm -rf /var/lib/apt/lists/* \
   && rustup target add x86_64-unknown-linux-musl
 
