@@ -30,7 +30,7 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 
 **Length**. The chat-turn system prompt is sent on every `!ai` invocation, so every byte counts. Aim for ≤2 KiB. The dreamer prompt fires once per day; it can be longer (≤4 KiB).
 
-**Voice**. Write to the model in second person ("you are kok"). Describe behavior, not rules. Models follow narrative tone better than bullet lists of "MUST" / "DO NOT".
+**Voice**. Write to the model in second person ("you are Aurora"). Describe behavior, not rules. Models follow narrative tone better than bullet lists of "MUST" / "DO NOT".
 
 **Memory model**. The system prompt is where you teach the model the *purpose* of each section in `SOUL.md`, `LORE.md`, `user/<id>.md`, and `state/<slug>.md`. The store enforces section *names*; this prompt enforces section *meaning*.
 
