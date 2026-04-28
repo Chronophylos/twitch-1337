@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: fmt + clippy + test
+  fmt:
+    name: fmt
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -28,18 +28,40 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.rust-toolchain.outputs.channel }}
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
+          components: rustfmt
 
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
+  check:
+    name: clippy + test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read Rust toolchain channel
+        id: rust-toolchain
+        run: |
+          channel=$(grep '^channel' rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: cargo test
-        run: cargo test
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: cargo nextest run
+        run: cargo nextest run
 
   audit:
     name: cargo audit
