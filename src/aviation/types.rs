@@ -10,9 +10,9 @@ use serde::Deserialize;
 // --- adsb.lol types ---
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct AdsbLolResponse {
+pub(super) struct AdsbLolResponse {
     #[serde(default)]
-    pub(crate) ac: Vec<NearbyAircraft>,
+    pub(super) ac: Vec<NearbyAircraft>,
 }
 
 #[derive(Debug, Deserialize)]
