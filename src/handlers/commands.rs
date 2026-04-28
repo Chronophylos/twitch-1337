@@ -212,8 +212,18 @@ where
             },
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
+            llm.clone(),
+            cfg.model.clone(),
+            commands::news::NewsMode::News,
+            Duration::from_secs(cfg.timeout),
+            Duration::from_secs(cooldowns.news),
+            chat_ctx.clone(),
+            whisper.clone(),
+        )));
+        cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm,
             cfg.model,
+            commands::news::NewsMode::Tldr,
             Duration::from_secs(cfg.timeout),
             Duration::from_secs(cooldowns.news),
             chat_ctx,
@@ -273,10 +283,11 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                         .as_ref()
                         .is_some_and(|ch| privmsg.channel_login == *ch);
                     if !is_admin_channel {
-                        history
-                            .lock()
-                            .await
-                            .push_user(privmsg.sender.login.clone(), privmsg.message_text.clone());
+                        history.lock().await.push_user_at(
+                            privmsg.sender.login.clone(),
+                            privmsg.message_text.clone(),
+                            privmsg.server_timestamp,
+                        );
                     }
                 }
 
