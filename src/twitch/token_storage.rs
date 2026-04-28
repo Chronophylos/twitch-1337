@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use color_eyre::eyre::{self, Result};
+use color_eyre::eyre::{self, Result, WrapErr as _};
 use secrecy::{ExposeSecret, SecretString};
 use tokio::fs;
 use tracing::{debug, instrument, warn};
@@ -68,7 +68,9 @@ impl TokenStorage for FileBasedTokenStorage {
     #[instrument(skip(self, token))]
     async fn update_token(&mut self, token: &UserAccessToken) -> Result<(), Self::UpdateError> {
         debug!(path = %self.path.display(), "Updating token in file");
-        crate::util::persist::atomic_save_ron_async(token, &self.path).await
+        crate::util::persist::atomic_save_ron_async(token, &self.path)
+            .await
+            .wrap_err("Failed to save token")
     }
 }
 

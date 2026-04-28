@@ -44,7 +44,7 @@ use crate::{
 };
 
 /// All `JoinHandle`s plus the shared state `run_bot` keeps after spawn.
-pub struct HandlerSet {
+pub(crate) struct HandlerSet {
     pub router: JoinHandle<()>,
     pub latency: JoinHandle<()>,
     pub tracker_1337: JoinHandle<()>,
@@ -58,7 +58,7 @@ pub struct HandlerSet {
 }
 
 /// Inputs for [`spawn_handlers`]. Grouped by handler.
-pub struct SpawnDeps<T: Transport, L: LoginCredentials> {
+pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     // Shared.
     pub client: Arc<TwitchIRCClient<T, L>>,
     pub incoming: tokio::sync::mpsc::UnboundedReceiver<ServerMessage>,
@@ -84,7 +84,7 @@ pub struct SpawnDeps<T: Transport, L: LoginCredentials> {
 /// Spawn every long-running handler task in the order they currently
 /// appear in `run_bot`. Returns a [`HandlerSet`] owning all handles plus
 /// shared `Notify` / `tracker_tx`.
-pub fn spawn_handlers<T, L>(deps: SpawnDeps<T, L>) -> HandlerSet
+pub(crate) fn spawn_handlers<T, L>(deps: SpawnDeps<T, L>) -> HandlerSet
 where
     T: Transport + Send + Sync + 'static,
     L: LoginCredentials + Send + Sync + 'static,
@@ -247,7 +247,7 @@ where
 /// with `tokio::spawn(std::future::pending::<()>())` when absent so every
 /// `select!` arm is a real `JoinHandle<()>`. This mirrors the existing
 /// fallback used for `flight_tracker` when no aviation client is wired.
-pub async fn await_shutdown(handlers: HandlerSet, shutdown: oneshot::Receiver<()>) {
+pub(crate) async fn await_shutdown(handlers: HandlerSet, shutdown: oneshot::Receiver<()>) {
     let HandlerSet {
         router,
         latency,

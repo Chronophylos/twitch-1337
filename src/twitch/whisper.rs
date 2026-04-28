@@ -184,5 +184,7 @@ async fn load_known_recipients(path: &Path) -> Result<HashSet<String>> {
 }
 
 async fn save_known_recipients(path: &Path, recipients: &HashSet<String>) -> Result<()> {
-    crate::util::persist::atomic_save_ron_async(recipients, path).await
+    crate::util::persist::atomic_save_ron_async(recipients, path)
+        .await
+        .wrap_err("Failed to save whisper recipients")
 }
