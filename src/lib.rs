@@ -56,14 +56,15 @@ pub use ai::chat_history::{
     ChatHistorySource, DEFAULT_HISTORY_LENGTH, MAX_HISTORY_LENGTH, MAX_TOOL_RESULT_MESSAGES,
 };
 pub use config::{load_configuration, validate_config};
-pub use twitch::handlers::tracker_1337::PersonalBest;
-pub use twitch::setup::{setup_and_verify_twitch_client, setup_twitch_client};
-pub use twitch::tls::install_crypto_provider;
-pub use twitch::token_storage::FileBasedTokenStorage;
-pub use util::telemetry::install_tracing;
+pub use twitch::{
+    handlers::tracker_1337::PersonalBest,
+    setup::{setup_and_verify_twitch_client, setup_twitch_client},
+    token_storage::FileBasedTokenStorage,
+};
 pub use util::{
     APP_USER_AGENT, MAX_RESPONSE_LENGTH, ensure_data_dir, get_config_path, get_data_dir,
-    parse_flight_duration, resolve_berlin_time, truncate_response,
+    install_crypto_provider, parse_flight_duration, resolve_berlin_time,
+    telemetry::install_tracing, truncate_response,
 };
 
 /// Test-overridable services injected into [`run_bot`].
