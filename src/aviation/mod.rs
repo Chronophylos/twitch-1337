@@ -1242,6 +1242,11 @@ mod tests {
         })
     }
 
+    fn aviation_client() -> AviationClient {
+        crate::twitch::tls::install_crypto_provider();
+        AviationClient::new().unwrap()
+    }
+
     #[test]
     fn airline_table_contains_known_mappings() {
         let table = airline_table();
@@ -1283,21 +1288,21 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_callsign_translates_iata() {
-        let client = AviationClient::new().unwrap();
+        let client = aviation_client();
         assert_eq!(client.resolve_callsign("TP247").await, "TAP247");
         assert_eq!(client.resolve_callsign("LH5765").await, "DLH5765");
     }
 
     #[tokio::test]
     async fn resolve_callsign_passes_through_icao() {
-        let client = AviationClient::new().unwrap();
+        let client = aviation_client();
         assert_eq!(client.resolve_callsign("TAP247").await, "TAP247");
         assert_eq!(client.resolve_callsign("DLH5765").await, "DLH5765");
     }
 
     #[tokio::test]
     async fn resolve_callsign_passes_through_hex() {
-        let client = AviationClient::new().unwrap();
+        let client = aviation_client();
         assert_eq!(client.resolve_callsign("4CA87D").await, "4CA87D");
     }
 
