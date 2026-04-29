@@ -16,10 +16,11 @@ use eyre::{Result, WrapErr as _};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::ai::llm::{
-    self, Message, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse,
+use llm::{
+    Message, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse,
     ToolResultMessage,
 };
+
 use crate::ai::memory::store::{Caps, DispatchContext, MemoryStore};
 use crate::ai::memory::tools::extractor_tools;
 use crate::ai::memory::{Scope, UserRole};

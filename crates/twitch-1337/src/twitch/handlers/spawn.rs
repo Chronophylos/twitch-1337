@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, atomic::AtomicU32},
 };
 
+use llm::LlmClient;
 use tokio::{
     sync::{Notify, RwLock, broadcast, mpsc, oneshot},
     task::JoinHandle,
@@ -72,7 +73,7 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     // Generic commands.
     pub ping_manager: Arc<RwLock<ping::PingManager>>,
     pub suspension_manager: Arc<SuspensionManager>,
-    pub llm: Option<Arc<dyn ai::llm::LlmClient>>,
+    pub llm: Option<Arc<dyn LlmClient>>,
     pub ai_memory: Option<ai::command::AiMemory>,
     pub whisper: Option<Arc<dyn WhisperSender>>,
 

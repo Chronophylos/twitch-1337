@@ -9,7 +9,7 @@ use std::time::Duration;
 use chrono::TimeZone;
 use chrono_tz::Europe::Berlin;
 use common::TestBotBuilder;
-use twitch_1337::ai::llm::ToolChatCompletionResponse;
+use llm::ToolChatCompletionResponse;
 
 const AI_CHAN: &str = "ai_chan";
 

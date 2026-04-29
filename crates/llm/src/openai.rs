@@ -1,14 +1,15 @@
 use async_trait::async_trait;
-use eyre::{Result, WrapErr as _};
 use reqwest::header::{self, HeaderValue};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, trace, warn};
 
-use super::{
-    ChatCompletionRequest, LlmClient, ToolChatCompletionRequest, ToolChatCompletionResponse,
-    truncate_for_echo,
+use crate::client::LlmClient;
+use crate::error::{LlmError, Result};
+use crate::types::{
+    ChatCompletionRequest, ToolCall, ToolCallArgsError, ToolChatCompletionRequest,
+    ToolChatCompletionResponse,
 };
-use crate::APP_USER_AGENT;
+use crate::util::truncate_for_echo;
 
 // --- Internal serde types for OpenAI-compatible API ---
 
@@ -171,12 +172,12 @@ fn parse_tool_call_arguments(
     tool: &str,
     id: &str,
     raw: &str,
-) -> (serde_json::Value, Option<super::ToolCallArgsError>) {
+) -> (serde_json::Value, Option<ToolCallArgsError>) {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(v) => (v, None),
         Err(e) => {
             warn!(tool, id, error = %e, raw, "invalid tool-call JSON arguments");
-            let err = super::ToolCallArgsError {
+            let err = ToolCallArgsError {
                 error: e.to_string(),
                 raw: truncate_for_echo(raw, 512),
             };
@@ -218,7 +219,12 @@ impl OpenAiClient {
 
     /// Creates a new OpenAI-compatible API client.
     #[instrument(skip(api_key))]
-    pub fn new(api_key: &str, model: &str, base_url: Option<&str>) -> Result<Self> {
+    pub fn new(
+        api_key: &str,
+        model: &str,
+        base_url: Option<&str>,
+        user_agent: &str,
+    ) -> Result<Self> {
         let base_url = base_url.unwrap_or(DEFAULT_BASE_URL).trim_end_matches('/');
         let is_openrouter = base_url.contains("openrouter.ai");
 
@@ -228,8 +234,7 @@ impl OpenAiClient {
             HeaderValue::from_static("application/json"),
         );
 
-        let mut auth_value = HeaderValue::from_str(&format!("Bearer {}", api_key))
-            .wrap_err("Invalid API key format")?;
+        let mut auth_value = HeaderValue::from_str(&format!("Bearer {}", api_key))?;
         auth_value.set_sensitive(true);
         headers.insert(header::AUTHORIZATION, auth_value);
 
@@ -241,10 +246,9 @@ impl OpenAiClient {
         headers.insert("X-Title", HeaderValue::from_static("twitch-1337"));
 
         let http = reqwest::Client::builder()
-            .user_agent(APP_USER_AGENT)
+            .user_agent(user_agent)
             .default_headers(headers)
-            .build()
-            .wrap_err("Failed to build HTTP client")?;
+            .build()?;
 
         Ok(Self {
             http,
@@ -283,44 +287,37 @@ impl LlmClient for OpenAiClient {
 
         debug!(model = %self.model, "Sending request to OpenAI-compatible API");
 
-        let response = self
-            .http
-            .post(&url)
-            .json(&api_request)
-            .send()
-            .await
-            .wrap_err("Failed to send request to OpenAI-compatible API")?;
+        let response = self.http.post(&url).json(&api_request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(eyre::eyre!(
-                "OpenAI-compatible API error (status {}): {}",
-                status,
-                error_body
-            ));
+            let body = response.text().await.unwrap_or_default();
+            return Err(LlmError::Provider {
+                status: status.as_u16(),
+                body,
+            });
         }
 
-        let body: serde_json::Value = response
-            .json()
-            .await
-            .wrap_err("Failed to parse OpenAI-compatible API response")?;
+        let body: serde_json::Value = response.json().await?;
         if let Some(msg) = extract_api_error(&body) {
-            return Err(eyre::eyre!("OpenAI-compatible API error: {}", msg));
+            return Err(LlmError::Provider {
+                status: 200,
+                body: msg,
+            });
         }
-        let api_response: ApiResponse = serde_json::from_value(body)
-            .wrap_err("Failed to parse OpenAI-compatible API response")?;
+        let api_response: ApiResponse =
+            serde_json::from_value(body).map_err(|source| LlmError::Decode {
+                stage: "openai chat response",
+                source,
+            })?;
 
         let choice = api_response
             .choices
             .into_iter()
             .next()
-            .ok_or_else(|| eyre::eyre!("No choices in API response"))?;
+            .ok_or(LlmError::EmptyResponse)?;
 
-        choice
-            .message
-            .content
-            .ok_or_else(|| eyre::eyre!("No text response from API"))
+        choice.message.content.ok_or(LlmError::EmptyResponse)
     }
 
     #[instrument(skip(self, request))]
@@ -376,40 +373,36 @@ impl LlmClient for OpenAiClient {
             debug!(model = %self.model, "Sending tool request to OpenAI-compatible API");
         }
 
-        let response = self
-            .http
-            .post(&url)
-            .json(&api_request)
-            .send()
-            .await
-            .wrap_err("Failed to send tool request to OpenAI-compatible API")?;
+        let response = self.http.post(&url).json(&api_request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(eyre::eyre!(
-                "OpenAI-compatible API error (status {}): {}",
-                status,
-                error_body
-            ));
+            let body = response.text().await.unwrap_or_default();
+            return Err(LlmError::Provider {
+                status: status.as_u16(),
+                body,
+            });
         }
 
-        let body: serde_json::Value = response
-            .json()
-            .await
-            .wrap_err("Failed to parse OpenAI-compatible API tool response")?;
+        let body: serde_json::Value = response.json().await?;
         trace!(response_body = %body, "OpenAI-compatible API raw tool response");
         if let Some(msg) = extract_api_error(&body) {
-            return Err(eyre::eyre!("OpenAI-compatible API error: {}", msg));
+            return Err(LlmError::Provider {
+                status: 200,
+                body: msg,
+            });
         }
-        let api_response: ApiToolResponse = serde_json::from_value(body)
-            .wrap_err("Failed to parse OpenAI-compatible API tool response")?;
+        let api_response: ApiToolResponse =
+            serde_json::from_value(body).map_err(|source| LlmError::Decode {
+                stage: "openai tool response",
+                source,
+            })?;
 
         let choice = api_response
             .choices
             .into_iter()
             .next()
-            .ok_or_else(|| eyre::eyre!("No choices in API tool response"))?;
+            .ok_or(LlmError::EmptyResponse)?;
 
         debug!(
             content = ?choice.message.content,
@@ -429,7 +422,7 @@ impl LlmClient for OpenAiClient {
                         &tc.id,
                         &tc.function.arguments,
                     );
-                    super::ToolCall {
+                    ToolCall {
                         id: tc.id,
                         name: tc.function.name,
                         arguments,
@@ -450,13 +443,23 @@ impl LlmClient for OpenAiClient {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Once;
+
     use super::*;
-    use crate::ai::llm::{
+    use crate::types::{
         Message, ToolCall, ToolCallRound, ToolChatCompletionRequest, ToolResultMessage,
     };
 
+    static CRYPTO: Once = Once::new();
+
+    fn ensure_crypto_provider() {
+        CRYPTO.call_once(|| {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        });
+    }
+
     fn test_client(is_openrouter: bool) -> OpenAiClient {
-        crate::install_crypto_provider();
+        ensure_crypto_provider();
         OpenAiClient {
             http: reqwest::Client::new(),
             base_url: "https://example.test".to_string(),

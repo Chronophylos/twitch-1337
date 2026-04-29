@@ -1,12 +1,12 @@
 use async_trait::async_trait;
-use eyre::{Result, WrapErr as _};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
-use super::{
-    ChatCompletionRequest, LlmClient, ToolChatCompletionRequest, ToolChatCompletionResponse,
+use crate::client::LlmClient;
+use crate::error::{LlmError, Result};
+use crate::types::{
+    ChatCompletionRequest, ToolCall, ToolChatCompletionRequest, ToolChatCompletionResponse,
 };
-use crate::APP_USER_AGENT;
 
 // --- Internal serde types for Ollama native API ---
 
@@ -144,13 +144,10 @@ const DEFAULT_BASE_URL: &str = "http://localhost:11434";
 impl OllamaClient {
     /// Creates a new Ollama API client.
     #[instrument]
-    pub fn new(model: &str, base_url: Option<&str>) -> Result<Self> {
+    pub fn new(model: &str, base_url: Option<&str>, user_agent: &str) -> Result<Self> {
         let base_url = base_url.unwrap_or(DEFAULT_BASE_URL).trim_end_matches('/');
 
-        let http = reqwest::Client::builder()
-            .user_agent(APP_USER_AGENT)
-            .build()
-            .wrap_err("Failed to build HTTP client")?;
+        let http = reqwest::Client::builder().user_agent(user_agent).build()?;
 
         Ok(Self {
             http,
@@ -181,28 +178,23 @@ impl LlmClient for OllamaClient {
 
         debug!(model = %self.model, "Sending request to Ollama API");
 
-        let response = self
-            .http
-            .post(&url)
-            .json(&api_request)
-            .send()
-            .await
-            .wrap_err("Failed to send request to Ollama API")?;
+        let response = self.http.post(&url).json(&api_request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(eyre::eyre!(
-                "Ollama API error (status {}): {}",
-                status,
-                error_body
-            ));
+            let body = response.text().await.unwrap_or_default();
+            return Err(LlmError::Provider {
+                status: status.as_u16(),
+                body,
+            });
         }
 
-        let api_response: ApiResponse = response
-            .json()
-            .await
-            .wrap_err("Failed to parse Ollama API response")?;
+        let body: serde_json::Value = response.json().await?;
+        let api_response: ApiResponse =
+            serde_json::from_value(body).map_err(|source| LlmError::Decode {
+                stage: "ollama chat response",
+                source,
+            })?;
 
         Ok(api_response.message.content)
     }
@@ -238,28 +230,23 @@ impl LlmClient for OllamaClient {
 
         debug!(model = %self.model, "Sending tool request to Ollama API");
 
-        let response = self
-            .http
-            .post(&url)
-            .json(&api_request)
-            .send()
-            .await
-            .wrap_err("Failed to send tool request to Ollama API")?;
+        let response = self.http.post(&url).json(&api_request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(eyre::eyre!(
-                "Ollama API error (status {}): {}",
-                status,
-                error_body
-            ));
+            let body = response.text().await.unwrap_or_default();
+            return Err(LlmError::Provider {
+                status: status.as_u16(),
+                body,
+            });
         }
 
-        let api_response: ApiToolResponse = response
-            .json()
-            .await
-            .wrap_err("Failed to parse Ollama API tool response")?;
+        let body: serde_json::Value = response.json().await?;
+        let api_response: ApiToolResponse =
+            serde_json::from_value(body).map_err(|source| LlmError::Decode {
+                stage: "ollama tool response",
+                source,
+            })?;
 
         if let Some(tool_calls) = api_response.message.tool_calls
             && !tool_calls.is_empty()
@@ -267,7 +254,7 @@ impl LlmClient for OllamaClient {
             let calls = tool_calls
                 .into_iter()
                 .enumerate()
-                .map(|(i, tc)| super::ToolCall {
+                .map(|(i, tc)| ToolCall {
                     id: format!("call_{}", i),
                     name: tc.function.name,
                     arguments: tc.function.arguments,
@@ -288,7 +275,7 @@ impl LlmClient for OllamaClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::llm::{
+    use crate::types::{
         Message, ToolCall, ToolCallRound, ToolChatCompletionRequest, ToolResultMessage,
     };
 

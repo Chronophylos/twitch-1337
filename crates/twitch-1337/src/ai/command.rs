@@ -7,11 +7,12 @@ use eyre::{Result, eyre};
 use tracing::{debug, error, instrument, warn};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use crate::ai::chat_history::{ChatHistory, ChatHistoryQuery, MAX_TOOL_RESULT_MESSAGES};
-use crate::ai::llm::{
+use llm::{
     ChatCompletionRequest, LlmClient, Message, ToolCall, ToolCallRound, ToolChatCompletionRequest,
     ToolChatCompletionResponse, ToolDefinition, ToolResultMessage,
 };
+
+use crate::ai::chat_history::{ChatHistory, ChatHistoryQuery, MAX_TOOL_RESULT_MESSAGES};
 use crate::ai::memory;
 use crate::ai::web_search;
 use crate::commands::{Command, CommandContext};
@@ -135,13 +136,14 @@ impl AiCommand {
             self.complete_ai_with_history_tool(system_prompt, user_message)
                 .await
         } else {
-            self.llm_client
+            Ok(self
+                .llm_client
                 .chat_completion(ChatCompletionRequest {
                     model: self.model.clone(),
                     messages: build_base_messages(system_prompt, user_message),
                     reasoning_effort: self.reasoning_effort.clone(),
                 })
-                .await
+                .await?)
         }
     }
 
@@ -349,7 +351,7 @@ pub(crate) async fn chat_with_web_tools(req: WebChatRequest<'_>) -> AiResult {
         .await
         {
             Ok(Ok(resp)) => resp,
-            Ok(Err(e)) => return AiResult::Error(e),
+            Ok(Err(e)) => return AiResult::Error(e.into()),
             Err(_) => return AiResult::Timeout,
         };
 

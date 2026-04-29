@@ -3,8 +3,8 @@ mod common;
 use std::time::Duration;
 
 use common::TestBotBuilder;
+use llm::ToolChatCompletionResponse;
 use serial_test::serial;
-use twitch_1337::ai::llm::ToolChatCompletionResponse;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
