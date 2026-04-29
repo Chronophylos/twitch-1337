@@ -12,9 +12,6 @@ pub enum LlmError {
     #[error("invalid header value")]
     Header(#[from] reqwest::header::InvalidHeaderValue),
 
-    #[error("invalid base url: {0}")]
-    InvalidBaseUrl(String),
-
     #[error("provider returned status {status}: {body}")]
     Provider { status: u16, body: String },
 
@@ -27,7 +24,4 @@ pub enum LlmError {
 
     #[error("provider returned an empty response")]
     EmptyResponse,
-
-    #[error("tool call decoding failed: {0}")]
-    ToolDecode(String),
 }

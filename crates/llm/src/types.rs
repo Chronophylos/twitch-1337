@@ -91,8 +91,8 @@ pub struct ToolCallArgsError {
 /// Response from a tool-calling chat completion.
 #[derive(Debug, Clone)]
 pub enum ToolChatCompletionResponse {
-    /// The model returned a text response (content may be unused by callers).
-    Message(#[allow(dead_code)] String),
+    /// The model returned a text response.
+    Message(String),
     ToolCalls {
         calls: Vec<ToolCall>,
         /// Present on thinking/reasoning models (e.g. DeepSeek); must be

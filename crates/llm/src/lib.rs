@@ -1,11 +1,11 @@
 //! Provider-agnostic LLM client for twitch-1337.
 
-pub mod client;
 pub mod error;
 pub mod ollama;
 pub mod openai;
-pub mod types;
 
+mod client;
+mod types;
 mod util;
 
 pub use client::LlmClient;
