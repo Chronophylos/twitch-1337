@@ -43,6 +43,7 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub aviation_client: Option<aviation::AviationClient>,
     pub whisper: Option<Arc<dyn WhisperSender>>,
     pub admin_channel: Option<String>,
+    pub ai_channel: Option<String>,
     pub bot_username: String,
     pub channel: String,
     pub data_dir: std::path::PathBuf,
@@ -75,6 +76,7 @@ where
         aviation_client,
         whisper,
         admin_channel,
+        ai_channel,
         bot_username,
         channel,
         data_dir,
@@ -252,6 +254,7 @@ where
         client,
         cmd_list,
         admin_channel,
+        ai_channel,
         chat_history,
         suspension_manager,
     )
@@ -292,12 +295,21 @@ fn is_twitch_login_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
+/// Returns true if the trigger word resolves to the `!ai` command.
+///
+/// Mirrors `AiCommand::matches` plus the Grok alias used by `command_invocation`.
+fn is_ai_trigger(trigger: &str) -> bool {
+    let trimmed = trigger.strip_prefix('!').unwrap_or(trigger);
+    trimmed.eq_ignore_ascii_case("ai") || trigger.eq_ignore_ascii_case(GROK_ALIAS_TRIGGER)
+}
+
 /// Main dispatch loop for trait-based commands.
 pub(crate) async fn run_command_dispatcher<T, L>(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
     client: Arc<TwitchIRCClient<T, L>>,
     commands: Vec<Box<dyn crate::commands::Command<T, L>>>,
     admin_channel: Option<String>,
+    ai_channel: Option<String>,
     chat_history: Option<ChatHistory>,
     suspension_manager: Arc<SuspensionManager>,
 ) where
@@ -311,7 +323,11 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                     continue;
                 };
 
-                // In the admin channel, only the broadcaster can use commands
+                let is_ai_channel = ai_channel
+                    .as_ref()
+                    .is_some_and(|ch| privmsg.channel_login == *ch);
+
+                // In the admin channel, only the broadcaster can use commands.
                 if let Some(ref admin_ch) = admin_channel
                     && privmsg.channel_login == *admin_ch
                     && !privmsg.badges.iter().any(|b| b.name == "broadcaster")
@@ -319,12 +335,12 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                     continue;
                 }
 
-                // Record message in chat history (main channel only)
+                // Record message in chat history (primary channel only).
                 if let Some(ref history) = chat_history {
                     let is_admin_channel = admin_channel
                         .as_ref()
                         .is_some_and(|ch| privmsg.channel_login == *ch);
-                    if !is_admin_channel {
+                    if !is_admin_channel && !is_ai_channel {
                         history.lock().await.push_user_at(
                             privmsg.sender.login.clone(),
                             privmsg.message_text.clone(),
@@ -336,6 +352,12 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                 let Some(invocation) = command_invocation(&privmsg.message_text) else {
                     continue;
                 };
+
+                // In the ai channel, only `!ai` is reachable. Drop everything else so the
+                // channel stays free of unrelated bot output.
+                if is_ai_channel && !is_ai_trigger(invocation.trigger) {
+                    continue;
+                }
 
                 let Some(cmd) = commands
                     .iter()
@@ -381,5 +403,37 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod ai_trigger_tests {
+    use super::is_ai_trigger;
+
+    #[test]
+    fn matches_bang_ai_case_insensitive() {
+        assert!(is_ai_trigger("!ai"));
+        assert!(is_ai_trigger("!AI"));
+        assert!(is_ai_trigger("!Ai"));
+    }
+
+    #[test]
+    fn matches_grok_alias() {
+        // GROK_ALIAS_TRIGGER lives in the same module; whatever it is,
+        // is_ai_trigger should accept the literal value plus its uppercase form.
+        assert!(is_ai_trigger(super::GROK_ALIAS_TRIGGER));
+        assert!(is_ai_trigger(&super::GROK_ALIAS_TRIGGER.to_uppercase()));
+    }
+
+    #[test]
+    fn rejects_other_triggers() {
+        assert!(!is_ai_trigger("!lb"));
+        assert!(!is_ai_trigger("!p"));
+        assert!(!is_ai_trigger("!track"));
+        assert!(!is_ai_trigger("!up"));
+        assert!(!is_ai_trigger("!fb"));
+        assert!(!is_ai_trigger(""));
+        assert!(!is_ai_trigger("!"));
+        assert!(!is_ai_trigger("ai_chan"));
     }
 }

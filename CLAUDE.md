@@ -86,6 +86,8 @@ Others pinned to major tags; Dependabot keeps them current.
 
 Schedules hot-reload on save (2s debounce via notify-debouncer-mini). No restart.
 
+`twitch.ai_channel` (optional): bot also joins this channel; only `!ai` is reachable there. Every other command, the 1337 tracker, and chat-history recording skip messages from it. AI memory and chat history remain global / primary-only.
+
 OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config structs are `Deserialize`-only; do NOT add `Serialize` derive (closes credential-leak via debug dump).
 
 ## Data dir
