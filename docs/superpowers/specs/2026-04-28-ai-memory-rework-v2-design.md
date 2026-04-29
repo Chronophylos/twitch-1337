@@ -25,7 +25,7 @@ Keep: `Twitch user_id` as identity anchor, role-based permissions, daily ritual 
 | Memory metaphor | People + chat (character sheets, chat culture) | Issue #102. Fact-DB framing pushed bot toward trivia; people-framing pushes it toward voice + relationship. |
 | Storage layout | `$DATA_DIR/memories/` tree, markdown files | Namespaces growing data dir. |
 | Body format | Free prose Markdown. No store-enforced section schema. | Section structure is taught in the system prompt, not policed by code. Removes a whole layer of parsing + tests. |
-| File kinds | `SOUL.md`, `LORE.md`, `user/<uid>.md`, `state/<slug>.md` | Soul = bot. Lore = chat. User = person. State = structured ephemera. |
+| File kinds | `SOUL.md`, `LORE.md`, `users/<uid>.md`, `state/<slug>.md` | Soul = bot. Lore = chat. User = person. State = structured ephemera. |
 | Identity key | Twitch numeric `user_id` (filename) | Stable across renames. Display name in frontmatter. |
 | Per-turn flow | Single LLM loop. All tools non-terminal. Loop ends when model returns no tool calls or hits round cap. | One LLM call instead of two. Multi-line replies are multiple `say` calls. Silence = refusal (closes #76). |
 | Tool surface | `write_file`, `write_state`, `delete_state`, `say` | Full-file overwrite (no section editing). State has its own pair because of `created_by` semantics. No `read_memory`/`list_memory` — everything injected up front. |
@@ -64,7 +64,7 @@ src/ai/memory/
 $DATA_DIR/memories/
 ├── SOUL.md
 ├── LORE.md
-├── user/
+├── users/
 │   ├── 12345.md
 │   └── 67890.md
 ├── state/
@@ -142,8 +142,8 @@ pub struct Caps {
 |---|---|---|---|---|
 | `SOUL.md` | r | r | r | rw |
 | `LORE.md` | r | rw | rw | rw |
-| `user/<speaker_id>.md` | rw | rw | rw | rw |
-| `user/<other_id>.md` | r | rw | rw | rw |
+| `users/<speaker_id>.md` | rw | rw | rw | rw |
+| `users/<other_id>.md` | r | rw | rw | rw |
 | `state/<slug>.md` | rw, delete-own | rw, delete-any | rw, delete-any | rw, delete-any |
 | `transcripts/*.md` | — (no LLM access) | — | — | r (dreamer only, injected) |
 
@@ -158,7 +158,7 @@ Replaces `commands/ai.rs` 2-stage flow. Single LLM session per `!ai`:
 1. Build system prompt: load `$DATA_DIR/prompts/system.md` + memory context (see Prompt Composition).
 2. Build user message: load `$DATA_DIR/prompts/ai_instructions.md` (preamble) + speaker metadata (id, username, role) + chat history + the new message.
 3. Loop with the chat LLM, tools enabled:
-   - `write_file(path, body)` — overwrite a memory file. Permission-gated. Path must be one of `SOUL.md`, `LORE.md`, `user/<digits>.md`. Frontmatter is store-managed; model only supplies the body.
+   - `write_file(path, body)` — overwrite a memory file. Permission-gated. Path must be one of `SOUL.md`, `LORE.md`, `users/<digits>.md`. Frontmatter is store-managed; model only supplies the body.
    - `write_state(slug, body)` — create or overwrite a state file. Sets `created_by = speaker_id` on create. Slug must match `^[a-z0-9][a-z0-9-]{0,63}$`.
    - `delete_state(slug)` — remove a state file. Permission-gated by `created_by`. Same slug regex.
    - `say(text)` — append one chat line. App truncates each call to 500 chars (append `…` if cut). Multiple calls produce multiple lines.
@@ -174,10 +174,10 @@ Inject the bodies of:
 
 - `SOUL.md` (always)
 - `LORE.md` (always)
-- All `user/*.md`, ordered by `updated_at` desc
+- All `users/*.md`, ordered by `updated_at` desc
 - All `state/*.md`, ordered by `updated_at` desc
 
-If total exceeds `inject_byte_budget` (default 24 KiB ≈ 6k tokens), drop oldest user/state files first. SOUL + LORE always included.
+If total exceeds `inject_byte_budget` (default 24 KiB ≈ 6k tokens), drop oldest users/state files first. SOUL + LORE always included.
 
 Each injected file is preceded by `# <path>` so the model can refer to it by path when calling `write_file`.
 
@@ -281,7 +281,7 @@ Drop `[ai.extraction]`, replace `[ai.consolidation]` with `[ai.dreamer]`. Update
 
 ### Integration (`tests/` + `TestBotBuilder`)
 
-- `memory_v2_basic`: `!ai` turn → model calls `write_file("user/<self>.md", …)` + `say` → file appears, chat line sent.
+- `memory_v2_basic`: `!ai` turn → model calls `write_file("users/<self>.md", …)` + `say` → file appears, chat line sent.
 - `memory_v2_multi_say`: model calls `say` twice → two chat lines, ordered.
 - `memory_v2_silent`: model returns no `say` → no chat output, `info!` log.
 - `memory_v2_perms`: regular tries `write_file("LORE.md", …)` → reject; mod succeeds.
