@@ -528,12 +528,12 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn aviation_client() -> AviationClient {
-        crate::twitch::tls::install_crypto_provider();
+        crate::install_crypto_provider();
         AviationClient::new().unwrap()
     }
 
     fn test_client_with_aggregators(adsb_aggregators: Vec<AdsbAggregator>) -> AviationClient {
-        crate::twitch::tls::install_crypto_provider();
+        crate::install_crypto_provider();
         AviationClient::new_with_adsb_aggregators(
             adsb_aggregators,
             "http://adsbdb.test".to_string(),

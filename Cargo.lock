@@ -2617,6 +2617,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "tempfile",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tokio-util",

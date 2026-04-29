@@ -7,9 +7,8 @@ use std::collections::HashSet;
 
 use eyre::{Context as _, Result, bail};
 use secrecy::ExposeSecret as _;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::time::Duration;
-use tracing::{error, info, instrument, trace};
+use tokio::{sync::mpsc::UnboundedReceiver, time::Duration};
+use tracing::{debug, debug_span, error, info, instrument, trace};
 use twitch_irc::{
     ClientConfig, SecureTCPTransport, TwitchIRCClient,
     login::{LoginCredentials as _, RefreshingLoginCredentials},
@@ -36,15 +35,19 @@ pub async fn setup_twitch_client(
         config.twitch.client_secret.expose_secret().to_string(),
         FileBasedTokenStorage::new(config.twitch.refresh_token.clone()),
     );
+
+    debug!(username = %config.twitch.username, "Obtaining initial Twitch credentials");
     credentials
         .get_credentials()
         .await
         .wrap_err("Failed to obtain initial credentials")?;
+
     let twitch_config = ClientConfig::new_simple(credentials.clone());
     let (incoming, client) = TwitchIRCClient::<
         SecureTCPTransport,
         RefreshingLoginCredentials<FileBasedTokenStorage>,
     >::new(twitch_config);
+
     Ok((incoming, client, credentials))
 }
 
@@ -64,22 +67,24 @@ pub async fn setup_and_verify_twitch_client(
 
     let (mut incoming_messages, client, credentials) = setup_twitch_client(config).await?;
 
-    info!("Connecting to Twitch IRC");
+    debug!("Connecting to Twitch IRC");
     client.connect().await;
 
     let mut channels: HashSet<String> = [config.twitch.channel.clone()].into();
     if let Some(ref admin_channel) = config.twitch.admin_channel {
-        info!(admin_channel = %admin_channel, "Joining admin channel");
+        debug!(admin_channel = %admin_channel, "Joining admin channel");
         channels.insert(admin_channel.clone());
     }
     if let Some(ref ai_channel) = config.twitch.ai_channel {
-        info!(ai_channel = %ai_channel, "Joining ai channel");
+        debug!(ai_channel = %ai_channel, "Joining ai channel");
         channels.insert(ai_channel.clone());
     }
-    info!(channel = %config.twitch.channel, "Joining channel");
+
+    info!(channels = ?channels, "Setting wanted channels");
     client.set_wanted_channels(channels)?;
 
     let verification = async {
+        let _ = debug_span!("twitch_auth_verification").entered();
         while let Some(message) = incoming_messages.recv().await {
             trace!(message = ?message, "Received IRC message during verification");
             match message {

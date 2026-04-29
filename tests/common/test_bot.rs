@@ -149,7 +149,7 @@ impl TestBotBuilder {
         let client = Arc::new(client);
         client.join(channel.clone()).expect("join");
 
-        twitch_1337::twitch::tls::install_crypto_provider();
+        twitch_1337::install_crypto_provider();
         let http = reqwest::Client::new();
         let aviation = AviationClient::new_with_base_url(
             adsb_mock.uri(),

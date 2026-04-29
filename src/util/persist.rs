@@ -9,20 +9,62 @@
 //! already in scope. "Atomic" here means no torn reads; it does NOT imply
 //! crash-safety (no `fsync` is performed).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use eyre::{Result, WrapErr as _};
 use serde::Serialize;
+use thiserror::Error;
+
+/// Errors that can occur during atomic persistence operations.
+#[derive(Debug, Error)]
+pub enum AtomicPersistError {
+    /// Failed to serialize value to RON format.
+    #[error("Failed to serialize value to RON: {0}")]
+    Serialization(#[from] ron::Error),
+
+    /// Failed to write temporary file.
+    #[error("Failed to write tmp file {path}: {source}")]
+    WriteTmp {
+        /// Path of the temporary file.
+        path: PathBuf,
+        /// The underlying IO error.
+        source: std::io::Error,
+    },
+
+    /// Failed to rename temporary file to destination.
+    #[error("Failed to rename {from} -> {to}: {source}")]
+    Rename {
+        /// Path of the source file.
+        from: PathBuf,
+        /// Path of the destination file.
+        to: PathBuf,
+        /// The underlying IO error.
+        source: std::io::Error,
+    },
+}
+
+pub type Result<T> = std::result::Result<T, AtomicPersistError>;
+
+fn serialize<T: Serialize>(value: &T) -> Result<String> {
+    ron::ser::to_string_pretty(value, ron::ser::PrettyConfig::default())
+        .map_err(AtomicPersistError::Serialization)
+}
 
 /// Synchronously serialize `value` as pretty RON and atomically write to `path`.
 pub fn atomic_save_ron<T: Serialize>(value: &T, path: &Path) -> Result<()> {
     let tmp = path.with_extension("ron.tmp");
-    let data = ron::ser::to_string_pretty(value, ron::ser::PrettyConfig::default())
-        .wrap_err("Failed to serialize value to RON")?;
-    std::fs::write(&tmp, &data)
-        .wrap_err_with(|| format!("Failed to write tmp file {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .wrap_err_with(|| format!("Failed to rename {} -> {}", tmp.display(), path.display()))?;
+    let data = serialize(value)?;
+
+    std::fs::write(&tmp, &data).map_err(|source| AtomicPersistError::WriteTmp {
+        path: tmp.clone(),
+        source,
+    })?;
+
+    std::fs::rename(&tmp, path).map_err(|source| AtomicPersistError::Rename {
+        from: tmp.clone(),
+        to: path.to_path_buf(),
+        source,
+    })?;
+
     Ok(())
 }
 
@@ -31,13 +73,23 @@ pub fn atomic_save_ron<T: Serialize>(value: &T, path: &Path) -> Result<()> {
 /// behaviour; switch to pretty if a call-site needs human inspection.
 pub async fn atomic_save_ron_async<T: Serialize>(value: &T, path: &Path) -> Result<()> {
     let tmp = path.with_extension("ron.tmp");
-    let data = ron::to_string(value).wrap_err("Failed to serialize value to RON")?;
+    let data = serialize(value)?;
+
     tokio::fs::write(&tmp, data.as_bytes())
         .await
-        .wrap_err_with(|| format!("Failed to write tmp file {}", tmp.display()))?;
+        .map_err(|source| AtomicPersistError::WriteTmp {
+            path: tmp.clone(),
+            source,
+        })?;
+
     tokio::fs::rename(&tmp, path)
         .await
-        .wrap_err_with(|| format!("Failed to rename {} -> {}", tmp.display(), path.display()))?;
+        .map_err(|source| AtomicPersistError::Rename {
+            from: tmp.clone(),
+            to: path.to_path_buf(),
+            source,
+        })?;
+
     Ok(())
 }
 
