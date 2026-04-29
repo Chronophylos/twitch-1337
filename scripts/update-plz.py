@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Download German postal code data from GeoNames and generate data/plz.csv."""
+"""Download German postal code data from GeoNames and generate crates/twitch-1337/data/plz.csv."""
 
 import csv
 import io

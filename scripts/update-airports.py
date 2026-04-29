@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Download airport data from OurAirports and generate data/airports.csv."""
+"""Download airport data from OurAirports and generate crates/twitch-1337/data/airports.csv."""
 
 import csv
 import io
