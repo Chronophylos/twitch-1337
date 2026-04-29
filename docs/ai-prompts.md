@@ -1,6 +1,6 @@
 # AI Prompts
 
-The bot's prompts live as Markdown files under `$DATA_DIR/prompts/`. Edit them live — the loader picks up changes within ~2 seconds. Defaults are bundled in `data/prompts/` and seeded on first run if the file is missing.
+The bot's prompts live as Markdown files under `$DATA_DIR/prompts/`. Edit them live — every invocation reads from disk, so changes are picked up immediately. Defaults are bundled in `data/prompts/` and seeded on first run if the file is missing.
 
 ## Files
 
@@ -32,7 +32,7 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 
 **Voice**. Write to the model in second person ("you are Aurora"). Describe behavior, not rules. Models follow narrative tone better than bullet lists of "MUST" / "DO NOT".
 
-**Memory model**. The system prompt is where you teach the model the *purpose* of each section in `SOUL.md`, `LORE.md`, `user/<id>.md`, and `state/<slug>.md`. The store enforces section *names*; this prompt enforces section *meaning*.
+**Memory model**. Files round-trip as opaque bodies after the YAML frontmatter — the store doesn't enforce any internal structure. The system prompt is the only place that teaches the model what to put in `SOUL.md`, `LORE.md`, `user/<id>.md`, and `state/<slug>.md`. Suggest informal section conventions in prose; don't expect them to be policed.
 
 **Multi-line replies**. `say(text)` is non-terminal — the model can call it multiple times in one turn to produce multiple chat lines. The loop ends when the model returns no tool calls (or hits the round cap). Encourage the model in the prompt to do memory updates first, then `say`.
 
@@ -45,18 +45,16 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 ## Editing flow
 
 1. Edit the file under `$DATA_DIR/prompts/` (e.g. `/var/lib/twitch-1337/prompts/system.md` on the production host).
-2. Wait ~2 s.
-3. Trigger `!ai` (or wait for the ritual) and observe.
-4. If you want to roll back, copy the bundled default from `data/prompts/` in the repo.
+2. Trigger `!ai` (or wait for the ritual) and observe.
+3. To roll back, copy the bundled default from `data/prompts/` in the repo.
 
 To restore a default: delete the file under `$DATA_DIR/prompts/` and restart. The seed-on-startup logic rewrites the bundled default. (Editing in place and never deleting means the bundled default is never re-applied — owner edits always win.)
 
 ## Caps and byte budgets
 
-Memory file caps (SOUL 4 KiB, LORE 12 KiB, user 4 KiB, state 2 KiB) are enforced by the store. The auto-injected context (SOUL + LORE + speaker user file + index) is bounded by `inject_byte_budget` (default 20 KiB ≈ 5k tokens). Prompt files are *additional* on top of that — keep them tight.
+Memory file caps (SOUL 4 KiB, LORE 12 KiB, user 4 KiB, state 2 KiB) are enforced by the store. The auto-injected context (every memory + state file body) is bounded by `inject_byte_budget` (default 24 KiB ≈ 6k tokens) — oldest user/state files drop first. Prompt files are *additional* on top of that — keep them tight.
 
 ## See also
 
 - `docs/superpowers/specs/2026-04-28-ai-memory-rework-v2-design.md` — full design.
-- `data/SOUL.default.md` — bundled default soul (seeded once).
 - `data/prompts/*.md` — bundled defaults for the three prompt files.
