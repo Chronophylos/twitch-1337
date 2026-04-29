@@ -24,7 +24,7 @@ jobs:
       - name: Read Rust toolchain channel
         id: rust-toolchain
         run: |
-          channel=$(grep '^channel' rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          channel=$(grep '^channel' crates/twitch-1337/rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@master # zizmor: ignore[unpinned-uses]
@@ -48,7 +48,7 @@ jobs:
       - name: Read Rust toolchain channel
         id: rust-toolchain
         run: |
-          channel=$(grep '^channel' rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          channel=$(grep '^channel' crates/twitch-1337/rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@master # zizmor: ignore[unpinned-uses]
@@ -59,13 +59,13 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest # zizmor: ignore[unpinned-uses]
 
       - name: cargo nextest run
-        run: cargo nextest run
+        run: cargo nextest run --workspace
 
   audit:
     name: cargo audit
