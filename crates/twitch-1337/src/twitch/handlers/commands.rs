@@ -4,6 +4,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use llm::LlmClient;
 use tokio::{sync::broadcast, time::Duration};
 use tracing::{debug, error, info, instrument};
 use twitch_irc::{
@@ -27,8 +28,8 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     /// Full AI config (system prompt, history, memory settings). `None` disables `!ai`.
     pub ai_config: Option<AiConfig>,
     /// Pre-built LLM client. When `None`, `!ai` is disabled regardless of `ai_config`.
-    /// Injected so tests can supply a fake and production can call [`ai::llm::build_llm_client`].
-    pub llm: Option<Arc<dyn ai::llm::LlmClient>>,
+    /// Injected so tests can supply a fake and production can call [`crate::llm_factory::build_llm_client`].
+    pub llm: Option<Arc<dyn LlmClient>>,
     /// Pre-built memory bundle (store handle + extractor deps). Built in
     /// `run_bot` so the consolidation task in `lib.rs` can share the same
     /// `store` handle and `path`. `None` disables memory for `!ai`.
@@ -93,7 +94,7 @@ where
     let prefill_config = ai_config.as_ref().and_then(|c| c.history_prefill.clone());
 
     // Combine pre-built LLM client with AI config; both must be present to enable !ai.
-    let llm_client: Option<(Arc<dyn ai::llm::LlmClient>, AiConfig)> = match (llm, ai_config) {
+    let llm_client: Option<(Arc<dyn LlmClient>, AiConfig)> = match (llm, ai_config) {
         (Some(llm_arc), Some(ai_cfg)) => {
             info!(backend = ?ai_cfg.backend, model = %ai_cfg.model, "AI command enabled");
             Some((llm_arc, ai_cfg))

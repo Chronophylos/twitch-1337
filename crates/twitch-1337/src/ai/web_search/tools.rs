@@ -1,4 +1,4 @@
-use crate::ai::llm::ToolDefinition;
+use llm::ToolDefinition;
 
 pub fn ai_tools() -> Vec<ToolDefinition> {
     vec![

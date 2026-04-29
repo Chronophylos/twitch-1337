@@ -7,10 +7,11 @@ use eyre::{Result, WrapErr as _};
 use tokio::sync::{Notify, RwLock};
 use tracing::{debug, info, warn};
 
-use crate::ai::llm::{
-    self, Message, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse,
+use llm::{
+    Message, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse,
     ToolResultMessage,
 };
+
 use crate::ai::memory::Memory;
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::consolidator_tools;
@@ -301,11 +302,12 @@ pub fn spawn_consolidation(
 
 #[cfg(test)]
 mod tests {
+    use llm::{ChatCompletionRequest, ToolCall};
+    use tempfile::TempDir;
+
     use super::*;
-    use crate::ai::llm::{ChatCompletionRequest, ToolCall};
     use crate::ai::memory::Scope;
     use crate::ai::memory::store::Memory;
-    use tempfile::TempDir;
 
     fn m_with(conf: u8, stale_days: i64, sources: Vec<String>) -> Memory {
         use chrono::Duration as CD;
@@ -382,13 +384,13 @@ mod tests {
 
     #[async_trait::async_trait]
     impl llm::LlmClient for ScriptedLlm {
-        async fn chat_completion(&self, _r: ChatCompletionRequest) -> Result<String> {
+        async fn chat_completion(&self, _r: ChatCompletionRequest) -> llm::Result<String> {
             Ok(String::new())
         }
         async fn chat_completion_with_tools(
             &self,
             _r: ToolChatCompletionRequest,
-        ) -> Result<ToolChatCompletionResponse> {
+        ) -> llm::Result<ToolChatCompletionResponse> {
             let mut g = self.next.lock().unwrap();
             if g.is_empty() {
                 Ok(ToolChatCompletionResponse::Message("done".into()))

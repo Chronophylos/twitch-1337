@@ -6,8 +6,8 @@ use secrecy::ExposeSecret as _;
 use tokio::sync::oneshot;
 use tracing::info;
 use twitch_1337::{
-    Services, ai::llm, aviation, ensure_data_dir, get_data_dir, install_crypto_provider,
-    install_tracing, load_configuration, run_bot, setup_and_verify_twitch_client, twitch::whisper,
+    Services, aviation, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing,
+    llm_factory, load_configuration, run_bot, setup_and_verify_twitch_client, twitch::whisper,
     util::clock::SystemClock,
 };
 
@@ -36,7 +36,7 @@ pub async fn main() -> Result<()> {
         setup_and_verify_twitch_client(&config).await?;
     let client = Arc::new(client);
 
-    let llm_client = llm::build_llm_client(config.ai.as_ref())?;
+    let llm_client = llm_factory::build_llm_client(config.ai.as_ref())?;
 
     let aviation_client = match aviation::AviationClient::new()
         .map(|client| client.with_aviationstack_config(config.aviationstack.clone()))

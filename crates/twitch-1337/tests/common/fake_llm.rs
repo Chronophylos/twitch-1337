@@ -10,10 +10,9 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use eyre::Result;
-
-use twitch_1337::ai::llm::{
-    ChatCompletionRequest, LlmClient, ToolChatCompletionRequest, ToolChatCompletionResponse,
+use llm::{
+    ChatCompletionRequest, LlmClient, LlmError, ToolChatCompletionRequest,
+    ToolChatCompletionResponse,
 };
 
 pub struct FakeLlm {
@@ -58,24 +57,30 @@ impl Default for FakeLlm {
 
 #[async_trait]
 impl LlmClient for FakeLlm {
-    async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<String> {
+    async fn chat_completion(&self, request: ChatCompletionRequest) -> llm::Result<String> {
         self.chat_calls.lock().unwrap().push(request);
         self.chat_responses
             .lock()
             .unwrap()
             .pop_front()
-            .ok_or_else(|| eyre::eyre!("FakeLlm: no chat response queued"))
+            .ok_or_else(|| LlmError::Provider {
+                status: 0,
+                body: "FakeLlm: no chat response queued".to_string(),
+            })
     }
 
     async fn chat_completion_with_tools(
         &self,
         request: ToolChatCompletionRequest,
-    ) -> Result<ToolChatCompletionResponse> {
+    ) -> llm::Result<ToolChatCompletionResponse> {
         self.tool_calls.lock().unwrap().push(request);
         self.tool_responses
             .lock()
             .unwrap()
             .pop_front()
-            .ok_or_else(|| eyre::eyre!("FakeLlm: no tool response queued"))
+            .ok_or_else(|| LlmError::Provider {
+                status: 0,
+                body: "FakeLlm: no tool response queued".to_string(),
+            })
     }
 }

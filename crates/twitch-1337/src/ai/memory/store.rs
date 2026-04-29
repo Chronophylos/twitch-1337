@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use crate::ai::llm::ToolCall;
+use llm::ToolCall;
+
 use crate::ai::memory::scope::{is_write_allowed, seed_confidence, trust_level_for};
 use crate::ai::memory::{Scope, UserRole};
 
@@ -785,7 +786,6 @@ pub(crate) fn build_key(scope: &Scope, slug: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::llm;
 
     fn empty_store() -> MemoryStore {
         MemoryStore::default()

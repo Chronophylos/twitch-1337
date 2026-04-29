@@ -10,6 +10,7 @@ pub mod commands;
 pub mod config;
 pub mod cooldown;
 pub mod database;
+pub mod llm_factory;
 pub mod ping;
 pub mod suspend;
 pub mod twitch;
@@ -19,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use eyre::{Result, WrapErr as _};
+use llm::LlmClient;
 use tokio::sync::{mpsc::UnboundedReceiver, oneshot};
 use tokio::time::Duration;
 use tracing::info;
@@ -30,7 +32,6 @@ use twitch_irc::{
 };
 
 use crate::{
-    ai::llm::LlmClient,
     aviation::AviationClient,
     config::Configuration,
     twitch::handlers::{

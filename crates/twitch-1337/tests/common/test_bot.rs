@@ -13,9 +13,9 @@ use tokio::sync::{Mutex, Notify, oneshot};
 use tokio::task::JoinHandle;
 use wiremock::MockServer;
 
+use llm::LlmClient;
 use twitch_1337::{
     PersonalBest, Services,
-    ai::llm::LlmClient,
     aviation::AviationClient,
     config::{AiConfig, Configuration},
     run_bot,

@@ -8,8 +8,8 @@ mod common;
 use std::time::Duration;
 
 use common::TestBotBuilder;
+use llm::{ToolCall, ToolChatCompletionResponse};
 use serial_test::serial;
-use twitch_1337::ai::llm::{ToolCall, ToolChatCompletionResponse};
 use twitch_1337::ai::memory::MemoryStore;
 
 /// Adversarial test: speaker asserts both a self-fact and a third-party fact.
@@ -174,10 +174,10 @@ async fn prompt_injection_does_not_poison_memory() {
 #[tokio::test]
 #[serial]
 async fn consolidation_merges_dupes() {
+    use llm::LlmClient;
     use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::sync::RwLock;
-    use twitch_1337::ai::llm::LlmClient;
     use twitch_1337::ai::memory::{Memory, Scope, consolidation};
 
     let fake = Arc::new(common::fake_llm::FakeLlm::new());
