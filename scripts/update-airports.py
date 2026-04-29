@@ -9,7 +9,7 @@ import urllib.request
 from pathlib import Path
 
 OURAIRPORTS_URL = "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/airports.csv"
-OUTPUT_PATH = Path(__file__).resolve().parent.parent / "data" / "airports.csv"
+OUTPUT_PATH = Path(__file__).resolve().parent.parent / "crates" / "twitch-1337" / "data" / "airports.csv"
 
 
 def main():
