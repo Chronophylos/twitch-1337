@@ -12,7 +12,7 @@ Three changes vs the v1 rework:
 
 1. **Focus shift.** Per-user files are character sheets, not bullet lists. LORE captures chat culture, running jokes, group dynamics. SOUL is bot personality + how the bot relates to *this* chat.
 2. **Format.** Markdown files with fixed H2 sections per file kind. Section bodies are free prose. Tools edit one section at a time.
-3. **Single-loop turns.** Per-`!ai` flow becomes one LLM session with terminal `say` / `refuse` tools. Fire-and-forget extractor is gone. Memory writes happen during the turn.
+3. **Single-loop turns.** Per-`!ai` flow becomes one LLM session. `say(text)` is a regular tool (not terminal) — model can emit multiple chat lines. Loop ends when the model returns no tool calls (natural stop) or hits `max_turn_rounds`. Silence = refusal. Fire-and-forget extractor is gone. Memory writes happen during the turn.
 
 Drop: `Scope` enum, slug keys, confidence scores, score/decay formula, separate extraction LLM call, `[ai.extraction]` config section, `NOTES.md`. Old RON store retired.
 
@@ -28,28 +28,26 @@ Keep: `Twitch user_id` as identity anchor, role-based permissions, daily ritual 
 | File kinds | `SOUL.md`, `LORE.md`, `user/<uid>.md`, `state/<slug>.md` | Soul = bot. Lore = chat. User = person. State = structured ephemera (quiz, polls). |
 | NOTES.md | Dropped | With state/ + per-user `## arc` + lore `## current`, no clean owner. |
 | Identity key | Twitch numeric `user_id` (filename) | Stable across renames. Display name in frontmatter. |
-| Per-turn flow | Single LLM loop, `say` / `refuse` terminal tools | One LLM call instead of two. Refusal closes #76 cleanly. |
-| Tool surface | `read_memory`, `list_memory`, `update_section`, `write_state`, `delete_state`, `say`, `refuse` | Section-level updates keep blast radius small. State files allow free-form game state. |
+| Per-turn flow | Single LLM loop, all tools non-terminal. Loop ends when model returns no tool calls or hits round cap. | One LLM call instead of two. Multi-line replies are just multiple `say` calls. Silence = refusal (closes #76). |
+| Tool surface | `read_memory`, `list_memory`, `update_section`, `write_state`, `delete_state`, `say` | Section-level updates keep blast radius small. State files allow free-form game state. |
 | Permission model | Path + section based, evaluated at dispatch | Regular user updates own user file + state. Mod/broadcaster also LORE + other users. SOUL = dreamer-only. State = anyone. |
 | Auto-inject | SOUL + LORE + speaker's user file body. Index-only for everything else. | Bounded token cost; model fetches on demand. |
-| Frontmatter | YAML: `description`, `updated_at`. Optional: `display_name`, `dormant` (user), `pinned` (state), `created_by` (state). | `description` powers the index injector. |
+| Frontmatter | YAML: `description`, `updated_at`. Optional: `display_name` (user), `pinned` (state), `created_by` (state). | `description` powers the index injector. |
 | Soul authorship | Hand-written seed, dreamer may amend | Issue #102 answer. Bundle `data/SOUL.default.md` via `include_str!`, write on first run if missing. |
 | Cap enforcement | Hard byte cap per file → flagged for next ritual | LORE 12 KiB, user 4 KiB, SOUL 4 KiB, state 2 KiB. Sized so worst-case auto-inject (SOUL+LORE+speaker user + index) ≈ 5k tokens. Over-cap blocks `update_section` with tool error. |
 | Slug validation | `^[a-z0-9][a-z0-9-]{0,63}$` enforced in `write_state` / `delete_state` dispatch | Path-traversal guard. Rejected before disk touch. |
 | Read cache | 2 s TTL per path, invalidated on local write | Absorbs chat spikes (4-round loop × N reads). Hand-edits still visible within 2 s. |
-| `say` length guard | App-side truncate to 500 chars, append `…` | LLMs count chars badly. Truncating beats burning rounds on retries. System prompt nudges "≤3 sentences". |
-| Tool ordering | Per round: process all non-terminal writes first, then terminal (`say`/`refuse`) | Allows model to batch updates + reply in one turn. Documented in system prompt + enforced in dispatcher. |
-| Prompt files | Loaded from `$DATA_DIR/prompts/{system,ai_instructions,dreamer}.md` on each invocation, 2 s TTL | Owner-editable like memory files. Defaults bundled via `include_str!`, written on first run if missing. |
+| `say` length guard | App-side truncate to 500 chars per call, append `…` | LLMs count chars badly. Truncating beats burning rounds on retries. System prompt nudges "≤3 sentences". |
+| Prompt files | Loaded from `$DATA_DIR/prompts/{system,ai_instructions,dreamer}.md` on each invocation | Owner-editable. Defaults bundled via `include_str!`, written on first run if missing. |
+| Storage cache | None — every read hits disk | Few reads per `!ai` (≤8); SSD cost trivial. Owner edits always visible. |
 | Decay | None per-paragraph; recency = file `updated_at`; pruning is dreamer's job | Dropped score formula entirely. |
+| Inactive users | Dreamer compacts at its discretion based on `updated_at` + transcript presence | No formal `dormant` flag. Index injection orders by recency and truncates on budget. |
 | Ritual cadence | Daily, configurable run-time, Berlin local | Same as v1 rework. |
 | State drain rule | State files with no writes in 7 days dropped by ritual unless `pinned: true` | Issue #102 answer: "leave dreamer option to preserve". |
 | LORE `## current` rotation | Ritual rotates `## current` into main lore prose, leaves it empty | Mirrors note-drain semantics without a separate notes file. |
-| Dormant user | `now - frontmatter.updated_at > dormant_days` (default 90), user not seen in this ritual's transcript | Dreamer compacts file + sets `dormant: true`. No deletion — returning users keep their character sheet. |
-| User return | Chat handler clears `dormant: true` on first observed message from that user | Re-enters per-turn index, next ritual treats as live. |
-| Storage cache | 2 s TTL per path, invalidated on local write | User edits visible within 2 s. Absorbs read bursts during 4-round !ai loops. |
 | Chat transcript | In-memory ring buffer of all channel messages, flushed on ritual fire to `memories/transcripts/YYYY-MM-DD.md` | Few-hundred-msg/day chat fits cleanly. Gives dreamer real material. |
-| Dream summary | Each ritual writes `memories/dreams/YYYY-MM-DD.md` | Audit trail + LLM-authored "what happened today" prose. Last N kept, default 30. |
-| Migration | One-shot at startup: `ai_memory.ron` → `memories/` tree, then rename `.migrated` | Same shape as v1; deletable next release. |
+| Dream summary | Each ritual writes `memories/dreams/YYYY-MM-DD.md` | Audit trail + LLM-authored "what happened today" prose. Owner deletes if disk pressure. |
+| v1 store | Deleted on first startup of v2 (renamed `.discarded-<unix_ts>`). No data migration. | v1 was fact-trivia bullets; v2 is character prose. Migrating would dump junk paragraphs the dreamer immediately rewrites anyway. Cleaner: log + start fresh, let chat rebuild memory organically. |
 | Model split | Keep `[ai.consolidation]` section (renamed `[ai.dreamer]`). Drop `[ai.extraction]`. | Chat model handles inline writes; ritual gets its own model. |
 
 ## Module Layout
@@ -65,8 +63,7 @@ src/ai/memory/
 ├── prompt.rs           # build per-turn memory context (auto-inject + index)
 ├── transcript.rs       # in-memory ring buffer + flush-on-ritual
 ├── ritual.rs           # daily ritual pass, dreamer LLM driver
-├── prompts.rs          # load $DATA_DIR/prompts/*.md with TTL cache, seed defaults
-└── migration.rs        # one-shot RON → markdown tree, deletable next release
+└── prompts.rs          # load $DATA_DIR/prompts/*.md, seed defaults on first run
 ```
 
 Old files removed: `scope.rs`, `extraction.rs`, `consolidation.rs`. `store.rs` rewritten end-to-end.
@@ -105,7 +102,6 @@ $DATA_DIR/memories/
 description: One-line summary used by the index injector.
 updated_at: 2026-04-28T18:42:00Z
 display_name: alice          # optional, user files only
-dormant: false               # optional, user files only — true = excluded from index, compact body
 pinned: false                # optional, state files only
 created_by: 12345            # optional, state files only (Twitch user_id)
 ---
@@ -195,7 +191,6 @@ pub struct Frontmatter {
     pub description: String,
     pub updated_at: DateTime<Utc>,
     pub display_name: Option<String>,
-    pub dormant: Option<bool>,
     pub pinned: Option<bool>,
     pub created_by: Option<String>,
 }
@@ -213,7 +208,7 @@ pub struct Transcript {
 }
 ```
 
-`MemoryStore` is `Clone` (cheap — paths + caps only). **2 s TTL read cache** keyed by path: each read returns cached body if `now - cached_at < 2s`, else hits disk and refreshes. Local writes (`update_section`, `write_state`, `delete_state`, dreamer rewrites) invalidate the entry. Hand-edits become visible within 2 s. Per-file `tokio::Mutex` keyed by path coordinates read-modify-write to avoid intra-bot races. Concurrent user edits during a write are last-rename-wins; documented as accepted risk.
+`MemoryStore` is `Clone` (cheap — paths + caps only). **No in-memory cache** — every read hits disk. Hot path is ≤8 reads per `!ai`; SSD cost trivial. Per-file `tokio::Mutex` keyed by path coordinates read-modify-write to avoid intra-bot races. Concurrent user edits during a write are last-rename-wins; documented as accepted risk.
 
 ### Permissions
 
@@ -248,11 +243,10 @@ Replaces `commands/ai.rs` 2-stage flow. Single LLM session per `!ai`:
    - `update_section(path, section, prose)` — replace one section's body. Permission-gated.
    - `write_state(slug, description, body)` — create or overwrite a state file (full body). Sets `created_by = speaker_id` on create. Slug must match `^[a-z0-9][a-z0-9-]{0,63}$`.
    - `delete_state(slug)` — remove a state file. Permission-gated by `created_by`. Same slug regex.
-   - `say(text)` — terminal. Body sent to chat. App truncates to 500 chars (append `…` if cut) before send.
-   - `refuse(reason)` — terminal. Reason logged at `info!`, never sent to chat.
-4. **Tool ordering**: within a single assistant round, dispatcher processes all non-terminal tool calls (read/list/update/state) first in array order, returning their results, then processes terminal tools (`say`/`refuse`). If both `say` and `refuse` appear in the same round, the first wins; the rest get a `"terminal_already_called"` tool result. System prompt tells the model: "Call updates first, then `say` in the same round." Loop bounded by `max_turn_rounds` (default 4). Round cap reached without a terminal → synthesized `refuse(reason="round_cap")`, `warn!` logged.
+   - `say(text)` — append one chat line. App truncates each call to 500 chars (append `…` if cut). Multiple `say` calls in a turn produce multiple chat lines.
+4. **Loop end**: each round, dispatcher executes all tool calls in array order. Loop continues as long as the model returns at least one tool call. Loop ends when the model returns no tool calls (natural stop) OR `max_turn_rounds` (default 4) is hit. Empty turn (no `say` ever called) is a silent refusal — `info!` logged, no chat output. Round-cap hit with no `say` → same: silent + `warn!`.
 
-Each `update_section` / `write_state` mutates under the path's mutex, updates frontmatter `updated_at`, persists atomically, invalidates the read cache. Cap exceeded → tool returns `"file_full, ritual pending"`; the change is *not* written. Backwards-compat: free-form `Message` returned without `say`/`refuse` is treated as `say(body)` with a `debug` log.
+Each `update_section` / `write_state` mutates under the path's mutex, updates frontmatter `updated_at`, persists atomically. Cap exceeded → tool returns `"file_full, ritual pending"`; the change is *not* written.
 
 Every channel message (including `!ai` user msg + bot reply) is appended to the transcript ring buffer at IRC-receive time, regardless of `!ai` activity.
 
@@ -264,7 +258,7 @@ Auto-inject the body of:
 - `LORE.md` (always)
 - `user/<speaker_id>.md` (current speaker, if exists)
 
-Inject index-only for everything else (live other users, all state files): a list of `path | description` lines. Model uses `read_memory` to pull bodies on demand. **User files with `dormant: true` are excluded from the index entirely** — invisible to the per-turn loop unless explicitly fetched by path.
+Inject index-only for everything else (other users, all state files): a list of `path | description` lines, ordered by `updated_at` descending. Model uses `read_memory` to pull bodies on demand. If the index itself blows the budget, oldest entries drop first — model can still find them via `list_memory`.
 
 Token budget guard: if auto-injected bodies + index would exceed `inject_byte_budget` (default 20 KiB ≈ 5k tokens), drop LORE `## current` first, then truncate LORE bottom-up. With the lowered file caps (4/12/4/2 KiB), this should never trigger.
 
@@ -280,7 +274,7 @@ Three prompt files live under `$DATA_DIR/prompts/`:
 | `ai_instructions.md` | chat-turn loop | Preamble prepended to user message before chat history + new message. |
 | `dreamer.md` | ritual | System prompt for the dreamer LLM. |
 
-**Loading**: `prompts.rs` reads each file on use with the same 2 s TTL cache as memory files. Owner edits are picked up live without restart.
+**Loading**: `prompts.rs` reads each file from disk on every use. Owner edits are picked up live without restart.
 
 **Defaults**: bundled via `include_str!` from `data/prompts/{system,ai_instructions,dreamer}.md`. On startup, missing files are written from the bundled default. Existing files are never overwritten (owner edits win).
 
@@ -297,8 +291,7 @@ Spawned from `lib.rs::run_bot`. Sleeps until `[ai.dreamer].run_at` (Berlin), the
 3. **Pre-pass deterministic cleanup**:
    - State files with `now - updated_at > state_ttl_days` and `pinned != true` → deleted (logged).
    - Bytes-over-cap files → flagged for forced rewrite.
-   - User files with `now - updated_at > dormant_days` AND `user_id` absent from this ritual's transcript → marked as dormant-candidates passed to dreamer.
-4. **Dreamer LLM call**: one model session with full context — every memory file, the freshly flushed transcript, the dormant-candidate list. Tools:
+4. **Dreamer LLM call**: one model session with full context — every memory file + the freshly flushed transcript. Tools:
    - `rewrite_file(path, frontmatter_json, sections_json)` — atomic full overwrite for SOUL/LORE/user.
    - `rewrite_state(slug, frontmatter_json, body)` — atomic overwrite for state.
    - `read_transcript(date)` — load a prior archived transcript (for older context, optional).
@@ -308,7 +301,7 @@ Spawned from `lib.rs::run_bot`. Sleeps until `[ai.dreamer].run_at` (Berlin), the
    - User-file `## arc` is the user-file section drained by default; other sections are amended in place.
    - SOUL is mostly left alone; amend only with consistent multi-turn evidence.
    - State files: bodies stay user-driven; only frontmatter sanity touched.
-   - For users on the dormant-candidate list: `rewrite_file` with `dormant: true` set in frontmatter; trim sections aggressively (drop `## misc`, compress others to one or two sentences each). Never delete user files.
+   - Inactive users (no transcript activity, `updated_at` old): compact at dreamer's discretion — drop `## misc`, compress others to one or two sentences. Never delete user files; returning users keep their sheet.
    - `write_dream_summary` is the terminal tool — must be called.
 6. **Apply**: rewrites written atomically under per-file mutex.
 7. **Post-pass**:
@@ -340,12 +333,9 @@ lore_bytes               = 12288
 user_bytes               = 4096
 state_bytes              = 2048
 inject_byte_budget       = 20480
-read_cache_ttl_secs      = 2
 state_ttl_days           = 7
-dormant_days             = 90
 transcript_ring_capacity = 2000
 transcript_archive_days  = 14
-dream_log_keep           = 30
 ```
 
 All optional; defaults shown.
@@ -374,10 +364,10 @@ Drop `[ai.extraction]`, replace `[ai.consolidation]` with `[ai.dreamer]`. Update
 - **Tool dispatch reject (permissions)**: tool result with explanation; model can retry.
 - **Dreamer LLM error**: `warn!`, no rewrites applied, transcript archived anyway, no dream summary. Retry tomorrow.
 - **Atomic write failure**: `error!`, prior content preserved (tmp+rename hasn't replaced original).
-- **`say` body > 500 chars**: app truncates to 500 chars, appends `…`, sends. `debug!` logs original length. No tool error, no retry.
+- **`say` body > 500 chars per call**: app truncates to 500 chars, appends `…`, sends. `debug!` logs original length.
 - **Invalid slug** (`write_state` / `delete_state`): tool result `"invalid_slug"`, model can retry with a corrected slug.
 - **Prompt file missing on load**: write bundled default, then read. `info!` logs the seed.
-- **Round cap with no terminal**: synthesized `refuse(reason="round_cap")`, `warn!`.
+- **Round cap hit**: loop ends. If any `say` calls happened, those lines are sent. If none, silent. `warn!` logged.
 - **Transcript flush failure**: `error!`, ring not cleared, retry on next message append (best-effort). Ritual proceeds with what it could read.
 
 ## Testing
@@ -387,27 +377,27 @@ Drop `[ai.extraction]`, replace `[ai.consolidation]` with `[ai.dreamer]`. Update
 - `frontmatter.rs`: roundtrip parse/render; missing-field defaults; unknown-field passthrough.
 - `sections.rs`: canonical-section parse/render; unknown-section preserved + warned; section update preserves order.
 - `permissions.rs`: table-driven across (role, target path, section, speaker id, `created_by`).
-- `store.rs`: atomic write under concurrent updates; cap enforcement; per-file mutex isolation; no-cache reads always hit disk.
+- `store.rs`: atomic write under concurrent updates; cap enforcement; per-file mutex isolation; reads always hit disk.
 - `transcript.rs`: ring overflow sets `truncated`; flush clears ring; concurrent appends + flush.
 - `prompt.rs`: index-only when bodies blow the budget; speaker file body present; other-user bodies absent; transcripts never reach per-turn prompt.
-- `tools.rs`: `update_section` rejected on permission denial; cap; `write_state` sets `created_by` on create only; `delete_state` blocked for non-owner regular; invalid slug rejected (`../`, uppercase, empty, >64 chars); same-round non-terminals processed before terminal; `say` >500 chars truncated with `…`.
-- `prompts.rs`: missing file → default seeded; existing file preserved; TTL respects edits; substitution tokens replaced + unknown tokens left literal.
+- `tools.rs`: `update_section` rejected on permission denial; cap; `write_state` sets `created_by` on create only; `delete_state` blocked for non-owner regular; invalid slug rejected (`../`, uppercase, empty, >64 chars); `say` >500 chars truncated with `…`; multiple `say` calls in one turn produce multiple chat lines; empty turn (no `say`) emits no chat output.
+- `prompts.rs`: missing file → default seeded; existing file preserved; substitution tokens replaced + unknown tokens left literal.
 
 ### Integration (`tests/` + `TestBotBuilder`)
 
-- `memory_v2_basic`: `!ai` turn → model calls `update_section("user/<self>.md", "## arc", …)` + `say` → file appears with section.
-- `memory_v2_refusal`: `refuse(reason)` → no chat output, log line emitted, no memory write.
+- `memory_v2_basic`: `!ai` turn → model calls `update_section("user/<self>.md", "## arc", …)` + `say` → file appears with section, chat line sent.
+- `memory_v2_multi_say`: model calls `say` twice in one turn → two chat lines, ordered.
+- `memory_v2_silent`: model returns no `say` calls → no chat output, `info!` log.
 - `memory_v2_perms`: regular tries `update_section("LORE.md", "## culture", …)` → reject; retry against `## current` succeeds.
 - `memory_v2_cap`: pre-fill section to cap, update → `file_full`, model picks another section.
 - `memory_v2_state_quiz`: scripted quiz scenario across multiple turns; non-creator regular cannot delete.
 - `memory_v2_cross_user_read`: speaker A's prompt requires fact about B; model sees B in index, calls `read_memory("user/<B>.md")`.
 - `transcript_capture`: random IRC traffic appended; ritual flush produces correct file; archive moves it.
-- `ritual_dream`: seed dirty `## current`, over-cap user file, stale state, dormant user → scripted dreamer plan applied; dream summary written.
-- `ritual_dormant_cutoff`: user with `updated_at` 91d ago + absent from transcript → on dormant list; if present in transcript, not flagged.
+- `ritual_dream`: seed dirty `## current`, over-cap user file, stale state → scripted dreamer plan applied; dream summary written.
 - `ritual_state_ttl`: stale unpinned dropped; pinned survives.
 - `ritual_shutdown`: shutdown mid-pass exits within grace.
 - `ritual_dreamer_failure`: scripted LLM error → no rewrites, transcript still archived, `warn!` emitted.
-- `migration_v1_to_v2`: seeded `ai_memory.ron` → after startup, `memories/` tree materialized, RON renamed `.migrated`.
+- `v1_store_discarded`: existing `ai_memory.ron` → after startup, file renamed `.discarded-<ts>`, fresh `memories/` tree, `info!` logged.
 
 ### Manual smoke
 
@@ -415,23 +405,18 @@ Drop `[ai.extraction]`, replace `[ai.consolidation]` with `[ai.dreamer]`. Update
 - Pin a state file, run a ritual after the TTL, verify it survives.
 - Temp `run_at` near-future to exercise the ritual live.
 
-## Migration
+## v1 Store Disposal
 
-One-shot in `migration.rs`, called from `MemoryStore::open`:
+No data migration. v1 was fact-trivia bullets keyed by `Scope`; v2 is character prose. Migrating would dump junk paragraphs the dreamer immediately rewrites anyway.
 
-1. If `memories/SOUL.md` exists → already migrated, return.
-2. Else look for `ai_memory.ron` (v1 schema):
-   - For each `Memory` entry, render to prose under the right file/section:
-     - `Scope::Lore` → append paragraph to `LORE.md ## culture`.
-     - `Scope::User { subject_id }` → append paragraph to `user/<subject_id>.md ## misc`.
-     - `Scope::Pref { subject_id }` → append paragraph to `user/<subject_id>.md ## with bot`.
-   - Identity map → `display_name` frontmatter.
-   - Default `description`: `"Migrated from v1 store on <date>."` Ritual rewrites on first run.
-   - Seed `SOUL.md` from bundled `data/SOUL.default.md`.
-3. Rename `ai_memory.ron` → `ai_memory.ron.migrated-<unix_ts>`.
-4. `info!` log with counts + paths.
+On first startup of v2, `MemoryStore::open`:
 
-Migration code is its own module, deleted after one release cycle (track via follow-up issue).
+1. If `memories/SOUL.md` exists → already initialized, return.
+2. Create `memories/` tree, seed `SOUL.md` from bundled `data/SOUL.default.md`.
+3. If `ai_memory.ron` exists, rename it to `ai_memory.ron.discarded-<unix_ts>`. `info!` log with path + entry count (best-effort parse for the count; failure is non-fatal).
+4. Memory rebuilds organically from chat over the next few days.
+
+No dedicated `migration.rs` module. Logic lives in `store.rs::open`.
 
 ## Out of Scope
 
