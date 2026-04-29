@@ -138,6 +138,13 @@ pub struct Caps {
 
 ### Permissions
 
+Twitch users never edit files directly — only the LLM does, via tool calls. Columns gate what the LLM may write **during a turn invoked by a speaker of that role**. Roles:
+
+- **Regular speaker**: ordinary chatter, no Twitch privilege. Default for everyone except mods, broadcaster, and the dreamer.
+- **Moderator**: Twitch mod badge in the channel.
+- **Broadcaster**: channel owner.
+- **Dreamer**: not a Twitch role — the ritual LLM session. Widest write scope.
+
 | Path | Regular speaker | Moderator | Broadcaster | Dreamer |
 |---|---|---|---|---|
 | `SOUL.md` | r | r | r | rw |
