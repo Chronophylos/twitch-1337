@@ -34,7 +34,7 @@ Keep: `Twitch user_id` as identity anchor, role-based permissions, daily ritual 
 | Frontmatter | YAML: `updated_at`. Optional: `display_name` (user), `created_by` (state). | Store-managed. Model writes body only. |
 | Soul authorship | Stub seeded from code on first run; dreamer amends over time. | Avoids carrying a separate `data/SOUL.default.md` file. |
 | Cap enforcement | Hard byte cap per file → over-cap blocks `write_file` with `"file_full"` tool result. Ritual reduces. | LORE 12 KiB, user 4 KiB, SOUL 4 KiB, state 2 KiB. Worst-case auto-inject (e.g. 10 users + 5 state) ≈ 16k tokens — fits modern windows. |
-| Slug validation | `^[a-z0-9][a-z0-9-]{0,63}$` enforced in dispatch for `write_state` / `delete_state` and any user-supplied path. | Path-traversal guard. |
+| Path / slug validation | `write_file` path: `^(SOUL\.md\|LORE\.md\|users/[0-9]+\.md)$` (Twitch `user_id` is numeric). `write_state` / `delete_state` slug: `^[a-z0-9][a-z0-9-]{0,63}$`. Both enforced in dispatch. | Path-traversal guard. |
 | `say` length guard | App truncates each call to 500 chars, appends `…`. | LLMs count chars badly. System prompt nudges "≤3 sentences per call". |
 | Storage cache | None — every read hits disk. | Few reads per `!ai`; SSD trivial. Owner edits always visible. |
 | Decay | None per-paragraph. Recency = `updated_at`. Pruning is dreamer's job. | No score formula. |
@@ -142,14 +142,14 @@ pub struct Caps {
 |---|---|---|---|---|
 | `SOUL.md` | r | r | r | rw |
 | `LORE.md` | r | rw | rw | rw |
-| `users/<speaker_id>.md` | rw | rw | rw | rw |
-| `users/<other_id>.md` | r | rw | rw | rw |
+| `users/<user_id>.md` (own) | rw | rw | rw | rw |
+| `users/<user_id>.md` (other) | r | rw | rw | rw |
 | `state/<slug>.md` | rw, delete-own | rw, delete-any | rw, delete-any | rw, delete-any |
 | `transcripts/*.md` | — (no LLM access) | — | — | r (dreamer only, injected) |
 
-All memory + state files are world-readable to the LLM (no read gating). State files store creator's `user_id` in frontmatter (`created_by`); regulars can only `delete_state` files where `created_by = speaker_id`. Transcripts are bot-internal.
+All memory + state files are world-readable to the LLM (no read gating). State files store creator's `user_id` in frontmatter (`created_by`); regulars can only `delete_state` files where `created_by` matches the speaker's `user_id`. Transcripts are bot-internal.
 
-Enforced in `tools.rs::can_write(speaker_role, speaker_id, path)`. Dispatcher rejects with a tool-result error before touching disk.
+Enforced in `tools.rs::can_write(role, user_id, path)`. Dispatcher rejects with a tool-result error before touching disk.
 
 ## Per-Turn Flow
 
@@ -158,8 +158,8 @@ Replaces `commands/ai.rs` 2-stage flow. Single LLM session per `!ai`:
 1. Build system prompt: load `$DATA_DIR/prompts/system.md` + memory context (see Prompt Composition).
 2. Build user message: load `$DATA_DIR/prompts/ai_instructions.md` (preamble) + speaker metadata (id, username, role) + chat history + the new message.
 3. Loop with the chat LLM, tools enabled:
-   - `write_file(path, body)` — overwrite a memory file. Permission-gated. Path must be one of `SOUL.md`, `LORE.md`, `users/<digits>.md`. Frontmatter is store-managed; model only supplies the body.
-   - `write_state(slug, body)` — create or overwrite a state file. Sets `created_by = speaker_id` on create. Slug must match `^[a-z0-9][a-z0-9-]{0,63}$`.
+   - `write_file(path, body)` — overwrite a memory file. Permission-gated. Path must match `^(SOUL\.md|LORE\.md|users/[0-9]+\.md)$` (the `[0-9]+` segment is a Twitch `user_id`). Frontmatter is store-managed; model only supplies the body.
+   - `write_state(slug, body)` — create or overwrite a state file. Sets `created_by` to the speaker's `user_id` on create. Slug must match `^[a-z0-9][a-z0-9-]{0,63}$`.
    - `delete_state(slug)` — remove a state file. Permission-gated by `created_by`. Same slug regex.
    - `say(text)` — append one chat line. App truncates each call to 500 chars (append `…` if cut). Multiple calls produce multiple lines.
 4. **Loop end**: each round, dispatcher executes all tool calls in array order. Loop continues while the model returns at least one tool call. Loop ends on natural stop (no tool calls) OR `max_turn_rounds` (default 4) hit. Empty turn (no `say`) is a silent refusal — `info!` logged, no chat output.
