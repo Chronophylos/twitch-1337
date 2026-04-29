@@ -204,6 +204,7 @@ mod tests {
     use crate::ai::llm::ToolCallArgsError;
 
     fn test_executor() -> WebToolExecutor {
+        crate::install_crypto_provider();
         let client = SearchClient::new_with_client(
             "http://127.0.0.1:65535/search".to_string(),
             Duration::from_secs(1),

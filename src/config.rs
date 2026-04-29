@@ -27,6 +27,8 @@ pub struct TwitchConfiguration {
     pub hidden_admins: Vec<String>,
     #[serde(default)]
     pub admin_channel: Option<String>,
+    #[serde(default)]
+    pub ai_channel: Option<String>,
 }
 
 /// Which LLM backend to use.
@@ -490,6 +492,7 @@ impl Configuration {
                 expected_latency: 100,
                 hidden_admins: Vec::new(),
                 admin_channel: None,
+                ai_channel: None,
             },
             aviationstack: None,
             pings: PingsConfig::default(),
@@ -552,6 +555,22 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         }
         if admin_ch == &config.twitch.channel {
             bail!("twitch.admin_channel must be different from twitch.channel");
+        }
+    }
+
+    if let Some(ref ai_ch) = config.twitch.ai_channel {
+        if ai_ch.trim().is_empty() {
+            bail!("twitch.ai_channel cannot be empty when specified");
+        }
+        if ai_ch == &config.twitch.channel {
+            bail!("twitch.ai_channel must be different from twitch.channel");
+        }
+        // Cross-check: admin_channel block above cannot see ai_channel, so the
+        // admin_channel == ai_channel guard lives here. Keep this branch second.
+        if let Some(ref admin_ch) = config.twitch.admin_channel
+            && ai_ch == admin_ch
+        {
+            bail!("twitch.ai_channel must be different from twitch.admin_channel");
         }
     }
 
@@ -890,5 +909,46 @@ mod tests {
         c.ai = Some(ai);
         let err = validate_config(&c).unwrap_err();
         assert!(format!("{err:#}").contains("ai.web.base_url"));
+    }
+
+    #[test]
+    fn ai_channel_must_differ_from_main_channel() {
+        let mut config = Configuration::test_default();
+        config.twitch.ai_channel = Some(config.twitch.channel.clone());
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("ai_channel must be different from twitch.channel"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn ai_channel_must_differ_from_admin_channel() {
+        let mut config = Configuration::test_default();
+        config.twitch.admin_channel = Some("admins".into());
+        config.twitch.ai_channel = Some("admins".into());
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("ai_channel must be different from twitch.admin_channel"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn ai_channel_cannot_be_blank_when_set() {
+        let mut config = Configuration::test_default();
+        config.twitch.ai_channel = Some("   ".into());
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            err.contains("ai_channel cannot be empty when specified"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn ai_channel_some_distinct_value_validates() {
+        let mut config = Configuration::test_default();
+        config.twitch.ai_channel = Some("ai_chan".into());
+        validate_config(&config).expect("distinct ai_channel must validate");
     }
 }

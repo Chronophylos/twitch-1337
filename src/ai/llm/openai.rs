@@ -456,6 +456,7 @@ mod tests {
     };
 
     fn test_client(is_openrouter: bool) -> OpenAiClient {
+        crate::install_crypto_provider();
         OpenAiClient {
             http: reqwest::Client::new(),
             base_url: "https://example.test".to_string(),

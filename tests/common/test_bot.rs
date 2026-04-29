@@ -149,6 +149,7 @@ impl TestBotBuilder {
         let client = Arc::new(client);
         client.join(channel.clone()).expect("join");
 
+        twitch_1337::install_crypto_provider();
         let http = reqwest::Client::new();
         let aviation = AviationClient::new_with_base_url(
             adsb_mock.uri(),
@@ -210,6 +211,19 @@ impl TestBot {
         self.transport.inject.send(line).await.expect("inject");
     }
 
+    /// Inject a PRIVMSG into a specific channel (not necessarily the primary).
+    /// Used by `ai_channel` tests to drive messages from the secondary channel.
+    pub async fn send_to(&self, channel: &str, user: &str, text: &str) {
+        let line = privmsg(channel, user, text);
+        self.transport.inject.send(line).await.expect("inject");
+    }
+
+    /// Same, but with an explicit `tmi-sent-ts` (used by 1337 tracker tests).
+    pub async fn send_to_at(&self, channel: &str, user: &str, text: &str, tmi_ts_ms: i64) {
+        let line = privmsg_at(channel, user, text, tmi_ts_ms);
+        self.transport.inject.send(line).await.expect("inject");
+    }
+
     pub async fn send_reply(&self, user: &str, text: &str, parent_user: &str, parent_text: &str) {
         let line = reply_privmsg(&self.channel, user, text, parent_user, parent_text);
         self.transport.inject.send(line).await.expect("inject");
@@ -248,6 +262,29 @@ impl TestBot {
             if raw.contains("PRIVMSG") {
                 return parse_privmsg_text(&raw);
             }
+        }
+    }
+
+    /// Wait for an outgoing PRIVMSG and return `(channel, body)`. The channel
+    /// is the IRC `#chan` argument with the leading `#` stripped.
+    pub async fn expect_say_full(&mut self, timeout: Duration) -> (String, String) {
+        loop {
+            let raw = tokio::time::timeout(timeout, self.transport.capture.recv())
+                .await
+                .expect("timed out waiting for outgoing message")
+                .expect("transport closed");
+            if !raw.contains("PRIVMSG") {
+                continue;
+            }
+            // PRIVMSG #chan :body  (no tags on outbound from TwitchIRCClient::say)
+            let after = raw.split_once("PRIVMSG ").expect("PRIVMSG format").1;
+            let (chan_with_hash, rest) = after.split_once(' ').expect("PRIVMSG channel/body");
+            let channel = chan_with_hash.trim_start_matches('#').to_owned();
+            let body = rest
+                .trim_start_matches(':')
+                .trim_end_matches(['\r', '\n'])
+                .to_owned();
+            return (channel, body);
         }
     }
 
