@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/twitch-1337"]
+members = ["crates/twitch-1337", "crates/llm"]
 
 [workspace.package]
 version = "0.1.0"
