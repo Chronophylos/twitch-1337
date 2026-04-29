@@ -3,8 +3,6 @@
 /// Truncate `s` at a char boundary to at most `max_chars` characters, appending
 /// a suffix describing how much was dropped. Used before echoing provider
 /// payloads back into the model context.
-// Used by provider modules added in subsequent commits.
-#[allow(dead_code)]
 pub(crate) fn truncate_for_echo(s: &str, max_chars: usize) -> String {
     let total = s.chars().count();
     if total <= max_chars {
