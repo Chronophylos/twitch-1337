@@ -1,4 +1,5 @@
-//! HTTP client for adsb.lol, adsbdb, Nominatim, and Aviationstack.
+//! HTTP client for ADS-B aggregators (adsb.lol + fallbacks), adsbdb,
+//! Nominatim, and Aviationstack.
 
 use std::time::Duration;
 
@@ -15,14 +16,103 @@ use super::location::{
 };
 use super::tracker::FlightIdentifier;
 use super::types::{
-    AdsbDbAirlineResponse, AdsbDbResponse, AdsbLolResponse, AviationstackFlightMetadata,
+    AdsbAircraftResponse, AdsbDbAirlineResponse, AdsbDbResponse, AviationstackFlightMetadata,
     AviationstackFlightsResponse, FlightRoute, NearbyAircraft,
 };
 
 const ADSBDB_BASE_URL: &str = "https://api.adsbdb.com/v0";
 const ADSBLOL_BASE_URL: &str = "https://api.adsb.lol/v2";
+const AIRPLANES_LIVE_BASE_URL: &str = "https://api.airplanes.live/v2";
+const ADSBFI_BASE_URL: &str = "https://opendata.adsb.fi/api/v2";
+const ADSBONE_BASE_URL: &str = "https://api.adsb.one/v2";
 const NOMINATIM_BASE_URL: &str = "https://nominatim.openstreetmap.org";
 const AIRLINE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+const ADSB_AGGREGATOR_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Clone)]
+pub(super) struct AdsbAggregator {
+    name: &'static str,
+    base_url: String,
+    path_style: AdsbPathStyle,
+}
+
+impl AdsbAggregator {
+    pub(super) fn readsb_v2(name: &'static str, base_url: String) -> Self {
+        Self {
+            name,
+            base_url,
+            path_style: AdsbPathStyle::ReadsbV2,
+        }
+    }
+
+    pub(super) fn adsb_fi(base_url: String) -> Self {
+        Self {
+            name: "adsb.fi",
+            base_url,
+            path_style: AdsbPathStyle::AdsbFiOpenData,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AdsbPathStyle {
+    ReadsbV2,
+    AdsbFiOpenData,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum AdsbEndpoint<'a> {
+    Point { lat: f64, lon: f64, radius_nm: u16 },
+    Hex(&'a str),
+    Callsign(&'a str),
+}
+
+impl AdsbEndpoint<'_> {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Point { .. } => "point",
+            Self::Hex(_) => "hex",
+            Self::Callsign(_) => "callsign",
+        }
+    }
+
+    pub(super) fn url(&self, aggregator: &AdsbAggregator) -> String {
+        let base = aggregator.base_url.trim_end_matches('/');
+        match (aggregator.path_style, self) {
+            (
+                AdsbPathStyle::ReadsbV2,
+                Self::Point {
+                    lat,
+                    lon,
+                    radius_nm,
+                },
+            ) => format!("{base}/point/{lat}/{lon}/{radius_nm}"),
+            (AdsbPathStyle::ReadsbV2, Self::Hex(hex)) => format!("{base}/hex/{hex}"),
+            (AdsbPathStyle::ReadsbV2, Self::Callsign(callsign)) => {
+                format!("{base}/callsign/{callsign}")
+            }
+            (
+                AdsbPathStyle::AdsbFiOpenData,
+                Self::Point {
+                    lat,
+                    lon,
+                    radius_nm,
+                },
+            ) => format!("{base}/lat/{lat}/lon/{lon}/dist/{radius_nm}"),
+            (AdsbPathStyle::AdsbFiOpenData, Self::Hex(hex)) => {
+                format!("{base}/hex/{hex}")
+            }
+            (AdsbPathStyle::AdsbFiOpenData, Self::Callsign(callsign)) => {
+                format!("{base}/callsign/{callsign}")
+            }
+        }
+    }
+}
+
+enum AdsbFetchError {
+    Retryable(eyre::Report),
+    Fatal(eyre::Report),
+}
 
 #[derive(Debug, Deserialize)]
 struct NominatimResult {
@@ -34,7 +124,8 @@ struct NominatimResult {
 #[derive(Clone)]
 pub struct AviationClient {
     http: reqwest::Client,
-    adsblol_base_url: String,
+    adsb_aggregators: Vec<AdsbAggregator>,
+    adsb_aggregator_timeout: Duration,
     adsbdb_base_url: String,
     nominatim_base_url: String,
     aviationstack: Option<AviationstackConfig>,
@@ -46,8 +137,8 @@ impl AviationClient {
             .user_agent(APP_USER_AGENT)
             .build()
             .wrap_err("Failed to build aviation HTTP client")?;
-        Ok(Self::new_with_base_url(
-            ADSBLOL_BASE_URL.to_owned(),
+        Ok(Self::new_with_adsb_aggregators(
+            Self::default_adsb_aggregators(),
             ADSBDB_BASE_URL.to_owned(),
             NOMINATIM_BASE_URL.to_owned(),
             http,
@@ -55,18 +146,42 @@ impl AviationClient {
     }
 
     pub fn new_with_base_url(
-        adsblol_base_url: String,
+        adsb_base_url: String,
+        adsbdb_base_url: String,
+        nominatim_base_url: String,
+        http_client: reqwest::Client,
+    ) -> Self {
+        Self::new_with_adsb_aggregators(
+            vec![AdsbAggregator::readsb_v2("adsb.lol", adsb_base_url)],
+            adsbdb_base_url,
+            nominatim_base_url,
+            http_client,
+        )
+    }
+
+    pub(super) fn new_with_adsb_aggregators(
+        adsb_aggregators: Vec<AdsbAggregator>,
         adsbdb_base_url: String,
         nominatim_base_url: String,
         http_client: reqwest::Client,
     ) -> Self {
         Self {
             http: http_client,
-            adsblol_base_url,
+            adsb_aggregators,
+            adsb_aggregator_timeout: ADSB_AGGREGATOR_TIMEOUT,
             adsbdb_base_url,
             nominatim_base_url,
             aviationstack: None,
         }
+    }
+
+    fn default_adsb_aggregators() -> Vec<AdsbAggregator> {
+        vec![
+            AdsbAggregator::readsb_v2("adsb.lol", ADSBLOL_BASE_URL.to_owned()),
+            AdsbAggregator::readsb_v2("airplanes.live", AIRPLANES_LIVE_BASE_URL.to_owned()),
+            AdsbAggregator::adsb_fi(ADSBFI_BASE_URL.to_owned()),
+            AdsbAggregator::readsb_v2("ADSB.One", ADSBONE_BASE_URL.to_owned()),
+        ]
     }
 
     pub fn with_aviationstack_config(mut self, aviationstack: Option<AviationstackConfig>) -> Self {
@@ -74,8 +189,92 @@ impl AviationClient {
         self
     }
 
+    #[cfg(test)]
+    fn with_adsb_aggregator_timeout(mut self, timeout: Duration) -> Self {
+        self.adsb_aggregator_timeout = timeout;
+        self
+    }
+
     pub fn aviationstack_enabled(&self) -> bool {
         self.aviationstack.is_some()
+    }
+
+    async fn fetch_adsb_response(
+        &self,
+        endpoint: AdsbEndpoint<'_>,
+    ) -> Result<AdsbAircraftResponse> {
+        let mut last_retryable_error = None;
+
+        for aggregator in &self.adsb_aggregators {
+            let url = endpoint.url(aggregator);
+            debug!(
+                provider = aggregator.name,
+                endpoint = endpoint.label(),
+                url = %url,
+                "Fetching aircraft from ADS-B aggregator"
+            );
+
+            match self.fetch_adsb_response_once(aggregator, &url).await {
+                Ok(resp) => {
+                    debug!(
+                        provider = aggregator.name,
+                        count = resp.aircraft.len(),
+                        "Received aircraft from ADS-B aggregator"
+                    );
+                    return Ok(resp);
+                }
+                Err(AdsbFetchError::Retryable(error)) => {
+                    warn!(
+                        provider = aggregator.name,
+                        error = ?error,
+                        "ADS-B aggregator failed; trying fallback"
+                    );
+                    last_retryable_error = Some(error);
+                }
+                Err(AdsbFetchError::Fatal(error)) => return Err(error),
+            }
+        }
+
+        match last_retryable_error {
+            Some(error) => Err(error.wrap_err("All ADS-B aggregators failed")),
+            None => Err(eyre::eyre!("No ADS-B aggregators configured")),
+        }
+    }
+
+    async fn fetch_adsb_response_once(
+        &self,
+        aggregator: &AdsbAggregator,
+        url: &str,
+    ) -> std::result::Result<AdsbAircraftResponse, AdsbFetchError> {
+        let resp = self
+            .http
+            .get(url)
+            .timeout(self.adsb_aggregator_timeout)
+            .send()
+            .await
+            .map_err(|e| {
+                let error = eyre::eyre!("Failed to send request to {}: {e}", aggregator.name);
+                if e.is_timeout() || e.is_connect() {
+                    AdsbFetchError::Retryable(error)
+                } else {
+                    AdsbFetchError::Fatal(error)
+                }
+            })?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(AdsbFetchError::Retryable(eyre::eyre!(
+                "{} returned {status}",
+                aggregator.name
+            )));
+        }
+
+        resp.json().await.map_err(|e| {
+            AdsbFetchError::Retryable(eyre::eyre!(
+                "Failed to parse {} response: {e}",
+                aggregator.name
+            ))
+        })
     }
 
     pub(super) async fn get_aircraft_nearby(
@@ -84,61 +283,32 @@ impl AviationClient {
         lon: f64,
         radius_nm: u16,
     ) -> Result<Vec<NearbyAircraft>> {
-        let url = format!("{}/point/{lat}/{lon}/{radius_nm}", self.adsblol_base_url);
-        debug!(url = %url, "Fetching nearby aircraft from adsb.lol");
-
-        let resp: AdsbLolResponse = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .wrap_err("Failed to send request to adsb.lol")?
-            .error_for_status()
-            .wrap_err("adsb.lol returned error status")?
-            .json()
-            .await
-            .wrap_err("Failed to parse adsb.lol response")?;
-
-        debug!(count = resp.ac.len(), "Received aircraft from adsb.lol");
-        Ok(resp.ac)
+        let resp = self
+            .fetch_adsb_response(AdsbEndpoint::Point {
+                lat,
+                lon,
+                radius_nm,
+            })
+            .await?;
+        Ok(resp.aircraft)
     }
 
     pub async fn get_aircraft_by_hex(&self, hex: &str) -> Result<Option<NearbyAircraft>> {
-        let url = format!("{}/hex/{hex}", self.adsblol_base_url);
-        debug!(hex = %hex, "Fetching aircraft by hex from adsb.lol");
+        debug!(hex = %hex, "Fetching aircraft by hex from ADS-B aggregators");
 
-        let resp: AdsbLolResponse = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .wrap_err("Failed to send request to adsb.lol")?
-            .error_for_status()
-            .wrap_err("adsb.lol returned error status")?
-            .json()
-            .await
-            .wrap_err("Failed to parse adsb.lol response")?;
+        let resp = self.fetch_adsb_response(AdsbEndpoint::Hex(hex)).await?;
 
-        Ok(resp.ac.into_iter().next())
+        Ok(resp.aircraft.into_iter().next())
     }
 
     pub async fn get_aircraft_by_callsign(&self, callsign: &str) -> Result<Option<NearbyAircraft>> {
-        let url = format!("{}/callsign/{callsign}", self.adsblol_base_url);
-        debug!(callsign = %callsign, "Fetching aircraft by callsign from adsb.lol");
+        debug!(callsign = %callsign, "Fetching aircraft by callsign from ADS-B aggregators");
 
-        let resp: AdsbLolResponse = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .wrap_err("Failed to send request to adsb.lol")?
-            .error_for_status()
-            .wrap_err("adsb.lol returned error status")?
-            .json()
-            .await
-            .wrap_err("Failed to parse adsb.lol response")?;
+        let resp = self
+            .fetch_adsb_response(AdsbEndpoint::Callsign(callsign))
+            .await?;
 
-        Ok(resp.ac.into_iter().next())
+        Ok(resp.aircraft.into_iter().next())
     }
 
     pub async fn get_flight_route(&self, callsign: &str) -> Result<Option<FlightRoute>> {
@@ -354,24 +524,156 @@ pub(super) fn aviationstack_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn aviation_client() -> AviationClient {
+        crate::twitch::tls::install_crypto_provider();
+        AviationClient::new().unwrap()
+    }
+
+    fn test_client_with_aggregators(adsb_aggregators: Vec<AdsbAggregator>) -> AviationClient {
+        crate::twitch::tls::install_crypto_provider();
+        AviationClient::new_with_adsb_aggregators(
+            adsb_aggregators,
+            "http://adsbdb.test".to_string(),
+            "http://nominatim.test".to_string(),
+            reqwest::Client::new(),
+        )
+    }
+
+    fn aircraft_response(flight: &str) -> serde_json::Value {
+        serde_json::json!({
+            "ac": [{
+                "hex": "3c6589",
+                "flight": flight,
+                "alt_baro": 35000,
+                "lat": 50.0,
+                "lon": 8.5
+            }],
+            "ctime": 0,
+            "now": 0,
+            "total": 1
+        })
+    }
 
     #[tokio::test]
     async fn resolve_callsign_translates_iata() {
-        let client = AviationClient::new().unwrap();
+        let client = aviation_client();
         assert_eq!(client.resolve_callsign("TP247").await, "TAP247");
         assert_eq!(client.resolve_callsign("LH5765").await, "DLH5765");
     }
 
     #[tokio::test]
     async fn resolve_callsign_passes_through_icao() {
-        let client = AviationClient::new().unwrap();
+        let client = aviation_client();
         assert_eq!(client.resolve_callsign("TAP247").await, "TAP247");
         assert_eq!(client.resolve_callsign("DLH5765").await, "DLH5765");
     }
 
     #[tokio::test]
     async fn resolve_callsign_passes_through_hex() {
-        let client = AviationClient::new().unwrap();
+        let client = aviation_client();
         assert_eq!(client.resolve_callsign("4CA87D").await, "4CA87D");
+    }
+
+    #[tokio::test]
+    async fn adsb_falls_back_from_5xx_to_next_aggregator() {
+        let (primary, backup) = tokio::join!(MockServer::start(), MockServer::start());
+
+        Mock::given(method("GET"))
+            .and(path("/hex/3c6589"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&primary)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/hex/3c6589"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(aircraft_response("DLH1234")))
+            .mount(&backup)
+            .await;
+
+        let client = test_client_with_aggregators(vec![
+            AdsbAggregator::readsb_v2("primary", primary.uri()),
+            AdsbAggregator::readsb_v2("backup", backup.uri()),
+        ]);
+
+        let aircraft = client
+            .get_aircraft_by_hex("3c6589")
+            .await
+            .expect("lookup succeeds through fallback")
+            .expect("aircraft returned");
+
+        assert_eq!(aircraft.flight.as_deref(), Some("DLH1234"));
+        assert_eq!(primary.received_requests().await.unwrap().len(), 1);
+        assert_eq!(backup.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn adsb_falls_back_from_timeout_to_next_aggregator() {
+        let (primary, backup) = tokio::join!(MockServer::start(), MockServer::start());
+
+        Mock::given(method("GET"))
+            .and(path("/callsign/DLH1234"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(500))
+                    .set_body_json(aircraft_response("DLH1234")),
+            )
+            .mount(&primary)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/callsign/DLH1234"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(aircraft_response("DLH1234")))
+            .mount(&backup)
+            .await;
+
+        let client = test_client_with_aggregators(vec![
+            AdsbAggregator::readsb_v2("primary", primary.uri()),
+            AdsbAggregator::readsb_v2("backup", backup.uri()),
+        ])
+        .with_adsb_aggregator_timeout(Duration::from_millis(50));
+
+        let aircraft = client
+            .get_aircraft_by_callsign("DLH1234")
+            .await
+            .expect("lookup succeeds through fallback")
+            .expect("aircraft returned");
+
+        assert_eq!(aircraft.flight.as_deref(), Some("DLH1234"));
+        assert_eq!(primary.received_requests().await.unwrap().len(), 1);
+        assert_eq!(backup.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn adsb_fi_point_url_uses_open_data_path() {
+        let aggregator = AdsbAggregator::adsb_fi("https://opendata.adsb.fi/api/v2/".to_string());
+        let url = AdsbEndpoint::Point {
+            lat: 1.5,
+            lon: 2.25,
+            radius_nm: 15,
+        }
+        .url(&aggregator);
+
+        assert_eq!(
+            url,
+            "https://opendata.adsb.fi/api/v2/lat/1.5/lon/2.25/dist/15"
+        );
+    }
+
+    #[test]
+    fn adsb_response_accepts_aircraft_alias() {
+        let response: AdsbAircraftResponse = serde_json::from_value(serde_json::json!({
+            "aircraft": [{
+                "hex": "3c6589",
+                "flight": "DLH1234",
+                "alt_baro": 35000
+            }]
+        }))
+        .unwrap();
+
+        assert_eq!(response.aircraft.len(), 1);
+        assert_eq!(response.aircraft[0].flight.as_deref(), Some("DLH1234"));
     }
 }

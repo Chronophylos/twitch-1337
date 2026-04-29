@@ -1,4 +1,4 @@
-//! API response types for adsb.lol, adsbdb, and Aviationstack.
+//! API response types for ADS-B aggregators, adsbdb, and Aviationstack.
 //!
 //! Public types here are re-exported from `aviation/mod.rs`.
 //! Internal envelope types (`AdsbDbResponse`, `Aviationstack*`) are
@@ -7,12 +7,12 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-// --- adsb.lol types ---
+// --- ADS-B v2 response types ---
 
 #[derive(Debug, Deserialize)]
-pub(super) struct AdsbLolResponse {
-    #[serde(default)]
-    pub(super) ac: Vec<NearbyAircraft>,
+pub(super) struct AdsbAircraftResponse {
+    #[serde(default, rename = "ac", alias = "aircraft")]
+    pub(super) aircraft: Vec<NearbyAircraft>,
 }
 
 #[derive(Debug, Deserialize)]

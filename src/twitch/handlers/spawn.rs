@@ -215,6 +215,7 @@ where
                 aviation_client: aviation_for_commands,
                 whisper,
                 admin_channel: config.twitch.admin_channel.clone(),
+                ai_channel: config.twitch.ai_channel.clone(),
                 bot_username: config.twitch.username.clone(),
                 channel: config.twitch.channel.clone(),
                 data_dir: data_dir.clone(),

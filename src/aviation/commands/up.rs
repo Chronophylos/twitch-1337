@@ -19,7 +19,7 @@ use super::super::types::{AltBaro, NearbyAircraft};
 
 const UP_SEARCH_RADIUS_NM: u16 = 15;
 const UP_COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
-const UP_ADSBLOL_TIMEOUT: Duration = Duration::from_secs(10);
+const UP_ADSB_TIMEOUT: Duration = Duration::from_secs(10);
 const UP_ADSBDB_TIMEOUT: Duration = Duration::from_secs(5);
 const UP_MAX_CANDIDATES: usize = 10;
 const UP_MAX_RESULTS: usize = 5;
@@ -135,12 +135,12 @@ where
     let result = tokio::time::timeout(UP_COMMAND_TIMEOUT, async {
         // Fetch nearby aircraft
         let aircraft = tokio::time::timeout(
-            UP_ADSBLOL_TIMEOUT,
+            UP_ADSB_TIMEOUT,
             aviation_client.get_aircraft_nearby(*lat, *lon, UP_SEARCH_RADIUS_NM),
         )
         .await
-        .map_err(|_| eyre::eyre!("adsb.lol request timed out"))?
-        .wrap_err("adsb.lol request failed")?;
+        .map_err(|_| eyre::eyre!("ADS-B request timed out"))?
+        .wrap_err("ADS-B request failed")?;
 
         // Filter by cone visibility, then by callsign
         let candidates: Vec<_> = aircraft
