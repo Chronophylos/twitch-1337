@@ -661,6 +661,7 @@ where
 /// handle. All three fields are `None` when AI is disabled or memory load
 /// failed; otherwise they are populated and ready to feed into the command
 /// handler + the daily consolidation task.
+// TODO(memory-v2): v1 field names; struct is replaced in tasks 13/14.
 pub struct AiMemoryBundle {
     pub ai_memory: Option<AiMemory>,
     pub consolidation_model: Option<String>,

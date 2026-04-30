@@ -971,4 +971,65 @@ mod tests {
         config.twitch.ai_channel = Some("ai_chan".into());
         validate_config(&config).expect("distinct ai_channel must validate");
     }
+
+    #[test]
+    fn validate_rejects_max_turn_rounds_out_of_range() {
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.max_turn_rounds = 0;
+        c.ai = Some(ai);
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ai.max_turn_rounds"),
+            "got: {err:#}"
+        );
+
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.max_turn_rounds = 21;
+        c.ai = Some(ai);
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ai.max_turn_rounds"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_max_writes_per_turn_out_of_range() {
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.max_writes_per_turn = 0;
+        c.ai = Some(ai);
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ai.max_writes_per_turn"),
+            "got: {err:#}"
+        );
+
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.max_writes_per_turn = 65;
+        c.ai = Some(ai);
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ai.max_writes_per_turn"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_inject_budget_below_soul_plus_lore() {
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.memory.soul_bytes = 4096;
+        ai.memory.lore_bytes = 12_288;
+        ai.memory.inject_byte_budget = 8192; // less than 4096 + 12288
+        c.ai = Some(ai);
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("inject_byte_budget"),
+            "got: {err:#}"
+        );
+    }
 }

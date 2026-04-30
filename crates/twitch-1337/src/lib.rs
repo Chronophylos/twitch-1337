@@ -116,11 +116,8 @@ where
     // Aviation is consumed by the flight tracker; clone first so commands (!up/!fl) also get it.
     let aviation_for_commands = aviation.clone();
 
-    // Build the memory bundle once so both `!ai` (extraction) and the
-    // daily consolidation task share the same store handle + path.
-    // Effective fallback resolution:
-    // - model: extraction -> [ai], consolidation -> extraction -> [ai]
-    // - reasoning_effort: extraction -> [ai], consolidation -> extraction -> [ai]
+    // TODO(memory-v2): build_ai_memory is a stub returning an empty bundle.
+    // Properly wired in tasks 13 (chat-turn flow) and 14 (dreamer ritual).
     let crate::ai::command::AiMemoryBundle {
         ai_memory,
         consolidation_model,
