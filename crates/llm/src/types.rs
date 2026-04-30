@@ -1,6 +1,31 @@
 //! Shared request/response types used by all providers.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
+
+/// The conversation role of a [`Message`]. Wire format is the lowercase
+/// variant name; matches what every supported provider expects on the
+/// `role` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::Tool => "tool",
+        })
+    }
+}
 
 /// A message in a chat completion conversation.
 #[derive(Debug, Clone)]
@@ -99,4 +124,26 @@ pub enum ToolChatCompletionResponse {
         /// echoed back in the assistant turn of subsequent requests.
         reasoning_content: Option<String>,
     },
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::Role;
+
+    #[test]
+    fn role_display_matches_wire_strings() {
+        assert_eq!(Role::System.to_string(), "system");
+        assert_eq!(Role::User.to_string(), "user");
+        assert_eq!(Role::Assistant.to_string(), "assistant");
+        assert_eq!(Role::Tool.to_string(), "tool");
+    }
+
+    #[test]
+    fn role_round_trips_through_json() {
+        for role in [Role::System, Role::User, Role::Assistant, Role::Tool] {
+            let json = serde_json::to_string(&role).unwrap();
+            let back: Role = serde_json::from_str(&json).unwrap();
+            assert_eq!(role, back);
+        }
+    }
 }
