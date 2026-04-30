@@ -204,7 +204,6 @@ fn extract_api_error(body: &serde_json::Value) -> Option<String> {
 pub struct OpenAiClient {
     http: reqwest::Client,
     base_url: String,
-    model: String,
     is_openrouter: bool,
 }
 
@@ -221,12 +220,7 @@ impl OpenAiClient {
 
     /// Creates a new OpenAI-compatible API client.
     #[instrument(skip(api_key))]
-    pub fn new(
-        api_key: &str,
-        model: &str,
-        base_url: Option<&str>,
-        user_agent: &str,
-    ) -> Result<Self> {
+    pub fn new(api_key: &str, base_url: Option<&str>, user_agent: &str) -> Result<Self> {
         let base_url = base_url.unwrap_or(DEFAULT_BASE_URL).trim_end_matches('/');
         let is_openrouter = base_url.contains("openrouter.ai");
 
@@ -255,7 +249,6 @@ impl OpenAiClient {
         Ok(Self {
             http,
             base_url: base_url.to_string(),
-            model: model.to_string(),
             is_openrouter,
         })
     }
@@ -287,7 +280,7 @@ impl LlmClient for OpenAiClient {
             reasoning,
         };
 
-        debug!(model = %self.model, "Sending request to OpenAI-compatible API");
+        debug!(model = %api_request.model, "Sending request to OpenAI-compatible API");
 
         let response = self.http.post(&url).json(&api_request).send().await?;
 
@@ -363,7 +356,7 @@ impl LlmClient for OpenAiClient {
         if let Ok(req_json) = serde_json::to_string(&api_request) {
             trace!(request_body = %req_json, "Sending tool request to OpenAI-compatible API");
         } else {
-            debug!(model = %self.model, "Sending tool request to OpenAI-compatible API");
+            debug!(model = %api_request.model, "Sending tool request to OpenAI-compatible API");
         }
 
         let response = self.http.post(&url).json(&api_request).send().await?;
@@ -456,7 +449,6 @@ mod tests {
         OpenAiClient {
             http: reqwest::Client::new(),
             base_url: "https://example.test".to_string(),
-            model: "test-model".to_string(),
             is_openrouter,
         }
     }

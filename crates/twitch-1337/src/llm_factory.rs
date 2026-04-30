@@ -29,16 +29,13 @@ pub fn build_llm_client(ai_config: Option<&AiConfig>) -> Result<Option<Arc<dyn L
                 .expect("validated: openai backend has api_key");
             OpenAiClient::new(
                 api_key.expose_secret(),
-                &ai_cfg.model,
                 ai_cfg.base_url.as_deref(),
                 APP_USER_AGENT,
             )
             .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
         }
-        AiBackend::Ollama => {
-            OllamaClient::new(&ai_cfg.model, ai_cfg.base_url.as_deref(), APP_USER_AGENT)
-                .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
-        }
+        AiBackend::Ollama => OllamaClient::new(ai_cfg.base_url.as_deref(), APP_USER_AGENT)
+            .map(|c| Arc::new(c) as Arc<dyn LlmClient>),
     };
 
     match result {
