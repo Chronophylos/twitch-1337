@@ -422,7 +422,7 @@ impl LlmClient for OpenAiClient {
             });
         }
 
-        let content = choice.message.content.unwrap_or_default();
+        let content = choice.message.content.ok_or(LlmError::EmptyResponse)?;
         Ok(ToolChatCompletionResponse::Message(content))
     }
 }
@@ -435,6 +435,20 @@ mod tests {
     use crate::types::{
         Message, ToolCall, ToolCallRound, ToolChatCompletionRequest, ToolResultMessage,
     };
+
+    #[test]
+    fn empty_message_content_is_error_not_empty_string() {
+        // Source-level regression: the tool path must surface an
+        // EmptyResponse error rather than handing back Message("").
+        // Assemble the needle at runtime so this assertion does not
+        // self-match the literal it is looking for.
+        let s = include_str!("openai.rs");
+        let needle = format!("{}.{}()", "content", "unwrap_or_default");
+        assert!(
+            !s.contains(&needle),
+            "tool path must error on empty content, not return Message(\"\")"
+        );
+    }
 
     static CRYPTO: Once = Once::new();
 
