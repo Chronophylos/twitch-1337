@@ -9,8 +9,7 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use llm::{
     AgentOpts, AgentOutcome, ChatCompletionRequest, LlmClient, Message, ToolCall, ToolCallRound,
-    ToolChatCompletionRequest, ToolChatCompletionResponse, ToolDefinition, ToolExecutor,
-    ToolResultMessage, run_agent,
+    ToolChatCompletionRequest, ToolDefinition, ToolExecutor, ToolResultMessage, run_agent,
 };
 
 use crate::ai::chat_history::{ChatHistory, ChatHistoryQuery, MAX_TOOL_RESULT_MESSAGES};
@@ -296,56 +295,47 @@ pub(crate) struct WebChatRequest<'a> {
     pub initial_prior_rounds: Vec<ToolCallRound>,
 }
 
+struct WebExecutor<'a> {
+    inner: &'a web_search::WebToolExecutor,
+}
+
+#[async_trait]
+impl ToolExecutor for WebExecutor<'_> {
+    async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
+        self.inner.execute_tool_call(call).await
+    }
+}
+
 pub(crate) async fn chat_with_web_tools(req: WebChatRequest<'_>) -> AiResult {
     let messages = vec![
         Message::system(req.system_prompt),
         Message::user(req.user_message),
     ];
 
-    let tools = web_search::ai_tools();
-    let mut prior_rounds = req.initial_prior_rounds;
+    let request = ToolChatCompletionRequest {
+        model: req.model.to_string(),
+        messages,
+        tools: web_search::ai_tools(),
+        reasoning_effort: req.reasoning_effort.clone(),
+        prior_rounds: req.initial_prior_rounds,
+    };
 
-    for round in 0..req.web.max_rounds {
-        let request = ToolChatCompletionRequest {
-            model: req.model.to_string(),
-            messages: messages.clone(),
-            tools: tools.clone(),
-            reasoning_effort: req.reasoning_effort.clone(),
-            prior_rounds: prior_rounds.clone(),
-        };
+    let executor = WebExecutor {
+        inner: &req.web.executor,
+    };
+    let opts = AgentOpts {
+        max_rounds: req.web.max_rounds,
+        per_round_timeout: Some(req.timeout),
+    };
 
-        let response = match tokio::time::timeout(
-            req.timeout,
-            req.llm_client.chat_completion_with_tools(request),
-        )
-        .await
-        {
-            Ok(Ok(resp)) => resp,
-            Ok(Err(e)) => return AiResult::Error(e.into()),
-            Err(_) => return AiResult::Timeout,
-        };
-
-        match response {
-            ToolChatCompletionResponse::Message(content) => return AiResult::Ok(content),
-            ToolChatCompletionResponse::ToolCalls {
-                calls,
-                reasoning_content,
-            } => {
-                let mut results = Vec::with_capacity(calls.len());
-                for call in &calls {
-                    results.push(req.web.executor.execute_tool_call(call).await);
-                }
-                prior_rounds.push(ToolCallRound {
-                    calls,
-                    results,
-                    reasoning_content,
-                });
-                debug!(round, "Processed web tool-call round");
-            }
+    match run_agent(req.llm_client.as_ref(), request, &executor, opts).await {
+        Ok(AgentOutcome::Text(text)) => AiResult::Ok(text),
+        Ok(AgentOutcome::Timeout { .. }) => AiResult::Timeout,
+        Ok(AgentOutcome::MaxRoundsExceeded) => {
+            AiResult::Error(eyre::eyre!("AI web-tool round limit reached"))
         }
+        Err(e) => AiResult::Error(e.into()),
     }
-
-    AiResult::Error(eyre::eyre!("AI web-tool round limit reached"))
 }
 
 impl AiCommand {
