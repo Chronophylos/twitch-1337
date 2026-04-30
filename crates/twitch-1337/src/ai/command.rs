@@ -8,8 +8,9 @@ use tracing::{debug, error, instrument, warn};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use llm::{
-    ChatCompletionRequest, LlmClient, Message, ToolCall, ToolCallRound, ToolChatCompletionRequest,
-    ToolChatCompletionResponse, ToolDefinition, ToolResultMessage,
+    AgentOpts, AgentOutcome, ChatCompletionRequest, LlmClient, Message, ToolCall, ToolCallRound,
+    ToolChatCompletionRequest, ToolChatCompletionResponse, ToolDefinition, ToolExecutor,
+    ToolResultMessage, run_agent,
 };
 
 use crate::ai::chat_history::{ChatHistory, ChatHistoryQuery, MAX_TOOL_RESULT_MESSAGES};
@@ -152,46 +153,31 @@ impl AiCommand {
         system_prompt: String,
         user_message: String,
     ) -> Result<String> {
-        let messages = build_base_messages(system_prompt, user_message);
-        let tools = vec![recent_chat_tool_definition()];
-        let mut prior_rounds: Vec<ToolCallRound> = Vec::new();
+        let chat_ctx = self
+            .chat_ctx
+            .as_ref()
+            .ok_or_else(|| eyre!("complete_ai_with_history_tool called without a chat context"))?;
 
-        for round in 0..CHAT_HISTORY_TOOL_MAX_ROUNDS {
-            let request = ToolChatCompletionRequest {
-                model: self.model.clone(),
-                messages: messages.clone(),
-                tools: tools.clone(),
-                reasoning_effort: self.reasoning_effort.clone(),
-                prior_rounds: prior_rounds.clone(),
-            };
+        let request = ToolChatCompletionRequest {
+            model: self.model.clone(),
+            messages: build_base_messages(system_prompt, user_message),
+            tools: vec![recent_chat_tool_definition()],
+            reasoning_effort: self.reasoning_effort.clone(),
+            prior_rounds: Vec::new(),
+        };
 
-            match self.llm_client.chat_completion_with_tools(request).await? {
-                ToolChatCompletionResponse::Message(text) => return Ok(text),
-                ToolChatCompletionResponse::ToolCalls {
-                    calls,
-                    reasoning_content,
-                } => {
-                    debug!(
-                        round,
-                        count = calls.len(),
-                        "AI chat history tool calls returned"
-                    );
-                    let mut results = Vec::with_capacity(calls.len());
-                    for call in &calls {
-                        results.push(self.execute_chat_history_tool(call).await);
-                    }
-                    prior_rounds.push(ToolCallRound {
-                        calls,
-                        results,
-                        reasoning_content,
-                    });
-                }
-            }
+        let executor = ChatHistoryExecutor { chat_ctx };
+        let opts = AgentOpts {
+            max_rounds: CHAT_HISTORY_TOOL_MAX_ROUNDS,
+            per_round_timeout: None,
+        };
+
+        match run_agent(&*self.llm_client, request, &executor, opts).await? {
+            AgentOutcome::Text(t) => Ok(t),
+            other => Err(eyre!(
+                "AI did not return a final message after tool rounds ({other:?})"
+            )),
         }
-
-        Err(eyre!(
-            "AI did not return a final message after {CHAT_HISTORY_TOOL_MAX_ROUNDS} tool rounds"
-        ))
     }
 }
 
@@ -203,57 +189,57 @@ struct RecentChatArgs {
     before_seq: Option<u64>,
 }
 
-impl AiCommand {
-    async fn execute_chat_history_tool(&self, call: &ToolCall) -> ToolResultMessage {
-        let content = self.chat_history_tool_content(call).await;
-        ToolResultMessage::for_call(call, content)
+struct ChatHistoryExecutor<'a> {
+    chat_ctx: &'a ChatContext,
+}
+
+#[async_trait]
+impl ToolExecutor for ChatHistoryExecutor<'_> {
+    async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
+        ToolResultMessage::for_call(call, chat_history_tool_content(self.chat_ctx, call).await)
+    }
+}
+
+async fn chat_history_tool_content(chat: &ChatContext, call: &ToolCall) -> String {
+    if call.name != CHAT_HISTORY_TOOL_NAME {
+        return format!("Unknown tool: {}", call.name);
     }
 
-    async fn chat_history_tool_content(&self, call: &ToolCall) -> String {
-        if call.name != CHAT_HISTORY_TOOL_NAME {
-            return format!("Unknown tool: {}", call.name);
+    let args: RecentChatArgs = match call.parse_args() {
+        Ok(a) => a,
+        Err(llm::ToolArgsError::Provider { error, raw }) => {
+            return format!(
+                "Error: tool '{name}' arguments were not valid JSON ({error}). Raw text: {raw}",
+                name = call.name,
+            );
         }
+        Err(llm::ToolArgsError::Deserialize { error }) => {
+            return format!(
+                "Error: tool '{name}' arguments were the wrong shape ({error})",
+                name = call.name,
+            );
+        }
+    };
 
-        let args: RecentChatArgs = match call.parse_args() {
-            Ok(a) => a,
-            Err(llm::ToolArgsError::Provider { error, raw }) => {
-                return format!(
-                    "Error: tool '{name}' arguments were not valid JSON ({error}). Raw text: {raw}",
-                    name = call.name,
-                );
-            }
-            Err(llm::ToolArgsError::Deserialize { error }) => {
-                return format!(
-                    "Error: tool '{name}' arguments were the wrong shape ({error})",
-                    name = call.name,
-                );
-            }
-        };
+    let page = chat.history.lock().await.query(ChatHistoryQuery {
+        limit: args.limit,
+        user: args.user,
+        contains: args.contains,
+        before_seq: args.before_seq,
+    });
 
-        let Some(chat) = self.chat_ctx.as_ref() else {
-            return "Chat history is disabled".to_string();
-        };
+    let returned = page.messages.len();
+    let messages = page.messages;
 
-        let page = chat.history.lock().await.query(ChatHistoryQuery {
-            limit: args.limit,
-            user: args.user,
-            contains: args.contains,
-            before_seq: args.before_seq,
-        });
-
-        let returned = page.messages.len();
-        let messages = page.messages;
-
-        serde_json::json!({
-            "messages_are_untrusted": true,
-            "messages": messages,
-            "returned": returned,
-            "has_more": page.has_more,
-            "next_before_seq": page.next_before_seq,
-            "max_limit": MAX_TOOL_RESULT_MESSAGES,
-        })
-        .to_string()
-    }
+    serde_json::json!({
+        "messages_are_untrusted": true,
+        "messages": messages,
+        "returned": returned,
+        "has_more": page.has_more,
+        "next_before_seq": page.next_before_seq,
+        "max_limit": MAX_TOOL_RESULT_MESSAGES,
+    })
+    .to_string()
 }
 
 fn build_base_messages(system_prompt: String, user_message: String) -> Vec<Message> {
