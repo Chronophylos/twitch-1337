@@ -3,7 +3,7 @@ mod common;
 use std::time::Duration;
 
 use common::TestBotBuilder;
-use llm::{ToolCall, ToolChatCompletionResponse};
+use llm::{Role, ToolCall, ToolChatCompletionResponse};
 use serial_test::serial;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -123,7 +123,7 @@ async fn ai_command_does_not_inline_chat_history() {
     let user_msg = call
         .messages
         .iter()
-        .find(|m| m.role == "user")
+        .find(|m| m.role == Role::User)
         .expect("request has a user message");
     assert!(
         !user_msg.content.contains("hello there"),
@@ -287,7 +287,7 @@ meaning = "steht nicht im aktuellen 7TV-Katalog"
     let system_msg = calls[0]
         .messages
         .iter()
-        .find(|m| m.role == "system")
+        .find(|m| m.role == Role::System)
         .expect("request has a system message");
     assert!(system_msg.content.contains("7TV emotes available"));
     assert!(system_msg.content.contains("KEKW"));
@@ -345,7 +345,7 @@ meaning = "lachen"
     let system_msg = calls[0]
         .messages
         .iter()
-        .find(|m| m.role == "system")
+        .find(|m| m.role == Role::System)
         .expect("request has a system message");
     assert!(!system_msg.content.contains("7TV emotes available"));
 

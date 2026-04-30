@@ -151,16 +151,7 @@ pub async fn run_consolidation(
         loop {
             let req = ToolChatCompletionRequest {
                 model: llm_config.model.clone(),
-                messages: vec![
-                    Message {
-                        role: "system".into(),
-                        content: sys.clone(),
-                    },
-                    Message {
-                        role: "user".into(),
-                        content: user.clone(),
-                    },
-                ],
+                messages: vec![Message::system(sys.clone()), Message::user(user.clone())],
                 tools: consolidator_tools(),
                 reasoning_effort: llm_config.reasoning_effort.clone(),
                 prior_rounds: prior.clone(),

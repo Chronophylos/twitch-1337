@@ -91,7 +91,7 @@ fn build_ollama_messages(request: &ToolChatCompletionRequest) -> Vec<serde_json:
         .iter()
         .map(|m| {
             serde_json::json!({
-                "role": m.role,
+                "role": m.role.to_string(),
                 "content": m.content,
             })
         })
@@ -169,7 +169,7 @@ impl LlmClient for OllamaClient {
                 .messages
                 .into_iter()
                 .map(|m| ApiMessage {
-                    role: m.role,
+                    role: m.role.to_string(),
                     content: m.content,
                 })
                 .collect(),
@@ -283,16 +283,7 @@ mod tests {
     fn build_messages_two_rounds_emits_correct_sequence() {
         let request = ToolChatCompletionRequest {
             model: "test-model".to_string(),
-            messages: vec![
-                Message {
-                    role: "system".to_string(),
-                    content: "sys".to_string(),
-                },
-                Message {
-                    role: "user".to_string(),
-                    content: "hi".to_string(),
-                },
-            ],
+            messages: vec![Message::system("sys"), Message::user("hi")],
             tools: vec![],
             reasoning_effort: None,
             prior_rounds: vec![

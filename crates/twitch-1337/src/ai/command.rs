@@ -258,16 +258,7 @@ impl AiCommand {
 }
 
 fn build_base_messages(system_prompt: String, user_message: String) -> Vec<Message> {
-    vec![
-        Message {
-            role: "system".to_string(),
-            content: system_prompt,
-        },
-        Message {
-            role: "user".to_string(),
-            content: user_message,
-        },
-    ]
+    vec![Message::system(system_prompt), Message::user(user_message)]
 }
 
 fn recent_chat_tool_definition() -> ToolDefinition {
@@ -322,14 +313,8 @@ pub(crate) struct WebChatRequest<'a> {
 
 pub(crate) async fn chat_with_web_tools(req: WebChatRequest<'_>) -> AiResult {
     let messages = vec![
-        Message {
-            role: "system".to_string(),
-            content: req.system_prompt,
-        },
-        Message {
-            role: "user".to_string(),
-            content: req.user_message,
-        },
+        Message::system(req.system_prompt),
+        Message::user(req.user_message),
     ];
 
     let tools = web_search::ai_tools();

@@ -30,8 +30,38 @@ impl fmt::Display for Role {
 /// A message in a chat completion conversation.
 #[derive(Debug, Clone)]
 pub struct Message {
-    pub role: String,
+    pub role: Role,
     pub content: String,
+}
+
+impl Message {
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::System,
+            content: content.into(),
+        }
+    }
+
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::User,
+            content: content.into(),
+        }
+    }
+
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+        }
+    }
+
+    pub fn tool(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::Tool,
+            content: content.into(),
+        }
+    }
 }
 
 /// A tool result message returned after executing a tool call.
@@ -145,5 +175,27 @@ mod role_tests {
             let back: Role = serde_json::from_str(&json).unwrap();
             assert_eq!(role, back);
         }
+    }
+}
+
+#[cfg(test)]
+mod message_tests {
+    use super::{Message, Role};
+
+    #[test]
+    fn constructors_set_the_right_role() {
+        assert_eq!(Message::system("hi").role, Role::System);
+        assert_eq!(Message::user("hi").role, Role::User);
+        assert_eq!(Message::assistant("hi").role, Role::Assistant);
+        assert_eq!(Message::tool("hi").role, Role::Tool);
+    }
+
+    #[test]
+    fn constructors_accept_string_and_str() {
+        let owned = String::from("owned");
+        let from_owned = Message::system(owned.clone());
+        let from_str = Message::system("borrowed");
+        assert_eq!(from_owned.content, owned);
+        assert_eq!(from_str.content, "borrowed");
     }
 }
