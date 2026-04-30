@@ -6,7 +6,7 @@ use tracing::{debug, instrument, trace, warn};
 use crate::client::LlmClient;
 use crate::error::{LlmError, Result};
 use crate::types::{
-    ChatCompletionRequest, ToolCall, ToolCallArgsError, ToolChatCompletionRequest,
+    ChatCompletionRequest, ToolArgsError, ToolCall, ToolChatCompletionRequest,
     ToolChatCompletionResponse,
 };
 use crate::util::truncate_for_echo;
@@ -165,19 +165,19 @@ fn build_openai_messages(request: &ToolChatCompletionRequest) -> Vec<serde_json:
 
 /// Parse the `arguments` string from an OpenAI-compatible tool call. Returns
 /// the parsed `Value` on success; on failure, returns `Value::Null` plus a
-/// `ToolCallArgsError` with the parse error and a truncated copy of the raw
+/// `ToolArgsError` with the parse error and a truncated copy of the raw
 /// payload, and emits a `warn!` tracing event. Executors use the error to
 /// surface a useful tool-result to the model instead of silently dropping.
 fn parse_tool_call_arguments(
     tool: &str,
     id: &str,
     raw: &str,
-) -> (serde_json::Value, Option<ToolCallArgsError>) {
+) -> (serde_json::Value, Option<ToolArgsError>) {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(v) => (v, None),
         Err(e) => {
             warn!(tool, id, error = %e, raw, "invalid tool-call JSON arguments");
-            let err = ToolCallArgsError {
+            let err = ToolArgsError::Provider {
                 error: e.to_string(),
                 raw: truncate_for_echo(raw, 512),
             };
@@ -620,8 +620,15 @@ mod tests {
         let (args, err) = parse_tool_call_arguments("save_memory", "X", raw);
         assert_eq!(args, serde_json::Value::Null);
         let err = err.expect("parse error must be set");
-        assert!(!err.error.is_empty());
-        assert_eq!(err.raw, raw);
+        let ToolArgsError::Provider {
+            error,
+            raw: returned_raw,
+        } = err
+        else {
+            panic!("expected Provider variant");
+        };
+        assert!(!error.is_empty());
+        assert_eq!(returned_raw, raw);
     }
 
     #[test]
@@ -644,9 +651,15 @@ mod tests {
         let raw = "x".repeat(1024);
         let (_, err) = parse_tool_call_arguments("save_memory", "X", &raw);
         let err = err.expect("parse error must be set");
-        assert!(err.raw.starts_with(&"x".repeat(512)));
-        assert!(err.raw.contains("more chars"));
-        assert!(err.raw.chars().count() < raw.chars().count());
+        let ToolArgsError::Provider {
+            raw: returned_raw, ..
+        } = err
+        else {
+            panic!("expected Provider variant");
+        };
+        assert!(returned_raw.starts_with(&"x".repeat(512)));
+        assert!(returned_raw.contains("more chars"));
+        assert!(returned_raw.chars().count() < raw.chars().count());
     }
 
     #[test]

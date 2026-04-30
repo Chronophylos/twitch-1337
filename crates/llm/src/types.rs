@@ -144,16 +144,29 @@ pub struct ToolCall {
     /// Set when the provider delivered `arguments` as an unparseable string
     /// (OpenAI-compatible APIs only).
     #[serde(default)]
-    pub arguments_parse_error: Option<ToolCallArgsError>,
+    pub arguments_parse_error: Option<ToolArgsError>,
 }
 
-/// Details of a malformed `arguments` payload returned from the LLM.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ToolCallArgsError {
-    pub error: String,
-    /// The raw string the provider sent. Already truncated to a bounded length
-    /// to avoid blowing up context budget when echoed back.
-    pub raw: String,
+/// Error from interpreting a tool call's `arguments` payload. The `Provider`
+/// variant is set programmatically by the OpenAI provider when the LLM
+/// returned an unparseable JSON string. The `Deserialize` variant is produced
+/// by [`ToolCall::parse_args`] when the caller-supplied target type cannot
+/// be built from the parsed JSON value.
+#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ToolArgsError {
+    #[error("provider returned malformed arguments: {error}")]
+    Provider { error: String, raw: String },
+    #[error("could not deserialize arguments: {error}")]
+    Deserialize { error: String },
+}
+
+impl From<serde_json::Error> for ToolArgsError {
+    fn from(e: serde_json::Error) -> Self {
+        ToolArgsError::Deserialize {
+            error: e.to_string(),
+        }
+    }
 }
 
 /// Response from a tool-calling chat completion.
@@ -229,5 +242,38 @@ mod tool_result_tests {
         assert_eq!(result.tool_call_id, "X");
         assert_eq!(result.tool_name, "save_memory");
         assert_eq!(result.content, "ok");
+    }
+}
+
+#[cfg(test)]
+mod tool_args_error_tests {
+    use super::ToolArgsError;
+
+    #[test]
+    fn provider_variant_round_trips_through_json() {
+        let err = ToolArgsError::Provider {
+            error: "unexpected token".to_string(),
+            raw: "not json".to_string(),
+        };
+        let json = serde_json::to_string(&err).unwrap();
+        let back: ToolArgsError = serde_json::from_str(&json).unwrap();
+        match back {
+            ToolArgsError::Provider { error, raw } => {
+                assert_eq!(error, "unexpected token");
+                assert_eq!(raw, "not json");
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_variant_built_from_serde_json_error() {
+        let parse_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
+        let wrapped: ToolArgsError = parse_err.into();
+        let rendered = wrapped.to_string();
+        assert!(
+            rendered.starts_with("could not deserialize arguments"),
+            "got: {rendered}"
+        );
     }
 }

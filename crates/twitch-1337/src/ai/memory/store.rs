@@ -375,12 +375,16 @@ impl MemoryStore {
     /// read-only inspection. Other tool names return an error string.
     pub fn execute_tool_call(&mut self, call: &ToolCall, ctx: &DispatchContext<'_>) -> String {
         if let Some(err) = &call.arguments_parse_error {
+            let (error, raw) = match err {
+                llm::ToolArgsError::Provider { error, raw } => (error.clone(), raw.clone()),
+                llm::ToolArgsError::Deserialize { error } => (error.clone(), String::new()),
+            };
             return format!(
                 "Error: tool '{name}' arguments were not valid JSON ({error}). \
                  Raw text: {raw}. Resend with a valid JSON object.",
                 name = call.name,
-                error = err.error,
-                raw = err.raw,
+                error = error,
+                raw = raw,
             );
         }
         match call.name.as_str() {
@@ -520,12 +524,16 @@ impl MemoryStore {
     /// `execute_tool_call`) so the LLM can correct and retry.
     pub fn execute_consolidator_tool(&mut self, call: &ToolCall, now: DateTime<Utc>) -> String {
         if let Some(err) = &call.arguments_parse_error {
+            let (error, raw) = match err {
+                llm::ToolArgsError::Provider { error, raw } => (error.clone(), raw.clone()),
+                llm::ToolArgsError::Deserialize { error } => (error.clone(), String::new()),
+            };
             return format!(
                 "Error: tool '{name}' arguments were not valid JSON ({error}). \
                  Raw text: {raw}. Resend with a valid JSON object.",
                 name = call.name,
-                error = err.error,
-                raw = err.raw,
+                error = error,
+                raw = raw,
             );
         }
         match call.name.as_str() {
@@ -1024,7 +1032,7 @@ mod tests {
             id: "c1".to_string(),
             name: "save_memory".to_string(),
             arguments: serde_json::Value::Null,
-            arguments_parse_error: Some(llm::ToolCallArgsError {
+            arguments_parse_error: Some(llm::ToolArgsError::Provider {
                 error: "expected `,` or `}` at line 1 column 17".to_string(),
                 raw: "{\"slug\":\"k\" \"fact\":\"f\"}".to_string(),
             }),
@@ -1282,7 +1290,7 @@ mod tests {
             id: "c".into(),
             name: "drop_memory".into(),
             arguments: serde_json::Value::Null,
-            arguments_parse_error: Some(llm::ToolCallArgsError {
+            arguments_parse_error: Some(llm::ToolArgsError::Provider {
                 error: "boom".into(),
                 raw: "{".into(),
             }),

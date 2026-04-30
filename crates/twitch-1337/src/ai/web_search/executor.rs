@@ -44,11 +44,15 @@ impl WebToolExecutor {
 
     async fn execute(&self, call: &ToolCall) -> String {
         if let Some(parse_err) = &call.arguments_parse_error {
+            let (details, raw) = match parse_err {
+                llm::ToolArgsError::Provider { error, raw } => (error.clone(), raw.clone()),
+                llm::ToolArgsError::Deserialize { error } => (error.clone(), String::new()),
+            };
             return json!({
                 "error": "invalid_arguments_json",
                 "tool": call.name,
-                "details": parse_err.error,
-                "raw": parse_err.raw,
+                "details": details,
+                "raw": raw,
             })
             .to_string();
         }
@@ -196,7 +200,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use llm::ToolCallArgsError;
+    use llm::ToolArgsError;
 
     use super::*;
 
@@ -235,7 +239,7 @@ mod tests {
             id: "c1".into(),
             name: "web_search".into(),
             arguments: serde_json::Value::Null,
-            arguments_parse_error: Some(ToolCallArgsError {
+            arguments_parse_error: Some(ToolArgsError::Provider {
                 error: "expected value".into(),
                 raw: "{bad".into(),
             }),

@@ -201,11 +201,15 @@ impl AiCommand {
 
     async fn chat_history_tool_content(&self, call: &ToolCall) -> String {
         if let Some(err) = &call.arguments_parse_error {
+            let (error, raw) = match err {
+                llm::ToolArgsError::Provider { error, raw } => (error.clone(), raw.clone()),
+                llm::ToolArgsError::Deserialize { error } => (error.clone(), String::new()),
+            };
             return format!(
                 "Error: tool '{name}' arguments were not valid JSON ({error}). Raw text: {raw}",
                 name = call.name,
-                error = err.error,
-                raw = err.raw,
+                error = error,
+                raw = raw,
             );
         }
         if call.name != CHAT_HISTORY_TOOL_NAME {
