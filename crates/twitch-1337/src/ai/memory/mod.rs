@@ -6,6 +6,7 @@ pub mod scope;
 pub mod store;
 pub mod store_v2;
 pub mod tools;
+pub mod tools_v2;
 pub mod transcript;
 pub mod types;
 
