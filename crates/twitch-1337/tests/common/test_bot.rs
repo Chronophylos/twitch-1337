@@ -118,7 +118,7 @@ impl TestBotBuilder {
         // NOTE: because TempDir is created inside spawn(), we can't write
         // here; instead, callers should create their own TempDir and call
         // spawn_with_data_dir(), or use a pre-spawn hook. For the v1_store
-        // test we use the unit-level test in store_v2::tests which already
+        // test we use the unit-level test in store::tests which already
         // covers the rename path. Document in the test file.
         self
     }
@@ -392,8 +392,8 @@ impl TestBot {
     /// dreamer ritual for `yesterday`.
     pub async fn run_ritual_for(&self, yesterday: chrono::NaiveDate) {
         use twitch_1337::ai::memory::{
-            RitualConfig, run_ritual, store_v2::MemoryStore as StoreV2,
-            transcript::TranscriptWriter, types::Caps,
+            RitualConfig, run_ritual, store::MemoryStore as StoreV2, transcript::TranscriptWriter,
+            types::Caps,
         };
 
         let store = StoreV2::open(self.data_dir.path(), Caps::default())

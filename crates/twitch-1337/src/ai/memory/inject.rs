@@ -4,7 +4,7 @@
 use eyre::Result;
 use rand::Rng as _;
 
-use crate::ai::memory::store_v2::MemoryStore;
+use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::types::{FileKind, MemoryFile};
 
 const FENCE_OPEN: &str = "<<<FILE";
@@ -96,7 +96,7 @@ pub async fn build_chat_turn_context(store: &MemoryStore, opts: BuildOpts) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::memory::store_v2::MemoryStore;
+    use crate::ai::memory::store::MemoryStore;
     use crate::ai::memory::types::{Caps, FileKind};
 
     #[test]

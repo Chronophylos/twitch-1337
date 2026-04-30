@@ -9,14 +9,16 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
-#[ignore = "memory v2 rework — fix in T16"]
 #[serial]
 async fn ai_reply_includes_parent_message() {
+    // Legacy path: memory disabled + history_length=0 → plain chat completion.
+    // The reply context (replied-to author + message) must appear in the user prompt.
     let bot = TestBotBuilder::new()
         .with_ai()
         .with_config(|c| {
             if let Some(ai) = c.ai.as_mut() {
                 ai.history_length = 0;
+                ai.memory.enabled = false;
             }
         })
         .spawn()
@@ -48,14 +50,16 @@ async fn ai_reply_includes_parent_message() {
 }
 
 #[tokio::test]
-#[ignore = "memory v2 rework — fix in T16"]
 #[serial]
 async fn grok_without_reply_behaves_like_ai_alias() {
+    // Legacy path: memory disabled + history_length=0. @grok with no reply
+    // context behaves like a plain !ai call via plain chat completion.
     let bot = TestBotBuilder::new()
         .with_ai()
         .with_config(|c| {
             if let Some(ai) = c.ai.as_mut() {
                 ai.history_length = 0;
+                ai.memory.enabled = false;
             }
         })
         .spawn()
@@ -83,14 +87,16 @@ async fn grok_without_reply_behaves_like_ai_alias() {
 }
 
 #[tokio::test]
-#[ignore = "memory v2 rework — fix in T16"]
 #[serial]
 async fn grok_reply_with_leading_mention_triggers_alias() {
+    // Legacy path: memory disabled + history_length=0. @grok with a leading
+    // mention and a reply includes the replied-to context in the user prompt.
     let bot = TestBotBuilder::new()
         .with_ai()
         .with_config(|c| {
             if let Some(ai) = c.ai.as_mut() {
                 ai.history_length = 0;
+                ai.memory.enabled = false;
             }
         })
         .spawn()
@@ -129,14 +135,16 @@ async fn grok_reply_with_leading_mention_triggers_alias() {
 }
 
 #[tokio::test]
-#[ignore = "memory v2 rework — fix in T16"]
 #[serial]
 async fn grok_empty_reply_with_leading_mention_uses_default_instruction() {
+    // Legacy path: memory disabled + history_length=0. @grok with no explicit
+    // instruction triggers the default "check the reply" instruction.
     let bot = TestBotBuilder::new()
         .with_ai()
         .with_config(|c| {
             if let Some(ai) = c.ai.as_mut() {
                 ai.history_length = 0;
+                ai.memory.enabled = false;
             }
         })
         .spawn()
@@ -169,14 +177,16 @@ async fn grok_empty_reply_with_leading_mention_uses_default_instruction() {
 }
 
 #[tokio::test]
-#[ignore = "memory v2 rework — fix in T16"]
 #[serial]
 async fn grok_strips_visible_reasoning_prefix_from_response() {
+    // Legacy path: memory disabled + history_length=0. The "thought …|…" prefix
+    // in the LLM response is stripped before forwarding to chat.
     let bot = TestBotBuilder::new()
         .with_ai()
         .with_config(|c| {
             if let Some(ai) = c.ai.as_mut() {
                 ai.history_length = 0;
+                ai.memory.enabled = false;
             }
         })
         .spawn()
@@ -194,9 +204,10 @@ async fn grok_strips_visible_reasoning_prefix_from_response() {
 }
 
 #[tokio::test]
-#[ignore = "memory v2 rework — fix in T16"]
 #[serial]
 async fn grok_uses_web_tools_when_enabled() {
+    // Legacy path: memory disabled, web tools enabled. @grok with a reply
+    // forces a web_search round before returning the final answer.
     let search = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/search"))
@@ -217,6 +228,7 @@ async fn grok_uses_web_tools_when_enabled() {
         .with_ai()
         .with_config(|c| {
             if let Some(ai) = c.ai.as_mut() {
+                ai.memory.enabled = false;
                 ai.web.enabled = true;
                 ai.web.base_url = format!("{}/search", search.uri());
                 ai.web.timeout = 5;

@@ -14,8 +14,8 @@ use llm::{
 
 use crate::ai::chat_history::{ChatHistory, ChatHistoryQuery, MAX_TOOL_RESULT_MESSAGES};
 use crate::ai::memory::inject;
-use crate::ai::memory::store_v2::MemoryStore;
-use crate::ai::memory::tools_v2::{
+use crate::ai::memory::store::MemoryStore;
+use crate::ai::memory::tools::{
     ChatTurnExecutor, ChatTurnExecutorOpts, SayChannel, chat_turn_tools,
 };
 use crate::ai::memory::transcript::TranscriptWriter;

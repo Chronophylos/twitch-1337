@@ -139,7 +139,7 @@ async fn memory_v2_silent() {
 /// (the MemoryStore seed writes an empty LORE.md at startup, so the file
 /// exists but its body is "").
 ///
-/// Moderator write path is unit-tested in tools_v2; one branch is enough here.
+/// Moderator write path is unit-tested in tools; one branch is enough here.
 #[tokio::test]
 #[serial]
 async fn memory_v2_perms() {
@@ -370,7 +370,7 @@ async fn chat_turn_injection() {
 // 9. v1 store discarded on open
 // ---------------------------------------------------------------------------
 
-/// The unit test `store_v2::tests::open_renames_v1_store_when_present` already
+/// The unit test `store::tests::open_renames_v1_store_when_present` already
 /// covers the rename path end-to-end against a real TempDir. We skip the
 /// integration-level version here because `TestBotBuilder` creates the TempDir
 /// inside `spawn()`, making it impossible to seed files before `open()` is
@@ -379,7 +379,7 @@ async fn chat_turn_injection() {
 /// If a `seed_file()` builder that defers writes is added in a future task,
 /// replace this placeholder with an actual integration test.
 #[tokio::test]
-#[ignore = "v1 disposal covered by store_v2::tests::open_renames_v1_store_when_present unit test; integration version needs seed_file builder (future task)"]
+#[ignore = "v1 disposal covered by store::tests::open_renames_v1_store_when_present unit test; integration version needs seed_file builder (future task)"]
 #[serial]
 async fn v1_store_discarded() {
     // See comment above.

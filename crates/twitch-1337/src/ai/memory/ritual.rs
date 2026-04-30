@@ -16,8 +16,8 @@ use crate::ai::memory::inject::{
     BuildOpts, SubstitutionVars, build_chat_turn_context, fence_block, fresh_nonce,
     scrub_for_inject, substitute,
 };
-use crate::ai::memory::store_v2::MemoryStore;
-use crate::ai::memory::tools_v2::{DreamerExecutor, DreamerExecutorOpts, dreamer_tools};
+use crate::ai::memory::store::MemoryStore;
+use crate::ai::memory::tools::{DreamerExecutor, DreamerExecutorOpts, dreamer_tools};
 use crate::ai::memory::transcript::TranscriptWriter;
 
 pub struct RitualConfig {
