@@ -1,71 +1,42 @@
-[package]
-name = "twitch-1337"
+[workspace]
+resolver = "3"
+members = ["crates/twitch-1337", "crates/llm"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
-[features]
-testing = []
-
-[dependencies]
+[workspace.dependencies]
 async-trait = "0.1.89"
-chrono = { version = "0.4.44", features = [
-  "now",
-  "serde",
-], default-features = false }
+chrono = { version = "0.4.44", features = ["now", "serde"], default-features = false }
 chrono-tz = { version = "0.10.4", features = ["filter-by-regex"] }
 color-eyre = "0.6"
+csv = "1.4.0"
+eyre = "0.6.12"
+notify-debouncer-mini = "0.7"
 rand = "0.10.1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 ron = "0.12.1"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+schemars = { version = "0.9", features = ["derive"] }
+scraper = "0.26"
 secrecy = { version = "0.10", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1.52.1", features = [
-  "macros",
-  "rt-multi-thread",
-  "signal",
-  "time",
-  "fs",
-] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-twitch-irc = { version = "6.0", default-features = false, features = [
-  "refreshing-token-rustls-webpki-roots",
-  "transport-tcp-rustls-webpki-roots",
-] }
-reqwest = { version = "0.13", default-features = false, features = [
-  "json",
-  "rustls-no-provider",
-] }
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
-eyre = "0.6.12"
-tracing-error = "0.2.1"
+thiserror = "2.0.18"
+tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "signal", "time", "fs"] }
 toml = "1.1.2"
-notify-debouncer-mini = "0.7"
-random-flight = { git = "https://github.com/Chronophylos/random-flight.git", rev = "261c2ba4a53770b51fbfb1ab93a806027eaf4fdf" }
-csv = "1.4.0"
-scraper = "0.26"
+tracing = "0.1"
+tracing-error = "0.2.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-[dev-dependencies]
-twitch-1337 = { path = ".", features = ["testing"] }
-tempfile = "3"
-wiremock = "0.6"
-serial_test = "3"
-tokio = { version = "1.52.1", features = ["test-util"] }
-async-trait = "0.1"
-bytes = "1"
-either = "1"
-futures-util = "0.3"
-tokio-stream = "0.1"
-tokio-util = { version = "0.7", features = ["codec"] }
-proptest = "1.11"
-
-[patch.crates-io]
-twitch-irc = { path = "vendor/twitch-irc" }
-
-[lints.clippy]
+[workspace.lints.clippy]
 cast_lossless = "warn"
 implicit_clone = "warn"
 needless_continue = "warn"
 redundant_closure_for_method_calls = "warn"
 semicolon_if_nothing_returned = "warn"
+
+[patch.crates-io]
+twitch-irc = { path = "crates/twitch-1337/vendor/twitch-irc" }

@@ -1,6 +1,6 @@
 # AI Prompts
 
-The bot's prompts live as Markdown files under `$DATA_DIR/prompts/`. Edit them live — every invocation reads from disk, so changes are picked up immediately. Defaults are bundled in `data/prompts/` and seeded on first run if the file is missing.
+The bot's prompts live as Markdown files under `$DATA_DIR/prompts/`. Edit them live — every invocation reads from disk, so changes are picked up immediately. Defaults are bundled in `crates/twitch-1337/data/prompts/` and seeded on first run if the file is missing.
 
 ## Files
 
@@ -46,7 +46,7 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 
 1. Edit the file under `$DATA_DIR/prompts/` (e.g. `/var/lib/twitch-1337/prompts/system.md` on the production host).
 2. Trigger `!ai` (or wait for the ritual) and observe.
-3. To roll back, copy the bundled default from `data/prompts/` in the repo.
+3. To roll back, copy the bundled default from `crates/twitch-1337/data/prompts/` in the repo.
 
 To restore a default: delete the file under `$DATA_DIR/prompts/` and restart. The seed-on-startup logic rewrites the bundled default. (Editing in place and never deleting means the bundled default is never re-applied — owner edits always win.)
 
@@ -57,4 +57,4 @@ Memory file caps (SOUL 4 KiB, LORE 12 KiB, user 4 KiB, state 2 KiB) are enforced
 ## See also
 
 - `docs/superpowers/specs/2026-04-28-ai-memory-rework-v2-design.md` — full design.
-- `data/prompts/*.md` — bundled defaults for the three prompt files.
+- `crates/twitch-1337/data/prompts/*.md` — bundled defaults for the three prompt files.

@@ -234,7 +234,7 @@ Three prompt files live under `$DATA_DIR/prompts/`:
 
 **Loading**: `store.rs` reads each file from disk on every use. Owner edits picked up live without restart.
 
-**Defaults**: bundled via `include_str!` from `data/prompts/{system,ai_instructions,dreamer}.md`. On startup, missing files are written from the bundled default. Existing files are never overwritten.
+**Defaults**: bundled via `include_str!` from `crates/twitch-1337/data/prompts/{system,ai_instructions,dreamer}.md`. On startup, missing files are written from the bundled default. Existing files are never overwritten.
 
 **Substitution**: simple `str::replace` on `{speaker_username}`, `{speaker_role}`, `{date}`, `{channel}`. Unknown tokens left literal. Substitution runs only on the loaded prompt-file content, before memory bodies and transcript are concatenated. Never applied to memory bodies, state bodies, or transcript lines.
 
