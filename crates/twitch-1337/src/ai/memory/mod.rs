@@ -1,6 +1,7 @@
 pub mod consolidation;
 pub mod extraction;
 pub mod frontmatter;
+pub mod inject;
 pub mod sanitize;
 pub mod scope;
 pub mod store;
