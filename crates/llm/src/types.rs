@@ -147,6 +147,19 @@ pub struct ToolCall {
     pub arguments_parse_error: Option<ToolArgsError>,
 }
 
+impl ToolCall {
+    /// Parse the call's `arguments` into a typed struct. If the provider
+    /// already flagged the payload as unparseable, the existing
+    /// [`ToolArgsError::Provider`] is returned. Otherwise the call's
+    /// `arguments` is deserialized into `T`.
+    pub fn parse_args<T: serde::de::DeserializeOwned>(&self) -> Result<T, ToolArgsError> {
+        if let Some(err) = &self.arguments_parse_error {
+            return Err(err.clone());
+        }
+        serde_json::from_value(self.arguments.clone()).map_err(Into::into)
+    }
+}
+
 /// Error from interpreting a tool call's `arguments` payload. The `Provider`
 /// variant is set programmatically by the OpenAI provider when the LLM
 /// returned an unparseable JSON string. The `Deserialize` variant is produced
@@ -275,5 +288,65 @@ mod tool_args_error_tests {
             rendered.starts_with("could not deserialize arguments"),
             "got: {rendered}"
         );
+    }
+}
+
+#[cfg(test)]
+mod parse_args_tests {
+    use serde::Deserialize;
+
+    use super::{ToolArgsError, ToolCall};
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    struct Demo {
+        slug: String,
+        n: u32,
+    }
+
+    fn call_with(args: serde_json::Value) -> ToolCall {
+        ToolCall {
+            id: "X".into(),
+            name: "demo".into(),
+            arguments: args,
+            arguments_parse_error: None,
+        }
+    }
+
+    #[test]
+    fn parse_args_success_returns_typed_value() {
+        let call = call_with(serde_json::json!({"slug": "k", "n": 7}));
+        let parsed: Demo = call.parse_args().unwrap();
+        assert_eq!(
+            parsed,
+            Demo {
+                slug: "k".into(),
+                n: 7
+            }
+        );
+    }
+
+    #[test]
+    fn parse_args_passes_through_provider_error() {
+        let mut call = call_with(serde_json::Value::Null);
+        call.arguments_parse_error = Some(ToolArgsError::Provider {
+            error: "missing comma".into(),
+            raw: "{".into(),
+        });
+        let err = call.parse_args::<Demo>().unwrap_err();
+        let ToolArgsError::Provider { error, raw } = err else {
+            panic!("expected Provider variant");
+        };
+        assert_eq!(error, "missing comma");
+        assert_eq!(raw, "{");
+    }
+
+    #[test]
+    fn parse_args_returns_deserialize_variant_on_type_mismatch() {
+        let call = call_with(serde_json::json!({"slug": 1}));
+        let err = call.parse_args::<Demo>().unwrap_err();
+        match err {
+            ToolArgsError::Deserialize { error } => assert!(!error.is_empty()),
+            other => panic!("expected Deserialize variant, got {other:?}"),
+        }
     }
 }
