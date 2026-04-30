@@ -218,6 +218,7 @@ where
                 memory_v2: ai_memory_v2,
                 web: web.clone(),
                 emotes: emote_provider,
+                bot_username: bot_username.clone(),
             },
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(

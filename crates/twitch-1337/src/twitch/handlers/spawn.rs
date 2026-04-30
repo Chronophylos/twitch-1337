@@ -102,7 +102,7 @@ where
         suspension_manager,
         llm,
         ai_memory_v2,
-        transcript: _transcript,
+        transcript,
         whisper,
         aviation,
         aviation_for_commands,
@@ -184,6 +184,17 @@ where
             run_latency_handler(client, btx, lat).await;
         }
     });
+
+    let _transcript_tap = if let Some(t) = transcript {
+        let rx = broadcast_tx.subscribe();
+        let w = Arc::new(t);
+        let ch = config.twitch.channel.clone();
+        Some(tokio::spawn(async move {
+            crate::twitch::handlers::transcript::run_transcript_tap(rx, w, ch).await;
+        }))
+    } else {
+        None
+    };
 
     let tracker_1337 = tokio::spawn({
         let btx = broadcast_tx.clone();

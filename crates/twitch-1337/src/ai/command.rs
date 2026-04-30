@@ -89,6 +89,7 @@ pub struct AiCommand {
     memory_v2: Option<AiMemoryV2>,
     web: Option<AiWeb>,
     emotes: Option<Arc<SevenTvEmoteProvider>>,
+    bot_username: String,
 }
 
 pub struct AiCommandDeps {
@@ -102,6 +103,7 @@ pub struct AiCommandDeps {
     pub memory_v2: Option<AiMemoryV2>,
     pub web: Option<AiWeb>,
     pub emotes: Option<Arc<SevenTvEmoteProvider>>,
+    pub bot_username: String,
 }
 const CHAT_HISTORY_TOOL_NAME: &str = "get_recent_chat";
 const CHAT_HISTORY_TOOL_MAX_ROUNDS: usize = 4;
@@ -138,6 +140,7 @@ impl AiCommand {
             memory_v2: deps.memory_v2,
             web: deps.web,
             emotes: deps.emotes,
+            bot_username: deps.bot_username,
         }
     }
 
@@ -569,10 +572,22 @@ where
             // Drain `say` lines as they arrive — fire-and-forget chat sends in their tool order.
             let client = ctx.client.clone();
             let privmsg_for_reply = ctx.privmsg.clone();
+            let transcript_for_drain = mem.transcript.clone();
+            let bot_username_for_drain = self.bot_username.clone();
             let drainer = tokio::spawn(async move {
                 while let Some(line) = say_rx.recv().await {
-                    if let Err(e) = client.say_in_reply_to(&privmsg_for_reply, line).await {
+                    let ts = Utc::now();
+                    if let Err(e) = client
+                        .say_in_reply_to(&privmsg_for_reply, line.clone())
+                        .await
+                    {
                         error!(error = ?e, "say drain failed");
+                    }
+                    if let Err(e) = transcript_for_drain
+                        .append_line(ts, &bot_username_for_drain, &line)
+                        .await
+                    {
+                        error!(error = ?e, "transcript bot-reply append failed");
                     }
                 }
             });

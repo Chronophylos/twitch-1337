@@ -9,3 +9,4 @@ pub mod router;
 pub mod schedules;
 pub mod spawn;
 pub mod tracker_1337;
+pub mod transcript;
