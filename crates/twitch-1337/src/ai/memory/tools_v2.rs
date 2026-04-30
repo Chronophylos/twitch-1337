@@ -344,6 +344,46 @@ impl ToolExecutor for ChatTurnExecutor {
 }
 
 // ---------------------------------------------------------------------------
+// DreamerExecutor
+// ---------------------------------------------------------------------------
+
+pub struct DreamerExecutorOpts {
+    pub store: MemoryStore,
+    pub max_state_files: usize,
+    pub max_writes_per_turn: usize,
+}
+
+pub struct DreamerExecutor {
+    inner: ChatTurnExecutor,
+}
+
+impl DreamerExecutor {
+    pub fn new(opts: DreamerExecutorOpts) -> Self {
+        Self {
+            inner: ChatTurnExecutor::new(ChatTurnExecutorOpts {
+                store: opts.store,
+                speaker_user_id: "dreamer".into(),
+                speaker_display_name: String::new(),
+                speaker_role: Role::Dreamer,
+                max_state_files: opts.max_state_files,
+                max_writes_per_turn: opts.max_writes_per_turn,
+                say: SayChannel::collecting(), // never used; dreamer never sees `say`.
+            }),
+        }
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for DreamerExecutor {
+    async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
+        if call.name == "say" {
+            return ToolResultMessage::for_call(call, "unknown_tool");
+        }
+        self.inner.execute(call).await
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -608,5 +648,44 @@ mod exec_tests {
         let line = &lines[0];
         assert!(line.ends_with('\u{2026}'));
         assert!(line.chars().count() <= 500);
+    }
+
+    #[tokio::test]
+    async fn dreamer_can_write_soul_lore_any_user() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), Caps::default())
+            .await
+            .unwrap();
+        let exec = DreamerExecutor::new(DreamerExecutorOpts {
+            store: store.clone(),
+            max_state_files: 16,
+            max_writes_per_turn: 32,
+        });
+        for path in ["SOUL.md", "LORE.md", "users/77.md"] {
+            let r = exec
+                .execute(&call(
+                    "write_file",
+                    serde_json::json!({"path": path, "body": "x"}),
+                ))
+                .await;
+            assert_eq!(r.content, "ok", "dreamer write {path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn dreamer_say_returns_unknown_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), Caps::default())
+            .await
+            .unwrap();
+        let exec = DreamerExecutor::new(DreamerExecutorOpts {
+            store,
+            max_state_files: 16,
+            max_writes_per_turn: 32,
+        });
+        let r = exec
+            .execute(&call("say", serde_json::json!({"text": "hi"})))
+            .await;
+        assert_eq!(r.content, "unknown_tool");
     }
 }
