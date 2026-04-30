@@ -17,8 +17,8 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use llm::{
-    Message, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse,
-    ToolResultMessage,
+    AgentOpts, AgentOutcome, Message, ToolCall, ToolChatCompletionRequest, ToolExecutor,
+    ToolResultMessage, run_agent,
 };
 
 use crate::ai::memory::store::{Caps, DispatchContext, MemoryStore};
@@ -75,6 +75,34 @@ pub fn spawn_memory_extraction(deps: ExtractionDeps, ctx: ExtractionContext) {
     });
 }
 
+struct ExtractionExecutor<'a> {
+    deps: &'a ExtractionDeps,
+    ctx: &'a ExtractionContext,
+}
+
+impl ExtractionExecutor<'_> {
+    fn dctx(&self) -> DispatchContext<'_> {
+        DispatchContext {
+            speaker_id: &self.ctx.speaker_id,
+            speaker_username: &self.ctx.speaker_username,
+            speaker_role: self.ctx.speaker_role,
+            caps: self.deps.caps.clone(),
+            half_life_days: self.deps.half_life_days,
+            now: Utc::now(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor for ExtractionExecutor<'_> {
+    async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
+        let mut w = self.deps.store.write().await;
+        let result = w.execute_tool_call(call, &self.dctx());
+        info!(tool = %call.name, result = %result, "extraction tool executed");
+        ToolResultMessage::for_call(call, result)
+    }
+}
+
 /// Run a single extraction pass: upsert the speaker's identity, snapshot the
 /// scope-relevant memories, and drive the extractor tool-call loop until the
 /// model returns a plain-text response or `deps.max_rounds` is reached.
@@ -109,63 +137,44 @@ pub async fn run_memory_extraction(deps: ExtractionDeps, ctx: ExtractionContext)
         ctx.ai_response,
     );
 
-    let tools = extractor_tools();
-    let messages = vec![Message::system(SYSTEM_PROMPT), Message::user(user_content)];
-    let mut prior_rounds: Vec<ToolCallRound> = Vec::new();
+    let request = ToolChatCompletionRequest {
+        model: deps.model.clone(),
+        messages: vec![Message::system(SYSTEM_PROMPT), Message::user(user_content)],
+        tools: extractor_tools(),
+        reasoning_effort: deps.reasoning_effort.clone(),
+        prior_rounds: Vec::new(),
+    };
 
-    for round in 0..deps.max_rounds {
-        let req = ToolChatCompletionRequest {
-            model: deps.model.clone(),
-            messages: messages.clone(),
-            tools: tools.clone(),
-            reasoning_effort: deps.reasoning_effort.clone(),
-            prior_rounds: prior_rounds.clone(),
-        };
-        let resp = tokio::time::timeout(deps.timeout, deps.llm.chat_completion_with_tools(req))
-            .await
-            .wrap_err("Memory extraction timed out")?
-            .wrap_err("Memory extraction LLM call failed")?;
-        match resp {
-            ToolChatCompletionResponse::Message(_) => {
-                debug!(round, "Memory extraction finished (text response)");
-                break;
-            }
-            ToolChatCompletionResponse::ToolCalls {
-                calls,
-                reasoning_content,
-            } => {
-                debug!(
-                    round,
-                    count = calls.len(),
-                    "Memory extraction: processing tool calls"
-                );
-                let mut results: Vec<ToolResultMessage> = Vec::with_capacity(calls.len());
-                let save_snapshot = {
-                    let mut w = deps.store.write().await;
-                    for call in &calls {
-                        let dctx = DispatchContext {
-                            speaker_id: &ctx.speaker_id,
-                            speaker_username: &ctx.speaker_username,
-                            speaker_role: ctx.speaker_role,
-                            caps: deps.caps.clone(),
-                            half_life_days: deps.half_life_days,
-                            now: Utc::now(),
-                        };
-                        let result = w.execute_tool_call(call, &dctx);
-                        info!(tool = %call.name, result = %result, "extraction tool executed");
-                        results.push(ToolResultMessage::for_call(call, result));
-                    }
-                    w.clone()
-                };
-                save_snapshot.save(&deps.store_path)?;
-                prior_rounds.push(ToolCallRound {
-                    calls,
-                    results,
-                    reasoning_content,
-                });
-            }
+    let executor = ExtractionExecutor {
+        deps: &deps,
+        ctx: &ctx,
+    };
+    let opts = AgentOpts {
+        max_rounds: deps.max_rounds,
+        per_round_timeout: Some(deps.timeout),
+    };
+
+    let outcome = run_agent(&*deps.llm, request, &executor, opts)
+        .await
+        .wrap_err("Memory extraction LLM call failed")?;
+    match outcome {
+        AgentOutcome::Text(_) => {
+            debug!("Memory extraction finished (text response)");
+        }
+        AgentOutcome::MaxRoundsExceeded => {
+            debug!(
+                rounds = deps.max_rounds,
+                "Memory extraction reached max_rounds"
+            );
+        }
+        AgentOutcome::Timeout { round } => {
+            warn!(round, "Memory extraction timed out");
         }
     }
+
+    let snapshot = deps.store.read().await.clone();
+    snapshot.save(&deps.store_path)?;
+
     Ok(())
 }
 

@@ -8,8 +8,8 @@ use tokio::sync::{Notify, RwLock};
 use tracing::{debug, info, warn};
 
 use llm::{
-    Message, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse,
-    ToolResultMessage,
+    AgentOpts, AgentOutcome, Message, ToolCall, ToolChatCompletionRequest, ToolExecutor,
+    ToolResultMessage, run_agent,
 };
 
 use crate::ai::memory::Memory;
@@ -58,6 +58,52 @@ pub fn corroboration_boost(m: &Memory) -> u8 {
         .unwrap_or(u32::MAX)
         .saturating_mul(5);
     u8::try_from(u32::from(m.confidence).saturating_add(bonus).min(100)).unwrap_or(100)
+}
+
+/// Per-call ToolExecutor for the consolidation pass.
+///
+/// Acquires the store write lock per tool call (one round previously held the
+/// write lock for the entire batch and pre-sorted calls drop → merge → edit).
+/// Under `run_agent`, the runner walks calls in the order the LLM emitted; the
+/// pre-sort is gone. Counters live behind `&self` via atomics because the
+/// trait method takes `&self`.
+struct ConsolidationExecutor<'a> {
+    store: &'a Arc<RwLock<MemoryStore>>,
+    now: DateTime<Utc>,
+    counters: ConsolidationCounters,
+}
+
+#[derive(Default, Clone)]
+struct ConsolidationCounters {
+    merged: Arc<std::sync::atomic::AtomicUsize>,
+    dropped: Arc<std::sync::atomic::AtomicUsize>,
+    edited: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor for ConsolidationExecutor<'_> {
+    async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
+        use std::sync::atomic::Ordering;
+
+        let out = {
+            let mut w = self.store.write().await;
+            w.execute_consolidator_tool(call, self.now)
+        };
+        match call.name.as_str() {
+            "merge_memories" if out.starts_with("Merged") => {
+                self.counters.merged.fetch_add(1, Ordering::Relaxed);
+            }
+            "drop_memory" if out.starts_with("Dropped") => {
+                self.counters.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            "edit_memory" if out.starts_with("Edited") => {
+                self.counters.edited.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+        info!(tool = %call.name, result = %out, "consolidation tool executed");
+        ToolResultMessage::for_call(call, out)
+    }
 }
 
 /// Run a single consolidation pass end-to-end:
@@ -114,9 +160,7 @@ pub async fn run_consolidation(
     }
 
     // 4. LLM pass per scope (user, lore, pref)
-    let mut merged = 0usize;
-    let mut dropped = 0usize;
-    let mut edited = 0usize;
+    let counters = ConsolidationCounters::default();
     for tag in ["user", "lore", "pref"] {
         let scope_snapshot: Vec<(String, Memory)> = {
             let r = store.read().await;
@@ -147,63 +191,45 @@ pub async fn run_consolidation(
              Respond with tool calls only; stop when done."
         );
         let user = format!("Current memories in scope {tag}:\n{listing}");
-        let mut prior: Vec<ToolCallRound> = Vec::new();
-        loop {
-            let req = ToolChatCompletionRequest {
-                model: llm_config.model.clone(),
-                messages: vec![Message::system(sys.clone()), Message::user(user.clone())],
-                tools: consolidator_tools(),
-                reasoning_effort: llm_config.reasoning_effort.clone(),
-                prior_rounds: prior.clone(),
-            };
-            let resp = tokio::time::timeout(timeout, llm.chat_completion_with_tools(req))
-                .await
-                .wrap_err("consolidation LLM timed out")?
-                .wrap_err("consolidation LLM call failed")?;
-            match resp {
-                ToolChatCompletionResponse::Message(_) => break,
-                ToolChatCompletionResponse::ToolCalls {
-                    calls,
-                    reasoning_content,
-                } => {
-                    let mut results = Vec::with_capacity(calls.len());
-                    let save_snapshot = {
-                        let mut w = store.write().await;
-                        // Apply ops in order: drop → merge → edit (sort once).
-                        let mut sorted = calls.clone();
-                        sorted.sort_by_key(|c| match c.name.as_str() {
-                            "drop_memory" => 0,
-                            "merge_memories" => 1,
-                            "edit_memory" => 2,
-                            _ => 3,
-                        });
-                        for call in &sorted {
-                            let out = w.execute_consolidator_tool(call, now);
-                            match call.name.as_str() {
-                                "merge_memories" if out.starts_with("Merged") => merged += 1,
-                                "drop_memory" if out.starts_with("Dropped") => dropped += 1,
-                                "edit_memory" if out.starts_with("Edited") => edited += 1,
-                                _ => {}
-                            }
-                            info!(tool = %call.name, result = %out, "consolidation tool executed");
-                            results.push(ToolResultMessage::for_call(call, out));
-                        }
-                        w.clone()
-                    };
-                    save_snapshot.save(&store_path)?;
-                    prior.push(ToolCallRound {
-                        calls,
-                        results,
-                        reasoning_content,
-                    });
-                    if prior.len() > 5 {
-                        warn!("consolidation exceeded 5 rounds; breaking");
-                        break;
-                    }
-                }
+
+        let request = ToolChatCompletionRequest {
+            model: llm_config.model.clone(),
+            messages: vec![Message::system(sys), Message::user(user)],
+            tools: consolidator_tools(),
+            reasoning_effort: llm_config.reasoning_effort.clone(),
+            prior_rounds: Vec::new(),
+        };
+
+        let executor = ConsolidationExecutor {
+            store: &store,
+            now,
+            counters: counters.clone(),
+        };
+        let opts = AgentOpts {
+            max_rounds: 5,
+            per_round_timeout: Some(timeout),
+        };
+
+        let outcome = run_agent(&*llm, request, &executor, opts)
+            .await
+            .wrap_err("consolidation LLM call failed")?;
+        match outcome {
+            AgentOutcome::Text(_) => {}
+            AgentOutcome::MaxRoundsExceeded => {
+                warn!(scope = tag, "consolidation hit max_rounds");
+            }
+            AgentOutcome::Timeout { round } => {
+                warn!(scope = tag, round, "consolidation LLM timed out");
             }
         }
     }
+
+    let store_snapshot = store.read().await.clone();
+    store_snapshot.save(&store_path)?;
+
+    let merged = counters.merged.load(std::sync::atomic::Ordering::Relaxed);
+    let dropped = counters.dropped.load(std::sync::atomic::Ordering::Relaxed);
+    let edited = counters.edited.load(std::sync::atomic::Ordering::Relaxed);
 
     info!(
         merged,
@@ -289,7 +315,7 @@ pub fn spawn_consolidation(
 
 #[cfg(test)]
 mod tests {
-    use llm::{ChatCompletionRequest, ToolCall};
+    use llm::{ChatCompletionRequest, ToolChatCompletionResponse};
     use tempfile::TempDir;
 
     use super::*;
