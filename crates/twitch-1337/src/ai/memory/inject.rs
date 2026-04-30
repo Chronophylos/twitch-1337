@@ -73,7 +73,7 @@ pub async fn build_chat_turn_context(store: &MemoryStore, opts: BuildOpts) -> Re
 
     // Merge user + state files by updated_at desc.
     let mut rest: Vec<MemoryFile> = users.drain(..).chain(states.drain(..)).collect();
-    rest.sort_by(|a, b| b.frontmatter.updated_at.cmp(&a.frontmatter.updated_at));
+    rest.sort_by_key(|f| std::cmp::Reverse(f.frontmatter.updated_at));
 
     let mut total: usize = blocks.iter().map(|(_, s)| s.len()).sum();
     for f in rest {

@@ -299,7 +299,7 @@ impl MemoryStore {
             let kind = kind_for(&stem);
             out.push(self.read_kind(&kind).await?);
         }
-        out.sort_by(|a, b| b.frontmatter.updated_at.cmp(&a.frontmatter.updated_at));
+        out.sort_by_key(|f| std::cmp::Reverse(f.frontmatter.updated_at));
         Ok(out)
     }
 }
