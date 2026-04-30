@@ -414,7 +414,6 @@ impl TestBot {
                 run_at: chrono::NaiveTime::from_hms_opt(4, 0, 0).unwrap(),
                 timeout_secs: 5,
                 max_rounds: 4,
-                max_state_files: 16,
                 max_writes_per_turn: 8,
                 inject_byte_budget: 16_384,
                 channel: self.channel.clone(),

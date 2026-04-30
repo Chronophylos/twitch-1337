@@ -123,8 +123,6 @@ pub struct ChatTurnExecutorOpts {
     pub speaker_user_id: String,
     pub speaker_display_name: String,
     pub speaker_role: Role,
-    /// Maximum number of state/<slug>.md files that may exist at once.
-    pub max_state_files: usize,
     /// Maximum write-class tool calls (write_file, write_state, delete_state)
     /// per turn. `say` is never counted.
     pub max_writes_per_turn: usize,
@@ -220,6 +218,7 @@ impl ChatTurnExecutor {
         match self.opts.store.write(&kind, &args.body, display).await {
             Ok(()) => "ok".into(),
             Err(WriteError::Full) => "file_full".into(),
+            Err(WriteError::StateFull) => "state_full".into(), // unreachable for write()
             Err(WriteError::Io(e)) => format!("io_error: {e}"),
         }
     }
@@ -237,23 +236,6 @@ impl ChatTurnExecutor {
         if check_body(&args.body).is_err() {
             return "invalid_body".into();
         }
-
-        // Enforce the state-count cap only for *new* files.
-        // We detect "new" via filesystem existence (most reliable; avoids
-        // parse-heuristic ambiguity when body is genuinely empty).
-        let state_path = self
-            .opts
-            .store
-            .memories_dir()
-            .join(format!("state/{slug}.md"));
-        let is_new = !tokio::fs::try_exists(&state_path).await.unwrap_or(false);
-        if is_new {
-            let listed = self.opts.store.list_state().await.unwrap_or_default();
-            if listed.len() >= self.opts.max_state_files {
-                return "state_full".into();
-            }
-        }
-
         if !self.try_consume_write_quota() {
             return "write_quota_exhausted".into();
         }
@@ -270,6 +252,7 @@ impl ChatTurnExecutor {
         {
             Ok(()) => "ok".into(),
             Err(WriteError::Full) => "file_full".into(),
+            Err(WriteError::StateFull) => "state_full".into(),
             Err(WriteError::Io(e)) => format!("io_error: {e}"),
         }
     }
@@ -349,7 +332,6 @@ impl ToolExecutor for ChatTurnExecutor {
 
 pub struct DreamerExecutorOpts {
     pub store: MemoryStore,
-    pub max_state_files: usize,
     pub max_writes_per_turn: usize,
 }
 
@@ -365,7 +347,6 @@ impl DreamerExecutor {
                 speaker_user_id: "dreamer".into(),
                 speaker_display_name: String::new(),
                 speaker_role: Role::Dreamer,
-                max_state_files: opts.max_state_files,
                 max_writes_per_turn: opts.max_writes_per_turn,
                 say: SayChannel::collecting(), // never used; dreamer never sees `say`.
             }),
@@ -430,18 +411,12 @@ mod exec_tests {
         }
     }
 
-    async fn make_executor(
-        role: Role,
-        store: MemoryStore,
-        max_state: usize,
-        max_writes: usize,
-    ) -> ChatTurnExecutor {
+    async fn make_executor(role: Role, store: MemoryStore, max_writes: usize) -> ChatTurnExecutor {
         ChatTurnExecutor::new(ChatTurnExecutorOpts {
             store,
             speaker_user_id: "12345".into(),
             speaker_display_name: "alice".into(),
             speaker_role: role,
-            max_state_files: max_state,
             max_writes_per_turn: max_writes,
             say: SayChannel::collecting(),
         })
@@ -453,7 +428,7 @@ mod exec_tests {
         let store = MemoryStore::open(dir.path(), Caps::default())
             .await
             .unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 16, 8).await;
+        let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
                 "write_file",
@@ -469,7 +444,7 @@ mod exec_tests {
         let store = MemoryStore::open(dir.path(), Caps::default())
             .await
             .unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 16, 8).await;
+        let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
                 "write_file",
@@ -485,7 +460,7 @@ mod exec_tests {
         let store = MemoryStore::open(dir.path(), Caps::default())
             .await
             .unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 16, 8).await;
+        let exec = make_executor(Role::Regular, store.clone(), 8).await;
         for path in ["LORE.md", "SOUL.md"] {
             let r = exec
                 .execute(&call(
@@ -503,7 +478,7 @@ mod exec_tests {
         let store = MemoryStore::open(dir.path(), Caps::default())
             .await
             .unwrap();
-        let exec = make_executor(Role::Moderator, store.clone(), 16, 8).await;
+        let exec = make_executor(Role::Moderator, store.clone(), 8).await;
         let r = exec
             .execute(&call(
                 "write_file",
@@ -526,7 +501,7 @@ mod exec_tests {
         let store = MemoryStore::open(dir.path(), Caps::default())
             .await
             .unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 16, 8).await;
+        let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
                 "write_file",
@@ -549,7 +524,7 @@ mod exec_tests {
         let store = MemoryStore::open(dir.path(), Caps::default())
             .await
             .unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 16, 8).await;
+        let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
                 "write_state",
@@ -562,10 +537,12 @@ mod exec_tests {
     #[tokio::test]
     async fn state_full_when_over_cap() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 1, 8).await;
+        let caps = Caps {
+            max_state_files: 1,
+            ..Caps::default()
+        };
+        let store = MemoryStore::open(dir.path(), caps).await.unwrap();
+        let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
                 "write_state",
@@ -588,7 +565,7 @@ mod exec_tests {
         let store = MemoryStore::open(dir.path(), Caps::default())
             .await
             .unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 16, 1).await;
+        let exec = make_executor(Role::Regular, store.clone(), 1).await;
         let r1 = exec
             .execute(&call(
                 "write_file",
@@ -624,7 +601,7 @@ mod exec_tests {
             )
             .await
             .unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 16, 8).await;
+        let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call("delete_state", serde_json::json!({"slug": "qz"})))
             .await;
@@ -637,7 +614,7 @@ mod exec_tests {
         let store = MemoryStore::open(dir.path(), Caps::default())
             .await
             .unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 16, 8).await;
+        let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let long = "x".repeat(600);
         let r = exec
             .execute(&call("say", serde_json::json!({"text": long})))
@@ -658,7 +635,6 @@ mod exec_tests {
             .unwrap();
         let exec = DreamerExecutor::new(DreamerExecutorOpts {
             store: store.clone(),
-            max_state_files: 16,
             max_writes_per_turn: 32,
         });
         for path in ["SOUL.md", "LORE.md", "users/77.md"] {
@@ -680,7 +656,6 @@ mod exec_tests {
             .unwrap();
         let exec = DreamerExecutor::new(DreamerExecutorOpts {
             store,
-            max_state_files: 16,
             max_writes_per_turn: 32,
         });
         let r = exec

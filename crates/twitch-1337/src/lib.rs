@@ -168,7 +168,6 @@ where
                 run_at,
                 timeout_secs: ai.dreamer.timeout_secs,
                 max_rounds: ai.max_turn_rounds,
-                max_state_files: ai.memory.max_state_files,
                 max_writes_per_turn: ai.max_writes_per_turn,
                 inject_byte_budget: ai.memory.inject_byte_budget,
                 channel: channel_for_ritual,

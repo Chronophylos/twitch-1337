@@ -31,6 +31,10 @@ struct StoreInner {
     prompts_dir: PathBuf,  // $DATA_DIR/prompts
     caps: Caps,
     locks: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
+    /// Serialises new state-file creation so the `max_state_files` cap can't
+    /// be smuggled past by two concurrent writes to two distinct new slugs.
+    /// Held only across the count-check + write path inside `write_state`.
+    state_create_lock: Mutex<()>,
 }
 
 impl MemoryStore {
@@ -104,6 +108,7 @@ impl MemoryStore {
                 prompts_dir,
                 caps,
                 locks: Mutex::new(HashMap::new()),
+                state_create_lock: Mutex::new(()),
             }),
         })
     }
@@ -165,7 +170,6 @@ impl MemoryStore {
         display_name: Option<&str>,
     ) -> Result<(), WriteError> {
         let limit = self.inner.caps.limit_for(kind);
-        let now = Utc::now();
 
         let display_name = if matches!(kind, FileKind::User { .. }) {
             display_name
@@ -175,21 +179,24 @@ impl MemoryStore {
             None
         };
 
-        if body.len() > limit {
-            return Err(WriteError::Full);
-        }
-
-        let fm = Frontmatter {
-            updated_at: now,
-            display_name,
-            created_by: None,
-        };
-        let raw = frontmatter::emit(&fm, body);
-
         let rel = kind.relative_path();
         let abs = self.inner.memories_dir.join(&rel);
         let lock = self.lock_for(&rel).await;
         let _g = lock.lock().await;
+
+        // Build the emitted file inside the lock so the cap covers the *full*
+        // on-disk content (frontmatter + body). Doing this before acquiring
+        // the lock would let two concurrent writes both pass a body-only cap
+        // check and then race the actual write.
+        let fm = Frontmatter {
+            updated_at: Utc::now(),
+            display_name,
+            created_by: None,
+        };
+        let raw = frontmatter::emit(&fm, body);
+        if raw.len() > limit {
+            return Err(WriteError::Full);
+        }
 
         if let Some(parent) = abs.parent() {
             tokio::fs::create_dir_all(parent)
@@ -214,7 +221,6 @@ impl MemoryStore {
             )));
         };
         let limit = self.inner.caps.state_bytes;
-        let now = Utc::now();
 
         let rel = kind.relative_path();
         let abs = self.inner.memories_dir.join(&rel);
@@ -222,25 +228,39 @@ impl MemoryStore {
         let _g = lock.lock().await;
 
         // Preserve existing created_by; only set on first write.
-        let prior_created_by = match tokio::fs::read_to_string(&abs).await {
-            Ok(raw) => frontmatter::parse(&raw)
-                .ok()
-                .and_then(|(fm, _)| fm.created_by),
-            Err(_) => None,
-        };
+        let prior_raw = tokio::fs::read_to_string(&abs).await.ok();
+        let is_new = prior_raw.is_none();
+        let prior_created_by = prior_raw
+            .as_deref()
+            .and_then(|raw| frontmatter::parse(raw).ok())
+            .and_then(|(fm, _)| fm.created_by);
         let created_by =
             prior_created_by.or_else(|| creator_user_id.map(std::string::ToString::to_string));
 
-        if body.len() > limit {
-            return Err(WriteError::Full);
-        }
-
         let fm = Frontmatter {
-            updated_at: now,
+            updated_at: Utc::now(),
             display_name: None,
             created_by,
         };
         let raw = frontmatter::emit(&fm, body);
+        if raw.len() > limit {
+            return Err(WriteError::Full);
+        }
+
+        // For new files only, serialise the count-check + write through the
+        // global state-create lock so two new-slug writes can't both pass.
+        let _create_g = if is_new {
+            Some(self.inner.state_create_lock.lock().await)
+        } else {
+            None
+        };
+        if is_new {
+            let count = count_state_files(&self.inner.memories_dir).await?;
+            if count >= self.inner.caps.max_state_files {
+                return Err(WriteError::StateFull);
+            }
+        }
+
         if let Some(parent) = abs.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -308,8 +328,30 @@ impl MemoryStore {
 pub enum WriteError {
     #[error("file_full")]
     Full,
+    #[error("state_full")]
+    StateFull,
     #[error("io: {0}")]
     Io(#[from] eyre::Report),
+}
+
+/// Count `*.md` entries in `memories/state/`. Used by `write_state` under
+/// the state-create lock to enforce `max_state_files`.
+async fn count_state_files(memories_dir: &Path) -> Result<usize, WriteError> {
+    let dir = memories_dir.join("state");
+    let mut entries = tokio::fs::read_dir(&dir)
+        .await
+        .map_err(|e| WriteError::Io(eyre!("read_dir state/: {e}")))?;
+    let mut n = 0usize;
+    while let Some(e) = entries
+        .next_entry()
+        .await
+        .map_err(|e| WriteError::Io(eyre!("read_dir next: {e}")))?
+    {
+        if e.path().extension().and_then(|s| s.to_str()) == Some("md") {
+            n += 1;
+        }
+    }
+    Ok(n)
 }
 
 #[cfg(test)]
@@ -373,8 +415,11 @@ mod tests {
     #[tokio::test]
     async fn write_user_file_persists_and_caps_apply() {
         let dir = tempfile::tempdir().unwrap();
+        // Cap covers the *full* on-disk file (frontmatter + body), so it must
+        // be larger than the ~80B frontmatter overhead but small enough to
+        // still reject a 4 KiB body.
         let caps = Caps {
-            user_bytes: 32, // tiny on purpose
+            user_bytes: 256,
             ..Caps::default()
         };
         let store = MemoryStore::open(dir.path(), caps).await.unwrap();
@@ -393,6 +438,49 @@ mod tests {
         let huge = "x".repeat(4096);
         let err = store.write(&kind, &huge, Some("alice")).await.unwrap_err();
         assert_eq!(err.to_string(), "file_full");
+    }
+
+    #[tokio::test]
+    async fn write_state_full_enforced_in_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let caps = Caps {
+            max_state_files: 1,
+            ..Caps::default()
+        };
+        let store = MemoryStore::open(dir.path(), caps).await.unwrap();
+        store
+            .write_state(
+                &FileKind::State {
+                    slug: "first".into(),
+                },
+                "x",
+                Some("1"),
+            )
+            .await
+            .unwrap();
+        // Overwriting the same slug must still succeed at the cap.
+        store
+            .write_state(
+                &FileKind::State {
+                    slug: "first".into(),
+                },
+                "y",
+                Some("1"),
+            )
+            .await
+            .unwrap();
+        // A second distinct slug must fail.
+        let err = store
+            .write_state(
+                &FileKind::State {
+                    slug: "second".into(),
+                },
+                "x",
+                Some("1"),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WriteError::StateFull));
     }
 
     #[tokio::test]

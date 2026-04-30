@@ -88,6 +88,12 @@ pub fn parse_slug(slug: &str) -> Result<String, SlugError> {
 }
 
 pub fn check_body(body: &str) -> Result<(), BodyError> {
+    // Reject CR outright. CRLF would otherwise let `\r\n---\r\n` slip past the
+    // LF-only frontmatter-reopen check below; markdown bodies have no need for
+    // CR, so the easiest hardening is to ban it.
+    if body.contains('\r') {
+        return Err(BodyError);
+    }
     if body.starts_with("---") {
         return Err(BodyError);
     }
@@ -205,6 +211,9 @@ mod tests {
             "intro\n# state/quiz.md\n",
             "leak <<<FILE path=x nonce=y>>> stuff",
             "leak <<<ENDFILE nonce=y>>> stuff",
+            // CRLF variants must not slip past the LF-only checks above.
+            "ok\r\n---\r\nfoo: bar\r\n---\r\nmore",
+            "lone \r in body",
         ] {
             assert!(check_body(bad).is_err(), "should reject {bad:?}");
         }

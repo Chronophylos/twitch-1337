@@ -26,7 +26,6 @@ pub struct RitualConfig {
     pub run_at: NaiveTime,
     pub timeout_secs: u64,
     pub max_rounds: usize,
-    pub max_state_files: usize,
     pub max_writes_per_turn: usize,
     pub inject_byte_budget: usize,
     pub channel: String,
@@ -109,7 +108,6 @@ pub async fn run_ritual(
 
     let exec = DreamerExecutor::new(DreamerExecutorOpts {
         store: store.clone(),
-        max_state_files: cfg.max_state_files,
         max_writes_per_turn: cfg.max_writes_per_turn,
     });
 

@@ -47,7 +47,6 @@ pub struct AiMemoryV2 {
     pub transcript: TranscriptWriter,
     pub caps: Caps,
     pub inject_byte_budget: usize,
-    pub max_state_files: usize,
     pub max_turn_rounds: usize,
     pub max_writes_per_turn: usize,
     pub turn_timeout: Duration,
@@ -564,7 +563,6 @@ where
                 speaker_user_id: ctx.privmsg.sender.id.clone(),
                 speaker_display_name: ctx.privmsg.sender.name.clone(),
                 speaker_role: role,
-                max_state_files: mem.max_state_files,
                 max_writes_per_turn: mem.max_writes_per_turn,
                 say: SayChannel::mpsc(say_tx),
             });
@@ -754,6 +752,7 @@ pub async fn build_ai_memory_v2(
         lore_bytes: ai.memory.lore_bytes,
         user_bytes: ai.memory.user_bytes,
         state_bytes: ai.memory.state_bytes,
+        max_state_files: ai.memory.max_state_files,
     };
     let store = MemoryStore::open(data_dir, caps).await?;
     let transcript = TranscriptWriter::open(store.memories_dir()).await?;
@@ -762,7 +761,6 @@ pub async fn build_ai_memory_v2(
         transcript: transcript.clone(),
         caps,
         inject_byte_budget: ai.memory.inject_byte_budget,
-        max_state_files: ai.memory.max_state_files,
         max_turn_rounds: ai.max_turn_rounds,
         max_writes_per_turn: ai.max_writes_per_turn,
         turn_timeout: Duration::from_secs(ai.timeout),

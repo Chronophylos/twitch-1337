@@ -48,12 +48,23 @@ pub struct MemoryFile {
     pub body: String,
 }
 
+/// Per-file byte caps and the global state-file count cap.
+///
+/// Byte caps apply to the *full emitted file* (frontmatter + body), so the
+/// on-disk size never exceeds the configured limit. The cap is enforced
+/// inside the per-path mutex in `MemoryStore::write` / `write_state`, so
+/// concurrent writes to the same file cannot smuggle an over-cap body past
+/// the check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Caps {
     pub soul_bytes: usize,
     pub lore_bytes: usize,
     pub user_bytes: usize,
     pub state_bytes: usize,
+    /// Max number of `state/<slug>.md` files that may exist at once.
+    /// Enforced inside `MemoryStore::write_state` under a global state-create
+    /// lock so two concurrent new-slug writes can't both pass the cap check.
+    pub max_state_files: usize,
 }
 
 impl Default for Caps {
@@ -63,6 +74,7 @@ impl Default for Caps {
             lore_bytes: 12_288,
             user_bytes: 4096,
             state_bytes: 2048,
+            max_state_files: 16,
         }
     }
 }
@@ -96,6 +108,7 @@ mod tests {
         assert_eq!(c.lore_bytes, 12_288);
         assert_eq!(c.user_bytes, 4096);
         assert_eq!(c.state_bytes, 2048);
+        assert_eq!(c.max_state_files, 16);
     }
 
     #[test]
