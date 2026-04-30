@@ -4,6 +4,7 @@ pub mod frontmatter;
 pub mod sanitize;
 pub mod scope;
 pub mod store;
+pub mod store_v2;
 pub mod tools;
 pub mod types;
 

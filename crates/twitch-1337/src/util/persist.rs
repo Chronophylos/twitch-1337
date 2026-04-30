@@ -68,6 +68,29 @@ pub fn atomic_save_ron<T: Serialize>(value: &T, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Async byte-level atomic write — does not require `Serialize`.
+/// Writes `bytes` to a `.tmp` sibling then renames onto `path`.
+pub async fn atomic_write_bytes_async(
+    bytes: &[u8],
+    path: &Path,
+) -> std::result::Result<(), AtomicPersistError> {
+    let tmp = path.with_extension("tmp");
+    tokio::fs::write(&tmp, bytes)
+        .await
+        .map_err(|source| AtomicPersistError::WriteTmp {
+            path: tmp.clone(),
+            source,
+        })?;
+    tokio::fs::rename(&tmp, path)
+        .await
+        .map_err(|source| AtomicPersistError::Rename {
+            from: tmp.clone(),
+            to: path.to_path_buf(),
+            source,
+        })?;
+    Ok(())
+}
+
 /// Async variant — uses `tokio::fs` so it does not block the runtime.
 /// Serializes with `ron::to_string` (compact) to match the existing tracker
 /// behaviour; switch to pretty if a call-site needs human inspection.
