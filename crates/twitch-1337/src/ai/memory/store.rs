@@ -13,6 +13,50 @@ use llm::ToolCall;
 use crate::ai::memory::scope::{is_write_allowed, seed_confidence, trust_level_for};
 use crate::ai::memory::{Scope, UserRole};
 
+#[derive(Debug, Deserialize)]
+struct SaveMemoryArgs {
+    scope: String,
+    #[serde(default)]
+    subject_id: Option<String>,
+    slug: String,
+    fact: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetMemoriesArgs {
+    scope: String,
+    #[serde(default)]
+    subject_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DropMemoryArgs {
+    key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetMemoryArgs {
+    key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MergeMemoriesArgs {
+    keys: Vec<String>,
+    new_slug: String,
+    new_fact: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EditMemoryArgs {
+    key: String,
+    #[serde(default)]
+    fact: Option<String>,
+    #[serde(default)]
+    confidence_delta: Option<i32>,
+    #[serde(default)]
+    drop_source: Option<String>,
+}
+
 const MEMORY_FILENAME: &str = "ai_memory.ron";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -374,40 +418,31 @@ impl MemoryStore {
     /// `save_memory` through the permission matrix and `get_memories` for
     /// read-only inspection. Other tool names return an error string.
     pub fn execute_tool_call(&mut self, call: &ToolCall, ctx: &DispatchContext<'_>) -> String {
-        if let Some(err) = &call.arguments_parse_error {
-            let (error, raw) = match err {
-                llm::ToolArgsError::Provider { error, raw } => (error.clone(), raw.clone()),
-                llm::ToolArgsError::Deserialize { error } => (error.clone(), String::new()),
-            };
-            return format!(
-                "Error: tool '{name}' arguments were not valid JSON ({error}). \
-                 Raw text: {raw}. Resend with a valid JSON object.",
-                name = call.name,
-                error = error,
-                raw = raw,
-            );
-        }
         match call.name.as_str() {
-            "save_memory" => self.handle_save_memory(call, ctx),
-            "get_memories" => self.handle_get_memories(call, ctx),
+            "save_memory" => match call.parse_args::<SaveMemoryArgs>() {
+                Ok(args) => self.handle_save_memory(args, ctx),
+                Err(e) => format_args_error(&call.name, &e),
+            },
+            "get_memories" => match call.parse_args::<GetMemoriesArgs>() {
+                Ok(args) => self.handle_get_memories(args),
+                Err(e) => format_args_error(&call.name, &e),
+            },
             other => format!("Unknown tool: {other}"),
         }
     }
 
-    fn handle_save_memory(&mut self, call: &ToolCall, ctx: &DispatchContext<'_>) -> String {
-        let args = &call.arguments;
-        let scope_str = args.get("scope").and_then(|v| v.as_str()).unwrap_or("");
-        let slug = args.get("slug").and_then(|v| v.as_str()).unwrap_or("");
-        let fact = args.get("fact").and_then(|v| v.as_str()).unwrap_or("");
-        let subject_id = args
-            .get("subject_id")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+    fn handle_save_memory(&mut self, args: SaveMemoryArgs, ctx: &DispatchContext<'_>) -> String {
+        let SaveMemoryArgs {
+            scope: scope_str,
+            subject_id,
+            slug,
+            fact,
+        } = args;
 
         if slug.is_empty() || fact.is_empty() {
             return "Error: save_memory requires non-empty 'slug' and 'fact'".into();
         }
-        let scope = match (scope_str, subject_id) {
+        let scope = match (scope_str.as_str(), subject_id) {
             ("user", Some(s)) => Scope::User { subject_id: s },
             ("pref", Some(s)) => Scope::Pref { subject_id: s },
             ("lore", None) => Scope::Lore,
@@ -430,7 +465,7 @@ impl MemoryStore {
             );
         }
 
-        let key = build_key(&scope, slug);
+        let key = build_key(&scope, &slug);
         let level = trust_level_for(ctx.speaker_role, &scope, ctx.speaker_id);
         let seed_conf = seed_confidence(level);
         let now = ctx.now;
@@ -440,7 +475,7 @@ impl MemoryStore {
             // that lane is adversarial (prompt injection, untrusted speakers).
             // Confidence adjustments go through the consolidator, which runs
             // daily and applies `corroboration_boost` from distinct sources.
-            existing.fact = fact.to_string();
+            existing.fact = fact;
             existing.updated_at = now;
             if !existing.sources.iter().any(|s| s == ctx.speaker_username) {
                 existing.sources.push(ctx.speaker_username.to_string());
@@ -469,7 +504,7 @@ impl MemoryStore {
         self.memories.insert(
             key.clone(),
             Memory::new(
-                fact.to_string(),
+                fact,
                 scope,
                 ctx.speaker_username.to_string(),
                 seed_conf,
@@ -486,13 +521,9 @@ impl MemoryStore {
             .count()
     }
 
-    fn handle_get_memories(&self, call: &ToolCall, _ctx: &DispatchContext<'_>) -> String {
-        let scope_str = call
-            .arguments
-            .get("scope")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let subject_id = call.arguments.get("subject_id").and_then(|v| v.as_str());
+    fn handle_get_memories(&self, args: GetMemoriesArgs) -> String {
+        let scope_str = args.scope.as_str();
+        let subject_id = args.subject_id.as_deref();
         let mut out: Vec<String> = self
             .memories
             .iter()
@@ -523,48 +554,39 @@ impl MemoryStore {
     /// Malformed arguments are surfaced as a string (same pattern as
     /// `execute_tool_call`) so the LLM can correct and retry.
     pub fn execute_consolidator_tool(&mut self, call: &ToolCall, now: DateTime<Utc>) -> String {
-        if let Some(err) = &call.arguments_parse_error {
-            let (error, raw) = match err {
-                llm::ToolArgsError::Provider { error, raw } => (error.clone(), raw.clone()),
-                llm::ToolArgsError::Deserialize { error } => (error.clone(), String::new()),
-            };
-            return format!(
-                "Error: tool '{name}' arguments were not valid JSON ({error}). \
-                 Raw text: {raw}. Resend with a valid JSON object.",
-                name = call.name,
-                error = error,
-                raw = raw,
-            );
-        }
         match call.name.as_str() {
-            "drop_memory" => self.handle_drop_memory(call),
-            "merge_memories" => self.handle_merge_memories(call, now),
-            "edit_memory" => self.handle_edit_memory(call),
-            "get_memory" => self.handle_get_memory(call),
+            "drop_memory" => match call.parse_args::<DropMemoryArgs>() {
+                Ok(args) => self.handle_drop_memory(args),
+                Err(e) => format_args_error(&call.name, &e),
+            },
+            "merge_memories" => match call.parse_args::<MergeMemoriesArgs>() {
+                Ok(args) => self.handle_merge_memories(args, now),
+                Err(e) => format_args_error(&call.name, &e),
+            },
+            "edit_memory" => match call.parse_args::<EditMemoryArgs>() {
+                Ok(args) => self.handle_edit_memory(args),
+                Err(e) => format_args_error(&call.name, &e),
+            },
+            "get_memory" => match call.parse_args::<GetMemoryArgs>() {
+                Ok(args) => self.handle_get_memory(args),
+                Err(e) => format_args_error(&call.name, &e),
+            },
             other => format!("Unknown consolidator tool: {other}"),
         }
     }
 
-    fn handle_drop_memory(&mut self, call: &ToolCall) -> String {
-        let key = call
-            .arguments
-            .get("key")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if self.memories.remove(key).is_some() {
+    fn handle_drop_memory(&mut self, args: DropMemoryArgs) -> String {
+        let DropMemoryArgs { key } = args;
+        if self.memories.remove(&key).is_some() {
             format!("Dropped memory '{key}'")
         } else {
             format!("No memory with key '{key}'")
         }
     }
 
-    fn handle_get_memory(&self, call: &ToolCall) -> String {
-        let key = call
-            .arguments
-            .get("key")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        match self.memories.get(key) {
+    fn handle_get_memory(&self, args: GetMemoryArgs) -> String {
+        let GetMemoryArgs { key } = args;
+        match self.memories.get(&key) {
             Some(m) => format!(
                 "{}: {} (confidence={}, sources={:?}, last_accessed={}, hits={})",
                 key, m.fact, m.confidence, m.sources, m.last_accessed, m.access_count
@@ -573,27 +595,12 @@ impl MemoryStore {
         }
     }
 
-    fn handle_merge_memories(&mut self, call: &ToolCall, now: DateTime<Utc>) -> String {
-        let keys: Vec<String> = call
-            .arguments
-            .get("keys")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let new_slug = call
-            .arguments
-            .get("new_slug")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let new_fact = call
-            .arguments
-            .get("new_fact")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+    fn handle_merge_memories(&mut self, args: MergeMemoriesArgs, now: DateTime<Utc>) -> String {
+        let MergeMemoriesArgs {
+            keys,
+            new_slug,
+            new_fact,
+        } = args;
         if keys.len() < 2 {
             return "Error: merge_memories requires at least 2 keys".into();
         }
@@ -655,7 +662,7 @@ impl MemoryStore {
         let last_accessed = inputs.iter().map(|m| m.last_accessed).max().unwrap_or(now);
         let access_count = inputs.iter().map(|m| m.access_count).sum();
 
-        let new_key = build_key(&scope, new_slug);
+        let new_key = build_key(&scope, &new_slug);
         if self.memories.contains_key(&new_key) && !keys.contains(&new_key) {
             return format!(
                 "Error: new_key '{new_key}' collides with existing non-merged memory; choose another slug"
@@ -673,7 +680,7 @@ impl MemoryStore {
         self.memories.insert(
             new_key,
             Memory {
-                fact: new_fact.to_string(),
+                fact: new_fact,
                 scope,
                 sources,
                 confidence,
@@ -686,20 +693,15 @@ impl MemoryStore {
         msg
     }
 
-    fn handle_edit_memory(&mut self, call: &ToolCall) -> String {
-        let key = call
-            .arguments
-            .get("key")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let fact_opt = call.arguments.get("fact").and_then(|v| v.as_str());
-        let delta_opt = call
-            .arguments
-            .get("confidence_delta")
-            .and_then(serde_json::Value::as_i64);
-        let drop_source_opt = call.arguments.get("drop_source").and_then(|v| v.as_str());
+    fn handle_edit_memory(&mut self, args: EditMemoryArgs) -> String {
+        let EditMemoryArgs {
+            key,
+            fact: fact_opt,
+            confidence_delta: delta_opt,
+            drop_source: drop_source_opt,
+        } = args;
 
-        if let Some(f) = fact_opt {
+        if let Some(f) = &fact_opt {
             if f.is_empty() {
                 return "Error: 'fact' must be non-empty".into();
             }
@@ -714,22 +716,22 @@ impl MemoryStore {
             return format!("Error: confidence_delta {d} out of range [-50, +30]");
         }
 
-        let mem = match self.memories.get_mut(key) {
+        let mem = match self.memories.get_mut(&key) {
             Some(m) => m,
             None => return format!("No memory with key '{key}'"),
         };
         if let Some(f) = fact_opt {
-            mem.fact = f.to_string();
+            mem.fact = f;
         }
         if let Some(d) = delta_opt {
             // `d` is validated in `[-50, 30]`; clamp also guards against any
             // pre-existing out-of-band `confidence` values.
-            let new_conf = (i64::from(mem.confidence) + d).clamp(0, 100);
+            let new_conf = (i32::from(mem.confidence) + d).clamp(0, 100);
             mem.confidence = u8::try_from(new_conf).unwrap_or(0);
         }
         if let Some(src) = drop_source_opt {
             let before = mem.sources.len();
-            mem.sources.retain(|s| s != src);
+            mem.sources.retain(|s| s != &src);
             if mem.sources.len() == before {
                 debug!(key, src, "drop_source target not in sources; no-op");
             }
@@ -788,6 +790,18 @@ pub(crate) fn build_key(scope: &Scope, slug: &str) -> String {
         Scope::User { subject_id } => format!("user:{}:{}", subject_id, slug),
         Scope::Lore => format!("lore::{}", slug),
         Scope::Pref { subject_id } => format!("pref:{}:{}", subject_id, slug),
+    }
+}
+
+fn format_args_error(tool: &str, err: &llm::ToolArgsError) -> String {
+    match err {
+        llm::ToolArgsError::Provider { error, raw } => format!(
+            "Error: tool '{tool}' arguments were not valid JSON ({error}). \
+             Raw text: {raw}. Resend with a valid JSON object."
+        ),
+        llm::ToolArgsError::Deserialize { error } => {
+            format!("Error: tool '{tool}' arguments did not match the expected schema: {error}")
+        }
     }
 }
 
@@ -1047,11 +1061,19 @@ mod tests {
 
     #[test]
     fn execute_tool_call_missing_args_is_distinct_from_parse_error() {
+        // Post-Task-1.11: "missing required field" payloads (e.g.
+        // `Value::Null`) are now caught by `parse_args` as
+        // `ToolArgsError::Deserialize`. To exercise the handler-level
+        // validation we send a well-formed payload with empty strings.
         let mut store = empty_store();
         let call = ToolCall {
             id: "c2".to_string(),
             name: "save_memory".to_string(),
-            arguments: serde_json::Value::Null,
+            arguments: serde_json::json!({
+                "scope": "lore",
+                "slug": "",
+                "fact": "",
+            }),
             arguments_parse_error: None,
         };
         let ctx = ctx_for("42", UserRole::Regular);
