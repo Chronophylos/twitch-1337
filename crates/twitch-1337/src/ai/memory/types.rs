@@ -1,0 +1,124 @@
+//! Public types shared across the v2 memory module.
+
+use std::path::PathBuf;
+
+use chrono::{DateTime, Utc};
+
+/// Speaker / actor role. `Dreamer` is the ritual LLM, never a Twitch user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum Role {
+    Regular = 0,
+    Moderator = 1,
+    Broadcaster = 2,
+    Dreamer = 3,
+}
+
+/// Identifies one file in the memory tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileKind {
+    Soul,
+    Lore,
+    User { user_id: String },
+    State { slug: String },
+}
+
+impl FileKind {
+    pub fn relative_path(&self) -> PathBuf {
+        match self {
+            FileKind::Soul => PathBuf::from("SOUL.md"),
+            FileKind::Lore => PathBuf::from("LORE.md"),
+            FileKind::User { user_id } => PathBuf::from(format!("users/{user_id}.md")),
+            FileKind::State { slug } => PathBuf::from(format!("state/{slug}.md")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Frontmatter {
+    pub updated_at: DateTime<Utc>,
+    pub display_name: Option<String>,
+    pub created_by: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryFile {
+    pub kind: FileKind,
+    pub frontmatter: Frontmatter,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Caps {
+    pub soul_bytes: usize,
+    pub lore_bytes: usize,
+    pub user_bytes: usize,
+    pub state_bytes: usize,
+}
+
+impl Default for Caps {
+    fn default() -> Self {
+        Self {
+            soul_bytes: 4096,
+            lore_bytes: 12_288,
+            user_bytes: 4096,
+            state_bytes: 2048,
+        }
+    }
+}
+
+impl Caps {
+    pub fn limit_for(&self, kind: &FileKind) -> usize {
+        match kind {
+            FileKind::Soul => self.soul_bytes,
+            FileKind::Lore => self.lore_bytes,
+            FileKind::User { .. } => self.user_bytes,
+            FileKind::State { .. } => self.state_bytes,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_orderable_for_perm_table() {
+        assert_eq!(Role::Regular as u8 + 1, Role::Moderator as u8);
+        assert_eq!(Role::Moderator as u8 + 1, Role::Broadcaster as u8);
+        assert_eq!(Role::Broadcaster as u8 + 1, Role::Dreamer as u8);
+    }
+
+    #[test]
+    fn caps_default_matches_spec() {
+        let c = Caps::default();
+        assert_eq!(c.soul_bytes, 4096);
+        assert_eq!(c.lore_bytes, 12_288);
+        assert_eq!(c.user_bytes, 4096);
+        assert_eq!(c.state_bytes, 2048);
+    }
+
+    #[test]
+    fn file_kind_relative_path_round_trips() {
+        assert_eq!(FileKind::Soul.relative_path().to_str().unwrap(), "SOUL.md");
+        assert_eq!(FileKind::Lore.relative_path().to_str().unwrap(), "LORE.md");
+        assert_eq!(
+            FileKind::User {
+                user_id: "12345".into()
+            }
+            .relative_path()
+            .to_str()
+            .unwrap(),
+            "users/12345.md"
+        );
+        assert_eq!(
+            FileKind::State {
+                slug: "quiz".into()
+            }
+            .relative_path()
+            .to_str()
+            .unwrap(),
+            "state/quiz.md"
+        );
+    }
+}

@@ -3,6 +3,7 @@ pub mod extraction;
 pub mod scope;
 pub mod store;
 pub mod tools;
+pub mod types;
 
 pub use consolidation::{
     corroboration_boost, hard_drop_candidates, run_consolidation, spawn_consolidation,
