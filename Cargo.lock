@@ -2688,6 +2688,7 @@ dependencies = [
  "reqwest",
  "ron",
  "rustls",
+ "schemars",
  "scraper",
  "secrecy",
  "serde",
