@@ -16,17 +16,10 @@ pub fn ai_tools() -> Vec<ToolDefinition> {
                 "required": ["query"]
             }),
         },
-        ToolDefinition {
-            name: "fetch_url".into(),
-            description: "Fetch a URL and return extracted readable plain text content.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "HTTP(S) URL to fetch"}
-                },
-                "required": ["url"]
-            }),
-        },
+        ToolDefinition::derived::<super::executor::FetchUrlArgs>(
+            "fetch_url",
+            "Fetch a URL and return extracted readable plain text content.",
+        ),
     ]
 }
 

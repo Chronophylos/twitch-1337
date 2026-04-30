@@ -16,9 +16,10 @@ struct WebSearchArgs {
     max_results: Option<usize>,
 }
 
-#[derive(Debug, Deserialize)]
-struct FetchUrlArgs {
-    url: String,
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(super) struct FetchUrlArgs {
+    /// HTTP(S) URL to fetch.
+    pub url: String,
 }
 
 const FETCH_RESULT_MAX_CHARS: usize = 4_000;

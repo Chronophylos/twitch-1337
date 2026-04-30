@@ -130,6 +130,25 @@ pub struct ToolDefinition {
     pub parameters: serde_json::Value,
 }
 
+impl ToolDefinition {
+    /// Build a `ToolDefinition` whose `parameters` schema is derived from
+    /// `T` via [`schemars`]. Pairs with [`ToolCall::parse_args`] to keep
+    /// the LLM-facing schema and the deserialize target in sync.
+    pub fn derived<T: schemars::JsonSchema>(
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        let schema = schemars::schema_for!(T);
+        let parameters = serde_json::to_value(schema)
+            .expect("JSON Schema serialization is infallible for derived types");
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters,
+        }
+    }
+}
+
 /// A single tool call returned by the LLM.
 ///
 /// Executors MUST check `arguments_parse_error` before inspecting `arguments`:
@@ -348,5 +367,39 @@ mod parse_args_tests {
             ToolArgsError::Deserialize { error } => assert!(!error.is_empty()),
             other => panic!("expected Deserialize variant, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tool_definition_tests {
+    use schemars::JsonSchema;
+    use serde::Deserialize;
+
+    use super::ToolDefinition;
+
+    #[derive(Debug, Deserialize, JsonSchema)]
+    #[allow(dead_code)]
+    struct DemoArgs {
+        query: String,
+        max_results: Option<u32>,
+    }
+
+    #[test]
+    fn derived_emits_a_top_level_object_schema() {
+        let def = ToolDefinition::derived::<DemoArgs>("demo", "Run a demo");
+        assert_eq!(def.name, "demo");
+        assert_eq!(def.description, "Run a demo");
+        assert_eq!(
+            def.parameters.get("type").and_then(|v| v.as_str()),
+            Some("object"),
+            "schema is not an object: {}",
+            def.parameters
+        );
+        let props = def
+            .parameters
+            .get("properties")
+            .expect("properties present");
+        assert!(props.get("query").is_some(), "missing query in {props}");
+        assert!(props.get("max_results").is_some(), "missing max_results");
     }
 }
