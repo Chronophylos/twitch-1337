@@ -113,9 +113,11 @@ struct ApiToolResponse {
 /// Per the OpenAI spec, `tool_calls[].function.arguments` is a JSON-encoded
 /// **string** (not an object), so we re-stringify the parsed `Value` from the
 /// response.
-fn build_openai_messages(request: &ToolChatCompletionRequest) -> Vec<serde_json::Value> {
-    let mut messages: Vec<serde_json::Value> = request
-        .messages
+fn build_openai_messages(
+    messages: &[crate::types::Message],
+    prior_rounds: &[crate::types::ToolCallRound],
+) -> Vec<serde_json::Value> {
+    let mut wire: Vec<serde_json::Value> = messages
         .iter()
         .map(|m| {
             serde_json::json!({
@@ -125,7 +127,7 @@ fn build_openai_messages(request: &ToolChatCompletionRequest) -> Vec<serde_json:
         })
         .collect();
 
-    for round in &request.prior_rounds {
+    for round in prior_rounds {
         let tool_calls: Vec<serde_json::Value> = round
             .calls
             .iter()
@@ -149,10 +151,10 @@ fn build_openai_messages(request: &ToolChatCompletionRequest) -> Vec<serde_json:
         if let Some(rc) = &round.reasoning_content {
             assistant_msg["reasoning_content"] = serde_json::Value::String(rc.clone());
         }
-        messages.push(assistant_msg);
+        wire.push(assistant_msg);
 
         for tr in &round.results {
-            messages.push(serde_json::json!({
+            wire.push(serde_json::json!({
                 "role": "tool",
                 "tool_call_id": tr.tool_call_id,
                 "content": tr.content,
@@ -160,7 +162,7 @@ fn build_openai_messages(request: &ToolChatCompletionRequest) -> Vec<serde_json:
         }
     }
 
-    messages
+    wire
 }
 
 /// Parse the `arguments` string from an OpenAI-compatible tool call. Returns
@@ -336,18 +338,9 @@ impl LlmClient for OpenAiClient {
         } = request;
         let (reasoning_effort, reasoning) = self.map_reasoning(reasoning_effort);
 
-        let request = ToolChatCompletionRequest {
-            model,
-            messages,
-            tools,
-            reasoning_effort: None,
-            prior_rounds,
-        };
+        let wire_messages = build_openai_messages(&messages, &prior_rounds);
 
-        let messages = build_openai_messages(&request);
-
-        let tools: Vec<ApiTool> = request
-            .tools
+        let api_tools: Vec<ApiTool> = tools
             .iter()
             .map(|t| ApiTool {
                 r#type: "function".to_string(),
@@ -360,9 +353,9 @@ impl LlmClient for OpenAiClient {
             .collect();
 
         let api_request = ApiToolRequest {
-            model: request.model,
-            messages,
-            tools,
+            model,
+            messages: wire_messages,
+            tools: api_tools,
             reasoning_effort,
             reasoning,
         };
@@ -480,7 +473,8 @@ mod tests {
 
     #[test]
     fn build_messages_empty_rounds_passes_through_base_messages() {
-        let msgs = build_openai_messages(&req_with_rounds(vec![]));
+        let req = req_with_rounds(vec![]);
+        let msgs = build_openai_messages(&req.messages, &req.prior_rounds);
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[1]["role"], "user");
@@ -517,7 +511,8 @@ mod tests {
             reasoning_content: None,
         };
 
-        let msgs = build_openai_messages(&req_with_rounds(vec![round1, round2]));
+        let req = req_with_rounds(vec![round1, round2]);
+        let msgs = build_openai_messages(&req.messages, &req.prior_rounds);
 
         // Expected layout:
         // [0] system, [1] user,
@@ -571,7 +566,8 @@ mod tests {
             reasoning_content: Some("I should save this fact.".to_string()),
         };
 
-        let msgs = build_openai_messages(&req_with_rounds(vec![round]));
+        let req = req_with_rounds(vec![round]);
+        let msgs = build_openai_messages(&req.messages, &req.prior_rounds);
 
         // [0] system, [1] user, [2] assistant, [3] tool
         assert_eq!(msgs[2]["role"], "assistant");
@@ -598,7 +594,8 @@ mod tests {
             reasoning_content: None,
         };
 
-        let msgs = build_openai_messages(&req_with_rounds(vec![round]));
+        let req = req_with_rounds(vec![round]);
+        let msgs = build_openai_messages(&req.messages, &req.prior_rounds);
 
         assert!(
             msgs[2].get("reasoning_content").is_none(),
