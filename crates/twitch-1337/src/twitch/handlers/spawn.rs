@@ -74,7 +74,8 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     pub ping_manager: Arc<RwLock<ping::PingManager>>,
     pub suspension_manager: Arc<SuspensionManager>,
     pub llm: Option<Arc<dyn LlmClient>>,
-    pub ai_memory: Option<ai::command::AiMemory>,
+    pub ai_memory_v2: Option<ai::command::AiMemoryV2>,
+    pub transcript: Option<crate::ai::memory::transcript::TranscriptWriter>,
     pub whisper: Option<Arc<dyn WhisperSender>>,
 
     // Flight tracker.
@@ -100,7 +101,8 @@ where
         ping_manager,
         suspension_manager,
         llm,
-        ai_memory,
+        ai_memory_v2,
+        transcript,
         whisper,
         aviation,
         aviation_for_commands,
@@ -183,6 +185,17 @@ where
         }
     });
 
+    let _transcript_tap = if let Some(t) = transcript {
+        let rx = broadcast_tx.subscribe();
+        let w = Arc::new(t);
+        let ch = config.twitch.channel.clone();
+        Some(tokio::spawn(async move {
+            crate::twitch::handlers::transcript::run_transcript_tap(rx, w, ch).await;
+        }))
+    } else {
+        None
+    };
+
     let tracker_1337 = tokio::spawn({
         let btx = broadcast_tx.clone();
         let client = client.clone();
@@ -205,7 +218,7 @@ where
                 client,
                 ai_config: config.ai.clone(),
                 llm,
-                ai_memory,
+                ai_memory_v2,
                 leaderboard,
                 ping_manager,
                 hidden_admin_ids: config.twitch.hidden_admins.clone(),

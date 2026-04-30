@@ -22,7 +22,6 @@ use std::sync::Arc;
 use eyre::{Result, WrapErr as _};
 use llm::LlmClient;
 use tokio::sync::{mpsc::UnboundedReceiver, oneshot};
-use tokio::time::Duration;
 use tracing::info;
 use twitch_irc::{
     TwitchIRCClient,
@@ -116,30 +115,18 @@ where
     // Aviation is consumed by the flight tracker; clone first so commands (!up/!fl) also get it.
     let aviation_for_commands = aviation.clone();
 
-    // Build the memory bundle once so both `!ai` (extraction) and the
-    // daily consolidation task share the same store handle + path.
-    // Effective fallback resolution:
-    // - model: extraction -> [ai], consolidation -> extraction -> [ai]
-    // - reasoning_effort: extraction -> [ai], consolidation -> extraction -> [ai]
-    let crate::ai::command::AiMemoryBundle {
-        ai_memory,
-        consolidation_model,
-        consolidation_reasoning_effort,
-    } = crate::ai::command::build_ai_memory(config.ai.as_ref(), llm.as_ref(), &data_dir);
+    // Build the v2 memory bundle. Returns None when AI is disabled or memory is disabled.
+    let (ai_memory_v2, transcript) =
+        match crate::ai::command::build_ai_memory_v2(config.ai.as_ref(), &data_dir).await? {
+            Some((mem, tx)) => (Some(mem), Some(tx)),
+            None => (None, None),
+        };
 
-    // Capture the store handle + path for the consolidation spawn before
-    // `ai_memory` is moved into the command handler. Both `!ai` extraction
-    // (in-handler) and consolidation (below) share these clones.
-    let consolidation_handle = ai_memory.as_ref().map(|m| {
-        (
-            m.config.store.clone(),
-            m.config.path.clone(),
-            llm.as_ref()
-                .expect("ai_memory only built when llm is Some")
-                .clone(),
-        )
-    });
-    let consolidation_settings = config.ai.as_ref().map(|a| a.consolidation.clone());
+    // Clone before moving into SpawnDeps so the dreamer ritual can also use them.
+    let ai_memory_v2_for_ritual = ai_memory_v2.clone();
+    let llm_for_ritual = llm.clone();
+    let ai_config_for_ritual = config.ai.clone();
+    let channel_for_ritual = config.twitch.channel.clone();
 
     let handlers = spawn_handlers(SpawnDeps {
         client,
@@ -151,7 +138,8 @@ where
         ping_manager,
         suspension_manager,
         llm,
-        ai_memory,
+        ai_memory_v2,
+        transcript,
         whisper,
         aviation,
         aviation_for_commands,
@@ -159,34 +147,34 @@ where
 
     let shutdown_notify = handlers.shutdown_notify.clone();
 
-    // Daily memory consolidation pass. Shares the memory store handle with
-    // the extractor so the pass sees any writes made since the last run, and
-    // reuses `shutdown_notify` so Ctrl+C aborts the scheduler mid-sleep.
-    if let (Some(ai), Some((store, path, llm_client)), Some(model)) = (
-        consolidation_settings,
-        consolidation_handle,
-        consolidation_model,
-    ) && ai.enabled
+    // Daily dreamer ritual.
+    if let (Some(llm), Some(mem)) = (llm_for_ritual.as_ref(), &ai_memory_v2_for_ritual)
+        && let Some(ref ai) = ai_config_for_ritual
+        && ai.dreamer.enabled
     {
-        // Format is validated in `validate_config`, so this cannot fail here.
-        let run_at = chrono::NaiveTime::parse_from_str(&ai.run_at, "%H:%M")
-            .expect("ai.consolidation.run_at is validated at config load");
-        ai::memory::spawn_consolidation(
-            llm_client,
-            ai::memory::consolidation::ConsolidationLlmConfig {
-                model,
-                reasoning_effort: consolidation_reasoning_effort,
+        let run_at = chrono::NaiveTime::parse_from_str(&ai.dreamer.run_at, "%H:%M")
+            .expect("ai.dreamer.run_at validated at config load");
+        crate::ai::memory::ritual::spawn_ritual(
+            llm.clone(),
+            mem.store.clone(),
+            mem.transcript.clone(),
+            crate::ai::memory::ritual::RitualConfig {
+                model: ai.dreamer.model.clone().unwrap_or_else(|| ai.model.clone()),
+                reasoning_effort: ai
+                    .dreamer
+                    .reasoning_effort
+                    .clone()
+                    .or_else(|| ai.reasoning_effort.clone()),
+                run_at,
+                timeout_secs: ai.dreamer.timeout_secs,
+                max_rounds: ai.max_turn_rounds,
+                max_writes_per_turn: ai.max_writes_per_turn,
+                inject_byte_budget: ai.memory.inject_byte_budget,
+                channel: channel_for_ritual,
             },
-            store,
-            path,
-            run_at,
-            Duration::from_secs(ai.timeout),
             shutdown_notify.clone(),
         );
-        info!(
-            run_at = %ai.run_at,
-            "Daily AI memory consolidation scheduled"
-        );
+        tracing::info!(run_at = %ai.dreamer.run_at, "Daily AI memory dreamer ritual scheduled");
     }
 
     if schedules_enabled {

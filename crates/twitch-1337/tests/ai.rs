@@ -11,7 +11,17 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 #[tokio::test]
 #[serial]
 async fn ai_command_returns_fake_response() {
-    let bot = TestBotBuilder::new().with_ai().spawn().await;
+    // Legacy path: memory disabled so the bot uses the chat-history tool loop
+    // and sends the final LLM text via say_in_reply_to.
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_config(|c| {
+            if let Some(ai) = c.ai.as_mut() {
+                ai.memory.enabled = false;
+            }
+        })
+        .spawn()
+        .await;
     bot.llm
         .push_tool(ToolChatCompletionResponse::Message("pong".into()));
 
@@ -35,11 +45,13 @@ async fn ai_command_returns_fake_response() {
 #[tokio::test]
 #[serial]
 async fn ai_command_uses_plain_chat_completion_when_history_disabled() {
+    // Legacy path: memory disabled + history_length=0 → plain chat completion.
     let bot = TestBotBuilder::new()
         .with_ai()
         .with_config(|c| {
             if let Some(ai) = c.ai.as_mut() {
                 ai.history_length = 0;
+                ai.memory.enabled = false;
             }
         })
         .spawn()
@@ -85,11 +97,14 @@ async fn ai_command_empty_shows_usage() {
 #[tokio::test]
 #[serial]
 async fn ai_command_does_not_inline_chat_history() {
+    // Legacy path: memory disabled, history_length=10. The chat-history tool
+    // loop (get_recent_chat) is used instead of inlining history in the prompt.
     let mut bot = TestBotBuilder::new()
         .with_ai()
         .with_config(|c| {
             if let Some(ai) = c.ai.as_mut() {
                 ai.history_length = 10;
+                ai.memory.enabled = false;
             }
         })
         .spawn()
@@ -147,11 +162,14 @@ async fn ai_command_does_not_inline_chat_history() {
 #[tokio::test]
 #[serial]
 async fn ai_command_get_recent_chat_tool_returns_history() {
+    // Legacy path: memory disabled, history_length=10. The get_recent_chat tool
+    // is wired up and returns the rolling buffer contents.
     let mut bot = TestBotBuilder::new()
         .with_ai()
         .with_config(|c| {
             if let Some(ai) = c.ai.as_mut() {
                 ai.history_length = 10;
+                ai.memory.enabled = false;
             }
         })
         .spawn()
@@ -215,11 +233,14 @@ async fn ai_command_get_recent_chat_tool_returns_history() {
 #[tokio::test]
 #[serial]
 async fn ai_command_injects_7tv_emote_glossary() {
+    // Legacy path: memory disabled + history_length=0 → plain chat completion,
+    // with 7TV emote glossary injected into the system prompt.
     let mut bot = TestBotBuilder::new()
         .with_ai()
         .with_config(|c| {
             if let Some(ai) = c.ai.as_mut() {
                 ai.history_length = 0;
+                ai.memory.enabled = false;
                 ai.emotes.enabled = true;
                 ai.emotes.include_global = true;
             }
@@ -301,11 +322,14 @@ meaning = "steht nicht im aktuellen 7TV-Katalog"
 #[tokio::test]
 #[serial]
 async fn ai_command_continues_when_7tv_unavailable() {
+    // Legacy path: memory disabled + emotes enabled but 7TV API returns 500.
+    // Bot should still reply without the emote glossary in the system prompt.
     let mut bot = TestBotBuilder::new()
         .with_ai()
         .with_config(|c| {
             if let Some(ai) = c.ai.as_mut() {
                 ai.history_length = 0;
+                ai.memory.enabled = false;
                 ai.emotes.enabled = true;
             }
         })
@@ -352,81 +376,15 @@ meaning = "lachen"
     bot.shutdown().await;
 }
 
-/// End-to-end smoke test for the Phase H extractor wiring: a successful
-/// `!ai` exchange should spawn a fire-and-forget extraction pass that
-/// routes a self-scoped `save_memory` tool call through the permission
-/// matrix and persists the fact to `ai_memory.ron`. The full adversarial
-/// surface (third-party writes, prompt injection, cap enforcement) lives
-/// in `tests/memory_integration.rs` once Phase I lands.
-#[tokio::test]
-#[serial]
-async fn ai_command_saves_memory_extraction() {
-    let mut bot = TestBotBuilder::new()
-        .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.memory.enabled = true;
-            }
-        })
-        .spawn()
-        .await;
-
-    // Main chat response.
-    bot.llm.push_tool(ToolChatCompletionResponse::Message(
-        "nice to meet you Alice".into(),
-    ));
-    // Extraction round 1: one self-scoped save_memory call. user-id 67890 is
-    // the default injected by `irc_line::privmsg`, so subject_id must match
-    // to pass the self-claim permission check.
-    bot.llm.push_tool(ToolChatCompletionResponse::ToolCalls {
-        calls: vec![ToolCall {
-            id: "call_1".into(),
-            name: "save_memory".into(),
-            arguments: serde_json::json!({
-                "scope": "user",
-                "subject_id": "67890",
-                "slug": "likes-coffee",
-                "fact": "alice likes coffee",
-            }),
-            arguments_parse_error: None,
-        }],
-        reasoning_content: None,
-    });
-    // Extraction round 2: plain-text response terminates the loop.
-    bot.llm
-        .push_tool(ToolChatCompletionResponse::Message(String::new()));
-
-    bot.send("alice", "!ai my name is Alice").await;
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    let body = out.strip_prefix(". ").unwrap_or(&out);
-    assert_eq!(body, "nice to meet you Alice");
-
-    // Memory extraction runs fire-and-forget after the reply. Poll briefly
-    // for the RON file to contain the expected fact under the new scoped key.
-    let memory_path = bot.data_dir.path().join("ai_memory.ron");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-    loop {
-        if let Ok(contents) = tokio::fs::read_to_string(&memory_path).await
-            && contents.contains("alice likes coffee")
-            && contents.contains("user:67890:likes-coffee")
-        {
-            break;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            let contents = tokio::fs::read_to_string(&memory_path)
-                .await
-                .unwrap_or_else(|_| "<not created>".into());
-            panic!("expected memory file to contain saved fact, got: {contents}");
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-
-    bot.shutdown().await;
-}
+// v1 test removed in T17: ai_command_saves_memory_extraction tested v1 RON
+// extraction (save_memory tool → ai_memory.ron, user:67890:likes-coffee key).
+// Equivalent v2 coverage lives in tests/memory_v2.rs.
 
 #[tokio::test]
 #[serial]
 async fn ai_command_web_tool_flow_search_success() {
+    // Legacy path: memory disabled, web tools enabled. Web search result is
+    // threaded back into the final LLM response.
     let search = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/search"))
@@ -450,6 +408,7 @@ async fn ai_command_web_tool_flow_search_success() {
         .with_ai()
         .with_config(|c| {
             let ai = c.ai.as_mut().expect("ai configured");
+            ai.memory.enabled = false;
             ai.web.enabled = true;
             ai.web.base_url = format!("{}/search", search.uri());
             ai.web.timeout = 5;
@@ -501,10 +460,13 @@ async fn ai_command_web_tool_flow_search_success() {
 #[tokio::test]
 #[serial]
 async fn ai_web_tool_rejects_memory_tool_calls() {
+    // Legacy path: memory disabled, web tools enabled. The LLM tries to call
+    // save_memory (not a web tool) and should receive an "unknown_tool" error.
     let mut bot = TestBotBuilder::new()
         .with_ai()
         .with_config(|c| {
             let ai = c.ai.as_mut().expect("ai configured");
+            ai.memory.enabled = false;
             ai.web.enabled = true;
         })
         .spawn()
@@ -536,57 +498,6 @@ async fn ai_web_tool_rejects_memory_tool_calls() {
     bot.shutdown().await;
 }
 
-#[tokio::test]
-#[serial]
-async fn memory_extractor_rejects_web_tool_calls() {
-    let mut bot = TestBotBuilder::new()
-        .with_ai()
-        .with_config(|c| {
-            let ai = c.ai.as_mut().expect("ai configured");
-            ai.memory.enabled = true;
-        })
-        .spawn()
-        .await;
-
-    // Main AI response (history-enabled → tool-capable completion).
-    bot.llm
-        .push_tool(ToolChatCompletionResponse::Message("ok".into()));
-    // Extraction round 1: extractor tries web_search, which should be rejected.
-    bot.llm.push_tool(ToolChatCompletionResponse::ToolCalls {
-        calls: vec![ToolCall {
-            id: "call_1".into(),
-            name: "web_search".into(),
-            arguments: serde_json::json!({"query":"x"}),
-            arguments_parse_error: None,
-        }],
-        reasoning_content: None,
-    });
-    // Extraction round 2: plain-text response terminates the loop.
-    bot.llm
-        .push_tool(ToolChatCompletionResponse::Message(String::new()));
-
-    bot.send("alice", "!ai remember this").await;
-    let _ = bot.expect_say(Duration::from_secs(2)).await;
-
-    let tool_calls = bot.llm.tool_calls();
-    assert!(
-        tool_calls.len() >= 3,
-        "expected main + extraction tool rounds"
-    );
-    let extraction_req = &tool_calls[1];
-    let extraction_tools: Vec<String> = extraction_req
-        .tools
-        .iter()
-        .map(|t| t.name.clone())
-        .collect();
-    assert_eq!(extraction_tools, vec!["save_memory", "get_memories"]);
-
-    let second_req = &tool_calls[2];
-    let extractor_result = &second_req.prior_rounds[0].results[0].content;
-    assert!(
-        extractor_result.contains("Unknown tool: web_search"),
-        "unexpected extractor result: {extractor_result}"
-    );
-
-    bot.shutdown().await;
-}
+// v1 test removed in T17: memory_extractor_rejects_web_tool_calls tested the
+// v1 fire-and-forget extraction pass (save_memory/get_memories tools). The v2
+// dreamer executor isolation is covered by tests/memory_v2.rs.

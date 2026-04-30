@@ -15,9 +15,16 @@ const AI_CHAN: &str = "ai_chan";
 
 #[tokio::test]
 async fn ai_command_works_in_ai_channel() {
+    // Legacy path: memory disabled so the bot uses say_in_reply_to for the
+    // final LLM text. Tests that the reply lands in the secondary AI channel.
     let mut bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| c.twitch.ai_channel = Some(AI_CHAN.into()))
+        .with_config(|c| {
+            c.twitch.ai_channel = Some(AI_CHAN.into());
+            if let Some(ai) = c.ai.as_mut() {
+                ai.memory.enabled = false;
+            }
+        })
         .spawn()
         .await;
 
@@ -136,9 +143,17 @@ async fn tracker_1337_ignores_ai_channel_messages() {
 
 #[tokio::test]
 async fn ai_command_still_works_in_primary_channel() {
+    // Legacy path: memory disabled so the bot uses say_in_reply_to for the
+    // final LLM text. Tests that primary-channel !ai still works when
+    // ai_channel is also configured.
     let mut bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| c.twitch.ai_channel = Some(AI_CHAN.into()))
+        .with_config(|c| {
+            c.twitch.ai_channel = Some(AI_CHAN.into());
+            if let Some(ai) = c.ai.as_mut() {
+                ai.memory.enabled = false;
+            }
+        })
         .spawn()
         .await;
 

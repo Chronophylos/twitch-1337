@@ -92,7 +92,7 @@ OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config
 
 ## Data dir
 
-All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `pings.ron`, `ai_memory.ron`, `leaderboard.ron`, `flights.ron`, `feedback.txt`.
+All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `pings.ron`, `leaderboard.ron`, `flights.ron`, `feedback.txt`. Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/state/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt overrides: `prompts/system.md`, `prompts/ai_instructions.md`, `prompts/dreamer.md`.
 
 Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `flight_tracker.rs`.
 
@@ -110,7 +110,7 @@ Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `fli
 - Aviation client init failure: log + disable `!up`/`!fl`/flight tracker + track commands. Don't abort.
 - Latency monitor: PING/PONG every 5min, EMA alpha=0.2, shared `Arc<AtomicU32>`. Read by 1337 handler for precise wake-up.
 - Flight tracker: `Arc<mpsc::Sender<TrackerCommand>>` from commands to long task. Adaptive poll 30/60/120s based on phase mix. adsb.lol v2; fallback aggregators in memory `reference_adsb_aggregators.md`.
-- AI memory: LLM manages via `save_memory`/`delete_memory` tool calls. Fire-and-forget extraction after each response. Cap `max_memories` (default 50, max 200).
+- AI memory (v2): per-user character sheets + chat LORE + bot SOUL as markdown under $DATA_DIR/memories/. Single-loop !ai turn drives the model with write_file/write_state/delete_state/say tools (run_agent in the llm crate). Daily dreamer ritual rewrites files from yesterday's transcript at [ai.dreamer].run_at (Berlin local). Memory bodies are byte-capped (SOUL/user 4 KiB, LORE 12 KiB, state 2 KiB).
 - Scheduled messages: on Ctrl+C, main notifies `Arc<Notify>`; children finish in-flight `say()` then exit; main awaits handler with 5s timeout.
 
 ## Gotchas

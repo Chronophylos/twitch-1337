@@ -71,32 +71,48 @@ fn default_true() -> bool {
     true
 }
 
-pub(crate) fn default_max_user() -> usize {
-    50
+fn default_soul_bytes() -> usize {
+    4096
 }
 
-fn default_max_lore() -> usize {
-    50
+fn default_lore_bytes() -> usize {
+    12_288
 }
 
-fn default_max_pref() -> usize {
-    50
+fn default_user_bytes() -> usize {
+    4096
 }
 
-fn default_half_life() -> u32 {
-    30
+fn default_state_bytes() -> usize {
+    2048
+}
+
+fn default_inject_budget() -> usize {
+    24_576
+}
+
+fn default_max_state_files() -> usize {
+    16
+}
+
+fn default_max_turn_rounds() -> usize {
+    4
+}
+
+fn default_max_writes_per_turn() -> usize {
+    8
+}
+
+fn default_dreamer_run_at() -> String {
+    "04:00".to_string()
+}
+
+fn default_dreamer_timeout() -> u64 {
+    120
 }
 
 fn default_max_rounds() -> usize {
     3
-}
-
-fn default_run_at() -> String {
-    "04:00".to_string()
-}
-
-fn default_consolidation_timeout() -> u64 {
-    120
 }
 
 fn default_web_timeout() -> u64 {
@@ -138,89 +154,65 @@ pub struct AviationstackConfig {
     pub timeout_secs: u64,
 }
 
-/// Per-scope caps + decay policy for the AI memory store. See
-/// `[ai.memory]` in `config.toml.example`.
+/// Byte-budget caps for the AI memory store. See `[ai.memory]` in
+/// `config.toml.example`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MemoryConfigSection {
-    /// Enable persistent AI memory (default: false)
-    #[serde(default)]
+    /// Enable persistent AI memory (default: true)
+    #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default = "default_max_user")]
-    pub max_user: usize,
-    #[serde(default = "default_max_lore")]
-    pub max_lore: usize,
-    #[serde(default = "default_max_pref")]
-    pub max_pref: usize,
-    #[serde(default = "default_half_life")]
-    pub half_life_days: u32,
+    #[serde(default = "default_soul_bytes")]
+    pub soul_bytes: usize,
+    #[serde(default = "default_lore_bytes")]
+    pub lore_bytes: usize,
+    #[serde(default = "default_user_bytes")]
+    pub user_bytes: usize,
+    #[serde(default = "default_state_bytes")]
+    pub state_bytes: usize,
+    #[serde(default = "default_inject_budget")]
+    pub inject_byte_budget: usize,
+    #[serde(default = "default_max_state_files")]
+    pub max_state_files: usize,
 }
 
 impl Default for MemoryConfigSection {
     fn default() -> Self {
         Self {
-            enabled: false,
-            max_user: default_max_user(),
-            max_lore: default_max_lore(),
-            max_pref: default_max_pref(),
-            half_life_days: default_half_life(),
-        }
-    }
-}
-
-/// Knobs for the per-turn memory extractor. `model` / `timeout` /
-/// `reasoning_effort` fall back to the main `[ai]` values when omitted.
-/// See `[ai.extraction]`.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ExtractionConfigSection {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub timeout: Option<u64>,
-    #[serde(default)]
-    pub reasoning_effort: Option<String>,
-    #[serde(default = "default_max_rounds")]
-    pub max_rounds: usize,
-}
-
-impl Default for ExtractionConfigSection {
-    fn default() -> Self {
-        Self {
             enabled: true,
-            model: None,
-            timeout: None,
-            reasoning_effort: None,
-            max_rounds: default_max_rounds(),
+            soul_bytes: default_soul_bytes(),
+            lore_bytes: default_lore_bytes(),
+            user_bytes: default_user_bytes(),
+            state_bytes: default_state_bytes(),
+            inject_byte_budget: default_inject_budget(),
+            max_state_files: default_max_state_files(),
         }
     }
 }
 
-/// Knobs for the daily memory-consolidation pass.
-/// `reasoning_effort` falls back to `[ai.extraction]` then `[ai]`.
-/// See `[ai.consolidation]`.
+/// Knobs for the nightly dreamer pass (replaces the old consolidation).
+/// See `[ai.dreamer]` in `config.toml.example`.
 #[derive(Debug, Clone, Deserialize)]
-pub struct ConsolidationConfigSection {
+pub struct DreamerConfigSection {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
-    #[serde(default = "default_run_at")]
+    #[serde(default = "default_dreamer_run_at")]
     pub run_at: String,
-    #[serde(default = "default_consolidation_timeout")]
-    pub timeout: u64,
+    #[serde(default = "default_dreamer_timeout")]
+    pub timeout_secs: u64,
 }
 
-impl Default for ConsolidationConfigSection {
+impl Default for DreamerConfigSection {
     fn default() -> Self {
         Self {
             enabled: true,
             model: None,
             reasoning_effort: None,
-            run_at: default_run_at(),
-            timeout: default_consolidation_timeout(),
+            run_at: default_dreamer_run_at(),
+            timeout_secs: default_dreamer_timeout(),
         }
     }
 }
@@ -324,24 +316,24 @@ pub struct AiConfig {
     /// Optional: Prefill chat history from a rustlog-compatible API at startup
     #[serde(default)]
     pub history_prefill: Option<prefill::HistoryPrefillConfig>,
-    /// Per-scope caps + decay for the memory store.
+    /// Byte-budget caps for the memory store.
     #[serde(default)]
     pub memory: MemoryConfigSection,
-    /// Per-turn extractor knobs.
+    /// Max tool-call rounds per `!ai` request (default: 4).
+    #[serde(default = "default_max_turn_rounds")]
+    pub max_turn_rounds: usize,
+    /// Max memory writes the model may make per turn (default: 8).
+    #[serde(default = "default_max_writes_per_turn")]
+    pub max_writes_per_turn: usize,
+    /// Nightly dreamer pass knobs.
     #[serde(default)]
-    pub extraction: ExtractionConfigSection,
-    /// Daily consolidation pass knobs.
-    #[serde(default)]
-    pub consolidation: ConsolidationConfigSection,
+    pub dreamer: DreamerConfigSection,
     /// Optional 7TV emote glossary prompt grounding.
     #[serde(default)]
     pub emotes: AiEmotesConfigSection,
     /// Optional web tool surface for `!ai` (`web_search`, `fetch_url`).
     #[serde(default)]
     pub web: AiWebConfigSection,
-    /// Deprecated: replaced by `memory.max_user`. Logged as a warning if set.
-    #[serde(default)]
-    pub max_memories: Option<usize>,
 }
 
 fn validate_reasoning_effort(path: &str, value: Option<&str>) -> Result<()> {
@@ -637,24 +629,39 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         bail!("ai.history_prefill requires history_length > 0");
     }
 
-    if let Some(ref ai) = config.ai
-        && ai.memory.enabled
-        && let Some(n) = ai.max_memories
-        && !(1..=200).contains(&n)
-    {
-        bail!("ai.max_memories must be between 1 and 200 (got {n})");
+    if let Some(ref ai) = config.ai {
+        if !(1..=20).contains(&ai.max_turn_rounds) {
+            bail!(
+                "ai.max_turn_rounds must be 1..=20 (got {})",
+                ai.max_turn_rounds
+            );
+        }
+        if !(1..=64).contains(&ai.max_writes_per_turn) {
+            bail!(
+                "ai.max_writes_per_turn must be 1..=64 (got {})",
+                ai.max_writes_per_turn
+            );
+        }
+        validate_reasoning_effort(
+            "ai.dreamer.reasoning_effort",
+            ai.dreamer.reasoning_effort.as_deref(),
+        )?;
+        chrono::NaiveTime::parse_from_str(&ai.dreamer.run_at, "%H:%M").wrap_err_with(|| {
+            format!(
+                "ai.dreamer.run_at must be HH:MM (got {:?})",
+                ai.dreamer.run_at
+            )
+        })?;
+        if ai.dreamer.timeout_secs == 0 {
+            bail!("ai.dreamer.timeout_secs must be > 0");
+        }
+        if ai.memory.inject_byte_budget < ai.memory.soul_bytes + ai.memory.lore_bytes {
+            bail!("ai.memory.inject_byte_budget must be >= soul_bytes + lore_bytes");
+        }
     }
 
     if let Some(ref ai) = config.ai {
         validate_reasoning_effort("ai.reasoning_effort", ai.reasoning_effort.as_deref())?;
-        validate_reasoning_effort(
-            "ai.extraction.reasoning_effort",
-            ai.extraction.reasoning_effort.as_deref(),
-        )?;
-        validate_reasoning_effort(
-            "ai.consolidation.reasoning_effort",
-            ai.consolidation.reasoning_effort.as_deref(),
-        )?;
         if ai.web.base_url.trim().is_empty() {
             bail!("ai.web.base_url cannot be empty");
         }
@@ -680,19 +687,6 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
             bail!("ai.web.cache_capacity must be > 0");
         }
     }
-    // Parsed again at scheduler spawn; bail here so a typo doesn't take the
-    // bot down after startup.
-    if let Some(ref ai) = config.ai {
-        chrono::NaiveTime::parse_from_str(&ai.consolidation.run_at, "%H:%M").wrap_err_with(
-            || {
-                format!(
-                    "ai.consolidation.run_at must be HH:MM (got {:?})",
-                    ai.consolidation.run_at
-                )
-            },
-        )?;
-    }
-
     if let Some(ref ai) = config.ai
         && ai.emotes.enabled
     {
@@ -738,10 +732,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn consolidation_run_at_parses() {
-        let s = ConsolidationConfigSection::default();
-        let t = chrono::NaiveTime::parse_from_str(&s.run_at, "%H:%M").unwrap();
-        assert_eq!(t.format("%H:%M").to_string(), "04:00");
+    fn ai_memory_v2_defaults() {
+        let s = MemoryConfigSection::default();
+        assert!(s.enabled);
+        assert_eq!(s.soul_bytes, 4096);
+        assert_eq!(s.lore_bytes, 12288);
+        assert_eq!(s.user_bytes, 4096);
+        assert_eq!(s.state_bytes, 2048);
+        assert_eq!(s.inject_byte_budget, 24576);
+        assert_eq!(s.max_state_files, 16);
+    }
+
+    #[test]
+    fn ai_dreamer_defaults() {
+        let d = DreamerConfigSection::default();
+        assert!(d.enabled);
+        assert_eq!(d.run_at, "04:00");
+        assert_eq!(d.timeout_secs, 120);
+        assert!(d.model.is_none());
+    }
+
+    #[test]
+    fn ai_top_level_v2_defaults() {
+        let ai: AiConfig = toml::from_str(
+            r#"
+            backend = "ollama"
+            model = "x"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(ai.max_turn_rounds, 4);
+        assert_eq!(ai.max_writes_per_turn, 8);
     }
 
     fn ai_with_run_at(run_at: &str) -> AiConfig {
@@ -757,14 +778,14 @@ mod tests {
             history_length: default_history_length(),
             history_prefill: None,
             memory: MemoryConfigSection::default(),
-            extraction: ExtractionConfigSection::default(),
-            consolidation: ConsolidationConfigSection {
+            max_turn_rounds: default_max_turn_rounds(),
+            max_writes_per_turn: default_max_writes_per_turn(),
+            dreamer: DreamerConfigSection {
                 run_at: run_at.into(),
-                ..ConsolidationConfigSection::default()
+                ..DreamerConfigSection::default()
             },
             emotes: AiEmotesConfigSection::default(),
             web: AiWebConfigSection::default(),
-            max_memories: None,
         }
     }
 
@@ -774,7 +795,7 @@ mod tests {
         c.ai = Some(ai_with_run_at("not-a-time"));
         let err = validate_config(&c).unwrap_err();
         assert!(
-            format!("{err:#}").contains("ai.consolidation.run_at"),
+            format!("{err:#}").contains("ai.dreamer.run_at"),
             "got: {err:#}"
         );
     }
@@ -880,12 +901,11 @@ mod tests {
     }
 
     #[test]
-    fn validate_accepts_non_empty_workflow_reasoning_effort() {
+    fn validate_accepts_non_empty_dreamer_reasoning_effort() {
         let mut c = Configuration::test_default();
         let mut ai = ai_with_run_at("04:00");
         ai.reasoning_effort = Some("medium".into());
-        ai.extraction.reasoning_effort = Some("low".into());
-        ai.consolidation.reasoning_effort = Some("high".into());
+        ai.dreamer.reasoning_effort = Some("high".into());
         c.ai = Some(ai);
 
         validate_config(&c).unwrap();
@@ -950,5 +970,66 @@ mod tests {
         let mut config = Configuration::test_default();
         config.twitch.ai_channel = Some("ai_chan".into());
         validate_config(&config).expect("distinct ai_channel must validate");
+    }
+
+    #[test]
+    fn validate_rejects_max_turn_rounds_out_of_range() {
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.max_turn_rounds = 0;
+        c.ai = Some(ai);
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ai.max_turn_rounds"),
+            "got: {err:#}"
+        );
+
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.max_turn_rounds = 21;
+        c.ai = Some(ai);
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ai.max_turn_rounds"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_max_writes_per_turn_out_of_range() {
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.max_writes_per_turn = 0;
+        c.ai = Some(ai);
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ai.max_writes_per_turn"),
+            "got: {err:#}"
+        );
+
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.max_writes_per_turn = 65;
+        c.ai = Some(ai);
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ai.max_writes_per_turn"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_inject_budget_below_soul_plus_lore() {
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.memory.soul_bytes = 4096;
+        ai.memory.lore_bytes = 12_288;
+        ai.memory.inject_byte_budget = 8192; // less than 4096 + 12288
+        c.ai = Some(ai);
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("inject_byte_budget"),
+            "got: {err:#}"
+        );
     }
 }

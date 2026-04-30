@@ -13,7 +13,13 @@ use llm::{
 };
 
 use crate::ai::chat_history::{ChatHistory, ChatHistoryQuery, MAX_TOOL_RESULT_MESSAGES};
-use crate::ai::memory;
+use crate::ai::memory::inject;
+use crate::ai::memory::store::MemoryStore;
+use crate::ai::memory::tools::{
+    ChatTurnExecutor, ChatTurnExecutorOpts, SayChannel, chat_turn_tools,
+};
+use crate::ai::memory::transcript::TranscriptWriter;
+use crate::ai::memory::types::{Caps, Role};
 use crate::ai::web_search;
 use crate::commands::{Command, CommandContext};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
@@ -33,26 +39,29 @@ pub struct AiPrompts {
     pub instruction_template: String,
 }
 
-/// Dependencies needed to fire the fire-and-forget memory-extraction task
-/// after each successful `!ai` exchange. Kept separate from chat generation
-/// so the extractor can use a different `model` / `timeout` / round budget.
-pub struct AiExtractionDeps {
-    /// Gate for spawning per-turn extraction. Mirrors `[ai.extraction].enabled`.
-    /// When `false`, the extractor never runs; chat generation is unaffected.
-    pub enabled: bool,
-    pub llm: Arc<dyn LlmClient>,
-    pub model: String,
-    pub reasoning_effort: Option<String>,
-    pub timeout: Duration,
-    pub max_rounds: usize,
+/// Memory v2 bundle: store handle, transcript writer, capability caps,
+/// and per-turn knobs. Replaces the v1 `AiMemory` + `AiExtractionDeps` types.
+#[derive(Clone)]
+pub struct AiMemoryV2 {
+    pub store: MemoryStore,
+    pub transcript: TranscriptWriter,
+    pub caps: Caps,
+    pub inject_byte_budget: usize,
+    pub max_turn_rounds: usize,
+    pub max_writes_per_turn: usize,
+    pub turn_timeout: Duration,
 }
 
-/// Memory store handle + per-turn extractor deps bundled together so
-/// `AiCommand` only has to carry one optional field for the whole
-/// memory subsystem.
-pub struct AiMemory {
-    pub config: memory::MemoryConfig,
-    pub extraction_deps: AiExtractionDeps,
+/// Classify the speaker role from Twitch IRC badge list.
+pub fn classify_role_v2(badges: &[twitch_irc::message::Badge]) -> Role {
+    let has = |key: &str| badges.iter().any(|b| b.name == key);
+    if has("broadcaster") {
+        Role::Broadcaster
+    } else if has("moderator") {
+        Role::Moderator
+    } else {
+        Role::Regular
+    }
 }
 
 /// Optional web tool-call dependencies for main `!ai` responses.
@@ -63,7 +72,7 @@ pub struct AiWeb {
 }
 
 pub struct AiFeatures {
-    pub memory: Option<AiMemory>,
+    pub memory_v2: Option<AiMemoryV2>,
     pub web: Option<AiWeb>,
     pub emotes: Option<Arc<SevenTvEmoteProvider>>,
 }
@@ -76,9 +85,10 @@ pub struct AiCommand {
     timeout: Duration,
     reasoning_effort: Option<String>,
     chat_ctx: Option<ChatContext>,
-    memory: Option<AiMemory>,
+    memory_v2: Option<AiMemoryV2>,
     web: Option<AiWeb>,
     emotes: Option<Arc<SevenTvEmoteProvider>>,
+    bot_username: String,
 }
 
 pub struct AiCommandDeps {
@@ -89,9 +99,10 @@ pub struct AiCommandDeps {
     pub reasoning_effort: Option<String>,
     pub cooldown: Duration,
     pub chat_ctx: Option<ChatContext>,
-    pub memory: Option<AiMemory>,
+    pub memory_v2: Option<AiMemoryV2>,
     pub web: Option<AiWeb>,
     pub emotes: Option<Arc<SevenTvEmoteProvider>>,
+    pub bot_username: String,
 }
 const CHAT_HISTORY_TOOL_NAME: &str = "get_recent_chat";
 const CHAT_HISTORY_TOOL_MAX_ROUNDS: usize = 4;
@@ -125,9 +136,10 @@ impl AiCommand {
             timeout: deps.timeout,
             reasoning_effort: deps.reasoning_effort,
             chat_ctx: deps.chat_ctx,
-            memory: deps.memory,
+            memory_v2: deps.memory_v2,
             web: deps.web,
             emotes: deps.emotes,
+            bot_username: deps.bot_username,
         }
     }
 
@@ -502,16 +514,109 @@ where
 
         self.cooldown.record(user).await;
 
+        // ── Memory v2 path ──────────────────────────────────────────────────
+        if let Some(ref mem) = self.memory_v2 {
+            let nonce = inject::fresh_nonce();
+            let role = classify_role_v2(&ctx.privmsg.badges);
+            let role_str = match role {
+                Role::Regular => "regular",
+                Role::Moderator => "moderator",
+                Role::Broadcaster => "broadcaster",
+                Role::Dreamer => "dreamer",
+            };
+            let now_berlin = Utc::now()
+                .with_timezone(&chrono_tz::Europe::Berlin)
+                .format("%Y-%m-%d");
+
+            // Load prompts from disk on every use (owner edits live).
+            let system_template =
+                tokio::fs::read_to_string(mem.store.prompts_dir().join("system.md")).await?;
+            let instructions_template =
+                tokio::fs::read_to_string(mem.store.prompts_dir().join("ai_instructions.md"))
+                    .await?;
+            let vars = inject::SubstitutionVars {
+                speaker_username: &ctx.privmsg.sender.login,
+                speaker_role: role_str,
+                channel: &ctx.privmsg.channel_login,
+                date: &now_berlin.to_string(),
+            };
+            let system_prompt_head = inject::substitute(&system_template, vars);
+            let instructions_head = inject::substitute(&instructions_template, vars);
+
+            let inject_body = inject::build_chat_turn_context(
+                &mem.store,
+                inject::BuildOpts {
+                    inject_byte_budget: mem.inject_byte_budget,
+                    nonce: nonce.clone(),
+                },
+            )
+            .await?;
+            let system_prompt = format!("{system_prompt_head}\n\n{inject_body}");
+
+            let instruction_for_prompt =
+                instruction_with_reply_context(&instruction, &ctx, grok_alias);
+            let user_message = format!("{instructions_head}\n\n{instruction_for_prompt}");
+
+            let (say_tx, mut say_rx) = tokio::sync::mpsc::channel::<String>(16);
+            let exec = ChatTurnExecutor::new(ChatTurnExecutorOpts {
+                store: mem.store.clone(),
+                speaker_user_id: ctx.privmsg.sender.id.clone(),
+                speaker_display_name: ctx.privmsg.sender.name.clone(),
+                speaker_role: role,
+                max_writes_per_turn: mem.max_writes_per_turn,
+                say: SayChannel::mpsc(say_tx),
+            });
+
+            // Drain `say` lines as they arrive — fire-and-forget chat sends in their tool order.
+            let client = ctx.client.clone();
+            let privmsg_for_reply = ctx.privmsg.clone();
+            let transcript_for_drain = mem.transcript.clone();
+            let bot_username_for_drain = self.bot_username.clone();
+            let drainer = tokio::spawn(async move {
+                while let Some(line) = say_rx.recv().await {
+                    let ts = Utc::now();
+                    if let Err(e) = client
+                        .say_in_reply_to(&privmsg_for_reply, line.clone())
+                        .await
+                    {
+                        error!(error = ?e, "say drain failed");
+                    }
+                    if let Err(e) = transcript_for_drain
+                        .append_line(ts, &bot_username_for_drain, &line)
+                        .await
+                    {
+                        error!(error = ?e, "transcript bot-reply append failed");
+                    }
+                }
+            });
+
+            let req = ToolChatCompletionRequest {
+                model: self.model.clone(),
+                messages: vec![Message::system(system_prompt), Message::user(user_message)],
+                tools: chat_turn_tools(),
+                reasoning_effort: self.reasoning_effort.clone(),
+                prior_rounds: Vec::new(),
+            };
+            let opts = AgentOpts {
+                max_rounds: mem.max_turn_rounds,
+                per_round_timeout: Some(mem.turn_timeout),
+            };
+
+            match run_agent(&*self.llm_client, req, &exec, opts).await {
+                Ok(AgentOutcome::Text(_)) => { /* clean exit; any say already on wire */ }
+                Ok(AgentOutcome::MaxRoundsExceeded) => warn!("AI max_turn_rounds exceeded"),
+                Ok(AgentOutcome::Timeout { round }) => warn!(round, "AI per-round timeout"),
+                Err(e) => warn!(error = ?e, "AI llm error"),
+            }
+            drop(exec); // closes say_tx
+            drainer.await.ok();
+
+            return Ok(());
+        }
+
+        // ── Legacy path (web tools, chat-history, plain completions) ────────
         let now = Utc::now();
-        let facts = if let Some(ref mem) = self.memory {
-            let store_guard = mem.config.store.read().await;
-            store_guard
-                .format_for_prompt(&mem.config.caps)
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        let mut system_prompt = format!("{}{}", self.prompts.system, facts);
+        let mut system_prompt = self.prompts.system.clone();
 
         if let Some(ref emotes) = self.emotes
             && let Some(block) = emotes.prompt_block(&ctx.privmsg.channel_id).await
@@ -593,7 +698,7 @@ where
             }
         };
 
-        let (response, success) = match result {
+        let (response, _success) = match result {
             AiResult::Ok(text) => {
                 let visible_text = clean_user_facing_ai_response(&text);
                 let truncated = truncate_response(visible_text, MAX_RESPONSE_LENGTH);
@@ -625,146 +730,40 @@ where
             error!(error = ?e, "Failed to send AI response");
         }
 
-        // Spawn fire-and-forget memory extraction (only on successful AI responses
-        // AND when the `[ai.extraction].enabled` flag allows it).
-        if let (true, Some(mem)) = (success, &self.memory)
-            && mem.extraction_deps.enabled
-        {
-            let ext_ctx = memory::ExtractionContext {
-                speaker_id: ctx.privmsg.sender.id.clone(),
-                speaker_username: ctx.privmsg.sender.login.clone(),
-                speaker_role: memory::classify_role(&ctx.privmsg.badges),
-                user_message: instruction.clone(),
-                ai_response: response.clone(),
-            };
-            memory::spawn_memory_extraction(
-                memory::ExtractionDeps {
-                    llm: mem.extraction_deps.llm.clone(),
-                    model: mem.extraction_deps.model.clone(),
-                    reasoning_effort: mem.extraction_deps.reasoning_effort.clone(),
-                    store: mem.config.store.clone(),
-                    store_path: mem.config.path.clone(),
-                    caps: mem.config.caps.clone(),
-                    half_life_days: mem.config.half_life_days,
-                    timeout: mem.extraction_deps.timeout,
-                    max_rounds: mem.extraction_deps.max_rounds,
-                },
-                ext_ctx,
-            );
-        }
-
         Ok(())
     }
 }
 
-/// Outcome of attempting to build the AI memory bundle from config + an LLM
-/// handle. All three fields are `None` when AI is disabled or memory load
-/// failed; otherwise they are populated and ready to feed into the command
-/// handler + the daily consolidation task.
-pub struct AiMemoryBundle {
-    pub ai_memory: Option<AiMemory>,
-    pub consolidation_model: Option<String>,
-    pub consolidation_reasoning_effort: Option<String>,
-}
-
-/// Construct the optional AI memory bundle from config + an LLM handle.
+/// Construct the optional AI memory v2 bundle from config.
 ///
-/// Returns an empty bundle when AI is disabled, no LLM is wired, or
-/// `[ai.memory].enabled = false`. Logs (warn!) on deprecated fields and
-/// (error!) on store load failure.
-pub fn build_ai_memory(
+/// Returns `None` when AI is disabled, memory is disabled, or the store
+/// cannot be opened. On success, returns `(AiMemoryV2, TranscriptWriter)`.
+pub async fn build_ai_memory_v2(
     ai: Option<&crate::config::AiConfig>,
-    llm: Option<&Arc<dyn LlmClient>>,
     data_dir: &std::path::Path,
-) -> AiMemoryBundle {
-    let empty = || AiMemoryBundle {
-        ai_memory: None,
-        consolidation_model: None,
-        consolidation_reasoning_effort: None,
-    };
-
-    let (Some(ai), Some(llm_arc)) = (ai, llm) else {
-        return empty();
-    };
+) -> eyre::Result<Option<(AiMemoryV2, TranscriptWriter)>> {
+    let Some(ai) = ai else { return Ok(None) };
     if !ai.memory.enabled {
-        return empty();
+        return Ok(None);
     }
 
-    let extraction_model = ai
-        .extraction
-        .model
-        .clone()
-        .unwrap_or_else(|| ai.model.clone());
-    let extraction_reasoning_effort = ai
-        .extraction
-        .reasoning_effort
-        .clone()
-        .or_else(|| ai.reasoning_effort.clone());
-    let consolidation_model = ai
-        .consolidation
-        .model
-        .clone()
-        .or_else(|| ai.extraction.model.clone())
-        .unwrap_or_else(|| ai.model.clone());
-    let consolidation_reasoning_effort = ai
-        .consolidation
-        .reasoning_effort
-        .clone()
-        .or_else(|| ai.extraction.reasoning_effort.clone())
-        .or_else(|| ai.reasoning_effort.clone());
-
-    match memory::MemoryStore::load(data_dir) {
-        Ok((store, path)) => {
-            // Back-compat: honor the deprecated `ai.max_memories` when the
-            // user hasn't overridden `[ai.memory].max_user`. Either way,
-            // emit a warn! so stale configs surface.
-            let max_user = if let Some(legacy_n) = ai.max_memories {
-                if ai.memory.max_user == crate::config::default_max_user() {
-                    warn!(
-                        "ai.max_memories is deprecated; migrating to [ai.memory].max_user = {legacy_n}. Please update your config."
-                    );
-                    legacy_n
-                } else {
-                    warn!(
-                        "ai.max_memories={} is deprecated AND ignored because [ai.memory].max_user={} is explicitly set. Remove the deprecated field.",
-                        legacy_n, ai.memory.max_user
-                    );
-                    ai.memory.max_user
-                }
-            } else {
-                ai.memory.max_user
-            };
-
-            let config = memory::MemoryConfig {
-                store: Arc::new(tokio::sync::RwLock::new(store)),
-                path,
-                caps: memory::Caps {
-                    max_user,
-                    max_lore: ai.memory.max_lore,
-                    max_pref: ai.memory.max_pref,
-                },
-                half_life_days: ai.memory.half_life_days,
-            };
-            let ai_memory = AiMemory {
-                config,
-                extraction_deps: AiExtractionDeps {
-                    enabled: ai.extraction.enabled,
-                    llm: llm_arc.clone(),
-                    model: extraction_model,
-                    reasoning_effort: extraction_reasoning_effort,
-                    timeout: Duration::from_secs(ai.extraction.timeout.unwrap_or(ai.timeout)),
-                    max_rounds: ai.extraction.max_rounds,
-                },
-            };
-            AiMemoryBundle {
-                ai_memory: Some(ai_memory),
-                consolidation_model: Some(consolidation_model),
-                consolidation_reasoning_effort,
-            }
-        }
-        Err(e) => {
-            error!(error = ?e, "Failed to load AI memory store, memory disabled");
-            empty()
-        }
-    }
+    let caps = Caps {
+        soul_bytes: ai.memory.soul_bytes,
+        lore_bytes: ai.memory.lore_bytes,
+        user_bytes: ai.memory.user_bytes,
+        state_bytes: ai.memory.state_bytes,
+        max_state_files: ai.memory.max_state_files,
+    };
+    let store = MemoryStore::open(data_dir, caps).await?;
+    let transcript = TranscriptWriter::open(store.memories_dir()).await?;
+    let mem = AiMemoryV2 {
+        store,
+        transcript: transcript.clone(),
+        caps,
+        inject_byte_budget: ai.memory.inject_byte_budget,
+        max_turn_rounds: ai.max_turn_rounds,
+        max_writes_per_turn: ai.max_writes_per_turn,
+        turn_timeout: Duration::from_secs(ai.timeout),
+    };
+    Ok(Some((mem, transcript)))
 }
