@@ -77,11 +77,11 @@ impl TestBotBuilder {
                 history_length: twitch_1337::DEFAULT_HISTORY_LENGTH,
                 history_prefill: None,
                 memory: twitch_1337::config::MemoryConfigSection::default(),
-                extraction: twitch_1337::config::ExtractionConfigSection::default(),
-                consolidation: twitch_1337::config::ConsolidationConfigSection::default(),
+                max_turn_rounds: 4,
+                max_writes_per_turn: 8,
+                dreamer: twitch_1337::config::DreamerConfigSection::default(),
                 emotes: twitch_1337::config::AiEmotesConfigSection::default(),
                 web: twitch_1337::config::AiWebConfigSection::default(),
-                max_memories: None,
             });
         }
         self

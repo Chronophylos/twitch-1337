@@ -77,7 +77,8 @@ client_secret = "your_client_secret"
 # timeout = 30                                        # Optional, AI request timeout in seconds (default: 30)
 # reasoning_effort = "medium"                         # Optional reasoning hint for !ai. Keep provider/model-specific values as-is.
 # history_length = 200                                # Optional, local chat messages available via get_recent_chat (0 = disabled, max 5000)
-# max_memories = 50                                   # DEPRECATED: use [ai.memory] max_user instead (kept for back-compat)
+# max_turn_rounds = 4                                 # Max tool-call rounds per !ai turn (1..=20, default: 4)
+# max_writes_per_turn = 8                             # Max memory writes the model may make per turn (1..=64, default: 8)
 #
 # Optional: 7TV emote grounding for !ai
 # Requires a manual glossary file so the model only gets emotes with known meaning.
@@ -102,7 +103,7 @@ client_secret = "your_client_secret"
 # base_url = "https://searxng.example/search"  # SearXNG /search endpoint, queried with format=json
 # timeout = 15                                  # Per outbound web HTTP call timeout in seconds
 # max_results = 5                               # Default cap for web_search (1..=10)
-# max_rounds = 3                                # Max tool-call rounds per !ai request (1..=6)
+# max_rounds = 3                                # Max web tool-call rounds per !ai request (1..=6)
 # cache_ttl_secs = 300                          # In-memory TTL cache for search/fetch results
 # cache_capacity = 100                          # Max cache entries before oldest eviction
 
@@ -114,52 +115,39 @@ client_secret = "your_client_secret"
 # threshold = 0.5                        # Fetch yesterday too if today < 50% of history_length (default: 0.5)
 
 # ────────────────────────────────────────────────────────────────────────────
-# AI memory — long-term fact store curated by the LLM.
-# Requires [ai.memory].enabled = true.
+# AI memory — long-term Markdown file store managed by the LLM.
+# Enabled by default when [ai] is configured. Set enabled = false to opt out.
 #
-# The store holds three kinds of memories:
-#   - User   (facts about a specific user, keyed by Twitch user_id)
-#   - Lore   (channel-level/community facts; only mods+broadcaster can write)
-#   - Pref   (how the AI should address a specific user; always self-only)
+# On first v2 startup any legacy ai_memory.ron is renamed to
+# ai_memory.ron.discarded-<timestamp> so it is not accidentally loaded.
 #
-# Trust model (enforced server-side, not just by prompts):
-#   - Regular users can only write facts about themselves.
-#   - Mods/broadcaster can write User/Lore for anyone; Pref stays self-only for all.
-#   - AI personality lives in [ai].system_prompt — never written by the store.
+# Files are split into named scopes:
+#   soul/   — AI personality anchors (max soul_bytes, bot-readable only)
+#   lore/   — Channel/community facts (max lore_bytes, mods+broadcaster can write)
+#   users/  — Per-user fact files (max user_bytes each)
+#   state/  — Ephemeral session state snapshots (max state_bytes, max_state_files files)
+#
+# inject_byte_budget controls how many bytes of memory context are injected
+# into each system prompt. Must be >= soul_bytes + lore_bytes.
 # ────────────────────────────────────────────────────────────────────────────
-
-# Caps serve two purposes:
-#   1. Eviction ceiling — when a scope is full, the lowest-scoring entry
-#      (confidence × exp-decay × hit-boost) is evicted to make room.
-#   2. Render breadth — format_for_prompt shows at most cap entries per scope
-#      per turn, sorted by descending confidence, so the system prompt stays
-#      cache-stable across turns (no timestamps or access counters in output).
 # [ai.memory]
-# enabled        = false         # Enable persistent AI memory (default: false)
-# max_user = 50                  # total User-scope entries (all users combined)
-# max_lore = 50
-# max_pref = 50                  # total Pref-scope entries (all users combined)
-# half_life_days = 30            # exponential decay; feeds the eviction score
+# enabled            = true    # Disable to opt out of the memory subsystem
+# soul_bytes         = 4096    # Max bytes for the soul/ scope injected per turn
+# lore_bytes         = 12288   # Max bytes for the lore/ scope injected per turn
+# user_bytes         = 4096    # Max bytes per user file
+# state_bytes        = 2048    # Max bytes per state snapshot file
+# inject_byte_budget = 24576   # Total byte cap for memory injected into system prompt (>= soul+lore)
+# max_state_files    = 16      # Max number of state snapshot files kept on disk
 
-# Extractor: runs after every !ai turn to propose new memories. Tool-call
-# reliability matters here — a small model that mangles JSON will silently
-# under-perform. Recommend a mid-sized tool-capable model.
-# [ai.extraction]
-# enabled    = true
-# model      = "qwen2.5:14b"   # fallback → [ai].model
-# reasoning_effort = "low"     # fallback → [ai].reasoning_effort
-# timeout    = 30
-# max_rounds = 3
-
-# Consolidator: runs once per day, curates the whole store (merge duplicates,
-# drop contradictions, adjust confidence). Quality matters more than speed,
-# so use the strongest model you can afford here.
-# [ai.consolidation]
-# enabled  = true
-# model    = "gpt-5"           # fallback → [ai.extraction].model → [ai].model
-# reasoning_effort = "high"    # fallback → [ai.extraction].reasoning_effort → [ai].reasoning_effort
-# run_at   = "04:00"           # HH:MM in Europe/Berlin
-# timeout  = 120
+# Dreamer: nightly pass that rewrites and consolidates memory files.
+# Quality matters more than speed — use the strongest model you can afford.
+# Falls back to [ai].model / [ai].reasoning_effort when omitted.
+# [ai.dreamer]
+# enabled          = true
+# model            = "gpt-4o"      # fallback → [ai].model
+# reasoning_effort = "high"        # fallback → [ai].reasoning_effort
+# run_at           = "04:00"       # HH:MM in Europe/Berlin
+# timeout_secs     = 120
 
 # Optional: Scheduled messages configuration
 # Add [[schedules]] sections to define scheduled messages.

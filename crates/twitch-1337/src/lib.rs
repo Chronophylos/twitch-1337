@@ -127,9 +127,9 @@ where
         consolidation_reasoning_effort,
     } = crate::ai::command::build_ai_memory(config.ai.as_ref(), llm.as_ref(), &data_dir);
 
-    // Capture the store handle + path for the consolidation spawn before
-    // `ai_memory` is moved into the command handler. Both `!ai` extraction
-    // (in-handler) and consolidation (below) share these clones.
+    // TODO(memory-v2): rewired in task 13/14 — consolidation_handle and
+    // consolidation_settings are left as dead placeholders until the v2
+    // dreamer wiring replaces them.
     let consolidation_handle = ai_memory.as_ref().map(|m| {
         (
             m.config.store.clone(),
@@ -139,7 +139,7 @@ where
                 .clone(),
         )
     });
-    let consolidation_settings = config.ai.as_ref().map(|a| a.consolidation.clone());
+    let consolidation_settings = config.ai.as_ref().map(|a| a.dreamer.clone());
 
     let handlers = spawn_handlers(SpawnDeps {
         client,
@@ -159,18 +159,21 @@ where
 
     let shutdown_notify = handlers.shutdown_notify.clone();
 
-    // Daily memory consolidation pass. Shares the memory store handle with
-    // the extractor so the pass sees any writes made since the last run, and
-    // reuses `shutdown_notify` so Ctrl+C aborts the scheduler mid-sleep.
-    if let (Some(ai), Some((store, path, llm_client)), Some(model)) = (
-        consolidation_settings,
-        consolidation_handle,
-        consolidation_model,
-    ) && ai.enabled
+    // TODO(memory-v2): rewired in task 14 — dreamer spawn replaces this block.
+    // Gated with `false &&` so the dead branch still type-checks with the new
+    // DreamerConfigSection fields while v2 modules are built incrementally.
+    #[allow(unused_variables, unreachable_code)]
+    if false
+        && let (Some(ai), Some((store, path, llm_client)), Some(model)) = (
+            consolidation_settings,
+            consolidation_handle,
+            consolidation_model,
+        )
+        && ai.enabled
     {
         // Format is validated in `validate_config`, so this cannot fail here.
         let run_at = chrono::NaiveTime::parse_from_str(&ai.run_at, "%H:%M")
-            .expect("ai.consolidation.run_at is validated at config load");
+            .expect("ai.dreamer.run_at is validated at config load");
         ai::memory::spawn_consolidation(
             llm_client,
             ai::memory::consolidation::ConsolidationLlmConfig {
@@ -180,7 +183,7 @@ where
             store,
             path,
             run_at,
-            Duration::from_secs(ai.timeout),
+            Duration::from_secs(ai.timeout_secs),
             shutdown_notify.clone(),
         );
         info!(
