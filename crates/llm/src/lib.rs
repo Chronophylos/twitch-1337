@@ -13,6 +13,6 @@ pub use error::{LlmError, Result};
 pub use ollama::OllamaClient;
 pub use openai::OpenAiClient;
 pub use types::{
-    ChatCompletionRequest, Message, ToolCall, ToolCallArgsError, ToolCallRound,
+    ChatCompletionRequest, Message, Role, ToolArgsError, ToolCall, ToolCallRound,
     ToolChatCompletionRequest, ToolChatCompletionResponse, ToolDefinition, ToolResultMessage,
 };

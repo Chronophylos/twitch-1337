@@ -110,16 +110,7 @@ pub async fn run_memory_extraction(deps: ExtractionDeps, ctx: ExtractionContext)
     );
 
     let tools = extractor_tools();
-    let messages = vec![
-        Message {
-            role: "system".into(),
-            content: SYSTEM_PROMPT.into(),
-        },
-        Message {
-            role: "user".into(),
-            content: user_content,
-        },
-    ];
+    let messages = vec![Message::system(SYSTEM_PROMPT), Message::user(user_content)];
     let mut prior_rounds: Vec<ToolCallRound> = Vec::new();
 
     for round in 0..deps.max_rounds {
@@ -162,11 +153,7 @@ pub async fn run_memory_extraction(deps: ExtractionDeps, ctx: ExtractionContext)
                         };
                         let result = w.execute_tool_call(call, &dctx);
                         info!(tool = %call.name, result = %result, "extraction tool executed");
-                        results.push(ToolResultMessage {
-                            tool_call_id: call.id.clone(),
-                            tool_name: call.name.clone(),
-                            content: result,
-                        });
+                        results.push(ToolResultMessage::for_call(call, result));
                     }
                     w.clone()
                 };

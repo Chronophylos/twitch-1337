@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
 use common::TestBotBuilder;
+use llm::Role;
 use serial_test::serial;
 use twitch_1337::twitch::whisper::{FIRST_WHISPER_MAX_CHARS, WHISPER_MAX_CHARS};
 
@@ -38,7 +39,7 @@ async fn news_command_summarizes_since_previous_user_message() {
     let user_msg = calls[0]
         .messages
         .iter()
-        .find(|m| m.role == "user")
+        .find(|m| m.role == Role::User)
         .expect("request has a user message");
 
     assert!(
@@ -70,7 +71,7 @@ async fn news_command_summarizes_since_previous_user_message() {
     let system_msg = calls[0]
         .messages
         .iter()
-        .find(|m| m.role == "system")
+        .find(|m| m.role == Role::System)
         .expect("request has a system message");
     assert!(
         system_msg.content.contains("trenne sie mit \" | \""),
@@ -112,7 +113,7 @@ async fn news_command_uses_full_history_without_previous_user_message() {
     let user_msg = calls[0]
         .messages
         .iter()
-        .find(|m| m.role == "user")
+        .find(|m| m.role == Role::User)
         .expect("request has a user message");
 
     assert!(
@@ -169,7 +170,7 @@ async fn news_command_does_not_use_previous_news_response_as_boundary() {
     let user_msg = calls[1]
         .messages
         .iter()
-        .find(|m| m.role == "user")
+        .find(|m| m.role == Role::User)
         .expect("request has a user message");
 
     assert!(
@@ -221,7 +222,7 @@ async fn news_command_uses_old_user_message_as_boundary_outside_recent_window() 
     let user_msg = calls[0]
         .messages
         .iter()
-        .find(|m| m.role == "user")
+        .find(|m| m.role == Role::User)
         .expect("request has a user message");
 
     assert!(
@@ -407,7 +408,7 @@ async fn tldr_command_summarizes_available_last_24_hours() {
     let user_msg = calls[0]
         .messages
         .iter()
-        .find(|m| m.role == "user")
+        .find(|m| m.role == Role::User)
         .expect("request has a user message");
 
     assert!(

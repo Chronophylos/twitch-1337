@@ -272,14 +272,8 @@ where
         let request = ChatCompletionRequest {
             model: self.model.clone(),
             messages: vec![
-                Message {
-                    role: "system".to_string(),
-                    content: self.mode.system_prompt().to_string(),
-                },
-                Message {
-                    role: "user".to_string(),
-                    content: user_message,
-                },
+                Message::system(self.mode.system_prompt()),
+                Message::user(user_message),
             ],
             reasoning_effort: None,
         };

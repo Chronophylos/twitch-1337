@@ -3,7 +3,7 @@ mod common;
 use std::time::Duration;
 
 use common::TestBotBuilder;
-use llm::ToolChatCompletionResponse;
+use llm::{Role, ToolChatCompletionResponse};
 use serial_test::serial;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -36,7 +36,7 @@ async fn ai_reply_includes_parent_message() {
     let user_message = calls[0]
         .messages
         .iter()
-        .find(|message| message.role == "user")
+        .find(|message| message.role == Role::User)
         .expect("request has a user message");
     assert!(user_message.content.contains("stimmt das"));
     assert!(user_message.content.contains("Die Erde ist flach"));
@@ -72,7 +72,7 @@ async fn grok_without_reply_behaves_like_ai_alias() {
     let user_message = calls[0]
         .messages
         .iter()
-        .find(|message| message.role == "user")
+        .find(|message| message.role == Role::User)
         .expect("request has a user message");
     assert!(user_message.content.contains("sag hallo"));
     assert!(bot.llm.tool_calls().is_empty());
@@ -112,7 +112,7 @@ async fn grok_reply_with_leading_mention_triggers_alias() {
     let user_message = calls[0]
         .messages
         .iter()
-        .find(|message| message.role == "user")
+        .find(|message| message.role == Role::User)
         .expect("request has a user message");
     assert!(user_message.content.contains("stimmt das"));
     assert!(user_message.content.contains("Replied-to author: bob"));
@@ -152,7 +152,7 @@ async fn grok_empty_reply_with_leading_mention_uses_default_instruction() {
     let user_message = calls[0]
         .messages
         .iter()
-        .find(|message| message.role == "user")
+        .find(|message| message.role == Role::User)
         .expect("request has a user message");
     assert!(user_message.content.contains("Prüfe die Reply-Nachricht"));
     assert!(
@@ -252,7 +252,7 @@ async fn grok_uses_web_tools_when_enabled() {
     let user_message = calls[0]
         .messages
         .iter()
-        .find(|message| message.role == "user")
+        .find(|message| message.role == Role::User)
         .expect("request has a user message");
     assert!(user_message.content.contains("Berlin hat heute 40 Grad"));
     assert!(user_message.content.contains("stimmt das aktuell"));
@@ -260,7 +260,7 @@ async fn grok_uses_web_tools_when_enabled() {
     let system_message = calls[0]
         .messages
         .iter()
-        .find(|message| message.role == "system")
+        .find(|message| message.role == Role::System)
         .expect("request has a system message");
     assert!(system_message.content.contains("test prompt"));
     assert!(system_message.content.contains("Grok-inspired"));
