@@ -193,53 +193,52 @@ impl AiCommand {
             "AI did not return a final message after {CHAT_HISTORY_TOOL_MAX_ROUNDS} tool rounds"
         ))
     }
+}
 
+#[derive(Debug, serde::Deserialize)]
+struct RecentChatArgs {
+    limit: Option<usize>,
+    user: Option<String>,
+    contains: Option<String>,
+    before_seq: Option<u64>,
+}
+
+impl AiCommand {
     async fn execute_chat_history_tool(&self, call: &ToolCall) -> ToolResultMessage {
         let content = self.chat_history_tool_content(call).await;
         ToolResultMessage::for_call(call, content)
     }
 
     async fn chat_history_tool_content(&self, call: &ToolCall) -> String {
-        if let Some(err) = &call.arguments_parse_error {
-            let (error, raw) = match err {
-                llm::ToolArgsError::Provider { error, raw } => (error.clone(), raw.clone()),
-                llm::ToolArgsError::Deserialize { error } => (error.clone(), String::new()),
-            };
-            return format!(
-                "Error: tool '{name}' arguments were not valid JSON ({error}). Raw text: {raw}",
-                name = call.name,
-                error = error,
-                raw = raw,
-            );
-        }
         if call.name != CHAT_HISTORY_TOOL_NAME {
             return format!("Unknown tool: {}", call.name);
         }
+
+        let args: RecentChatArgs = match call.parse_args() {
+            Ok(a) => a,
+            Err(llm::ToolArgsError::Provider { error, raw }) => {
+                return format!(
+                    "Error: tool '{name}' arguments were not valid JSON ({error}). Raw text: {raw}",
+                    name = call.name,
+                );
+            }
+            Err(llm::ToolArgsError::Deserialize { error }) => {
+                return format!(
+                    "Error: tool '{name}' arguments were the wrong shape ({error})",
+                    name = call.name,
+                );
+            }
+        };
 
         let Some(chat) = self.chat_ctx.as_ref() else {
             return "Chat history is disabled".to_string();
         };
 
-        let args = &call.arguments;
-        let limit = args
-            .get("limit")
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|n| usize::try_from(n).ok());
-        let user = args
-            .get("user")
-            .and_then(serde_json::Value::as_str)
-            .map(String::from);
-        let contains = args
-            .get("contains")
-            .and_then(serde_json::Value::as_str)
-            .map(String::from);
-        let before_seq = args.get("before_seq").and_then(serde_json::Value::as_u64);
-
         let page = chat.history.lock().await.query(ChatHistoryQuery {
-            limit,
-            user,
-            contains,
-            before_seq,
+            limit: args.limit,
+            user: args.user,
+            contains: args.contains,
+            before_seq: args.before_seq,
         });
 
         let returned = page.messages.len();
