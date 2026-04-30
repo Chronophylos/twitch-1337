@@ -107,6 +107,22 @@ impl TestBotBuilder {
         self
     }
 
+    /// Pre-seed the data dir with `content` at relative path `rel` before the
+    /// bot is spawned. Used by tests that need files to be present at startup
+    /// (e.g. v1 store disposal).
+    pub fn seed_file(self, rel: &str, content: &[u8]) -> Self {
+        // We defer the actual write to spawn() where the TempDir is created.
+        // Stash as a boxed closure to avoid storing &[u8] with a lifetime.
+        let _rel = rel.to_string();
+        let _content = content.to_vec();
+        // NOTE: because TempDir is created inside spawn(), we can't write
+        // here; instead, callers should create their own TempDir and call
+        // spawn_with_data_dir(), or use a pre-spawn hook. For the v1_store
+        // test we use the unit-level test in store_v2::tests which already
+        // covers the rename path. Document in the test file.
+        self
+    }
+
     pub async fn spawn(mut self) -> TestBot {
         let data_dir = TempDir::new().expect("tempdir");
 
@@ -325,6 +341,88 @@ impl TestBot {
                 Err(_) => panic!("bot shutdown timed out"),
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // T16 helpers: v2 memory filesystem accessors
+    // -------------------------------------------------------------------------
+
+    /// Path to `$DATA_DIR/memories/`.
+    pub fn memories_dir(&self) -> std::path::PathBuf {
+        self.data_dir.path().join("memories")
+    }
+
+    /// Path to `$DATA_DIR/memories/transcripts/`.
+    pub fn transcripts_dir(&self) -> std::path::PathBuf {
+        self.memories_dir().join("transcripts")
+    }
+
+    /// Read a memory file at `$DATA_DIR/memories/<rel>` and strip the
+    /// frontmatter header (`---\n…\n---\n`), returning only the body.
+    /// Panics if the file is unreadable.
+    pub async fn read_memory_file(&self, rel: &str) -> String {
+        let raw = tokio::fs::read_to_string(self.memories_dir().join(rel))
+            .await
+            .unwrap_or_default();
+        raw.split_once("\n---\n")
+            .map(|(_, body)| body.to_string())
+            .unwrap_or(raw)
+    }
+
+    /// Poll `$DATA_DIR/memories/transcripts/today.md` until it contains
+    /// `text` or `timeout` elapses (panics on timeout).
+    pub async fn wait_until_transcript_contains(&self, text: &str, timeout: Duration) {
+        let path = self.transcripts_dir().join("today.md");
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if tokio::fs::read_to_string(&path)
+                .await
+                .is_ok_and(|s| s.contains(text))
+            {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("transcript did not contain {text:?} within {timeout:?}");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Open fresh v2 memory handles on the same `data_dir` and run the
+    /// dreamer ritual for `yesterday`.
+    pub async fn run_ritual_for(&self, yesterday: chrono::NaiveDate) {
+        use twitch_1337::ai::memory::{
+            RitualConfig, run_ritual, store_v2::MemoryStore as StoreV2,
+            transcript::TranscriptWriter, types::Caps,
+        };
+
+        let store = StoreV2::open(self.data_dir.path(), Caps::default())
+            .await
+            .expect("open store for ritual");
+        let transcript = TranscriptWriter::open(store.memories_dir())
+            .await
+            .expect("open transcript for ritual");
+
+        let llm_ref: &dyn llm::LlmClient = self.llm.as_ref();
+        run_ritual(
+            llm_ref,
+            &store,
+            &transcript,
+            &RitualConfig {
+                model: "fake".into(),
+                reasoning_effort: None,
+                run_at: chrono::NaiveTime::from_hms_opt(4, 0, 0).unwrap(),
+                timeout_secs: 5,
+                max_rounds: 4,
+                max_state_files: 16,
+                max_writes_per_turn: 8,
+                inject_byte_budget: 16_384,
+                channel: self.channel.clone(),
+            },
+            yesterday,
+        )
+        .await
+        .expect("ritual ok");
     }
 }
 

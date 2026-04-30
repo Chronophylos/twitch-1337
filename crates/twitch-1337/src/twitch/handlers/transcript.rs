@@ -25,7 +25,7 @@ pub async fn run_transcript_tap(
                 }
             }
             Ok(_) => {}
-            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Lagged(_)) => {}
             Err(_) => return,
         }
     }

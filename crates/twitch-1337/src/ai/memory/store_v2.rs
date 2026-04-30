@@ -228,7 +228,8 @@ impl MemoryStore {
                 .and_then(|(fm, _)| fm.created_by),
             Err(_) => None,
         };
-        let created_by = prior_created_by.or_else(|| creator_user_id.map(|s| s.to_string()));
+        let created_by = prior_created_by
+            .or_else(|| creator_user_id.map(std::string::ToString::to_string));
 
         if body.len() > limit {
             return Err(WriteError::Full);
@@ -372,8 +373,10 @@ mod tests {
     #[tokio::test]
     async fn write_user_file_persists_and_caps_apply() {
         let dir = tempfile::tempdir().unwrap();
-        let mut caps = Caps::default();
-        caps.user_bytes = 32; // tiny on purpose
+        let caps = Caps {
+            user_bytes: 32, // tiny on purpose
+            ..Caps::default()
+        };
         let store = MemoryStore::open(dir.path(), caps).await.unwrap();
         let kind = FileKind::User {
             user_id: "12".into(),
