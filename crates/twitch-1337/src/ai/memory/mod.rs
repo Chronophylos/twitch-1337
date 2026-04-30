@@ -2,6 +2,7 @@ pub mod consolidation;
 pub mod extraction;
 pub mod frontmatter;
 pub mod inject;
+pub mod ritual;
 pub mod sanitize;
 pub mod scope;
 pub mod store;
@@ -15,6 +16,7 @@ pub use consolidation::{
     corroboration_boost, hard_drop_candidates, run_consolidation, spawn_consolidation,
 };
 pub use extraction::{ExtractionContext, ExtractionDeps, spawn_memory_extraction};
+pub use ritual::{RitualConfig, run_ritual, spawn_ritual};
 pub use scope::{
     Scope, TrustLevel, UserRole, classify_role, is_write_allowed, seed_confidence, trust_level_for,
 };

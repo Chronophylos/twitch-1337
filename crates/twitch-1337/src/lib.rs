@@ -122,6 +122,12 @@ where
             None => (None, None),
         };
 
+    // Clone before moving into SpawnDeps so the dreamer ritual can also use them.
+    let ai_memory_v2_for_ritual = ai_memory_v2.clone();
+    let llm_for_ritual = llm.clone();
+    let ai_config_for_ritual = config.ai.clone();
+    let channel_for_ritual = config.twitch.channel.clone();
+
     let handlers = spawn_handlers(SpawnDeps {
         client,
         incoming,
@@ -139,8 +145,38 @@ where
         aviation_for_commands,
     });
 
-    // TODO(T14): shutdown_notify will be passed to the dreamer spawn when wired in Task 14.
-    let _shutdown_notify = handlers.shutdown_notify.clone();
+    let shutdown_notify = handlers.shutdown_notify.clone();
+
+    // Daily dreamer ritual.
+    if let (Some(llm), Some(mem)) = (llm_for_ritual.as_ref(), &ai_memory_v2_for_ritual)
+        && let Some(ref ai) = ai_config_for_ritual
+        && ai.dreamer.enabled
+    {
+        let run_at = chrono::NaiveTime::parse_from_str(&ai.dreamer.run_at, "%H:%M")
+            .expect("ai.dreamer.run_at validated at config load");
+        crate::ai::memory::ritual::spawn_ritual(
+            llm.clone(),
+            mem.store.clone(),
+            mem.transcript.clone(),
+            crate::ai::memory::ritual::RitualConfig {
+                model: ai.dreamer.model.clone().unwrap_or_else(|| ai.model.clone()),
+                reasoning_effort: ai
+                    .dreamer
+                    .reasoning_effort
+                    .clone()
+                    .or_else(|| ai.reasoning_effort.clone()),
+                run_at,
+                timeout_secs: ai.dreamer.timeout_secs,
+                max_rounds: ai.max_turn_rounds,
+                max_state_files: ai.memory.max_state_files,
+                max_writes_per_turn: ai.max_writes_per_turn,
+                inject_byte_budget: ai.memory.inject_byte_budget,
+                channel: channel_for_ritual,
+            },
+            shutdown_notify.clone(),
+        );
+        tracing::info!(run_at = %ai.dreamer.run_at, "Daily AI memory dreamer ritual scheduled");
+    }
 
     if schedules_enabled {
         info!(

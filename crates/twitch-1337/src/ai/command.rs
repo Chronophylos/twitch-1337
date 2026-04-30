@@ -41,6 +41,7 @@ pub struct AiPrompts {
 
 /// Memory v2 bundle: store handle, transcript writer, capability caps,
 /// and per-turn knobs. Replaces the v1 `AiMemory` + `AiExtractionDeps` types.
+#[derive(Clone)]
 pub struct AiMemoryV2 {
     pub store: MemoryStore,
     pub transcript: TranscriptWriter,
