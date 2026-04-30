@@ -63,7 +63,7 @@ pub fn emit(fm: &Frontmatter, body: &str) -> String {
     s.push_str(&format!(
         "updated_at: {}\n",
         fm.updated_at
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
     ));
     if let Some(ref n) = fm.display_name {
         s.push_str(&format!("display_name: {n}\n"));
