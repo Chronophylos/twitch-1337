@@ -196,11 +196,7 @@ impl AiCommand {
 
     async fn execute_chat_history_tool(&self, call: &ToolCall) -> ToolResultMessage {
         let content = self.chat_history_tool_content(call).await;
-        ToolResultMessage {
-            tool_call_id: call.id.clone(),
-            tool_name: call.name.clone(),
-            content,
-        }
+        ToolResultMessage::for_call(call, content)
     }
 
     async fn chat_history_tool_content(&self, call: &ToolCall) -> String {

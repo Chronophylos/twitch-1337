@@ -186,11 +186,7 @@ pub async fn run_consolidation(
                                 _ => {}
                             }
                             info!(tool = %call.name, result = %out, "consolidation tool executed");
-                            results.push(ToolResultMessage {
-                                tool_call_id: call.id.clone(),
-                                tool_name: call.name.clone(),
-                                content: out,
-                            });
+                            results.push(ToolResultMessage::for_call(call, out));
                         }
                         w.clone()
                     };

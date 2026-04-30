@@ -39,11 +39,7 @@ impl WebToolExecutor {
 
     pub async fn execute_tool_call(&self, call: &ToolCall) -> ToolResultMessage {
         let content = self.execute(call).await;
-        ToolResultMessage {
-            tool_call_id: call.id.clone(),
-            tool_name: call.name.clone(),
-            content,
-        }
+        ToolResultMessage::for_call(call, content)
     }
 
     async fn execute(&self, call: &ToolCall) -> String {

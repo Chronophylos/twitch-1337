@@ -74,6 +74,19 @@ pub struct ToolResultMessage {
     pub content: String,
 }
 
+impl ToolResultMessage {
+    /// Build a tool-result message that mirrors the call's `id` and `name`.
+    /// Both fields are required: OpenAI matches results to calls by
+    /// `tool_call_id`; Ollama keys them by `tool_name`.
+    pub fn for_call(call: &ToolCall, content: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            content: content.into(),
+        }
+    }
+}
+
 /// One round of tool calling: the assistant's `tool_calls` and the matching
 /// `tool` role results. Strict providers require the assistant turn carrying
 /// `tool_calls` to precede the results referencing its `tool_call_id`s, so
@@ -197,5 +210,24 @@ mod message_tests {
         let from_str = Message::system("borrowed");
         assert_eq!(from_owned.content, owned);
         assert_eq!(from_str.content, "borrowed");
+    }
+}
+
+#[cfg(test)]
+mod tool_result_tests {
+    use super::{ToolCall, ToolResultMessage};
+
+    #[test]
+    fn for_call_threads_id_and_name() {
+        let call = ToolCall {
+            id: "X".to_string(),
+            name: "save_memory".to_string(),
+            arguments: serde_json::Value::Null,
+            arguments_parse_error: None,
+        };
+        let result = ToolResultMessage::for_call(&call, "ok");
+        assert_eq!(result.tool_call_id, "X");
+        assert_eq!(result.tool_name, "save_memory");
+        assert_eq!(result.content, "ok");
     }
 }
