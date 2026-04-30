@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::Mutex;
 
@@ -8,6 +9,17 @@ use llm::{ToolCall, ToolResultMessage};
 
 use super::cache::TtlCache;
 use super::client::{SearchClient, SearchResult};
+
+#[derive(Debug, Deserialize)]
+struct WebSearchArgs {
+    query: String,
+    max_results: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FetchUrlArgs {
+    url: String,
+}
 
 const FETCH_RESULT_MAX_CHARS: usize = 4_000;
 
@@ -43,23 +55,15 @@ impl WebToolExecutor {
     }
 
     async fn execute(&self, call: &ToolCall) -> String {
-        if let Some(parse_err) = &call.arguments_parse_error {
-            let (details, raw) = match parse_err {
-                llm::ToolArgsError::Provider { error, raw } => (error.clone(), raw.clone()),
-                llm::ToolArgsError::Deserialize { error } => (error.clone(), String::new()),
-            };
-            return json!({
-                "error": "invalid_arguments_json",
-                "tool": call.name,
-                "details": details,
-                "raw": raw,
-            })
-            .to_string();
-        }
-
         match call.name.as_str() {
-            "web_search" => self.execute_web_search(call).await,
-            "fetch_url" => self.execute_fetch_url(call).await,
+            "web_search" => match call.parse_args::<WebSearchArgs>() {
+                Ok(args) => self.execute_web_search(args).await,
+                Err(e) => Self::args_error_payload(&call.name, &e),
+            },
+            "fetch_url" => match call.parse_args::<FetchUrlArgs>() {
+                Ok(args) => self.execute_fetch_url(args).await,
+                Err(e) => Self::args_error_payload(&call.name, &e),
+            },
             other => json!({
                 "error": "unknown_tool",
                 "tool": other,
@@ -68,15 +72,27 @@ impl WebToolExecutor {
         }
     }
 
-    async fn execute_web_search(&self, call: &ToolCall) -> String {
-        let Some(query) = call.arguments.get("query").and_then(|v| v.as_str()) else {
-            return json!({
-                "error": "invalid_arguments",
-                "details": "web_search requires string field 'query'",
+    fn args_error_payload(tool: &str, err: &llm::ToolArgsError) -> String {
+        match err {
+            llm::ToolArgsError::Provider { error, raw } => json!({
+                "error": "invalid_arguments_json",
+                "tool": tool,
+                "details": error,
+                "raw": raw,
             })
-            .to_string();
-        };
-        if query.trim().is_empty() {
+            .to_string(),
+            llm::ToolArgsError::Deserialize { error } => json!({
+                "error": "invalid_arguments",
+                "tool": tool,
+                "details": error,
+            })
+            .to_string(),
+        }
+    }
+
+    async fn execute_web_search(&self, args: WebSearchArgs) -> String {
+        let query = args.query.trim();
+        if query.is_empty() {
             return json!({
                 "error": "invalid_arguments",
                 "details": "query cannot be empty",
@@ -84,12 +100,7 @@ impl WebToolExecutor {
             .to_string();
         }
 
-        let requested = call
-            .arguments
-            .get("max_results")
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|n| usize::try_from(n).ok())
-            .unwrap_or(self.max_results);
+        let requested = args.max_results.unwrap_or(self.max_results);
         let effective_max = requested.clamp(1, self.max_results);
 
         let key = format!("{}::{}", normalize_query(query), effective_max);
@@ -128,15 +139,8 @@ impl WebToolExecutor {
         }
     }
 
-    async fn execute_fetch_url(&self, call: &ToolCall) -> String {
-        let Some(url) = call.arguments.get("url").and_then(|v| v.as_str()) else {
-            return json!({
-                "error": "invalid_arguments",
-                "details": "fetch_url requires string field 'url'",
-            })
-            .to_string();
-        };
-
+    async fn execute_fetch_url(&self, args: FetchUrlArgs) -> String {
+        let url = args.url.as_str();
         let key = normalize_url(url);
         if let Some(cached) = self.fetch_cache.lock().await.get(&key) {
             return json!({
