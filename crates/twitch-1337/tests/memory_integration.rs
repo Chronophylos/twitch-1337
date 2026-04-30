@@ -1,3 +1,6 @@
+#![cfg(any())]
+//! v1 memory tests — disabled until v2 wiring lands. Deleted in Task 17 of the
+//! AI memory rework v2 plan.
 //! Integration tests for the AI memory pipeline. Covers the adversarial
 //! surface (third-party writes, prompt injection) end-to-end through the
 //! `!ai` handler + extraction task, plus the consolidation pass driven

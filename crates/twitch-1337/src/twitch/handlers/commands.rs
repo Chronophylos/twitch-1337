@@ -30,10 +30,8 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     /// Pre-built LLM client. When `None`, `!ai` is disabled regardless of `ai_config`.
     /// Injected so tests can supply a fake and production can call [`crate::llm_factory::build_llm_client`].
     pub llm: Option<Arc<dyn LlmClient>>,
-    /// Pre-built memory bundle (store handle + extractor deps). Built in
-    /// `run_bot` so the consolidation task in `lib.rs` can share the same
-    /// `store` handle and `path`. `None` disables memory for `!ai`.
-    pub ai_memory: Option<ai::command::AiMemory>,
+    /// Pre-built memory v2 bundle. `None` disables v2 memory for `!ai`.
+    pub ai_memory_v2: Option<ai::command::AiMemoryV2>,
     pub leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
     pub ping_manager: Arc<tokio::sync::RwLock<ping::PingManager>>,
     pub hidden_admin_ids: Vec<String>,
@@ -66,7 +64,7 @@ where
         client,
         ai_config,
         llm,
-        ai_memory,
+        ai_memory_v2,
         leaderboard,
         ping_manager,
         hidden_admin_ids,
@@ -217,7 +215,7 @@ where
                 reasoning_effort: cfg.reasoning_effort.clone(),
                 cooldown: Duration::from_secs(cooldowns.ai),
                 chat_ctx: chat_ctx.clone(),
-                memory: ai_memory,
+                memory_v2: ai_memory_v2,
                 web: web.clone(),
                 emotes: emote_provider,
             },

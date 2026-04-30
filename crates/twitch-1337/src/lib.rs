@@ -22,7 +22,6 @@ use std::sync::Arc;
 use eyre::{Result, WrapErr as _};
 use llm::LlmClient;
 use tokio::sync::{mpsc::UnboundedReceiver, oneshot};
-use tokio::time::Duration;
 use tracing::info;
 use twitch_irc::{
     TwitchIRCClient,
@@ -116,27 +115,12 @@ where
     // Aviation is consumed by the flight tracker; clone first so commands (!up/!fl) also get it.
     let aviation_for_commands = aviation.clone();
 
-    // TODO(memory-v2): build_ai_memory is a stub returning an empty bundle.
-    // Properly wired in tasks 13 (chat-turn flow) and 14 (dreamer ritual).
-    let crate::ai::command::AiMemoryBundle {
-        ai_memory,
-        consolidation_model,
-        consolidation_reasoning_effort,
-    } = crate::ai::command::build_ai_memory(config.ai.as_ref(), llm.as_ref(), &data_dir);
-
-    // TODO(memory-v2): rewired in task 13/14 — consolidation_handle and
-    // consolidation_settings are left as dead placeholders until the v2
-    // dreamer wiring replaces them.
-    let consolidation_handle = ai_memory.as_ref().map(|m| {
-        (
-            m.config.store.clone(),
-            m.config.path.clone(),
-            llm.as_ref()
-                .expect("ai_memory only built when llm is Some")
-                .clone(),
-        )
-    });
-    let consolidation_settings = config.ai.as_ref().map(|a| a.dreamer.clone());
+    // Build the v2 memory bundle. Returns None when AI is disabled or memory is disabled.
+    let (ai_memory_v2, transcript) =
+        match crate::ai::command::build_ai_memory_v2(config.ai.as_ref(), &data_dir).await? {
+            Some((mem, tx)) => (Some(mem), Some(tx)),
+            None => (None, None),
+        };
 
     let handlers = spawn_handlers(SpawnDeps {
         client,
@@ -148,46 +132,15 @@ where
         ping_manager,
         suspension_manager,
         llm,
-        ai_memory,
+        ai_memory_v2,
+        transcript,
         whisper,
         aviation,
         aviation_for_commands,
     });
 
-    let shutdown_notify = handlers.shutdown_notify.clone();
-
-    // TODO(memory-v2): rewired in task 14 — dreamer spawn replaces this block.
-    // Gated with `false &&` so the dead branch still type-checks with the new
-    // DreamerConfigSection fields while v2 modules are built incrementally.
-    #[allow(unused_variables, unreachable_code)]
-    if false
-        && let (Some(ai), Some((store, path, llm_client)), Some(model)) = (
-            consolidation_settings,
-            consolidation_handle,
-            consolidation_model,
-        )
-        && ai.enabled
-    {
-        // Format is validated in `validate_config`, so this cannot fail here.
-        let run_at = chrono::NaiveTime::parse_from_str(&ai.run_at, "%H:%M")
-            .expect("ai.dreamer.run_at is validated at config load");
-        ai::memory::spawn_consolidation(
-            llm_client,
-            ai::memory::consolidation::ConsolidationLlmConfig {
-                model,
-                reasoning_effort: consolidation_reasoning_effort,
-            },
-            store,
-            path,
-            run_at,
-            Duration::from_secs(ai.timeout_secs),
-            shutdown_notify.clone(),
-        );
-        info!(
-            run_at = %ai.run_at,
-            "Daily AI memory consolidation scheduled"
-        );
-    }
+    // TODO(T14): shutdown_notify will be passed to the dreamer spawn when wired in Task 14.
+    let _shutdown_notify = handlers.shutdown_notify.clone();
 
     if schedules_enabled {
         info!(
