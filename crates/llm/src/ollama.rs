@@ -136,7 +136,6 @@ fn build_ollama_messages(request: &ToolChatCompletionRequest) -> Vec<serde_json:
 pub struct OllamaClient {
     http: reqwest::Client,
     base_url: String,
-    model: String,
 }
 
 const DEFAULT_BASE_URL: &str = "http://localhost:11434";
@@ -144,7 +143,7 @@ const DEFAULT_BASE_URL: &str = "http://localhost:11434";
 impl OllamaClient {
     /// Creates a new Ollama API client.
     #[instrument]
-    pub fn new(model: &str, base_url: Option<&str>, user_agent: &str) -> Result<Self> {
+    pub fn new(base_url: Option<&str>, user_agent: &str) -> Result<Self> {
         let base_url = base_url.unwrap_or(DEFAULT_BASE_URL).trim_end_matches('/');
 
         let http = reqwest::Client::builder().user_agent(user_agent).build()?;
@@ -152,7 +151,6 @@ impl OllamaClient {
         Ok(Self {
             http,
             base_url: base_url.to_string(),
-            model: model.to_string(),
         })
     }
 }
@@ -176,7 +174,7 @@ impl LlmClient for OllamaClient {
             stream: false,
         };
 
-        debug!(model = %self.model, "Sending request to Ollama API");
+        debug!(model = %api_request.model, "Sending request to Ollama API");
 
         let response = self.http.post(&url).json(&api_request).send().await?;
 
@@ -228,7 +226,7 @@ impl LlmClient for OllamaClient {
             stream: false,
         };
 
-        debug!(model = %self.model, "Sending tool request to Ollama API");
+        debug!(model = %api_request.model, "Sending tool request to Ollama API");
 
         let response = self.http.post(&url).json(&api_request).send().await?;
 
@@ -267,7 +265,10 @@ impl LlmClient for OllamaClient {
             });
         }
 
-        let content = api_response.message.content.unwrap_or_default();
+        let content = api_response
+            .message
+            .content
+            .ok_or(LlmError::EmptyResponse)?;
         Ok(ToolChatCompletionResponse::Message(content))
     }
 }
@@ -278,6 +279,20 @@ mod tests {
     use crate::types::{
         Message, ToolCall, ToolCallRound, ToolChatCompletionRequest, ToolResultMessage,
     };
+
+    #[test]
+    fn empty_message_content_is_error_not_empty_string() {
+        // Source-level regression: the tool path must surface an
+        // EmptyResponse error rather than handing back Message("").
+        // Assemble the needle at runtime so this assertion does not
+        // self-match the literal it is looking for.
+        let s = include_str!("ollama.rs");
+        let needle = format!("{}.{}()", "content", "unwrap_or_default");
+        assert!(
+            !s.contains(&needle),
+            "tool path must error on empty content, not return Message(\"\")"
+        );
+    }
 
     #[test]
     fn build_messages_two_rounds_emits_correct_sequence() {
