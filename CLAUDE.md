@@ -31,6 +31,8 @@ just build | just push | just restart | just deploy
 `main` is branch-protected (admin enforced). Direct pushes rejected — use a PR.
 Linear history required, force-push + delete blocked, conversations must resolve.
 
+**Branch naming:** `feature/` features, `spec/` specs, `fix/` bug fixes, `refactor/` refactors, `build/` CI / dependencies / Docker. Slug after slash, kebab-case.
+
 **Required status checks (7, must all pass to merge):**
 
 | Check | Workflow | Purpose |
