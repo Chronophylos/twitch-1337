@@ -167,3 +167,59 @@ async fn ai_command_still_works_in_primary_channel() {
 
     bot.shutdown().await;
 }
+
+#[tokio::test]
+async fn ai_in_ai_channel_sees_both_history_sections() {
+    // !ai invoked in ai_channel must surface both recent-chat sections to the
+    // model; invocation channel goes first.
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_config(|c| {
+            c.twitch.ai_channel = Some(AI_CHAN.into());
+            if let Some(ai) = c.ai.as_mut() {
+                ai.memory.enabled = false;
+                // Put {ai_channel_history} first so that when !ai is invoked
+                // in ai_channel the invocation-channel section appears before
+                // the primary-channel section in the rendered prompt.
+                ai.instruction_template =
+                    "{ai_channel_history}\n\n{primary_history}\n\n{message}".into();
+            }
+        })
+        .spawn()
+        .await;
+
+    // Pre-seed both channels with traffic.
+    bot.send("alice", "hello main").await;
+    bot.send_to(AI_CHAN, "bob", "hello ai").await;
+
+    bot.llm
+        .push_tool(ToolChatCompletionResponse::Message("ok".into()));
+    bot.send_to(AI_CHAN, "viewer", "!ai recap").await;
+
+    let _ = bot.expect_say_full(Duration::from_secs(2)).await;
+
+    let calls = bot.llm.tool_calls();
+    let last = calls.last().expect("LLM must have received a tool request");
+    let user_msg = last
+        .messages
+        .iter()
+        .rev()
+        .find(|m| matches!(m.role, llm::Role::User))
+        .expect("user message present")
+        .content
+        .as_str();
+    let ai_idx = user_msg
+        .find(&format!("Recent chat (#{AI_CHAN})"))
+        .expect("ai_channel section");
+    let main_idx = user_msg
+        .find("Recent chat (#test_chan)")
+        .expect("primary section");
+    assert!(
+        ai_idx < main_idx,
+        "invocation channel must come first; got user_msg:\n{user_msg}"
+    );
+    assert!(user_msg.contains("bob: hello ai"));
+    assert!(user_msg.contains("alice: hello main"));
+
+    bot.shutdown().await;
+}
