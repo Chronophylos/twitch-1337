@@ -98,7 +98,7 @@ impl NewsCommand {
     async fn relevant_history(&self, user: &str, current_message: &str) -> Option<Vec<String>> {
         let chat = self.chat_ctx.as_ref()?;
         let mut snapshot = {
-            let buf = chat.history.lock().await;
+            let buf = chat.primary_history.lock().await;
             buf.snapshot()
         };
 

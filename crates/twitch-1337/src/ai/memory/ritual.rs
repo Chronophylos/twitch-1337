@@ -13,8 +13,8 @@ use tokio::sync::Notify;
 use tracing::{info, warn};
 
 use crate::ai::memory::inject::{
-    BuildOpts, SubstitutionVars, build_chat_turn_context, fence_block, fresh_nonce,
-    scrub_for_inject, substitute,
+    BuildOpts, InvocationChannel, SubstitutionVars, build_chat_turn_context, fence_block,
+    fresh_nonce, scrub_for_inject, substitute,
 };
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::{DreamerExecutor, DreamerExecutorOpts, dreamer_tools};
@@ -80,6 +80,11 @@ pub async fn run_ritual(
         BuildOpts {
             inject_byte_budget: cfg.inject_byte_budget,
             nonce: nonce.clone(),
+            primary_history: None,
+            primary_login: String::new(),
+            ai_channel_history: None,
+            ai_channel_login: None,
+            invocation_channel: InvocationChannel::Primary,
         },
     )
     .await?;

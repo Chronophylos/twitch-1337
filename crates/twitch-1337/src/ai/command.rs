@@ -26,11 +26,31 @@ use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::twitch::seventv::SevenTvEmoteProvider;
 use crate::util::{MAX_RESPONSE_LENGTH, truncate_response};
 
-/// Groups the shared chat history buffer with its capacity and the bot's username.
+/// Chat history buffers and channel logins for `!ai`. Both buffers share the
+/// same type; `primary_history` is always present, `ai_channel_history` is
+/// only allocated when `twitch.ai_channel` is configured.
 #[derive(Clone)]
 pub struct ChatContext {
-    pub history: ChatHistory,
-    pub bot_username: String,
+    pub primary_history: ChatHistory,
+    pub primary_login: String,
+    pub ai_channel_history: Option<ChatHistory>,
+    pub ai_channel_login: Option<String>,
+}
+
+impl ChatContext {
+    /// Pick the buffer matching `channel_login`. Falls back to primary when
+    /// no ai_channel buffer is configured or the login does not match.
+    pub fn buffer_for(&self, channel_login: &str) -> &ChatHistory {
+        match (&self.ai_channel_history, &self.ai_channel_login) {
+            (Some(h), Some(login)) if login == channel_login => h,
+            _ => &self.primary_history,
+        }
+    }
+
+    /// `true` iff `channel_login` matches the configured ai_channel.
+    pub fn is_ai_channel(&self, channel_login: &str) -> bool {
+        matches!(&self.ai_channel_login, Some(login) if login == channel_login)
+    }
 }
 
 /// Prompt templates for the AI command.
@@ -143,9 +163,14 @@ impl AiCommand {
         }
     }
 
-    async fn complete_ai(&self, system_prompt: String, user_message: String) -> Result<String> {
+    async fn complete_ai(
+        &self,
+        system_prompt: String,
+        user_message: String,
+        channel_login: &str,
+    ) -> Result<String> {
         if self.chat_ctx.is_some() {
-            self.complete_ai_with_history_tool(system_prompt, user_message)
+            self.complete_ai_with_history_tool(system_prompt, user_message, channel_login)
                 .await
         } else {
             Ok(self
@@ -163,6 +188,7 @@ impl AiCommand {
         &self,
         system_prompt: String,
         user_message: String,
+        channel_login: &str,
     ) -> Result<String> {
         let chat_ctx = self
             .chat_ctx
@@ -177,7 +203,10 @@ impl AiCommand {
             prior_rounds: Vec::new(),
         };
 
-        let executor = ChatHistoryExecutor { chat_ctx };
+        let executor = ChatHistoryExecutor {
+            chat_ctx,
+            channel_login,
+        };
         let opts = AgentOpts {
             max_rounds: CHAT_HISTORY_TOOL_MAX_ROUNDS,
             per_round_timeout: None,
@@ -202,16 +231,24 @@ struct RecentChatArgs {
 
 struct ChatHistoryExecutor<'a> {
     chat_ctx: &'a ChatContext,
+    channel_login: &'a str,
 }
 
 #[async_trait]
 impl ToolExecutor for ChatHistoryExecutor<'_> {
     async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
-        ToolResultMessage::for_call(call, chat_history_tool_content(self.chat_ctx, call).await)
+        ToolResultMessage::for_call(
+            call,
+            chat_history_tool_content(self.chat_ctx, self.channel_login, call).await,
+        )
     }
 }
 
-async fn chat_history_tool_content(chat: &ChatContext, call: &ToolCall) -> String {
+async fn chat_history_tool_content(
+    chat: &ChatContext,
+    channel_login: &str,
+    call: &ToolCall,
+) -> String {
     if call.name != CHAT_HISTORY_TOOL_NAME {
         return format!("Unknown tool: {}", call.name);
     }
@@ -232,7 +269,8 @@ async fn chat_history_tool_content(chat: &ChatContext, call: &ToolCall) -> Strin
         }
     };
 
-    let page = chat.history.lock().await.query(ChatHistoryQuery {
+    let buffer = chat.buffer_for(channel_login);
+    let page = buffer.lock().await.query(ChatHistoryQuery {
         limit: args.limit,
         user: args.user,
         contains: args.contains,
@@ -548,6 +586,29 @@ where
                 inject::BuildOpts {
                     inject_byte_budget: mem.inject_byte_budget,
                     nonce: nonce.clone(),
+                    primary_history: self.chat_ctx.as_ref().map(|c| c.primary_history.clone()),
+                    primary_login: self
+                        .chat_ctx
+                        .as_ref()
+                        .map(|c| c.primary_login.clone())
+                        .unwrap_or_else(|| ctx.privmsg.channel_login.clone()),
+                    ai_channel_history: self
+                        .chat_ctx
+                        .as_ref()
+                        .and_then(|c| c.ai_channel_history.clone()),
+                    ai_channel_login: self
+                        .chat_ctx
+                        .as_ref()
+                        .and_then(|c| c.ai_channel_login.clone()),
+                    invocation_channel: if self
+                        .chat_ctx
+                        .as_ref()
+                        .is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login))
+                    {
+                        inject::InvocationChannel::AiChannel
+                    } else {
+                        inject::InvocationChannel::Primary
+                    },
                 },
             )
             .await?;
@@ -572,6 +633,14 @@ where
             let privmsg_for_reply = ctx.privmsg.clone();
             let transcript_for_drain = mem.transcript.clone();
             let bot_username_for_drain = self.bot_username.clone();
+            let target_buffer = self
+                .chat_ctx
+                .as_ref()
+                .map(|c| c.buffer_for(&ctx.privmsg.channel_login).clone());
+            let is_primary_source = !self
+                .chat_ctx
+                .as_ref()
+                .is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));
             let drainer = tokio::spawn(async move {
                 while let Some(line) = say_rx.recv().await {
                     let ts = Utc::now();
@@ -581,9 +650,17 @@ where
                     {
                         error!(error = ?e, "say drain failed");
                     }
-                    if let Err(e) = transcript_for_drain
-                        .append_line(ts, &bot_username_for_drain, &line)
-                        .await
+                    if let Some(ref buf) = target_buffer {
+                        buf.lock().await.push_bot_at(
+                            bot_username_for_drain.clone(),
+                            line.clone(),
+                            ts,
+                        );
+                    }
+                    if is_primary_source
+                        && let Err(e) = transcript_for_drain
+                            .append_line(ts, &bot_username_for_drain, &line)
+                            .await
                     {
                         error!(error = ?e, "transcript bot-reply append failed");
                     }
@@ -634,24 +711,37 @@ where
             }
         }
 
+        let (primary_block, ai_block) = if let Some(ref chat) = self.chat_ctx {
+            let primary = render_legacy_recent_block(
+                &chat.primary_history,
+                &chat.primary_login,
+                crate::ai::memory::inject::RECENT_CHAT_PRIMARY_BYTES,
+            )
+            .await;
+            let ai = match (&chat.ai_channel_history, &chat.ai_channel_login) {
+                (Some(h), Some(login)) => {
+                    render_legacy_recent_block(
+                        h,
+                        login,
+                        crate::ai::memory::inject::RECENT_CHAT_AI_CHANNEL_BYTES,
+                    )
+                    .await
+                }
+                _ => String::new(),
+            };
+            (primary, ai)
+        } else {
+            (String::new(), String::new())
+        };
+
+        // Backward-compat: {chat_history} maps to whichever buffer matches
+        // the invocation channel. Operators wanting both sections explicit
+        // use {primary_history} and {ai_channel_history} instead.
         let chat_history_text = if let Some(ref chat) = self.chat_ctx {
-            let buf = chat.history.lock().await;
-            if buf.is_empty() {
-                String::new()
+            if chat.is_ai_channel(&ctx.privmsg.channel_login) {
+                ai_block.clone()
             } else {
-                buf.snapshot()
-                    .iter()
-                    .map(|entry| {
-                        let ts_berlin = entry.timestamp.with_timezone(&chrono_tz::Europe::Berlin);
-                        format!(
-                            "[{}] {}: {}",
-                            ts_berlin.format("%H:%M"),
-                            entry.username,
-                            entry.text
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                primary_block.clone()
             }
         } else {
             String::new()
@@ -667,7 +757,9 @@ where
             .prompts
             .instruction_template
             .replace("{message}", &instruction_for_prompt)
-            .replace("{chat_history}", &chat_history_text);
+            .replace("{chat_history}", &chat_history_text)
+            .replace("{primary_history}", &primary_block)
+            .replace("{ai_channel_history}", &ai_block);
         let user_message = format!("Current time: {now_berlin}\n\n{instruction_rendered}");
 
         let result = if let Some(ref web) = self.web {
@@ -689,8 +781,11 @@ where
                     .await
             }
         } else {
-            match tokio::time::timeout(self.timeout, self.complete_ai(system_prompt, user_message))
-                .await
+            match tokio::time::timeout(
+                self.timeout,
+                self.complete_ai(system_prompt, user_message, &ctx.privmsg.channel_login),
+            )
+            .await
             {
                 Ok(Ok(text)) => AiResult::Ok(text),
                 Ok(Err(e)) => AiResult::Error(e),
@@ -704,10 +799,11 @@ where
                 let truncated = truncate_response(visible_text, MAX_RESPONSE_LENGTH);
                 // Record successful response in chat history
                 if let Some(ref chat) = self.chat_ctx {
-                    chat.history
+                    let buffer = chat.buffer_for(&ctx.privmsg.channel_login);
+                    buffer
                         .lock()
                         .await
-                        .push_bot(chat.bot_username.clone(), truncated.clone());
+                        .push_bot(self.bot_username.clone(), truncated.clone());
                 }
                 (truncated, true)
             }
@@ -732,6 +828,40 @@ where
 
         Ok(())
     }
+}
+
+async fn render_legacy_recent_block(history: &ChatHistory, login: &str, cap: usize) -> String {
+    use crate::ai::chat_history::ChatHistoryEntry;
+    use chrono_tz::Europe::Berlin;
+
+    let snapshot: Vec<ChatHistoryEntry> = history.lock().await.snapshot();
+    if snapshot.is_empty() {
+        return String::new();
+    }
+    let mut chosen: Vec<String> = Vec::new();
+    let mut bytes = 0usize;
+    for entry in snapshot.iter().rev() {
+        let ts = entry.timestamp.with_timezone(&Berlin);
+        let line = format!(
+            "[{}] {}: {}",
+            ts.format("%H:%M"),
+            entry.username,
+            entry.text
+        );
+        let line_bytes = line.len() + 1;
+        if bytes + line_bytes > cap {
+            break;
+        }
+        bytes += line_bytes;
+        chosen.push(line);
+    }
+    if chosen.is_empty() {
+        return String::new();
+    }
+    chosen.reverse();
+    let mut s = format!("## Recent chat (#{login})\n");
+    s.push_str(&chosen.join("\n"));
+    s
 }
 
 /// Construct the optional AI memory v2 bundle from config.
