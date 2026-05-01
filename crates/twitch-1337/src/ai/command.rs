@@ -227,6 +227,14 @@ struct RecentChatArgs {
     user: Option<String>,
     contains: Option<String>,
     before_seq: Option<u64>,
+    channel: Option<RecentChatChannel>,
+}
+
+#[derive(Debug, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RecentChatChannel {
+    Primary,
+    AiChannel,
 }
 
 struct ChatHistoryExecutor<'a> {
@@ -269,7 +277,14 @@ async fn chat_history_tool_content(
         }
     };
 
-    let buffer = chat.buffer_for(channel_login);
+    let buffer = match args.channel {
+        Some(RecentChatChannel::Primary) => &chat.primary_history,
+        Some(RecentChatChannel::AiChannel) => match &chat.ai_channel_history {
+            Some(buf) => buf,
+            None => return "Error: ai_channel buffer not configured".to_string(),
+        },
+        None => chat.buffer_for(channel_login),
+    };
     let page = buffer.lock().await.query(ChatHistoryQuery {
         limit: args.limit,
         user: args.user,
@@ -322,6 +337,11 @@ fn recent_chat_tool_definition() -> ToolDefinition {
                 "before_seq": {
                     "type": "integer",
                     "description": "Optional pagination cursor. Returns messages with seq lower than this value."
+                },
+                "channel": {
+                    "type": "string",
+                    "enum": ["primary", "ai_channel"],
+                    "description": "Which buffer to read. Defaults to the channel the !ai was invoked in."
                 }
             }
         }),
@@ -868,4 +888,109 @@ pub async fn build_ai_memory_v2(
         turn_timeout: Duration::from_secs(ai.timeout),
     };
     Ok(Some((mem, transcript)))
+}
+
+#[cfg(test)]
+mod chat_history_tool_tests {
+    use super::*;
+    use crate::ai::chat_history::ChatHistoryBuffer;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    fn ctx_with_both() -> ChatContext {
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(10)));
+        let ai = Arc::new(Mutex::new(ChatHistoryBuffer::new(10)));
+        ChatContext {
+            primary_history: primary,
+            primary_login: "main".into(),
+            ai_channel_history: Some(ai),
+            ai_channel_login: Some("ai_chan".into()),
+        }
+    }
+
+    fn ctx_primary_only() -> ChatContext {
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(10)));
+        ChatContext {
+            primary_history: primary,
+            primary_login: "main".into(),
+            ai_channel_history: None,
+            ai_channel_login: None,
+        }
+    }
+
+    fn make_call(args: serde_json::Value) -> ToolCall {
+        ToolCall {
+            id: "id1".into(),
+            name: CHAT_HISTORY_TOOL_NAME.into(),
+            arguments: args,
+            arguments_parse_error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn channel_primary_reads_primary_buffer() {
+        let chat_ctx = ctx_with_both();
+        chat_ctx
+            .primary_history
+            .lock()
+            .await
+            .push_user("alice", "primary line");
+        chat_ctx
+            .ai_channel_history
+            .as_ref()
+            .unwrap()
+            .lock()
+            .await
+            .push_user("bob", "ai line");
+
+        let call = make_call(serde_json::json!({"channel": "primary"}));
+        let result = chat_history_tool_content(&chat_ctx, "main", &call).await;
+        assert!(result.contains("alice"));
+        assert!(result.contains("primary line"));
+        assert!(!result.contains("bob"));
+    }
+
+    #[tokio::test]
+    async fn channel_ai_channel_reads_ai_buffer() {
+        let chat_ctx = ctx_with_both();
+        chat_ctx
+            .ai_channel_history
+            .as_ref()
+            .unwrap()
+            .lock()
+            .await
+            .push_user("bob", "ai line");
+
+        let call = make_call(serde_json::json!({"channel": "ai_channel"}));
+        let result = chat_history_tool_content(&chat_ctx, "main", &call).await;
+        assert!(result.contains("bob"));
+        assert!(result.contains("ai line"));
+    }
+
+    #[tokio::test]
+    async fn channel_omitted_defaults_to_invocation_channel() {
+        let chat_ctx = ctx_with_both();
+        chat_ctx
+            .ai_channel_history
+            .as_ref()
+            .unwrap()
+            .lock()
+            .await
+            .push_user("bob", "ai line");
+
+        let call = make_call(serde_json::json!({}));
+        let result = chat_history_tool_content(&chat_ctx, "ai_chan", &call).await;
+        assert!(result.contains("bob"));
+    }
+
+    #[tokio::test]
+    async fn channel_ai_when_unconfigured_returns_error_string() {
+        let chat_ctx = ctx_primary_only();
+        let call = make_call(serde_json::json!({"channel": "ai_channel"}));
+        let result = chat_history_tool_content(&chat_ctx, "main", &call).await;
+        assert!(
+            result.contains("ai_channel buffer not configured"),
+            "got: {result}"
+        );
+    }
 }
