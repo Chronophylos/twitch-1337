@@ -55,6 +55,10 @@ fn default_history_length() -> u64 {
     crate::ai::chat_history::DEFAULT_HISTORY_LENGTH
 }
 
+fn default_ai_channel_history_length() -> u64 {
+    50
+}
+
 fn default_emote_glossary_path() -> String {
     "7tv_emotes.toml".to_string()
 }
@@ -313,6 +317,10 @@ pub struct AiConfig {
     /// Number of recent chat messages to keep in the local tool-readable buffer.
     #[serde(default = "default_history_length")]
     pub history_length: u64,
+    /// Capacity of the rolling buffer recording messages from `twitch.ai_channel`.
+    /// Allocated only when `twitch.ai_channel` is set.
+    #[serde(default = "default_ai_channel_history_length")]
+    pub ai_channel_history_length: u64,
     /// Optional: Prefill chat history from a rustlog-compatible API at startup
     #[serde(default)]
     pub history_prefill: Option<prefill::HistoryPrefillConfig>,
@@ -609,6 +617,16 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
     }
 
     if let Some(ref ai) = config.ai
+        && ai.ai_channel_history_length > crate::ai::chat_history::MAX_HISTORY_LENGTH
+    {
+        bail!(
+            "ai.ai_channel_history_length must be <= {} (got {})",
+            crate::ai::chat_history::MAX_HISTORY_LENGTH,
+            ai.ai_channel_history_length
+        );
+    }
+
+    if let Some(ref ai) = config.ai
         && let Some(ref prefill) = ai.history_prefill
     {
         if prefill.base_url.trim().is_empty() {
@@ -776,6 +794,7 @@ mod tests {
             timeout: default_ai_timeout(),
             reasoning_effort: None,
             history_length: default_history_length(),
+            ai_channel_history_length: default_ai_channel_history_length(),
             history_prefill: None,
             memory: MemoryConfigSection::default(),
             max_turn_rounds: default_max_turn_rounds(),
@@ -1031,5 +1050,40 @@ mod tests {
             format!("{err:#}").contains("inject_byte_budget"),
             "got: {err:#}"
         );
+    }
+
+    #[test]
+    fn ai_channel_history_length_default_is_50() {
+        let ai: AiConfig = toml::from_str(
+            r#"
+            backend = "ollama"
+            model = "x"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(ai.ai_channel_history_length, 50);
+    }
+
+    #[test]
+    fn validate_rejects_ai_channel_history_length_above_max() {
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.ai_channel_history_length = crate::ai::chat_history::MAX_HISTORY_LENGTH + 1;
+        c.ai = Some(ai);
+
+        let err = validate_config(&c).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ai.ai_channel_history_length"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_ai_channel_history_length_50() {
+        let mut c = Configuration::test_default();
+        let mut ai = ai_with_run_at("04:00");
+        ai.ai_channel_history_length = 50;
+        c.ai = Some(ai);
+        validate_config(&c).unwrap();
     }
 }
