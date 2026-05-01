@@ -205,7 +205,7 @@ impl AiCommand {
 
         let executor = ChatHistoryExecutor {
             chat_ctx,
-            channel_login,
+            invocation_channel_login: channel_login,
         };
         let opts = AgentOpts {
             max_rounds: CHAT_HISTORY_TOOL_MAX_ROUNDS,
@@ -231,7 +231,7 @@ struct RecentChatArgs {
 
 struct ChatHistoryExecutor<'a> {
     chat_ctx: &'a ChatContext,
-    channel_login: &'a str,
+    invocation_channel_login: &'a str,
 }
 
 #[async_trait]
@@ -239,7 +239,7 @@ impl ToolExecutor for ChatHistoryExecutor<'_> {
     async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
         ToolResultMessage::for_call(
             call,
-            chat_history_tool_content(self.chat_ctx, self.channel_login, call).await,
+            chat_history_tool_content(self.chat_ctx, self.invocation_channel_login, call).await,
         )
     }
 }
@@ -831,37 +831,9 @@ where
 }
 
 async fn render_legacy_recent_block(history: &ChatHistory, login: &str, cap: usize) -> String {
-    use crate::ai::chat_history::ChatHistoryEntry;
-    use chrono_tz::Europe::Berlin;
-
-    let snapshot: Vec<ChatHistoryEntry> = history.lock().await.snapshot();
-    if snapshot.is_empty() {
-        return String::new();
-    }
-    let mut chosen: Vec<String> = Vec::new();
-    let mut bytes = 0usize;
-    for entry in snapshot.iter().rev() {
-        let ts = entry.timestamp.with_timezone(&Berlin);
-        let line = format!(
-            "[{}] {}: {}",
-            ts.format("%H:%M"),
-            entry.username,
-            entry.text
-        );
-        let line_bytes = line.len() + 1;
-        if bytes + line_bytes > cap {
-            break;
-        }
-        bytes += line_bytes;
-        chosen.push(line);
-    }
-    if chosen.is_empty() {
-        return String::new();
-    }
-    chosen.reverse();
-    let mut s = format!("## Recent chat (#{login})\n");
-    s.push_str(&chosen.join("\n"));
-    s
+    crate::ai::memory::inject::render_recent_section(Some(history), login, cap)
+        .await
+        .unwrap_or_default()
 }
 
 /// Construct the optional AI memory v2 bundle from config.

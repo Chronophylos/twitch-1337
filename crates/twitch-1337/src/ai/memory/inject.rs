@@ -162,7 +162,7 @@ pub async fn build_chat_turn_context(store: &MemoryStore, opts: BuildOpts) -> Re
 
 /// Render one `## Recent chat (#login)` section, newest-first up to `cap` bytes,
 /// then reverse to chronological order. Returns `None` for missing or empty buffers.
-async fn render_recent_section(
+pub(crate) async fn render_recent_section(
     buf: Option<&Arc<Mutex<ChatHistoryBuffer>>>,
     login: &str,
     cap: usize,
