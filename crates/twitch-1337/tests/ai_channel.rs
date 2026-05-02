@@ -8,10 +8,45 @@ use std::time::Duration;
 
 use chrono::TimeZone;
 use chrono_tz::Europe::Berlin;
-use common::TestBotBuilder;
+use common::{TestBot, TestBotBuilder};
 use llm::ToolChatCompletionResponse;
 
 const AI_CHAN: &str = "ai_chan";
+
+/// Builds a `TestBot` with AI enabled, `ai_channel` set, memory disabled, and
+/// a custom `instruction_template`, then pre-seeds both channels with one
+/// message each (`alice: hello main` in primary, `bob: hello ai` in ai_chan).
+async fn spawn_history_test_bot(template: &str) -> TestBot {
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_config(|c| {
+            c.twitch.ai_channel = Some(AI_CHAN.into());
+            if let Some(ai) = c.ai.as_mut() {
+                ai.memory.enabled = false;
+                ai.instruction_template = template.into();
+            }
+        })
+        .spawn()
+        .await;
+    bot.send("alice", "hello main").await;
+    bot.send_to(AI_CHAN, "bob", "hello ai").await;
+    bot
+}
+
+/// Returns the text of the most-recent user-role message from the last LLM
+/// tool-call request recorded by the stub.
+fn last_user_message(bot: &TestBot) -> String {
+    let calls = bot.llm.tool_calls();
+    let last = calls.last().expect("LLM must have received a tool request");
+    last.messages
+        .iter()
+        .rev()
+        .find(|m| matches!(m.role, llm::Role::User))
+        .expect("user message present")
+        .content
+        .as_str()
+        .to_string()
+}
 
 #[tokio::test]
 async fn ai_command_works_in_ai_channel() {
@@ -172,25 +207,10 @@ async fn ai_command_still_works_in_primary_channel() {
 async fn ai_in_ai_channel_sees_both_history_sections() {
     // !ai invoked in ai_channel must surface both recent-chat sections to the
     // model; invocation channel goes first.
-    let mut bot = TestBotBuilder::new()
-        .with_ai()
-        .with_config(|c| {
-            c.twitch.ai_channel = Some(AI_CHAN.into());
-            if let Some(ai) = c.ai.as_mut() {
-                ai.memory.enabled = false;
-                // Put {ai_channel_history} first so that when !ai is invoked
-                // in ai_channel the invocation-channel section appears before
-                // the primary-channel section in the rendered prompt.
-                ai.instruction_template =
-                    "{ai_channel_history}\n\n{primary_history}\n\n{message}".into();
-            }
-        })
-        .spawn()
-        .await;
-
-    // Pre-seed both channels with traffic.
-    bot.send("alice", "hello main").await;
-    bot.send_to(AI_CHAN, "bob", "hello ai").await;
+    // Put {ai_channel_history} first so that when !ai is invoked in ai_channel
+    // the invocation-channel section appears before the primary-channel section.
+    let mut bot =
+        spawn_history_test_bot("{ai_channel_history}\n\n{primary_history}\n\n{message}").await;
 
     bot.llm
         .push_tool(ToolChatCompletionResponse::Message("ok".into()));
@@ -198,16 +218,7 @@ async fn ai_in_ai_channel_sees_both_history_sections() {
 
     let _ = bot.expect_say_full(Duration::from_secs(2)).await;
 
-    let calls = bot.llm.tool_calls();
-    let last = calls.last().expect("LLM must have received a tool request");
-    let user_msg = last
-        .messages
-        .iter()
-        .rev()
-        .find(|m| matches!(m.role, llm::Role::User))
-        .expect("user message present")
-        .content
-        .as_str();
+    let user_msg = last_user_message(&bot);
     let ai_idx = user_msg
         .find(&format!("Recent chat (#{AI_CHAN})"))
         .expect("ai_channel section");
@@ -229,20 +240,7 @@ async fn legacy_chat_history_alias_renders_invocation_buffer_when_invoked_from_p
     // {chat_history} alias must dynamically map to the invocation channel's
     // buffer. Invocation from primary => alias contains primary content,
     // not ai_channel content.
-    let mut bot = TestBotBuilder::new()
-        .with_ai()
-        .with_config(|c| {
-            c.twitch.ai_channel = Some(AI_CHAN.into());
-            if let Some(ai) = c.ai.as_mut() {
-                ai.memory.enabled = false;
-                ai.instruction_template = "{chat_history}\n\n{message}".into();
-            }
-        })
-        .spawn()
-        .await;
-
-    bot.send("alice", "hello main").await;
-    bot.send_to(AI_CHAN, "bob", "hello ai").await;
+    let mut bot = spawn_history_test_bot("{chat_history}\n\n{message}").await;
 
     bot.llm
         .push_tool(ToolChatCompletionResponse::Message("ok".into()));
@@ -250,17 +248,7 @@ async fn legacy_chat_history_alias_renders_invocation_buffer_when_invoked_from_p
 
     let _ = bot.expect_say_full(Duration::from_secs(2)).await;
 
-    let calls = bot.llm.tool_calls();
-    let last = calls.last().expect("LLM must have received a tool request");
-    let user_msg = last
-        .messages
-        .iter()
-        .rev()
-        .find(|m| matches!(m.role, llm::Role::User))
-        .expect("user message present")
-        .content
-        .as_str();
-
+    let user_msg = last_user_message(&bot);
     assert!(
         user_msg.contains("alice: hello main"),
         "primary content missing from alias\n{user_msg}"
@@ -281,20 +269,7 @@ async fn legacy_chat_history_alias_renders_invocation_buffer_when_invoked_from_p
 async fn legacy_chat_history_alias_renders_invocation_buffer_when_invoked_from_ai_channel() {
     // Mirror of the above: invocation from ai_channel => alias contains
     // ai_channel content, not primary.
-    let mut bot = TestBotBuilder::new()
-        .with_ai()
-        .with_config(|c| {
-            c.twitch.ai_channel = Some(AI_CHAN.into());
-            if let Some(ai) = c.ai.as_mut() {
-                ai.memory.enabled = false;
-                ai.instruction_template = "{chat_history}\n\n{message}".into();
-            }
-        })
-        .spawn()
-        .await;
-
-    bot.send("alice", "hello main").await;
-    bot.send_to(AI_CHAN, "bob", "hello ai").await;
+    let mut bot = spawn_history_test_bot("{chat_history}\n\n{message}").await;
 
     bot.llm
         .push_tool(ToolChatCompletionResponse::Message("ok".into()));
@@ -302,17 +277,7 @@ async fn legacy_chat_history_alias_renders_invocation_buffer_when_invoked_from_a
 
     let _ = bot.expect_say_full(Duration::from_secs(2)).await;
 
-    let calls = bot.llm.tool_calls();
-    let last = calls.last().expect("LLM must have received a tool request");
-    let user_msg = last
-        .messages
-        .iter()
-        .rev()
-        .find(|m| matches!(m.role, llm::Role::User))
-        .expect("user message present")
-        .content
-        .as_str();
-
+    let user_msg = last_user_message(&bot);
     assert!(
         user_msg.contains("bob: hello ai"),
         "ai_channel content missing from alias\n{user_msg}"
