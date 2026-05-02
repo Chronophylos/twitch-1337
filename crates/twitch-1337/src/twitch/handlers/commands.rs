@@ -87,8 +87,11 @@ where
 
     let broadcast_rx = broadcast_tx.subscribe();
 
-    // Extract history_length before ai_config is consumed
+    // Extract history lengths before ai_config is consumed
     let history_length = ai_config.as_ref().map_or(0, |c| c.history_length) as usize;
+    let ai_channel_history_length = ai_config
+        .as_ref()
+        .map_or(0, |c| c.ai_channel_history_length) as usize;
     let prefill_config = ai_config.as_ref().and_then(|c| c.history_prefill.clone());
 
     // Combine pre-built LLM client with AI config; both must be present to enable !ai.
@@ -104,7 +107,7 @@ where
     };
 
     // Create chat history buffer for AI context (if history_length > 0)
-    let chat_history: Option<ChatHistory> = if history_length > 0 {
+    let primary_history: Option<ChatHistory> = if history_length > 0 {
         let buffer = if let Some(ref prefill_cfg) = prefill_config {
             let prefilled =
                 ai::prefill::prefill_chat_history(&channel, history_length, prefill_cfg).await;
@@ -115,6 +118,15 @@ where
         Some(Arc::new(tokio::sync::Mutex::new(buffer)))
     } else {
         None
+    };
+
+    // ai_channel buffer: allocated only when an ai_channel is configured AND
+    // chat history is enabled. Capacity from ai.ai_channel_history_length.
+    let ai_channel_history: Option<ChatHistory> = match (&ai_channel, primary_history.is_some()) {
+        (Some(_), true) if ai_channel_history_length > 0 => Some(Arc::new(
+            tokio::sync::Mutex::new(ChatHistoryBuffer::new(ai_channel_history_length)),
+        )),
+        _ => None,
     };
 
     let emote_provider = llm_client
@@ -196,11 +208,13 @@ where
             None
         };
 
-        let chat_ctx = chat_history
+        let chat_ctx = primary_history
             .clone()
             .map(|history| ai::command::ChatContext {
-                history,
-                bot_username: bot_username.clone(),
+                primary_history: history,
+                primary_login: channel.clone(),
+                ai_channel_history: ai_channel_history.clone(),
+                ai_channel_login: ai_channel.clone(),
             });
 
         cmd_list.push(Box::new(ai::command::AiCommand::new(
@@ -255,7 +269,8 @@ where
         cmd_list,
         admin_channel,
         ai_channel,
-        chat_history,
+        primary_history,
+        ai_channel_history,
         suspension_manager,
     )
     .await;
@@ -304,13 +319,17 @@ fn is_ai_trigger(trigger: &str) -> bool {
 }
 
 /// Main dispatch loop for trait-based commands.
+// Two separate history buffers (primary + ai_channel) push this over the 7-arg limit;
+// wrapping them in a struct would add noise without clarity gain.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_command_dispatcher<T, L>(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
     client: Arc<TwitchIRCClient<T, L>>,
     commands: Vec<Box<dyn crate::commands::Command<T, L>>>,
     admin_channel: Option<String>,
     ai_channel: Option<String>,
-    chat_history: Option<ChatHistory>,
+    primary_history_for_dispatch: Option<ChatHistory>,
+    ai_channel_history_for_dispatch: Option<ChatHistory>,
     suspension_manager: Arc<SuspensionManager>,
 ) where
     T: Transport,
@@ -335,18 +354,23 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                     continue;
                 }
 
-                // Record message in chat history (primary channel only).
-                if let Some(ref history) = chat_history {
-                    let is_admin_channel = admin_channel
-                        .as_ref()
-                        .is_some_and(|ch| privmsg.channel_login == *ch);
-                    if !is_admin_channel && !is_ai_channel {
-                        history.lock().await.push_user_at(
-                            privmsg.sender.login.clone(),
-                            privmsg.message_text.clone(),
-                            privmsg.server_timestamp,
-                        );
-                    }
+                // Record message in the appropriate chat history buffer.
+                let target_buffer: Option<&ChatHistory> = if admin_channel
+                    .as_ref()
+                    .is_some_and(|ch| privmsg.channel_login == *ch)
+                {
+                    None
+                } else if is_ai_channel {
+                    ai_channel_history_for_dispatch.as_ref()
+                } else {
+                    primary_history_for_dispatch.as_ref()
+                };
+                if let Some(buffer) = target_buffer {
+                    buffer.lock().await.push_user_at(
+                        privmsg.sender.login.clone(),
+                        privmsg.message_text.clone(),
+                        privmsg.server_timestamp,
+                    );
                 }
 
                 let Some(invocation) = command_invocation(&privmsg.message_text) else {

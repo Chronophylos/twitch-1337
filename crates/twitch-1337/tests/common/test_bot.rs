@@ -75,6 +75,7 @@ impl TestBotBuilder {
                 timeout: 30,
                 reasoning_effort: None,
                 history_length: twitch_1337::DEFAULT_HISTORY_LENGTH,
+                ai_channel_history_length: 50,
                 history_prefill: None,
                 memory: twitch_1337::config::MemoryConfigSection::default(),
                 max_turn_rounds: 4,
