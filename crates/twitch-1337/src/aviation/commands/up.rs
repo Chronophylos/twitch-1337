@@ -152,11 +152,10 @@ where
                     .as_ref()
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty());
-                let registration = ac
-                    .r
-                    .as_ref()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
+                let registration =
+                    ac.r.as_ref()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
                 let hex = ac
                     .hex
                     .as_ref()

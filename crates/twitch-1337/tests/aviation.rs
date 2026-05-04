@@ -99,7 +99,10 @@ async fn up_command_includes_aircraft_without_route() {
     let mut bot = bot;
     bot.send("alice", "!up 10115").await;
     let out = bot.expect_say(Duration::from_secs(5)).await;
-    assert!(out.contains("PRIV01"), "expected PRIV01 in up output: {out}");
+    assert!(
+        out.contains("PRIV01"),
+        "expected PRIV01 in up output: {out}"
+    );
     assert!(out.contains("C172"), "expected C172 in up output: {out}");
     assert!(
         !out.contains("→"),
@@ -173,7 +176,10 @@ async fn up_command_falls_back_to_hex() {
     let mut bot = bot;
     bot.send("alice", "!up 10115").await;
     let out = bot.expect_say(Duration::from_secs(5)).await;
-    assert!(out.contains("abcdef"), "expected hex abcdef in up output: {out}");
+    assert!(
+        out.contains("abcdef"),
+        "expected hex abcdef in up output: {out}"
+    );
 
     bot.shutdown().await;
 }
