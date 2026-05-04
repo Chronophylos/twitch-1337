@@ -145,3 +145,35 @@ async fn up_command_uses_registration_when_callsign_missing() {
 
     bot.shutdown().await;
 }
+
+#[tokio::test]
+#[serial]
+async fn up_command_falls_back_to_hex() {
+    let bot = TestBotBuilder::new().spawn().await;
+
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/point/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ac": [
+                {
+                    "hex": "abcdef",
+                    "alt_baro": 2500,
+                    "lat": 52.52,
+                    "lon": 13.40,
+                    "gs": 90.0
+                }
+            ],
+            "ctime": 0,
+            "now": 0,
+            "total": 1
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    let mut bot = bot;
+    bot.send("alice", "!up 10115").await;
+    let out = bot.expect_say(Duration::from_secs(5)).await;
+    assert!(out.contains("abcdef"), "expected hex abcdef in up output: {out}");
+
+    bot.shutdown().await;
+}
