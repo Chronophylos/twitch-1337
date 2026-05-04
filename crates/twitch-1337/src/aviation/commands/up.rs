@@ -187,10 +187,8 @@ where
             join_set.spawn(async move {
                 let route =
                     tokio::time::timeout(UP_ADSBDB_TIMEOUT, av_client.get_flight_route(&cs)).await;
-
-                match route {
-                    Ok(Ok(Some(fr))) => Some((cs, icao_type, alt, fr, dist, direction)),
-                    Ok(Ok(None)) => None,
+                let route = match route {
+                    Ok(Ok(r)) => r,
                     Ok(Err(e)) => {
                         warn!(callsign = %cs, error = ?e, "adsbdb lookup failed");
                         None
@@ -199,13 +197,14 @@ where
                         warn!(callsign = %cs, "adsbdb lookup timed out");
                         None
                     }
-                }
+                };
+                (cs, icao_type, alt, route, dist, direction)
             });
         }
 
         let mut results = Vec::new();
         while let Some(res) = join_set.join_next().await {
-            if let Ok(Some(entry)) = res {
+            if let Ok(entry) = res {
                 results.push(entry);
             }
         }
@@ -223,14 +222,17 @@ where
             let parts: Vec<String> = entries
                 .iter()
                 .take(UP_MAX_RESULTS)
-                .map(|(cs, icao_type, alt, route, dist, direction)| {
+                .map(|(id, icao_type, alt, route, dist, direction)| {
                     let typ = icao_type.as_deref().unwrap_or("?");
-                    format!(
-                        "{cs} ({typ}) {origin}→{dest} {alt} {dist:.1}nm {direction}",
-                        origin = route.origin.iata_code,
-                        dest = route.destination.iata_code,
-                        alt = format_altitude(alt),
-                    )
+                    let alt_str = format_altitude(alt);
+                    match route {
+                        Some(r) => format!(
+                            "{id} ({typ}) {origin}→{dest} {alt_str} {dist:.1}nm {direction}",
+                            origin = r.origin.iata_code,
+                            dest = r.destination.iata_code,
+                        ),
+                        None => format!("{id} ({typ}) {alt_str} {dist:.1}nm {direction}"),
+                    }
                 })
                 .collect();
             let joined = parts.join(" | ");
