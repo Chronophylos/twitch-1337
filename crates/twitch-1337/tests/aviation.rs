@@ -108,3 +108,40 @@ async fn up_command_includes_aircraft_without_route() {
 
     bot.shutdown().await;
 }
+
+#[tokio::test]
+#[serial]
+async fn up_command_uses_registration_when_callsign_missing() {
+    let bot = TestBotBuilder::new().spawn().await;
+
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/point/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ac": [
+                {
+                    "hex": "abcdef",
+                    "r": "D-EABC",
+                    "t": "C172",
+                    "alt_baro": 3500,
+                    "lat": 52.52,
+                    "lon": 13.40,
+                    "gs": 110.0
+                }
+            ],
+            "ctime": 0,
+            "now": 0,
+            "total": 1
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    let mut bot = bot;
+    bot.send("alice", "!up 10115").await;
+    let out = bot.expect_say(Duration::from_secs(5)).await;
+    assert!(
+        out.contains("D-EABC"),
+        "expected registration D-EABC in up output: {out}"
+    );
+
+    bot.shutdown().await;
+}
