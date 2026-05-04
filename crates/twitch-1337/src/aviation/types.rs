@@ -19,6 +19,7 @@ pub(super) struct AdsbAircraftResponse {
 pub struct NearbyAircraft {
     pub hex: Option<String>,
     pub flight: Option<String>,
+    pub r: Option<String>,
     pub t: Option<String>,
     pub alt_baro: Option<AltBaro>,
     pub lat: Option<f64>,

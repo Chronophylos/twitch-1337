@@ -142,16 +142,30 @@ where
         .map_err(|_| eyre::eyre!("ADS-B request timed out"))?
         .wrap_err("ADS-B request failed")?;
 
-        // Filter by cone visibility, then by callsign
+        // Filter by cone visibility, then by identifier (callsign → registration → hex)
         let candidates: Vec<_> = aircraft
             .iter()
             .filter_map(|ac| {
                 let distance_nm = cone_distance_nm(ac, *lat, *lon)?;
-                let callsign = ac.flight.as_ref()?.trim();
-                if callsign.is_empty() {
-                    return None;
-                }
-                Some((callsign.to_string(), ac, distance_nm))
+                let callsign = ac
+                    .flight
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let registration =
+                    ac.r.as_ref()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                let hex = ac
+                    .hex
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let id = callsign
+                    .clone()
+                    .or_else(|| registration.clone())
+                    .or_else(|| hex.clone())?;
+                Some((id, callsign, ac, distance_nm))
             })
             .take(UP_MAX_CANDIDATES)
             .collect();
@@ -162,9 +176,10 @@ where
 
         // Fetch routes concurrently
         let mut join_set = tokio::task::JoinSet::new();
-        for (callsign, ac, distance_nm) in &candidates {
+        for (id, callsign, ac, distance_nm) in &candidates {
             let av_client = aviation_client.clone();
-            let cs = callsign.clone();
+            let id_owned = id.clone();
+            let callsign_owned = callsign.clone();
             let icao_type = ac.t.clone();
             let alt = ac.alt_baro.clone();
             let dist = *distance_nm;
@@ -185,30 +200,39 @@ where
                 _ => "?",
             };
             join_set.spawn(async move {
-                let route =
-                    tokio::time::timeout(UP_ADSBDB_TIMEOUT, av_client.get_flight_route(&cs)).await;
-
-                match route {
-                    Ok(Ok(Some(fr))) => Some((cs, icao_type, alt, fr, dist, direction)),
-                    Ok(Ok(None)) => None,
-                    Ok(Err(e)) => {
-                        warn!(callsign = %cs, error = ?e, "adsbdb lookup failed");
-                        None
+                let route = match callsign_owned {
+                    Some(cs) => {
+                        let res = tokio::time::timeout(
+                            UP_ADSBDB_TIMEOUT,
+                            av_client.get_flight_route(&cs),
+                        )
+                        .await;
+                        match res {
+                            Ok(Ok(r)) => r,
+                            Ok(Err(e)) => {
+                                warn!(callsign = %cs, error = ?e, "adsbdb lookup failed");
+                                None
+                            }
+                            Err(_) => {
+                                warn!(callsign = %cs, "adsbdb lookup timed out");
+                                None
+                            }
+                        }
                     }
-                    Err(_) => {
-                        warn!(callsign = %cs, "adsbdb lookup timed out");
-                        None
-                    }
-                }
+                    None => None,
+                };
+                (id_owned, icao_type, alt, route, dist, direction)
             });
         }
 
         let mut results = Vec::new();
         while let Some(res) = join_set.join_next().await {
-            if let Ok(Some(entry)) = res {
+            if let Ok(entry) = res {
                 results.push(entry);
             }
         }
+
+        results.sort_by(|a, b| a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal));
 
         Ok::<_, eyre::Report>(results)
     })
@@ -223,14 +247,17 @@ where
             let parts: Vec<String> = entries
                 .iter()
                 .take(UP_MAX_RESULTS)
-                .map(|(cs, icao_type, alt, route, dist, direction)| {
+                .map(|(id, icao_type, alt, route, dist, direction)| {
                     let typ = icao_type.as_deref().unwrap_or("?");
-                    format!(
-                        "{cs} ({typ}) {origin}→{dest} {alt} {dist:.1}nm {direction}",
-                        origin = route.origin.iata_code,
-                        dest = route.destination.iata_code,
-                        alt = format_altitude(alt),
-                    )
+                    let alt_str = format_altitude(alt);
+                    match route {
+                        Some(r) => format!(
+                            "{id} ({typ}) {origin}→{dest} {alt_str} {dist:.1}nm {direction}",
+                            origin = r.origin.iata_code,
+                            dest = r.destination.iata_code,
+                        ),
+                        None => format!("{id} ({typ}) {alt_str} {dist:.1}nm {direction}"),
+                    }
                 })
                 .collect();
             let joined = parts.join(" | ");
