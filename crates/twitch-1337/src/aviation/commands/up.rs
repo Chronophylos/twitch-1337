@@ -142,16 +142,31 @@ where
         .map_err(|_| eyre::eyre!("ADS-B request timed out"))?
         .wrap_err("ADS-B request failed")?;
 
-        // Filter by cone visibility, then by callsign
+        // Filter by cone visibility, then by identifier (callsign → registration → hex)
         let candidates: Vec<_> = aircraft
             .iter()
             .filter_map(|ac| {
                 let distance_nm = cone_distance_nm(ac, *lat, *lon)?;
-                let callsign = ac.flight.as_ref()?.trim();
-                if callsign.is_empty() {
-                    return None;
-                }
-                Some((callsign.to_string(), ac, distance_nm))
+                let callsign = ac
+                    .flight
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let registration = ac
+                    .r
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let hex = ac
+                    .hex
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let id = callsign
+                    .clone()
+                    .or_else(|| registration.clone())
+                    .or_else(|| hex.clone())?;
+                Some((id, callsign, ac, distance_nm))
             })
             .take(UP_MAX_CANDIDATES)
             .collect();
@@ -162,9 +177,10 @@ where
 
         // Fetch routes concurrently
         let mut join_set = tokio::task::JoinSet::new();
-        for (callsign, ac, distance_nm) in &candidates {
+        for (id, callsign, ac, distance_nm) in &candidates {
             let av_client = aviation_client.clone();
-            let cs = callsign.clone();
+            let id_owned = id.clone();
+            let callsign_owned = callsign.clone();
             let icao_type = ac.t.clone();
             let alt = ac.alt_baro.clone();
             let dist = *distance_nm;
@@ -185,20 +201,28 @@ where
                 _ => "?",
             };
             join_set.spawn(async move {
-                let route =
-                    tokio::time::timeout(UP_ADSBDB_TIMEOUT, av_client.get_flight_route(&cs)).await;
-                let route = match route {
-                    Ok(Ok(r)) => r,
-                    Ok(Err(e)) => {
-                        warn!(callsign = %cs, error = ?e, "adsbdb lookup failed");
-                        None
+                let route = match callsign_owned {
+                    Some(cs) => {
+                        let res = tokio::time::timeout(
+                            UP_ADSBDB_TIMEOUT,
+                            av_client.get_flight_route(&cs),
+                        )
+                        .await;
+                        match res {
+                            Ok(Ok(r)) => r,
+                            Ok(Err(e)) => {
+                                warn!(callsign = %cs, error = ?e, "adsbdb lookup failed");
+                                None
+                            }
+                            Err(_) => {
+                                warn!(callsign = %cs, "adsbdb lookup timed out");
+                                None
+                            }
+                        }
                     }
-                    Err(_) => {
-                        warn!(callsign = %cs, "adsbdb lookup timed out");
-                        None
-                    }
+                    None => None,
                 };
-                (cs, icao_type, alt, route, dist, direction)
+                (id_owned, icao_type, alt, route, dist, direction)
             });
         }
 
