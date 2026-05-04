@@ -233,6 +233,8 @@ where
             }
         }
 
+        results.sort_by(|a, b| a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal));
+
         Ok::<_, eyre::Report>(results)
     })
     .await;
