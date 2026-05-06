@@ -605,7 +605,12 @@ where
                 channel: &ctx.privmsg.channel_login,
                 date: &now_berlin.to_string(),
             };
-            let system_prompt_head = inject::substitute(&system_template, vars);
+            let mut system_prompt_head = inject::substitute(&system_template, vars);
+            if let Some(ref emotes) = self.emotes
+                && let Some(block) = emotes.prompt_block(&ctx.privmsg.channel_id).await
+            {
+                system_prompt_head.push_str(&block);
+            }
             let instructions_head = inject::substitute(&instructions_template, vars);
 
             let inject_body = inject::build_chat_turn_context(
@@ -649,6 +654,7 @@ where
             let exec = ChatTurnExecutor::new(ChatTurnExecutorOpts {
                 store: mem.store.clone(),
                 speaker_user_id: ctx.privmsg.sender.id.clone(),
+                speaker_login: ctx.privmsg.sender.login.clone(),
                 speaker_display_name: ctx.privmsg.sender.name.clone(),
                 speaker_role: role,
                 max_writes_per_turn: mem.max_writes_per_turn,

@@ -13,8 +13,8 @@ use tokio::sync::Notify;
 use tracing::{info, warn};
 
 use crate::ai::memory::inject::{
-    BuildOpts, InvocationChannel, SubstitutionVars, build_chat_turn_context, fence_block,
-    fresh_nonce, scrub_for_inject, substitute,
+    BuildOpts, FenceLabel, InvocationChannel, SubstitutionVars, build_chat_turn_context,
+    fence_block, fresh_nonce, scrub_for_inject, substitute,
 };
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::{DreamerExecutor, DreamerExecutorOpts, dreamer_tools};
@@ -88,8 +88,9 @@ pub async fn run_ritual(
         },
     )
     .await?;
+    let date_str = rotate_to.format("%Y-%m-%d").to_string();
     let transcript_block = fence_block(
-        &format!("transcripts/{}.md", rotate_to.format("%Y-%m-%d")),
+        FenceLabel::Transcript { date: &date_str },
         &nonce,
         &scrub_for_inject(&transcript_text),
     );
