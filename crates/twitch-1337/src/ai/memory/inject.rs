@@ -15,6 +15,27 @@ use crate::ai::memory::types::{FileKind, MemoryFile};
 const FENCE_OPEN: &str = "<<<FILE";
 const FENCE_CLOSE: &str = "<<<ENDFILE";
 
+/// Identifies what a fenced inject block represents. Renders into the FILE
+/// header attrs so the model can map a block to its subject without parsing
+/// a path. Path-style addressing only re-appears in the `write_file` tool's
+/// `path` argument, where it's the canonical way to address a write target.
+#[derive(Debug, Clone)]
+pub enum FenceLabel<'a> {
+    Soul,
+    Lore,
+    User {
+        id: &'a str,
+        login: Option<&'a str>,
+        display_name: Option<&'a str>,
+    },
+    State {
+        slug: &'a str,
+    },
+    Transcript {
+        date: &'a str,
+    },
+}
+
 /// Per-section byte caps for rolling chat injected into the v2 prompt.
 /// Independent of `inject_byte_budget`, which covers SOUL/LORE/users/state.
 pub const RECENT_CHAT_PRIMARY_BYTES: usize = 2048;
@@ -33,9 +54,42 @@ pub fn fresh_nonce() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-pub fn fence_block(path: &str, nonce: &str, body: &str) -> String {
+pub fn fence_block(label: FenceLabel<'_>, nonce: &str, body: &str) -> String {
     let safe = scrub_for_inject(body);
-    format!("<<<FILE path={path} nonce={nonce}>>>\n{safe}\n<<<ENDFILE nonce={nonce}>>>")
+    let attrs = render_label_attrs(&label);
+    format!("<<<FILE {attrs} nonce={nonce}>>>\n{safe}\n<<<ENDFILE nonce={nonce}>>>")
+}
+
+fn render_label_attrs(label: &FenceLabel<'_>) -> String {
+    match label {
+        FenceLabel::Soul => "kind=soul".into(),
+        FenceLabel::Lore => "kind=lore".into(),
+        FenceLabel::State { slug } => format!("kind=state slug={slug}"),
+        FenceLabel::Transcript { date } => format!("kind=transcript date={date}"),
+        FenceLabel::User {
+            id,
+            login,
+            display_name,
+        } => {
+            let mut s = format!("kind=user id={id}");
+            if let Some(l) = login.filter(|l| !l.is_empty()) {
+                s.push_str(&format!(" login={l}"));
+            }
+            if let Some(n) = display_name.filter(|n| !n.is_empty()) {
+                s.push_str(&format!(" name=\"{}\"", sanitize_attr_value(n)));
+            }
+            s
+        }
+    }
+}
+
+/// Strip characters that would break the FILE header (quotes, newlines, `>`).
+/// Display names are already control-stripped at write time, but we apply
+/// the same hardening at render time to keep the marker syntactically clean.
+fn sanitize_attr_value(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control() && *c != '"' && *c != '>' && *c != '<')
+        .collect()
 }
 
 /// If a body contains either fence sentinel, replace it wholesale.
@@ -120,35 +174,36 @@ pub async fn build_chat_turn_context(store: &MemoryStore, opts: BuildOpts) -> Re
     let mut users = store.list_users().await?;
     let mut states = store.list_state().await?;
 
-    let mut memory_blocks: Vec<(String, String)> = Vec::new();
-    memory_blocks.push((
-        "SOUL.md".into(),
-        fence_block("SOUL.md", &opts.nonce, &soul.body),
-    ));
-    memory_blocks.push((
-        "LORE.md".into(),
-        fence_block("LORE.md", &opts.nonce, &lore.body),
-    ));
+    let mut memory_blocks: Vec<String> = Vec::new();
+    memory_blocks.push(fence_block(FenceLabel::Soul, &opts.nonce, &soul.body));
+    memory_blocks.push(fence_block(FenceLabel::Lore, &opts.nonce, &lore.body));
 
     let mut rest: Vec<MemoryFile> = users.drain(..).chain(states.drain(..)).collect();
     rest.sort_by_key(|f| std::cmp::Reverse(f.frontmatter.updated_at));
 
-    let mut total: usize = memory_blocks.iter().map(|(_, s)| s.len()).sum();
+    let mut total: usize = memory_blocks.iter().map(String::len).sum();
     for f in rest {
-        let path = f.kind.relative_path().to_string_lossy().to_string();
-        let block = fence_block(&path, &opts.nonce, &f.body);
+        let label = match &f.kind {
+            FileKind::User { user_id } => FenceLabel::User {
+                id: user_id,
+                login: f.frontmatter.username.as_deref(),
+                display_name: f.frontmatter.display_name.as_deref(),
+            },
+            FileKind::State { slug } => FenceLabel::State { slug },
+            FileKind::Soul | FileKind::Lore => {
+                tracing::error!(?f.kind, "soul/lore in user/state list, skipping");
+                continue;
+            }
+        };
+        let block = fence_block(label, &opts.nonce, &f.body);
         if total + block.len() + 1 > opts.inject_byte_budget {
             break;
         }
         total += block.len() + 1;
-        memory_blocks.push((path, block));
+        memory_blocks.push(block);
     }
 
-    let memory_body = memory_blocks
-        .into_iter()
-        .map(|(_, b)| b)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let memory_body = memory_blocks.join("\n");
 
     if recent_sections.is_empty() {
         return Ok(memory_body);
@@ -211,11 +266,67 @@ mod tests {
     use crate::ai::memory::types::{Caps, FileKind};
 
     #[test]
-    fn fence_block_carries_nonce() {
-        let s = fence_block("users/12.md", "abc123abc123abc1", "body\n");
-        assert!(s.starts_with("<<<FILE path=users/12.md nonce=abc123abc123abc1>>>"));
+    fn fence_block_user_renders_identity_attrs() {
+        let s = fence_block(
+            FenceLabel::User {
+                id: "12",
+                login: Some("alicepleb"),
+                display_name: Some("Alice Pleb"),
+            },
+            "abc123abc123abc1",
+            "body\n",
+        );
+        assert!(s.starts_with(
+            "<<<FILE kind=user id=12 login=alicepleb name=\"Alice Pleb\" nonce=abc123abc123abc1>>>"
+        ));
         assert!(s.ends_with("<<<ENDFILE nonce=abc123abc123abc1>>>"));
         assert!(s.contains("body\n"));
+    }
+
+    #[test]
+    fn fence_block_user_omits_missing_identity_attrs() {
+        let s = fence_block(
+            FenceLabel::User {
+                id: "12",
+                login: None,
+                display_name: None,
+            },
+            "n",
+            "x",
+        );
+        assert!(s.starts_with("<<<FILE kind=user id=12 nonce=n>>>"));
+    }
+
+    #[test]
+    fn fence_block_soul_lore_state_transcript_use_kind_attrs() {
+        assert!(
+            fence_block(FenceLabel::Soul, "n", "x").starts_with("<<<FILE kind=soul nonce=n>>>")
+        );
+        assert!(
+            fence_block(FenceLabel::Lore, "n", "x").starts_with("<<<FILE kind=lore nonce=n>>>")
+        );
+        assert!(
+            fence_block(FenceLabel::State { slug: "quiz" }, "n", "x")
+                .starts_with("<<<FILE kind=state slug=quiz nonce=n>>>")
+        );
+        assert!(
+            fence_block(FenceLabel::Transcript { date: "2026-05-05" }, "n", "x",)
+                .starts_with("<<<FILE kind=transcript date=2026-05-05 nonce=n>>>")
+        );
+    }
+
+    #[test]
+    fn fence_block_strips_quote_breakers_from_display_name() {
+        let s = fence_block(
+            FenceLabel::User {
+                id: "1",
+                login: Some("a"),
+                display_name: Some("we\"ird>guy"),
+            },
+            "n",
+            "x",
+        );
+        assert!(s.contains("name=\"weirdguy\""), "got: {s}");
     }
 
     #[test]
@@ -251,6 +362,7 @@ mod tests {
                     &FileKind::User { user_id: id.into() },
                     &"x".repeat(500),
                     Some("u"),
+                    Some("U"),
                 )
                 .await
                 .unwrap();
@@ -274,8 +386,8 @@ mod tests {
         .await
         .unwrap();
         // Newest user retained, oldest dropped.
-        assert!(ctx.contains("users/3.md"));
-        assert!(!ctx.contains("users/1.md"));
+        assert!(ctx.contains("kind=user id=3"));
+        assert!(!ctx.contains("kind=user id=1"));
     }
 
     #[tokio::test]

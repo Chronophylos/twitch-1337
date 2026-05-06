@@ -67,6 +67,7 @@ impl MemoryStore {
         if !tokio::fs::try_exists(&soul_path).await.unwrap_or(false) {
             let fm = Frontmatter {
                 updated_at: Utc::now(),
+                username: None,
                 display_name: None,
                 created_by: None,
             };
@@ -80,6 +81,7 @@ impl MemoryStore {
         if !tokio::fs::try_exists(&lore_path).await.unwrap_or(false) {
             let fm = Frontmatter {
                 updated_at: Utc::now(),
+                username: None,
                 display_name: None,
                 created_by: None,
             };
@@ -154,6 +156,7 @@ impl MemoryStore {
                 kind: kind.clone(),
                 frontmatter: Frontmatter {
                     updated_at: Utc::now(),
+                    username: None,
                     display_name: None,
                     created_by: None,
                 },
@@ -163,21 +166,18 @@ impl MemoryStore {
         }
     }
 
+    /// Write a SOUL/LORE/user file. For user files, `username` (Twitch login)
+    /// and `display_name` (cased) are persisted in the frontmatter. Either
+    /// `None` arg preserves the existing value on disk so the dreamer or
+    /// moderators writing other people's user files don't clobber identity.
     pub async fn write(
         &self,
         kind: &FileKind,
         body: &str,
+        username: Option<&str>,
         display_name: Option<&str>,
     ) -> Result<(), WriteError> {
         let limit = self.inner.caps.limit_for(kind);
-
-        let display_name = if matches!(kind, FileKind::User { .. }) {
-            display_name
-                .map(normalize_display_name)
-                .filter(|s| !s.is_empty())
-        } else {
-            None
-        };
 
         let rel = kind.relative_path();
         let abs = self.inner.memories_dir.join(&rel);
@@ -188,8 +188,34 @@ impl MemoryStore {
         // on-disk content (frontmatter + body). Doing this before acquiring
         // the lock would let two concurrent writes both pass a body-only cap
         // check and then race the actual write.
+        let (username, display_name) = if matches!(kind, FileKind::User { .. }) {
+            let username = username.map(str::to_string).filter(|s| !s.is_empty());
+            let display_name = display_name
+                .map(normalize_display_name)
+                .filter(|s| !s.is_empty());
+            // For user files, preserve any prior identity fields the caller
+            // didn't supply — protects mod/dreamer writes from clobbering
+            // display info they don't have on hand. Skip the disk read when
+            // the caller already supplied both fields.
+            if username.is_some() && display_name.is_some() {
+                (username, display_name)
+            } else {
+                let prior = tokio::fs::read_to_string(&abs)
+                    .await
+                    .ok()
+                    .and_then(|raw| frontmatter::parse(&raw).ok().map(|(fm, _)| fm));
+                (
+                    username.or_else(|| prior.as_ref().and_then(|fm| fm.username.clone())),
+                    display_name.or_else(|| prior.as_ref().and_then(|fm| fm.display_name.clone())),
+                )
+            }
+        } else {
+            (None, None)
+        };
+
         let fm = Frontmatter {
             updated_at: Utc::now(),
+            username,
             display_name,
             created_by: None,
         };
@@ -239,6 +265,7 @@ impl MemoryStore {
 
         let fm = Frontmatter {
             updated_at: Utc::now(),
+            username: None,
             display_name: None,
             created_by,
         };
@@ -428,15 +455,19 @@ mod tests {
         };
 
         store
-            .write(&kind, "small body", Some("alice"))
+            .write(&kind, "small body", Some("alicepleb"), Some("AlicePleb"))
             .await
             .unwrap();
         let mf = store.read_kind(&kind).await.unwrap();
         assert_eq!(mf.body.trim(), "small body");
-        assert_eq!(mf.frontmatter.display_name.as_deref(), Some("alice"));
+        assert_eq!(mf.frontmatter.username.as_deref(), Some("alicepleb"));
+        assert_eq!(mf.frontmatter.display_name.as_deref(), Some("AlicePleb"));
 
         let huge = "x".repeat(4096);
-        let err = store.write(&kind, &huge, Some("alice")).await.unwrap_err();
+        let err = store
+            .write(&kind, &huge, Some("alicepleb"), Some("AlicePleb"))
+            .await
+            .unwrap_err();
         assert_eq!(err.to_string(), "file_full");
     }
 
@@ -493,7 +524,10 @@ mod tests {
             user_id: "99".into(),
         };
         let dirty = "ali\u{200B}ce\nx";
-        store.write(&kind, "body", Some(dirty)).await.unwrap();
+        store
+            .write(&kind, "body", Some("alicex"), Some(dirty))
+            .await
+            .unwrap();
         let mf = store.read_kind(&kind).await.unwrap();
         assert_eq!(mf.frontmatter.display_name.as_deref(), Some("alicex"));
     }
@@ -510,9 +544,15 @@ mod tests {
         let b = FileKind::User {
             user_id: "2".into(),
         };
-        store.write(&a, "first", Some("a")).await.unwrap();
+        store
+            .write(&a, "first", Some("a"), Some("A"))
+            .await
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        store.write(&b, "second", Some("b")).await.unwrap();
+        store
+            .write(&b, "second", Some("b"), Some("B"))
+            .await
+            .unwrap();
         let list = store.list_users().await.unwrap();
         assert_eq!(list[0].kind, b);
         assert_eq!(list[1].kind, a);

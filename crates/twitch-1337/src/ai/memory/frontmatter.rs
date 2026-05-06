@@ -1,5 +1,6 @@
 //! Hand-rolled YAML-ish frontmatter parser. Schema is fixed:
-//! `updated_at` (RFC3339, required), `display_name` (optional), `created_by` (optional).
+//! `updated_at` (RFC3339, required), `username` (optional), `display_name`
+//! (optional), `created_by` (optional).
 
 use chrono::{DateTime, Utc};
 use thiserror::Error;
@@ -27,6 +28,7 @@ pub fn parse(raw: &str) -> Result<(Frontmatter, String), FrontmatterError> {
     };
 
     let mut updated_at = None;
+    let mut username = None;
     let mut display_name = None;
     let mut created_by = None;
     for line in yaml.lines() {
@@ -41,6 +43,7 @@ pub fn parse(raw: &str) -> Result<(Frontmatter, String), FrontmatterError> {
                     .with_timezone(&Utc);
                 updated_at = Some(dt);
             }
+            "username" if !v.is_empty() => username = Some(v.to_string()),
             "display_name" if !v.is_empty() => display_name = Some(v.to_string()),
             "created_by" if !v.is_empty() => created_by = Some(v.to_string()),
             _ => {}
@@ -50,6 +53,7 @@ pub fn parse(raw: &str) -> Result<(Frontmatter, String), FrontmatterError> {
     Ok((
         Frontmatter {
             updated_at: updated_at.ok_or(FrontmatterError::MissingField("updated_at"))?,
+            username,
             display_name,
             created_by,
         },
@@ -65,6 +69,9 @@ pub fn emit(fm: &Frontmatter, body: &str) -> String {
         fm.updated_at
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
     ));
+    if let Some(ref u) = fm.username {
+        s.push_str(&format!("username: {u}\n"));
+    }
     if let Some(ref n) = fm.display_name {
         s.push_str(&format!("display_name: {n}\n"));
     }
@@ -90,10 +97,11 @@ mod tests {
 
     #[test]
     fn split_returns_frontmatter_and_body() {
-        let raw = "---\nupdated_at: 2026-04-28T18:42:00Z\ndisplay_name: alice\n---\nhello\nworld\n";
+        let raw = "---\nupdated_at: 2026-04-28T18:42:00Z\nusername: alicepleb\ndisplay_name: AlicePleb\n---\nhello\nworld\n";
         let (fm, body) = parse(raw).unwrap();
         assert_eq!(fm.updated_at, ts());
-        assert_eq!(fm.display_name.as_deref(), Some("alice"));
+        assert_eq!(fm.username.as_deref(), Some("alicepleb"));
+        assert_eq!(fm.display_name.as_deref(), Some("AlicePleb"));
         assert_eq!(body, "hello\nworld\n");
     }
 
@@ -107,7 +115,8 @@ mod tests {
     fn emit_round_trips() {
         let fm = Frontmatter {
             updated_at: ts(),
-            display_name: Some("alice".into()),
+            username: Some("alice".into()),
+            display_name: Some("Alice".into()),
             created_by: None,
         };
         let raw = emit(&fm, "body line\n");
