@@ -1316,6 +1316,7 @@ mod tests {
         NearbyAircraft {
             hex: Some("4952c3".to_string()),
             flight: Some("TAP247".to_string()),
+            r: None,
             t: Some("A339".to_string()),
             alt_baro: Some(AltBaro::Feet(altitude_ft)),
             lat: Some(38.0),

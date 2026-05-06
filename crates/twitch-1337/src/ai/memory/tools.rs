@@ -121,6 +121,7 @@ impl SayChannel {
 pub struct ChatTurnExecutorOpts {
     pub store: MemoryStore,
     pub speaker_user_id: String,
+    pub speaker_login: String,
     pub speaker_display_name: String,
     pub speaker_role: Role,
     /// Maximum write-class tool calls (write_file, write_state, delete_state)
@@ -208,14 +209,23 @@ impl ChatTurnExecutor {
         }
 
         let kind = write_path_to_kind(path);
-        // Pass the display name only for the speaker's own user file.
-        let display = if matches!(&kind, FileKind::User { user_id } if user_id == &self.opts.speaker_user_id)
+        // Pass identity only for the speaker's own user file. For other user
+        // files, `None` lets the store preserve whatever's already on disk.
+        let (login, display) = if matches!(&kind, FileKind::User { user_id } if user_id == &self.opts.speaker_user_id)
         {
-            Some(self.opts.speaker_display_name.as_str())
+            (
+                Some(self.opts.speaker_login.as_str()),
+                Some(self.opts.speaker_display_name.as_str()),
+            )
         } else {
-            None
+            (None, None)
         };
-        match self.opts.store.write(&kind, &args.body, display).await {
+        match self
+            .opts
+            .store
+            .write(&kind, &args.body, login, display)
+            .await
+        {
             Ok(()) => "ok".into(),
             Err(WriteError::Full) => "file_full".into(),
             Err(WriteError::StateFull) => "state_full".into(), // unreachable for write()
@@ -345,6 +355,7 @@ impl DreamerExecutor {
             inner: ChatTurnExecutor::new(ChatTurnExecutorOpts {
                 store: opts.store,
                 speaker_user_id: "dreamer".into(),
+                speaker_login: String::new(),
                 speaker_display_name: String::new(),
                 speaker_role: Role::Dreamer,
                 max_writes_per_turn: opts.max_writes_per_turn,
@@ -415,7 +426,8 @@ mod exec_tests {
         ChatTurnExecutor::new(ChatTurnExecutorOpts {
             store,
             speaker_user_id: "12345".into(),
-            speaker_display_name: "alice".into(),
+            speaker_login: "alice".into(),
+            speaker_display_name: "Alice".into(),
             speaker_role: role,
             max_writes_per_turn: max_writes,
             say: SayChannel::collecting(),

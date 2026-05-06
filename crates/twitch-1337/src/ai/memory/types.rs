@@ -37,6 +37,11 @@ impl FileKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frontmatter {
     pub updated_at: DateTime<Utc>,
+    /// Twitch login (lowercase username). Set on user files; absent on
+    /// SOUL/LORE/state.
+    pub username: Option<String>,
+    /// Twitch display name (cased). Set on user files; absent on
+    /// SOUL/LORE/state.
     pub display_name: Option<String>,
     pub created_by: Option<String>,
 }
