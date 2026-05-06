@@ -383,6 +383,27 @@ impl ToolExecutor for WebExecutor<'_> {
     }
 }
 
+/// Memory-v2 path executor that dispatches by tool name to the chat-turn
+/// executor (write_file/write_state/delete_state/say) or, when web tools are
+/// configured, the web search executor (web_search/fetch_url).
+struct V2Executor<'a> {
+    chat: &'a ChatTurnExecutor,
+    web: Option<&'a web_search::WebToolExecutor>,
+}
+
+#[async_trait]
+impl ToolExecutor for V2Executor<'_> {
+    async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
+        match call.name.as_str() {
+            "web_search" | "fetch_url" => match self.web {
+                Some(w) => w.execute_tool_call(call).await,
+                None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
+            },
+            _ => self.chat.execute(call).await,
+        }
+    }
+}
+
 pub(crate) async fn chat_with_web_tools(req: WebChatRequest<'_>) -> AiResult {
     let messages = vec![
         Message::system(req.system_prompt),
@@ -611,6 +632,14 @@ where
             {
                 system_prompt_head.push_str(&block);
             }
+            if grok_alias {
+                system_prompt_head.push_str(GROK_SYSTEM_APPENDIX);
+                if self.web.is_some() {
+                    system_prompt_head.push_str(GROK_WEB_SYSTEM_APPENDIX);
+                }
+            } else if self.web.is_some() {
+                system_prompt_head.push_str(WEB_TOOLS_SYSTEM_APPENDIX);
+            }
             let instructions_head = inject::substitute(&instructions_template, vars);
 
             let inject_body = inject::build_chat_turn_context(
@@ -700,19 +729,32 @@ where
                 }
             });
 
+            let mut tools = chat_turn_tools();
+            if self.web.is_some() {
+                tools.extend(web_search::ai_tools());
+            }
+            let prior_rounds = if grok_alias && let Some(ref w) = self.web {
+                vec![forced_web_search_round(w, &instruction_for_prompt).await]
+            } else {
+                Vec::new()
+            };
             let req = ToolChatCompletionRequest {
                 model: self.model.clone(),
                 messages: vec![Message::system(system_prompt), Message::user(user_message)],
-                tools: chat_turn_tools(),
+                tools,
                 reasoning_effort: self.reasoning_effort.clone(),
-                prior_rounds: Vec::new(),
+                prior_rounds,
             };
             let opts = AgentOpts {
                 max_rounds: mem.max_turn_rounds,
                 per_round_timeout: Some(mem.turn_timeout),
             };
 
-            match run_agent(&*self.llm_client, req, &exec, opts).await {
+            let combined_exec = V2Executor {
+                chat: &exec,
+                web: self.web.as_ref().map(|w| w.executor.as_ref()),
+            };
+            match run_agent(&*self.llm_client, req, &combined_exec, opts).await {
                 Ok(AgentOutcome::Text(_)) => { /* clean exit; any say already on wire */ }
                 Ok(AgentOutcome::MaxRoundsExceeded) => warn!("AI max_turn_rounds exceeded"),
                 Ok(AgentOutcome::Timeout { round }) => warn!(round, "AI per-round timeout"),
