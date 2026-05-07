@@ -7,6 +7,7 @@ FROM docker.io/lukemathwalker/cargo-chef:latest-rust-1@sha256:00c3c07c51d092325d
 WORKDIR /app
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=clang
 ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+# hadolint ignore=DL3008
 RUN apt-get update \
   && apt-get install --no-install-recommends --assume-yes musl-tools mold clang ca-certificates \
   && rm -rf /var/lib/apt/lists/* \
