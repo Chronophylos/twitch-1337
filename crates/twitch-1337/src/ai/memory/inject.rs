@@ -127,10 +127,22 @@ pub struct BuildOpts {
     pub invocation_channel: InvocationChannel,
 }
 
-/// Build the chat-turn injected memory context: recent chat sections first (invocation
-/// channel first), then SOUL + LORE always; users + state ordered by `updated_at` desc,
-/// oldest dropped if over budget.
-pub async fn build_chat_turn_context(store: &MemoryStore, opts: BuildOpts) -> Result<String> {
+/// Result of [`build_chat_turn_context`]. `recent_chat` holds the per-turn rolling
+/// chat sections (volatile, belongs in the user message for cache hygiene);
+/// `memory` holds SOUL/LORE/users/state nonce-fenced blocks (less volatile,
+/// belongs in the system message). Either may be empty.
+pub struct ChatTurnContext {
+    pub recent_chat: String,
+    pub memory: String,
+}
+
+/// Build the chat-turn injected context split into a recent-chat section and a
+/// memory section. Callers place each in the message that maximizes prompt
+/// caching: memory in the system message, recent chat in the user message.
+pub async fn build_chat_turn_context(
+    store: &MemoryStore,
+    opts: BuildOpts,
+) -> Result<ChatTurnContext> {
     // Render recent-chat sections in invocation-first order.
     let mut recent_sections: Vec<String> = Vec::with_capacity(2);
     let primary_section = render_recent_section(
@@ -204,15 +216,11 @@ pub async fn build_chat_turn_context(store: &MemoryStore, opts: BuildOpts) -> Re
     }
 
     let memory_body = memory_blocks.join("\n");
-
-    if recent_sections.is_empty() {
-        return Ok(memory_body);
-    }
-
-    let mut out = recent_sections.join("\n\n");
-    out.push_str("\n\n");
-    out.push_str(&memory_body);
-    Ok(out)
+    let recent_chat = recent_sections.join("\n\n");
+    Ok(ChatTurnContext {
+        recent_chat,
+        memory: memory_body,
+    })
 }
 
 /// Render one `## Recent chat (#login)` section, newest-first up to `cap` bytes,
@@ -386,8 +394,9 @@ mod tests {
         .await
         .unwrap();
         // Newest user retained, oldest dropped.
-        assert!(ctx.contains("kind=user id=3"));
-        assert!(!ctx.contains("kind=user id=1"));
+        assert!(ctx.memory.contains("kind=user id=3"));
+        assert!(!ctx.memory.contains("kind=user id=1"));
+        assert!(ctx.recent_chat.is_empty());
     }
 
     #[tokio::test]
@@ -421,11 +430,18 @@ mod tests {
         .await
         .unwrap();
 
-        let pri_idx = body.find("Recent chat (#main)").expect("primary header");
-        let ai_idx = body.find("Recent chat (#ai_chan)").expect("ai header");
+        let pri_idx = body
+            .recent_chat
+            .find("Recent chat (#main)")
+            .expect("primary header");
+        let ai_idx = body
+            .recent_chat
+            .find("Recent chat (#ai_chan)")
+            .expect("ai header");
         assert!(ai_idx < pri_idx, "invocation channel must come first");
-        assert!(body.contains("alice: hello primary"));
-        assert!(body.contains("bob: hello ai"));
+        assert!(body.recent_chat.contains("alice: hello primary"));
+        assert!(body.recent_chat.contains("bob: hello ai"));
+        assert!(!body.memory.contains("Recent chat"));
     }
 
     #[tokio::test]
@@ -458,8 +474,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(body.contains("Recent chat (#main)"));
-        assert!(!body.contains("Recent chat (#ai_chan)"));
+        assert!(body.recent_chat.contains("Recent chat (#main)"));
+        assert!(!body.recent_chat.contains("Recent chat (#ai_chan)"));
     }
 
     #[tokio::test]
@@ -497,11 +513,9 @@ mod tests {
         .unwrap();
 
         let primary_section_bytes = body
+            .recent_chat
             .split("Recent chat (#main)")
             .nth(1)
-            .unwrap_or("")
-            .split("<<<FILE")
-            .next()
             .unwrap_or("")
             .len();
         assert!(

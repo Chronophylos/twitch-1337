@@ -642,7 +642,7 @@ where
             }
             let instructions_head = inject::substitute(&instructions_template, vars);
 
-            let inject_body = inject::build_chat_turn_context(
+            let inject_ctx = inject::build_chat_turn_context(
                 &mem.store,
                 inject::BuildOpts {
                     inject_byte_budget: mem.inject_byte_budget,
@@ -673,11 +673,21 @@ where
                 },
             )
             .await?;
-            let system_prompt = format!("{system_prompt_head}\n\n{inject_body}");
+            // Memory in system message (less volatile, cacheable across turns).
+            // Recent chat in user message (changes every turn, would bust cache).
+            let inject::ChatTurnContext {
+                recent_chat,
+                memory,
+            } = inject_ctx;
+            let system_prompt = format!("{system_prompt_head}\n\n{memory}");
 
             let instruction_for_prompt =
                 instruction_with_reply_context(&instruction, &ctx, grok_alias);
-            let user_message = format!("{instructions_head}\n\n{instruction_for_prompt}");
+            let user_message = if recent_chat.is_empty() {
+                format!("{instructions_head}\n\n{instruction_for_prompt}")
+            } else {
+                format!("{recent_chat}\n\n{instructions_head}\n\n{instruction_for_prompt}")
+            };
 
             let (say_tx, mut say_rx) = tokio::sync::mpsc::channel::<String>(16);
             let exec = ChatTurnExecutor::new(ChatTurnExecutorOpts {
