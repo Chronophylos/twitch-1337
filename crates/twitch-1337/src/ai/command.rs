@@ -920,6 +920,7 @@ where
 async fn render_legacy_recent_block(history: &ChatHistory, login: &str, cap: usize) -> String {
     crate::ai::memory::inject::render_recent_section(Some(history), login, cap)
         .await
+        .map(|s| s.body)
         .unwrap_or_default()
 }
 

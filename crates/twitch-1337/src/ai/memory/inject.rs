@@ -143,52 +143,35 @@ pub async fn build_chat_turn_context(
     store: &MemoryStore,
     opts: BuildOpts,
 ) -> Result<ChatTurnContext> {
-    // Render recent-chat sections in invocation-first order.
-    let mut recent_sections: Vec<String> = Vec::with_capacity(2);
-    let mut mentioned: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let primary_section = render_recent_section_with_mentions(
+    let primary_rendered = render_recent_section(
         opts.primary_history.as_ref(),
         &opts.primary_login,
         RECENT_CHAT_PRIMARY_BYTES,
-        &mut mentioned,
     )
     .await;
-    let ai_section = match (
+    let ai_rendered = match (
         opts.ai_channel_history.as_ref(),
         opts.ai_channel_login.as_ref(),
     ) {
         (Some(buf), Some(login)) => {
-            render_recent_section_with_mentions(
-                Some(buf),
-                login,
-                RECENT_CHAT_AI_CHANNEL_BYTES,
-                &mut mentioned,
-            )
-            .await
+            render_recent_section(Some(buf), login, RECENT_CHAT_AI_CHANNEL_BYTES).await
         }
         _ => None,
     };
 
-    match opts.invocation_channel {
-        InvocationChannel::AiChannel => {
-            if let Some(s) = ai_section {
-                recent_sections.push(s);
-            }
-            if let Some(s) = primary_section {
-                recent_sections.push(s);
-            }
+    let (first, second) = match opts.invocation_channel {
+        InvocationChannel::AiChannel => (ai_rendered, primary_rendered),
+        InvocationChannel::Primary => (primary_rendered, ai_rendered),
+    };
+    let mut mentioned: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut recent_sections: Vec<String> = Vec::with_capacity(2);
+    for section in [first, second].into_iter().flatten() {
+        for u in section.usernames {
+            mentioned.insert(u);
         }
-        InvocationChannel::Primary => {
-            if let Some(s) = primary_section {
-                recent_sections.push(s);
-            }
-            if let Some(s) = ai_section {
-                recent_sections.push(s);
-            }
-        }
+        recent_sections.push(section.body);
     }
 
-    // Existing memory blocks: SOUL + LORE + user/state ordered by updated_at desc.
     let soul = store.read_kind(&FileKind::Soul).await?;
     let lore = store.read_kind(&FileKind::Lore).await?;
     let mut users = store.list_users().await?;
@@ -284,26 +267,20 @@ fn render_mention_table(
     s
 }
 
+pub(crate) struct RenderedRecentSection {
+    pub body: String,
+    pub usernames: Vec<String>,
+}
+
 /// Render one `## Recent chat (#login)` section, newest-first up to `cap` bytes,
-/// then reverse to chronological order. Returns `None` for missing or empty buffers.
+/// then reverse to chronological order. Also returns the lowercased usernames
+/// of every line that survived the byte cap. Returns `None` for missing or
+/// empty buffers.
 pub(crate) async fn render_recent_section(
     buf: Option<&Arc<Mutex<ChatHistoryBuffer>>>,
     login: &str,
     cap: usize,
-) -> Option<String> {
-    let mut sink = std::collections::BTreeSet::new();
-    render_recent_section_with_mentions(buf, login, cap, &mut sink).await
-}
-
-/// Same as [`render_recent_section`] but also records the lowercased usernames
-/// of every line emitted, so callers can build a mention table without
-/// re-scanning the buffer.
-pub(crate) async fn render_recent_section_with_mentions(
-    buf: Option<&Arc<Mutex<ChatHistoryBuffer>>>,
-    login: &str,
-    cap: usize,
-    mentioned: &mut std::collections::BTreeSet<String>,
-) -> Option<String> {
+) -> Option<RenderedRecentSection> {
     let buf = buf?;
     let snapshot: Vec<ChatHistoryEntry> = buf.lock().await.snapshot();
     if snapshot.is_empty() {
@@ -311,25 +288,26 @@ pub(crate) async fn render_recent_section_with_mentions(
     }
 
     let mut chosen: Vec<String> = Vec::new();
+    let mut usernames: Vec<String> = Vec::new();
     let mut bytes = 0usize;
     for entry in snapshot.iter().rev() {
         let line = format_entry_line(entry);
-        let line_bytes = line.len() + 1; // +1 for newline
+        let line_bytes = line.len() + 1;
         if bytes + line_bytes > cap {
             break;
         }
         bytes += line_bytes;
         chosen.push(line);
-        mentioned.insert(entry.username.to_ascii_lowercase());
+        usernames.push(entry.username.to_ascii_lowercase());
     }
     if chosen.is_empty() {
         return None;
     }
     chosen.reverse();
 
-    let mut s = format!("## Recent chat (#{login})\n");
-    s.push_str(&chosen.join("\n"));
-    Some(s)
+    let mut body = format!("## Recent chat (#{login})\n");
+    body.push_str(&chosen.join("\n"));
+    Some(RenderedRecentSection { body, usernames })
 }
 
 fn format_entry_line(entry: &ChatHistoryEntry) -> String {
