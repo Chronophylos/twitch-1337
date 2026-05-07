@@ -40,6 +40,11 @@ impl FakeLlm {
         self.tool_responses.lock().unwrap().push_back(resp);
     }
 
+    /// Convenience: push a final-message tool response (terminates the agent loop).
+    pub fn push_tool_message(&self, text: impl Into<String>) {
+        self.push_tool(ToolChatCompletionResponse::Message(text.into()));
+    }
+
     pub fn chat_calls(&self) -> Vec<ChatCompletionRequest> {
         self.chat_calls.lock().unwrap().clone()
     }

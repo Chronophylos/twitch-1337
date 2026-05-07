@@ -70,8 +70,6 @@ impl TestBotBuilder {
                 api_key: Some(secrecy::SecretString::new("test".into())),
                 base_url: None,
                 model: "test-model".into(),
-                system_prompt: "test prompt".into(),
-                instruction_template: "{message}".into(),
                 timeout: 30,
                 reasoning_effort: None,
                 history_length: twitch_1337::DEFAULT_HISTORY_LENGTH,
@@ -280,6 +278,14 @@ impl TestBot {
                 return parse_privmsg_text(&raw);
             }
         }
+    }
+
+    /// `expect_say` with the leading `". "` stripped that `say_in_reply_to`
+    /// inserts to defeat command injection. Use when assertions don't care
+    /// about the prefix.
+    pub async fn expect_reply(&mut self, timeout: Duration) -> String {
+        let out = self.expect_say(timeout).await;
+        out.strip_prefix(". ").map(str::to_owned).unwrap_or(out)
     }
 
     /// Wait for an outgoing PRIVMSG and return `(channel, body)`. The channel

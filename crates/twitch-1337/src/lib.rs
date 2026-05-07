@@ -115,12 +115,9 @@ where
     // Aviation is consumed by the flight tracker; clone first so commands (!up/!fl) also get it.
     let aviation_for_commands = aviation.clone();
 
-    // Build the v2 memory bundle. Returns None when AI is disabled or memory is disabled.
-    let (ai_memory_v2, transcript) =
-        match crate::ai::command::build_ai_memory_v2(config.ai.as_ref(), &data_dir).await? {
-            Some((mem, tx)) => (Some(mem), Some(tx)),
-            None => (None, None),
-        };
+    let ai_memory_v2 =
+        crate::ai::command::build_ai_memory_v2(config.ai.as_ref(), &data_dir).await?;
+    let transcript = ai_memory_v2.as_ref().map(|m| m.transcript.clone());
 
     // Clone before moving into SpawnDeps so the dreamer ritual can also use them.
     let ai_memory_v2_for_ritual = ai_memory_v2.clone();

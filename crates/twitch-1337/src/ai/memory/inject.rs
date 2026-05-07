@@ -38,8 +38,8 @@ pub enum FenceLabel<'a> {
 
 /// Per-section byte caps for rolling chat injected into the v2 prompt.
 /// Independent of `inject_byte_budget`, which covers SOUL/LORE/users/state.
-pub const RECENT_CHAT_PRIMARY_BYTES: usize = 2048;
-pub const RECENT_CHAT_AI_CHANNEL_BYTES: usize = 1024;
+const RECENT_CHAT_PRIMARY_BYTES: usize = 2048;
+const RECENT_CHAT_AI_CHANNEL_BYTES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InvocationChannel {
@@ -267,16 +267,16 @@ fn render_mention_table(
     s
 }
 
-pub(crate) struct RenderedRecentSection {
-    pub body: String,
-    pub usernames: Vec<String>,
+struct RenderedRecentSection {
+    body: String,
+    usernames: Vec<String>,
 }
 
 /// Render one `## Recent chat (#login)` section, newest-first up to `cap` bytes,
 /// then reverse to chronological order. Also returns the lowercased usernames
 /// of every line that survived the byte cap. Returns `None` for missing or
 /// empty buffers.
-pub(crate) async fn render_recent_section(
+async fn render_recent_section(
     buf: Option<&Arc<Mutex<ChatHistoryBuffer>>>,
     login: &str,
     cap: usize,
