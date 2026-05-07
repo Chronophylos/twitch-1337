@@ -5,4 +5,4 @@ pub mod tools;
 
 pub use client::{SearchClient, SearchResult};
 pub use executor::WebToolExecutor;
-pub use tools::ai_tools;
+pub use tools::{ai_tools, is_web_tool};

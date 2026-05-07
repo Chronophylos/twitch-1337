@@ -39,14 +39,6 @@ pub enum AiBackend {
     Ollama,
 }
 
-fn default_system_prompt() -> String {
-    "You are a helpful Twitch chat bot assistant. Keep responses brief (2-3 sentences max) since they'll appear in chat. Be friendly and casual. Respond in the same language the user writes in (German or English).".to_string()
-}
-
-fn default_instruction_template() -> String {
-    "{message}".to_string()
-}
-
 fn default_ai_timeout() -> u64 {
     30
 }
@@ -162,9 +154,6 @@ pub struct AviationstackConfig {
 /// `config.toml.example`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MemoryConfigSection {
-    /// Enable persistent AI memory (default: true)
-    #[serde(default = "default_true")]
-    pub enabled: bool,
     #[serde(default = "default_soul_bytes")]
     pub soul_bytes: usize,
     #[serde(default = "default_lore_bytes")]
@@ -182,7 +171,6 @@ pub struct MemoryConfigSection {
 impl Default for MemoryConfigSection {
     fn default() -> Self {
         Self {
-            enabled: true,
             soul_bytes: default_soul_bytes(),
             lore_bytes: default_lore_bytes(),
             user_bytes: default_user_bytes(),
@@ -302,12 +290,6 @@ pub struct AiConfig {
     pub base_url: Option<String>,
     /// Model name to use
     pub model: String,
-    /// System prompt sent to the model
-    #[serde(default = "default_system_prompt")]
-    pub system_prompt: String,
-    /// Template for the user message. Use `{message}` as the instruction placeholder.
-    #[serde(default = "default_instruction_template")]
-    pub instruction_template: String,
     /// Timeout for AI requests in seconds (default: 30)
     #[serde(default = "default_ai_timeout")]
     pub timeout: u64,
@@ -752,7 +734,6 @@ mod tests {
     #[test]
     fn ai_memory_v2_defaults() {
         let s = MemoryConfigSection::default();
-        assert!(s.enabled);
         assert_eq!(s.soul_bytes, 4096);
         assert_eq!(s.lore_bytes, 12288);
         assert_eq!(s.user_bytes, 4096);
@@ -789,8 +770,6 @@ mod tests {
             api_key: None,
             base_url: None,
             model: "x".into(),
-            system_prompt: default_system_prompt(),
-            instruction_template: default_instruction_template(),
             timeout: default_ai_timeout(),
             reasoning_effort: None,
             history_length: default_history_length(),
@@ -827,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    fn ai_defaults_keep_tool_history_enabled_without_inline_template() {
+    fn ai_defaults_keep_tool_history_enabled() {
         let ai: AiConfig = toml::from_str(
             r#"
             backend = "ollama"
@@ -840,7 +819,6 @@ mod tests {
             ai.history_length,
             crate::ai::chat_history::DEFAULT_HISTORY_LENGTH
         );
-        assert_eq!(ai.instruction_template, "{message}");
     }
 
     #[test]

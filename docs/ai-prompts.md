@@ -34,11 +34,11 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 
 **Memory model**. Files round-trip as opaque bodies after the YAML frontmatter — the store doesn't enforce any internal structure. The system prompt is the only place that teaches the model what to put in `SOUL.md`, `LORE.md`, `user/<id>.md`, and `state/<slug>.md`. Suggest informal section conventions in prose; don't expect them to be policed.
 
-**Multi-line replies**. `say(text)` is non-terminal — the model can call it multiple times in one turn to produce multiple chat lines. The loop ends when the model returns no tool calls (or hits the round cap). Encourage the model in the prompt to do memory updates first, then `say`.
+**Replies**. The model's final assistant text (returned when it makes no more tool calls) is sent to chat verbatim. Newlines collapse into a single chat line. There is no `say` tool — encourage the model to do memory updates first, then end the turn with the reply text.
 
-**Length nudge for `say`**. Each `say` call over 500 characters is truncated app-side with a `…` appended. Asking for "≤3 sentences per call" in the prompt usually keeps lines tidy.
+**Length nudge**. The final reply is truncated app-side at `MAX_RESPONSE_LENGTH` chars. Asking for "≤3 sentences" in the prompt keeps lines tidy.
 
-**Refusal**. There's no `refuse` tool. The bot refuses by simply not calling `say` — silence ends the turn, nothing is sent to chat. Encourage the model to stay silent on harassment, off-topic, or low-signal prompts rather than producing a defensive reply.
+**Refusal**. The bot refuses by returning empty final text — nothing is sent to chat. Encourage the model to stay silent on harassment, off-topic, or low-signal prompts rather than producing a defensive reply.
 
 **Slugs**. State file slugs match `^[a-z0-9][a-z0-9-]{0,63}$`. The prompt should mention this so the model produces valid slugs on the first try.
 
