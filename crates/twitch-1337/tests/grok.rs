@@ -3,7 +3,7 @@ mod common;
 use std::time::Duration;
 
 use common::TestBotBuilder;
-use llm::{Role, ToolChatCompletionResponse};
+use llm::Role;
 use serial_test::serial;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -20,16 +20,13 @@ async fn ai_reply_includes_parent_message() {
         })
         .spawn()
         .await;
-    bot.llm.push_tool(ToolChatCompletionResponse::Message(
-        "Nein, das ist Quatsch.".into(),
-    ));
+    bot.llm.push_tool_message("Nein, das ist Quatsch.");
 
     let mut bot = bot;
     bot.send_reply("alice", "!ai stimmt das", "bob", "Die Erde ist flach")
         .await;
 
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    let body = out.strip_prefix(". ").unwrap_or(&out);
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(body, "Nein, das ist Quatsch.");
 
     let calls = bot.llm.tool_calls();
@@ -59,14 +56,12 @@ async fn grok_without_reply_behaves_like_ai_alias() {
         })
         .spawn()
         .await;
-    bot.llm
-        .push_tool(ToolChatCompletionResponse::Message("alias ok".into()));
+    bot.llm.push_tool_message("alias ok");
 
     let mut bot = bot;
     bot.send("alice", "@grok sag hallo").await;
 
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    let body = out.strip_prefix(". ").unwrap_or(&out);
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(body, "alias ok");
 
     let calls = bot.llm.tool_calls();
@@ -93,9 +88,7 @@ async fn grok_reply_with_leading_mention_triggers_alias() {
         })
         .spawn()
         .await;
-    bot.llm.push_tool(ToolChatCompletionResponse::Message(
-        "Nein, Chat, das ist Quatsch.".into(),
-    ));
+    bot.llm.push_tool_message("Nein, Chat, das ist Quatsch.");
 
     let mut bot = bot;
     bot.send_reply(
@@ -106,8 +99,7 @@ async fn grok_reply_with_leading_mention_triggers_alias() {
     )
     .await;
 
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    let body = out.strip_prefix(". ").unwrap_or(&out);
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(body, "Nein, Chat, das ist Quatsch.");
 
     let calls = bot.llm.tool_calls();
@@ -140,15 +132,13 @@ async fn grok_empty_reply_with_leading_mention_uses_default_instruction() {
         })
         .spawn()
         .await;
-    bot.llm
-        .push_tool(ToolChatCompletionResponse::Message("Kurz: nein.".into()));
+    bot.llm.push_tool_message("Kurz: nein.");
 
     let mut bot = bot;
     bot.send_reply("alice", "@bob @grok", "bob", "Berlin liegt auf dem Mond")
         .await;
 
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    let body = out.strip_prefix(". ").unwrap_or(&out);
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(body, "Kurz: nein.");
 
     let calls = bot.llm.tool_calls();
@@ -180,15 +170,12 @@ async fn grok_strips_visible_reasoning_prefix_from_response() {
         })
         .spawn()
         .await;
-    bot.llm.push_tool(ToolChatCompletionResponse::Message(
-        "thought test_channel|Hallo Chat".into(),
-    ));
+    bot.llm.push_tool_message("thought test_channel|Hallo Chat");
 
     let mut bot = bot;
     bot.send("alice", "@grok sag hallo").await;
 
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    let body = out.strip_prefix(". ").unwrap_or(&out);
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(body, "Hallo Chat");
 
     bot.shutdown().await;
@@ -224,9 +211,7 @@ async fn grok_uses_web_tools_when_enabled() {
         })
         .spawn()
         .await;
-    bot.llm.push_tool(ToolChatCompletionResponse::Message(
-        "Web sagt: nope.".into(),
-    ));
+    bot.llm.push_tool_message("Web sagt: nope.");
 
     let mut bot = bot;
     bot.send_reply(
@@ -237,8 +222,7 @@ async fn grok_uses_web_tools_when_enabled() {
     )
     .await;
 
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    let body = out.strip_prefix(". ").unwrap_or(&out);
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(body, "Web sagt: nope.");
 
     let calls = bot.llm.tool_calls();

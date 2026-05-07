@@ -280,6 +280,14 @@ impl TestBot {
         }
     }
 
+    /// `expect_say` with the leading `". "` stripped that `say_in_reply_to`
+    /// inserts to defeat command injection. Use when assertions don't care
+    /// about the prefix.
+    pub async fn expect_reply(&mut self, timeout: Duration) -> String {
+        let out = self.expect_say(timeout).await;
+        out.strip_prefix(". ").map(str::to_owned).unwrap_or(out)
+    }
+
     /// Wait for an outgoing PRIVMSG and return `(channel, body)`. The channel
     /// is the IRC `#chan` argument with the leading `#` stripped.
     pub async fn expect_say_full(&mut self, timeout: Duration) -> (String, String) {

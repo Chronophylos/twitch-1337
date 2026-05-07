@@ -51,13 +51,11 @@ impl ChatContext {
     }
 }
 
-/// Memory v2 bundle: store handle, transcript writer, capability caps,
-/// and per-turn knobs.
+/// Memory v2 bundle: store handle, transcript writer, and per-turn knobs.
 #[derive(Clone)]
 pub struct AiMemoryV2 {
     pub store: MemoryStore,
     pub transcript: TranscriptWriter,
-    pub caps: Caps,
     pub inject_byte_budget: usize,
     pub max_turn_rounds: usize,
     pub max_writes_per_turn: usize,
@@ -65,7 +63,7 @@ pub struct AiMemoryV2 {
 }
 
 /// Classify the speaker role from Twitch IRC badge list.
-pub fn classify_role_v2(badges: &[twitch_irc::message::Badge]) -> Role {
+pub fn classify_role(badges: &[twitch_irc::message::Badge]) -> Role {
     let has = |key: &str| badges.iter().any(|b| b.name == key);
     if has("broadcaster") {
         Role::Broadcaster
@@ -81,12 +79,6 @@ pub fn classify_role_v2(badges: &[twitch_irc::message::Badge]) -> Role {
 pub struct AiWeb {
     pub executor: Arc<web_search::WebToolExecutor>,
     pub max_rounds: usize,
-}
-
-pub struct AiFeatures {
-    pub memory_v2: AiMemoryV2,
-    pub web: Option<AiWeb>,
-    pub emotes: Option<Arc<SevenTvEmoteProvider>>,
 }
 
 pub struct AiCommand {
@@ -162,12 +154,13 @@ struct V2Executor<'a> {
 #[async_trait]
 impl ToolExecutor for V2Executor<'_> {
     async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
-        match call.name.as_str() {
-            "web_search" | "fetch_url" => match self.web {
+        if web_search::is_web_tool(&call.name) {
+            match self.web {
                 Some(w) => w.execute_tool_call(call).await,
                 None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
-            },
-            _ => self.chat.execute(call).await,
+            }
+        } else {
+            self.chat.execute(call).await
         }
     }
 }
@@ -314,28 +307,24 @@ where
         self.cooldown.record(user).await;
 
         let mem = &self.memory;
-        let nonce = inject::fresh_nonce();
-        let role = classify_role_v2(&ctx.privmsg.badges);
-        let role_str = match role {
-            Role::Regular => "regular",
-            Role::Moderator => "moderator",
-            Role::Broadcaster => "broadcaster",
-            Role::Dreamer => "dreamer",
-        };
+        let cc = self.chat_ctx.as_ref();
+        let role = classify_role(&ctx.privmsg.badges);
         let now_berlin = Utc::now()
             .with_timezone(&chrono_tz::Europe::Berlin)
-            .format("%Y-%m-%d");
+            .format("%Y-%m-%d")
+            .to_string();
 
-        // Load prompts from disk on every use (owner edits live).
-        let system_template =
-            tokio::fs::read_to_string(mem.store.prompts_dir().join("system.md")).await?;
-        let instructions_template =
-            tokio::fs::read_to_string(mem.store.prompts_dir().join("ai_instructions.md")).await?;
+        // Re-read each turn so owner edits land without restart.
+        let prompts_dir = mem.store.prompts_dir();
+        let (system_template, instructions_template) = tokio::try_join!(
+            tokio::fs::read_to_string(prompts_dir.join("system.md")),
+            tokio::fs::read_to_string(prompts_dir.join("ai_instructions.md")),
+        )?;
         let vars = inject::SubstitutionVars {
             speaker_username: &ctx.privmsg.sender.login,
-            speaker_role: role_str,
+            speaker_role: role.as_str(),
             channel: &ctx.privmsg.channel_login,
-            date: &now_berlin.to_string(),
+            date: &now_berlin,
         };
         let mut system_prompt_head = inject::substitute(&system_template, vars);
         if let Some(ref emotes) = self.emotes
@@ -353,43 +342,32 @@ where
         }
         let instructions_head = inject::substitute(&instructions_template, vars);
 
-        let inject_ctx = inject::build_chat_turn_context(
-            &mem.store,
-            inject::BuildOpts {
-                inject_byte_budget: mem.inject_byte_budget,
-                nonce: nonce.clone(),
-                primary_history: self.chat_ctx.as_ref().map(|c| c.primary_history.clone()),
-                primary_login: self
-                    .chat_ctx
-                    .as_ref()
-                    .map(|c| c.primary_login.clone())
-                    .unwrap_or_else(|| ctx.privmsg.channel_login.clone()),
-                ai_channel_history: self
-                    .chat_ctx
-                    .as_ref()
-                    .and_then(|c| c.ai_channel_history.clone()),
-                ai_channel_login: self
-                    .chat_ctx
-                    .as_ref()
-                    .and_then(|c| c.ai_channel_login.clone()),
-                invocation_channel: if self
-                    .chat_ctx
-                    .as_ref()
-                    .is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login))
-                {
-                    inject::InvocationChannel::AiChannel
-                } else {
-                    inject::InvocationChannel::Primary
-                },
-            },
-        )
-        .await?;
-        // Memory in system message (less volatile, cacheable across turns).
-        // Recent chat in user message (changes every turn, would bust cache).
+        let invocation_channel = if cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login))
+        {
+            inject::InvocationChannel::AiChannel
+        } else {
+            inject::InvocationChannel::Primary
+        };
+        // Memory goes in the system message (cacheable across turns); recent
+        // chat goes in the user message (changes every turn).
         let inject::ChatTurnContext {
             recent_chat,
             memory,
-        } = inject_ctx;
+        } = inject::build_chat_turn_context(
+            &mem.store,
+            inject::BuildOpts {
+                inject_byte_budget: mem.inject_byte_budget,
+                nonce: inject::fresh_nonce(),
+                primary_history: cc.map(|c| c.primary_history.clone()),
+                primary_login: cc
+                    .map(|c| c.primary_login.clone())
+                    .unwrap_or_else(|| ctx.privmsg.channel_login.clone()),
+                ai_channel_history: cc.and_then(|c| c.ai_channel_history.clone()),
+                ai_channel_login: cc.and_then(|c| c.ai_channel_login.clone()),
+                invocation_channel,
+            },
+        )
+        .await?;
         let system_prompt = format!("{system_prompt_head}\n\n{memory}");
 
         let instruction_for_prompt = instruction_with_reply_context(&instruction, &ctx, grok_alias);
@@ -463,10 +441,8 @@ where
                         .await
                         .push_bot_at(self.bot_username.clone(), line.clone(), ts);
                 }
-                let is_primary_source = !self
-                    .chat_ctx
-                    .as_ref()
-                    .is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));
+                let is_primary_source =
+                    !cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));
                 if is_primary_source
                     && let Err(e) = mem
                         .transcript
@@ -482,13 +458,11 @@ where
     }
 }
 
-/// Construct the AI memory v2 bundle from config.
-///
-/// Returns `None` only when AI is disabled (no `[ai]` section).
+/// Construct the AI memory v2 bundle from config. `None` when `[ai]` is absent.
 pub async fn build_ai_memory_v2(
     ai: Option<&crate::config::AiConfig>,
     data_dir: &std::path::Path,
-) -> eyre::Result<Option<(AiMemoryV2, TranscriptWriter)>> {
+) -> Result<Option<AiMemoryV2>> {
     let Some(ai) = ai else { return Ok(None) };
 
     let caps = Caps {
@@ -500,14 +474,12 @@ pub async fn build_ai_memory_v2(
     };
     let store = MemoryStore::open(data_dir, caps).await?;
     let transcript = TranscriptWriter::open(store.memories_dir()).await?;
-    let mem = AiMemoryV2 {
+    Ok(Some(AiMemoryV2 {
         store,
-        transcript: transcript.clone(),
-        caps,
+        transcript,
         inject_byte_budget: ai.memory.inject_byte_budget,
         max_turn_rounds: ai.max_turn_rounds,
         max_writes_per_turn: ai.max_writes_per_turn,
         turn_timeout: Duration::from_secs(ai.timeout),
-    };
-    Ok(Some((mem, transcript)))
+    }))
 }

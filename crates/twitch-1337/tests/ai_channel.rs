@@ -9,7 +9,6 @@ use std::time::Duration;
 use chrono::TimeZone;
 use chrono_tz::Europe::Berlin;
 use common::TestBotBuilder;
-use llm::ToolChatCompletionResponse;
 
 const AI_CHAN: &str = "ai_chan";
 
@@ -21,8 +20,7 @@ async fn ai_command_works_in_ai_channel() {
         .spawn()
         .await;
 
-    bot.llm
-        .push_tool(ToolChatCompletionResponse::Message("stubbed reply".into()));
+    bot.llm.push_tool_message("stubbed reply");
     bot.send_to(AI_CHAN, "viewer", "!ai hello").await;
 
     let (channel, body) = bot.expect_say_full(Duration::from_secs(2)).await;
@@ -136,8 +134,7 @@ async fn ai_command_still_works_in_primary_channel() {
         .spawn()
         .await;
 
-    bot.llm
-        .push_tool(ToolChatCompletionResponse::Message("primary reply".into()));
+    bot.llm.push_tool_message("primary reply");
     bot.send("viewer", "!ai hello").await;
 
     let (channel, body) = bot.expect_say_full(Duration::from_secs(2)).await;

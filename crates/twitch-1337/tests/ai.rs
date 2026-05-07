@@ -12,13 +12,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 #[serial]
 async fn ai_command_returns_fake_response() {
     let bot = TestBotBuilder::new().with_ai().spawn().await;
-    bot.llm
-        .push_tool(ToolChatCompletionResponse::Message("pong".into()));
+    bot.llm.push_tool_message("pong");
 
     let mut bot = bot;
     bot.send("alice", "!ai ping").await;
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    let body = out.strip_prefix(". ").unwrap_or(&out);
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(body, "pong");
 
     let calls = bot.llm.tool_calls();
@@ -114,11 +112,9 @@ meaning = "steht nicht im aktuellen 7TV-Katalog"
         .mount(&bot.seventv_mock)
         .await;
 
-    bot.llm
-        .push_tool(ToolChatCompletionResponse::Message("passt KEKW".into()));
+    bot.llm.push_tool_message("passt KEKW");
     bot.send("alice", "!ai sag etwas lustiges").await;
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    let body = out.strip_prefix(". ").unwrap_or(&out);
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(body, "passt KEKW");
 
     let calls = bot.llm.tool_calls();
@@ -173,12 +169,9 @@ meaning = "lachen"
         .mount(&bot.seventv_mock)
         .await;
 
-    bot.llm.push_tool(ToolChatCompletionResponse::Message(
-        "weiter ohne emote".into(),
-    ));
+    bot.llm.push_tool_message("weiter ohne emote");
     bot.send("alice", "!ai ping").await;
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    let body = out.strip_prefix(". ").unwrap_or(&out);
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(body, "weiter ohne emote");
 
     let calls = bot.llm.tool_calls();
@@ -238,13 +231,11 @@ async fn ai_command_web_tool_flow_search_success() {
         }],
         reasoning_content: None,
     });
-    bot.llm.push_tool(ToolChatCompletionResponse::Message(
-        "Rust 1.90 just shipped with new language and tooling improvements.".into(),
-    ));
+    bot.llm
+        .push_tool_message("Rust 1.90 just shipped with new language and tooling improvements.");
 
     bot.send("alice", "!ai any rust news?").await;
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    let body = out.strip_prefix(". ").unwrap_or(&out);
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
     assert!(body.contains("Rust 1.90"), "reply: {body}");
 
     let calls = bot.llm.tool_calls();

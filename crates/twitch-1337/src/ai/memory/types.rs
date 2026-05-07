@@ -14,6 +14,17 @@ pub enum Role {
     Dreamer = 3,
 }
 
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Regular => "regular",
+            Role::Moderator => "moderator",
+            Role::Broadcaster => "broadcaster",
+            Role::Dreamer => "dreamer",
+        }
+    }
+}
+
 /// Identifies one file in the memory tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileKind {
