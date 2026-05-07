@@ -70,8 +70,6 @@ impl TestBotBuilder {
                 api_key: Some(secrecy::SecretString::new("test".into())),
                 base_url: None,
                 model: "test-model".into(),
-                system_prompt: "test prompt".into(),
-                instruction_template: "{message}".into(),
                 timeout: 30,
                 reasoning_effort: None,
                 history_length: twitch_1337::DEFAULT_HISTORY_LENGTH,

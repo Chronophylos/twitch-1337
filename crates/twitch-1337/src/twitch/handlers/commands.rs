@@ -184,7 +184,7 @@ where
         )));
     }
 
-    if let Some((llm, cfg)) = llm_client {
+    if let (Some((llm, cfg)), Some(ai_memory_v2)) = (llm_client, ai_memory_v2) {
         let web = if cfg.web.enabled {
             match ai::web_search::SearchClient::new(
                 &cfg.web.base_url,
@@ -221,15 +221,10 @@ where
             ai::command::AiCommandDeps {
                 llm_client: llm.clone(),
                 model: cfg.model.clone(),
-                prompts: ai::command::AiPrompts {
-                    system: cfg.system_prompt,
-                    instruction_template: cfg.instruction_template,
-                },
-                timeout: Duration::from_secs(cfg.timeout),
                 reasoning_effort: cfg.reasoning_effort.clone(),
                 cooldown: Duration::from_secs(cooldowns.ai),
                 chat_ctx: chat_ctx.clone(),
-                memory_v2: ai_memory_v2,
+                memory: ai_memory_v2,
                 web: web.clone(),
                 emotes: emote_provider,
                 bot_username: bot_username.clone(),
