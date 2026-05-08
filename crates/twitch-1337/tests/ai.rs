@@ -325,8 +325,7 @@ async fn ai_command_read_url_round_trip() {
         reasoning_content: None,
     });
     // Round 2: main model returns final assistant text.
-    bot.llm
-        .push_tool_message("Image seen: A small PNG.");
+    bot.llm.push_tool_message("Image seen: A small PNG.");
 
     bot.send("alice", "!ai please look at the picture").await;
     let body = bot.expect_reply(Duration::from_secs(5)).await;

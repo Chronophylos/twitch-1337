@@ -204,13 +204,10 @@ where
                 .user_agent(crate::APP_USER_AGENT)
                 .build()
                 .expect("build media HTTP client");
-            let provider_base_url = cfg
-                .base_url
-                .clone()
-                .unwrap_or_else(|| match cfg.backend {
-                    crate::config::AiBackend::OpenAi => "https://api.openai.com/v1".to_string(),
-                    crate::config::AiBackend::Ollama => "http://localhost:11434/v1".to_string(),
-                });
+            let provider_base_url = cfg.base_url.clone().unwrap_or_else(|| match cfg.backend {
+                crate::config::AiBackend::OpenAi => "https://api.openai.com/v1".to_string(),
+                crate::config::AiBackend::Ollama => "http://localhost:11434/v1".to_string(),
+            });
             let media = Arc::new(ai::content::MediaClient::new(
                 media_http,
                 provider_base_url,

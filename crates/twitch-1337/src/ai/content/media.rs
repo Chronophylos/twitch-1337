@@ -193,11 +193,13 @@ mod tests {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/v1/chat/completions"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "choices": [{
-                    "message": { "role": "assistant", "content": "It is a cat." }
-                }]
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{
+                        "message": { "role": "assistant", "content": "It is a cat." }
+                    }]
+                })),
+            )
             .mount(&server)
             .await;
 
@@ -237,14 +239,12 @@ mod tests {
             Duration::from_secs(2),
         );
         let err = c
-            .analyze(
-                Bucket::Text,
-                "text/plain",
-                &Payload::Text("x".into()),
-                None,
-            )
+            .analyze(Bucket::Text, "text/plain", &Payload::Text("x".into()), None)
             .await
             .expect_err("err");
-        assert!(err.to_string().to_lowercase().contains("error status"), "{err}");
+        assert!(
+            err.to_string().to_lowercase().contains("error status"),
+            "{err}"
+        );
     }
 }
