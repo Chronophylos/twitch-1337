@@ -77,6 +77,11 @@ The `llm` crate stays text-only. `MediaClient` emits raw OpenAI-compatible JSON 
 - `crates/twitch-1337/src/config.rs` — new `AiMediaConfig` (see below).
 - `data/config.toml.example` — document `[ai.media]` and recommended models.
 
+New dependencies (`crates/twitch-1337/Cargo.toml`):
+
+- `infer` — magic-byte content-type sniffing (no_std-friendly, MIT).
+- `bytesize` with `features = ["serde"]` — parses human-readable size strings ("10 MB", "1 GiB") into a typed `ByteSize` for the per-type caps.
+
 ## Configuration
 
 New section `[ai.media]`. All fields except `model` are optional and fall back to `[ai]` defaults where it makes sense.
@@ -93,12 +98,13 @@ model = "google/gemini-2.5-flash"
 # Sub-agent request timeout (seconds). Default: 60.
 timeout = 60
 
-# Per-type byte caps. Defaults shown.
-max_image_bytes = 10485760    # 10 MB
-max_pdf_bytes   = 26214400    # 25 MB
-max_audio_bytes = 26214400    # 25 MB
-max_video_bytes = 52428800    # 50 MB
-max_text_bytes  =  1048576    #  1 MB
+# Per-type size caps. Parsed via the `bytesize` crate (accepts "10 MB",
+# "25 MiB", "1 GB", etc.). Defaults shown.
+max_image_size = "10 MB"
+max_pdf_size   = "25 MB"
+max_audio_size = "25 MB"
+max_video_size = "50 MB"
+max_text_size  = "1 MB"
 ```
 
 If `[ai.media]` is absent, `read_url` is registered but returns `{"error": "media_disabled"}` for every call. (Cheaper than removing the tool conditionally; keeps the prompt-side surface stable across deployments.)
