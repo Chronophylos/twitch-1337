@@ -23,8 +23,6 @@ pub(super) struct FetchUrlArgs {
     pub url: String,
 }
 
-const FETCH_RESULT_MAX_CHARS: usize = 4_000;
-
 pub struct ContentToolExecutor {
     client: SearchClient,
     max_results: usize,
@@ -155,36 +153,13 @@ impl ContentToolExecutor {
             .to_string();
         }
 
-        match self.client.fetch_url(url).await {
-            Ok(content) => {
-                let shortened = truncate_chars(&content, FETCH_RESULT_MAX_CHARS);
-                self.fetch_cache.lock().await.insert(key, shortened.clone());
-                json!({
-                    "cached": false,
-                    "url": url,
-                    "content": shortened,
-                })
-                .to_string()
-            }
-            Err(err) => {
-                let msg = err.to_string().to_ascii_lowercase();
-                let error_code = if msg.contains("blocked") {
-                    warn!(error = ?err, url, "fetch_url blocked");
-                    "fetch_blocked"
-                } else if msg.contains("timed out") {
-                    warn!(error = ?err, url, "fetch_url timed out");
-                    "fetch_timeout"
-                } else {
-                    error!(error = ?err, url, "fetch_url failed");
-                    "fetch_failed"
-                };
-                json!({
-                    "error": error_code,
-                    "details": format!("{err:#}"),
-                })
-                .to_string()
-            }
-        }
+        // TODO(Task 9): replace with fetch_for_read once read_url tool is wired.
+        let _ = url;
+        json!({
+            "error": "not_implemented",
+            "details": "fetch_url is being replaced by read_url in Task 9",
+        })
+        .to_string()
     }
 }
 
@@ -194,19 +169,6 @@ fn normalize_query(query: &str) -> String {
 
 fn normalize_url(url: &str) -> String {
     url.trim().to_ascii_lowercase()
-}
-
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    let len = value.chars().count();
-    if len <= max_chars {
-        return value.to_string();
-    }
-    let cutoff = value
-        .char_indices()
-        .nth(max_chars)
-        .map(|(idx, _)| idx)
-        .unwrap_or(value.len());
-    format!("{}...", &value[..cutoff])
 }
 
 #[cfg(test)]
