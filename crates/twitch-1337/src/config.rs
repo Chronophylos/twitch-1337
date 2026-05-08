@@ -283,7 +283,7 @@ impl Default for AiEmotesConfigSection {
     }
 }
 
-/// Tool-calling web access for `!ai` (`web_search` and `fetch_url`).
+/// Tool-calling web access for `!ai` (`web_search` and `read_url`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct AiWebConfigSection {
     #[serde(default)]
@@ -409,7 +409,7 @@ pub struct AiConfig {
     /// Multimodal sub-agent for `read_url`.
     #[serde(default)]
     pub media: AiMediaConfig,
-    /// Optional web tool surface for `!ai` (`web_search`, `fetch_url`).
+    /// Optional web tool surface for `!ai` (`web_search`, `read_url`).
     #[serde(default)]
     pub web: AiWebConfigSection,
 }

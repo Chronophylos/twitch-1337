@@ -242,7 +242,7 @@ async fn ai_command_web_tool_flow_search_success() {
     assert_eq!(calls.len(), 2, "expected tool loop with two rounds");
     let first_tools: Vec<String> = calls[0].tools.iter().map(|t| t.name.clone()).collect();
     assert!(first_tools.iter().any(|t| t == "web_search"));
-    assert!(first_tools.iter().any(|t| t == "fetch_url"));
+    assert!(first_tools.iter().any(|t| t == "read_url"));
     let first_round = calls[1]
         .prior_rounds
         .first()
