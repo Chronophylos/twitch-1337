@@ -331,6 +331,8 @@ mod tests {
                     reasoning_content: None,
                 },
             ],
+            user: None,
+            session_id: None,
         };
 
         let msgs = build_ollama_messages(&request);

@@ -176,6 +176,8 @@ mod tests {
             tools: vec![],
             reasoning_effort: None,
             prior_rounds: vec![],
+            user: None,
+            session_id: None,
         }
     }
 
