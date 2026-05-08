@@ -31,11 +31,17 @@ pub fn detect(content_type_header: &str, leading_bytes: &[u8]) -> Option<Bucket>
 
 fn bucket_from_media_type(mime: &str) -> Option<Bucket> {
     match mime {
-        "image/png" | "image/jpeg" | "image/jpg" | "image/webp" | "image/gif" => Some(Bucket::Image),
+        "image/png" | "image/jpeg" | "image/jpg" | "image/webp" | "image/gif" => {
+            Some(Bucket::Image)
+        }
         "application/pdf" => Some(Bucket::Pdf),
         m if m.starts_with("audio/") => Some(Bucket::Audio),
         m if m.starts_with("video/") => Some(Bucket::Video),
-        "text/html" | "application/xhtml+xml" | "application/xml" | "text/xml" | "text/plain"
+        "text/html"
+        | "application/xhtml+xml"
+        | "application/xml"
+        | "text/xml"
+        | "text/plain"
         | "application/json" => Some(Bucket::Text),
         _ => None,
     }
@@ -47,16 +53,16 @@ mod tests {
 
     #[test]
     fn header_image_jpeg_returns_image() {
-        assert_eq!(detect("image/jpeg; charset=binary", &[]), Some(Bucket::Image));
+        assert_eq!(
+            detect("image/jpeg; charset=binary", &[]),
+            Some(Bucket::Image)
+        );
     }
 
     #[test]
     fn header_lies_magic_corrects_to_pdf() {
         let bytes = b"%PDF-1.7\n%...";
-        assert_eq!(
-            detect("application/octet-stream", bytes),
-            Some(Bucket::Pdf)
-        );
+        assert_eq!(detect("application/octet-stream", bytes), Some(Bucket::Pdf));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bytesize::ByteSize;
@@ -10,6 +11,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::APP_USER_AGENT;
 use crate::ai::content::detect::{Bucket, detect};
+
+/// Global SSRF bypass flag. Zero overhead in production (never set to true
+/// outside of tests). Integration tests that need to reach local wiremock
+/// servers call `ssrf_bypass_for_tests(true)`.
+static SSRF_BYPASS: AtomicBool = AtomicBool::new(false);
+
+/// Enable or disable the SSRF bypass.
+/// Only intended for use in integration tests that point the bot at loopback
+/// addresses (e.g. wiremock servers). Always `false` in production.
+///
+/// Protected behind `#[doc(hidden)]` to keep it out of the public API surface.
+#[doc(hidden)]
+pub fn ssrf_bypass_for_tests(enabled: bool) {
+    SSRF_BYPASS.store(enabled, Ordering::Relaxed);
+}
 
 const SEARX_RESPONSE_LIMIT: usize = 10;
 
@@ -156,9 +172,9 @@ impl SearchClient {
         }
 
         #[cfg(not(test))]
-        let ssrf_enabled = true;
+        let ssrf_enabled = !SSRF_BYPASS.load(Ordering::Relaxed);
         #[cfg(test)]
-        let ssrf_enabled = !self.skip_ssrf;
+        let ssrf_enabled = !self.skip_ssrf && !SSRF_BYPASS.load(Ordering::Relaxed);
 
         if ssrf_enabled && is_blocked_host_literal(&url) {
             bail!("Blocked target host")
