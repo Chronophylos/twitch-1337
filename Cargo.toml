@@ -9,11 +9,13 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 async-trait = "0.1.89"
+bytesize = { version = "2", features = ["serde"] }
 chrono = { version = "0.4.44", features = ["now", "serde"], default-features = false }
 chrono-tz = { version = "0.10.4", features = ["filter-by-regex"] }
 color-eyre = "0.6"
 csv = "1.4.0"
 eyre = "0.6.12"
+infer = { version = "0.19", default-features = false }
 notify-debouncer-mini = "0.7"
 rand = "0.10.1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }

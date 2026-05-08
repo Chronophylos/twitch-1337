@@ -188,6 +188,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
+name = "bytesize"
+version = "2.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bd91ee7b2422bcb158d90ef4d14f75ef67f340943fc4149891dcce8f8b972a3"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.61"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1039,6 +1048,12 @@ dependencies = [
  "serde",
  "serde_core",
 ]
+
+[[package]]
+name = "infer"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a588916bfdfd92e71cacef98a63d9b1f0d74d6599980d11894290e7ddefffcf7"
 
 [[package]]
 name = "inotify"
@@ -2674,6 +2689,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "bytesize",
  "chrono",
  "chrono-tz",
  "color-eyre",
@@ -2681,6 +2697,7 @@ dependencies = [
  "either",
  "eyre",
  "futures-util",
+ "infer",
  "llm",
  "notify-debouncer-mini",
  "proptest",
