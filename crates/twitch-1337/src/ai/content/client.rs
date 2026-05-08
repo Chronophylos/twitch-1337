@@ -18,6 +18,12 @@ use crate::util::truncate_response;
 
 static SSRF_BYPASS: AtomicBool = AtomicBool::new(false);
 
+const BLOCKED_TARGET: &str = "blocked target host";
+
+fn ssrf_active() -> bool {
+    !SSRF_BYPASS.load(Ordering::Relaxed)
+}
+
 struct SsrfSafeResolver;
 
 impl Resolve for SsrfSafeResolver {
@@ -28,16 +34,14 @@ impl Resolve for SsrfSafeResolver {
                 .await
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
                 .collect();
-            if !SSRF_BYPASS.load(Ordering::Relaxed) {
-                for a in &addrs {
-                    if is_blocked_ip(a.ip()) {
-                        return Err(Box::new(io::Error::new(
-                            io::ErrorKind::PermissionDenied,
-                            format!("Blocked target IP: {}", a.ip()),
-                        ))
-                            as Box<dyn std::error::Error + Send + Sync>);
-                    }
-                }
+            if ssrf_active()
+                && let Some(a) = addrs.iter().find(|a| is_blocked_ip(a.ip()))
+            {
+                return Err(Box::new(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("{BLOCKED_TARGET}: {}", a.ip()),
+                ))
+                    as Box<dyn std::error::Error + Send + Sync>);
             }
             let iter: Addrs = Box::new(addrs.into_iter());
             Ok(iter)
@@ -47,8 +51,8 @@ impl Resolve for SsrfSafeResolver {
 
 fn ssrf_safe_redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|attempt| {
-        if !SSRF_BYPASS.load(Ordering::Relaxed) && is_blocked_host_literal(attempt.url()) {
-            attempt.error("blocked redirect target")
+        if ssrf_active() && is_blocked_host_literal(attempt.url()) {
+            attempt.error(BLOCKED_TARGET)
         } else if attempt.previous().len() >= 10 {
             attempt.stop()
         } else {
@@ -116,9 +120,6 @@ pub struct SearchClient {
     http: reqwest::Client,
     base_url: String,
     timeout: Duration,
-    /// Skip SSRF guards — only set in unit tests via `new_for_test`.
-    #[cfg(test)]
-    skip_ssrf: bool,
 }
 
 impl SearchClient {
@@ -132,25 +133,7 @@ impl SearchClient {
             http,
             base_url,
             timeout,
-            #[cfg(test)]
-            skip_ssrf: false,
         }
-    }
-
-    /// Test-only constructor that skips SSRF host checks so wiremock servers
-    /// on 127.0.0.1 can be reached.
-    #[cfg(test)]
-    pub fn new_for_test(base_url: &str, timeout: Duration) -> Result<Self> {
-        let http = reqwest::Client::builder()
-            .user_agent(APP_USER_AGENT)
-            .build()
-            .wrap_err("Failed to build web-search HTTP client")?;
-        Ok(Self {
-            http,
-            base_url: base_url.to_string(),
-            timeout,
-            skip_ssrf: true,
-        })
     }
 
     pub async fn web_search(&self, query: &str, max_results: usize) -> Result<Vec<SearchResult>> {
@@ -198,13 +181,8 @@ impl SearchClient {
             other => bail!("Unsupported URL scheme: {other}"),
         }
 
-        #[cfg(not(test))]
-        let ssrf_enabled = !SSRF_BYPASS.load(Ordering::Relaxed);
-        #[cfg(test)]
-        let ssrf_enabled = !self.skip_ssrf && !SSRF_BYPASS.load(Ordering::Relaxed);
-
-        if ssrf_enabled && is_blocked_host_literal(&url) {
-            bail!("Blocked target host")
+        if ssrf_active() && is_blocked_host_literal(&url) {
+            bail!(BLOCKED_TARGET)
         }
 
         let response = self
@@ -494,6 +472,11 @@ mod tests {
         AiMediaConfig::default()
     }
 
+    fn make_test_client(base_url: &str) -> SearchClient {
+        ssrf_bypass_for_tests(true);
+        SearchClient::new(base_url, Duration::from_secs(2)).expect("client")
+    }
+
     #[tokio::test]
     async fn fetch_for_read_returns_text_bucket_for_html() {
         crate::install_crypto_provider();
@@ -508,9 +491,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client =
-            SearchClient::new_for_test(&format!("{}/search", server.uri()), Duration::from_secs(2))
-                .expect("client");
+        let client = make_test_client(&format!("{}/search", server.uri()));
         let url = format!("{}/page", server.uri());
         let fetched = client
             .fetch_for_read(&url, &caps())
@@ -538,9 +519,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client =
-            SearchClient::new_for_test(&format!("{}/search", server.uri()), Duration::from_secs(2))
-                .expect("client");
+        let client = make_test_client(&format!("{}/search", server.uri()));
         let url = format!("{}/p.png", server.uri());
         let fetched = client.fetch_for_read(&url, &caps()).await.expect("fetch");
         assert_eq!(fetched.bucket, Bucket::Image);
@@ -574,9 +553,7 @@ mod tests {
             ..AiMediaConfig::default()
         };
 
-        let client =
-            SearchClient::new_for_test(&format!("{}/search", server.uri()), Duration::from_secs(2))
-                .expect("client");
+        let client = make_test_client(&format!("{}/search", server.uri()));
         let err = client
             .fetch_for_read(&format!("{}/big.png", server.uri()), &tiny_caps)
             .await
@@ -601,9 +578,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client =
-            SearchClient::new_for_test(&format!("{}/search", server.uri()), Duration::from_secs(2))
-                .expect("client");
+        let client = make_test_client(&format!("{}/search", server.uri()));
         let err = client
             .fetch_for_read(&format!("{}/x", server.uri()), &caps())
             .await
