@@ -27,6 +27,15 @@ logs:
 # Deploy image and restart pod
 deploy: build push restart
 
+# Mount prod data dir from docker host via sshfs at ./prod-data
+mount-prod-data:
+  mkdir -p prod-data
+  sshfs root@docker.homelab:/opt/dockhand/stacks/twitch/data prod-data
+
+# Unmount prod data dir
+unmount-prod-data:
+  fusermount -u prod-data
+
 # Run locally with data dir in current directory and debug logging
 dev:
   DATA_DIR=./crates/twitch-1337/data RUST_LOG=info,twitch_1337=debug cargo run -p twitch-1337
