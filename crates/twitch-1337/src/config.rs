@@ -350,6 +350,19 @@ impl Default for AiMediaConfig {
     }
 }
 
+impl AiMediaConfig {
+    pub fn cap_for(&self, bucket: crate::ai::content::detect::Bucket) -> bytesize::ByteSize {
+        use crate::ai::content::detect::Bucket;
+        match bucket {
+            Bucket::Image => self.max_image_size,
+            Bucket::Pdf => self.max_pdf_size,
+            Bucket::Audio => self.max_audio_size,
+            Bucket::Video => self.max_video_size,
+            Bucket::Text => self.max_text_size,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AiConfig {
     /// Backend type: "openai" or "ollama"
@@ -1191,5 +1204,16 @@ mod tests {
         ai.ai_channel_history_length = 50;
         c.ai = Some(ai);
         validate_config(&c).unwrap();
+    }
+
+    #[test]
+    fn ai_media_cap_for_bucket_returns_correct_field() {
+        use crate::ai::content::detect::Bucket;
+        let cfg = AiMediaConfig::default();
+        assert_eq!(cfg.cap_for(Bucket::Image), cfg.max_image_size);
+        assert_eq!(cfg.cap_for(Bucket::Pdf), cfg.max_pdf_size);
+        assert_eq!(cfg.cap_for(Bucket::Audio), cfg.max_audio_size);
+        assert_eq!(cfg.cap_for(Bucket::Video), cfg.max_video_size);
+        assert_eq!(cfg.cap_for(Bucket::Text), cfg.max_text_size);
     }
 }
