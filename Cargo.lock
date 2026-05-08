@@ -2733,6 +2733,7 @@ dependencies = [
 [[package]]
 name = "twitch-irc"
 version = "6.0.0"
+source = "git+https://github.com/Chronophylos/twitch-irc-rs?branch=ring-tls#efa05cbc5971aed4b512de8e5883bfb85ec2c63f"
 dependencies = [
  "async-trait",
  "bytes",
