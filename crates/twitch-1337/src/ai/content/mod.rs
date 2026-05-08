@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod client;
+pub mod detect;
 pub mod executor;
 pub mod tools;
 
