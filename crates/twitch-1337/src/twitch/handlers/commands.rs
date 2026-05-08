@@ -215,19 +215,11 @@ where
                 cfg.media.model.clone(),
                 Duration::from_secs(cfg.media.timeout),
             ));
-            let caps = ai::content::BucketCaps {
-                image: cfg.media.max_image_size,
-                pdf: cfg.media.max_pdf_size,
-                audio: cfg.media.max_audio_size,
-                video: cfg.media.max_video_size,
-                text: cfg.media.max_text_size,
-            };
-
             search.map(|client| ai::command::AiWeb {
                 executor: Arc::new(ai::content::ContentToolExecutor::new(
                     client,
                     media,
-                    caps,
+                    cfg.media.clone(),
                     cfg.web.max_results,
                     Duration::from_secs(cfg.web.cache_ttl_secs),
                     cfg.web.cache_capacity,

@@ -9,8 +9,9 @@ use tracing::{error, warn};
 use llm::{ToolCall, ToolResultMessage};
 
 use super::cache::TtlCache;
-use super::client::{BucketCaps, SearchClient, SearchResult};
+use super::client::{SearchClient, SearchResult};
 use super::media::MediaClient;
+use crate::config::AiMediaConfig;
 
 #[derive(Debug, Deserialize)]
 struct WebSearchArgs {
@@ -31,7 +32,7 @@ pub(super) struct ReadUrlArgs {
 pub struct ContentToolExecutor {
     client: SearchClient,
     media: Arc<MediaClient>,
-    caps: BucketCaps,
+    caps: AiMediaConfig,
     max_results: usize,
     search_cache: Arc<Mutex<TtlCache<Vec<SearchResult>>>>,
     read_cache: Arc<Mutex<TtlCache<ReadCacheEntry>>>,
@@ -47,7 +48,7 @@ impl ContentToolExecutor {
     pub fn new(
         client: SearchClient,
         media: Arc<MediaClient>,
-        caps: BucketCaps,
+        caps: AiMediaConfig,
         max_results: usize,
         cache_ttl: Duration,
         cache_capacity: usize,
@@ -189,7 +190,6 @@ impl ContentToolExecutor {
         let answer = match self
             .media
             .analyze(
-                fetched.bucket,
                 &fetched.content_type,
                 &fetched.payload,
                 instruction.as_deref(),
@@ -288,14 +288,14 @@ mod tests {
             "test-model".into(),
             Duration::from_secs(1),
         ));
-        let caps = BucketCaps {
-            image: bytesize::ByteSize::mib(10),
-            pdf: bytesize::ByteSize::mib(25),
-            audio: bytesize::ByteSize::mib(25),
-            video: bytesize::ByteSize::mib(50),
-            text: bytesize::ByteSize::mib(1),
-        };
-        ContentToolExecutor::new(client, media, caps, 5, Duration::from_secs(300), 32)
+        ContentToolExecutor::new(
+            client,
+            media,
+            AiMediaConfig::default(),
+            5,
+            Duration::from_secs(300),
+            32,
+        )
     }
 
     #[tokio::test]

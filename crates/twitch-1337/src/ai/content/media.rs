@@ -15,7 +15,6 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde_json::{Value, json};
 
 use crate::ai::content::client::Payload;
-use crate::ai::content::detect::Bucket;
 
 const SYSTEM_PROMPT: &str = "You analyze URLs on behalf of a Twitch chat bot. \
 Answer the user's instruction strictly from the provided content. Be concise. \
@@ -48,12 +47,11 @@ impl MediaClient {
 
     pub async fn analyze(
         &self,
-        bucket: Bucket,
         content_type: &str,
         payload: &Payload,
         instruction: Option<&str>,
     ) -> Result<String> {
-        let body = self.build_request(bucket, content_type, payload, instruction);
+        let body = self.build_request(content_type, payload, instruction);
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let mut req = self.http.post(&url).timeout(self.timeout).json(&body);
@@ -88,7 +86,6 @@ impl MediaClient {
 
     fn build_request(
         &self,
-        bucket: Bucket,
         content_type: &str,
         payload: &Payload,
         instruction: Option<&str>,
@@ -98,15 +95,18 @@ impl MediaClient {
             .filter(|s| !s.is_empty())
             .unwrap_or("Describe the contents.");
 
-        let media_part = match (bucket, payload) {
-            (Bucket::Text, Payload::Text(t)) => json!({ "type": "text", "text": t }),
-            (Bucket::Image | Bucket::Pdf | Bucket::Audio | Bucket::Video, Payload::Bytes(b)) => {
-                let data_url = format!("data:{};base64,{}", content_type, BASE64.encode(b));
-                json!({ "type": "image_url", "image_url": { "url": data_url } })
-            }
-            (_, Payload::Text(t)) => json!({ "type": "text", "text": t }),
-            (_, Payload::Bytes(b)) => {
-                let data_url = format!("data:{};base64,{}", content_type, BASE64.encode(b));
+        let media_part = match payload {
+            Payload::Text(t) => json!({ "type": "text", "text": t }),
+            Payload::Bytes(b) => {
+                let prefix = "data:";
+                let mid = ";base64,";
+                let mut data_url = String::with_capacity(
+                    prefix.len() + content_type.len() + mid.len() + (b.len() * 4 / 3) + 4,
+                );
+                data_url.push_str(prefix);
+                data_url.push_str(content_type);
+                data_url.push_str(mid);
+                BASE64.encode_string(b, &mut data_url);
                 json!({ "type": "image_url", "image_url": { "url": data_url } })
             }
         };
@@ -146,7 +146,6 @@ mod tests {
     fn build_request_image_uses_data_url() {
         let c = client();
         let req = c.build_request(
-            Bucket::Image,
             "image/png",
             &Payload::Bytes(vec![1, 2, 3]),
             Some("what is shown?"),
@@ -162,12 +161,7 @@ mod tests {
     #[test]
     fn build_request_text_uses_inline_text_part() {
         let c = client();
-        let req = c.build_request(
-            Bucket::Text,
-            "text/html",
-            &Payload::Text("Hello".into()),
-            None,
-        );
+        let req = c.build_request("text/html", &Payload::Text("Hello".into()), None);
         let parts = &req["messages"][1]["content"];
         assert_eq!(parts[0]["text"], "Describe the contents.");
         assert_eq!(parts[1]["type"], "text");
@@ -177,7 +171,7 @@ mod tests {
     #[test]
     fn build_request_includes_system_prompt() {
         let c = client();
-        let req = c.build_request(Bucket::Text, "text/plain", &Payload::Text("x".into()), None);
+        let req = c.build_request("text/plain", &Payload::Text("x".into()), None);
         assert_eq!(req["messages"][0]["role"], "system");
         assert!(
             req["messages"][0]["content"]
@@ -211,12 +205,7 @@ mod tests {
             Duration::from_secs(2),
         );
         let answer = c
-            .analyze(
-                Bucket::Image,
-                "image/png",
-                &Payload::Bytes(vec![1, 2]),
-                Some("what?"),
-            )
+            .analyze("image/png", &Payload::Bytes(vec![1, 2]), Some("what?"))
             .await
             .expect("ok");
         assert_eq!(answer, "It is a cat.");
@@ -239,7 +228,7 @@ mod tests {
             Duration::from_secs(2),
         );
         let err = c
-            .analyze(Bucket::Text, "text/plain", &Payload::Text("x".into()), None)
+            .analyze("text/plain", &Payload::Text("x".into()), None)
             .await
             .expect_err("err");
         assert!(

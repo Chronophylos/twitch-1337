@@ -1,8 +1,6 @@
 use llm::ToolDefinition;
 
-/// Names of all tools registered by [`ai_tools`]. Used by the chat-turn
-/// executor to dispatch tool calls back to this module.
-pub const WEB_TOOL_NAMES: &[&str] = &["web_search", "read_url"];
+const WEB_TOOL_NAMES: &[&str] = &["web_search", "read_url"];
 
 pub fn is_web_tool(name: &str) -> bool {
     WEB_TOOL_NAMES.contains(&name)

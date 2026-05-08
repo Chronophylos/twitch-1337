@@ -2,7 +2,6 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use bytesize::ByteSize;
 use eyre::{Result, WrapErr as _, bail};
 use futures_util::StreamExt as _;
 use reqwest::header;
@@ -11,17 +10,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::APP_USER_AGENT;
 use crate::ai::content::detect::{Bucket, detect};
+use crate::config::AiMediaConfig;
+use crate::util::truncate_response;
 
-/// Global SSRF bypass flag. Zero overhead in production (never set to true
-/// outside of tests). Integration tests that need to reach local wiremock
-/// servers call `ssrf_bypass_for_tests(true)`.
 static SSRF_BYPASS: AtomicBool = AtomicBool::new(false);
 
-/// Enable or disable the SSRF bypass.
-/// Only intended for use in integration tests that point the bot at loopback
-/// addresses (e.g. wiremock servers). Always `false` in production.
-///
-/// Protected behind `#[doc(hidden)]` to keep it out of the public API surface.
+/// Enable the SSRF bypass for integration tests pointing at loopback
+/// (e.g. wiremock). Always `false` in production.
 #[doc(hidden)]
 pub fn ssrf_bypass_for_tests(enabled: bool) {
     SSRF_BYPASS.store(enabled, Ordering::Relaxed);
@@ -29,50 +24,31 @@ pub fn ssrf_bypass_for_tests(enabled: bool) {
 
 const SEARX_RESPONSE_LIMIT: usize = 10;
 
-/// Per-bucket size caps in bytes.
-#[derive(Debug, Clone, Copy)]
-pub struct BucketCaps {
-    pub image: ByteSize,
-    pub pdf: ByteSize,
-    pub audio: ByteSize,
-    pub video: ByteSize,
-    pub text: ByteSize,
-}
-
-impl BucketCaps {
-    fn cap_for(&self, b: Bucket) -> ByteSize {
-        match b {
-            Bucket::Image => self.image,
-            Bucket::Pdf => self.pdf,
-            Bucket::Audio => self.audio,
-            Bucket::Video => self.video,
-            Bucket::Text => self.text,
-        }
-    }
-
-    fn max(&self) -> ByteSize {
-        [self.image, self.pdf, self.audio, self.video, self.text]
-            .into_iter()
-            .max()
-            .expect("non-empty array")
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum Payload {
-    /// Already-extracted readable text (HTML stripped, JSON/plain as-is).
     Text(String),
-    /// Raw bytes for media buckets (image/pdf/audio/video).
     Bytes(Vec<u8>),
 }
 
 #[derive(Debug, Clone)]
 pub struct FetchedContent {
-    pub url: String,
     pub bucket: Bucket,
-    /// MIME string used downstream as the data-URL prefix or for display.
     pub content_type: String,
     pub payload: Payload,
+}
+
+fn overall_cap(caps: &AiMediaConfig) -> u64 {
+    [
+        caps.max_image_size,
+        caps.max_pdf_size,
+        caps.max_audio_size,
+        caps.max_video_size,
+        caps.max_text_size,
+    ]
+    .iter()
+    .max()
+    .expect("non-empty")
+    .as_u64()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -152,9 +128,9 @@ impl SearchClient {
             .into_iter()
             .take(effective_max)
             .map(|r| SearchResult {
-                title: truncate_chars(&collapse_ws(&r.title), 200),
+                title: truncate_response(&r.title, 200),
                 url: r.url,
-                snippet: truncate_chars(&collapse_ws(&r.content.unwrap_or_default()), 500),
+                snippet: truncate_response(&r.content.unwrap_or_default(), 500),
                 published_at: r.published_date,
                 source: r.engine,
             })
@@ -163,7 +139,11 @@ impl SearchClient {
         Ok(results)
     }
 
-    pub async fn fetch_for_read(&self, raw_url: &str, caps: &BucketCaps) -> Result<FetchedContent> {
+    pub async fn fetch_for_read(
+        &self,
+        raw_url: &str,
+        caps: &AiMediaConfig,
+    ) -> Result<FetchedContent> {
         let url = reqwest::Url::parse(raw_url).wrap_err("Invalid URL")?;
 
         match url.scheme() {
@@ -193,7 +173,7 @@ impl SearchClient {
             .error_for_status()
             .wrap_err("URL returned error status")?;
 
-        let max_cap = caps.max().as_u64();
+        let max_cap = overall_cap(caps);
 
         if let Some(length) = response.content_length()
             && length > max_cap
@@ -208,14 +188,19 @@ impl SearchClient {
             .unwrap_or("")
             .to_string();
 
+        let initial_capacity = response
+            .content_length()
+            .map(|len| len.min(max_cap) as usize)
+            .unwrap_or(0);
+
         let mut stream = response.bytes_stream();
-        let mut buf: Vec<u8> = Vec::new();
+        let mut buf: Vec<u8> = Vec::with_capacity(initial_capacity);
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.wrap_err("Failed to read URL response body")?;
-            buf.extend_from_slice(&chunk);
-            if buf.len() as u64 > max_cap {
+            if (buf.len() as u64).saturating_add(chunk.len() as u64) > max_cap {
                 bail!("Response too large")
             }
+            buf.extend_from_slice(&chunk);
         }
 
         let head = &buf[..buf.len().min(16)];
@@ -261,7 +246,6 @@ impl SearchClient {
         };
 
         Ok(FetchedContent {
-            url: raw_url.to_string(),
             bucket,
             content_type,
             payload,
@@ -286,19 +270,6 @@ struct SearxResult {
     published_date: Option<String>,
     #[serde(default)]
     engine: Option<String>,
-}
-
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    let len = value.chars().count();
-    if len <= max_chars {
-        return value.to_string();
-    }
-    let cutoff = value
-        .char_indices()
-        .nth(max_chars)
-        .map(|(idx, _)| idx)
-        .unwrap_or(value.len());
-    format!("{}...", &value[..cutoff])
 }
 
 fn collapse_ws(s: &str) -> String {
@@ -495,14 +466,8 @@ mod tests {
         assert_eq!(parsed.results[0].url, "https://example.com/news");
     }
 
-    fn caps() -> BucketCaps {
-        BucketCaps {
-            image: ByteSize::mib(10),
-            pdf: ByteSize::mib(25),
-            audio: ByteSize::mib(25),
-            video: ByteSize::mib(50),
-            text: ByteSize::mib(1),
-        }
+    fn caps() -> AiMediaConfig {
+        AiMediaConfig::default()
     }
 
     #[tokio::test]
@@ -565,8 +530,6 @@ mod tests {
     async fn fetch_for_read_rejects_oversize_via_content_length() {
         crate::install_crypto_provider();
         let server = MockServer::start().await;
-        // Declare a 100-byte image body that exceeds the tiny caps below.
-        // Use a real PNG magic header so the body-type check doesn't interfere.
         let png_magic = vec![0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00];
         Mock::given(wm_method("GET"))
             .and(wm_path("/big.png"))
@@ -578,13 +541,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        // Use a tiny cap (1 byte) so even the 10-byte body exceeds it.
-        let tiny_caps = BucketCaps {
-            image: ByteSize::b(1),
-            pdf: ByteSize::b(1),
-            audio: ByteSize::b(1),
-            video: ByteSize::b(1),
-            text: ByteSize::b(1),
+        let tiny_caps = AiMediaConfig {
+            max_image_size: bytesize::ByteSize::b(1),
+            max_pdf_size: bytesize::ByteSize::b(1),
+            max_audio_size: bytesize::ByteSize::b(1),
+            max_video_size: bytesize::ByteSize::b(1),
+            max_text_size: bytesize::ByteSize::b(1),
+            ..AiMediaConfig::default()
         };
 
         let client =
