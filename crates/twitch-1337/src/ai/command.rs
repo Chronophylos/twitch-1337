@@ -9,7 +9,7 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use llm::{
     AgentOpts, AgentOutcome, LlmClient, LlmError, Message, ToolCall, ToolCallRound,
-    ToolChatCompletionRequest, ToolExecutor, ToolResultMessage, run_agent,
+    ToolChatCompletionRequest, ToolExecutor, ToolResultMessage, TraceIds, run_agent,
 };
 
 use crate::ai::chat_history::ChatHistory;
@@ -401,8 +401,10 @@ where
             tools,
             reasoning_effort: self.reasoning_effort.clone(),
             prior_rounds,
-            user: Some(ctx.privmsg.sender.login.clone()),
-            session_id: Some(crate::ai::session::new_session_id()),
+            trace: TraceIds {
+                user: Some(ctx.privmsg.sender.login.clone()),
+                session_id: Some(crate::ai::session::new_session_id()),
+            },
         };
         let opts = AgentOpts {
             max_rounds: mem.max_turn_rounds,

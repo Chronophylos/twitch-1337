@@ -331,8 +331,7 @@ mod tests {
                     reasoning_content: None,
                 },
             ],
-            user: None,
-            session_id: None,
+            trace: crate::types::TraceIds::default(),
         };
 
         let msgs = build_ollama_messages(&request);
