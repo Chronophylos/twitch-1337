@@ -84,16 +84,14 @@ New dependencies (`crates/twitch-1337/Cargo.toml`):
 
 ## Configuration
 
-New section `[ai.media]`. All fields except `model` are optional and fall back to `[ai]` defaults where it makes sense.
+New section `[ai.media]`. All fields are optional. The `[ai]` provider
+(`base_url`, `api_key`) is reused; only the `model` and per-type caps
+differ.
 
 ```toml
 [ai.media]
-# Required when [ai.media] is present.
-model = "google/gemini-2.5-flash"
-
-# Optional. If absent, inherit from [ai].
-# base_url = "https://openrouter.ai/api/v1"
-# api_key  = "..."
+# Optional. Defaults to "~google/gemini-flash-latest".
+model = "~google/gemini-flash-latest"
 
 # Sub-agent request timeout (seconds). Default: 60.
 timeout = 60
@@ -107,7 +105,7 @@ max_video_size = "50 MB"
 max_text_size  = "1 MB"
 ```
 
-If `[ai.media]` is absent, `read_url` is registered but returns `{"error": "media_disabled"}` for every call. (Cheaper than removing the tool conditionally; keeps the prompt-side surface stable across deployments.)
+`[ai.media]` is always available when `[ai]` is configured: it inherits the provider, and every field has a sensible default. There is no separate "disabled" state.
 
 ## Content-type detection
 
@@ -157,7 +155,6 @@ For PDFs, content part type is provider-dependent. Initial implementation uses `
 
 | Code | Cause |
 |------|-------|
-| `media_disabled` | `[ai.media]` not configured |
 | `fetch_blocked` | SSRF guard tripped (existing) |
 | `fetch_timeout` | HTTP timeout (existing) |
 | `fetch_failed` | Other HTTP error (existing) |
@@ -187,8 +184,8 @@ Unit:
 
 Integration (`crates/twitch-1337/tests/ai.rs`):
 - Mock media endpoint + mock SearXNG; full turn round-trip with a `read_url` call returns the sub-agent's answer to the main model.
-- `[ai.media]` absent → tool returns `media_disabled`.
+- `[ai.media]` absent → tool falls back to default model + caps and still serves requests.
 
 ## Open questions
 
-- **Audio/video coverage.** Not every OpenRouter route accepts inline audio. The example config will recommend `google/gemini-2.5-flash` (covers all four media types as of 2026-05). If the operator picks a model that rejects audio, the bot surfaces `analysis_failed` with the provider error rather than silently degrading.
+- **Audio/video coverage.** Not every OpenRouter route accepts inline audio. The default `~google/gemini-flash-latest` covers all four media types as of 2026-05. If the operator overrides to a model that rejects audio, the bot surfaces `analysis_failed` with the provider error rather than silently degrading.
