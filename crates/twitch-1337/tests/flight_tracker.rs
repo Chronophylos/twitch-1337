@@ -168,3 +168,86 @@ async fn track_command_enriches_flight_from_aviationstack_once() {
 
     bot.shutdown().await;
 }
+
+#[tokio::test]
+#[serial]
+async fn track_command_accepts_aviationstack_flight_before_adsb_appears() {
+    let bot = TestBotBuilder::new()
+        .with_config(enable_aviationstack)
+        .spawn()
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/callsign/EIN336"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ac": [],
+            "ctime": 0,
+            "now": 0,
+            "total": 0
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/flights"))
+        .and(query_param("access_key", "test-key"))
+        .and(query_param("flight_icao", "EIN336"))
+        .and(query_param("limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{
+                "flight": {
+                    "iata": "EI336",
+                    "icao": "EIN336",
+                    "number": "336"
+                },
+                "airline": {
+                    "iata": "EI",
+                    "icao": "EIN",
+                    "name": "Aer Lingus"
+                },
+                "departure": {
+                    "iata": "DUB",
+                    "icao": "EIDW",
+                    "scheduled": "2026-04-18T10:30:00+00:00",
+                    "actual": null,
+                    "actual_runway": null
+                },
+                "arrival": {
+                    "iata": "BER",
+                    "icao": "EDDB",
+                    "estimated": "2026-04-18T12:45:00+00:00",
+                    "actual": null
+                },
+                "aircraft": {
+                    "icao24": null,
+                    "icao": "A320"
+                }
+            }]
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    let mut bot = bot;
+    bot.send("alice", "!track EIN336").await;
+    let ack = bot.expect_say(Duration::from_secs(5)).await;
+    assert!(ack.contains("EIN336"), "got: {ack}");
+    assert!(ack.contains("DUB") && ack.contains("BER"), "got: {ack}");
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let state_path = bot.data_dir.path().join("flights.ron");
+    let persisted = tokio::fs::read_to_string(state_path).await.unwrap();
+    let state: twitch_1337::aviation::tracker::FlightTrackerState =
+        ron::from_str(&persisted).unwrap();
+    let flight = state.flights.first().expect("persisted flight");
+    assert_eq!(flight.callsign.as_deref(), Some("EIN336"));
+    assert_eq!(flight.route, Some(("DUB".to_string(), "BER".to_string())));
+    assert_eq!(flight.aircraft_type.as_deref(), Some("A320"));
+    assert_eq!(flight.last_seen, None);
+    assert_eq!(
+        flight.phase,
+        twitch_1337::aviation::tracker::FlightPhase::Unknown
+    );
+    assert!(flight.aviationstack_checked);
+
+    bot.shutdown().await;
+}
