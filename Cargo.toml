@@ -41,6 +41,3 @@ implicit_clone = "warn"
 needless_continue = "warn"
 redundant_closure_for_method_calls = "warn"
 semicolon_if_nothing_returned = "warn"
-
-[patch.crates-io]
-twitch-irc = { path = "crates/twitch-1337/vendor/twitch-irc" }
