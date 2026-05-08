@@ -25,14 +25,14 @@ pub(super) struct FetchUrlArgs {
 
 const FETCH_RESULT_MAX_CHARS: usize = 4_000;
 
-pub struct WebToolExecutor {
+pub struct ContentToolExecutor {
     client: SearchClient,
     max_results: usize,
     search_cache: Arc<Mutex<TtlCache<Vec<SearchResult>>>>,
     fetch_cache: Arc<Mutex<TtlCache<String>>>,
 }
 
-impl WebToolExecutor {
+impl ContentToolExecutor {
     pub fn new(
         client: SearchClient,
         max_results: usize,
@@ -215,14 +215,14 @@ mod tests {
 
     use super::*;
 
-    fn test_executor() -> WebToolExecutor {
+    fn test_executor() -> ContentToolExecutor {
         crate::install_crypto_provider();
         let client = SearchClient::new_with_client(
             "http://127.0.0.1:65535/search".to_string(),
             Duration::from_secs(1),
             reqwest::Client::new(),
         );
-        WebToolExecutor::new(client, 5, Duration::from_secs(300), 32)
+        ContentToolExecutor::new(client, 5, Duration::from_secs(300), 32)
     }
 
     #[tokio::test]

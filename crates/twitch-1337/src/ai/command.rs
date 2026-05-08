@@ -18,7 +18,7 @@ use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::{ChatTurnExecutor, ChatTurnExecutorOpts, chat_turn_tools};
 use crate::ai::memory::transcript::TranscriptWriter;
 use crate::ai::memory::types::{Caps, Role};
-use crate::ai::web_search;
+use crate::ai::content;
 use crate::commands::{Command, CommandContext};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::twitch::seventv::SevenTvEmoteProvider;
@@ -77,7 +77,7 @@ pub fn classify_role(badges: &[twitch_irc::message::Badge]) -> Role {
 /// Optional web tool-call dependencies for main `!ai` responses.
 #[derive(Clone)]
 pub struct AiWeb {
-    pub executor: Arc<web_search::WebToolExecutor>,
+    pub executor: Arc<content::ContentToolExecutor>,
     pub max_rounds: usize,
 }
 
@@ -148,13 +148,13 @@ impl AiCommand {
 /// configured, the web search executor (web_search/fetch_url).
 struct V2Executor<'a> {
     chat: &'a ChatTurnExecutor,
-    web: Option<&'a web_search::WebToolExecutor>,
+    web: Option<&'a content::ContentToolExecutor>,
 }
 
 #[async_trait]
 impl ToolExecutor for V2Executor<'_> {
     async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
-        if web_search::is_web_tool(&call.name) {
+        if content::is_web_tool(&call.name) {
             match self.web {
                 Some(w) => w.execute_tool_call(call).await,
                 None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
@@ -388,7 +388,7 @@ where
 
         let mut tools = chat_turn_tools();
         if self.web.is_some() {
-            tools.extend(web_search::ai_tools());
+            tools.extend(content::ai_tools());
         }
         let prior_rounds = if grok_alias && let Some(ref w) = self.web {
             vec![forced_web_search_round(w, &instruction_for_prompt).await]

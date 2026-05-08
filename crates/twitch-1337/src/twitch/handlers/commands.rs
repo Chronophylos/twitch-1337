@@ -189,12 +189,12 @@ where
 
     if let (Some((llm, cfg)), Some(ai_memory_v2)) = (llm_client, ai_memory_v2) {
         let web = if cfg.web.enabled {
-            match ai::web_search::SearchClient::new(
+            match ai::content::SearchClient::new(
                 &cfg.web.base_url,
                 Duration::from_secs(cfg.web.timeout),
             ) {
                 Ok(client) => Some(ai::command::AiWeb {
-                    executor: Arc::new(ai::web_search::WebToolExecutor::new(
+                    executor: Arc::new(ai::content::ContentToolExecutor::new(
                         client,
                         cfg.web.max_results,
                         Duration::from_secs(cfg.web.cache_ttl_secs),
