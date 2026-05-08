@@ -1,9 +1,12 @@
-use std::net::IpAddr;
+use std::io;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use eyre::{Result, WrapErr as _, bail};
 use futures_util::StreamExt as _;
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::header;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
@@ -14,6 +17,54 @@ use crate::config::AiMediaConfig;
 use crate::util::truncate_response;
 
 static SSRF_BYPASS: AtomicBool = AtomicBool::new(false);
+
+struct SsrfSafeResolver;
+
+impl Resolve for SsrfSafeResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
+                .collect();
+            if !SSRF_BYPASS.load(Ordering::Relaxed) {
+                for a in &addrs {
+                    if is_blocked_ip(a.ip()) {
+                        return Err(Box::new(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            format!("Blocked target IP: {}", a.ip()),
+                        ))
+                            as Box<dyn std::error::Error + Send + Sync>);
+                    }
+                }
+            }
+            let iter: Addrs = Box::new(addrs.into_iter());
+            Ok(iter)
+        })
+    }
+}
+
+fn ssrf_safe_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if !SSRF_BYPASS.load(Ordering::Relaxed) && is_blocked_host_literal(attempt.url()) {
+            attempt.error("blocked redirect target")
+        } else if attempt.previous().len() >= 10 {
+            attempt.stop()
+        } else {
+            attempt.follow()
+        }
+    })
+}
+
+fn build_ssrf_safe_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .dns_resolver(Arc::new(SsrfSafeResolver))
+        .redirect(ssrf_safe_redirect_policy())
+        .build()
+        .wrap_err("Failed to build web-search HTTP client")
+}
 
 /// Enable the SSRF bypass for integration tests pointing at loopback
 /// (e.g. wiremock). Always `false` in production.
@@ -72,11 +123,7 @@ pub struct SearchClient {
 
 impl SearchClient {
     pub fn new(base_url: &str, timeout: Duration) -> Result<Self> {
-        let http = reqwest::Client::builder()
-            .user_agent(APP_USER_AGENT)
-            .build()
-            .wrap_err("Failed to build web-search HTTP client")?;
-
+        let http = build_ssrf_safe_client()?;
         Ok(Self::new_with_client(base_url.to_string(), timeout, http))
     }
 
@@ -157,9 +204,6 @@ impl SearchClient {
         let ssrf_enabled = !self.skip_ssrf && !SSRF_BYPASS.load(Ordering::Relaxed);
 
         if ssrf_enabled && is_blocked_host_literal(&url) {
-            bail!("Blocked target host")
-        }
-        if ssrf_enabled && resolves_to_blocked_ip(&url).await? {
             bail!("Blocked target host")
         }
 
@@ -291,6 +335,9 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
                 || v6.is_unique_local()
                 || v6.is_unicast_link_local()
                 || v6.is_unspecified()
+                || v6
+                    .to_ipv4_mapped()
+                    .is_some_and(|v4| is_blocked_ip(IpAddr::V4(v4)))
         }
     }
 }
@@ -309,36 +356,6 @@ fn is_blocked_host_literal(url: &reqwest::Url) -> bool {
     }
 
     false
-}
-
-async fn resolves_to_blocked_ip(url: &reqwest::Url) -> Result<bool> {
-    let Some(host) = url.host_str() else {
-        return Ok(true);
-    };
-
-    if host.parse::<IpAddr>().is_ok() {
-        return Ok(false);
-    }
-
-    let port = url.port_or_known_default().unwrap_or(80);
-    let mut saw_any_address = false;
-
-    let addrs = tokio::net::lookup_host((host, port))
-        .await
-        .wrap_err("Failed to resolve target host")?;
-
-    for addr in addrs {
-        saw_any_address = true;
-        if is_blocked_ip(addr.ip()) {
-            return Ok(true);
-        }
-    }
-
-    if !saw_any_address {
-        return Ok(true);
-    }
-
-    Ok(false)
 }
 
 fn extract_readable_text(html: &str) -> String {
@@ -421,10 +438,17 @@ mod tests {
         assert!(!is_html_content_type("application/json"));
     }
 
-    #[tokio::test]
-    async fn blocks_dns_resolution_to_loopback() {
-        let url = reqwest::Url::parse("http://localhost/test").expect("url");
-        assert!(resolves_to_blocked_ip(&url).await.expect("dns resolve"));
+    #[test]
+    fn blocks_ipv6_mapped_ipv4_loopback() {
+        assert!(is_blocked_ip(
+            "::ffff:127.0.0.1".parse::<IpAddr>().expect("ip")
+        ));
+        assert!(is_blocked_ip(
+            "::ffff:10.0.0.1".parse::<IpAddr>().expect("ip")
+        ));
+        assert!(!is_blocked_ip(
+            "::ffff:8.8.8.8".parse::<IpAddr>().expect("ip")
+        ));
     }
 
     #[test]
