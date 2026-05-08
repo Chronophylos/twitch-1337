@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 async-trait = "0.1.89"
+base64 = "0.22"
 bytesize = { version = "2", features = ["serde"] }
 chrono = { version = "0.4.44", features = ["now", "serde"], default-features = false }
 chrono-tz = { version = "0.10.4", features = ["filter-by-regex"] }
