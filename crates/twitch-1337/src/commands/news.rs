@@ -276,6 +276,8 @@ where
                 Message::user(user_message),
             ],
             reasoning_effort: None,
+            user: None,
+            session_id: None,
         };
 
         let result =

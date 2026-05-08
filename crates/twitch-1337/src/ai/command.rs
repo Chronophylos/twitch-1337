@@ -401,6 +401,8 @@ where
             tools,
             reasoning_effort: self.reasoning_effort.clone(),
             prior_rounds,
+            user: Some(ctx.privmsg.sender.login.clone()),
+            session_id: Some(crate::ai::session::new_session_id()),
         };
         let opts = AgentOpts {
             max_rounds: mem.max_turn_rounds,
