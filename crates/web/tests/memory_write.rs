@@ -274,6 +274,46 @@ async fn save_csrf_mismatch_rejected() {
 }
 
 #[tokio::test]
+async fn save_state_oversized_renders_editor_with_draft() {
+    let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
+    // Create the state note first so save (POST /memory/state/<slug>) is valid.
+    let kind = FileKind::State {
+        slug: "notes".into(),
+    };
+    state
+        .memory_store
+        .write_state(&kind, "hello", Some("9001"))
+        .await
+        .unwrap();
+    // Read the current mtime so the guard doesn't trip a 409 first.
+    let mtime = state.memory_store.current_mtime(&kind).await.unwrap();
+    // 4 KiB+ payload exceeds the 2 KiB state cap.
+    let huge = "x".repeat(4096);
+    let body = format!(
+        "_csrf={csrf}&mtime={mtime}&body={body}",
+        csrf = urlencoding::encode(&bare_csrf),
+        body = urlencoding::encode(&huge),
+    );
+    let app = build_router(state);
+    let res = app
+        .oneshot(post_form("/memory/state/notes", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let html = body_string(res).await;
+    assert!(
+        html.contains("exceeds byte cap"),
+        "error message must render; got {html}"
+    );
+    // The user's draft must round-trip (rendered HTML-escaped, but still
+    // recognizable).
+    assert!(
+        html.contains(&"x".repeat(64)),
+        "draft must survive the re-render"
+    );
+}
+
+#[tokio::test]
 async fn delete_state_invalid_slug_400() {
     let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
     let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));

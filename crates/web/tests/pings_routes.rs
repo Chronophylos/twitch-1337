@@ -239,6 +239,80 @@ async fn delete_without_csrf_rejected() {
 }
 
 #[tokio::test]
+async fn create_duplicate_renders_form_with_error_and_user_draft() {
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
+    {
+        let mut mgr = state.ping_manager.write().await;
+        mgr.create_ping("foo".into(), "@user".into(), "admin".into(), None)
+            .unwrap();
+    }
+    let app = build_router(state);
+    let body = format!(
+        "_csrf={csrf}&name=foo&template=%40new-template-text",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let html = body_string(res).await;
+    assert!(
+        html.contains("@new-template-text"),
+        "user draft must round-trip into the form; got {html}"
+    );
+    assert!(
+        html.contains("already exists"),
+        "error message must render; got {html}"
+    );
+}
+
+#[tokio::test]
+async fn update_invalid_template_renders_form_with_error() {
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
+    {
+        let mut mgr = state.ping_manager.write().await;
+        mgr.create_ping("team".into(), "Hey {mentions}".into(), "admin".into(), None)
+            .unwrap();
+    }
+    let app = build_router(state.clone());
+    // Control-char templates are rejected by `PingManager::edit_template`.
+    // %01 is SOH, which `validate_template` rejects so the form re-renders.
+    let body = format!(
+        "_csrf={csrf}&template=draft%01control",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings/team")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let html = body_string(res).await;
+    // The user's draft must round-trip — the literal control char is escaped
+    // by askama, but the surrounding text must survive.
+    assert!(
+        html.contains("draft") && html.contains("control"),
+        "user draft must round-trip into the form; got {html}"
+    );
+    // Error banner from `validate_template`.
+    assert!(
+        html.contains("class=\"error\""),
+        "error banner must render; got {html}"
+    );
+    // Original template must NOT have been overwritten on disk.
+    let mgr = state.ping_manager.read().await;
+    assert_eq!(mgr.get("team").unwrap().template, "Hey {mentions}");
+}
+
+#[tokio::test]
 async fn create_rejects_bad_form_csrf() {
     let (state, sid, csrf, _bare_csrf, _td) = authed_setup().await;
     let app = build_router(state.clone());
