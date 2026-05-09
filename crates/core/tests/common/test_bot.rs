@@ -206,6 +206,13 @@ impl TestBotBuilder {
             twitch_1337::ping::PingManager::load(data_dir.path()).expect("load ping manager"),
         ));
 
+        let memory_store = twitch_1337::ai::memory::store::MemoryStore::open(
+            data_dir.path(),
+            twitch_1337::ai::command::memory_caps_from_config(self.config.ai.as_ref()),
+        )
+        .await
+        .expect("open memory store");
+
         let web_spawner = if self.config.web.enabled {
             let bind_addr: std::net::SocketAddr = self
                 .config
@@ -214,8 +221,12 @@ impl TestBotBuilder {
                 .parse()
                 .expect("test web.bind_addr");
             let listener = twitch_1337_web::bind(bind_addr).await.expect("bind web");
-            let state =
-                build_test_web_state(&self.config, irc_connected.clone(), ping_manager.clone());
+            let state = build_test_web_state(
+                &self.config,
+                irc_connected.clone(),
+                ping_manager.clone(),
+                memory_store.clone(),
+            );
             let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
                 let deps = twitch_1337_web::WebDeps { bind_addr, state };
                 tokio::spawn(async move {
@@ -243,6 +254,7 @@ impl TestBotBuilder {
             irc_connected: irc_connected.clone(),
             web_spawner,
             ping_manager,
+            memory_store,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -575,6 +587,7 @@ fn build_test_web_state(
     config: &Configuration,
     irc_connected: Arc<AtomicBool>,
     ping_manager: Arc<tokio::sync::RwLock<twitch_1337::ping::PingManager>>,
+    memory_store: twitch_1337::ai::memory::store::MemoryStore,
 ) -> twitch_1337_web::WebState {
     use twitch_1337_web::auth::OAuthCtx;
     use twitch_1337_web::auth::session::SessionTable;
@@ -625,5 +638,6 @@ fn build_test_web_state(
         client_id: secrecy::SecretString::new("test-client-id".to_owned().into()),
         oauth,
         ping_manager,
+        memory_store,
     }
 }

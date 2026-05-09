@@ -99,6 +99,11 @@ pub struct Services {
     /// handed both to the IRC handler set (via `SpawnDeps`) and to
     /// `WebState` (for the dashboard CRUD routes).
     pub ping_manager: Arc<tokio::sync::RwLock<crate::ping::PingManager>>,
+    /// Shared v2 memory store. Constructed by the bin so the bot's `!ai`
+    /// turn / dreamer ritual and the dashboard memory editor write through
+    /// the *same* per-path mutex map. Two independent stores against the
+    /// same on-disk tree would silently race past each other's locks.
+    pub memory_store: crate::ai::memory::store::MemoryStore,
 }
 
 pub type WebSpawner =
@@ -130,6 +135,7 @@ where
         irc_connected,
         web_spawner,
         ping_manager,
+        memory_store,
     } = services;
 
     let schedules_enabled = !config.schedules.is_empty();
@@ -142,7 +148,7 @@ where
     let aviation_for_commands = aviation.clone();
 
     let ai_memory_v2 =
-        crate::ai::command::build_ai_memory_v2(config.ai.as_ref(), &data_dir).await?;
+        crate::ai::command::build_ai_memory_v2(config.ai.as_ref(), memory_store).await?;
     let transcript = ai_memory_v2.as_ref().map(|m| m.transcript.clone());
 
     // 7TV emote provider: built once at startup so malformed glossary TOML

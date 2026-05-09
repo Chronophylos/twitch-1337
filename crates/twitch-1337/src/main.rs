@@ -9,9 +9,14 @@ use secrecy::ExposeSecret as _;
 use tokio::sync::oneshot;
 use tracing::info;
 use twitch_1337_core::{
-    AuthenticatedLoginCredentials, Services, aviation, ensure_data_dir, get_data_dir,
-    install_crypto_provider, install_tracing, llm_factory, load_configuration, ping::PingManager,
-    run_bot, setup_and_verify_twitch_client, twitch::whisper, util::clock::SystemClock,
+    AuthenticatedLoginCredentials, Services,
+    ai::{command::memory_caps_from_config, memory::store::MemoryStore},
+    aviation, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing, llm_factory,
+    load_configuration,
+    ping::PingManager,
+    run_bot, setup_and_verify_twitch_client,
+    twitch::whisper,
+    util::clock::SystemClock,
 };
 use twitch_1337_web::helix::{AccessTokenProvider, HelixClient as _, ReqwestHelixClient};
 use twitch_irc::login::LoginCredentials as _;
@@ -78,6 +83,14 @@ pub async fn main() -> Result<()> {
         PingManager::load(&get_data_dir()).wrap_err("Failed to load ping manager")?,
     ));
 
+    // Memory v2 store opens unconditionally so the dashboard editor has a
+    // handle even when `[ai]` is disabled. The same `Arc`-backed store is
+    // shared with the bot's IRC handlers / dreamer ritual via `Services`.
+    let memory_store =
+        MemoryStore::open(&get_data_dir(), memory_caps_from_config(config.ai.as_ref()))
+            .await
+            .wrap_err("open memory store")?;
+
     let web_spawner = if config.web.enabled {
         let credentials_for_web = credentials.clone();
         Some(
@@ -86,6 +99,7 @@ pub async fn main() -> Result<()> {
                 credentials_for_web,
                 irc_connected.clone(),
                 ping_manager.clone(),
+                memory_store.clone(),
             )
             .await?,
         )
@@ -103,6 +117,7 @@ pub async fn main() -> Result<()> {
         irc_connected,
         web_spawner,
         ping_manager,
+        memory_store,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -123,6 +138,7 @@ async fn build_web_spawner(
     credentials: AuthenticatedLoginCredentials,
     irc_connected: Arc<AtomicBool>,
     ping_manager: Arc<tokio::sync::RwLock<PingManager>>,
+    memory_store: MemoryStore,
 ) -> Result<twitch_1337::WebSpawner> {
     let bind_addr: std::net::SocketAddr = config
         .web
@@ -180,6 +196,7 @@ async fn build_web_spawner(
         client_id: config.twitch.client_id.clone(),
         oauth,
         ping_manager,
+        memory_store,
     };
 
     Ok(Box::new(move |shutdown| {

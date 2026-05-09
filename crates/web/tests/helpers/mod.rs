@@ -17,6 +17,8 @@ use chrono::{DateTime, Utc};
 use secrecy::SecretString;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
+use twitch_1337_core::ai::memory::store::MemoryStore;
+use twitch_1337_core::ai::memory::types::Caps;
 use twitch_1337_core::ping::PingManager;
 use twitch_1337_web::WebState;
 use twitch_1337_web::auth::OAuthCtx;
@@ -55,22 +57,34 @@ pub fn install_crypto() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
-pub fn build_state(helix: Arc<dyn HelixClient>) -> WebState {
-    let (state, _td) = build_state_with_ping_dir(helix);
-    // Test data dir leaks intentionally via TempDir's Drop running here. For
-    // tests that just need WebState (without persistent ping mutations), we
-    // accept that the underlying tempdir is removed. The ping_manager keeps
-    // its in-memory state, so this only affects atomic save+rename targets,
-    // which existing auth tests do not exercise.
+pub async fn build_state(helix: Arc<dyn HelixClient>) -> WebState {
+    let (state, _td_pings, _td_memory) = build_state_with_dirs(helix).await;
+    // Test data dirs leak intentionally via TempDir's Drop running here. For
+    // tests that just need WebState (without persistent mutations), we accept
+    // that the underlying tempdirs are removed. The ping_manager / memory
+    // store keep their in-memory state, so this only affects atomic
+    // save+rename targets, which existing auth tests do not exercise.
     state
 }
 
-/// Variant that returns the underlying `TempDir` so callers can keep it
-/// alive while exercising persistent ping CRUD paths.
-pub fn build_state_with_ping_dir(helix: Arc<dyn HelixClient>) -> (WebState, TempDir) {
-    let dir = TempDir::new().expect("tempdir");
-    let pings = PingManager::load(dir.path()).expect("load empty ping manager");
+/// Variant that returns the ping data dir so callers can keep it alive while
+/// exercising persistent ping CRUD paths. Memory data dir is dropped — use
+/// [`build_state_with_dirs`] when both are needed.
+pub async fn build_state_with_ping_dir(helix: Arc<dyn HelixClient>) -> (WebState, TempDir) {
+    let (state, td_pings, _td_memory) = build_state_with_dirs(helix).await;
+    (state, td_pings)
+}
+
+/// Variant that returns both the ping and memory tempdirs so callers can
+/// keep them alive while exercising persistent CRUD paths.
+pub async fn build_state_with_dirs(helix: Arc<dyn HelixClient>) -> (WebState, TempDir, TempDir) {
+    let pings_dir = TempDir::new().expect("pings tempdir");
+    let memory_dir = TempDir::new().expect("memory tempdir");
+    let pings = PingManager::load(pings_dir.path()).expect("load empty ping manager");
     let ping_manager = Arc::new(RwLock::new(pings));
+    let memory_store = MemoryStore::open(memory_dir.path(), Caps::default())
+        .await
+        .expect("open memory store");
     let clock = Arc::new(FixedClock(
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 1, 0, 0, 0).unwrap(),
     ));
@@ -102,8 +116,9 @@ pub fn build_state_with_ping_dir(helix: Arc<dyn HelixClient>) -> (WebState, Temp
         client_id: SecretString::new("test-client-id".to_owned().into()),
         oauth,
         ping_manager,
+        memory_store,
     };
-    (state, dir)
+    (state, pings_dir, memory_dir)
 }
 
 /// Insert a session for `(user_id, user_login)` and return the session id

@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicBool;
 
 use secrecy::SecretString;
 use tokio::sync::RwLock;
+use twitch_1337_core::ai::memory::store::MemoryStore;
 use twitch_1337_core::ping::PingManager;
 
 use crate::auth::OAuthCtx;
@@ -38,4 +39,9 @@ pub struct WebState {
     /// delete) persist to disk and must serialize against IRC handler
     /// triggers.
     pub ping_manager: Arc<RwLock<PingManager>>,
+    /// Shared v2 memory store (same `Arc`-backed instance the bot's `!ai`
+    /// turn / dreamer ritual writes through). Sharing the store keeps the
+    /// per-path mutex map coherent — two independent stores against the
+    /// same on-disk tree would silently race past each other's locks.
+    pub memory_store: MemoryStore,
 }

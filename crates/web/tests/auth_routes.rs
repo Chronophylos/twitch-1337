@@ -24,7 +24,7 @@ fn fake_helix() -> Arc<dyn HelixClient> {
 #[tokio::test]
 async fn root_redirects_to_pings_for_authed_request_only() {
     install_crypto();
-    let state = build_state(fake_helix());
+    let state = build_state(fake_helix()).await;
     let app = build_router(state);
 
     // Without a session, `/` (which requires mod) redirects to /login.
@@ -47,7 +47,7 @@ async fn root_redirects_to_pings_for_authed_request_only() {
 #[tokio::test]
 async fn login_route_redirects_to_twitch() {
     install_crypto();
-    let state = build_state(fake_helix());
+    let state = build_state(fake_helix()).await;
     let app = build_router(state);
 
     let req = Request::builder()
@@ -71,7 +71,7 @@ async fn login_route_redirects_to_twitch() {
 #[tokio::test]
 async fn healthz_is_public() {
     install_crypto();
-    let state = build_state(fake_helix());
+    let state = build_state(fake_helix()).await;
     let app = build_router(state);
 
     let req = Request::builder()
@@ -85,7 +85,7 @@ async fn healthz_is_public() {
 #[tokio::test]
 async fn assets_serve_embedded_files() {
     install_crypto();
-    let state = build_state(fake_helix());
+    let state = build_state(fake_helix()).await;
     let app = build_router(state);
 
     let req = Request::builder()

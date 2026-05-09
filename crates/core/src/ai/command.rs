@@ -498,21 +498,37 @@ fn user_facing_provider_message(err: &LlmError) -> Option<&'static str> {
     }
 }
 
+/// Build the [`Caps`] used by the v2 memory store from the (optional)
+/// `[ai.memory]` config section. Falls back to [`Caps::default`] when AI is
+/// disabled — the web dashboard always needs *some* caps because it opens
+/// the store unconditionally.
+pub fn memory_caps_from_config(ai: Option<&crate::config::AiConfig>) -> Caps {
+    match ai {
+        Some(ai) => Caps {
+            soul_bytes: ai.memory.soul_bytes,
+            lore_bytes: ai.memory.lore_bytes,
+            user_bytes: ai.memory.user_bytes,
+            state_bytes: ai.memory.state_bytes,
+            max_state_files: ai.memory.max_state_files,
+        },
+        None => Caps::default(),
+    }
+}
+
 /// Construct the AI memory v2 bundle from config. `None` when `[ai]` is absent.
+///
+/// `store` is built once in main.rs (or by tests) and shared with the web
+/// dashboard via [`crate::Services::memory_store`]. Sharing the same `Arc`-
+/// backed store keeps the per-path mutex map coherent across the bot's
+/// IRC handlers, the dreamer ritual, and the dashboard editor — two
+/// distinct stores would silently race past each other's locks and break
+/// byte-cap enforcement.
 pub async fn build_ai_memory_v2(
     ai: Option<&crate::config::AiConfig>,
-    data_dir: &std::path::Path,
+    store: MemoryStore,
 ) -> Result<Option<AiMemoryV2>> {
     let Some(ai) = ai else { return Ok(None) };
 
-    let caps = Caps {
-        soul_bytes: ai.memory.soul_bytes,
-        lore_bytes: ai.memory.lore_bytes,
-        user_bytes: ai.memory.user_bytes,
-        state_bytes: ai.memory.state_bytes,
-        max_state_files: ai.memory.max_state_files,
-    };
-    let store = MemoryStore::open(data_dir, caps).await?;
     let transcript = TranscriptWriter::open(store.memories_dir()).await?;
     Ok(Some(AiMemoryV2 {
         store,

@@ -39,11 +39,11 @@ fn admin_helix(user_id: &str) -> Arc<dyn HelixClient> {
 
 /// Build (state, sid, csrf, _td) — `_td` keeps the ping data dir alive while
 /// tests exercise PingManager's atomic save+rename. Drop it to clean up.
-fn authed_setup() -> (twitch_1337_web::WebState, String, String, tempfile::TempDir) {
+async fn authed_setup() -> (twitch_1337_web::WebState, String, String, tempfile::TempDir) {
     install_crypto();
     let user_id = "9001";
     let helix = admin_helix(user_id);
-    let (state, td) = build_state_with_ping_dir(helix);
+    let (state, td) = build_state_with_ping_dir(helix).await;
     let (sid, csrf) = insert_session(&state, user_id, "admin");
     (state, sid, csrf, td)
 }
@@ -55,7 +55,7 @@ async fn body_string(res: axum::http::Response<Body>) -> String {
 
 #[tokio::test]
 async fn list_renders_existing_pings() {
-    let (state, sid, csrf, _td) = authed_setup();
+    let (state, sid, csrf, _td) = authed_setup().await;
     {
         let mut mgr = state.ping_manager.write().await;
         mgr.create_ping("team".into(), "Hey {mentions}".into(), "admin".into(), None)
@@ -82,7 +82,7 @@ async fn list_renders_existing_pings() {
 
 #[tokio::test]
 async fn create_rejects_control_chars() {
-    let (state, sid, csrf, _td) = authed_setup();
+    let (state, sid, csrf, _td) = authed_setup().await;
     let app = build_router(state.clone());
     let body = format!(
         "_csrf={csrf}&name=bad&template=oops%0Aboom",
@@ -106,7 +106,7 @@ async fn create_rejects_control_chars() {
 
 #[tokio::test]
 async fn create_rejects_duplicate_name() {
-    let (state, sid, csrf, _td) = authed_setup();
+    let (state, sid, csrf, _td) = authed_setup().await;
     {
         let mut mgr = state.ping_manager.write().await;
         mgr.create_ping("dup".into(), "x {mentions}".into(), "admin".into(), None)
@@ -133,7 +133,7 @@ async fn create_rejects_duplicate_name() {
 
 #[tokio::test]
 async fn edit_round_trip() {
-    let (state, sid, csrf, _td) = authed_setup();
+    let (state, sid, csrf, _td) = authed_setup().await;
     {
         let mut mgr = state.ping_manager.write().await;
         mgr.create_ping("team".into(), "Hey {mentions}".into(), "admin".into(), None)
@@ -176,7 +176,7 @@ async fn edit_round_trip() {
 
 #[tokio::test]
 async fn delete_via_htmx_header_succeeds() {
-    let (state, sid, csrf, _td) = authed_setup();
+    let (state, sid, csrf, _td) = authed_setup().await;
     {
         let mut mgr = state.ping_manager.write().await;
         mgr.create_ping("doomed".into(), "{mentions}".into(), "admin".into(), None)
@@ -203,7 +203,7 @@ async fn delete_via_htmx_header_succeeds() {
 
 #[tokio::test]
 async fn delete_without_csrf_rejected() {
-    let (state, sid, csrf, _td) = authed_setup();
+    let (state, sid, csrf, _td) = authed_setup().await;
     {
         let mut mgr = state.ping_manager.write().await;
         mgr.create_ping("survives".into(), "{mentions}".into(), "admin".into(), None)
@@ -228,7 +228,7 @@ async fn delete_without_csrf_rejected() {
 
 #[tokio::test]
 async fn create_rejects_bad_form_csrf() {
-    let (state, sid, csrf, _td) = authed_setup();
+    let (state, sid, csrf, _td) = authed_setup().await;
     let app = build_router(state.clone());
     let body = format!(
         "_csrf={bad}&name=tampered&template=hi",

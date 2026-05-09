@@ -66,7 +66,7 @@ pub fn build_router(state: WebState) -> Router {
             axum::routing::get(|| async { axum::response::Redirect::to("/pings") }),
         )
         .merge(routes::pings::router())
-        // Memory router mounts in later tasks.
+        .merge(routes::memory::router())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_mod,

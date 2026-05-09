@@ -15,6 +15,10 @@ use crate::ai::memory::sanitize::normalize_display_name;
 use crate::ai::memory::types::{Caps, FileKind, Frontmatter, MemoryFile};
 use crate::util::persist::atomic_write_bytes_async;
 
+/// On-disk modification time, milliseconds since the UNIX epoch. Used as a
+/// lost-update token by the dashboard memory editor.
+pub type Mtime = u64;
+
 const SOUL_SEED: &str = include_str!("../../../data/prompts/seed_soul.md");
 const PROMPT_SYSTEM: &str = include_str!("../../../data/prompts/system.md");
 const PROMPT_INSTRUCTIONS: &str = include_str!("../../../data/prompts/ai_instructions.md");
@@ -300,6 +304,29 @@ impl MemoryStore {
         Ok(())
     }
 
+    /// Returns the on-disk modification time of `kind` as milliseconds since
+    /// the UNIX epoch. Missing files return `0` so the editor can render a
+    /// new-document mtime token without a separate "exists?" probe.
+    ///
+    /// Used by the dashboard editor (Task 5) to embed an `mtime` token in
+    /// the form so a subsequent save can detect lost-update conflicts.
+    pub async fn current_mtime(&self, kind: &FileKind) -> Result<Mtime, WriteError> {
+        let abs = self.inner.memories_dir.join(kind.relative_path());
+        match tokio::fs::metadata(&abs).await {
+            Ok(meta) => {
+                let modified = meta
+                    .modified()
+                    .map_err(|e| WriteError::Io(eyre!("modified: {e}")))?;
+                let dur = modified
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| WriteError::Io(eyre!("epoch: {e}")))?;
+                Ok(u64::try_from(dur.as_millis()).unwrap_or(u64::MAX))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(e) => Err(WriteError::Io(eyre!("metadata: {e}"))),
+        }
+    }
+
     pub async fn delete_state(&self, slug: &str) -> Result<()> {
         let rel = PathBuf::from(format!("state/{slug}.md"));
         let abs = self.inner.memories_dir.join(&rel);
@@ -583,6 +610,39 @@ mod tests {
             Some("12345"),
             "created_by stays after overwrite"
         );
+    }
+
+    #[tokio::test]
+    async fn current_mtime_returns_positive_for_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), Caps::default())
+            .await
+            .unwrap();
+        // SOUL.md is seeded by `open`, so it must have a non-zero mtime.
+        let mt = store.current_mtime(&FileKind::Soul).await.unwrap();
+        assert!(mt > 0, "seeded file must have positive mtime; got {mt}");
+    }
+
+    #[tokio::test]
+    async fn current_mtime_returns_zero_for_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), Caps::default())
+            .await
+            .unwrap();
+        let mt = store
+            .current_mtime(&FileKind::User {
+                user_id: "404".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(mt, 0, "missing file must report mtime 0");
+        let mt = store
+            .current_mtime(&FileKind::State {
+                slug: "missing".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(mt, 0);
     }
 
     #[tokio::test]
