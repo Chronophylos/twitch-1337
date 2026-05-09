@@ -34,6 +34,9 @@ use crate::state::WebState;
 const SID_COOKIE: &str = "tw1337_sid";
 const CSRF_COOKIE: &str = "tw1337_csrf";
 const OAUTH_STATE_COOKIE: &str = "tw1337_oauth_state";
+/// Short-lived cookie that stashes the original requested path captured by
+/// `require_mod` into `?next=`. Consumed (and cleared) by the callback.
+const NEXT_COOKIE: &str = "tw1337_next";
 
 /// Fully-configured `BasicClient` (auth/token/redirect endpoints all set).
 type ConfiguredClient =
@@ -111,7 +114,16 @@ pub fn auth_router() -> Router<WebState> {
         .route("/logout", post(logout))
 }
 
-async fn login(State(state): State<WebState>, cookies: Cookies) -> Response {
+#[derive(Deserialize)]
+struct LoginParams {
+    next: Option<String>,
+}
+
+async fn login(
+    State(state): State<WebState>,
+    Query(params): Query<LoginParams>,
+    cookies: Cookies,
+) -> Response {
     let csrf = CsrfToken::new_random();
     cookies.add(
         Cookie::build((OAUTH_STATE_COOKIE, csrf.secret().to_owned()))
@@ -122,6 +134,19 @@ async fn login(State(state): State<WebState>, cookies: Cookies) -> Response {
             .max_age(time::Duration::minutes(10))
             .build(),
     );
+    if let Some(path) = params.next.as_deref()
+        && crate::error::is_safe_redirect(path)
+    {
+        cookies.add(
+            Cookie::build((NEXT_COOKIE, path.to_owned()))
+                .http_only(true)
+                .secure(true)
+                .same_site(SameSite::Lax)
+                .path("/")
+                .max_age(time::Duration::minutes(10))
+                .build(),
+        );
+    }
     let csrf_for_url = csrf.clone();
     // `moderation:read` lets us check the helix moderators list against the
     // user's own access token in the callback, so the bot's IRC token does
@@ -215,8 +240,15 @@ async fn callback(
             .build(),
     );
 
+    let next_path = cookies
+        .get(NEXT_COOKIE)
+        .map(|c| c.value().to_owned())
+        .filter(|p| crate::error::is_safe_redirect(p))
+        .unwrap_or_else(|| "/".to_owned());
+    cookies.remove(Cookie::build(NEXT_COOKIE).path("/").build());
+
     tracing::info!(target: "twitch_1337_web", user_id=%me.id, user_login=%me.login, action="login", result="ok");
-    Ok(Redirect::to("/").into_response())
+    Ok(Redirect::to(&next_path).into_response())
 }
 
 #[derive(Deserialize)]
@@ -279,14 +311,19 @@ pub async fn require_mod(
     mut req: Request,
     next: Next,
 ) -> Result<Response, WebError> {
+    let captured_next = req.uri().path_and_query().map(|pq| pq.as_str().to_owned());
+    let unauth = || WebError::Unauthenticated {
+        next: captured_next.clone(),
+    };
+
     let sid_cookie = cookies
         .signed(&state.signed_key)
         .get(SID_COOKIE)
-        .ok_or(WebError::Unauthenticated)?;
+        .ok_or_else(unauth)?;
     let session = state
         .sessions
         .get_and_touch(sid_cookie.value())
-        .ok_or(WebError::Unauthenticated)?;
+        .ok_or_else(unauth)?;
 
     let now = state.clock.now();
     let elapsed = now

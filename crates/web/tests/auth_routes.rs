@@ -27,7 +27,9 @@ async fn root_redirects_to_pings_for_authed_request_only() {
     let state = build_state(fake_helix()).await;
     let app = build_router(state);
 
-    // Without a session, `/` (which requires mod) redirects to /login.
+    // Without a session, `/` (which requires mod) redirects to /login. With
+    // the post-login deep-link wired in v2, the captured path `/` is encoded
+    // as `?next=%2F` so the callback can return there after auth.
     let req = Request::builder().uri("/").body(Body::empty()).unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
@@ -37,9 +39,9 @@ async fn root_redirects_to_pings_for_authed_request_only() {
         .unwrap()
         .to_str()
         .unwrap();
-    assert_eq!(
-        location, "/login",
-        "unauth root must redirect to /login (post-login deep-link not wired in v1)",
+    assert!(
+        location.starts_with("/login"),
+        "unauth root must redirect to /login (saw {location})",
     );
 }
 

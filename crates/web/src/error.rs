@@ -11,10 +11,11 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WebError {
-    /// User has no valid session. Redirects to `/login`. Post-login deep-link
-    /// (`?next=`) is not wired in v1 — every login lands the user on `/pings`.
+    /// User has no valid session. Redirects to `/login`. The optional `next`
+    /// captures the requested path so the callback can return there after
+    /// successful login.
     #[error("unauthenticated; redirect to login")]
-    Unauthenticated,
+    Unauthenticated { next: Option<String> },
     #[error("forbidden")]
     Forbidden,
     #[error("csrf mismatch")]
@@ -67,6 +68,20 @@ struct ConflictTpl<'a> {
     current_page: &'static str,
 }
 
+/// Allow only same-origin absolute paths. Anything that smells like a
+/// scheme, host, or CRLF is rejected so the redirect can't be turned into
+/// an open-redirect or header-splitting vector.
+///
+/// Public so test binaries (in `crates/web/tests/`) can pin the validator
+/// directly — they link as separate crates against the public API.
+pub fn is_safe_redirect(path: &str) -> bool {
+    path.starts_with('/')
+        && path.len() <= 256
+        && !path.starts_with("//")
+        && !path.contains("://")
+        && !path.contains(['\r', '\n'])
+}
+
 fn render<T: Template>(status: StatusCode, tpl: &T) -> Response {
     match tpl.render() {
         Ok(body) => (status, Html(body)).into_response(),
@@ -80,7 +95,14 @@ fn render<T: Template>(status: StatusCode, tpl: &T) -> Response {
 impl IntoResponse for WebError {
     fn into_response(self) -> Response {
         match self {
-            WebError::Unauthenticated => Redirect::to("/login").into_response(),
+            WebError::Unauthenticated { next } => {
+                if let Some(path) = next.filter(|p| is_safe_redirect(p)) {
+                    Redirect::to(&format!("/login?next={}", urlencoding::encode(&path)))
+                        .into_response()
+                } else {
+                    Redirect::to("/login").into_response()
+                }
+            }
             WebError::Forbidden => render(StatusCode::FORBIDDEN, &DeniedTpl),
             WebError::CsrfMismatch => (
                 StatusCode::FORBIDDEN,
