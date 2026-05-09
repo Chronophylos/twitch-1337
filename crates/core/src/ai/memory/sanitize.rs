@@ -19,6 +19,10 @@ const RESERVED: &[&str] = &[
     "dreamer",
     "prompt",
     "instructions",
+    // Dashboard route literals: a state note named `new` would shadow the
+    // create form, `delete` would shadow the per-slug delete URL.
+    "new",
+    "delete",
 ];
 const FENCE_OPEN: &str = "<<<FILE ";
 const FENCE_CLOSE: &str = "<<<ENDFILE ";

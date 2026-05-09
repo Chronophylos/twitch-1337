@@ -392,12 +392,14 @@ impl MemoryStore {
     /// `id` is informational; the path is encoded in `kind`. Kept on the
     /// signature so call sites read fluently.
     ///
-    /// TOCTOU note: we drop the outer guard between mtime check + the
-    /// inner `write` / `write_state` (which take their own per-path lock).
-    /// Acceptable for v1 because every write path serialises on the same
-    /// mutex map — the worst case is an unconditional write losing to a
-    /// guarded one that just verified mtime, which still preserves
-    /// causality from the user's perspective.
+    /// TOCTOU note: we drop the outer guard between the mtime check and
+    /// the inner `write` / `write_state` (which take their own per-path
+    /// lock). In that gap an unconditional write (AI tool or dreamer
+    /// ritual) can land between the dashboard user's check and their
+    /// write — the dashboard write then silently overwrites that change
+    /// without surfacing a conflict. Acceptable for v1 since every write
+    /// path serialises on the same per-path mutex map and the gap is
+    /// short; the dashboard user's intent is always preserved.
     pub async fn write_with_guard(
         &self,
         kind: FileKind,

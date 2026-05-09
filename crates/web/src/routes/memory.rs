@@ -346,6 +346,8 @@ struct CsrfOnly {
 /// Common save path for SOUL/LORE/users/state. Validates csrf, dispatches
 /// to `write_with_guard`, and maps every WriteError variant to a
 /// user-facing response so the handler bodies stay one-liners.
+// Eight args: state + session + cookies + kind + label + id + form + redirect.
+// Splitting them into a struct would just rename the noise without removing it.
 #[allow(clippy::too_many_arguments)]
 async fn save_kind(
     state: &WebState,
