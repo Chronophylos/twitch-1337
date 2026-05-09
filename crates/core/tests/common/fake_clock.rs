@@ -6,6 +6,8 @@
 //! `set` to simulate time passing. Registered waiters (from `sleep_until`)
 //! fire when their target becomes reached.
 
+use twitch_1337_core as twitch_1337;
+
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;

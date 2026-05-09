@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use twitch_1337_core as twitch_1337;
+
 use chrono::Utc;
 use color_eyre::eyre::Result;
 use secrecy::ExposeSecret as _;

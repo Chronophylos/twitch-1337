@@ -1,3 +1,4 @@
+use twitch_1337_core as twitch_1337;
 mod common;
 
 use std::collections::HashMap;

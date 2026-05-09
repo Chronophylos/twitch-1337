@@ -1,6 +1,8 @@
 //! One-stop integration test fixture. Assembles FakeTransport + FakeClock +
 //! FakeLlm + wiremock + tempdir into a live bot running behind `run_bot`.
 
+use twitch_1337_core as twitch_1337;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
