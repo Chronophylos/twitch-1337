@@ -189,16 +189,7 @@ async fn build_web_spawner(
         mod_check_refresh: config.web.mod_check_refresh,
     });
 
-    let signed_key = {
-        let secret = config.web.session_secret.expose_secret().as_bytes();
-        if secret.len() < 32 {
-            return Err(eyre!(
-                "web.session_secret must be at least 32 bytes (got {})",
-                secret.len()
-            ));
-        }
-        tower_cookies::Key::derive_from(secret)
-    };
+    let signed_key = twitch_1337_web::state::derive_session_key(&config.web.session_secret)?;
 
     let state = twitch_1337_web::WebState {
         sessions,

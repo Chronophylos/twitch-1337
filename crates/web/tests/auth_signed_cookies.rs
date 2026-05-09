@@ -18,10 +18,16 @@ async fn tampered_sid_redirects_to_login() {
     .await;
     let (signed_sid, _signed_csrf, _bare_csrf) = insert_session(&state, "12345", "alice");
 
-    // Flip a single hex char in the signed sid; the HMAC must fail.
+    // tower-cookies signs as `BASE64(hmac_tag) || original_value`. Flipping
+    // a char inside the HMAC tag prefix (first 44 chars) corrupts only the
+    // signature; the embedded sid stays intact. A bare cookies.get(...)
+    // would still find the live sid in SessionTable — only the signed
+    // extractor's HMAC verification rejects this. That's what we want to
+    // pin down.
     let mut tampered = signed_sid.clone();
-    let last = tampered.pop().unwrap();
-    tampered.push(if last == 'a' { 'b' } else { 'a' });
+    // SAFETY: base64 chars are ASCII; flipping A↔B preserves UTF-8.
+    let bytes = unsafe { tampered.as_bytes_mut() };
+    bytes[0] = if bytes[0] == b'A' { b'B' } else { b'A' };
 
     let app = build_router(state);
     let req = Request::builder()
