@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::sync::mpsc;
@@ -51,10 +51,26 @@ pub const TRACKING_LOST_REMOVAL: Duration = Duration::from_secs(1800); // 30 min
 pub const POLL_FAST: Duration = Duration::from_secs(30);
 pub const POLL_NORMAL: Duration = Duration::from_secs(60);
 pub const POLL_SLOW: Duration = Duration::from_secs(120);
+const PENDING_POLL_2_MIN: Duration = Duration::from_secs(120);
+const PENDING_POLL_5_MIN: Duration = Duration::from_secs(300);
+const PENDING_POLL_10_MIN: Duration = Duration::from_secs(600);
+const PENDING_POLL_15_MIN: Duration = Duration::from_secs(900);
+const PENDING_POLL_30_MIN: Duration = Duration::from_secs(1800);
 /// Timeout for a single live ADS-B lookup.
 pub const POLL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Timeout for adsbdb route fetch.
 const ROUTE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+// Pending pre-tracked flights use sparse ADS-B checks far from departure and
+// tighten only around the likely takeoff window to keep aggregator calls low.
+const PENDING_SCHEDULED_FAR_BEFORE: i64 = 6 * 60 * 60;
+const PENDING_SCHEDULED_NEAR_BEFORE: i64 = 90 * 60;
+const PENDING_SCHEDULED_NEAR_AFTER: i64 = 45 * 60;
+const PENDING_SCHEDULED_MID_AFTER: i64 = 3 * 60 * 60;
+const PENDING_SCHEDULED_EXPIRE_AFTER: i64 = 12 * 60 * 60;
+const PENDING_UNKNOWN_FAST_AFTER_TRACK: i64 = 10 * 60;
+const PENDING_UNKNOWN_NORMAL_AFTER_TRACK: i64 = 6 * 60 * 60;
+const PENDING_UNKNOWN_EXPIRE_AFTER: i64 = 24 * 60 * 60;
 
 // Divert detection
 const DIVERT_BEARING_THRESHOLD: f64 = 90.0; // degrees
@@ -172,6 +188,10 @@ pub struct TrackedFlight {
     pub takeoff_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub aviationstack_checked: bool,
+    #[serde(default)]
+    pub scheduled_departure_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub last_adsb_poll_at: Option<DateTime<Utc>>,
 
     // Divert detection
     #[serde(default)]
@@ -438,8 +458,45 @@ fn set_route_from_iata(flight: &mut TrackedFlight, origin: &str, dest: &str) {
     flight.route = Some((origin, dest));
 }
 
+fn normalize_flight_code(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_uppercase())
+    }
+}
+
+fn metadata_callsign(metadata: &AviationstackFlightMetadata) -> Option<String> {
+    metadata
+        .flight_icao
+        .as_deref()
+        .and_then(normalize_flight_code)
+        .or_else(|| {
+            let airline = metadata.airline_icao.as_deref()?.trim();
+            let number = metadata.flight_number.as_deref()?.trim();
+            if airline.is_empty() || number.is_empty() {
+                None
+            } else {
+                Some(format!("{}{}", airline.to_uppercase(), number))
+            }
+        })
+}
+
 fn apply_aviationstack_metadata(flight: &mut TrackedFlight, metadata: AviationstackFlightMetadata) {
     let takeoff_at = metadata.takeoff_time();
+
+    if flight.scheduled_departure_at.is_none() {
+        flight
+            .scheduled_departure_at
+            .clone_from(&metadata.departure_scheduled);
+    }
+
+    if flight.callsign.is_none()
+        && let Some(callsign) = metadata_callsign(&metadata)
+    {
+        flight.callsign = Some(callsign);
+    }
 
     if let (Some(origin), Some(dest)) = (
         metadata.departure_iata.as_deref(),
@@ -462,6 +519,27 @@ fn apply_aviationstack_metadata(flight: &mut TrackedFlight, metadata: Aviationst
 
     if let Some(takeoff_at) = takeoff_at {
         flight.takeoff_at = Some(takeoff_at);
+    }
+}
+
+async fn fetch_aviationstack_metadata_for_tracking(
+    aviation_client: &AviationClient,
+    identifier: &FlightIdentifier,
+    callsign: Option<&str>,
+) -> Option<AviationstackFlightMetadata> {
+    match aviation_client
+        .get_aviationstack_flight_metadata(identifier, callsign)
+        .await
+    {
+        Ok(Some(metadata)) => Some(metadata),
+        Ok(None) => {
+            debug!(identifier = %identifier, "No aviationstack metadata found for flight");
+            None
+        }
+        Err(e) => {
+            warn!(error = ?e, identifier = %identifier, "Aviationstack metadata lookup failed");
+            None
+        }
     }
 }
 
@@ -543,6 +621,20 @@ pub(crate) fn msg_tracking_lost(flight: &TrackedFlight) -> String {
     format!("{name} Signal verloren, wird nicht mehr getrackt")
 }
 
+pub(crate) fn msg_adsb_visible(flight: &TrackedFlight) -> String {
+    format!(
+        "{} ist jetzt im ADS-B sichtbar",
+        format_flight_prefix(flight)
+    )
+}
+
+pub(crate) fn msg_pending_expired(flight: &TrackedFlight) -> String {
+    format!(
+        "{} ist nicht im ADS-B aufgetaucht, wird nicht mehr getrackt",
+        format_flight_prefix(flight)
+    )
+}
+
 pub(crate) fn msg_flight_status(flight: &TrackedFlight, now: DateTime<Utc>) -> String {
     let prefix = format_flight_prefix(flight);
     let alt = format_alt(flight.altitude_ft);
@@ -578,13 +670,155 @@ pub(crate) fn msg_flights_list(flights: &[TrackedFlight]) -> String {
     format!("Getrackte Fl\u{00fc}ge: {}", parts.join(" | "))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingPollSchedule {
+    Active {
+        interval: Duration,
+        expires_at: DateTime<Utc>,
+    },
+    Expired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PollReadiness {
+    Due,
+    NotDue(DateTime<Utc>),
+    Expired,
+}
+
+fn chrono_seconds(seconds: i64) -> TimeDelta {
+    TimeDelta::seconds(seconds)
+}
+
+fn duration_to_chrono(duration: Duration) -> TimeDelta {
+    TimeDelta::from_std(duration).unwrap_or_else(|_| TimeDelta::zero())
+}
+
+fn add_duration(time: DateTime<Utc>, duration: Duration) -> DateTime<Utc> {
+    time + duration_to_chrono(duration)
+}
+
+fn is_pending_adsb(flight: &TrackedFlight) -> bool {
+    flight.last_seen.is_none()
+}
+
+fn live_poll_interval(flight: &TrackedFlight) -> Duration {
+    if flight.polls_since_change < 5
+        || matches!(
+            flight.phase,
+            FlightPhase::Takeoff | FlightPhase::Approach | FlightPhase::Landing
+        )
+    {
+        POLL_FAST
+    } else if matches!(flight.phase, FlightPhase::Climb | FlightPhase::Descent) {
+        POLL_NORMAL
+    } else {
+        POLL_SLOW
+    }
+}
+
+fn pending_poll_schedule(flight: &TrackedFlight, now: DateTime<Utc>) -> PendingPollSchedule {
+    if let Some(scheduled_departure_at) = flight.scheduled_departure_at {
+        let expires_at = scheduled_departure_at + chrono_seconds(PENDING_SCHEDULED_EXPIRE_AFTER);
+        if now >= expires_at {
+            return PendingPollSchedule::Expired;
+        }
+
+        let until_departure = scheduled_departure_at.signed_duration_since(now);
+        let since_departure = now.signed_duration_since(scheduled_departure_at);
+        let interval = if until_departure > chrono_seconds(PENDING_SCHEDULED_FAR_BEFORE) {
+            PENDING_POLL_30_MIN
+        } else if until_departure > chrono_seconds(PENDING_SCHEDULED_NEAR_BEFORE) {
+            PENDING_POLL_15_MIN
+        } else if since_departure <= chrono_seconds(PENDING_SCHEDULED_NEAR_AFTER) {
+            PENDING_POLL_2_MIN
+        } else if since_departure <= chrono_seconds(PENDING_SCHEDULED_MID_AFTER) {
+            PENDING_POLL_5_MIN
+        } else {
+            PENDING_POLL_15_MIN
+        };
+
+        return PendingPollSchedule::Active {
+            interval,
+            expires_at,
+        };
+    }
+
+    let expires_at = flight.tracked_at + chrono_seconds(PENDING_UNKNOWN_EXPIRE_AFTER);
+    if now >= expires_at {
+        return PendingPollSchedule::Expired;
+    }
+
+    let age = now.signed_duration_since(flight.tracked_at);
+    let interval = if age < chrono_seconds(PENDING_UNKNOWN_FAST_AFTER_TRACK) {
+        PENDING_POLL_2_MIN
+    } else if age < chrono_seconds(PENDING_UNKNOWN_NORMAL_AFTER_TRACK) {
+        PENDING_POLL_10_MIN
+    } else {
+        PENDING_POLL_30_MIN
+    };
+
+    PendingPollSchedule::Active {
+        interval,
+        expires_at,
+    }
+}
+
+fn next_due_after_last_poll(
+    last_adsb_poll_at: Option<DateTime<Utc>>,
+    interval: Duration,
+    now: DateTime<Utc>,
+) -> DateTime<Utc> {
+    last_adsb_poll_at
+        .map(|last_poll| add_duration(last_poll, interval))
+        .unwrap_or(now)
+}
+
+fn poll_readiness(flight: &TrackedFlight, now: DateTime<Utc>) -> PollReadiness {
+    let next_due = if is_pending_adsb(flight) {
+        match pending_poll_schedule(flight, now) {
+            PendingPollSchedule::Expired => return PollReadiness::Expired,
+            PendingPollSchedule::Active {
+                interval,
+                expires_at,
+            } => {
+                let due_at = next_due_after_last_poll(flight.last_adsb_poll_at, interval, now);
+                if due_at <= expires_at {
+                    due_at
+                } else {
+                    expires_at
+                }
+            }
+        }
+    } else {
+        next_due_after_last_poll(flight.last_adsb_poll_at, live_poll_interval(flight), now)
+    };
+
+    if next_due <= now {
+        PollReadiness::Due
+    } else {
+        PollReadiness::NotDue(next_due)
+    }
+}
+
+fn next_poll_at(flights: &[TrackedFlight], now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    flights
+        .iter()
+        .map(|flight| match poll_readiness(flight, now) {
+            PollReadiness::Due | PollReadiness::Expired => now,
+            PollReadiness::NotDue(next_at) => next_at,
+        })
+        .min()
+}
+
 /// Determines the polling interval based on all tracked flights.
+#[allow(dead_code)]
 pub(crate) fn compute_poll_interval(flights: &[TrackedFlight]) -> Duration {
-    if flights.is_empty() {
+    if flights.is_empty() || flights.iter().all(is_pending_adsb) {
         return POLL_SLOW;
     }
 
-    let needs_fast = flights.iter().any(|f| {
+    let needs_fast = flights.iter().filter(|f| !is_pending_adsb(f)).any(|f| {
         f.polls_since_change < 5
             || matches!(
                 f.phase,
@@ -598,6 +832,7 @@ pub(crate) fn compute_poll_interval(flights: &[TrackedFlight]) -> Duration {
 
     let needs_normal = flights
         .iter()
+        .filter(|f| !is_pending_adsb(f))
         .any(|f| matches!(f.phase, FlightPhase::Climb | FlightPhase::Descent));
 
     if needs_normal {
@@ -655,7 +890,8 @@ pub async fn run_flight_tracker<T, L>(
                 .await;
             }
 
-            // Poll all flights
+            // Poll only flights that are due. Pending pre-tracked flights can
+            // stay far below the live cadence until their departure window.
             poll_all_flights(
                 &mut state,
                 &client,
@@ -666,16 +902,16 @@ pub async fn run_flight_tracker<T, L>(
             )
             .await;
 
-            // Sleep with adaptive interval, but wake up early for commands
-            let interval = compute_poll_interval(&state.flights);
+            let now = clock.now_utc();
+            let next_at = next_poll_at(&state.flights, now).unwrap_or(now);
             debug!(
-                interval_secs = interval.as_secs(),
+                next_poll_at = %next_at,
                 flights = state.flights.len(),
-                "Sleeping until next poll"
+                "Sleeping until next flight poll"
             );
 
             tokio::select! {
-                _ = tokio::time::sleep(interval) => {}
+                _ = clock.sleep_until(next_at) => {}
                 cmd = cmd_rx.recv() => {
                     match cmd {
                         Some(cmd) => {
@@ -804,31 +1040,75 @@ async fn handle_track<T, L>(
         return;
     }
 
+    let resolved_callsign = match &identifier {
+        FlightIdentifier::Callsign(cs) => {
+            // Translate IATA flight numbers (e.g. TP247 -> TAP247) before querying.
+            // This runs outside POLL_TIMEOUT: adsbdb fallback has its own 5s timeout.
+            Some(aviation_client.resolve_callsign(cs).await)
+        }
+        FlightIdentifier::Hex(_) => None,
+    };
+
+    if let Some(resolved) = &resolved_callsign
+        && !resolved.eq_ignore_ascii_case(identifier.as_str())
+    {
+        let already_tracked = state.flights.iter().any(|f| {
+            f.identifier.as_str().eq_ignore_ascii_case(resolved)
+                || f.callsign
+                    .as_ref()
+                    .is_some_and(|cs| cs.eq_ignore_ascii_case(resolved))
+        });
+        if already_tracked {
+            let msg = format!("{} wird schon getrackt FDM", identifier);
+            if let Err(e) = client.say_in_reply_to(reply_to, msg).await {
+                error!(error = ?e, "Failed to send duplicate message");
+            }
+            return;
+        }
+    }
+
     // Query live ADS-B aggregators to verify flight exists.
     let ac_result = match &identifier {
         FlightIdentifier::Hex(hex) => {
             tokio::time::timeout(POLL_TIMEOUT, aviation_client.get_aircraft_by_hex(hex)).await
         }
-        FlightIdentifier::Callsign(cs) => {
-            // Translate IATA flight numbers (e.g. TP247 → TAP247) before querying.
-            // This runs outside POLL_TIMEOUT: adsbdb fallback has its own 5s timeout.
-            let resolved = aviation_client.resolve_callsign(cs).await;
+        FlightIdentifier::Callsign(_) => {
+            let resolved = resolved_callsign
+                .as_deref()
+                .expect("callsign identifiers have a resolved callsign");
             tokio::time::timeout(
                 POLL_TIMEOUT,
-                aviation_client.get_aircraft_by_callsign(&resolved),
+                aviation_client.get_aircraft_by_callsign(resolved),
             )
             .await
         }
     };
 
+    let mut aviationstack_checked = false;
+    let mut metadata = None;
     let ac = match ac_result {
-        Ok(Ok(Some(ac))) => ac,
+        Ok(Ok(Some(ac))) => Some(ac),
         Ok(Ok(None)) => {
-            let msg = format!("{} nicht gefunden im ADS-B FDM", identifier);
-            if let Err(e) = client.say_in_reply_to(reply_to, msg).await {
-                error!(error = ?e, "Failed to send not-found message");
+            if matches!(&identifier, FlightIdentifier::Callsign(_))
+                && aviation_client.aviationstack_enabled()
+            {
+                aviationstack_checked = true;
+                metadata = fetch_aviationstack_metadata_for_tracking(
+                    aviation_client,
+                    &identifier,
+                    resolved_callsign.as_deref(),
+                )
+                .await;
             }
-            return;
+
+            if metadata.is_none() {
+                let msg = format!("{} nicht gefunden im ADS-B FDM", identifier);
+                if let Err(e) = client.say_in_reply_to(reply_to, msg).await {
+                    error!(error = ?e, "Failed to send not-found message");
+                }
+                return;
+            }
+            None
         }
         Ok(Err(e)) => {
             error!(error = ?e, identifier = %identifier, "ADS-B lookup failed");
@@ -851,65 +1131,70 @@ async fn handle_track<T, L>(
         }
     };
 
-    // Extract data from the aircraft
     let callsign = ac
-        .flight
         .as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let hex = ac.hex.clone();
-    let aircraft_type = ac.t.clone();
+        .and_then(|ac| {
+            ac.flight
+                .as_ref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .or_else(|| metadata.as_ref().and_then(metadata_callsign))
+        .or_else(|| resolved_callsign.clone());
+    let hex = ac.as_ref().and_then(|ac| ac.hex.clone());
+    let aircraft_type = ac.as_ref().and_then(|ac| ac.t.clone());
     let now = clock.now_utc();
 
     let mut flight = TrackedFlight {
         identifier: identifier.clone(),
         callsign: callsign.clone(),
-        hex: hex.clone(),
+        hex,
         phase: FlightPhase::Unknown,
         route: None,
         aircraft_type,
-        altitude_ft: altitude_ft(&ac),
-        vertical_rate_fpm: vertical_rate(&ac),
-        ground_speed_kts: ac.gs,
-        lat: ac.lat,
-        lon: ac.lon,
-        squawk: ac.squawk.clone(),
+        altitude_ft: ac.as_ref().and_then(altitude_ft),
+        vertical_rate_fpm: ac.as_ref().and_then(vertical_rate),
+        ground_speed_kts: ac.as_ref().and_then(|ac| ac.gs),
+        lat: ac.as_ref().and_then(|ac| ac.lat),
+        lon: ac.as_ref().and_then(|ac| ac.lon),
+        squawk: ac.as_ref().and_then(|ac| ac.squawk.clone()),
         tracked_by: requested_by.to_string(),
         tracked_at: now,
-        last_seen: Some(now),
+        last_seen: ac.as_ref().map(|_| now),
         last_phase_change: None,
         polls_since_change: 0,
         takeoff_at: None,
-        aviationstack_checked: false,
+        aviationstack_checked,
+        scheduled_departure_at: None,
+        last_adsb_poll_at: Some(now),
         divert_consecutive_polls: 0,
         dest_lat: None,
         dest_lon: None,
     };
 
-    // Detect initial phase
-    flight.phase = detect_phase(&flight, &ac);
+    if let Some(ac) = &ac {
+        flight.phase = detect_phase(&flight, ac);
+    }
 
-    if aviation_client.aviationstack_enabled() {
-        flight.aviationstack_checked = true;
-        match aviation_client
-            .get_aviationstack_flight_metadata(&identifier, callsign.as_deref())
-            .await
-        {
-            Ok(Some(metadata)) => {
-                apply_aviationstack_metadata(&mut flight, metadata);
-            }
-            Ok(None) => {
-                debug!(identifier = %identifier, "No aviationstack metadata found for flight");
-            }
-            Err(e) => {
-                warn!(error = ?e, identifier = %identifier, "Aviationstack metadata lookup failed");
-            }
-        }
+    if aviation_client.aviationstack_enabled() && !aviationstack_checked {
+        aviationstack_checked = true;
+        metadata = fetch_aviationstack_metadata_for_tracking(
+            aviation_client,
+            &identifier,
+            callsign.as_deref(),
+        )
+        .await;
+    }
+
+    flight.aviationstack_checked = aviationstack_checked;
+    if let Some(metadata) = metadata {
+        apply_aviationstack_metadata(&mut flight, metadata);
     }
 
     // Fetch route if we have a callsign and aviationstack did not provide one.
+    let route_callsign = flight.callsign.clone();
     if flight.route.is_none()
-        && let Some(cs) = &callsign
+        && let Some(cs) = route_callsign.as_deref()
     {
         match tokio::time::timeout(ROUTE_FETCH_TIMEOUT, aviation_client.get_flight_route(cs)).await
         {
@@ -1039,10 +1324,29 @@ async fn poll_all_flights<T, L>(
         Result<Result<Option<NearbyAircraft>, eyre::Report>, tokio::time::error::Elapsed>;
 
     let mut join_set = tokio::task::JoinSet::new();
+    let mut fetch_results: Vec<Option<PollResult>> =
+        (0..state.flights.len()).map(|_| None).collect();
+
     for (idx, flight) in state.flights.iter().enumerate() {
+        match poll_readiness(flight, now) {
+            PollReadiness::Due => {}
+            PollReadiness::NotDue(_) => continue,
+            PollReadiness::Expired => {
+                info!(
+                    identifier = %flight.identifier,
+                    "Removing pending flight: ADS-B never appeared"
+                );
+                messages.push(msg_pending_expired(flight));
+                removals.push(idx);
+                changed = true;
+                continue;
+            }
+        }
+
         let ac = aviation_client.clone();
         let id = flight.identifier.clone();
         let hex = flight.hex.clone();
+        let callsign = flight.callsign.clone();
         join_set.spawn(async move {
             let result: PollResult = match &id {
                 FlightIdentifier::Hex(h) => {
@@ -1052,7 +1356,12 @@ async fn poll_all_flights<T, L>(
                     if let Some(h) = &hex {
                         tokio::time::timeout(POLL_TIMEOUT, ac.get_aircraft_by_hex(h)).await
                     } else {
-                        tokio::time::timeout(POLL_TIMEOUT, ac.get_aircraft_by_callsign(cs)).await
+                        let lookup_callsign = callsign.as_deref().unwrap_or(cs);
+                        tokio::time::timeout(
+                            POLL_TIMEOUT,
+                            ac.get_aircraft_by_callsign(lookup_callsign),
+                        )
+                        .await
                     }
                 }
             };
@@ -1061,8 +1370,6 @@ async fn poll_all_flights<T, L>(
     }
 
     // Collect results indexed by flight position
-    let mut fetch_results: Vec<Option<PollResult>> =
-        (0..state.flights.len()).map(|_| None).collect();
     while let Some(res) = join_set.join_next().await {
         if let Ok((idx, poll_result)) = res {
             fetch_results[idx] = Some(poll_result);
@@ -1081,12 +1388,17 @@ async fn poll_all_flights<T, L>(
             continue;
         };
         let flight = &mut state.flights[idx];
+        let was_pending = is_pending_adsb(flight);
+        flight.last_adsb_poll_at = Some(now);
+        changed = true;
 
         let ac = match ac_result {
             Ok(Ok(Some(ac))) => ac,
             Ok(Ok(None)) => {
                 // Aircraft not found -- check tracking lost threshold
-                if let Some(last_seen) = flight.last_seen {
+                if flight.last_seen.is_none() {
+                    flight.polls_since_change = flight.polls_since_change.saturating_add(1);
+                } else if let Some(last_seen) = flight.last_seen {
                     let lost_duration = now.signed_duration_since(last_seen);
                     if lost_duration >= removal_threshold {
                         info!(
@@ -1116,7 +1428,11 @@ async fn poll_all_flights<T, L>(
             }
         };
 
-        // Aircraft found -- update last_seen (don't mark changed for just this)
+        if was_pending {
+            messages.push(msg_adsb_visible(flight));
+        }
+
+        // Aircraft found -- update last_seen.
         flight.last_seen = Some(now);
 
         // Resolve callsign/hex/type if not yet known
@@ -1195,14 +1511,17 @@ async fn poll_all_flights<T, L>(
                 flight.takeoff_at = Some(now);
             }
 
-            // Post phase change messages
-            match new_phase {
-                FlightPhase::Takeoff => messages.push(msg_takeoff(flight)),
-                FlightPhase::Cruise => messages.push(msg_cruise(flight)),
-                FlightPhase::Descent => messages.push(msg_descent(flight)),
-                FlightPhase::Approach => messages.push(msg_approach(flight)),
-                FlightPhase::Landing => messages.push(msg_landing(flight, now)),
-                _ => {}
+            // First ADS-B visibility for pending flights is announced above;
+            // defer phase chatter until later polls to keep that transition clear.
+            if !was_pending {
+                match new_phase {
+                    FlightPhase::Takeoff => messages.push(msg_takeoff(flight)),
+                    FlightPhase::Cruise => messages.push(msg_cruise(flight)),
+                    FlightPhase::Descent => messages.push(msg_descent(flight)),
+                    FlightPhase::Approach => messages.push(msg_approach(flight)),
+                    FlightPhase::Landing => messages.push(msg_landing(flight, now)),
+                    _ => {}
+                }
             }
 
             // Landing transitions to Ground after posting
@@ -1306,6 +1625,8 @@ mod tests {
             polls_since_change: 0,
             takeoff_at: None,
             aviationstack_checked: false,
+            scheduled_departure_at: None,
+            last_adsb_poll_at: None,
             divert_consecutive_polls: 0,
             dest_lat: None,
             dest_lon: None,
@@ -1359,6 +1680,20 @@ mod tests {
         }
     }
 
+    fn pending_interval(flight: &TrackedFlight, now: DateTime<Utc>) -> Duration {
+        match pending_poll_schedule(flight, now) {
+            PendingPollSchedule::Active { interval, .. } => interval,
+            PendingPollSchedule::Expired => panic!("expected active pending schedule"),
+        }
+    }
+
+    fn assert_pending_expired(flight: &TrackedFlight, now: DateTime<Utc>) {
+        assert_eq!(
+            pending_poll_schedule(flight, now),
+            PendingPollSchedule::Expired
+        );
+    }
+
     #[test]
     fn landing_uses_takeoff_time_not_tracking_time() {
         let mut flight = tracked_flight();
@@ -1388,6 +1723,7 @@ mod tests {
         let mut metadata = metadata();
         metadata.departure_iata = Some("fra".to_string());
         metadata.arrival_iata = Some("muc".to_string());
+        metadata.departure_scheduled = Some(dt("2026-04-18T09:45:00Z"));
         metadata.departure_actual = Some(dt("2026-04-18T10:00:00Z"));
         metadata.departure_actual_runway = Some(dt("2026-04-18T10:05:00Z"));
         metadata.aircraft_icao24 = Some("3c6589".to_string());
@@ -1396,6 +1732,10 @@ mod tests {
         apply_aviationstack_metadata(&mut flight, metadata);
 
         assert_eq!(flight.route, Some(("FRA".to_string(), "MUC".to_string())));
+        assert_eq!(
+            flight.scheduled_departure_at,
+            Some(dt("2026-04-18T09:45:00Z"))
+        );
         assert_eq!(flight.takeoff_at, Some(dt("2026-04-18T10:05:00Z")));
         assert_eq!(flight.hex.as_deref(), Some("3C6589"));
         assert_eq!(flight.aircraft_type.as_deref(), Some("A320"));
@@ -1410,6 +1750,100 @@ mod tests {
         apply_aviationstack_metadata(&mut flight, metadata);
 
         assert_eq!(flight.takeoff_at, Some(dt("2026-04-18T10:00:00Z")));
+    }
+
+    #[test]
+    fn pending_poll_schedule_uses_sparse_interval_far_before_departure() {
+        let mut flight = tracked_flight();
+        flight.scheduled_departure_at = Some(dt("2026-04-18T12:00:00Z"));
+
+        assert_eq!(
+            pending_interval(&flight, dt("2026-04-18T05:59:00Z")),
+            PENDING_POLL_30_MIN
+        );
+    }
+
+    #[test]
+    fn pending_poll_schedule_uses_fast_interval_around_departure() {
+        let mut flight = tracked_flight();
+        flight.scheduled_departure_at = Some(dt("2026-04-18T12:00:00Z"));
+
+        assert_eq!(
+            pending_interval(&flight, dt("2026-04-18T10:31:00Z")),
+            PENDING_POLL_2_MIN
+        );
+        assert_eq!(
+            pending_interval(&flight, dt("2026-04-18T12:45:00Z")),
+            PENDING_POLL_2_MIN
+        );
+    }
+
+    #[test]
+    fn pending_poll_schedule_slows_after_departure_window() {
+        let mut flight = tracked_flight();
+        flight.scheduled_departure_at = Some(dt("2026-04-18T12:00:00Z"));
+
+        assert_eq!(
+            pending_interval(&flight, dt("2026-04-18T13:00:00Z")),
+            PENDING_POLL_5_MIN
+        );
+        assert_eq!(
+            pending_interval(&flight, dt("2026-04-18T15:01:00Z")),
+            PENDING_POLL_15_MIN
+        );
+    }
+
+    #[test]
+    fn pending_poll_schedule_expires_scheduled_flights() {
+        let mut flight = tracked_flight();
+        flight.scheduled_departure_at = Some(dt("2026-04-18T12:00:00Z"));
+
+        assert_pending_expired(&flight, dt("2026-04-19T00:00:00Z"));
+    }
+
+    #[test]
+    fn pending_poll_schedule_ramps_unknown_departure_and_expires() {
+        let flight = tracked_flight();
+
+        assert_eq!(
+            pending_interval(&flight, dt("2026-04-18T10:05:00Z")),
+            PENDING_POLL_2_MIN
+        );
+        assert_eq!(
+            pending_interval(&flight, dt("2026-04-18T10:10:00Z")),
+            PENDING_POLL_10_MIN
+        );
+        assert_eq!(
+            pending_interval(&flight, dt("2026-04-18T16:00:00Z")),
+            PENDING_POLL_30_MIN
+        );
+        assert_pending_expired(&flight, dt("2026-04-19T10:00:00Z"));
+    }
+
+    #[test]
+    fn next_poll_at_respects_pending_due_time() {
+        let mut flight = tracked_flight();
+        let now = dt("2026-04-18T10:00:00Z");
+        flight.scheduled_departure_at = Some(dt("2026-04-18T10:30:00Z"));
+        flight.last_adsb_poll_at = Some(now);
+
+        assert_eq!(
+            next_poll_at(&[flight], now),
+            Some(dt("2026-04-18T10:02:00Z"))
+        );
+    }
+
+    #[test]
+    fn next_poll_at_keeps_live_fast_interval_for_recent_changes() {
+        let mut flight = tracked_flight_with(FlightPhase::Unknown, 0);
+        let now = dt("2026-04-18T10:00:00Z");
+        flight.last_seen = Some(now);
+        flight.last_adsb_poll_at = Some(now);
+
+        assert_eq!(
+            next_poll_at(&[flight], now),
+            Some(dt("2026-04-18T10:00:30Z"))
+        );
     }
 
     #[test]
