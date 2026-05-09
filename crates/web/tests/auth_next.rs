@@ -41,6 +41,8 @@ fn safe_redirect_rejects_scheme_and_host() {
     assert!(!is_safe_redirect("https://evil.example/"));
     assert!(!is_safe_redirect("javascript:alert(1)"));
     assert!(!is_safe_redirect("/path\r\nSet-Cookie: x=1"));
+    assert!(!is_safe_redirect("/\\evil.example/x"));
+    assert!(!is_safe_redirect("/foo\\bar"));
     assert!(!is_safe_redirect(&"/".repeat(257)));
 }
 
@@ -62,9 +64,9 @@ async fn unauth_request_redirects_to_login_with_next() {
         .unwrap()
         .to_str()
         .unwrap();
-    assert!(
-        location.starts_with("/login?next=") && location.contains("memory"),
-        "expected next=memory deep-link, got {location}"
+    assert_eq!(
+        location, "/login?next=%2Fmemory%2Fstate%2Fnotes",
+        "expected exact encoded next path, got {location}"
     );
 }
 

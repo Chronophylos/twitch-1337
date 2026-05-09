@@ -247,7 +247,14 @@ async fn callback(
         .unwrap_or_else(|| "/".to_owned());
     cookies.remove(Cookie::build(NEXT_COOKIE).path("/").build());
 
-    tracing::info!(target: "twitch_1337_web", user_id=%me.id, user_login=%me.login, action="login", result="ok");
+    tracing::info!(
+        target: "twitch_1337_web",
+        user_id = %me.id,
+        user_login = %me.login,
+        next_path = %next_path,
+        action = "login",
+        result = "ok",
+    );
     Ok(Redirect::to(&next_path).into_response())
 }
 

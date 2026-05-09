@@ -69,8 +69,10 @@ struct ConflictTpl<'a> {
 }
 
 /// Allow only same-origin absolute paths. Anything that smells like a
-/// scheme, host, or CRLF is rejected so the redirect can't be turned into
-/// an open-redirect or header-splitting vector.
+/// scheme, host, or CRLF is rejected so the redirect can't be turned
+/// into an open-redirect or header-splitting vector. Backslashes are
+/// rejected because browsers (per WHATWG URL spec) parse them as `/`,
+/// turning `/\evil.example/x` into a protocol-relative URL.
 ///
 /// Public so test binaries (in `crates/web/tests/`) can pin the validator
 /// directly — they link as separate crates against the public API.
@@ -79,7 +81,7 @@ pub fn is_safe_redirect(path: &str) -> bool {
         && path.len() <= 256
         && !path.starts_with("//")
         && !path.contains("://")
-        && !path.contains(['\r', '\n'])
+        && !path.contains(['\r', '\n', '\\'])
 }
 
 fn render<T: Template>(status: StatusCode, tpl: &T) -> Response {
