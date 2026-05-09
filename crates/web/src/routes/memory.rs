@@ -161,7 +161,7 @@ async fn tree(
         state_count: states.len(),
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
-        current_page: "memory",
+        current_page: crate::nav::MEMORY_TREE,
     })
 }
 
@@ -210,7 +210,7 @@ async fn view_soul(
         "SOUL".to_owned(),
         "/memory/soul".to_owned(),
         None,
-        "memory_soul",
+        crate::nav::MEMORY_SOUL,
     )
     .await
 }
@@ -226,7 +226,7 @@ async fn view_lore(
         "LORE".to_owned(),
         "/memory/lore".to_owned(),
         None,
-        "memory_lore",
+        crate::nav::MEMORY_LORE,
     )
     .await
 }
@@ -259,7 +259,7 @@ async fn list_users(
         items,
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
-        current_page: "memory_users",
+        current_page: crate::nav::MEMORY_USERS,
     })
 }
 
@@ -285,7 +285,7 @@ async fn view_user(
         title,
         save_url,
         None,
-        "memory_users",
+        crate::nav::MEMORY_USERS,
     )
     .await
 }
@@ -317,7 +317,7 @@ async fn list_state(
         items,
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
-        current_page: "memory_state",
+        current_page: crate::nav::MEMORY_STATE,
     })
 }
 
@@ -337,7 +337,7 @@ async fn new_state_form(
         delete_url: None,
         error: None,
         user_login: &session.user_login,
-        current_page: "memory_state",
+        current_page: crate::nav::MEMORY_STATE,
     })
 }
 
@@ -357,7 +357,7 @@ async fn view_state(
         title,
         save_url,
         Some(delete_url),
-        "memory_state",
+        crate::nav::MEMORY_STATE,
     )
     .await
 }
@@ -409,10 +409,10 @@ async fn save_kind(
         return Err(WebError::CsrfMismatch);
     }
     let current_page: &'static str = match &kind {
-        FileKind::Soul => "memory_soul",
-        FileKind::Lore => "memory_lore",
-        FileKind::User { .. } => "memory_users",
-        FileKind::State { .. } => "memory_state",
+        FileKind::Soul => crate::nav::MEMORY_SOUL,
+        FileKind::Lore => crate::nav::MEMORY_LORE,
+        FileKind::User { .. } => crate::nav::MEMORY_USERS,
+        FileKind::State { .. } => crate::nav::MEMORY_STATE,
     };
     let outcome = state
         .memory_store
@@ -678,7 +678,7 @@ fn render_state_create_error(
             delete_url: None,
             error: Some(msg),
             user_login,
-            current_page: "memory_state",
+            current_page: crate::nav::MEMORY_STATE,
         },
     )
 }

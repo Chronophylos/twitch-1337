@@ -13,6 +13,7 @@ pub mod config;
 pub mod error;
 pub mod flash;
 pub mod helix;
+pub mod nav;
 pub mod routes;
 pub mod state;
 

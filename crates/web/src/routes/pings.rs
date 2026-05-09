@@ -93,7 +93,7 @@ async fn list(
         flash: flash::take(&cookies),
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
-        current_page: "pings",
+        current_page: crate::nav::PINGS,
     };
     render(&tpl)
 }
@@ -107,7 +107,7 @@ async fn new_form(Extension(session): Extension<Session>) -> Result<Response, We
         csrf: &csrf_hex,
         error: None,
         user_login: &session.user_login,
-        current_page: "pings",
+        current_page: crate::nav::PINGS,
     })
 }
 
@@ -150,7 +150,7 @@ async fn create(
                 csrf: &csrf_hex,
                 error: Some(format!("ping `{name}` already exists")),
                 user_login: &session.user_login,
-                current_page: "pings",
+                current_page: crate::nav::PINGS,
             },
         );
     }
@@ -177,7 +177,7 @@ async fn create(
                 csrf: &csrf_hex,
                 error: Some(e.to_string()),
                 user_login: &session.user_login,
-                current_page: "pings",
+                current_page: crate::nav::PINGS,
             },
         );
     }
@@ -218,7 +218,7 @@ async fn edit_form(
         csrf: &csrf_hex,
         error: None,
         user_login: &session.user_login,
-        current_page: "pings",
+        current_page: crate::nav::PINGS,
     })
 }
 
@@ -261,7 +261,7 @@ async fn update(
                 csrf: &csrf_hex,
                 error: Some(e.to_string()),
                 user_login: &session.user_login,
-                current_page: "pings",
+                current_page: crate::nav::PINGS,
             },
         );
     }
