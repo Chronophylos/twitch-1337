@@ -44,6 +44,10 @@ pub struct ConflictPayload {
     /// The conflict template renders a fresh save form so the user can
     /// retry from inside the conflict page itself.
     pub csrf: String,
+    /// Logged-in user's login, threaded through to the sidebar.
+    pub user_login: String,
+    /// Sidebar highlight key matching the originating editor's section.
+    pub current_page: &'static str,
 }
 
 #[derive(Template)]
@@ -59,6 +63,8 @@ struct ConflictTpl<'a> {
     current_mtime: u64,
     draft: &'a str,
     csrf: &'a str,
+    user_login: &'a str,
+    current_page: &'static str,
 }
 
 fn render<T: Template>(status: StatusCode, tpl: &T) -> Response {
@@ -95,6 +101,8 @@ impl IntoResponse for WebError {
                     current_mtime: payload.current_mtime,
                     draft: &payload.draft,
                     csrf: &payload.csrf,
+                    user_login: &payload.user_login,
+                    current_page: payload.current_page,
                 },
             ),
             WebError::OAuthExchange(msg) => (

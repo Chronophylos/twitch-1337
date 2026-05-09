@@ -43,6 +43,8 @@ struct ListTpl {
     rows: Vec<RowView>,
     flash: Option<String>,
     csrf: String,
+    user_login: String,
+    current_page: &'static str,
 }
 
 #[derive(Template)]
@@ -53,6 +55,8 @@ struct FormTpl<'a> {
     template_text: &'a str,
     csrf: &'a str,
     error: Option<String>,
+    user_login: &'a str,
+    current_page: &'static str,
 }
 
 fn render<T: Template>(tpl: &T) -> Result<Response, WebError> {
@@ -88,6 +92,8 @@ async fn list(
         rows,
         flash: flash::take(&cookies),
         csrf: csrf::encode(&session.csrf_value),
+        user_login: session.user_login.clone(),
+        current_page: "pings",
     };
     render(&tpl)
 }
@@ -100,6 +106,8 @@ async fn new_form(Extension(session): Extension<Session>) -> Result<Response, We
         template_text: "",
         csrf: &csrf_hex,
         error: None,
+        user_login: &session.user_login,
+        current_page: "pings",
     })
 }
 
@@ -141,6 +149,8 @@ async fn create(
                 template_text: &template,
                 csrf: &csrf_hex,
                 error: Some(format!("ping `{name}` already exists")),
+                user_login: &session.user_login,
+                current_page: "pings",
             },
         );
     }
@@ -166,6 +176,8 @@ async fn create(
                 template_text: &template,
                 csrf: &csrf_hex,
                 error: Some(e.to_string()),
+                user_login: &session.user_login,
+                current_page: "pings",
             },
         );
     }
@@ -205,6 +217,8 @@ async fn edit_form(
         template_text: &template_text,
         csrf: &csrf_hex,
         error: None,
+        user_login: &session.user_login,
+        current_page: "pings",
     })
 }
 
@@ -246,6 +260,8 @@ async fn update(
                 template_text: &template,
                 csrf: &csrf_hex,
                 error: Some(e.to_string()),
+                user_login: &session.user_login,
+                current_page: "pings",
             },
         );
     }

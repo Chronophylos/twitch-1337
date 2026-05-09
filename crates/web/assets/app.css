@@ -1,5 +1,8 @@
-.layout { display: flex; min-height: 100vh; }
-.sidebar { width: 220px; padding: 1rem; border-right: 1px solid #333; }
-.content { flex: 1; padding: 1.5rem; }
-.flash { background: #2d4a2d; padding: .5rem 1rem; border-radius: 4px; }
-.error { background: #4a2d2d; padding: .5rem 1rem; border-radius: 4px; }
+.dashboard { display: grid; grid-template-columns: 16rem 1fr; min-height: 100vh; }
+.sidebar { padding: 1rem; border-right: 1px solid var(--pico-muted-border-color, #ddd); }
+.sidebar nav ul { list-style: none; padding-left: 0; }
+.sidebar nav ul ul { padding-left: 1rem; }
+.sidebar li.active > a { font-weight: bold; }
+.content { padding: 1rem 2rem; }
+.flash { padding: 0.5rem 1rem; background: var(--pico-color-azure-100, #e8f4fd); border-radius: 0.25rem; margin-bottom: 1rem; }
+.error { padding: 0.5rem 1rem; background: var(--pico-color-pumpkin-100, #fde8e0); border-radius: 0.25rem; margin-bottom: 1rem; }

@@ -58,6 +58,9 @@ pub fn router() -> Router<WebState> {
 struct TreeTpl {
     user_count: usize,
     state_count: usize,
+    csrf: String,
+    user_login: String,
+    current_page: &'static str,
 }
 
 #[derive(Template)]
@@ -71,6 +74,8 @@ struct EditorTpl<'a> {
     save_url: &'a str,
     delete_url: Option<&'a str>,
     error: Option<String>,
+    user_login: &'a str,
+    current_page: &'static str,
 }
 
 struct StateRow {
@@ -83,6 +88,9 @@ struct StateRow {
 #[template(path = "memory/state_list.html")]
 struct StateListTpl {
     items: Vec<StateRow>,
+    csrf: String,
+    user_login: String,
+    current_page: &'static str,
 }
 
 struct UserRow {
@@ -95,6 +103,9 @@ struct UserRow {
 #[template(path = "memory/users_list.html")]
 struct UsersListTpl {
     items: Vec<UserRow>,
+    csrf: String,
+    user_login: String,
+    current_page: &'static str,
 }
 
 fn render<T: Template>(tpl: &T) -> Result<Response, WebError> {
@@ -132,7 +143,10 @@ fn validate_slug(slug: &str) -> Result<(), WebError> {
     })
 }
 
-async fn tree(State(state): State<WebState>) -> Result<Response, WebError> {
+async fn tree(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+) -> Result<Response, WebError> {
     let store = &state.memory_store;
     let users = store
         .list_users()
@@ -145,6 +159,9 @@ async fn tree(State(state): State<WebState>) -> Result<Response, WebError> {
     render(&TreeTpl {
         user_count: users.len(),
         state_count: states.len(),
+        csrf: csrf::encode(&session.csrf_value),
+        user_login: session.user_login.clone(),
+        current_page: "memory",
     })
 }
 
@@ -155,6 +172,7 @@ async fn view_kind(
     title: String,
     save_url: String,
     delete_url: Option<String>,
+    current_page: &'static str,
 ) -> Result<Response, WebError> {
     let store = &state.memory_store;
     let mf = store
@@ -176,6 +194,8 @@ async fn view_kind(
         save_url: &save_url,
         delete_url: delete_url.as_deref(),
         error: None,
+        user_login: &session.user_login,
+        current_page,
     })
 }
 
@@ -190,6 +210,7 @@ async fn view_soul(
         "SOUL".to_owned(),
         "/memory/soul".to_owned(),
         None,
+        "memory_soul",
     )
     .await
 }
@@ -205,11 +226,15 @@ async fn view_lore(
         "LORE".to_owned(),
         "/memory/lore".to_owned(),
         None,
+        "memory_lore",
     )
     .await
 }
 
-async fn list_users(State(state): State<WebState>) -> Result<Response, WebError> {
+async fn list_users(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+) -> Result<Response, WebError> {
     let users: Vec<MemoryFile> = state
         .memory_store
         .list_users()
@@ -230,7 +255,12 @@ async fn list_users(State(state): State<WebState>) -> Result<Response, WebError>
             }
         })
         .collect();
-    render(&UsersListTpl { items })
+    render(&UsersListTpl {
+        items,
+        csrf: csrf::encode(&session.csrf_value),
+        user_login: session.user_login.clone(),
+        current_page: "memory_users",
+    })
 }
 
 async fn view_user(
@@ -255,11 +285,15 @@ async fn view_user(
         title,
         save_url,
         None,
+        "memory_users",
     )
     .await
 }
 
-async fn list_state(State(state): State<WebState>) -> Result<Response, WebError> {
+async fn list_state(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+) -> Result<Response, WebError> {
     let items: Vec<MemoryFile> = state
         .memory_store
         .list_state()
@@ -279,7 +313,12 @@ async fn list_state(State(state): State<WebState>) -> Result<Response, WebError>
             }
         })
         .collect();
-    render(&StateListTpl { items })
+    render(&StateListTpl {
+        items,
+        csrf: csrf::encode(&session.csrf_value),
+        user_login: session.user_login.clone(),
+        current_page: "memory_state",
+    })
 }
 
 async fn new_state_form(
@@ -297,6 +336,8 @@ async fn new_state_form(
         save_url: "/memory/state",
         delete_url: None,
         error: None,
+        user_login: &session.user_login,
+        current_page: "memory_state",
     })
 }
 
@@ -316,6 +357,7 @@ async fn view_state(
         title,
         save_url,
         Some(delete_url),
+        "memory_state",
     )
     .await
 }
@@ -366,6 +408,12 @@ async fn save_kind(
     if !csrf::verify(&form.csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
+    let current_page: &'static str = match &kind {
+        FileKind::Soul => "memory_soul",
+        FileKind::Lore => "memory_lore",
+        FileKind::User { .. } => "memory_users",
+        FileKind::State { .. } => "memory_state",
+    };
     let outcome = state
         .memory_store
         .write_with_guard(kind.clone(), &id, &form.body, Some(form.mtime))
@@ -403,6 +451,8 @@ async fn save_kind(
                 current_mtime,
                 draft: form.body,
                 csrf: csrf_hex,
+                user_login: session.user_login.clone(),
+                current_page,
             })))
         }
         Err(err) => {
@@ -434,6 +484,8 @@ async fn save_kind(
                     save_url: &redirect_to,
                     delete_url: delete_url.as_deref(),
                     error: Some(msg),
+                    user_login: &session.user_login,
+                    current_page,
                 },
             )
         }
@@ -562,7 +614,7 @@ async fn create_state(
             // it with a wrong user-facing message.
             other => return Err(other),
         };
-        return render_state_create_error(&form, &csrf_hex, cap, msg);
+        return render_state_create_error(&form, &csrf_hex, cap, msg, &session.user_login);
     }
     let slug = form.slug.clone();
     match state
@@ -602,7 +654,7 @@ async fn create_state(
                 WriteError::InvalidSlug => "reserved or invalid slug".to_owned(),
                 WriteError::Io(e) => return Err(WebError::Internal(e)),
             };
-            render_state_create_error(&form, &csrf_hex, cap, msg)
+            render_state_create_error(&form, &csrf_hex, cap, msg, &session.user_login)
         }
     }
 }
@@ -612,6 +664,7 @@ fn render_state_create_error(
     csrf_hex: &str,
     cap: usize,
     msg: String,
+    user_login: &str,
 ) -> Result<Response, WebError> {
     render_with(
         StatusCode::BAD_REQUEST,
@@ -624,6 +677,8 @@ fn render_state_create_error(
             save_url: "/memory/state",
             delete_url: None,
             error: Some(msg),
+            user_login,
+            current_page: "memory_state",
         },
     )
 }

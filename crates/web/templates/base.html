@@ -11,9 +11,12 @@
 </head>
 <body>
   {% block layout %}
-  <main class="content">
-    {% block content %}{% endblock %}
-  </main>
+  <div class="dashboard">
+    {% include "sidebar.html" %}
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
   {% endblock %}
 </body>
 </html>
