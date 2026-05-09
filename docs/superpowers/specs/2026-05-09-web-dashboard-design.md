@@ -93,7 +93,9 @@ Templates use Askama with layout inheritance (`{% extends "base.html" %}`). Stat
 
 ### Run hook (`crates/core/src/lib.rs::run_bot`)
 
-If `config.web.enabled`, build a `WebDeps` struct from the same `Arc`s already passed to handlers and spawn `web::run_web(deps, shutdown_notify.subscribe())` alongside other handlers. Web shutdown participates in the existing graceful-shutdown protocol (`Arc<Notify>` + 5s timeout). Bind failure → `bail!` at startup, identical to IRC connect failure.
+If `config.web.enabled`, build a `WebDeps` struct from the same `Arc`s already passed to handlers and spawn `web::run_web(deps, shutdown)` alongside other handlers. Today `run_bot` accepts a `oneshot::Receiver<()>` from the bin entry-point and threads an internal `Arc<Notify>` to schedule children. The web task is added as a third child of that internal `Notify`: `run_bot` calls `web::run_web(deps, shutdown_notify.clone())` and the web task awaits `shutdown_notify.notified()` to begin draining. The outer `oneshot::Receiver<()>` continues to drive the top-level Ctrl+C path; no changes to `run_bot`'s public signature.
+
+Bind failure when `web.enabled = true` → `bail!` at startup, by design — a misconfigured public surface is louder than silent. Operators who want the bot without the web simply set `web.enabled = false`.
 
 ### Dependencies
 
@@ -110,7 +112,7 @@ Workspace additions: `axum`, `askama` (with `with-axum`), `tower`, `tower-http` 
    2. `user_id == broadcaster_id_of(twitch.channel)` → admit (broadcaster id resolved once at startup via helix and cached)
    3. `user_id ∈ helix moderators of twitch.channel` (called using the bot's existing refreshed access token from `token.ron`) → admit. The helix moderators endpoint paginates (default 20, max 100 per page) via the `pagination.cursor` field. The client must follow the cursor until exhausted before answering "not a moderator" — single-page lookup would 403 a real moderator on broadcasters with more than one page of mods. Use `first=100` to minimize round trips.
    4. otherwise → render `auth/denied.html` with HTTP 403
-4. **Issue session** — random 32-byte id (`rand::rngs::OsRng`); cookie `tw1337_sid` (HttpOnly, Secure, SameSite=Lax, no Max-Age = browser session). Server-side `Arc<RwLock<HashMap<SessionId, Session>>>`. Session = `{ user_id, user_login, issued_at, last_seen, last_mod_check }`.
+4. **Issue session** — random 32-byte id (`rand::rngs::OsRng`); cookie `tw1337_sid` (HttpOnly, Secure, SameSite=Lax, no Max-Age = browser session). The `Secure` flag is always set; the bot expects to be reached only via the Cloudflare Tunnel public URL (HTTPS), and direct loopback access is for development where browsers permit `Secure` cookies on `http://localhost`. Server-side `Arc<RwLock<HashMap<SessionId, Session>>>`. Session = `{ user_id, user_login, issued_at, last_seen, last_mod_check, csrf_value: [u8; 32] }`.
 5. **`POST /logout`** — drop session entry + clear cookie.
 
 ### Session lifetime
@@ -122,7 +124,7 @@ Workspace additions: `axum`, `askama` (with `with-axum`), `tower`, `tower-http` 
 
 ### CSRF for write actions
 
-Double-submit cookie. On session creation, set `tw1337_csrf` cookie (random 32-byte hex, HttpOnly=false so JS-light templates can read it via DOM if needed; SameSite=Lax). Every form rendered server-side includes a hidden `_csrf` input populated from the same value held in `WebState`. POST/DELETE handlers compare cookie vs form field; mismatch → 403.
+Double-submit cookie. On session creation, generate a random 32-byte CSRF token and store it on the session (`Session.csrf_value`). Set `tw1337_csrf` cookie to the same value (hex-encoded, HttpOnly=false so the global HTMX hook can read it from the DOM cookie store; Secure; SameSite=Lax). Every form rendered server-side includes a hidden `_csrf` input populated from `Session.csrf_value`. POST/DELETE handlers compare submitted value (form field or header — see below) against both the cookie and the session-stored value; mismatch → 403. Storing the token on the session, not in `WebState`, means each user has their own value and rotating one doesn't disrupt another.
 
 **HTMX-driven mutations:** standard `<form hx-post=...>` submissions auto-serialize the hidden `_csrf` input. Isolated buttons (e.g. inline ping delete, state-note delete) render without an enclosing form, so they must attach the token explicitly. Two acceptable patterns; the codebase picks one and uses it consistently:
 
@@ -167,7 +169,11 @@ Authed (mod-gated):
 
 Delete is exposed only for state notes by design — no route accepts deletes for SOUL, LORE, or user sheets.
 
-**Reserved slugs.** State note creation rejects the slugs `new`, `delete`, and any value that would collide with the route table (anything matching `^[a-zA-Z0-9._-]+$` minus that reserved set is allowed). This guards against a state note literally named `new` shadowing the create form even if Axum's route precedence handled it correctly today. The reservation lives in `MemoryStore` so the IRC `write_file` tool gets the same protection.
+**Reserved slugs.** State note creation rejects the slugs `new`, `delete`, and any value that would collide with the route table. Allowed slugs match `^[a-zA-Z0-9._-]{1,64}$` minus that reserved set. The 64-char cap prevents both ugly URLs and edge cases at the 255-byte filesystem-name limit. This guards against a state note literally named `new` shadowing the create form even if Axum's route precedence handled it correctly today. The reservation and length cap live in `MemoryStore` so the IRC `write_file` tool gets the same protection.
+
+**User-id path validation.** `:user_id` route segments must match `^[0-9]{1,32}$` (Twitch numeric user ids are decimal; 32 digits is generous future-proofing). Anything else returns 404 before any filesystem access, ruling out path-traversal attempts like `/memory/users/../../../etc/passwd`. `MemoryStore` performs the same check on the AI `write_file` tool path; the web layer's regex sits at the route extractor so invalid paths short-circuit before touching the store.
+
+**Why no delete for SOUL/LORE/users.** Deleting these would erase the bot's core persona (SOUL), the channel's accumulated lore (LORE), or a user's complete memory sheet — all hard or impossible to reconstruct. Users wanting to "reset" can blank the body in the editor, which is reversible until the dreamer ritual rewrites the file.
 
 ### `WebState`
 
@@ -178,7 +184,6 @@ pub struct WebState {
     pub sessions: Arc<RwLock<HashMap<SessionId, Session>>>,
     pub oauth: Arc<OAuthClient>,
     pub helix: Arc<dyn HelixClient>,         // new thin client, mirrors AviationClient pattern; boxed for tests
-    pub csrf_secret: [u8; 32],
     pub irc_connected: Arc<AtomicBool>,
     pub config: Arc<WebConfig>,
     pub clock: Arc<dyn Clock>,
@@ -192,6 +197,8 @@ Same `Arc<RwLock<PingManager>>` and `Arc<MemoryStore>` already used by IRC handl
 `MemoryStore` gains a write method that takes an expected mtime token:
 
 ```rust
+pub type Mtime = u64;  // milliseconds since UNIX_EPOCH; opaque to callers, sourced from std::fs::Metadata::modified()
+
 pub enum WriteOutcome {
     Written { new_mtime: Mtime },
     Conflict { current_body: String, current_mtime: Mtime },
@@ -206,13 +213,13 @@ pub async fn write_with_guard(
 ) -> Result<WriteOutcome, WriteError>;
 ```
 
-The ritual and the AI `write_file` tool keep using the existing unconditional path (`expected = None`); the web layer always supplies the `expected` token from the form. Byte caps and validation are enforced in `MemoryStore` (already true today); the web layer adds no parallel rules.
+The ritual and the AI `write_file` tool keep using the existing unconditional path (`expected = None`); the web layer always supplies the `expected` token from the form. Byte caps (SOUL 4 KiB, LORE 12 KiB, user 4 KiB, state 2 KiB — defined in `Caps::default()` in `ai::memory::types`) and validation are enforced in `MemoryStore` (already true today); the web layer adds no parallel rules.
 
 ### Healthz
 
 `GET /healthz` returns 200 if the bot's IRC connection is currently alive, else 503. Mounted unconditionally when web is enabled. This is what Cloudflare Tunnel and the Docker `HEALTHCHECK` probe.
 
-The connection-alive signal is a new `Arc<AtomicBool>` set true on successful initial IRC connect and updated by the latency monitor: cleared if `LATENCY_PING_INTERVAL * 3` elapses without a PONG, set again on the next PONG. This is the most direct, side-effect-free signal available; no existing flag exposes it.
+The connection-alive signal is a new `Arc<AtomicBool>`, **initialized `false`**, set true on successful initial IRC connect and updated by the latency monitor: cleared if `LATENCY_PING_INTERVAL * 3` elapses without a PONG, set again on the next PONG. The `Dockerfile` `HEALTHCHECK` line specifies `--start-period=10s`, which gives the bot a grace period to complete initial IRC connect before unhealthy probes count against the container. This is the most direct, side-effect-free signal available; no existing flag exposes it.
 
 The bot binary gains a `--healthcheck` flag that performs `GET http://127.0.0.1:<web.bind_port>/healthz` and exits 0/1. With `web.enabled = false` it exits 0 (skip). Used in the Dockerfile so probes work in `FROM scratch` without curl/wget:
 
@@ -259,6 +266,8 @@ Duration fields use the `humantime-serde` crate (newly added) and deserialize in
 
 The mod allow list is derived dynamically from `twitch.hidden_admins`, the broadcaster of `twitch.channel`, and helix moderators. No static web allow list.
 
+The `[web]` section is **read once at startup**. Changing `bind_addr`, `session_ttl`, or any other web setting requires a restart. The existing schedules hot-reload pipeline does not extend to `[web]`. (Out of scope for v1; not worth the rebind machinery.) Restart drops the in-memory session table → all users re-login. Equivalent to rotating `session_secret`, so no separate rotation flow is needed.
+
 ## Error handling
 
 Centralized `WebError` enum implementing `axum::response::IntoResponse`:
@@ -269,20 +278,25 @@ Centralized `WebError` enum implementing `axum::response::IntoResponse`:
 | `Forbidden`                   | 403  | `auth/denied.html`                                          |
 | `CsrfMismatch`                | 403  | terse "Session expired, reload and try again"               |
 | `Validation { field, msg }`   | 400  | re-render originating form with inline error                |
+| `DuplicateName { name }`      | 400  | re-render ping create form with "ping `<name>` already exists" |
 | `Conflict { kind, id, ... }`  | 409  | `memory/conflict.html`                                      |
-| `OAuthExchange(_)` etc.       | 502  | retry link                                                  |
+| `OAuthExchange(_)` etc.       | 502  | error page with link back to `/login` (preserves `?next=`)  |
 | `Internal(eyre::Error)`       | 500  | generic page; logged with `?error`                          |
 
 Validation rules (control chars in ping templates, byte cap exceeded in memory bodies, ping name regex) are reused from `PingManager` and `MemoryStore`. The web layer maps their error types into `WebError::Validation` rather than re-implementing checks.
 
-`tower_http::trace::TraceLayer` logs every request at INFO with method, path, status, latency. Auth events (login, mod-check pass/fail, logout) and write actions log at INFO with `user_id` + `user_login` + `action` + `target` + `result`. No separate audit file in v1.
+**Flash messages.** Successful POSTs (save / create / delete) issue a 303-See-Other redirect to a list view; the redirect target carries a one-shot success message via a short-lived (60s) `tw1337_flash` cookie cleared on first read. Used for "Ping `foo` saved", "State note `bar` deleted", etc. No server-side flash state.
+
+**Login throttling.** v1 relies on Cloudflare Tunnel's edge protections (rate limiting, bot fight mode) and the in-app mod check (only Twitch-authenticated mods see anything past 403). No per-IP login throttling is implemented in the bot. If the deployment grows, add `tower_governor` later.
+
+`tower_http::trace::TraceLayer` logs every request at INFO with method, path, status, latency, under tracing target `twitch_1337_web`. Auth events (login, mod-check pass/fail, logout) and write actions (pings + memory, both kinds) log at INFO with `user_id` + `user_login` + `action` + `target` + `result`. No separate audit file in v1.
 
 ## Testing
 
 ### Unit tests (`crates/web/`)
 
 - `auth::session`: cookie sign/verify round-trip, TTL expiry against fake `Clock`, sliding refresh.
-- `auth::csrf`: token issue/verify round-trip, mismatch path.
+- `auth::csrf`: token issue/verify round-trip, mismatch path, both submission channels (form field `_csrf` and header `X-Csrf-Token`).
 - `auth::mod_check`: hidden admin path, broadcaster path, helix path (with mocked `HelixClient`), denied path.
 - `error::IntoResponse`: every variant produces expected status + template name.
 
@@ -290,7 +304,7 @@ Validation rules (control chars in ping templates, byte cap exceeded in memory b
 
 Drive `axum::Router` with `tower::ServiceExt::oneshot` (no real network):
 
-- **Pings**: list rendering, create rejects control chars, edit round-trip, delete removes from `PingManager`, name regex enforced.
+- **Pings**: list rendering, create rejects control chars, edit round-trip, delete removes from `PingManager`, name regex enforced, duplicate-name on create returns `WebError::DuplicateName`, HTMX delete (no enclosing form) accepted with `X-Csrf-Token` header and rejected without it.
 - **Memory**: read each kind, byte-cap rejection per kind, mtime conflict path returns 409 with current body + draft preserved, state CRUD (create / edit / delete), kind boundary (no delete route mounted for soul/lore/users; routing assertion). Route precedence: `GET /memory/state/new` resolves to the create form, never to a state note named `new`; create with reserved slug (`new`, `delete`) is rejected with 400.
 - **Helix client**: pagination — synthesize a multi-page moderators response in the fake (cursor on page 1, target user on page 2) and assert the client follows the cursor and returns true.
 - **Auth**: unauthenticated authed-route hit → 302; authenticated non-mod → 403; mod → 200.
@@ -298,7 +312,7 @@ Drive `axum::Router` with `tower::ServiceExt::oneshot` (no real network):
 
 ### Integration test (`crates/twitch-1337/tests/`)
 
-One test that builds `run_bot` via `TestBotBuilder` with `web.enabled = true` and a fake transport, then makes a real TCP `GET /healthz` and asserts 200. Smoke test for the wiring in `core::run_bot`.
+One test that builds `run_bot` via `TestBotBuilder` with `web.enabled = true` and a fake transport, then makes a real TCP `GET /healthz` and asserts 200. Smoke test for the wiring in `core::run_bot`. **Deliberately narrow:** OAuth callback and authed routes are covered by `oneshot` route tests; we do not stand up a fake Twitch IDP for end-to-end login in v1.
 
 ### Fakes
 
@@ -330,3 +344,5 @@ None blocking. Items deferred to follow-up specs:
 - Manual dreamer trigger, suspend handler controls, config reload
 - Audit log file separate from tracing output
 - Mobile-optimized layout
+- Cloudflare Tunnel ingress configuration and the deployment doc updates (CLAUDE.md `[web]` reference, README setup instructions, Justfile targets for tunnel up/down) — captured in the implementation plan, not the spec
+- Login rate limiting / `tower_governor`
