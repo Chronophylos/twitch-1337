@@ -66,6 +66,7 @@ pub async fn main() -> Result<()> {
         aviation: aviation_client,
         whisper: Some(whisper),
         data_dir: get_data_dir(),
+        emote_glossary_override: None,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();

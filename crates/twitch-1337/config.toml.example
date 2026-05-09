@@ -82,20 +82,13 @@ client_secret = "your_client_secret"
 # max_writes_per_turn = 8                             # Max memory writes the model may make per turn (1..=64, default: 8)
 #
 # Optional: 7TV emote grounding for !ai
-# Requires a manual glossary file so the model only gets emotes with known meaning.
+# The glossary that maps emote names to meanings is baked into the binary;
+# enable the feature here, no glossary file is read at runtime.
 # [ai.emotes]
 # enabled = true
 # include_global = true
 # refresh_interval_secs = 3600
 # max_prompt_emotes = 40
-# glossary_path = "7tv_emotes.toml"  # Relative paths resolve under the bot data dir
-#
-# Example glossary file:
-# [[emotes]]
-# name = "KEKW"
-# meaning = "laughter; something is funny"
-# usage = "jokes, fail moments, or ironic chat reactions"
-# avoid = "serious topics"
 #
 # Optional: expose web tools to !ai (`web_search` + `read_url`) via SearXNG.
 # The model can search current events and fetch article text at runtime.

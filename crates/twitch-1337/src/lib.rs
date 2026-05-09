@@ -76,6 +76,10 @@ pub struct Services {
     pub aviation: Option<AviationClient>,
     pub whisper: Option<Arc<dyn WhisperSender>>,
     pub data_dir: PathBuf,
+    /// Optional override for the 7TV emote glossary TOML. Production leaves
+    /// this `None` so the baked glossary is used; integration tests inject
+    /// custom fixtures.
+    pub emote_glossary_override: Option<String>,
 }
 
 /// Run the bot until `shutdown` fires or a handler exits.
@@ -100,6 +104,7 @@ where
         aviation,
         whisper,
         data_dir,
+        emote_glossary_override,
     } = services;
 
     let schedules_enabled = !config.schedules.is_empty();
@@ -118,6 +123,22 @@ where
     let ai_memory_v2 =
         crate::ai::command::build_ai_memory_v2(config.ai.as_ref(), &data_dir).await?;
     let transcript = ai_memory_v2.as_ref().map(|m| m.transcript.clone());
+
+    // 7TV emote provider: built once at startup so malformed glossary TOML
+    // (baked or test-injected) fails fast instead of silently disabling emotes.
+    let emote_provider = match (llm.as_ref(), config.ai.as_ref()) {
+        (Some(_), Some(ai)) if ai.emotes.enabled => {
+            let glossary_toml = emote_glossary_override
+                .as_deref()
+                .unwrap_or(crate::twitch::seventv::BAKED_GLOSSARY_TOML);
+            let provider =
+                crate::twitch::seventv::SevenTvEmoteProvider::new(ai.emotes.clone(), glossary_toml)
+                    .wrap_err("Failed to initialize 7TV emote provider")?;
+            tracing::info!("7TV emote glossary prompt grounding enabled");
+            Some(Arc::new(provider))
+        }
+        _ => None,
+    };
 
     // Clone before moving into SpawnDeps so the dreamer ritual can also use them.
     let ai_memory_v2_for_ritual = ai_memory_v2.clone();
@@ -140,6 +161,7 @@ where
         whisper,
         aviation,
         aviation_for_commands,
+        emote_provider,
     });
 
     let shutdown_notify = handlers.shutdown_notify.clone();

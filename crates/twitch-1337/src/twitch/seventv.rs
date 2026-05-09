@@ -2,7 +2,6 @@
 
 use std::{
     collections::HashSet,
-    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -16,13 +15,17 @@ use crate::{APP_USER_AGENT, config::AiEmotesConfigSection};
 const DEFAULT_BASE_URL: &str = "https://7tv.io/v3";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Manual glossary baked into the binary at build time. Curated alongside the
+/// rest of the codebase; updates ship with the binary, not as a runtime file.
+pub const BAKED_GLOSSARY_TOML: &str = include_str!("../../data/7tv_emotes.toml");
+
 /// Lazily refreshes the available 7TV catalog and builds an LLM prompt block
 /// from the intersection with a manual glossary.
 #[derive(Debug)]
 pub struct SevenTvEmoteProvider {
     http: reqwest::Client,
     base_url: String,
-    glossary_path: PathBuf,
+    glossary: Vec<GlossaryEmote>,
     include_global: bool,
     refresh_interval: Duration,
     max_prompt_emotes: usize,
@@ -77,15 +80,14 @@ struct SevenTvEmote {
 }
 
 impl SevenTvEmoteProvider {
-    /// Build a provider from `[ai.emotes]`. Relative glossary paths resolve
-    /// under the bot data directory.
-    pub fn new(config: AiEmotesConfigSection, data_dir: &Path) -> Result<Self> {
-        let glossary_path = PathBuf::from(&config.glossary_path);
-        let glossary_path = if glossary_path.is_absolute() {
-            glossary_path
-        } else {
-            data_dir.join(glossary_path)
-        };
+    /// Build a provider from `[ai.emotes]` and a TOML glossary string.
+    ///
+    /// Production code passes [`BAKED_GLOSSARY_TOML`]; integration tests pass
+    /// a custom fixture. The glossary is parsed eagerly so malformed TOML
+    /// fails the bot at startup instead of silently disabling emotes.
+    pub fn new(config: AiEmotesConfigSection, glossary_toml: &str) -> Result<Self> {
+        let glossary: Glossary =
+            toml::from_str(glossary_toml).wrap_err("Failed to parse 7TV emote glossary")?;
 
         let http = reqwest::Client::builder()
             .user_agent(APP_USER_AGENT)
@@ -101,7 +103,7 @@ impl SevenTvEmoteProvider {
                 .unwrap_or(DEFAULT_BASE_URL)
                 .trim_end_matches('/')
                 .to_string(),
-            glossary_path,
+            glossary: glossary.emotes,
             include_global: config.include_global,
             refresh_interval: Duration::from_secs(config.refresh_interval_secs),
             max_prompt_emotes: config.max_prompt_emotes,
@@ -156,30 +158,14 @@ impl SevenTvEmoteProvider {
         &self,
         twitch_channel_id: &str,
     ) -> Result<Option<Vec<PromptEmote>>> {
-        let glossary = self.load_glossary().await?;
-        if glossary.emotes.is_empty() {
-            debug!(
-                path = %self.glossary_path.display(),
-                "7TV emote glossary is empty"
-            );
+        if self.glossary.is_empty() {
+            debug!("7TV emote glossary is empty");
             return Ok(None);
         }
 
         let available = self.fetch_available_emotes(twitch_channel_id).await?;
-        let emotes = build_available_prompt_emotes(&glossary.emotes, &available);
+        let emotes = build_available_prompt_emotes(&self.glossary, &available);
         Ok(emotes)
-    }
-
-    async fn load_glossary(&self) -> Result<Glossary> {
-        let text = tokio::fs::read_to_string(&self.glossary_path)
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "Failed to read 7TV emote glossary at {}",
-                    self.glossary_path.display()
-                )
-            })?;
-        toml::from_str(&text).wrap_err("Failed to parse 7TV emote glossary")
     }
 
     async fn fetch_available_emotes(&self, twitch_channel_id: &str) -> Result<HashSet<String>> {

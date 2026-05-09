@@ -51,10 +51,6 @@ fn default_ai_channel_history_length() -> u64 {
     50
 }
 
-fn default_emote_glossary_path() -> String {
-    "7tv_emotes.toml".to_string()
-}
-
 fn default_emote_refresh_interval() -> u64 {
     3600
 }
@@ -262,8 +258,6 @@ pub struct AiEmotesConfigSection {
     pub refresh_interval_secs: u64,
     #[serde(default = "default_max_prompt_emotes")]
     pub max_prompt_emotes: usize,
-    #[serde(default = "default_emote_glossary_path")]
-    pub glossary_path: String,
     /// Optional override for tests or private mirrors. Defaults to
     /// `https://7tv.io/v3` when omitted.
     #[serde(default)]
@@ -277,7 +271,6 @@ impl Default for AiEmotesConfigSection {
             include_global: true,
             refresh_interval_secs: default_emote_refresh_interval(),
             max_prompt_emotes: default_max_prompt_emotes(),
-            glossary_path: default_emote_glossary_path(),
             base_url: None,
         }
     }
@@ -793,9 +786,6 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
                 ai.emotes.max_prompt_emotes
             );
         }
-        if ai.emotes.glossary_path.trim().is_empty() {
-            bail!("ai.emotes.glossary_path cannot be empty when emotes are enabled");
-        }
         if let Some(ref base_url) = ai.emotes.base_url
             && base_url.trim().is_empty()
         {
@@ -944,10 +934,6 @@ mod tests {
     fn ai_emotes_default_disabled() {
         assert!(!AiEmotesConfigSection::default().enabled);
         assert!(AiEmotesConfigSection::default().include_global);
-        assert_eq!(
-            AiEmotesConfigSection::default().glossary_path,
-            "7tv_emotes.toml"
-        );
     }
 
     #[test]
@@ -970,7 +956,6 @@ mod tests {
         let mut c = Configuration::test_default();
         let mut ai = ai_with_run_at("04:00");
         ai.emotes.enabled = true;
-        ai.emotes.glossary_path = "7tv_emotes.toml".into();
         ai.emotes.refresh_interval_secs = 60;
         ai.emotes.max_prompt_emotes = 40;
         c.ai = Some(ai);

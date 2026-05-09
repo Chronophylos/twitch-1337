@@ -51,6 +51,7 @@ pub struct TestBotBuilder {
     now: DateTime<Utc>,
     seeded_leaderboard: Option<HashMap<String, PersonalBest>>,
     whisper_failure: bool,
+    emote_glossary_override: Option<String>,
 }
 
 impl TestBotBuilder {
@@ -60,7 +61,16 @@ impl TestBotBuilder {
             now: "2026-04-18T11:00:00Z".parse().unwrap(),
             seeded_leaderboard: None,
             whisper_failure: false,
+            emote_glossary_override: None,
         }
+    }
+
+    /// Inject a custom 7TV emote glossary TOML for this test run instead of
+    /// the baked production glossary. Lets tests assert on bespoke fixtures
+    /// (KEKW/LocalEmote/MissingEmote, etc.) without touching disk.
+    pub fn with_emote_glossary(mut self, toml: impl Into<String>) -> Self {
+        self.emote_glossary_override = Some(toml.into());
+        self
     }
 
     pub fn with_ai(mut self) -> Self {
@@ -185,6 +195,7 @@ impl TestBotBuilder {
             aviation: Some(aviation),
             whisper: Some(whisper.clone() as Arc<dyn WhisperSender>),
             data_dir: data_dir.path().to_path_buf(),
+            emote_glossary_override: self.emote_glossary_override,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();

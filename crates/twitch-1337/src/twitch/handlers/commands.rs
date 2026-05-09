@@ -48,6 +48,8 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub data_dir: std::path::PathBuf,
     pub suspension_manager: Arc<SuspensionManager>,
     pub suspend: SuspendConfig,
+    /// Pre-built 7TV emote provider. `None` disables emote grounding for `!ai`.
+    pub emote_provider: Option<Arc<SevenTvEmoteProvider>>,
 }
 
 /// Handler for generic text commands that start with `!`.
@@ -81,6 +83,7 @@ where
         data_dir,
         suspension_manager,
         suspend,
+        emote_provider,
     } = cfg;
 
     let default_suspend_duration = Duration::from_secs(suspend.default_duration_secs);
@@ -128,20 +131,6 @@ where
         )),
         _ => None,
     };
-
-    let emote_provider = llm_client
-        .as_ref()
-        .and_then(|(_, cfg)| cfg.emotes.enabled.then_some(cfg.emotes.clone()))
-        .and_then(|emotes_cfg| match SevenTvEmoteProvider::new(emotes_cfg, &data_dir) {
-            Ok(provider) => {
-                info!("7TV emote glossary prompt grounding enabled");
-                Some(Arc::new(provider))
-            }
-            Err(e) => {
-                error!(error = ?e, "Failed to initialize 7TV emote provider; AI emotes disabled");
-                None
-            }
-        });
 
     let mut cmd_list: Vec<Box<dyn commands::Command<T, L>>> = vec![
         Box::new(commands::ping_admin::PingAdminCommand::new(
