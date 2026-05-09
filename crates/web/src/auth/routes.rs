@@ -31,6 +31,10 @@ use crate::auth::mod_check::{ModCheckOutcome, check_is_mod};
 use crate::error::WebError;
 use crate::state::WebState;
 
+const SID_COOKIE: &str = "tw1337_sid";
+const CSRF_COOKIE: &str = "tw1337_csrf";
+const OAUTH_STATE_COOKIE: &str = "tw1337_oauth_state";
+
 /// Fully-configured `BasicClient` (auth/token/redirect endpoints all set).
 type ConfiguredClient =
     BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
@@ -110,7 +114,7 @@ pub fn auth_router() -> Router<WebState> {
 async fn login(State(state): State<WebState>, cookies: Cookies) -> Response {
     let csrf = CsrfToken::new_random();
     cookies.add(
-        Cookie::build(("tw1337_oauth_state", csrf.secret().to_owned()))
+        Cookie::build((OAUTH_STATE_COOKIE, csrf.secret().to_owned()))
             .http_only(true)
             .secure(true)
             .same_site(SameSite::Lax)
@@ -143,13 +147,11 @@ async fn callback(
     Query(params): Query<CallbackParams>,
     cookies: Cookies,
 ) -> Result<Response, WebError> {
-    let stored = cookies
-        .get("tw1337_oauth_state")
-        .ok_or(WebError::Forbidden)?;
+    let stored = cookies.get(OAUTH_STATE_COOKIE).ok_or(WebError::Forbidden)?;
     if stored.value() != params.state {
         return Err(WebError::Forbidden);
     }
-    cookies.remove(Cookie::build("tw1337_oauth_state").path("/").build());
+    cookies.remove(Cookie::build(OAUTH_STATE_COOKIE).path("/").build());
 
     let http = state.oauth.http.clone();
     let http_call = move |req: oauth2::HttpRequest| {
@@ -190,19 +192,14 @@ async fn callback(
         }
     }
 
-    let sid = state
+    let (sid, csrf_value) = state
         .sessions
         .insert(me.id.clone(), me.login.clone())
         .map_err(WebError::Internal)?;
-
-    let session = state
-        .sessions
-        .get_and_touch(&sid)
-        .ok_or_else(|| WebError::Internal(eyre!("session vanished after insert")))?;
-    let csrf_value_hex = hex::encode(session.csrf_value);
+    let csrf_value_hex = hex::encode(csrf_value);
 
     cookies.add(
-        Cookie::build(("tw1337_sid", sid))
+        Cookie::build((SID_COOKIE, sid))
             .http_only(true)
             .secure(true)
             .same_site(SameSite::Lax)
@@ -210,7 +207,7 @@ async fn callback(
             .build(),
     );
     cookies.add(
-        Cookie::build(("tw1337_csrf", csrf_value_hex))
+        Cookie::build((CSRF_COOKIE, csrf_value_hex))
             .secure(true)
             .same_site(SameSite::Lax)
             .path("/")
@@ -233,7 +230,7 @@ async fn logout(
     axum::Form(form): axum::Form<LogoutForm>,
 ) -> Result<Response, WebError> {
     let sid = cookies
-        .get("tw1337_sid")
+        .get(SID_COOKIE)
         .map(|c| c.value().to_owned())
         .ok_or(WebError::CsrfMismatch)?;
     let session = state
@@ -244,8 +241,8 @@ async fn logout(
         return Err(WebError::CsrfMismatch);
     }
     state.sessions.drop_session(&sid);
-    cookies.remove(Cookie::build("tw1337_sid").path("/").build());
-    cookies.remove(Cookie::build("tw1337_csrf").path("/").build());
+    cookies.remove(Cookie::build(SID_COOKIE).path("/").build());
+    cookies.remove(Cookie::build(CSRF_COOKIE).path("/").build());
     Ok(Redirect::to("/login").into_response())
 }
 
@@ -257,7 +254,9 @@ async fn fetch_caller_user(
     struct Resp {
         data: Vec<crate::helix::HelixUser>,
     }
-    let resp: Resp = reqwest::Client::new()
+    let resp: Resp = state
+        .oauth
+        .http
         .get("https://api.twitch.tv/helix/users")
         .bearer_auth(access_token)
         .header("Client-Id", state.client_id.expose_secret())
@@ -278,7 +277,7 @@ pub async fn require_mod(
     mut req: Request,
     next: Next,
 ) -> Result<Response, WebError> {
-    let sid = cookies.get("tw1337_sid").ok_or(WebError::Unauthenticated)?;
+    let sid = cookies.get(SID_COOKIE).ok_or(WebError::Unauthenticated)?;
     let session = state
         .sessions
         .get_and_touch(sid.value())

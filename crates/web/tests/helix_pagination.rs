@@ -16,32 +16,24 @@ impl AccessTokenProvider for StubToken {
     }
 }
 
-#[tokio::test]
-async fn is_moderator_follows_cursor() {
+fn install_crypto() {
     // Workspace pins reqwest = "rustls-no-provider"; tests need a provider.
     let _ = rustls::crypto::ring::default_provider().install_default();
+}
 
+#[tokio::test]
+async fn is_moderator_uses_user_id_filter() {
+    install_crypto();
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
         .and(path("/helix/moderation/moderators"))
         .and(query_param("broadcaster_id", "100"))
-        .and(query_param("first", "100"))
+        .and(query_param("user_id", "12345"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": [{ "user_id": "999", "user_login": "other", "user_name": "Other" }],
-            "pagination": { "cursor": "page2" }
+            "data": [{ "user_id": "12345", "user_login": "alice", "user_name": "Alice" }]
         })))
-        .up_to_n_times(1)
-        .mount(&server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/helix/moderation/moderators"))
-        .and(query_param("after", "page2"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": [{ "user_id": "12345", "user_login": "alice", "user_name": "Alice" }],
-            "pagination": {}
-        })))
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -52,4 +44,27 @@ async fn is_moderator_follows_cursor() {
         server.uri(),
     );
     assert!(client.is_moderator("100", "12345").await.unwrap());
+}
+
+#[tokio::test]
+async fn is_moderator_returns_false_for_empty_data() {
+    install_crypto();
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/helix/moderation/moderators"))
+        .and(query_param("broadcaster_id", "100"))
+        .and(query_param("user_id", "999"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = ReqwestHelixClient::with_base(
+        reqwest::Client::new(),
+        SecretString::new("client-id".to_owned().into()),
+        Arc::new(StubToken),
+        server.uri(),
+    );
+    assert!(!client.is_moderator("100", "999").await.unwrap());
 }

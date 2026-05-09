@@ -1,8 +1,9 @@
 //! Minimal Twitch helix client (broadcaster id, moderator list, user lookup).
 //!
 //! Mirrors the AviationClient pattern in core for testability — boxed behind
-//! a trait so route tests can inject fakes. The real impl follows pagination
-//! cursors when listing moderators.
+//! a trait so route tests can inject fakes. Moderator membership is checked
+//! with the helix `user_id` filter so a single round-trip resolves it
+//! regardless of how many mods the channel has.
 
 use std::sync::Arc;
 
@@ -15,7 +16,7 @@ use serde::Deserialize;
 pub trait HelixClient: Send + Sync {
     async fn fetch_user_by_id(&self, user_id: &str) -> Result<Option<HelixUser>>;
     async fn fetch_user_by_login(&self, login: &str) -> Result<Option<HelixUser>>;
-    /// Follows pagination until exhausted; returns true if `user_id` is in the moderator list.
+    /// Single helix call filtered by `user_id`; returns true iff the user is in the moderator list.
     async fn is_moderator(&self, broadcaster_id: &str, user_id: &str) -> Result<bool>;
 }
 
@@ -99,49 +100,28 @@ impl HelixClient for ReqwestHelixClient {
 
     async fn is_moderator(&self, broadcaster_id: &str, user_id: &str) -> Result<bool> {
         #[derive(Deserialize)]
-        struct ModEntry {
-            user_id: String,
-        }
-        #[derive(Deserialize)]
-        struct Pagination {
-            cursor: Option<String>,
-        }
+        struct ModEntry {}
         #[derive(Deserialize)]
         struct ModResp {
             data: Vec<ModEntry>,
-            #[serde(default)]
-            pagination: Option<Pagination>,
         }
 
-        let mut cursor: Option<String> = None;
-        loop {
-            let mut url =
-                url::Url::parse(&format!("{}/helix/moderation/moderators", self.helix_base))?;
-            url.query_pairs_mut()
-                .append_pair("broadcaster_id", broadcaster_id)
-                .append_pair("first", "100");
-            if let Some(c) = &cursor {
-                url.query_pairs_mut().append_pair("after", c);
-            }
-            let token = self.access_token_provider.current_access_token().await?;
-            let resp: ModResp = self
-                .http
-                .get(url)
-                .bearer_auth(&token)
-                .header("Client-Id", self.client_id.expose_secret())
-                .send()
-                .await?
-                .error_for_status()
-                .wrap_err("helix moderators")?
-                .json()
-                .await?;
-            if resp.data.iter().any(|m| m.user_id == user_id) {
-                return Ok(true);
-            }
-            match resp.pagination.and_then(|p| p.cursor) {
-                Some(c) if !c.is_empty() => cursor = Some(c),
-                _ => return Ok(false),
-            }
-        }
+        let mut url = url::Url::parse(&format!("{}/helix/moderation/moderators", self.helix_base))?;
+        url.query_pairs_mut()
+            .append_pair("broadcaster_id", broadcaster_id)
+            .append_pair("user_id", user_id);
+        let token = self.access_token_provider.current_access_token().await?;
+        let resp: ModResp = self
+            .http
+            .get(url)
+            .bearer_auth(&token)
+            .header("Client-Id", self.client_id.expose_secret())
+            .send()
+            .await?
+            .error_for_status()
+            .wrap_err("helix moderators")?
+            .json()
+            .await?;
+        Ok(!resp.data.is_empty())
     }
 }

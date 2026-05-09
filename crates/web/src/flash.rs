@@ -1,7 +1,4 @@
 //! Short-lived flash cookie ("just deleted X") plumbing.
-//!
-//! Stub for Task 3 — full read/write helpers land alongside ping CRUD in
-//! Task 4 once a handler actually wants to set them.
 
 use tower_cookies::cookie::SameSite;
 use tower_cookies::{Cookie, Cookies};

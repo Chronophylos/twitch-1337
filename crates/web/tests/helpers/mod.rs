@@ -22,7 +22,7 @@ use twitch_1337_core::ai::memory::types::Caps;
 use twitch_1337_core::ping::PingManager;
 use twitch_1337_web::WebState;
 use twitch_1337_web::auth::OAuthCtx;
-use twitch_1337_web::auth::session::{Session, SessionTable};
+use twitch_1337_web::auth::session::SessionTable;
 use twitch_1337_web::clock::Clock;
 use twitch_1337_web::config::WebConfig;
 use twitch_1337_web::helix::{HelixClient, HelixUser};
@@ -125,16 +125,11 @@ pub async fn build_state_with_dirs(helix: Arc<dyn HelixClient>) -> (WebState, Te
 /// alongside the hex-encoded csrf value the cookie + form fields would
 /// carry. Used by ping/memory route tests to skip the OAuth round-trip.
 pub fn insert_session(state: &WebState, user_id: &str, user_login: &str) -> (String, String) {
-    let sid = state
+    let (sid, csrf) = state
         .sessions
         .insert(user_id.to_owned(), user_login.to_owned())
         .expect("insert session");
-    let session: Session = state
-        .sessions
-        .get_and_touch(&sid)
-        .expect("session present after insert");
-    let csrf_hex = hex::encode(session.csrf_value);
-    (sid, csrf_hex)
+    (sid, hex::encode(csrf))
 }
 
 /// `Cookie:` header value combining sid + csrf, matching what the browser

@@ -8,12 +8,11 @@
 //!
 //! ## Path validation
 //!
-//! `:user_id` is matched against `^[0-9]{1,32}$` *before* any filesystem
-//! access; that single regex is the only thing standing between an
+//! `:user_id` is matched against `^[0-9]{1,32}$` and `:slug` is delegated
+//! to `validate_state_slug` (the same rule the store enforces) *before*
+//! any filesystem access — together they're the only barrier between an
 //! attacker-controlled URL and `MemoryStore::read_kind`. Any other shape
-//! returns `WebError::Validation` (400). State `:slug` validation lands in
-//! Task 6 alongside writes; for now the read path passes through to the
-//! store, which simply returns an empty body for missing files.
+//! returns `WebError::Validation` (400).
 //!
 //! ## Route precedence
 //!
@@ -28,7 +27,7 @@ use axum::routing::{get, post};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use tower_cookies::Cookies;
-use twitch_1337_core::ai::memory::store::{WriteError, WriteOutcome};
+use twitch_1337_core::ai::memory::store::{WriteError, WriteOutcome, validate_state_slug};
 use twitch_1337_core::ai::memory::types::{FileKind, MemoryFile};
 
 use crate::auth::csrf;
@@ -116,16 +115,16 @@ fn is_valid_user_id(s: &str) -> bool {
     !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// `^[a-zA-Z0-9._-]{1,64}$` with no `..` segments. Same contract as the
-/// write-path slug check the spec mandates for state notes; applied here
-/// at the route layer so a slug like `..` cannot escape `memories/state/`
-/// to read SOUL.md or LORE.md via the state viewer.
-fn is_valid_slug(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 64
-        && !s.contains("..")
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+/// Wraps `validate_state_slug` so the route layer rejects bad slugs with the
+/// same rule the store enforces (charset, length, `..`, reserved literals)
+/// — `..` is the security-critical case: without it a `/memory/state/..`
+/// URL would reach `read_kind` and could escape `memories/state/` to leak
+/// SOUL.md or LORE.md via the state viewer.
+fn validate_slug(slug: &str) -> Result<(), WebError> {
+    validate_state_slug(slug).map_err(|_| WebError::Validation {
+        field: "slug".into(),
+        msg: "must be 1-64 chars, [a-zA-Z0-9._-], not `new`/`delete`, no `..`".into(),
+    })
 }
 
 async fn tree(State(state): State<WebState>) -> Result<Response, WebError> {
@@ -301,12 +300,7 @@ async fn view_state(
     Extension(session): Extension<Session>,
     Path(slug): Path<String>,
 ) -> Result<Response, WebError> {
-    if !is_valid_slug(&slug) {
-        return Err(WebError::Validation {
-            field: "slug".into(),
-            msg: "must be 1-64 chars, [a-zA-Z0-9._-], no `..`".into(),
-        });
-    }
+    validate_slug(&slug)?;
     let title = format!("State / {slug}");
     let save_url = format!("/memory/state/{slug}");
     let delete_url = format!("/memory/state/{slug}/delete");
@@ -507,12 +501,7 @@ async fn save_state(
     Path(slug): Path<String>,
     axum::Form(form): axum::Form<SaveForm>,
 ) -> Result<Response, WebError> {
-    if !is_valid_slug(&slug) {
-        return Err(WebError::Validation {
-            field: "slug".into(),
-            msg: "must be 1-64 chars, [a-zA-Z0-9._-], no `..`".into(),
-        });
-    }
+    validate_slug(&slug)?;
     let redirect = format!("/memory/state/{slug}");
     save_kind(
         &state,
@@ -536,12 +525,7 @@ async fn create_state(
     if !csrf::verify(&form.csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    if !is_valid_slug(&form.slug) {
-        return Err(WebError::Validation {
-            field: "slug".into(),
-            msg: "must be 1-64 chars, [a-zA-Z0-9._-], no `..`".into(),
-        });
-    }
+    validate_slug(&form.slug)?;
     let slug = form.slug.clone();
     match state
         .memory_store
@@ -589,12 +573,7 @@ async fn delete_state(
     if !csrf::verify(&form.csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    if !is_valid_slug(&slug) {
-        return Err(WebError::Validation {
-            field: "slug".into(),
-            msg: "must be 1-64 chars, [a-zA-Z0-9._-], no `..`".into(),
-        });
-    }
+    validate_slug(&slug)?;
     state
         .memory_store
         .delete_state(&slug)

@@ -43,7 +43,10 @@ impl SessionTable {
         }
     }
 
-    pub fn insert(&self, user_id: String, user_login: String) -> Result<SessionId> {
+    /// Returns the new session id together with the freshly-generated csrf
+    /// value so the OAuth callback can set both cookies without a second
+    /// lookup against the table.
+    pub fn insert(&self, user_id: String, user_login: String) -> Result<(SessionId, [u8; 32])> {
         let now = self.clock.now();
         let mut rng = rand::rng();
         let mut id_bytes = [0u8; 32];
@@ -62,7 +65,7 @@ impl SessionTable {
                 csrf_value: csrf,
             },
         );
-        Ok(id)
+        Ok((id, csrf))
     }
 
     pub fn get_and_touch(&self, id: &str) -> Option<Session> {

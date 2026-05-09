@@ -1,9 +1,8 @@
 //! Wall-clock abstraction for the web crate.
 //!
-//! Defined locally so the web crate stays free of a `core` dependency
-//! (avoiding the cycle: core already depends on web for the embedded
-//! dashboard hook). The bin/core supplies a wrapper around the real
-//! `SystemClock` when building [`WebState`].
+//! A small `now()`-only trait so route tests can substitute a stub clock
+//! without dragging in the async `sleep_until` half of `core::util::clock::Clock`
+//! (which exists for time-driven schedulers — not for HTTP request timing).
 
 use chrono::{DateTime, Utc};
 

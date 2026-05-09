@@ -1,10 +1,10 @@
 //! Embedded static asset router (`/assets/*`).
 //!
 //! Bakes css/js straight into the binary so the FROM-scratch musl image
-//! stays self-contained. Real htmx/pico assets are placeholders today —
-//! follow-up commit drops the actual minified files in the same path.
+//! stays self-contained.
 
 use axum::Router;
+use axum::body::Body;
 use axum::extract::Path;
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
@@ -25,8 +25,14 @@ async fn serve(Path(path): Path<String>) -> impl IntoResponse {
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
             (
                 StatusCode::OK,
-                [(header::CONTENT_TYPE, mime.as_ref())],
-                content.data.into_owned(),
+                [
+                    (header::CONTENT_TYPE, mime.as_ref()),
+                    // Embedded assets ship with the binary, so a deploy is
+                    // the only thing that can change them — `immutable` is
+                    // safe and saves repeat downloads on every page load.
+                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                ],
+                Body::from(content.data),
             )
                 .into_response()
         }
