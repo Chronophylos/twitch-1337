@@ -80,6 +80,9 @@ pub struct Services {
     /// this `None` so the baked glossary is used; integration tests inject
     /// custom fixtures.
     pub emote_glossary_override: Option<String>,
+    /// Shared connectivity flag flipped by the latency monitor. Read by the
+    /// web dashboard's `/healthz` endpoint.
+    pub irc_connected: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Run the bot until `shutdown` fires or a handler exits.
@@ -105,6 +108,7 @@ where
         whisper,
         data_dir,
         emote_glossary_override,
+        irc_connected,
     } = services;
 
     let schedules_enabled = !config.schedules.is_empty();
@@ -146,6 +150,8 @@ where
     let ai_config_for_ritual = config.ai.clone();
     let channel_for_ritual = config.twitch.channel.clone();
 
+    let web_config = config.web.clone();
+
     let handlers = spawn_handlers(SpawnDeps {
         client,
         incoming,
@@ -162,9 +168,30 @@ where
         aviation,
         aviation_for_commands,
         emote_provider,
+        irc_connected: irc_connected.clone(),
     });
 
     let shutdown_notify = handlers.shutdown_notify.clone();
+
+    // Optional embedded web dashboard. Disabled by default.
+    let web_handle = if web_config.enabled {
+        let bind_addr: std::net::SocketAddr = web_config
+            .bind_addr
+            .parse()
+            .wrap_err("parse web.bind_addr")?;
+        let deps = twitch_1337_web::WebDeps {
+            bind_addr,
+            irc_connected: irc_connected.clone(),
+        };
+        let notify = shutdown_notify.clone();
+        Some(tokio::spawn(async move {
+            if let Err(e) = twitch_1337_web::run_web(deps, notify).await {
+                tracing::error!(target: "twitch_1337_web", error = ?e, "Web task exited with error");
+            }
+        }))
+    } else {
+        None
+    };
 
     // Daily dreamer ritual.
     if let (Some(llm), Some(mem)) = (llm_for_ritual.as_ref(), &ai_memory_v2_for_ritual)
@@ -214,6 +241,15 @@ where
     info!("Bot is running. Press Ctrl+C to stop.");
 
     crate::twitch::handlers::spawn::await_shutdown(handlers, shutdown).await;
+
+    // After handler shutdown, drain the web task. The graceful shutdown future
+    // is wired to the same `shutdown_notify` notified by `await_shutdown`, so
+    // axum::serve has already begun winding down.
+    if let Some(handle) = web_handle
+        && let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await
+    {
+        tracing::warn!(target: "twitch_1337_web", ?e, "Web task did not shut down within 5s");
+    }
 
     info!("Bot shutdown complete");
     Ok(())

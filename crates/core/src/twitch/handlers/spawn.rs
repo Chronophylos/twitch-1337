@@ -8,7 +8,10 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Arc, atomic::AtomicU32},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32},
+    },
 };
 
 use llm::LlmClient;
@@ -84,6 +87,9 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
 
     // AI emote grounding.
     pub emote_provider: Option<Arc<crate::twitch::seventv::SevenTvEmoteProvider>>,
+
+    // Shared IRC connectivity flag (latency monitor flips, web /healthz reads).
+    pub irc_connected: Arc<AtomicBool>,
 }
 
 /// Spawn every long-running handler task in the order they currently
@@ -110,6 +116,7 @@ where
         aviation,
         aviation_for_commands,
         emote_provider,
+        irc_connected,
     } = deps;
 
     let schedules_enabled = !config.schedules.is_empty();
@@ -184,8 +191,9 @@ where
         let client = client.clone();
         let btx = broadcast_tx.clone();
         let lat = latency_value.clone();
+        let conn = irc_connected.clone();
         async move {
-            run_latency_handler(client, btx, lat).await;
+            run_latency_handler(client, btx, lat, conn).await;
         }
     });
 
@@ -287,11 +295,12 @@ pub(crate) async fn await_shutdown(handlers: HandlerSet, shutdown: oneshot::Rece
     tokio::select! {
         _ = shutdown => {
             info!("Shutdown signal received, exiting gracefully");
-            if has_sched {
-                shutdown_notify.notify_waiters();
-                if let Err(e) = timeout(Duration::from_secs(5), &mut sched).await {
-                    warn!(?e, "Scheduled message handler did not shut down within 5s");
-                }
+            // Always wake any waiters (scheduled messages, web dashboard).
+            shutdown_notify.notify_waiters();
+            if has_sched
+                && let Err(e) = timeout(Duration::from_secs(5), &mut sched).await
+            {
+                warn!(?e, "Scheduled message handler did not shut down within 5s");
             }
         }
         result = router => { error!("Message router exited unexpectedly: {result:?}"); }

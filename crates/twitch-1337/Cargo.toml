@@ -9,6 +9,7 @@ twitch-1337-core = { path = "../core" }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 color-eyre = { workspace = true }
+reqwest = { workspace = true }
 secrecy = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

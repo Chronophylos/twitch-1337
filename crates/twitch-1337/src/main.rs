@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use twitch_1337_core as twitch_1337;
 
@@ -15,6 +16,10 @@ use twitch_1337::{
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
+        return run_healthcheck().await;
+    }
+
     color_eyre::install()?;
     install_tracing();
     install_crypto_provider();
@@ -62,6 +67,8 @@ pub async fn main() -> Result<()> {
     .await
     .map(|sender| Arc::new(sender) as Arc<dyn whisper::WhisperSender>)?;
 
+    let irc_connected = Arc::new(AtomicBool::new(false));
+
     let services = Services {
         clock: Arc::new(SystemClock),
         llm: llm_client,
@@ -69,6 +76,7 @@ pub async fn main() -> Result<()> {
         whisper: Some(whisper),
         data_dir: get_data_dir(),
         emote_glossary_override: None,
+        irc_connected,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -78,6 +86,30 @@ pub async fn main() -> Result<()> {
     });
 
     run_bot(client, incoming, config, services, shutdown_rx).await
+}
+
+/// Lightweight healthcheck for the Docker `HEALTHCHECK` directive. Reads the
+/// config to find the web bind port and probes `/healthz`. When `[web]` is
+/// disabled, exits 0 without touching the network so the container is still
+/// considered healthy.
+async fn run_healthcheck() -> Result<()> {
+    let config = load_configuration().await?;
+    if !config.web.enabled {
+        return Ok(());
+    }
+    let port = config.web.bind_addr.rsplit(':').next().unwrap_or("8080");
+    let url = format!("http://127.0.0.1:{port}/healthz");
+    let res = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()?
+        .get(&url)
+        .send()
+        .await?;
+    if res.status().is_success() {
+        Ok(())
+    } else {
+        std::process::exit(1);
+    }
 }
 
 #[cfg(test)]

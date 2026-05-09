@@ -523,6 +523,48 @@ pub struct ScheduleConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct WebConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_web_bind")]
+    pub bind_addr: String,
+    #[serde(default)]
+    pub public_url: String,
+    #[serde(default = "default_web_session_secret")]
+    pub session_secret: SecretString,
+    #[serde(default = "default_session_ttl", with = "humantime_serde")]
+    pub session_ttl: std::time::Duration,
+    #[serde(default = "default_mod_check_refresh", with = "humantime_serde")]
+    pub mod_check_refresh: std::time::Duration,
+}
+
+fn default_web_bind() -> String {
+    "127.0.0.1:8080".to_owned()
+}
+fn default_session_ttl() -> std::time::Duration {
+    std::time::Duration::from_secs(7 * 24 * 60 * 60)
+}
+fn default_mod_check_refresh() -> std::time::Duration {
+    std::time::Duration::from_secs(300)
+}
+fn default_web_session_secret() -> SecretString {
+    SecretString::new(String::new().into())
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind_addr: default_web_bind(),
+            public_url: String::new(),
+            session_secret: default_web_session_secret(),
+            session_ttl: default_session_ttl(),
+            mod_check_refresh: default_mod_check_refresh(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Configuration {
     pub twitch: TwitchConfiguration,
     #[serde(default)]
@@ -537,6 +579,8 @@ pub struct Configuration {
     pub ai: Option<AiConfig>,
     #[serde(default)]
     pub schedules: Vec<ScheduleConfig>,
+    #[serde(default)]
+    pub web: WebConfig,
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -563,6 +607,7 @@ impl Configuration {
             suspend: SuspendConfig::default(),
             ai: None,
             schedules: Vec::new(),
+            web: WebConfig::default(),
         }
     }
 }
@@ -806,6 +851,28 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         database::Schedule::parse_interval(&schedule.interval).wrap_err_with(|| {
             format!("Schedule '{}' has invalid interval format", schedule.name)
         })?;
+    }
+
+    if config.web.enabled {
+        let secret = config.web.session_secret.expose_secret();
+        let secret_bytes_len = hex::decode(secret).map(|b| b.len()).unwrap_or(0);
+        if secret_bytes_len < 32 {
+            bail!("web.session_secret must be ≥32 bytes hex when web.enabled = true");
+        }
+        if !config.web.public_url.starts_with("https://") {
+            bail!(
+                "web.public_url must start with https:// when web.enabled = true (got {:?})",
+                config.web.public_url
+            );
+        }
+        let ttl = config.web.session_ttl.as_secs();
+        if !(3600..=2_592_000).contains(&ttl) {
+            bail!("web.session_ttl must be between 1h and 30d (got {ttl}s)");
+        }
+        let refresh = config.web.mod_check_refresh.as_secs();
+        if !(30..=3600).contains(&refresh) {
+            bail!("web.mod_check_refresh must be between 30s and 1h (got {refresh}s)");
+        }
     }
 
     Ok(())
@@ -1189,6 +1256,44 @@ mod tests {
         ai.ai_channel_history_length = 50;
         c.ai = Some(ai);
         validate_config(&c).unwrap();
+    }
+
+    #[test]
+    fn web_disabled_skips_validation() {
+        let cfg = Configuration::test_default();
+        assert!(!cfg.web.enabled);
+        validate_config(&cfg).expect("disabled web validates trivially");
+    }
+
+    #[test]
+    fn web_enabled_requires_https_public_url() {
+        let mut cfg = Configuration::test_default();
+        cfg.web.enabled = true;
+        cfg.web.session_secret = secrecy::SecretString::new("00".repeat(32).into());
+        cfg.web.public_url = "http://insecure".into();
+        let err = validate_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("public_url"), "{err}");
+    }
+
+    #[test]
+    fn web_enabled_requires_32_byte_secret() {
+        let mut cfg = Configuration::test_default();
+        cfg.web.enabled = true;
+        cfg.web.session_secret = secrecy::SecretString::new("ab".into());
+        cfg.web.public_url = "https://bot.test".into();
+        let err = validate_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("session_secret"), "{err}");
+    }
+
+    #[test]
+    fn web_enabled_validates_ttl_range() {
+        let mut cfg = Configuration::test_default();
+        cfg.web.enabled = true;
+        cfg.web.session_secret = secrecy::SecretString::new("00".repeat(32).into());
+        cfg.web.public_url = "https://bot.test".into();
+        cfg.web.session_ttl = std::time::Duration::from_secs(10); // below 1h
+        let err = validate_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("session_ttl"), "{err}");
     }
 
     #[test]

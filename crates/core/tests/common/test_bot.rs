@@ -5,6 +5,7 @@ use twitch_1337_core as twitch_1337;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -44,6 +45,7 @@ pub struct TestBot {
     pub llm: Arc<FakeLlm>,
     whisper: Arc<FakeWhisperSender>,
     pub channel: String,
+    pub irc_connected: Arc<AtomicBool>,
     shutdown: Option<oneshot::Sender<()>>,
     bot_task: Option<JoinHandle<EyreResult<()>>>,
 }
@@ -119,6 +121,17 @@ impl TestBotBuilder {
         self
     }
 
+    /// Enable the embedded web dashboard for the duration of this test. Sets
+    /// a 32-byte hex session secret and a placeholder HTTPS public URL so
+    /// `validate_config` accepts the configuration.
+    pub fn with_web(mut self, bind: &str) -> Self {
+        self.config.web.enabled = true;
+        self.config.web.bind_addr = bind.into();
+        self.config.web.session_secret = secrecy::SecretString::new("0".repeat(64).into());
+        self.config.web.public_url = "https://test.invalid".into();
+        self
+    }
+
     /// Pre-seed the data dir with `content` at relative path `rel` before the
     /// bot is spawned. Used by tests that need files to be present at startup
     /// (e.g. v1 store disposal).
@@ -187,6 +200,8 @@ impl TestBotBuilder {
         )
         .with_aviationstack_config(self.config.aviationstack.clone());
 
+        let irc_connected = Arc::new(AtomicBool::new(false));
+
         let services = Services {
             clock: clock.clone(),
             llm: self
@@ -198,6 +213,7 @@ impl TestBotBuilder {
             whisper: Some(whisper.clone() as Arc<dyn WhisperSender>),
             data_dir: data_dir.path().to_path_buf(),
             emote_glossary_override: self.emote_glossary_override,
+            irc_connected: irc_connected.clone(),
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -222,6 +238,7 @@ impl TestBotBuilder {
             llm,
             whisper,
             channel,
+            irc_connected,
             shutdown: Some(shutdown_tx),
             bot_task: Some(bot_task),
         }
@@ -348,6 +365,13 @@ impl TestBot {
                 }
             }
         }
+    }
+
+    /// Flip the shared `irc_connected` flag. Used by web smoke tests since
+    /// the latency monitor only sets the flag after a real PONG round-trip.
+    pub fn set_irc_connected(&self, v: bool) {
+        self.irc_connected
+            .store(v, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub async fn shutdown(mut self) {

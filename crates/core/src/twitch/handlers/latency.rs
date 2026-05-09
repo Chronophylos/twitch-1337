@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use chrono::Utc;
@@ -37,11 +37,12 @@ pub(crate) const LATENCY_LOG_THRESHOLD: u32 = 10;
 ///
 /// The handler is fully independent — PING failures or PONG timeouts are logged
 /// but never crash the handler or affect the EMA.
-#[instrument(skip(client, broadcast_tx, latency))]
+#[instrument(skip(client, broadcast_tx, latency, irc_connected))]
 pub async fn run_latency_handler<T, L>(
     client: Arc<TwitchIRCClient<T, L>>,
     broadcast_tx: broadcast::Sender<ServerMessage>,
     latency: Arc<AtomicU32>,
+    irc_connected: Arc<AtomicBool>,
 ) where
     T: Transport,
     L: LoginCredentials,
@@ -51,6 +52,7 @@ pub async fn run_latency_handler<T, L>(
 
     let mut ema: f64 = f64::from(initial);
     let mut last_logged_ema: u32 = initial;
+    let mut consecutive_misses: u32 = 0;
 
     loop {
         sleep(LATENCY_PING_INTERVAL).await;
@@ -89,9 +91,18 @@ pub async fn run_latency_handler<T, L>(
         .await;
 
         let rtt = match pong_result {
-            Ok(elapsed) => elapsed,
+            Ok(elapsed) => {
+                consecutive_misses = 0;
+                irc_connected.store(true, Ordering::Relaxed);
+                elapsed
+            }
             Err(_) => {
                 warn!("PONG timeout after {:?}", LATENCY_PING_TIMEOUT);
+                consecutive_misses += 1;
+                if consecutive_misses >= 3 {
+                    irc_connected.store(false, Ordering::Relaxed);
+                    warn!("3 consecutive PONG timeouts; marking IRC disconnected");
+                }
                 continue;
             }
         };
