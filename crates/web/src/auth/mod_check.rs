@@ -4,9 +4,7 @@
 //! helix lookup so a debugging account always retains access. The broadcaster
 //! id is checked next as a fast path. Otherwise we follow the moderator list.
 
-use eyre::WrapErr as _;
 use secrecy::ExposeSecret as _;
-use serde::Deserialize;
 
 use crate::helix::HelixClient;
 use crate::state::WebState;
@@ -73,28 +71,13 @@ async fn is_moderator_with_user_token(
     broadcaster_id: &str,
     state: &WebState,
 ) -> eyre::Result<bool> {
-    #[derive(Deserialize)]
-    struct Mod {}
-    #[derive(Deserialize)]
-    struct Resp {
-        data: Vec<Mod>,
-    }
-
-    let mut url = url::Url::parse("https://api.twitch.tv/helix/moderation/moderators")?;
-    url.query_pairs_mut()
-        .append_pair("broadcaster_id", broadcaster_id)
-        .append_pair("user_id", user_id);
-    let resp: Resp = state
-        .oauth
-        .http
-        .get(url)
-        .bearer_auth(access_token)
-        .header("Client-Id", state.client_id.expose_secret())
-        .send()
-        .await?
-        .error_for_status()
-        .wrap_err("helix moderators (user token)")?
-        .json()
-        .await?;
-    Ok(!resp.data.is_empty())
+    crate::helix::helix_moderator_check(
+        &state.oauth.http,
+        "https://api.twitch.tv",
+        state.client_id.expose_secret(),
+        access_token,
+        broadcaster_id,
+        user_id,
+    )
+    .await
 }
