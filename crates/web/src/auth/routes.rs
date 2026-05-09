@@ -198,7 +198,8 @@ async fn callback(
         .map_err(WebError::Internal)?;
     let csrf_value_hex = hex::encode(csrf_value);
 
-    cookies.add(
+    let signed = cookies.signed(&state.signed_key);
+    signed.add(
         Cookie::build((SID_COOKIE, sid))
             .http_only(true)
             .secure(true)
@@ -206,7 +207,7 @@ async fn callback(
             .path("/")
             .build(),
     );
-    cookies.add(
+    signed.add(
         Cookie::build((CSRF_COOKIE, csrf_value_hex))
             .secure(true)
             .same_site(SameSite::Lax)
@@ -230,6 +231,7 @@ async fn logout(
     axum::Form(form): axum::Form<LogoutForm>,
 ) -> Result<Response, WebError> {
     let sid = cookies
+        .signed(&state.signed_key)
         .get(SID_COOKIE)
         .map(|c| c.value().to_owned())
         .ok_or(WebError::CsrfMismatch)?;
@@ -277,10 +279,13 @@ pub async fn require_mod(
     mut req: Request,
     next: Next,
 ) -> Result<Response, WebError> {
-    let sid = cookies.get(SID_COOKIE).ok_or(WebError::Unauthenticated)?;
+    let sid_cookie = cookies
+        .signed(&state.signed_key)
+        .get(SID_COOKIE)
+        .ok_or(WebError::Unauthenticated)?;
     let session = state
         .sessions
-        .get_and_touch(sid.value())
+        .get_and_touch(sid_cookie.value())
         .ok_or(WebError::Unauthenticated)?;
 
     let now = state.clock.now();
@@ -297,9 +302,9 @@ pub async fn require_mod(
         )
         .await
         {
-            Ok(ModCheckOutcome::Allow) => state.sessions.record_mod_check(sid.value()),
+            Ok(ModCheckOutcome::Allow) => state.sessions.record_mod_check(sid_cookie.value()),
             Ok(ModCheckOutcome::Deny) => {
-                state.sessions.drop_session(sid.value());
+                state.sessions.drop_session(sid_cookie.value());
                 tracing::info!(target: "twitch_1337_web", user_id=%session.user_id, action="mod_recheck", result="denied");
                 return Err(WebError::Forbidden);
             }

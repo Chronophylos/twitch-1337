@@ -35,13 +35,17 @@ fn admin_helix(user_id: &str) -> Arc<dyn HelixClient> {
     })
 }
 
-async fn authed_setup() -> (WebState, String, String, TempDir, TempDir) {
+/// `(state, signed_sid, signed_csrf, bare_csrf, _td_pings, _td_memory)`.
+/// `signed_csrf` is what the browser would send as the `tw1337_csrf` cookie
+/// after signed-add by the OAuth callback; `bare_csrf` is the user-visible
+/// value that goes into the `_csrf` form field or `X-Csrf-Token` header.
+async fn authed_setup() -> (WebState, String, String, String, TempDir, TempDir) {
     install_crypto();
     let user_id = "9001";
     let helix = admin_helix(user_id);
     let (state, td_pings, td_memory) = build_state_with_dirs(helix).await;
-    let (sid, csrf) = insert_session(&state, user_id, "admin");
-    (state, sid, csrf, td_pings, td_memory)
+    let (sid, csrf, bare_csrf) = insert_session(&state, user_id, "admin");
+    (state, sid, csrf, bare_csrf, td_pings, td_memory)
 }
 
 async fn body_string(res: axum::http::Response<Body>) -> String {
@@ -61,7 +65,7 @@ fn post_form(uri: &str, sid: &str, csrf: &str, body: String) -> Request<Body> {
 
 #[tokio::test]
 async fn save_soul_written_when_mtime_matches() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
+    let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
     let mtime = state
         .memory_store
         .current_mtime(&FileKind::Soul)
@@ -69,7 +73,7 @@ async fn save_soul_written_when_mtime_matches() {
         .unwrap();
     let body = format!(
         "_csrf={csrf}&mtime={mtime}&body=fresh-soul-body",
-        csrf = urlencoding::encode(&csrf),
+        csrf = urlencoding::encode(&bare_csrf),
     );
     let app = build_router(state.clone());
     let res = app
@@ -83,7 +87,7 @@ async fn save_soul_written_when_mtime_matches() {
 
 #[tokio::test]
 async fn save_soul_409_on_stale_mtime() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
+    let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
     // Bump SOUL.md so the stored mtime is non-zero, then submit a form
     // pretending the user opened the page when SOUL.md didn't exist (mtime=0).
     state
@@ -93,7 +97,7 @@ async fn save_soul_409_on_stale_mtime() {
         .unwrap();
     let body = format!(
         "_csrf={csrf}&mtime=0&body=user-draft-body",
-        csrf = urlencoding::encode(&csrf),
+        csrf = urlencoding::encode(&bare_csrf),
     );
     let app = build_router(state.clone());
     let res = app
@@ -118,7 +122,7 @@ async fn save_soul_409_on_stale_mtime() {
 
 #[tokio::test]
 async fn save_oversized_body_returns_400() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
+    let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
     let mtime = state
         .memory_store
         .current_mtime(&FileKind::Soul)
@@ -129,7 +133,7 @@ async fn save_oversized_body_returns_400() {
     let huge = "x".repeat(5000);
     let body = format!(
         "_csrf={csrf}&mtime={mtime}&body={huge}",
-        csrf = urlencoding::encode(&csrf),
+        csrf = urlencoding::encode(&bare_csrf),
     );
     let app = build_router(state);
     let res = app
@@ -141,10 +145,10 @@ async fn save_oversized_body_returns_400() {
 
 #[tokio::test]
 async fn create_state_reserved_slug_rejected() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
+    let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
     let body = format!(
         "_csrf={csrf}&slug=new&body=anything",
-        csrf = urlencoding::encode(&csrf),
+        csrf = urlencoding::encode(&bare_csrf),
     );
     let app = build_router(state.clone());
     let res = app
@@ -167,10 +171,10 @@ async fn create_state_reserved_slug_rejected() {
 
 #[tokio::test]
 async fn create_state_round_trip() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
+    let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
     let body = format!(
         "_csrf={csrf}&slug=quiz&body=score%3A%201",
-        csrf = urlencoding::encode(&csrf),
+        csrf = urlencoding::encode(&bare_csrf),
     );
     let app = build_router(state.clone());
     let res = app
@@ -198,7 +202,7 @@ async fn create_state_round_trip() {
 
 #[tokio::test]
 async fn delete_state_round_trip() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
+    let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
     state
         .memory_store
         .write_state(
@@ -210,7 +214,7 @@ async fn delete_state_round_trip() {
         )
         .await
         .unwrap();
-    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&csrf));
+    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
     let app = build_router(state.clone());
     let res = app
         .oneshot(post_form("/memory/state/doomed/delete", &sid, &csrf, body))
@@ -235,10 +239,10 @@ async fn delete_state_round_trip() {
 
 #[tokio::test]
 async fn save_user_id_invalid_400() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
+    let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
     let body = format!(
         "_csrf={csrf}&mtime=0&body=anything",
-        csrf = urlencoding::encode(&csrf),
+        csrf = urlencoding::encode(&bare_csrf),
     );
     let app = build_router(state);
     let res = app
@@ -250,7 +254,7 @@ async fn save_user_id_invalid_400() {
 
 #[tokio::test]
 async fn save_csrf_mismatch_rejected() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
+    let (state, sid, csrf, _bare_csrf, _tdp, _tdm) = authed_setup().await;
     let mtime = state
         .memory_store
         .current_mtime(&FileKind::Soul)
@@ -271,8 +275,8 @@ async fn save_csrf_mismatch_rejected() {
 
 #[tokio::test]
 async fn delete_state_invalid_slug_400() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
-    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&csrf));
+    let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
+    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
     let app = build_router(state);
     let res = app
         .oneshot(post_form(

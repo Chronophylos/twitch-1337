@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicBool;
 
 use secrecy::SecretString;
 use tokio::sync::RwLock;
+use tower_cookies::Key;
 use twitch_1337_core::ai::memory::store::MemoryStore;
 use twitch_1337_core::ping::PingManager;
 
@@ -44,4 +45,8 @@ pub struct WebState {
     /// per-path mutex map coherent — two independent stores against the
     /// same on-disk tree would silently race past each other's locks.
     pub memory_store: MemoryStore,
+    /// HMAC key for signed cookies (sid + csrf). Derived from
+    /// `[web].session_secret` in the bin so tampering with sid is detected
+    /// on the next request rather than handled by HashMap miss alone.
+    pub signed_key: Key,
 }

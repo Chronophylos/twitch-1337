@@ -104,6 +104,9 @@ pub async fn build_state_with_dirs(helix: Arc<dyn HelixClient>) -> (WebState, Te
         session_ttl: Duration::from_secs(7200),
         mod_check_refresh: Duration::from_secs(300),
     });
+    // Tests don't need a real production secret; a fixed 32-byte key keeps
+    // signed-cookie round-trips deterministic across reruns.
+    let signed_key = tower_cookies::Key::from(&[0x42u8; 64]);
     let state = WebState {
         sessions,
         helix,
@@ -117,24 +120,57 @@ pub async fn build_state_with_dirs(helix: Arc<dyn HelixClient>) -> (WebState, Te
         oauth,
         ping_manager,
         memory_store,
+        signed_key,
     };
     (state, pings_dir, memory_dir)
 }
 
-/// Insert a session for `(user_id, user_login)` and return the session id
-/// alongside the hex-encoded csrf value the cookie + form fields would
-/// carry. Used by ping/memory route tests to skip the OAuth round-trip.
-pub fn insert_session(state: &WebState, user_id: &str, user_login: &str) -> (String, String) {
+/// Insert a session for `(user_id, user_login)` and return
+/// `(signed_sid_for_cookie, signed_csrf_for_cookie, bare_csrf_for_form_field)`.
+/// Used by ping/memory route tests to skip the OAuth round-trip; cookie
+/// headers must carry the signed values (HMAC tag + payload) because the
+/// production OAuth callback writes them via `cookies.signed(&key)`. The
+/// bare csrf is what the user's browser fills into the `_csrf=` form field
+/// or `X-Csrf-Token` header — `crate::auth::csrf::verify` compares the bare
+/// hex against `session.csrf_value`.
+pub fn insert_session(
+    state: &WebState,
+    user_id: &str,
+    user_login: &str,
+) -> (String, String, String) {
     let (sid, csrf) = state
         .sessions
         .insert(user_id.to_owned(), user_login.to_owned())
         .expect("insert session");
-    (sid, hex::encode(csrf))
+    let bare_csrf = hex::encode(csrf);
+    let signed_sid = sign_for_tests(state, "tw1337_sid", &sid);
+    let signed_csrf = sign_for_tests(state, "tw1337_csrf", &bare_csrf);
+    (signed_sid, signed_csrf, bare_csrf)
+}
+
+/// Sign a cookie value against `state.signed_key` so handlers see a cookie
+/// the signed extractor will accept. Round-trips through an in-memory
+/// `Cookies` jar so we get the exact signed string the production
+/// `Set-Cookie` path emits.
+pub fn sign_for_tests(state: &WebState, name: &str, value: &str) -> String {
+    use tower_cookies::Cookies;
+    let cookies = Cookies::default();
+    let signed = cookies.signed(&state.signed_key);
+    signed.add(
+        tower_cookies::Cookie::build((name.to_owned(), value.to_owned()))
+            .path("/")
+            .build(),
+    );
+    cookies
+        .get(name)
+        .expect("cookie present after signed add")
+        .value()
+        .to_owned()
 }
 
 /// `Cookie:` header value combining sid + csrf, matching what the browser
-/// would send after a successful login (sid is HttpOnly; csrf is JS-readable
-/// but for header CSRF we just send the value back).
-pub fn cookie_header(sid: &str, csrf: &str) -> String {
-    format!("tw1337_sid={sid}; tw1337_csrf={csrf}")
+/// would send after a successful login. Tests inject the *signed* values,
+/// because that's what hits the server in production.
+pub fn cookie_header(signed_sid: &str, signed_csrf: &str) -> String {
+    format!("tw1337_sid={signed_sid}; tw1337_csrf={signed_csrf}")
 }
