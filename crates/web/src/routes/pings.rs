@@ -244,20 +244,9 @@ async fn delete(
     }
 
     let mut mgr = state.ping_manager.write().await;
-    if let Err(e) = mgr.delete_ping(&name) {
-        tracing::warn!(
-            target: "twitch_1337_web",
-            user_id = %session.user_id,
-            action = "ping_delete",
-            target_name = %name,
-            result = "missing",
-            error = ?e,
-        );
-        return Err(WebError::Validation {
-            field: "name".into(),
-            msg: e.to_string(),
-        });
-    }
+    // Idempotent: delete on a missing ping is a no-op. The HTMX row swap
+    // removes the visible row either way; double-clicks shouldn't 4xx.
+    let _ = mgr.delete_ping(&name);
     drop(mgr);
 
     tracing::info!(

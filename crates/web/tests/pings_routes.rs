@@ -225,3 +225,27 @@ async fn delete_without_csrf_rejected() {
         "ping must persist when csrf header is absent",
     );
 }
+
+#[tokio::test]
+async fn create_rejects_bad_form_csrf() {
+    let (state, sid, csrf, _td) = authed_setup();
+    let app = build_router(state.clone());
+    let body = format!(
+        "_csrf={bad}&name=tampered&template=hi",
+        bad = urlencoding::encode(&"00".repeat(32)),
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let mgr = state.ping_manager.read().await;
+    assert!(
+        mgr.get("tampered").is_none(),
+        "ping must not persist with mismatched _csrf",
+    );
+}
