@@ -81,6 +81,9 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     // Flight tracker.
     pub aviation: Option<AviationClient>,
     pub aviation_for_commands: Option<AviationClient>,
+
+    // AI emote grounding.
+    pub emote_provider: Option<Arc<crate::twitch::seventv::SevenTvEmoteProvider>>,
 }
 
 /// Spawn every long-running handler task in the order they currently
@@ -106,6 +109,7 @@ where
         whisper,
         aviation,
         aviation_for_commands,
+        emote_provider,
     } = deps;
 
     let schedules_enabled = !config.schedules.is_empty();
@@ -235,6 +239,7 @@ where
                 data_dir: data_dir.clone(),
                 suspension_manager: suspension_manager.clone(),
                 suspend: config.suspend.clone(),
+                emote_provider,
             })
             .await;
         }

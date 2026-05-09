@@ -60,12 +60,8 @@ async fn ai_command_injects_7tv_emote_glossary() {
                 ai.emotes.include_global = true;
             }
         })
-        .spawn()
-        .await;
-
-    tokio::fs::write(
-        bot.data_dir.path().join("7tv_emotes.toml"),
-        r#"
+        .with_emote_glossary(
+            r#"
 [[emotes]]
 name = "KEKW"
 meaning = "lachen, etwas ist lustig"
@@ -81,9 +77,9 @@ usage = "wenn der Chat den Insider anspricht"
 name = "MissingEmote"
 meaning = "steht nicht im aktuellen 7TV-Katalog"
 "#,
-    )
-    .await
-    .unwrap();
+        )
+        .spawn()
+        .await;
 
     Mock::given(method("GET"))
         .and(path("/emote-sets/global"))
@@ -154,19 +150,15 @@ async fn ai_command_continues_when_7tv_unavailable() {
                 ai.emotes.enabled = true;
             }
         })
-        .spawn()
-        .await;
-
-    tokio::fs::write(
-        bot.data_dir.path().join("7tv_emotes.toml"),
-        r#"
+        .with_emote_glossary(
+            r#"
 [[emotes]]
 name = "KEKW"
 meaning = "lachen"
 "#,
-    )
-    .await
-    .unwrap();
+        )
+        .spawn()
+        .await;
 
     Mock::given(method("GET"))
         .and(path("/emote-sets/global"))
