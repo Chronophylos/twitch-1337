@@ -1,18 +1,22 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use twitch_1337_core as twitch_1337;
-
+use async_trait::async_trait;
 use chrono::Utc;
 use color_eyre::eyre::Result;
+use eyre::{WrapErr as _, eyre};
 use secrecy::ExposeSecret as _;
 use tokio::sync::oneshot;
 use tracing::info;
-use twitch_1337::{
-    Services, aviation, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing,
-    llm_factory, load_configuration, run_bot, setup_and_verify_twitch_client, twitch::whisper,
-    util::clock::SystemClock,
+use twitch_1337_core::{
+    AuthenticatedLoginCredentials, Services, aviation, ensure_data_dir, get_data_dir,
+    install_crypto_provider, install_tracing, llm_factory, load_configuration, run_bot,
+    setup_and_verify_twitch_client, twitch::whisper, util::clock::SystemClock,
 };
+use twitch_1337_web::helix::{AccessTokenProvider, HelixClient as _, ReqwestHelixClient};
+use twitch_irc::login::LoginCredentials as _;
+
+use twitch_1337_core as twitch_1337;
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
@@ -58,8 +62,9 @@ pub async fn main() -> Result<()> {
         }
     };
 
+    let whisper_credentials = credentials.clone();
     let whisper = whisper::HelixWhisperSender::new(
-        credentials,
+        whisper_credentials,
         config.twitch.client_id.expose_secret().to_string(),
         bot_user_id,
         get_data_dir(),
@@ -69,6 +74,13 @@ pub async fn main() -> Result<()> {
 
     let irc_connected = Arc::new(AtomicBool::new(false));
 
+    let web_spawner = if config.web.enabled {
+        let credentials_for_web = credentials.clone();
+        Some(build_web_spawner(&config, credentials_for_web, irc_connected.clone()).await?)
+    } else {
+        None
+    };
+
     let services = Services {
         clock: Arc::new(SystemClock),
         llm: llm_client,
@@ -77,6 +89,7 @@ pub async fn main() -> Result<()> {
         data_dir: get_data_dir(),
         emote_glossary_override: None,
         irc_connected,
+        web_spawner,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -86,6 +99,102 @@ pub async fn main() -> Result<()> {
     });
 
     run_bot(client, incoming, config, services, shutdown_rx).await
+}
+
+/// Build the web-task spawn closure. Resolves the broadcaster id, builds
+/// the helix client + OAuth context, binds the listener loud (port-in-use
+/// aborts startup), and returns a closure that — given the shared
+/// shutdown `Notify` — spawns `run_web` on a tokio task.
+async fn build_web_spawner(
+    config: &twitch_1337::config::Configuration,
+    credentials: AuthenticatedLoginCredentials,
+    irc_connected: Arc<AtomicBool>,
+) -> Result<twitch_1337::WebSpawner> {
+    let bind_addr: std::net::SocketAddr = config
+        .web
+        .bind_addr
+        .parse()
+        .wrap_err("parse web.bind_addr")?;
+    // Bind synchronously so a port-in-use failure aborts startup loudly.
+    let listener = twitch_1337_web::bind(bind_addr).await?;
+
+    let token_provider: Arc<dyn AccessTokenProvider> = Arc::new(CredsTokenProvider {
+        creds: Arc::new(credentials),
+    });
+    let helix = Arc::new(ReqwestHelixClient::new(
+        reqwest::Client::new(),
+        config.twitch.client_id.clone(),
+        token_provider,
+    ));
+
+    let broadcaster = helix
+        .as_ref()
+        .fetch_user_by_login(&config.twitch.channel)
+        .await
+        .wrap_err("resolve broadcaster id")?
+        .ok_or_else(|| eyre!("channel `{}` not found on twitch", config.twitch.channel))?;
+
+    let oauth = Arc::new(twitch_1337_web::auth::OAuthCtx::new(
+        config.twitch.client_id.expose_secret(),
+        &config.twitch.client_secret,
+        &config.web.public_url,
+    )?);
+
+    let web_clock = Arc::new(twitch_1337_web::clock::SystemClock);
+    let sessions = Arc::new(twitch_1337_web::auth::session::SessionTable::new(
+        config.web.session_ttl,
+        web_clock.clone(),
+    ));
+
+    let web_config = Arc::new(twitch_1337_web::config::WebConfig {
+        bind_addr: config.web.bind_addr.clone(),
+        public_url: config.web.public_url.clone(),
+        session_secret: config.web.session_secret.clone(),
+        session_ttl: config.web.session_ttl,
+        mod_check_refresh: config.web.mod_check_refresh,
+    });
+
+    let state = twitch_1337_web::WebState {
+        sessions,
+        helix: helix as Arc<dyn twitch_1337_web::helix::HelixClient>,
+        irc_connected,
+        config: web_config,
+        clock: web_clock,
+        channel: Arc::from(config.twitch.channel.as_str()),
+        broadcaster_id: Arc::from(broadcaster.id.as_str()),
+        hidden_admins: Arc::from(config.twitch.hidden_admins.clone().into_boxed_slice()),
+        client_id: config.twitch.client_id.clone(),
+        oauth,
+    };
+
+    Ok(Box::new(move |shutdown| {
+        let deps = twitch_1337_web::WebDeps { bind_addr, state };
+        tokio::spawn(async move {
+            if let Err(e) = twitch_1337_web::run_web(listener, deps, shutdown).await {
+                tracing::error!(target: "twitch_1337_web", error = ?e, "Web task exited with error");
+            }
+        })
+    }))
+}
+
+/// Bridges the bot's `RefreshingLoginCredentials` to the web crate's
+/// helix `AccessTokenProvider`. Lets the helix client reuse the same
+/// refreshed access token the bot already maintains in `token.ron`.
+struct CredsTokenProvider {
+    creds: Arc<AuthenticatedLoginCredentials>,
+}
+
+#[async_trait]
+impl AccessTokenProvider for CredsTokenProvider {
+    async fn current_access_token(&self) -> eyre::Result<String> {
+        let creds = self
+            .creds
+            .as_ref()
+            .get_credentials()
+            .await
+            .map_err(|e| eyre!("get_credentials: {e}"))?;
+        Ok(creds.token.unwrap_or_default())
+    }
 }
 
 /// Lightweight healthcheck for the Docker `HEALTHCHECK` directive. Reads the

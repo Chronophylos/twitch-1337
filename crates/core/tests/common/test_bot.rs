@@ -202,6 +202,28 @@ impl TestBotBuilder {
 
         let irc_connected = Arc::new(AtomicBool::new(false));
 
+        let web_spawner = if self.config.web.enabled {
+            let bind_addr: std::net::SocketAddr = self
+                .config
+                .web
+                .bind_addr
+                .parse()
+                .expect("test web.bind_addr");
+            let listener = twitch_1337_web::bind(bind_addr).await.expect("bind web");
+            let state = build_test_web_state(&self.config, irc_connected.clone());
+            let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
+                let deps = twitch_1337_web::WebDeps { bind_addr, state };
+                tokio::spawn(async move {
+                    if let Err(e) = twitch_1337_web::run_web(listener, deps, shutdown).await {
+                        tracing::error!(target: "twitch_1337_web", ?e, "test web exited");
+                    }
+                })
+            });
+            Some(spawner)
+        } else {
+            None
+        };
+
         let services = Services {
             clock: clock.clone(),
             llm: self
@@ -214,6 +236,7 @@ impl TestBotBuilder {
             data_dir: data_dir.path().to_path_buf(),
             emote_glossary_override: self.emote_glossary_override,
             irc_connected: irc_connected.clone(),
+            web_spawner,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -536,5 +559,63 @@ impl WhisperSender for FakeWhisperSender {
         });
         self.notify.notify_waiters();
         Ok(message)
+    }
+}
+
+/// Build a minimal `WebState` for tests that flip on `with_web`. Uses a
+/// stub helix client that denies every mod check (no production routes
+/// reach it because the web smoke test only probes the public `/healthz`).
+fn build_test_web_state(
+    config: &Configuration,
+    irc_connected: Arc<AtomicBool>,
+) -> twitch_1337_web::WebState {
+    use twitch_1337_web::auth::OAuthCtx;
+    use twitch_1337_web::auth::session::SessionTable;
+    use twitch_1337_web::clock::SystemClock as WebSystemClock;
+    use twitch_1337_web::config::WebConfig as WebWebConfig;
+    use twitch_1337_web::helix::{HelixClient, HelixUser};
+
+    struct DenyHelix;
+    #[async_trait]
+    impl HelixClient for DenyHelix {
+        async fn fetch_user_by_id(&self, _id: &str) -> eyre::Result<Option<HelixUser>> {
+            Ok(None)
+        }
+        async fn fetch_user_by_login(&self, _login: &str) -> eyre::Result<Option<HelixUser>> {
+            Ok(None)
+        }
+        async fn is_moderator(&self, _b: &str, _u: &str) -> eyre::Result<bool> {
+            Ok(false)
+        }
+    }
+
+    let web_clock = Arc::new(WebSystemClock);
+    let sessions = Arc::new(SessionTable::new(config.web.session_ttl, web_clock.clone()));
+    let oauth = Arc::new(
+        OAuthCtx::new(
+            "test-client-id",
+            &secrecy::SecretString::new("test-secret".to_owned().into()),
+            "https://test.invalid",
+        )
+        .expect("test oauth"),
+    );
+    let web_config = Arc::new(WebWebConfig {
+        bind_addr: config.web.bind_addr.clone(),
+        public_url: config.web.public_url.clone(),
+        session_secret: config.web.session_secret.clone(),
+        session_ttl: config.web.session_ttl,
+        mod_check_refresh: config.web.mod_check_refresh,
+    });
+    twitch_1337_web::WebState {
+        sessions,
+        helix: Arc::new(DenyHelix),
+        irc_connected,
+        config: web_config,
+        clock: web_clock,
+        channel: Arc::from(config.twitch.channel.as_str()),
+        broadcaster_id: Arc::from("0"),
+        hidden_admins: Arc::from(Vec::<String>::new().into_boxed_slice()),
+        client_id: secrecy::SecretString::new("test-client-id".to_owned().into()),
+        oauth,
     }
 }

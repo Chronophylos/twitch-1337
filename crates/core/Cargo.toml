@@ -46,6 +46,7 @@ twitch-irc = { git = "https://github.com/Chronophylos/twitch-irc-rs", branch = "
 
 [dev-dependencies]
 twitch-1337-core = { path = ".", features = ["testing"] }
+twitch-1337-web = { path = "../web" }
 async-trait = "0.1"
 bytes = "1"
 either = "1"

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Conflict</h2>
+<p>File <code>{{ kind }}/{{ id }}</code> changed since you opened it (mtime {{ current_mtime }}).</p>
+<p>Reconcile manually. Full UI lands in Task 6.</p>
+<details>
+  <summary>Current</summary>
+  <pre>{{ current_body }}</pre>
+</details>
+<details>
+  <summary>Your draft</summary>
+  <pre>{{ draft }}</pre>
+</details>
+{% endblock %}

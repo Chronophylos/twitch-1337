@@ -83,7 +83,22 @@ pub struct Services {
     /// Shared connectivity flag flipped by the latency monitor. Read by the
     /// web dashboard's `/healthz` endpoint.
     pub irc_connected: Arc<std::sync::atomic::AtomicBool>,
+    /// Optional callback that spawns the embedded web dashboard task.
+    ///
+    /// `core` no longer depends on the `web` crate (the cycle would break
+    /// builds), so the binary is the only place that can construct
+    /// `WebState` + spawn `run_web`. Tests leave this `None` and the bot
+    /// runs without a dashboard.
+    ///
+    /// The closure receives the shared shutdown `Notify` (so axum's
+    /// graceful-shutdown future fires when handlers wind down) and is
+    /// expected to return a `JoinHandle` that resolves when the web task
+    /// exits.
+    pub web_spawner: Option<WebSpawner>,
 }
+
+pub type WebSpawner =
+    Box<dyn FnOnce(Arc<tokio::sync::Notify>) -> tokio::task::JoinHandle<()> + Send + 'static>;
 
 /// Run the bot until `shutdown` fires or a handler exits.
 ///
@@ -109,6 +124,7 @@ where
         data_dir,
         emote_glossary_override,
         irc_connected,
+        web_spawner,
     } = services;
 
     let schedules_enabled = !config.schedules.is_empty();
@@ -150,8 +166,6 @@ where
     let ai_config_for_ritual = config.ai.clone();
     let channel_for_ritual = config.twitch.channel.clone();
 
-    let web_config = config.web.clone();
-
     let handlers = spawn_handlers(SpawnDeps {
         client,
         incoming,
@@ -173,26 +187,9 @@ where
 
     let shutdown_notify = handlers.shutdown_notify.clone();
 
-    // Optional embedded web dashboard. Disabled by default.
-    let web_handle = if web_config.enabled {
-        let bind_addr: std::net::SocketAddr = web_config
-            .bind_addr
-            .parse()
-            .wrap_err("parse web.bind_addr")?;
-        // Bind synchronously so port-in-use aborts startup loudly per spec.
-        let listener = twitch_1337_web::bind(bind_addr).await?;
-        let deps = twitch_1337_web::WebDeps {
-            irc_connected: irc_connected.clone(),
-        };
-        let notify = shutdown_notify.clone();
-        Some(tokio::spawn(async move {
-            if let Err(e) = twitch_1337_web::run_web(listener, deps, notify).await {
-                tracing::error!(target: "twitch_1337_web", error = ?e, "Web task exited with error");
-            }
-        }))
-    } else {
-        None
-    };
+    // Optional embedded web dashboard. The bin builds and supplies the
+    // spawn closure so this crate stays independent of `twitch_1337_web`.
+    let web_handle = web_spawner.map(|spawner| spawner(shutdown_notify.clone()));
 
     // Daily dreamer ritual.
     if let (Some(llm), Some(mem)) = (llm_for_ritual.as_ref(), &ai_memory_v2_for_ritual)
