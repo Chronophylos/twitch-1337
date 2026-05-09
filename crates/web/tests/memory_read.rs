@@ -46,7 +46,7 @@ async fn authed_setup() -> (WebState, String, String, TempDir, TempDir) {
     let user_id = "9001";
     let helix = admin_helix(user_id);
     let (state, td_pings, td_memory) = build_state_with_dirs(helix).await;
-    let (sid, csrf) = insert_session(&state, user_id, "admin");
+    let (sid, csrf, _bare_csrf) = insert_session(&state, user_id, "admin");
     (state, sid, csrf, td_pings, td_memory)
 }
 

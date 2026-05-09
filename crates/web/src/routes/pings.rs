@@ -43,6 +43,8 @@ struct ListTpl {
     rows: Vec<RowView>,
     flash: Option<String>,
     csrf: String,
+    user_login: String,
+    current_page: &'static str,
 }
 
 #[derive(Template)]
@@ -53,13 +55,19 @@ struct FormTpl<'a> {
     template_text: &'a str,
     csrf: &'a str,
     error: Option<String>,
+    user_login: &'a str,
+    current_page: &'static str,
 }
 
 fn render<T: Template>(tpl: &T) -> Result<Response, WebError> {
+    render_with(StatusCode::OK, tpl)
+}
+
+fn render_with<T: Template>(status: StatusCode, tpl: &T) -> Result<Response, WebError> {
     let body = tpl
         .render()
         .map_err(|e| WebError::Internal(eyre::eyre!("render: {e}")))?;
-    Ok(Html(body).into_response())
+    Ok((status, Html(body)).into_response())
 }
 
 async fn list(
@@ -84,6 +92,8 @@ async fn list(
         rows,
         flash: flash::take(&cookies),
         csrf: csrf::encode(&session.csrf_value),
+        user_login: session.user_login.clone(),
+        current_page: crate::nav::PINGS,
     };
     render(&tpl)
 }
@@ -96,6 +106,8 @@ async fn new_form(Extension(session): Extension<Session>) -> Result<Response, We
         template_text: "",
         csrf: &csrf_hex,
         error: None,
+        user_login: &session.user_login,
+        current_page: crate::nav::PINGS,
     })
 }
 
@@ -118,6 +130,7 @@ async fn create(
     }
     let name = form.name.trim().to_owned();
     let template = form.template;
+    let csrf_hex = csrf::encode(&session.csrf_value);
 
     let mut mgr = state.ping_manager.write().await;
     if mgr.ping_exists_ignore_case(&name) {
@@ -128,9 +141,25 @@ async fn create(
             target_name = %name,
             result = "duplicate",
         );
-        return Err(WebError::DuplicateName { name });
+        return render_with(
+            StatusCode::BAD_REQUEST,
+            &FormTpl {
+                is_new: true,
+                name: &name,
+                template_text: &template,
+                csrf: &csrf_hex,
+                error: Some(format!("ping `{name}` already exists")),
+                user_login: &session.user_login,
+                current_page: crate::nav::PINGS,
+            },
+        );
     }
-    if let Err(e) = mgr.create_ping(name.clone(), template, session.user_login.clone(), None) {
+    if let Err(e) = mgr.create_ping(
+        name.clone(),
+        template.clone(),
+        session.user_login.clone(),
+        None,
+    ) {
         tracing::warn!(
             target: "twitch_1337_web",
             user_id = %session.user_id,
@@ -139,10 +168,18 @@ async fn create(
             result = "validation",
             error = ?e,
         );
-        return Err(WebError::Validation {
-            field: "template".into(),
-            msg: e.to_string(),
-        });
+        return render_with(
+            StatusCode::BAD_REQUEST,
+            &FormTpl {
+                is_new: true,
+                name: &name,
+                template_text: &template,
+                csrf: &csrf_hex,
+                error: Some(e.to_string()),
+                user_login: &session.user_login,
+                current_page: crate::nav::PINGS,
+            },
+        );
     }
     drop(mgr);
 
@@ -180,6 +217,8 @@ async fn edit_form(
         template_text: &template_text,
         csrf: &csrf_hex,
         error: None,
+        user_login: &session.user_login,
+        current_page: crate::nav::PINGS,
     })
 }
 
@@ -200,9 +239,11 @@ async fn update(
     if !csrf::verify(&form.csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
+    let csrf_hex = csrf::encode(&session.csrf_value);
+    let template = form.template;
 
     let mut mgr = state.ping_manager.write().await;
-    if let Err(e) = mgr.edit_template(&name, form.template) {
+    if let Err(e) = mgr.edit_template(&name, template.clone()) {
         tracing::warn!(
             target: "twitch_1337_web",
             user_id = %session.user_id,
@@ -211,10 +252,18 @@ async fn update(
             result = "validation",
             error = ?e,
         );
-        return Err(WebError::Validation {
-            field: "template".into(),
-            msg: e.to_string(),
-        });
+        return render_with(
+            StatusCode::BAD_REQUEST,
+            &FormTpl {
+                is_new: false,
+                name: &name,
+                template_text: &template,
+                csrf: &csrf_hex,
+                error: Some(e.to_string()),
+                user_login: &session.user_login,
+                current_page: crate::nav::PINGS,
+            },
+        );
     }
     drop(mgr);
 

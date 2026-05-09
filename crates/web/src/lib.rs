@@ -1,11 +1,14 @@
 //! Embedded web dashboard for the twitch-1337 bot.
 //!
-//! v1 surfaces:
+//! Public surfaces:
 //! - `/healthz` (always public)
-//! - `/login`, `/auth/callback`, `/logout` (OAuth)
-//! - `/assets/*` (embedded css/js)
-//! - root authed shell (redirects `/` → `/pings`; ping/memory routes mount
-//!   in later tasks)
+//! - `/login`, `/auth/callback`, `/logout` (OAuth + post-login `?next=` deep-link)
+//! - `/assets/*` (embedded htmx + pico bundles, immutable cache)
+//!
+//! Mod-gated surfaces (sliding helix re-check via `require_mod`):
+//! - `/pings` — ping CRUD against the bot's `PingManager`
+//! - `/memory/{soul,lore,users,state}` — AI memory browse + edit with
+//!   `MemoryStore::write_with_guard` for mtime-aware conflict UX
 
 pub mod auth;
 pub mod clock;
@@ -13,6 +16,7 @@ pub mod config;
 pub mod error;
 pub mod flash;
 pub mod helix;
+pub mod nav;
 pub mod routes;
 pub mod state;
 

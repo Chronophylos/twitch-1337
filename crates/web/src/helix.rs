@@ -99,29 +99,51 @@ impl HelixClient for ReqwestHelixClient {
     }
 
     async fn is_moderator(&self, broadcaster_id: &str, user_id: &str) -> Result<bool> {
-        #[derive(Deserialize)]
-        struct ModEntry {}
-        #[derive(Deserialize)]
-        struct ModResp {
-            data: Vec<ModEntry>,
-        }
-
-        let mut url = url::Url::parse(&format!("{}/helix/moderation/moderators", self.helix_base))?;
-        url.query_pairs_mut()
-            .append_pair("broadcaster_id", broadcaster_id)
-            .append_pair("user_id", user_id);
         let token = self.access_token_provider.current_access_token().await?;
-        let resp: ModResp = self
-            .http
-            .get(url)
-            .bearer_auth(&token)
-            .header("Client-Id", self.client_id.expose_secret())
-            .send()
-            .await?
-            .error_for_status()
-            .wrap_err("helix moderators")?
-            .json()
-            .await?;
-        Ok(!resp.data.is_empty())
+        helix_moderator_check(
+            &self.http,
+            &self.helix_base,
+            self.client_id.expose_secret(),
+            &token,
+            broadcaster_id,
+            user_id,
+            "helix moderators (bot token)",
+        )
+        .await
     }
+}
+
+/// Single helix moderator-list call filtered by `user_id`. Returns true iff
+/// `user_id` is a moderator of `broadcaster_id`. Used by both
+/// `ReqwestHelixClient::is_moderator` (bot token) and the OAuth callback's
+/// `is_moderator_with_user_token` (user token); the only difference is the
+/// bearer.
+pub async fn helix_moderator_check(
+    http: &reqwest::Client,
+    helix_base: &str,
+    client_id: &str,
+    bearer_token: &str,
+    broadcaster_id: &str,
+    user_id: &str,
+    context: &'static str,
+) -> Result<bool> {
+    #[derive(Deserialize)]
+    struct ModResp {
+        data: Vec<serde::de::IgnoredAny>,
+    }
+    let mut url = url::Url::parse(&format!("{helix_base}/helix/moderation/moderators"))?;
+    url.query_pairs_mut()
+        .append_pair("broadcaster_id", broadcaster_id)
+        .append_pair("user_id", user_id);
+    let resp: ModResp = http
+        .get(url)
+        .bearer_auth(bearer_token)
+        .header("Client-Id", client_id)
+        .send()
+        .await?
+        .error_for_status()
+        .wrap_err(context)?
+        .json()
+        .await?;
+    Ok(!resp.data.is_empty())
 }

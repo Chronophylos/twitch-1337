@@ -37,15 +37,27 @@ fn admin_helix(user_id: &str) -> Arc<dyn HelixClient> {
     })
 }
 
-/// Build (state, sid, csrf, _td) — `_td` keeps the ping data dir alive while
-/// tests exercise PingManager's atomic save+rename. Drop it to clean up.
-async fn authed_setup() -> (twitch_1337_web::WebState, String, String, tempfile::TempDir) {
+/// Build (state, signed_sid, signed_csrf, bare_csrf, _td). `_td` keeps the
+/// ping data dir alive while tests exercise PingManager's atomic save+rename.
+/// Drop it to clean up.
+///
+/// `signed_csrf` is what the browser sends as the `tw1337_csrf` cookie after
+/// signed-add. `bare_csrf` is the user-visible value for the `_csrf` form
+/// field or `X-Csrf-Token` header (constant-time compared via
+/// `crate::auth::csrf::verify`).
+async fn authed_setup() -> (
+    twitch_1337_web::WebState,
+    String,
+    String,
+    String,
+    tempfile::TempDir,
+) {
     install_crypto();
     let user_id = "9001";
     let helix = admin_helix(user_id);
     let (state, td) = build_state_with_ping_dir(helix).await;
-    let (sid, csrf) = insert_session(&state, user_id, "admin");
-    (state, sid, csrf, td)
+    let (sid, csrf, bare_csrf) = insert_session(&state, user_id, "admin");
+    (state, sid, csrf, bare_csrf, td)
 }
 
 async fn body_string(res: axum::http::Response<Body>) -> String {
@@ -55,7 +67,7 @@ async fn body_string(res: axum::http::Response<Body>) -> String {
 
 #[tokio::test]
 async fn list_renders_existing_pings() {
-    let (state, sid, csrf, _td) = authed_setup().await;
+    let (state, sid, csrf, _bare_csrf, _td) = authed_setup().await;
     {
         let mut mgr = state.ping_manager.write().await;
         mgr.create_ping("team".into(), "Hey {mentions}".into(), "admin".into(), None)
@@ -82,11 +94,11 @@ async fn list_renders_existing_pings() {
 
 #[tokio::test]
 async fn create_rejects_control_chars() {
-    let (state, sid, csrf, _td) = authed_setup().await;
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     let app = build_router(state.clone());
     let body = format!(
         "_csrf={csrf}&name=bad&template=oops%0Aboom",
-        csrf = urlencoding::encode(&csrf),
+        csrf = urlencoding::encode(&bare_csrf),
     );
     let req = Request::builder()
         .method("POST")
@@ -106,7 +118,7 @@ async fn create_rejects_control_chars() {
 
 #[tokio::test]
 async fn create_rejects_duplicate_name() {
-    let (state, sid, csrf, _td) = authed_setup().await;
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     {
         let mut mgr = state.ping_manager.write().await;
         mgr.create_ping("dup".into(), "x {mentions}".into(), "admin".into(), None)
@@ -116,7 +128,7 @@ async fn create_rejects_duplicate_name() {
     // Case-insensitive dup check: try "DUP".
     let body = format!(
         "_csrf={csrf}&name=DUP&template=other%20{{mentions}}",
-        csrf = urlencoding::encode(&csrf),
+        csrf = urlencoding::encode(&bare_csrf),
     );
     let req = Request::builder()
         .method("POST")
@@ -133,7 +145,7 @@ async fn create_rejects_duplicate_name() {
 
 #[tokio::test]
 async fn edit_round_trip() {
-    let (state, sid, csrf, _td) = authed_setup().await;
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     {
         let mut mgr = state.ping_manager.write().await;
         mgr.create_ping("team".into(), "Hey {mentions}".into(), "admin".into(), None)
@@ -159,7 +171,7 @@ async fn edit_round_trip() {
     let app = build_router(state.clone());
     let body = format!(
         "_csrf={csrf}&template=Updated%20{{mentions}}",
-        csrf = urlencoding::encode(&csrf),
+        csrf = urlencoding::encode(&bare_csrf),
     );
     let req = Request::builder()
         .method("POST")
@@ -176,7 +188,7 @@ async fn edit_round_trip() {
 
 #[tokio::test]
 async fn delete_via_htmx_header_succeeds() {
-    let (state, sid, csrf, _td) = authed_setup().await;
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     {
         let mut mgr = state.ping_manager.write().await;
         mgr.create_ping("doomed".into(), "{mentions}".into(), "admin".into(), None)
@@ -187,7 +199,7 @@ async fn delete_via_htmx_header_succeeds() {
         .method("POST")
         .uri("/pings/doomed/delete")
         .header(header::COOKIE, cookie_header(&sid, &csrf))
-        .header("X-Csrf-Token", csrf.clone())
+        .header("X-Csrf-Token", bare_csrf.clone())
         .body(Body::empty())
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
@@ -203,7 +215,7 @@ async fn delete_via_htmx_header_succeeds() {
 
 #[tokio::test]
 async fn delete_without_csrf_rejected() {
-    let (state, sid, csrf, _td) = authed_setup().await;
+    let (state, sid, csrf, _bare_csrf, _td) = authed_setup().await;
     {
         let mut mgr = state.ping_manager.write().await;
         mgr.create_ping("survives".into(), "{mentions}".into(), "admin".into(), None)
@@ -227,8 +239,86 @@ async fn delete_without_csrf_rejected() {
 }
 
 #[tokio::test]
+async fn create_duplicate_renders_form_with_error_and_user_draft() {
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
+    {
+        let mut mgr = state.ping_manager.write().await;
+        mgr.create_ping("foo".into(), "@user".into(), "admin".into(), None)
+            .unwrap();
+    }
+    let app = build_router(state);
+    let body = format!(
+        "_csrf={csrf}&name=foo&template=%40new-template-text",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let html = body_string(res).await;
+    assert!(
+        html.contains("@new-template-text"),
+        "user draft must round-trip into the form; got {html}"
+    );
+    assert!(
+        html.contains("already exists"),
+        "error message must render; got {html}"
+    );
+    assert!(
+        html.contains(r#"value="foo""#),
+        "user-typed name must round-trip into the name input on re-render; got {html}"
+    );
+}
+
+#[tokio::test]
+async fn update_invalid_template_renders_form_with_error() {
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
+    {
+        let mut mgr = state.ping_manager.write().await;
+        mgr.create_ping("team".into(), "Hey {mentions}".into(), "admin".into(), None)
+            .unwrap();
+    }
+    let app = build_router(state.clone());
+    // Control-char templates are rejected by `PingManager::edit_template`.
+    // %01 is SOH, which `validate_template` rejects so the form re-renders.
+    let body = format!(
+        "_csrf={csrf}&template=draft%01control",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings/team")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let html = body_string(res).await;
+    // The user's draft must round-trip — the literal control char is escaped
+    // by askama, but the surrounding text must survive.
+    assert!(
+        html.contains("draft") && html.contains("control"),
+        "user draft must round-trip into the form; got {html}"
+    );
+    // Error banner from `validate_template`.
+    assert!(
+        html.contains("class=\"error\""),
+        "error banner must render; got {html}"
+    );
+    // Original template must NOT have been overwritten on disk.
+    let mgr = state.ping_manager.read().await;
+    assert_eq!(mgr.get("team").unwrap().template, "Hey {mentions}");
+}
+
+#[tokio::test]
 async fn create_rejects_bad_form_csrf() {
-    let (state, sid, csrf, _td) = authed_setup().await;
+    let (state, sid, csrf, _bare_csrf, _td) = authed_setup().await;
     let app = build_router(state.clone());
     let body = format!(
         "_csrf={bad}&name=tampered&template=hi",

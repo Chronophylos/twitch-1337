@@ -2,13 +2,23 @@
   <header><strong>twitch-1337</strong></header>
   <nav>
     <ul>
-      <li><a href="/pings">Pings</a></li>
+      <li{% if current_page == "pings" %} class="active"{% endif %}>
+        <a href="/pings">Pings</a>
+      </li>
       <li>Memory
         <ul>
-          <li><a href="/memory/soul">SOUL</a></li>
-          <li><a href="/memory/lore">LORE</a></li>
-          <li><a href="/memory/users">Users</a></li>
-          <li><a href="/memory/state">State</a></li>
+          <li{% if current_page == "memory_soul" %} class="active"{% endif %}>
+            <a href="/memory/soul">SOUL</a>
+          </li>
+          <li{% if current_page == "memory_lore" %} class="active"{% endif %}>
+            <a href="/memory/lore">LORE</a>
+          </li>
+          <li{% if current_page == "memory_users" %} class="active"{% endif %}>
+            <a href="/memory/users">Users</a>
+          </li>
+          <li{% if current_page == "memory_state" %} class="active"{% endif %}>
+            <a href="/memory/state">State</a>
+          </li>
         </ul>
       </li>
     </ul>

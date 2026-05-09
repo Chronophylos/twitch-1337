@@ -22,6 +22,7 @@
 use askama::Template;
 use axum::Router;
 use axum::extract::{Extension, Path, State};
+use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use chrono::{DateTime, Utc};
@@ -57,6 +58,9 @@ pub fn router() -> Router<WebState> {
 struct TreeTpl {
     user_count: usize,
     state_count: usize,
+    csrf: String,
+    user_login: String,
+    current_page: &'static str,
 }
 
 #[derive(Template)]
@@ -70,6 +74,8 @@ struct EditorTpl<'a> {
     save_url: &'a str,
     delete_url: Option<&'a str>,
     error: Option<String>,
+    user_login: &'a str,
+    current_page: &'static str,
 }
 
 struct StateRow {
@@ -82,6 +88,9 @@ struct StateRow {
 #[template(path = "memory/state_list.html")]
 struct StateListTpl {
     items: Vec<StateRow>,
+    csrf: String,
+    user_login: String,
+    current_page: &'static str,
 }
 
 struct UserRow {
@@ -94,13 +103,20 @@ struct UserRow {
 #[template(path = "memory/users_list.html")]
 struct UsersListTpl {
     items: Vec<UserRow>,
+    csrf: String,
+    user_login: String,
+    current_page: &'static str,
 }
 
 fn render<T: Template>(tpl: &T) -> Result<Response, WebError> {
+    render_with(StatusCode::OK, tpl)
+}
+
+fn render_with<T: Template>(status: StatusCode, tpl: &T) -> Result<Response, WebError> {
     let body = tpl
         .render()
         .map_err(|e| WebError::Internal(eyre::eyre!("render: {e}")))?;
-    Ok(Html(body).into_response())
+    Ok((status, Html(body)).into_response())
 }
 
 fn fmt_ts(t: DateTime<Utc>) -> String {
@@ -127,7 +143,10 @@ fn validate_slug(slug: &str) -> Result<(), WebError> {
     })
 }
 
-async fn tree(State(state): State<WebState>) -> Result<Response, WebError> {
+async fn tree(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+) -> Result<Response, WebError> {
     let store = &state.memory_store;
     let users = store
         .list_users()
@@ -140,6 +159,9 @@ async fn tree(State(state): State<WebState>) -> Result<Response, WebError> {
     render(&TreeTpl {
         user_count: users.len(),
         state_count: states.len(),
+        csrf: csrf::encode(&session.csrf_value),
+        user_login: session.user_login.clone(),
+        current_page: crate::nav::MEMORY_TREE,
     })
 }
 
@@ -150,6 +172,7 @@ async fn view_kind(
     title: String,
     save_url: String,
     delete_url: Option<String>,
+    current_page: &'static str,
 ) -> Result<Response, WebError> {
     let store = &state.memory_store;
     let mf = store
@@ -171,6 +194,8 @@ async fn view_kind(
         save_url: &save_url,
         delete_url: delete_url.as_deref(),
         error: None,
+        user_login: &session.user_login,
+        current_page,
     })
 }
 
@@ -185,6 +210,7 @@ async fn view_soul(
         "SOUL".to_owned(),
         "/memory/soul".to_owned(),
         None,
+        crate::nav::MEMORY_SOUL,
     )
     .await
 }
@@ -200,11 +226,15 @@ async fn view_lore(
         "LORE".to_owned(),
         "/memory/lore".to_owned(),
         None,
+        crate::nav::MEMORY_LORE,
     )
     .await
 }
 
-async fn list_users(State(state): State<WebState>) -> Result<Response, WebError> {
+async fn list_users(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+) -> Result<Response, WebError> {
     let users: Vec<MemoryFile> = state
         .memory_store
         .list_users()
@@ -225,7 +255,12 @@ async fn list_users(State(state): State<WebState>) -> Result<Response, WebError>
             }
         })
         .collect();
-    render(&UsersListTpl { items })
+    render(&UsersListTpl {
+        items,
+        csrf: csrf::encode(&session.csrf_value),
+        user_login: session.user_login.clone(),
+        current_page: crate::nav::MEMORY_USERS,
+    })
 }
 
 async fn view_user(
@@ -250,11 +285,15 @@ async fn view_user(
         title,
         save_url,
         None,
+        crate::nav::MEMORY_USERS,
     )
     .await
 }
 
-async fn list_state(State(state): State<WebState>) -> Result<Response, WebError> {
+async fn list_state(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+) -> Result<Response, WebError> {
     let items: Vec<MemoryFile> = state
         .memory_store
         .list_state()
@@ -274,7 +313,12 @@ async fn list_state(State(state): State<WebState>) -> Result<Response, WebError>
             }
         })
         .collect();
-    render(&StateListTpl { items })
+    render(&StateListTpl {
+        items,
+        csrf: csrf::encode(&session.csrf_value),
+        user_login: session.user_login.clone(),
+        current_page: crate::nav::MEMORY_STATE,
+    })
 }
 
 async fn new_state_form(
@@ -292,6 +336,8 @@ async fn new_state_form(
         save_url: "/memory/state",
         delete_url: None,
         error: None,
+        user_login: &session.user_login,
+        current_page: crate::nav::MEMORY_STATE,
     })
 }
 
@@ -311,6 +357,7 @@ async fn view_state(
         title,
         save_url,
         Some(delete_url),
+        crate::nav::MEMORY_STATE,
     )
     .await
 }
@@ -338,10 +385,13 @@ struct CsrfOnly {
 }
 
 /// Common save path for SOUL/LORE/users/state. Validates csrf, dispatches
-/// to `write_with_guard`, and maps every WriteError variant to a
-/// user-facing response so the handler bodies stay one-liners.
-// Eight args: state + session + cookies + kind + label + id + form + redirect.
-// Splitting them into a struct would just rename the noise without removing it.
+/// to `write_with_guard`, and on `WriteError::{Full,StateFull,InvalidSlug}`
+/// re-renders the originating editor with the user's draft + an inline
+/// error so they don't lose their work. `Io` keeps bubbling as 500;
+/// `CsrfMismatch` and the conflict path stay untouched.
+// Ten args: state + session + cookies + kind + label + id + form + redirect
+// + cap + delete_url. Splitting them into a struct would just rename the
+// noise without removing it.
 #[allow(clippy::too_many_arguments)]
 async fn save_kind(
     state: &WebState,
@@ -352,14 +402,23 @@ async fn save_kind(
     id: String,
     form: SaveForm,
     redirect_to: String,
+    cap: usize,
+    delete_url: Option<String>,
 ) -> Result<Response, WebError> {
     if !csrf::verify(&form.csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
+    let current_page: &'static str = match &kind {
+        FileKind::Soul => crate::nav::MEMORY_SOUL,
+        FileKind::Lore => crate::nav::MEMORY_LORE,
+        FileKind::User { .. } => crate::nav::MEMORY_USERS,
+        FileKind::State { .. } => crate::nav::MEMORY_STATE,
+    };
     let outcome = state
         .memory_store
         .write_with_guard(kind.clone(), &id, &form.body, Some(form.mtime))
         .await;
+    let csrf_hex = csrf::encode(&session.csrf_value);
     match outcome {
         Ok(WriteOutcome::Written { .. }) => {
             tracing::info!(
@@ -391,7 +450,9 @@ async fn save_kind(
                 current_body,
                 current_mtime,
                 draft: form.body,
-                csrf: csrf::encode(&session.csrf_value),
+                csrf: csrf_hex,
+                user_login: session.user_login.clone(),
+                current_page,
             })))
         }
         Err(err) => {
@@ -404,26 +465,30 @@ async fn save_kind(
                 result = "error",
                 error = ?err,
             );
-            Err(map_write_error(err))
+            // Render the editor with the user's draft preserved. `Io` is the
+            // only variant that lacks a meaningful form context — bubble it.
+            let msg = match err {
+                WriteError::Full => "exceeds byte cap".to_owned(),
+                WriteError::StateFull => "state collection full".to_owned(),
+                WriteError::InvalidSlug => "reserved or invalid slug".to_owned(),
+                WriteError::Io(e) => return Err(WebError::Internal(e)),
+            };
+            render_with(
+                StatusCode::BAD_REQUEST,
+                &EditorTpl {
+                    title: &label,
+                    body: &form.body,
+                    csrf: &csrf_hex,
+                    mtime: form.mtime,
+                    byte_cap: cap,
+                    save_url: &redirect_to,
+                    delete_url: delete_url.as_deref(),
+                    error: Some(msg),
+                    user_login: &session.user_login,
+                    current_page,
+                },
+            )
         }
-    }
-}
-
-fn map_write_error(err: WriteError) -> WebError {
-    match err {
-        WriteError::Full => WebError::Validation {
-            field: "body".into(),
-            msg: "exceeds byte cap".into(),
-        },
-        WriteError::StateFull => WebError::Validation {
-            field: "slug".into(),
-            msg: "state collection full".into(),
-        },
-        WriteError::InvalidSlug => WebError::Validation {
-            field: "slug".into(),
-            msg: "reserved or invalid".into(),
-        },
-        WriteError::Io(e) => WebError::Internal(e),
     }
 }
 
@@ -433,6 +498,7 @@ async fn save_soul(
     cookies: Cookies,
     axum::Form(form): axum::Form<SaveForm>,
 ) -> Result<Response, WebError> {
+    let cap = state.memory_store.caps().soul_bytes;
     save_kind(
         &state,
         &session,
@@ -442,6 +508,8 @@ async fn save_soul(
         String::new(),
         form,
         "/memory/soul".to_owned(),
+        cap,
+        None,
     )
     .await
 }
@@ -452,6 +520,7 @@ async fn save_lore(
     cookies: Cookies,
     axum::Form(form): axum::Form<SaveForm>,
 ) -> Result<Response, WebError> {
+    let cap = state.memory_store.caps().lore_bytes;
     save_kind(
         &state,
         &session,
@@ -461,6 +530,8 @@ async fn save_lore(
         String::new(),
         form,
         "/memory/lore".to_owned(),
+        cap,
+        None,
     )
     .await
 }
@@ -479,6 +550,7 @@ async fn save_user(
         });
     }
     let redirect = format!("/memory/users/{user_id}");
+    let cap = state.memory_store.caps().user_bytes;
     save_kind(
         &state,
         &session,
@@ -490,6 +562,8 @@ async fn save_user(
         user_id,
         form,
         redirect,
+        cap,
+        None,
     )
     .await
 }
@@ -503,6 +577,8 @@ async fn save_state(
 ) -> Result<Response, WebError> {
     validate_slug(&slug)?;
     let redirect = format!("/memory/state/{slug}");
+    let delete_url = format!("/memory/state/{slug}/delete");
+    let cap = state.memory_store.caps().state_bytes;
     save_kind(
         &state,
         &session,
@@ -512,6 +588,8 @@ async fn save_state(
         slug,
         form,
         redirect,
+        cap,
+        Some(delete_url),
     )
     .await
 }
@@ -525,7 +603,19 @@ async fn create_state(
     if !csrf::verify(&form.csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    validate_slug(&form.slug)?;
+    let csrf_hex = csrf::encode(&session.csrf_value);
+    let cap = state.memory_store.caps().state_bytes;
+
+    if let Err(e) = validate_slug(&form.slug) {
+        let msg = match e {
+            WebError::Validation { msg, .. } => msg,
+            // `validate_slug` only ever produces a `Validation` error; treat
+            // anything else as a programming bug rather than papering over
+            // it with a wrong user-facing message.
+            other => return Err(other),
+        };
+        return render_state_create_error(&form, &csrf_hex, cap, msg, &session.user_login);
+    }
     let slug = form.slug.clone();
     match state
         .memory_store
@@ -558,9 +648,39 @@ async fn create_state(
                 result = "error",
                 error = ?err,
             );
-            Err(map_write_error(err))
+            let msg = match err {
+                WriteError::Full => "exceeds byte cap".to_owned(),
+                WriteError::StateFull => "state collection full".to_owned(),
+                WriteError::InvalidSlug => "reserved or invalid slug".to_owned(),
+                WriteError::Io(e) => return Err(WebError::Internal(e)),
+            };
+            render_state_create_error(&form, &csrf_hex, cap, msg, &session.user_login)
         }
     }
+}
+
+fn render_state_create_error(
+    form: &CreateStateForm,
+    csrf_hex: &str,
+    cap: usize,
+    msg: String,
+    user_login: &str,
+) -> Result<Response, WebError> {
+    render_with(
+        StatusCode::BAD_REQUEST,
+        &EditorTpl {
+            title: "new state note",
+            body: &form.body,
+            csrf: csrf_hex,
+            mtime: 0,
+            byte_cap: cap,
+            save_url: "/memory/state",
+            delete_url: None,
+            error: Some(msg),
+            user_login,
+            current_page: crate::nav::MEMORY_STATE,
+        },
+    )
 }
 
 async fn delete_state(

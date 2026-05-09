@@ -7,8 +7,11 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use eyre::eyre;
+use secrecy::ExposeSecret;
 use secrecy::SecretString;
 use tokio::sync::RwLock;
+use tower_cookies::Key;
 use twitch_1337_core::ai::memory::store::MemoryStore;
 use twitch_1337_core::ping::PingManager;
 
@@ -44,4 +47,56 @@ pub struct WebState {
     /// per-path mutex map coherent — two independent stores against the
     /// same on-disk tree would silently race past each other's locks.
     pub memory_store: MemoryStore,
+    /// HMAC key for signed cookies (sid + csrf). Derived from
+    /// `[web].session_secret` in the bin so tampering with sid is detected
+    /// on the next request rather than handled by HashMap miss alone.
+    pub signed_key: Key,
+}
+
+/// Derive the signed-cookie [`Key`] from `[web].session_secret`.
+///
+/// `Key::derive_from` panics on secrets shorter than 32 bytes; this helper
+/// turns that into a typed `eyre` error so the bin can surface a clean
+/// startup failure instead of crashing.
+pub fn derive_session_key(secret: &SecretString) -> eyre::Result<Key> {
+    let bytes = secret.expose_secret().as_bytes();
+    if bytes.len() < 32 {
+        return Err(eyre!(
+            "web.session_secret must be at least 32 bytes (got {})",
+            bytes.len()
+        ));
+    }
+    Ok(Key::derive_from(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_session_key_rejects_short_secret() {
+        let secret = SecretString::from("a".repeat(31));
+        let err = derive_session_key(&secret).expect_err("31 bytes must fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("at least 32 bytes"),
+            "error message should mention min length, got: {msg}"
+        );
+        assert!(
+            msg.contains("31"),
+            "error message should mention actual length, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn derive_session_key_accepts_32_bytes() {
+        let secret = SecretString::from("a".repeat(32));
+        derive_session_key(&secret).expect("32 bytes is the minimum and must succeed");
+    }
+
+    #[test]
+    fn derive_session_key_accepts_64_bytes() {
+        let secret = SecretString::from("a".repeat(64));
+        derive_session_key(&secret).expect("64 bytes must succeed");
+    }
 }

@@ -189,6 +189,8 @@ async fn build_web_spawner(
         mod_check_refresh: config.web.mod_check_refresh,
     });
 
+    let signed_key = twitch_1337_web::state::derive_session_key(&config.web.session_secret)?;
+
     let state = twitch_1337_web::WebState {
         sessions,
         helix: helix as Arc<dyn twitch_1337_web::helix::HelixClient>,
@@ -202,6 +204,7 @@ async fn build_web_spawner(
         oauth,
         ping_manager,
         memory_store,
+        signed_key,
     };
 
     Ok(Box::new(move |shutdown| {
