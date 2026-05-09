@@ -108,7 +108,7 @@ Workspace additions: `axum`, `askama` (with `with-axum`), `tower`, `tower-http` 
 3. **Mod check** (cheap → expensive):
    1. `user_id ∈ twitch.hidden_admins` → admit
    2. `user_id == broadcaster_id_of(twitch.channel)` → admit (broadcaster id resolved once at startup via helix and cached)
-   3. `user_id ∈ helix moderators of twitch.channel` (called using the bot's existing refreshed access token from `token.ron`) → admit
+   3. `user_id ∈ helix moderators of twitch.channel` (called using the bot's existing refreshed access token from `token.ron`) → admit. The helix moderators endpoint paginates (default 20, max 100 per page) via the `pagination.cursor` field. The client must follow the cursor until exhausted before answering "not a moderator" — single-page lookup would 403 a real moderator on broadcasters with more than one page of mods. Use `first=100` to minimize round trips.
    4. otherwise → render `auth/denied.html` with HTTP 403
 4. **Issue session** — random 32-byte id (`rand::rngs::OsRng`); cookie `tw1337_sid` (HttpOnly, Secure, SameSite=Lax, no Max-Age = browser session). Server-side `Arc<RwLock<HashMap<SessionId, Session>>>`. Session = `{ user_id, user_login, issued_at, last_seen, last_mod_check }`.
 5. **`POST /logout`** — drop session entry + clear cookie.
@@ -116,6 +116,7 @@ Workspace additions: `axum`, `askama` (with `with-axum`), `tower`, `tower-http` 
 ### Session lifetime
 
 - TTL = `web.session_ttl` (default `"7d"`), measured from `last_seen`. Sliding refresh on every authenticated request.
+- The session table is held behind a single `RwLock`, so every request takes a write lock to update `last_seen`. Acceptable for this deployment — handful of moderators, sub-millisecond critical section. If contention ever shows up, swap the table for `dashmap` or `moka` without changing the public API.
 - Sessions are in-memory only. Restart = re-login. No persistence file.
 - Mod check refreshed on session use older than `web.mod_check_refresh` (default `"5m"`). Helix call failures during refresh are logged and the session is admitted (avoid lockout on transient outages); failures during initial login are propagated as 502.
 
@@ -154,7 +155,7 @@ Authed (mod-gated):
   GET  /memory/users                  → user list with name search
   GET  /memory/users/:user_id         → editor for users/<id>.md
   GET  /memory/state                  → state list + new-state button
-  GET  /memory/state/new              → blank state form
+  GET  /memory/state/new              → blank state form (must be declared BEFORE :slug)
   GET  /memory/state/:slug            → editor for state/<slug>.md
   POST /memory/soul                   → save SOUL.md (body, mtime_token, _csrf)
   POST /memory/lore                   → save LORE.md (body, mtime_token, _csrf)
@@ -165,6 +166,8 @@ Authed (mod-gated):
 ```
 
 Delete is exposed only for state notes by design — no route accepts deletes for SOUL, LORE, or user sheets.
+
+**Reserved slugs.** State note creation rejects the slugs `new`, `delete`, and any value that would collide with the route table (anything matching `^[a-zA-Z0-9._-]+$` minus that reserved set is allowed). This guards against a state note literally named `new` shadowing the create form even if Axum's route precedence handled it correctly today. The reservation lives in `MemoryStore` so the IRC `write_file` tool gets the same protection.
 
 ### `WebState`
 
@@ -288,7 +291,8 @@ Validation rules (control chars in ping templates, byte cap exceeded in memory b
 Drive `axum::Router` with `tower::ServiceExt::oneshot` (no real network):
 
 - **Pings**: list rendering, create rejects control chars, edit round-trip, delete removes from `PingManager`, name regex enforced.
-- **Memory**: read each kind, byte-cap rejection per kind, mtime conflict path returns 409 with current body + draft preserved, state CRUD (create / edit / delete), kind boundary (no delete route mounted for soul/lore/users; routing assertion).
+- **Memory**: read each kind, byte-cap rejection per kind, mtime conflict path returns 409 with current body + draft preserved, state CRUD (create / edit / delete), kind boundary (no delete route mounted for soul/lore/users; routing assertion). Route precedence: `GET /memory/state/new` resolves to the create form, never to a state note named `new`; create with reserved slug (`new`, `delete`) is rejected with 400.
+- **Helix client**: pagination — synthesize a multi-page moderators response in the fake (cursor on page 1, target user on page 2) and assert the client follows the cursor and returns true.
 - **Auth**: unauthenticated authed-route hit → 302; authenticated non-mod → 403; mod → 200.
 - **Healthz**: 200 when `irc_connected = true`; 503 when false (driven directly).
 
