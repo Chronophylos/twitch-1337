@@ -115,9 +115,9 @@ Workspace additions: `axum`, `askama` (with `with-axum`), `tower`, `tower-http` 
 
 ### Session lifetime
 
-- TTL = `web.session_ttl_days` (default 7), measured from `last_seen`. Sliding refresh on every authenticated request.
+- TTL = `web.session_ttl` (default `"7d"`), measured from `last_seen`. Sliding refresh on every authenticated request.
 - Sessions are in-memory only. Restart = re-login. No persistence file.
-- Mod check refreshed on session use older than `web.mod_check_refresh_secs` (default 300). Helix call failures during refresh are logged and the session is admitted (avoid lockout on transient outages); failures during initial login are propagated as 502.
+- Mod check refreshed on session use older than `web.mod_check_refresh` (default `"5m"`). Helix call failures during refresh are logged and the session is admitted (avoid lockout on transient outages); failures during initial login are propagated as 502.
 
 ### CSRF for write actions
 
@@ -232,14 +232,18 @@ enabled = false
 bind_addr = "127.0.0.1:8080"        # production container: "0.0.0.0:8080"
 public_url = "https://bot.example.com"
 session_secret = "<32+ bytes hex>"
-session_ttl_days = 7
-mod_check_refresh_secs = 300
+session_ttl = "7d"                  # accepts "7d", "168h", "1d 12h", etc.
+mod_check_refresh = "5m"            # accepts "5m", "300s", "1h", etc.
 ```
+
+Duration fields use the `humantime-serde` crate (newly added) and deserialize into `std::time::Duration`. The crate accepts forms like `"7d"`, `"300s"`, `"1h 30m"`. This is a new convention for this project — existing `*_secs: u64` fields elsewhere in `config.toml` are intentionally left alone in this change to avoid scope creep; future cleanup may migrate them.
 
 `session_secret` wraps in `SecretString`. Validation at config load (`enabled = true`):
 - `session_secret` decoded length ≥ 32 bytes; reject otherwise
 - `public_url` parses as `https://...` URL; reject otherwise
 - `twitch.client_id` and `twitch.client_secret` already populated (already required for IRC)
+- `session_ttl` between 1 hour and 30 days; reject otherwise
+- `mod_check_refresh` between 30 seconds and 1 hour; reject otherwise
 
 `config.toml.example` ships the section commented-out.
 
