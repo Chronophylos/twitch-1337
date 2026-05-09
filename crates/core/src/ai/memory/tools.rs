@@ -172,6 +172,7 @@ impl ChatTurnExecutor {
             Ok(()) => "ok".into(),
             Err(WriteError::Full) => "file_full".into(),
             Err(WriteError::StateFull) => "state_full".into(), // unreachable for write()
+            Err(WriteError::InvalidSlug) => "invalid_slug".into(), // unreachable for non-state write
             Err(WriteError::Io(e)) => format!("io_error: {e}"),
         }
     }
@@ -206,6 +207,7 @@ impl ChatTurnExecutor {
             Ok(()) => "ok".into(),
             Err(WriteError::Full) => "file_full".into(),
             Err(WriteError::StateFull) => "state_full".into(),
+            Err(WriteError::InvalidSlug) => "invalid_slug".into(),
             Err(WriteError::Io(e)) => format!("io_error: {e}"),
         }
     }

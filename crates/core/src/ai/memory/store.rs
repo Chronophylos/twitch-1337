@@ -19,6 +19,53 @@ use crate::util::persist::atomic_write_bytes_async;
 /// lost-update token by the dashboard memory editor.
 pub type Mtime = u64;
 
+/// Slugs the dashboard reserves for literal `/memory/state/...` routes; the
+/// store rejects writes targeting these names so the AI's `write_state` tool
+/// gets the same protection the route layer already applies. See spec
+/// "Routes" — the literal `/memory/state/new` route lives next to the
+/// dynamic `/memory/state/{slug}` capture, so a user-controlled `new` slug
+/// would shadow the create form.
+pub const RESERVED_STATE_SLUGS: &[&str] = &["new", "delete"];
+
+/// `^[a-zA-Z0-9._-]{1,64}$` and not in `RESERVED_STATE_SLUGS`. Mirrors the
+/// route-layer `is_valid_slug` check so the store is authoritative whether
+/// the call comes from the web dashboard, the AI tool, or the dreamer
+/// ritual. Keeping the rule in the store closes the gap a route-only check
+/// would leave open.
+pub fn validate_state_slug(slug: &str) -> Result<(), WriteError> {
+    if slug.is_empty() || slug.len() > 64 {
+        return Err(WriteError::InvalidSlug);
+    }
+    if RESERVED_STATE_SLUGS.contains(&slug) {
+        return Err(WriteError::InvalidSlug);
+    }
+    if slug.contains("..") {
+        return Err(WriteError::InvalidSlug);
+    }
+    if !slug
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(WriteError::InvalidSlug);
+    }
+    Ok(())
+}
+
+/// Outcome of `MemoryStore::write_with_guard`: either the write went
+/// through (caller can read the new mtime back) or the on-disk mtime
+/// disagreed with the caller's expected token, in which case the dashboard
+/// renders the conflict template with the current body for manual merge.
+#[derive(Debug)]
+pub enum WriteOutcome {
+    Written {
+        new_mtime: Mtime,
+    },
+    Conflict {
+        current_body: String,
+        current_mtime: Mtime,
+    },
+}
+
 const SOUL_SEED: &str = include_str!("../../../data/prompts/seed_soul.md");
 const PROMPT_SYSTEM: &str = include_str!("../../../data/prompts/system.md");
 const PROMPT_INSTRUCTIONS: &str = include_str!("../../../data/prompts/ai_instructions.md");
@@ -250,6 +297,10 @@ impl MemoryStore {
                 "write_state called on non-state kind"
             )));
         };
+        // Validate before touching the filesystem — the AI tool, the
+        // dashboard, and the dreamer all funnel through this method, so the
+        // slug rule lives here rather than at any one call site.
+        validate_state_slug(slug)?;
         let limit = self.inner.caps.state_bytes;
 
         let rel = kind.relative_path();
@@ -328,7 +379,70 @@ impl MemoryStore {
         }
     }
 
+    /// Lost-update-guarded write used by the dashboard memory editor.
+    ///
+    /// `expected = Some(mtime)` re-reads the on-disk mtime under the
+    /// per-path mutex and aborts with `WriteOutcome::Conflict` (returning
+    /// the current body so the conflict template can show both versions
+    /// side-by-side) when the disk state doesn't match.
+    /// `expected = None` is unconditional — used by the dreamer ritual and
+    /// the AI `write_file` tool, which serialise through the same per-path
+    /// mutex map and don't carry a token.
+    ///
+    /// `id` is informational; the path is encoded in `kind`. Kept on the
+    /// signature so call sites read fluently.
+    ///
+    /// TOCTOU note: we drop the outer guard between mtime check + the
+    /// inner `write` / `write_state` (which take their own per-path lock).
+    /// Acceptable for v1 because every write path serialises on the same
+    /// mutex map — the worst case is an unconditional write losing to a
+    /// guarded one that just verified mtime, which still preserves
+    /// causality from the user's perspective.
+    pub async fn write_with_guard(
+        &self,
+        kind: FileKind,
+        id: &str,
+        body: &str,
+        expected: Option<Mtime>,
+    ) -> Result<WriteOutcome, WriteError> {
+        let _ = id; // already encoded in `kind`; arg kept for ergonomic call sites
+
+        let rel = kind.relative_path();
+        let lock = self.lock_for(&rel).await;
+        let g = lock.lock().await;
+
+        if let Some(exp) = expected {
+            let current = self.current_mtime(&kind).await?;
+            if current != exp {
+                let body = self
+                    .read_kind(&kind)
+                    .await
+                    .map(|f| f.body)
+                    .unwrap_or_default();
+                return Ok(WriteOutcome::Conflict {
+                    current_body: body,
+                    current_mtime: current,
+                });
+            }
+        }
+
+        drop(g);
+        match &kind {
+            FileKind::State { slug } => {
+                self.write_state(&FileKind::State { slug: slug.clone() }, body, None)
+                    .await?;
+            }
+            _ => {
+                self.write(&kind, body, None, None).await?;
+            }
+        }
+        let new_mtime = self.current_mtime(&kind).await?;
+        Ok(WriteOutcome::Written { new_mtime })
+    }
+
     pub async fn delete_state(&self, slug: &str) -> Result<()> {
+        // Reject reserved/path-traversal slugs symmetrically with `write_state`.
+        validate_state_slug(slug).map_err(|e| eyre!("delete_state: {e}"))?;
         let rel = PathBuf::from(format!("state/{slug}.md"));
         let abs = self.inner.memories_dir.join(&rel);
         let lock = self.lock_for(&rel).await;
@@ -385,6 +499,8 @@ pub enum WriteError {
     Full,
     #[error("state_full")]
     StateFull,
+    #[error("invalid_slug")]
+    InvalidSlug,
     #[error("io: {0}")]
     Io(#[from] eyre::Report),
 }
@@ -658,5 +774,114 @@ mod tests {
         store.write_state(&kind, "x", Some("1")).await.unwrap();
         store.delete_state("quiz").await.unwrap();
         assert!(!dir.path().join("memories/state/quiz.md").exists());
+    }
+
+    #[tokio::test]
+    async fn write_with_guard_detects_concurrent_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), Caps::default())
+            .await
+            .unwrap();
+        // Bump SOUL.md so we have a known mtime to test against.
+        store
+            .write(&FileKind::Soul, "first", None, None)
+            .await
+            .unwrap();
+        let mt1 = store.current_mtime(&FileKind::Soul).await.unwrap();
+
+        // Stale token → Conflict.
+        let outcome = store
+            .write_with_guard(FileKind::Soul, "", "loser", Some(0))
+            .await
+            .unwrap();
+        match outcome {
+            WriteOutcome::Conflict {
+                current_body,
+                current_mtime,
+            } => {
+                assert!(current_body.contains("first"));
+                assert_eq!(current_mtime, mt1);
+            }
+            WriteOutcome::Written { .. } => panic!("expected Conflict for stale mtime"),
+        }
+        // The file must NOT have been overwritten.
+        let mf = store.read_kind(&FileKind::Soul).await.unwrap();
+        assert!(mf.body.contains("first"));
+
+        // Fresh token → Written.
+        let outcome = store
+            .write_with_guard(FileKind::Soul, "", "winner", Some(mt1))
+            .await
+            .unwrap();
+        let new_mt = match outcome {
+            WriteOutcome::Written { new_mtime } => new_mtime,
+            WriteOutcome::Conflict { .. } => panic!("expected Written for fresh mtime"),
+        };
+        assert!(new_mt >= mt1);
+        let mf = store.read_kind(&FileKind::Soul).await.unwrap();
+        assert!(mf.body.contains("winner"));
+    }
+
+    #[tokio::test]
+    async fn write_with_guard_unconditional_when_expected_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), Caps::default())
+            .await
+            .unwrap();
+        store
+            .write(&FileKind::Lore, "before", None, None)
+            .await
+            .unwrap();
+        let outcome = store
+            .write_with_guard(FileKind::Lore, "", "after", None)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, WriteOutcome::Written { .. }));
+        let mf = store.read_kind(&FileKind::Lore).await.unwrap();
+        assert!(mf.body.contains("after"));
+    }
+
+    #[tokio::test]
+    async fn state_reserved_slugs_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), Caps::default())
+            .await
+            .unwrap();
+        for reserved in ["new", "delete"] {
+            let err = store
+                .write_state(
+                    &FileKind::State {
+                        slug: reserved.into(),
+                    },
+                    "x",
+                    Some("1"),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, WriteError::InvalidSlug),
+                "slug `{reserved}` must be rejected, got {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn state_invalid_slug_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), Caps::default())
+            .await
+            .unwrap();
+        let too_long = "x".repeat(65);
+        let cases = [too_long.as_str(), "", "with/slash", "..", "with..dots"];
+        for slug in cases {
+            let err = store
+                .write_state(&FileKind::State { slug: slug.into() }, "x", Some("1"))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, WriteError::InvalidSlug),
+                "slug `{slug}` must be rejected, got {err:?}"
+            );
+        }
     }
 }

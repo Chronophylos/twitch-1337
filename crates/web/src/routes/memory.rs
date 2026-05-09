@@ -1,7 +1,10 @@
-//! Read-only `/memory` viewer routes (Task 5).
+//! `/memory` viewer + editor routes (Tasks 5–6).
 //!
 //! Mounts under the authed sub-router so every entry point is mod-gated.
-//! POST handlers (save / delete) land in Task 6 — all routes here are GET.
+//! GET handlers render read-only viewers and create/edit forms; POST
+//! handlers save/create/delete with `MemoryStore::write_with_guard` so a
+//! stale mtime token surfaces as a conflict page instead of clobbering an
+//! AI/dreamer write.
 //!
 //! ## Path validation
 //!
@@ -20,28 +23,34 @@
 use askama::Template;
 use axum::Router;
 use axum::extract::{Extension, Path, State};
-use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::routing::{get, post};
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use tower_cookies::Cookies;
+use twitch_1337_core::ai::memory::store::{WriteError, WriteOutcome};
 use twitch_1337_core::ai::memory::types::{FileKind, MemoryFile};
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
-use crate::error::WebError;
+use crate::error::{ConflictPayload, WebError};
+use crate::flash;
 use crate::state::WebState;
 
 pub fn router() -> Router<WebState> {
     Router::new()
         .route("/memory", get(tree))
-        .route("/memory/soul", get(view_soul))
-        .route("/memory/lore", get(view_lore))
+        .route("/memory/soul", get(view_soul).post(save_soul))
+        .route("/memory/lore", get(view_lore).post(save_lore))
         .route("/memory/users", get(list_users))
-        .route("/memory/users/{user_id}", get(view_user))
+        .route("/memory/users/{user_id}", get(view_user).post(save_user))
         // `/memory/state/new` MUST precede `/memory/state/{slug}` so the
         // literal route wins over the dynamic capture.
         .route("/memory/state/new", get(new_state_form))
-        .route("/memory/state", get(list_state))
-        .route("/memory/state/{slug}", get(view_state))
+        // GET lists state notes; POST creates a new one (collection URL).
+        .route("/memory/state", get(list_state).post(create_state))
+        .route("/memory/state/{slug}", get(view_state).post(save_state))
+        .route("/memory/state/{slug}/delete", post(delete_state))
 }
 
 #[derive(Template)]
@@ -310,4 +319,293 @@ async fn view_state(
         Some(delete_url),
     )
     .await
+}
+
+#[derive(Deserialize)]
+struct SaveForm {
+    body: String,
+    mtime: u64,
+    #[serde(rename = "_csrf")]
+    csrf: String,
+}
+
+#[derive(Deserialize)]
+struct CreateStateForm {
+    slug: String,
+    body: String,
+    #[serde(rename = "_csrf")]
+    csrf: String,
+}
+
+#[derive(Deserialize)]
+struct CsrfOnly {
+    #[serde(rename = "_csrf")]
+    csrf: String,
+}
+
+/// Common save path for SOUL/LORE/users/state. Validates csrf, dispatches
+/// to `write_with_guard`, and maps every WriteError variant to a
+/// user-facing response so the handler bodies stay one-liners.
+#[allow(clippy::too_many_arguments)]
+async fn save_kind(
+    state: &WebState,
+    session: &Session,
+    cookies: &Cookies,
+    kind: FileKind,
+    label: String,
+    id: String,
+    form: SaveForm,
+    redirect_to: String,
+) -> Result<Response, WebError> {
+    if !csrf::verify(&form.csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    let outcome = state
+        .memory_store
+        .write_with_guard(kind.clone(), &id, &form.body, Some(form.mtime))
+        .await;
+    match outcome {
+        Ok(WriteOutcome::Written { .. }) => {
+            tracing::info!(
+                target: "twitch_1337_web",
+                user_id = %session.user_id,
+                action = "memory_write",
+                target_label = %label,
+                target_id = %id,
+                result = "ok",
+            );
+            flash::set(cookies, &format!("{label} saved"));
+            Ok(Redirect::to(&redirect_to).into_response())
+        }
+        Ok(WriteOutcome::Conflict {
+            current_body,
+            current_mtime,
+        }) => {
+            tracing::info!(
+                target: "twitch_1337_web",
+                user_id = %session.user_id,
+                action = "memory_write",
+                target_label = %label,
+                target_id = %id,
+                result = "conflict",
+            );
+            Err(WebError::Conflict(Box::new(ConflictPayload {
+                kind: label,
+                id,
+                current_body,
+                current_mtime,
+                draft: form.body,
+                csrf: csrf::encode(&session.csrf_value),
+            })))
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "twitch_1337_web",
+                user_id = %session.user_id,
+                action = "memory_write",
+                target_label = %label,
+                target_id = %id,
+                result = "error",
+                error = ?err,
+            );
+            Err(map_write_error(err))
+        }
+    }
+}
+
+fn map_write_error(err: WriteError) -> WebError {
+    match err {
+        WriteError::Full => WebError::Validation {
+            field: "body".into(),
+            msg: "exceeds byte cap".into(),
+        },
+        WriteError::StateFull => WebError::Validation {
+            field: "slug".into(),
+            msg: "state collection full".into(),
+        },
+        WriteError::InvalidSlug => WebError::Validation {
+            field: "slug".into(),
+            msg: "reserved or invalid".into(),
+        },
+        WriteError::Io(e) => WebError::Internal(e),
+    }
+}
+
+async fn save_soul(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    axum::Form(form): axum::Form<SaveForm>,
+) -> Result<Response, WebError> {
+    save_kind(
+        &state,
+        &session,
+        &cookies,
+        FileKind::Soul,
+        "SOUL".to_owned(),
+        String::new(),
+        form,
+        "/memory/soul".to_owned(),
+    )
+    .await
+}
+
+async fn save_lore(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    axum::Form(form): axum::Form<SaveForm>,
+) -> Result<Response, WebError> {
+    save_kind(
+        &state,
+        &session,
+        &cookies,
+        FileKind::Lore,
+        "LORE".to_owned(),
+        String::new(),
+        form,
+        "/memory/lore".to_owned(),
+    )
+    .await
+}
+
+async fn save_user(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    Path(user_id): Path<String>,
+    axum::Form(form): axum::Form<SaveForm>,
+) -> Result<Response, WebError> {
+    if !is_valid_user_id(&user_id) {
+        return Err(WebError::Validation {
+            field: "user_id".into(),
+            msg: "must be numeric, 1-32 digits".into(),
+        });
+    }
+    let redirect = format!("/memory/users/{user_id}");
+    save_kind(
+        &state,
+        &session,
+        &cookies,
+        FileKind::User {
+            user_id: user_id.clone(),
+        },
+        format!("user {user_id}"),
+        user_id,
+        form,
+        redirect,
+    )
+    .await
+}
+
+async fn save_state(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    Path(slug): Path<String>,
+    axum::Form(form): axum::Form<SaveForm>,
+) -> Result<Response, WebError> {
+    if !is_valid_slug(&slug) {
+        return Err(WebError::Validation {
+            field: "slug".into(),
+            msg: "must be 1-64 chars, [a-zA-Z0-9._-], no `..`".into(),
+        });
+    }
+    let redirect = format!("/memory/state/{slug}");
+    save_kind(
+        &state,
+        &session,
+        &cookies,
+        FileKind::State { slug: slug.clone() },
+        format!("state {slug}"),
+        slug,
+        form,
+        redirect,
+    )
+    .await
+}
+
+async fn create_state(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    axum::Form(form): axum::Form<CreateStateForm>,
+) -> Result<Response, WebError> {
+    if !csrf::verify(&form.csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    if !is_valid_slug(&form.slug) {
+        return Err(WebError::Validation {
+            field: "slug".into(),
+            msg: "must be 1-64 chars, [a-zA-Z0-9._-], no `..`".into(),
+        });
+    }
+    let slug = form.slug.clone();
+    match state
+        .memory_store
+        .write_state(
+            &FileKind::State { slug: slug.clone() },
+            &form.body,
+            Some(&session.user_id),
+        )
+        .await
+    {
+        Ok(()) => {
+            tracing::info!(
+                target: "twitch_1337_web",
+                user_id = %session.user_id,
+                action = "memory_create",
+                target_label = "state",
+                target_id = %slug,
+                result = "ok",
+            );
+            flash::set(&cookies, &format!("state `{slug}` created"));
+            Ok(Redirect::to(&format!("/memory/state/{slug}")).into_response())
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "twitch_1337_web",
+                user_id = %session.user_id,
+                action = "memory_create",
+                target_label = "state",
+                target_id = %slug,
+                result = "error",
+                error = ?err,
+            );
+            Err(map_write_error(err))
+        }
+    }
+}
+
+async fn delete_state(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    Path(slug): Path<String>,
+    cookies: Cookies,
+    axum::Form(form): axum::Form<CsrfOnly>,
+) -> Result<Response, WebError> {
+    if !csrf::verify(&form.csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    if !is_valid_slug(&slug) {
+        return Err(WebError::Validation {
+            field: "slug".into(),
+            msg: "must be 1-64 chars, [a-zA-Z0-9._-], no `..`".into(),
+        });
+    }
+    state
+        .memory_store
+        .delete_state(&slug)
+        .await
+        .map_err(|e| WebError::Internal(eyre::eyre!("delete_state: {e}")))?;
+    tracing::info!(
+        target: "twitch_1337_web",
+        user_id = %session.user_id,
+        action = "memory_delete",
+        target_label = "state",
+        target_id = %slug,
+        result = "ok",
+    );
+    flash::set(&cookies, &format!("state `{slug}` deleted"));
+    Ok(Redirect::to("/memory/state").into_response())
 }
