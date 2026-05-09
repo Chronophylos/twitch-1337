@@ -269,6 +269,10 @@ async fn create_duplicate_renders_form_with_error_and_user_draft() {
         html.contains("already exists"),
         "error message must render; got {html}"
     );
+    assert!(
+        html.contains(r#"value="foo""#),
+        "user-typed name must round-trip into the name input on re-render; got {html}"
+    );
 }
 
 #[tokio::test]

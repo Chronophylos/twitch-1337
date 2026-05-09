@@ -21,8 +21,6 @@ pub enum WebError {
     CsrfMismatch,
     #[error("validation: {field}: {msg}")]
     Validation { field: String, msg: String },
-    #[error("duplicate name: {name}")]
-    DuplicateName { name: String },
     /// Boxed so the variant doesn't dominate `WebError::result_large_err`
     /// clippy lint — the inner payload carries multiple String fields.
     #[error("conflict")]
@@ -86,11 +84,6 @@ impl IntoResponse for WebError {
             WebError::Validation { field, msg } => (
                 StatusCode::BAD_REQUEST,
                 format!("validation: {field}: {msg}"),
-            )
-                .into_response(),
-            WebError::DuplicateName { name } => (
-                StatusCode::BAD_REQUEST,
-                format!("ping `{name}` already exists"),
             )
                 .into_response(),
             WebError::Conflict(payload) => render(

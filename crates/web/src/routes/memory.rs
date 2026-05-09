@@ -555,7 +555,14 @@ async fn create_state(
     let cap = state.memory_store.caps().state_bytes;
 
     if let Err(e) = validate_slug(&form.slug) {
-        return render_state_create_error(&form, &csrf_hex, cap, slug_error_msg(&e));
+        let msg = match e {
+            WebError::Validation { msg, .. } => msg,
+            // `validate_slug` only ever produces a `Validation` error; treat
+            // anything else as a programming bug rather than papering over
+            // it with a wrong user-facing message.
+            other => return Err(other),
+        };
+        return render_state_create_error(&form, &csrf_hex, cap, msg);
     }
     let slug = form.slug.clone();
     match state
@@ -598,10 +605,6 @@ async fn create_state(
             render_state_create_error(&form, &csrf_hex, cap, msg)
         }
     }
-}
-
-fn slug_error_msg(_e: &WebError) -> String {
-    "must be 1-64 chars, [a-zA-Z0-9._-], not `new`/`delete`, no `..`".to_owned()
 }
 
 fn render_state_create_error(
