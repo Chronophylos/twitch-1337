@@ -38,7 +38,6 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-error = { workspace = true }
 tracing-subscriber = { workspace = true }
-twitch-1337-web = { path = "../web" }
 twitch-irc = { git = "https://github.com/Chronophylos/twitch-irc-rs", branch = "ring-tls", default-features = false, features = [
   "refreshing-token-rustls-webpki-roots",
   "transport-tcp-rustls-webpki-roots",

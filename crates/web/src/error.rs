@@ -105,7 +105,7 @@ impl IntoResponse for WebError {
             WebError::Internal(err) => {
                 tracing::error!(
                     target: "twitch_1337_web",
-                    error = err.as_ref() as &dyn std::error::Error,
+                    error = ?err,
                     "internal error"
                 );
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()

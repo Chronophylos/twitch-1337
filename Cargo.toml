@@ -10,7 +10,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 askama = { version = "0.14" }
 async-trait = "0.1.89"
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log", "tracing"] }
+axum = { version = "0.8", default-features = false, features = ["form", "http1", "json", "query", "tokio", "tower-log", "tracing"] }
 base64 = "0.22"
 bytesize = { version = "2", features = ["serde"] }
 chrono = { version = "0.4.44", features = ["now", "serde"], default-features = false }

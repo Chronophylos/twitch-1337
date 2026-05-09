@@ -42,7 +42,7 @@ pub struct OAuthCtx {
     /// `reqwest = 0.13` while oauth2 v5 pins `reqwest = 0.12`; the closure
     /// adapter `oauth_http_call` translates between the workspace reqwest
     /// and oauth2's `AsyncHttpClient` blanket impl over `Fn(HttpRequest)`.
-    http: reqwest::Client,
+    pub http: reqwest::Client,
 }
 
 impl OAuthCtx {
@@ -119,11 +119,15 @@ async fn login(State(state): State<WebState>, cookies: Cookies) -> Response {
             .build(),
     );
     let csrf_for_url = csrf.clone();
+    // `moderation:read` lets us check the helix moderators list against the
+    // user's own access token in the callback, so the bot's IRC token does
+    // not need that scope.
     let (auth_url, _) = state
         .oauth
         .basic
         .authorize_url(move || csrf_for_url.clone())
         .add_scope(Scope::new("user:read:email".to_owned()))
+        .add_scope(Scope::new("moderation:read".to_owned()))
         .url();
     Redirect::to(auth_url.as_ref()).into_response()
 }
@@ -165,9 +169,14 @@ async fn callback(
         .await
         .map_err(|e| WebError::OAuthExchange(format!("user lookup: {e}")))?;
 
-    match check_is_mod(
-        state.helix.as_ref(),
+    // Initial mod check uses the user's own access token (granted
+    // `moderation:read` via OAuth scope), so the bot's IRC token does not
+    // need extra scopes. The require_mod middleware re-checks via the bot
+    // token; on failure there it log+admits to avoid lockout.
+    match crate::auth::mod_check::check_is_mod_with_token(
+        &state,
         &me.id,
+        &user_token,
         &state.broadcaster_id,
         &state.hidden_admins,
     )
@@ -212,13 +221,32 @@ async fn callback(
     Ok(Redirect::to("/").into_response())
 }
 
-async fn logout(State(state): State<WebState>, cookies: Cookies) -> Response {
-    if let Some(c) = cookies.get("tw1337_sid") {
-        state.sessions.drop_session(c.value());
+#[derive(Deserialize)]
+struct LogoutForm {
+    #[serde(rename = "_csrf")]
+    csrf: String,
+}
+
+async fn logout(
+    State(state): State<WebState>,
+    cookies: Cookies,
+    axum::Form(form): axum::Form<LogoutForm>,
+) -> Result<Response, WebError> {
+    let sid = cookies
+        .get("tw1337_sid")
+        .map(|c| c.value().to_owned())
+        .ok_or(WebError::CsrfMismatch)?;
+    let session = state
+        .sessions
+        .get_and_touch(&sid)
+        .ok_or(WebError::CsrfMismatch)?;
+    if !crate::auth::csrf::verify(&form.csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
     }
+    state.sessions.drop_session(&sid);
     cookies.remove(Cookie::build("tw1337_sid").path("/").build());
     cookies.remove(Cookie::build("tw1337_csrf").path("/").build());
-    Redirect::to("/login").into_response()
+    Ok(Redirect::to("/login").into_response())
 }
 
 async fn fetch_caller_user(
@@ -286,7 +314,7 @@ pub async fn require_mod(
             Err(e) => {
                 tracing::warn!(
                     target: "twitch_1337_web",
-                    error = e.as_ref() as &dyn std::error::Error,
+                    error = ?e,
                     "mod refresh failed; admitting on stale check"
                 );
             }
