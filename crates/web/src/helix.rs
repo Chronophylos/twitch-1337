@@ -107,6 +107,7 @@ impl HelixClient for ReqwestHelixClient {
             &token,
             broadcaster_id,
             user_id,
+            "helix moderators (bot token)",
         )
         .await
     }
@@ -124,12 +125,11 @@ pub async fn helix_moderator_check(
     bearer_token: &str,
     broadcaster_id: &str,
     user_id: &str,
+    context: &'static str,
 ) -> Result<bool> {
     #[derive(Deserialize)]
-    struct ModEntry {}
-    #[derive(Deserialize)]
     struct ModResp {
-        data: Vec<ModEntry>,
+        data: Vec<serde::de::IgnoredAny>,
     }
     let mut url = url::Url::parse(&format!("{helix_base}/helix/moderation/moderators"))?;
     url.query_pairs_mut()
@@ -142,7 +142,7 @@ pub async fn helix_moderator_check(
         .send()
         .await?
         .error_for_status()
-        .wrap_err("helix moderators")?
+        .wrap_err(context)?
         .json()
         .await?;
     Ok(!resp.data.is_empty())

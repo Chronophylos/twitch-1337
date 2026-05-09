@@ -78,6 +78,7 @@ async fn is_moderator_with_user_token(
         access_token,
         broadcaster_id,
         user_id,
+        "helix moderators (user token)",
     )
     .await
 }
