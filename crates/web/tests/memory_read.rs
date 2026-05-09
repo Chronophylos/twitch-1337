@@ -150,6 +150,21 @@ async fn view_user_with_alpha_id_400() {
 }
 
 #[tokio::test]
+async fn view_state_with_traversal_slug_400() {
+    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
+    let app = build_router(state);
+    let res = app
+        .oneshot(get("/memory/state/..", &sid, &csrf))
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::BAD_REQUEST,
+        "`..` slug must not reach the store",
+    );
+}
+
+#[tokio::test]
 async fn view_state_new_resolves_to_create_form() {
     let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
     let app = build_router(state);

@@ -320,7 +320,8 @@ impl MemoryStore {
                 let dur = modified
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_err(|e| WriteError::Io(eyre!("epoch: {e}")))?;
-                Ok(u64::try_from(dur.as_millis()).unwrap_or(u64::MAX))
+                u64::try_from(dur.as_millis())
+                    .map_err(|_| WriteError::Io(eyre!("mtime overflow: u128 -> u64")))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
             Err(e) => Err(WriteError::Io(eyre!("metadata: {e}"))),

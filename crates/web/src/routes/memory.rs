@@ -107,6 +107,18 @@ fn is_valid_user_id(s: &str) -> bool {
     !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// `^[a-zA-Z0-9._-]{1,64}$` with no `..` segments. Same contract as the
+/// write-path slug check the spec mandates for state notes; applied here
+/// at the route layer so a slug like `..` cannot escape `memories/state/`
+/// to read SOUL.md or LORE.md via the state viewer.
+fn is_valid_slug(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && !s.contains("..")
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
 async fn tree(State(state): State<WebState>) -> Result<Response, WebError> {
     let store = &state.memory_store;
     let users = store
@@ -269,7 +281,7 @@ async fn new_state_form(
         csrf: &csrf_hex,
         mtime: 0,
         byte_cap: cap,
-        save_url: "/memory/state/new",
+        save_url: "/memory/state",
         delete_url: None,
         error: None,
     })
@@ -280,6 +292,12 @@ async fn view_state(
     Extension(session): Extension<Session>,
     Path(slug): Path<String>,
 ) -> Result<Response, WebError> {
+    if !is_valid_slug(&slug) {
+        return Err(WebError::Validation {
+            field: "slug".into(),
+            msg: "must be 1-64 chars, [a-zA-Z0-9._-], no `..`".into(),
+        });
+    }
     let title = format!("State / {slug}");
     let save_url = format!("/memory/state/{slug}");
     let delete_url = format!("/memory/state/{slug}/delete");
