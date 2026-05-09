@@ -50,6 +50,11 @@ pub async fn run_latency_handler<T, L>(
     let initial = latency.load(Ordering::Relaxed);
     info!(initial_latency_ms = initial, "Latency handler started");
 
+    // Spawned only after the IRC client authenticated and joined channels, so the
+    // connection is healthy at this point. Mark healthy immediately — without
+    // this, /healthz returns 503 for the full 5-min ping interval after start.
+    irc_connected.store(true, Ordering::Relaxed);
+
     let mut ema: f64 = f64::from(initial);
     let mut last_logged_ema: u32 = initial;
     let mut consecutive_misses: u32 = 0;

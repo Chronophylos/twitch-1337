@@ -179,13 +179,14 @@ where
             .bind_addr
             .parse()
             .wrap_err("parse web.bind_addr")?;
+        // Bind synchronously so port-in-use aborts startup loudly per spec.
+        let listener = twitch_1337_web::bind(bind_addr).await?;
         let deps = twitch_1337_web::WebDeps {
-            bind_addr,
             irc_connected: irc_connected.clone(),
         };
         let notify = shutdown_notify.clone();
         Some(tokio::spawn(async move {
-            if let Err(e) = twitch_1337_web::run_web(deps, notify).await {
+            if let Err(e) = twitch_1337_web::run_web(listener, deps, notify).await {
                 tracing::error!(target: "twitch_1337_web", error = ?e, "Web task exited with error");
             }
         }))

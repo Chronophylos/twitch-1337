@@ -15,16 +15,21 @@ use tokio::sync::Notify;
 use tracing::{info, warn};
 
 pub struct WebDeps {
-    pub bind_addr: SocketAddr,
     pub irc_connected: Arc<AtomicBool>,
 }
 
-pub async fn run_web(deps: WebDeps, shutdown: Arc<Notify>) -> Result<()> {
-    let app = routes::health::router(deps.irc_connected);
-    let listener = TcpListener::bind(deps.bind_addr)
+/// Bind synchronously so a port-in-use failure aborts startup (loud) rather
+/// than silently degrading the spawned task.
+pub async fn bind(addr: SocketAddr) -> Result<TcpListener> {
+    TcpListener::bind(addr)
         .await
-        .wrap_err_with(|| format!("bind {}", deps.bind_addr))?;
-    info!(target: "twitch_1337_web", addr = %deps.bind_addr, "Web dashboard listening");
+        .wrap_err_with(|| format!("bind {addr}"))
+}
+
+pub async fn run_web(listener: TcpListener, deps: WebDeps, shutdown: Arc<Notify>) -> Result<()> {
+    let local_addr = listener.local_addr().ok();
+    let app = routes::health::router(deps.irc_connected);
+    info!(target: "twitch_1337_web", ?local_addr, "Web dashboard listening");
     axum::serve(listener, app)
         .with_graceful_shutdown(async move { shutdown.notified().await })
         .await
