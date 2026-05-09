@@ -6,13 +6,13 @@
 //! enforces the mod check, and finally drops `tw1337_sid` (HttpOnly) and
 //! `tw1337_csrf` (JS-readable, matched against the session secret).
 //!
-//! axum can't read a request body twice. The `require_csrf` middleware
-//! validates the header path; per-handler form-field validation must use
-//! [`crate::auth::csrf::verify`] against the session's csrf value.
+//! axum can't read a request body twice, so each mutating handler validates
+//! its `_csrf` form field via [`crate::auth::csrf::verify`] against the
+//! session's csrf value. The header path (HTMX delete) is the only mutation
+//! that needs no body parse — handlers read `X-Csrf-Token` directly.
 
 use axum::Router;
 use axum::extract::{Query, Request, State};
-use axum::http::HeaderMap;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -278,18 +278,11 @@ pub async fn require_mod(
     mut req: Request,
     next: Next,
 ) -> Result<Response, WebError> {
-    let sid = cookies
-        .get("tw1337_sid")
-        .ok_or_else(|| WebError::Unauthenticated {
-            next: req.uri().path().to_owned(),
-        })?;
-    let session =
-        state
-            .sessions
-            .get_and_touch(sid.value())
-            .ok_or_else(|| WebError::Unauthenticated {
-                next: req.uri().path().to_owned(),
-            })?;
+    let sid = cookies.get("tw1337_sid").ok_or(WebError::Unauthenticated)?;
+    let session = state
+        .sessions
+        .get_and_touch(sid.value())
+        .ok_or(WebError::Unauthenticated)?;
 
     let now = state.clock.now();
     let elapsed = now
@@ -322,41 +315,5 @@ pub async fn require_mod(
     }
 
     req.extensions_mut().insert(session);
-    Ok(next.run(req).await)
-}
-
-/// Header-path CSRF check. Form-field POSTs validate via
-/// [`crate::auth::csrf::verify`] inside their handler since axum cannot
-/// peek the body twice.
-pub async fn require_csrf(
-    cookies: Cookies,
-    headers: HeaderMap,
-    req: Request,
-    next: Next,
-) -> Result<Response, WebError> {
-    if !matches!(
-        *req.method(),
-        axum::http::Method::POST | axum::http::Method::DELETE
-    ) {
-        return Ok(next.run(req).await);
-    }
-    let Some(session) = req
-        .extensions()
-        .get::<crate::auth::session::Session>()
-        .cloned()
-    else {
-        return Err(WebError::Forbidden);
-    };
-
-    let header_token = headers.get("X-Csrf-Token").and_then(|v| v.to_str().ok());
-    let cookie_token = cookies.get("tw1337_csrf").map(|c| c.value().to_owned());
-
-    if let (Some(h), Some(c)) = (header_token, cookie_token.as_deref())
-        && h == c
-        && crate::auth::csrf::verify(h, &session.csrf_value)
-    {
-        return Ok(next.run(req).await);
-    }
-    // Form-field path: defer to per-handler validation.
     Ok(next.run(req).await)
 }

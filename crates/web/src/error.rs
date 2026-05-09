@@ -11,8 +11,10 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WebError {
+    /// User has no valid session. Redirects to `/login`. Post-login deep-link
+    /// (`?next=`) is not wired in v1 — every login lands the user on `/pings`.
     #[error("unauthenticated; redirect to login")]
-    Unauthenticated { next: String },
+    Unauthenticated,
     #[error("forbidden")]
     Forbidden,
     #[error("csrf mismatch")]
@@ -74,9 +76,7 @@ fn render<T: Template>(status: StatusCode, tpl: &T) -> Response {
 impl IntoResponse for WebError {
     fn into_response(self) -> Response {
         match self {
-            WebError::Unauthenticated { next } => {
-                Redirect::to(&format!("/login?next={}", urlencoding::encode(&next))).into_response()
-            }
+            WebError::Unauthenticated => Redirect::to("/login").into_response(),
             WebError::Forbidden => render(StatusCode::FORBIDDEN, &DeniedTpl),
             WebError::CsrfMismatch => (
                 StatusCode::FORBIDDEN,

@@ -26,6 +26,11 @@ use twitch_1337_core as twitch_1337;
 #[tokio::main]
 pub async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
+        // reqwest uses rustls-no-provider; the ring default provider must be
+        // installed before any TLS handshake or `Client::builder().build()`
+        // panics. Skipping color_eyre + tracing on the healthcheck path is
+        // intentional — they aren't needed for a one-shot HTTP probe.
+        install_crypto_provider();
         return run_healthcheck().await;
     }
 

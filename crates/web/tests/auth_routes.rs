@@ -37,11 +37,10 @@ async fn root_redirects_to_pings_for_authed_request_only() {
         .unwrap()
         .to_str()
         .unwrap();
-    assert!(
-        location.starts_with("/login?next="),
-        "expected redirect to /login?next=…; got {location}"
+    assert_eq!(
+        location, "/login",
+        "unauth root must redirect to /login (post-login deep-link not wired in v1)",
     );
-    assert!(location.contains("%2F"), "next= should be url-encoded path");
 }
 
 #[tokio::test]
