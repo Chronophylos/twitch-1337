@@ -1,0 +1,9 @@
+<tr>
+  <td><a href="/pings/{{ name }}">{{ name }}</a></td>
+  <td><code>{{ template }}</code></td>
+  <td>{{ members }}</td>
+  <td>{{ created_by }}</td>
+  <td>
+    <button hx-post="/pings/{{ name }}/delete" hx-confirm="Delete ping {{ name }}?" hx-target="closest tr" hx-swap="outerHTML" hx-headers='{"X-Csrf-Token": "{{ csrf }}"}'>Delete</button>
+  </td>
+</tr>

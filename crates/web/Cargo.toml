@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+twitch-1337-core = { path = "../core" }
 askama = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }

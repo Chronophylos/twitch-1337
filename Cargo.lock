@@ -3440,6 +3440,7 @@ dependencies = [
  "tower-cookies",
  "tower-http",
  "tracing",
+ "twitch-1337-core",
  "url",
  "urlencoding",
  "wiremock",

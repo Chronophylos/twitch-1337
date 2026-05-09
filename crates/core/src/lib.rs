@@ -95,6 +95,10 @@ pub struct Services {
     /// expected to return a `JoinHandle` that resolves when the web task
     /// exits.
     pub web_spawner: Option<WebSpawner>,
+    /// Shared ping manager. Constructed by the bin so the same `Arc` can be
+    /// handed both to the IRC handler set (via `SpawnDeps`) and to
+    /// `WebState` (for the dashboard CRUD routes).
+    pub ping_manager: Arc<tokio::sync::RwLock<crate::ping::PingManager>>,
 }
 
 pub type WebSpawner =
@@ -125,15 +129,12 @@ where
         emote_glossary_override,
         irc_connected,
         web_spawner,
+        ping_manager,
     } = services;
 
     let schedules_enabled = !config.schedules.is_empty();
 
     let leaderboard = Arc::new(tokio::sync::RwLock::new(load_leaderboard(&data_dir).await));
-
-    let ping_manager = Arc::new(tokio::sync::RwLock::new(
-        ping::PingManager::load(&data_dir).wrap_err("Failed to load ping manager")?,
-    ));
 
     let suspension_manager = Arc::new(suspend::SuspensionManager::new());
 

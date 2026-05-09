@@ -202,6 +202,10 @@ impl TestBotBuilder {
 
         let irc_connected = Arc::new(AtomicBool::new(false));
 
+        let ping_manager = Arc::new(tokio::sync::RwLock::new(
+            twitch_1337::ping::PingManager::load(data_dir.path()).expect("load ping manager"),
+        ));
+
         let web_spawner = if self.config.web.enabled {
             let bind_addr: std::net::SocketAddr = self
                 .config
@@ -210,7 +214,8 @@ impl TestBotBuilder {
                 .parse()
                 .expect("test web.bind_addr");
             let listener = twitch_1337_web::bind(bind_addr).await.expect("bind web");
-            let state = build_test_web_state(&self.config, irc_connected.clone());
+            let state =
+                build_test_web_state(&self.config, irc_connected.clone(), ping_manager.clone());
             let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
                 let deps = twitch_1337_web::WebDeps { bind_addr, state };
                 tokio::spawn(async move {
@@ -237,6 +242,7 @@ impl TestBotBuilder {
             emote_glossary_override: self.emote_glossary_override,
             irc_connected: irc_connected.clone(),
             web_spawner,
+            ping_manager,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -568,6 +574,7 @@ impl WhisperSender for FakeWhisperSender {
 fn build_test_web_state(
     config: &Configuration,
     irc_connected: Arc<AtomicBool>,
+    ping_manager: Arc<tokio::sync::RwLock<twitch_1337::ping::PingManager>>,
 ) -> twitch_1337_web::WebState {
     use twitch_1337_web::auth::OAuthCtx;
     use twitch_1337_web::auth::session::SessionTable;
@@ -617,5 +624,6 @@ fn build_test_web_state(
         hidden_admins: Arc::from(Vec::<String>::new().into_boxed_slice()),
         client_id: secrecy::SecretString::new("test-client-id".to_owned().into()),
         oauth,
+        ping_manager,
     }
 }

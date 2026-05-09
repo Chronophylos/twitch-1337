@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use secrecy::SecretString;
+use tokio::sync::RwLock;
+use twitch_1337_core::ping::PingManager;
 
 use crate::auth::OAuthCtx;
 use crate::auth::session::SessionTable;
@@ -31,4 +33,9 @@ pub struct WebState {
     /// callback fetches the caller's user record).
     pub client_id: SecretString,
     pub oauth: Arc<OAuthCtx>,
+    /// Shared ping manager (same instance the bot uses for `!p` / `!<ping>`
+    /// commands). Wrapped in a tokio `RwLock` because writes (create/edit/
+    /// delete) persist to disk and must serialize against IRC handler
+    /// triggers.
+    pub ping_manager: Arc<RwLock<PingManager>>,
 }

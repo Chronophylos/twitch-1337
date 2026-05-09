@@ -10,8 +10,8 @@ use tokio::sync::oneshot;
 use tracing::info;
 use twitch_1337_core::{
     AuthenticatedLoginCredentials, Services, aviation, ensure_data_dir, get_data_dir,
-    install_crypto_provider, install_tracing, llm_factory, load_configuration, run_bot,
-    setup_and_verify_twitch_client, twitch::whisper, util::clock::SystemClock,
+    install_crypto_provider, install_tracing, llm_factory, load_configuration, ping::PingManager,
+    run_bot, setup_and_verify_twitch_client, twitch::whisper, util::clock::SystemClock,
 };
 use twitch_1337_web::helix::{AccessTokenProvider, HelixClient as _, ReqwestHelixClient};
 use twitch_irc::login::LoginCredentials as _;
@@ -74,9 +74,21 @@ pub async fn main() -> Result<()> {
 
     let irc_connected = Arc::new(AtomicBool::new(false));
 
+    let ping_manager = Arc::new(tokio::sync::RwLock::new(
+        PingManager::load(&get_data_dir()).wrap_err("Failed to load ping manager")?,
+    ));
+
     let web_spawner = if config.web.enabled {
         let credentials_for_web = credentials.clone();
-        Some(build_web_spawner(&config, credentials_for_web, irc_connected.clone()).await?)
+        Some(
+            build_web_spawner(
+                &config,
+                credentials_for_web,
+                irc_connected.clone(),
+                ping_manager.clone(),
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -90,6 +102,7 @@ pub async fn main() -> Result<()> {
         emote_glossary_override: None,
         irc_connected,
         web_spawner,
+        ping_manager,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -109,6 +122,7 @@ async fn build_web_spawner(
     config: &twitch_1337::config::Configuration,
     credentials: AuthenticatedLoginCredentials,
     irc_connected: Arc<AtomicBool>,
+    ping_manager: Arc<tokio::sync::RwLock<PingManager>>,
 ) -> Result<twitch_1337::WebSpawner> {
     let bind_addr: std::net::SocketAddr = config
         .web
@@ -165,6 +179,7 @@ async fn build_web_spawner(
         hidden_admins: Arc::from(config.twitch.hidden_admins.clone().into_boxed_slice()),
         client_id: config.twitch.client_id.clone(),
         oauth,
+        ping_manager,
     };
 
     Ok(Box::new(move |shutdown| {

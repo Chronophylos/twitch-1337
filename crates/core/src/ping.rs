@@ -185,6 +185,17 @@ impl PingManager {
         self.save()
     }
 
+    /// Iterate `(name, ping)` pairs without exposing the internal HashMap.
+    /// Used by the web dashboard's CRUD list view.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Ping)> {
+        self.store.pings.iter()
+    }
+
+    /// Look up a single ping by exact name. Used by the dashboard edit view.
+    pub fn get(&self, name: &str) -> Option<&Ping> {
+        self.store.pings.get(name)
+    }
+
     /// Check if any ping matches the given name case-insensitively.
     /// Avoids heap allocation compared to `name.to_lowercase()` + `contains_key`.
     pub fn ping_exists_ignore_case(&self, name: &str) -> bool {
