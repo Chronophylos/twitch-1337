@@ -123,6 +123,13 @@ Workspace additions: `axum`, `askama` (with `with-axum`), `tower`, `tower-http` 
 
 Double-submit cookie. On session creation, set `tw1337_csrf` cookie (random 32-byte hex, HttpOnly=false so JS-light templates can read it via DOM if needed; SameSite=Lax). Every form rendered server-side includes a hidden `_csrf` input populated from the same value held in `WebState`. POST/DELETE handlers compare cookie vs form field; mismatch → 403.
 
+**HTMX-driven mutations:** standard `<form hx-post=...>` submissions auto-serialize the hidden `_csrf` input. Isolated buttons (e.g. inline ping delete, state-note delete) render without an enclosing form, so they must attach the token explicitly. Two acceptable patterns; the codebase picks one and uses it consistently:
+
+- Per-element: `<button hx-post=".../delete" hx-vals='{"_csrf":"{{ csrf }}"}'>Delete</button>` — explicit, easy to grep.
+- Global hook: an `htmx:configRequest` listener registered once in `app.js` reads the `tw1337_csrf` cookie and adds it to every non-GET request as a header `X-Csrf-Token`; the server middleware then accepts either form field `_csrf` or header `X-Csrf-Token`.
+
+The global-hook variant is preferred — it eliminates the per-button copy-paste hazard and means the CSRF concern lives in one file instead of every template that renders a button. The middleware accepting either source keeps plain HTML forms (no JS needed) working as a fallback.
+
 ## Routes
 
 ```text
