@@ -189,12 +189,14 @@ async fn callback(
         .exchange_code(AuthorizationCode::new(params.code))
         .request_async(&http_call)
         .await
-        .map_err(|e| WebError::OAuthExchange(e.to_string()))?;
+        .map_err(|e| {
+            WebError::OAuthExchange(eyre::Report::new(e).wrap_err("token exchange"))
+        })?;
 
     let user_token = token.access_token().secret().to_owned();
     let me = fetch_caller_user(&state, &user_token)
         .await
-        .map_err(|e| WebError::OAuthExchange(format!("user lookup: {e}")))?;
+        .map_err(|e| WebError::OAuthExchange(e.wrap_err("user lookup")))?;
 
     // Initial mod check uses the user's own access token (granted
     // `moderation:read` via OAuth scope), so the bot's IRC token does not
@@ -208,7 +210,7 @@ async fn callback(
         &state.hidden_admins,
     )
     .await
-    .map_err(|e| WebError::OAuthExchange(format!("mod check: {e}")))?
+    .map_err(|e| WebError::OAuthExchange(e.wrap_err("mod check")))?
     {
         ModCheckOutcome::Allow => {}
         ModCheckOutcome::Deny => {
@@ -295,21 +297,25 @@ async fn fetch_caller_user(
     struct Resp {
         data: Vec<crate::helix::HelixUser>,
     }
-    let resp: Resp = state
+    let resp = state
         .oauth
         .http
         .get("https://api.twitch.tv/helix/users")
         .bearer_auth(access_token)
         .header("Client-Id", state.client_id.expose_secret())
         .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    resp.data
+        .await
+        .wrap_err("helix /users request send")?;
+    let status = resp.status();
+    let resp = resp
+        .error_for_status()
+        .wrap_err_with(|| format!("helix /users returned {status}"))?;
+    let parsed: Resp = resp.json().await.wrap_err("helix /users decode")?;
+    parsed
+        .data
         .into_iter()
         .next()
-        .ok_or_else(|| eyre!("empty user list"))
+        .ok_or_else(|| eyre!("helix /users returned empty data array"))
 }
 
 pub async fn require_mod(

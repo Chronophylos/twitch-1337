@@ -26,8 +26,12 @@ pub enum WebError {
     /// clippy lint — the inner payload carries multiple String fields.
     #[error("conflict")]
     Conflict(Box<ConflictPayload>),
+    /// OAuth flow failure (token exchange, user lookup, mod check). The
+    /// inner `eyre::Report` carries the wrapped chain — logged via Debug
+    /// (full chain + spantrace) when the response is built so cloudflare's
+    /// 502 has a matching server-side trace.
     #[error("oauth exchange: {0}")]
-    OAuthExchange(String),
+    OAuthExchange(eyre::Report),
     #[error("internal: {0}")]
     Internal(#[from] eyre::Report),
 }
@@ -129,11 +133,14 @@ impl IntoResponse for WebError {
                     current_page: payload.current_page,
                 },
             ),
-            WebError::OAuthExchange(msg) => (
-                StatusCode::BAD_GATEWAY,
-                format!("oauth exchange failed: {msg}"),
-            )
-                .into_response(),
+            WebError::OAuthExchange(err) => {
+                tracing::error!(
+                    target: "twitch_1337_web",
+                    error = ?err,
+                    "oauth exchange failed"
+                );
+                (StatusCode::BAD_GATEWAY, "oauth exchange failed").into_response()
+            }
             WebError::Internal(err) => {
                 tracing::error!(
                     target: "twitch_1337_web",
