@@ -139,18 +139,16 @@ fn normalize_twitch_scope(body: Vec<u8>) -> Vec<u8> {
 /// so error logs that include a response body never leak access/refresh
 /// tokens. No-op on non-JSON or non-object bodies.
 fn redact_token_body(body: &[u8]) -> String {
-    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return String::from_utf8_lossy(body).into_owned();
+    let mut value = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => v,
+        Err(_) => return String::from_utf8_lossy(body).into_owned(),
     };
     let Some(obj) = value.as_object_mut() else {
         return String::from_utf8_lossy(body).into_owned();
     };
     for key in ["access_token", "refresh_token", "id_token"] {
-        if obj.contains_key(key) {
-            obj.insert(
-                key.to_owned(),
-                serde_json::Value::String("<redacted>".into()),
-            );
+        if let Some(slot) = obj.get_mut(key) {
+            *slot = serde_json::Value::String("<redacted>".into());
         }
     }
     value.to_string()
@@ -461,6 +459,31 @@ mod tests {
     }
 
     #[test]
+    fn normalize_twitch_scope_passes_through_missing_scope_field() {
+        let body = br#"{"access_token":"x","token_type":"bearer"}"#.to_vec();
+        assert_eq!(normalize_twitch_scope(body.clone()), body);
+    }
+
+    #[test]
+    fn normalize_twitch_scope_handles_empty_array() {
+        let body = br#"{"access_token":"x","scope":[],"token_type":"bearer"}"#.to_vec();
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&normalize_twitch_scope(body)).unwrap();
+        assert_eq!(parsed["scope"], serde_json::Value::String(String::new()));
+    }
+
+    #[test]
+    fn normalize_twitch_scope_drops_non_string_array_elements() {
+        // Twitch should never send numbers in scope, but pin the silent-drop
+        // behavior of `filter_map(as_str)` so a future Twitch quirk surfaces
+        // as a test diff rather than a parse failure on the live endpoint.
+        let body = br#"{"scope":[1,"a",2,"b"]}"#.to_vec();
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&normalize_twitch_scope(body)).unwrap();
+        assert_eq!(parsed["scope"], serde_json::Value::String("a b".into()));
+    }
+
+    #[test]
     fn redact_token_body_replaces_known_credential_fields() {
         let body = br#"{"access_token":"secret","refresh_token":"rsecret","scope":["a"]}"#;
         let out = redact_token_body(body);
@@ -483,5 +506,19 @@ mod tests {
     fn redact_token_body_passes_through_non_json() {
         let body = b"plain text";
         assert_eq!(redact_token_body(body), "plain text");
+    }
+
+    #[test]
+    fn redact_token_body_redacts_id_token() {
+        let body = br#"{"id_token":"jwt.payload.sig","scope":"a"}"#;
+        let parsed: serde_json::Value = serde_json::from_str(&redact_token_body(body)).unwrap();
+        assert_eq!(parsed["id_token"], "<redacted>");
+    }
+
+    #[test]
+    fn redact_token_body_passes_through_top_level_array() {
+        let body = br#"["a","b"]"#;
+        // Top-level non-object → fall through to lossy passthrough.
+        assert_eq!(redact_token_body(body), r#"["a","b"]"#);
     }
 }
