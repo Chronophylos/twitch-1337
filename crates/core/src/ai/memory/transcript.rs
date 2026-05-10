@@ -56,6 +56,9 @@ impl TranscriptWriter {
             .write_all(line.as_bytes())
             .await
             .wrap_err("write transcript")?;
+        // tokio::fs::File buffers internally — flush so the dreamer ritual
+        // (and tests reading the file directly) sees the line immediately.
+        g.handle.flush().await.wrap_err("flush transcript")?;
         Ok(())
     }
 

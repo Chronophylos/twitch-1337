@@ -45,9 +45,11 @@ pub async fn check_is_mod(
     }
 }
 
-/// Variant used during the OAuth callback. The user's own access token has
-/// `moderation:read` (granted via the requested scope), so the helix call
-/// works regardless of the bot token's scopes.
+/// Variant used during the OAuth callback. Asks Twitch which channels the
+/// user moderates (scope `user:read:moderated_channels` on the user token)
+/// and checks `broadcaster_id` against that list — the
+/// `helix/moderation/moderators` endpoint can't be used here because it
+/// requires the bearer to *be* the broadcaster.
 pub async fn check_is_mod_with_token(
     state: &WebState,
     user_id: &str,
@@ -71,14 +73,14 @@ async fn is_moderator_with_user_token(
     broadcaster_id: &str,
     state: &WebState,
 ) -> eyre::Result<bool> {
-    crate::helix::helix_moderator_check(
+    crate::helix::user_moderates_channel(
         &state.oauth.http,
         "https://api.twitch.tv",
         state.client_id.expose_secret(),
         access_token,
-        broadcaster_id,
         user_id,
-        "helix moderators (user token)",
+        broadcaster_id,
+        "helix moderated channels (user token)",
     )
     .await
 }

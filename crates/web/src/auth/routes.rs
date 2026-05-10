@@ -195,15 +195,16 @@ async fn login(
         );
     }
     let csrf_for_url = csrf.clone();
-    // `moderation:read` lets us check the helix moderators list against the
-    // user's own access token in the callback, so the bot's IRC token does
-    // not need that scope.
+    // `user:read:moderated_channels` lets the callback ask Twitch which
+    // channels the logging-in user moderates and check our broadcaster
+    // against that list — `moderation:read` would only work if the
+    // logging-in user IS the broadcaster.
     let (auth_url, _) = state
         .oauth
         .basic
         .authorize_url(move || csrf_for_url.clone())
         .add_scope(Scope::new("user:read:email".to_owned()))
-        .add_scope(Scope::new("moderation:read".to_owned()))
+        .add_scope(Scope::new("user:read:moderated_channels".to_owned()))
         .url();
     Redirect::to(auth_url.as_ref()).into_response()
 }
@@ -258,9 +259,10 @@ async fn callback(
         .map_err(|e| WebError::OAuthExchange(e.wrap_err("user lookup")))?;
 
     // Initial mod check uses the user's own access token (granted
-    // `moderation:read` via OAuth scope), so the bot's IRC token does not
-    // need extra scopes. The require_mod middleware re-checks via the bot
-    // token; on failure there it log+admits to avoid lockout.
+    // `user:read:moderated_channels` via OAuth scope), so the bot's IRC
+    // token does not need extra scopes. The require_mod middleware
+    // re-checks via the bot token; on failure there it log+admits to
+    // avoid lockout.
     match crate::auth::mod_check::check_is_mod_with_token(
         &state,
         &me.id,
