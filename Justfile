@@ -43,6 +43,14 @@ unmount-prod-data:
 dev:
   DATA_DIR=./dev-data RUST_LOG=info,twitch_1337=debug,twitch_1337_core=debug,twitch_1337_web=debug cargo run -p twitch-1337 --features dev-login
 
+# Run the dashboard alone (no IRC, no Helix) on a non-conflicting port.
+# Lets a worktree iterate on /pings + /memory views in parallel with the
+# full bot above — both share dev-data via atomic tmp+rename, so writes
+# from either side land cleanly (last-writer-wins, never corrupted).
+# Default bind 127.0.0.1:8761; pass `bind=...` to override.
+dev-web bind="127.0.0.1:8761":
+  DATA_DIR=./dev-data BIND_ADDR={{bind}} RUST_LOG=info,twitch_1337_web=debug cargo run -p twitch-1337-web --bin web-dev --features dev-login
+
 # Run tests with minimal output
 test-brief:
     @cargo test --workspace --quiet 2>&1 | grep "test result" | awk ' \
