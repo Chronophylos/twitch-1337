@@ -347,14 +347,31 @@ async fn view_user(
             msg: "must be numeric, 1-32 digits".into(),
         });
     }
-    let title = format!("User {user_id}");
+    let kind = FileKind::User {
+        user_id: user_id.clone(),
+    };
+    // Pre-read so the page title can fall back display_name → username → id.
+    // view_kind reads the file again; the second read hits the same warm
+    // cache + the editor needs an mtime snapshot anyway, so the cost is
+    // negligible for a single-user page.
+    let mf = state
+        .memory_store
+        .read_kind(&kind)
+        .await
+        .map_err(|e| WebError::Internal(eyre::eyre!("read_kind: {e}")))?;
+    let title = mf
+        .frontmatter
+        .display_name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or(mf.frontmatter.username.as_deref().filter(|s| !s.is_empty()))
+        .unwrap_or(&user_id)
+        .to_owned();
     let save_url = format!("/memory/users/{user_id}");
     view_kind(
         &state,
         &session,
-        FileKind::User {
-            user_id: user_id.clone(),
-        },
+        kind,
         title,
         save_url,
         None,
