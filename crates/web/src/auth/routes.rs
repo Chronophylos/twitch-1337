@@ -189,7 +189,20 @@ async fn callback(
         .exchange_code(AuthorizationCode::new(params.code))
         .request_async(&http_call)
         .await
-        .map_err(|e| WebError::OAuthExchange(eyre::Report::new(e).wrap_err("token exchange")))?;
+        .map_err(|e| {
+            // Twitch returns non-RFC-6749 error bodies that fail Parse; surface
+            // the raw body so logs show the upstream message.
+            let msg = match &e {
+                oauth2::RequestTokenError::Parse(_, body) => {
+                    format!(
+                        "token exchange (response body: {})",
+                        String::from_utf8_lossy(body)
+                    )
+                }
+                _ => "token exchange".into(),
+            };
+            WebError::OAuthExchange(eyre::Report::new(e).wrap_err(msg))
+        })?;
 
     let user_token = token.access_token().secret().to_owned();
     let me = fetch_caller_user(&state, &user_token)

@@ -60,6 +60,10 @@ pub struct ConflictPayload {
 struct DeniedTpl;
 
 #[derive(Template)]
+#[template(path = "auth/oauth_failed.html")]
+struct OAuthFailedTpl;
+
+#[derive(Template)]
 #[template(path = "memory/conflict.html")]
 struct ConflictTpl<'a> {
     kind: &'a str,
@@ -139,7 +143,8 @@ impl IntoResponse for WebError {
                     error = ?err,
                     "oauth exchange failed"
                 );
-                (StatusCode::BAD_GATEWAY, "oauth exchange failed").into_response()
+                // Almost always a stale/reused auth code (refresh, double-tab); offer retry instead of bare 502.
+                render(StatusCode::BAD_GATEWAY, &OAuthFailedTpl)
             }
             WebError::Internal(err) => {
                 tracing::error!(
