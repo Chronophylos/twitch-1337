@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use eyre::{Result, WrapErr as _};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 #[async_trait]
 pub trait HelixClient: Send + Sync {
@@ -68,24 +69,48 @@ impl ReqwestHelixClient {
         struct UserResp {
             data: Vec<HelixUser>,
         }
-        let mut url = url::Url::parse(&format!("{}/helix/users", self.helix_base))?;
-        for (k, v) in query {
-            url.query_pairs_mut().append_pair(k, v);
-        }
         let token = self.access_token_provider.current_access_token().await?;
-        let resp: UserResp = self
-            .http
-            .get(url)
-            .bearer_auth(&token)
-            .header("Client-Id", self.client_id.expose_secret())
-            .send()
-            .await?
-            .error_for_status()
-            .wrap_err("helix users")?
-            .json()
-            .await?;
+        let resp: UserResp = helix_get(
+            &self.http,
+            &self.helix_base,
+            "/helix/users",
+            query,
+            &token,
+            self.client_id.expose_secret(),
+            "helix users",
+        )
+        .await?;
         Ok(resp.data.into_iter().next())
     }
+}
+
+/// Shared GET → bearer + Client-Id → JSON-decode. All Twitch helix calls
+/// in this module share the same shape; this isolates it so each caller
+/// only writes the path, query, and response type.
+async fn helix_get<T: DeserializeOwned>(
+    http: &reqwest::Client,
+    helix_base: &str,
+    path: &str,
+    query: &[(&str, &str)],
+    bearer_token: &str,
+    client_id: &str,
+    context: &'static str,
+) -> Result<T> {
+    let mut url = url::Url::parse(&format!("{helix_base}{path}"))?;
+    for (k, v) in query {
+        url.query_pairs_mut().append_pair(k, v);
+    }
+    let resp = http
+        .get(url)
+        .bearer_auth(bearer_token)
+        .header("Client-Id", client_id)
+        .send()
+        .await?
+        .error_for_status()
+        .wrap_err(context)?
+        .json::<T>()
+        .await?;
+    Ok(resp)
 }
 
 #[async_trait]
@@ -131,27 +156,19 @@ pub async fn helix_moderator_check(
     struct ModResp {
         data: Vec<serde::de::IgnoredAny>,
     }
-    let mut url = url::Url::parse(&format!("{helix_base}/helix/moderation/moderators"))?;
-    url.query_pairs_mut()
-        .append_pair("broadcaster_id", broadcaster_id)
-        .append_pair("user_id", user_id);
-    let resp: ModResp = http
-        .get(url)
-        .bearer_auth(bearer_token)
-        .header("Client-Id", client_id)
-        .send()
-        .await?
-        .error_for_status()
-        .wrap_err(context)?
-        .json()
-        .await?;
+    let resp: ModResp = helix_get(
+        http,
+        helix_base,
+        "/helix/moderation/moderators",
+        &[("broadcaster_id", broadcaster_id), ("user_id", user_id)],
+        bearer_token,
+        client_id,
+        context,
+    )
+    .await?;
     Ok(!resp.data.is_empty())
 }
 
-/// Calls `helix/moderation/channels?user_id=USER` with the user's own
-/// access token (requires `user:read:moderated_channels` scope) and
-/// returns true iff `broadcaster_id` appears in the returned data.
-///
 /// Used during OAuth callback because `helix/moderation/moderators`
 /// requires the bearer's user id to match `broadcaster_id` (i.e. only
 /// the broadcaster can list their own mods), so a logging-in mod cannot
@@ -177,19 +194,15 @@ pub async fn user_moderates_channel(
     struct Resp {
         data: Vec<Channel>,
     }
-    let mut url = url::Url::parse(&format!("{helix_base}/helix/moderation/channels"))?;
-    url.query_pairs_mut()
-        .append_pair("user_id", user_id)
-        .append_pair("first", "100");
-    let resp: Resp = http
-        .get(url)
-        .bearer_auth(user_access_token)
-        .header("Client-Id", client_id)
-        .send()
-        .await?
-        .error_for_status()
-        .wrap_err(context)?
-        .json()
-        .await?;
+    let resp: Resp = helix_get(
+        http,
+        helix_base,
+        "/helix/moderation/channels",
+        &[("user_id", user_id), ("first", "100")],
+        user_access_token,
+        client_id,
+        context,
+    )
+    .await?;
     Ok(resp.data.iter().any(|c| c.broadcaster_id == broadcaster_id))
 }
