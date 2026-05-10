@@ -43,6 +43,23 @@ unmount-prod-data:
 dev:
   DATA_DIR=./dev-data RUST_LOG=info,twitch_1337=debug,twitch_1337_core=debug,twitch_1337_web=debug cargo run -p twitch-1337 --features dev-login
 
+# Run the dashboard alone (no IRC, no Helix) on a non-conflicting port.
+# Lets a worktree iterate on /pings + /memory views in parallel with the
+# full bot above — both share dev-data via atomic tmp+rename, so writes
+# from either side land cleanly (last-writer-wins, never corrupted).
+# Default bind 127.0.0.1:8761; pass `bind=...` to override.
+dev-web bind="127.0.0.1:8761":
+  DATA_DIR=./dev-data BIND_ADDR={{bind}} RUST_LOG=info,twitch_1337_web=debug cargo run -p twitch-1337-web --bin web-dev --features dev-login
+
+# One-shot: mint a dev session at /_dev/login + screenshot a path to PNG.
+# Requires `dev-web` already running on `base`. Reuses /tmp/wd-cprof so
+# the second+ shot skips the auth round-trip. Defaults: /pings →
+# /tmp/wd.png. Override `path=`, `file=`, `base=` as needed.
+dev-web-shot path="/pings" file="/tmp/wd.png" base="http://127.0.0.1:8761":
+  @rm -rf /tmp/wd-cprof
+  @chromium --headless=new --no-sandbox --disable-gpu --hide-scrollbars --window-size=1400,900 --user-data-dir=/tmp/wd-cprof --virtual-time-budget=4000 --screenshot={{file}} "{{base}}/_dev/login?next={{path}}" 2>&1 | tail -1
+  @echo "shot {{base}}{{path}} -> {{file}}"
+
 # Run tests with minimal output
 test-brief:
     @cargo test --workspace --quiet 2>&1 | grep "test result" | awk ' \

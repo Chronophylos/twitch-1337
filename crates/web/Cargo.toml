@@ -37,6 +37,13 @@ urlencoding = { workspace = true }
 # can mint a moderator session without OAuth.
 dev-login = []
 
+# Standalone dashboard runner — skips IRC, uses StubHelix.
+# `cargo run -p twitch-1337-web --bin web-dev --features dev-login`
+[[bin]]
+name = "web-dev"
+path = "src/bin/web_dev.rs"
+required-features = ["dev-login"]
+
 [dev-dependencies]
 rustls = { workspace = true }
 tempfile = "3"
