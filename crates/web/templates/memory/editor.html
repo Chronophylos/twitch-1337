@@ -6,6 +6,25 @@
 <form method="post" action="{{ save_url }}">
   <input type="hidden" name="_csrf" value="{{ csrf }}">
   <input type="hidden" name="mtime" value="{{ mtime }}">
+  {% if show_user_fm %}
+  <fieldset>
+    <legend>Frontmatter</legend>
+    <label>username (Twitch login)
+      <input name="fm_username" value="{{ fm_username }}" placeholder="leave empty to preserve">
+    </label>
+    <label>display_name
+      <input name="fm_display_name" value="{{ fm_display_name }}" placeholder="leave empty to preserve">
+    </label>
+  </fieldset>
+  {% endif %}
+  {% if show_state_fm %}
+  <fieldset>
+    <legend>Frontmatter</legend>
+    <label>created_by (Twitch user id)
+      <input name="fm_created_by" value="{{ fm_created_by }}" placeholder="leave empty to preserve">
+    </label>
+  </fieldset>
+  {% endif %}
   <label>Body (max {{ byte_cap }} bytes)
     <textarea name="body" rows="20">{{ body }}</textarea>
   </label>

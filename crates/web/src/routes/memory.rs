@@ -28,7 +28,9 @@ use axum::routing::{get, post};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use tower_cookies::Cookies;
-use twitch_1337_core::ai::memory::store::{WriteError, WriteOutcome, validate_state_slug};
+use twitch_1337_core::ai::memory::store::{
+    FrontmatterOverride, WriteError, WriteOutcome, validate_state_slug,
+};
 use twitch_1337_core::ai::memory::types::{FileKind, MemoryFile};
 
 use crate::auth::csrf;
@@ -76,6 +78,13 @@ struct EditorTpl<'a> {
     error: Option<String>,
     user_login: &'a str,
     current_page: &'static str,
+    /// Render the user-only frontmatter inputs (`username`, `display_name`).
+    show_user_fm: bool,
+    /// Render the state-only frontmatter input (`created_by`).
+    show_state_fm: bool,
+    fm_username: &'a str,
+    fm_display_name: &'a str,
+    fm_created_by: &'a str,
 }
 
 struct StateRow {
@@ -196,6 +205,11 @@ async fn view_kind(
         error: None,
         user_login: &session.user_login,
         current_page,
+        show_user_fm: matches!(kind, FileKind::User { .. }),
+        show_state_fm: matches!(kind, FileKind::State { .. }),
+        fm_username: mf.frontmatter.username.as_deref().unwrap_or(""),
+        fm_display_name: mf.frontmatter.display_name.as_deref().unwrap_or(""),
+        fm_created_by: mf.frontmatter.created_by.as_deref().unwrap_or(""),
     })
 }
 
@@ -338,6 +352,11 @@ async fn new_state_form(
         error: None,
         user_login: &session.user_login,
         current_page: crate::nav::MEMORY_STATE,
+        show_user_fm: false,
+        show_state_fm: false,
+        fm_username: "",
+        fm_display_name: "",
+        fm_created_by: "",
     })
 }
 
@@ -368,6 +387,13 @@ struct SaveForm {
     mtime: u64,
     #[serde(rename = "_csrf")]
     csrf: String,
+    /// Empty string = preserve prior on-disk value.
+    #[serde(default)]
+    fm_username: String,
+    #[serde(default)]
+    fm_display_name: String,
+    #[serde(default)]
+    fm_created_by: String,
 }
 
 #[derive(Deserialize)]
@@ -414,9 +440,14 @@ async fn save_kind(
         FileKind::User { .. } => crate::nav::MEMORY_USERS,
         FileKind::State { .. } => crate::nav::MEMORY_STATE,
     };
+    let fm_override = FrontmatterOverride {
+        username: Some(form.fm_username.clone()),
+        display_name: Some(form.fm_display_name.clone()),
+        created_by: Some(form.fm_created_by.clone()),
+    };
     let outcome = state
         .memory_store
-        .write_with_guard(kind.clone(), &id, &form.body, Some(form.mtime))
+        .write_with_guard(kind.clone(), &id, &form.body, Some(form.mtime), fm_override)
         .await;
     let csrf_hex = csrf::encode(&session.csrf_value);
     match outcome {
@@ -486,6 +517,11 @@ async fn save_kind(
                     error: Some(msg),
                     user_login: &session.user_login,
                     current_page,
+                    show_user_fm: matches!(&kind, FileKind::User { .. }),
+                    show_state_fm: matches!(&kind, FileKind::State { .. }),
+                    fm_username: &form.fm_username,
+                    fm_display_name: &form.fm_display_name,
+                    fm_created_by: &form.fm_created_by,
                 },
             )
         }
@@ -679,6 +715,11 @@ fn render_state_create_error(
             error: Some(msg),
             user_login,
             current_page: crate::nav::MEMORY_STATE,
+            show_user_fm: false,
+            show_state_fm: false,
+            fm_username: "",
+            fm_display_name: "",
+            fm_created_by: "",
         },
     )
 }

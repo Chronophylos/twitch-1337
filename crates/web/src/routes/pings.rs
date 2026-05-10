@@ -14,6 +14,8 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use serde::Deserialize;
 use tower_cookies::Cookies;
+use twitch_1337_core::commands::normalize_username;
+use twitch_1337_core::ping::PingManager;
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
@@ -27,6 +29,11 @@ pub fn router() -> Router<WebState> {
         .route("/pings/new", get(new_form))
         .route("/pings/{name}", get(edit_form).post(update))
         .route("/pings/{name}/delete", post(delete))
+        .route("/pings/{name}/members", post(add_member))
+        .route(
+            "/pings/{name}/members/{username}/delete",
+            post(remove_member),
+        )
 }
 
 #[derive(Clone)]
@@ -57,10 +64,25 @@ struct FormTpl<'a> {
     error: Option<String>,
     user_login: &'a str,
     current_page: &'static str,
+    /// Sorted lowercase logins. Empty on the create form.
+    members: Vec<String>,
+    /// Inline error from a recent add/remove attempt, rendered above the
+    /// member list. Independent of the template-edit `error` field.
+    member_error: Option<String>,
 }
 
 fn render<T: Template>(tpl: &T) -> Result<Response, WebError> {
     render_with(StatusCode::OK, tpl)
+}
+
+/// Snapshot a ping for the edit-form template: cloned template text + a
+/// sorted member list. Returns `None` when the ping doesn't exist so callers
+/// can map to a 4xx without re-borrowing the manager.
+fn ping_snapshot(mgr: &PingManager, name: &str) -> Option<(String, Vec<String>)> {
+    let p = mgr.get(name)?;
+    let mut members: Vec<String> = p.members.iter().cloned().collect();
+    members.sort();
+    Some((p.template.clone(), members))
 }
 
 fn render_with<T: Template>(status: StatusCode, tpl: &T) -> Result<Response, WebError> {
@@ -108,6 +130,8 @@ async fn new_form(Extension(session): Extension<Session>) -> Result<Response, We
         error: None,
         user_login: &session.user_login,
         current_page: crate::nav::PINGS,
+        members: Vec::new(),
+        member_error: None,
     })
 }
 
@@ -151,6 +175,8 @@ async fn create(
                 error: Some(format!("ping `{name}` already exists")),
                 user_login: &session.user_login,
                 current_page: crate::nav::PINGS,
+                members: Vec::new(),
+                member_error: None,
             },
         );
     }
@@ -178,6 +204,8 @@ async fn create(
                 error: Some(e.to_string()),
                 user_login: &session.user_login,
                 current_page: crate::nav::PINGS,
+                members: Vec::new(),
+                member_error: None,
             },
         );
     }
@@ -199,16 +227,13 @@ async fn edit_form(
     Extension(session): Extension<Session>,
     Path(name): Path<String>,
 ) -> Result<Response, WebError> {
-    let mgr = state.ping_manager.read().await;
-    let template_text = mgr
-        .get(&name)
-        .ok_or_else(|| WebError::Validation {
+    let (template_text, members) = {
+        let mgr = state.ping_manager.read().await;
+        ping_snapshot(&mgr, &name).ok_or_else(|| WebError::Validation {
             field: "name".into(),
             msg: format!("ping `{name}` does not exist"),
         })?
-        .template
-        .clone();
-    drop(mgr);
+    };
 
     let csrf_hex = csrf::encode(&session.csrf_value);
     render(&FormTpl {
@@ -219,6 +244,8 @@ async fn edit_form(
         error: None,
         user_login: &session.user_login,
         current_page: crate::nav::PINGS,
+        members,
+        member_error: None,
     })
 }
 
@@ -252,6 +279,9 @@ async fn update(
             result = "validation",
             error = ?e,
         );
+        let members = ping_snapshot(&mgr, &name)
+            .map(|(_, m)| m)
+            .unwrap_or_default();
         return render_with(
             StatusCode::BAD_REQUEST,
             &FormTpl {
@@ -262,6 +292,8 @@ async fn update(
                 error: Some(e.to_string()),
                 user_login: &session.user_login,
                 current_page: crate::nav::PINGS,
+                members,
+                member_error: None,
             },
         );
     }
@@ -276,6 +308,125 @@ async fn update(
     );
     flash::set(&cookies, &format!("Updated ping `{name}`."));
     Ok(Redirect::to("/pings").into_response())
+}
+
+/// Twitch login: lowercase ASCII alphanumeric + underscore, 1–25 chars.
+/// (Twitch enforces ≤25 chars and that exact charset on signup.) Validated
+/// here so a stray space or `@` doesn't end up persisted in the member set.
+fn is_valid_twitch_login(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 25
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+#[derive(Deserialize)]
+struct AddMemberForm {
+    #[serde(rename = "_csrf")]
+    csrf: String,
+    username: String,
+}
+
+async fn add_member(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    Path(name): Path<String>,
+    axum::Form(form): axum::Form<AddMemberForm>,
+) -> Result<Response, WebError> {
+    if !csrf::verify(&form.csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    let username = normalize_username(form.username.trim());
+    let csrf_hex = csrf::encode(&session.csrf_value);
+    let invalid_login = !is_valid_twitch_login(&username);
+
+    let mut mgr = state.ping_manager.write().await;
+    let result = if invalid_login {
+        Err("username must be 1–25 chars: lowercase letters, digits, underscore".to_owned())
+    } else {
+        mgr.add_member(&name, &username).map_err(|e| e.to_string())
+    };
+    let (template_text, members) =
+        ping_snapshot(&mgr, &name).ok_or_else(|| WebError::Validation {
+            field: "name".into(),
+            msg: format!("ping `{name}` does not exist"),
+        })?;
+    drop(mgr);
+
+    match result {
+        Ok(()) => {
+            tracing::info!(
+                target: "twitch_1337_web",
+                user_id = %session.user_id,
+                action = "ping_member_add",
+                target_name = %name,
+                target_user = %username,
+                result = "ok",
+            );
+            flash::set(&cookies, &format!("Added `{username}` to `{name}`."));
+            Ok(Redirect::to(&format!("/pings/{name}")).into_response())
+        }
+        Err(msg) => {
+            tracing::info!(
+                target: "twitch_1337_web",
+                user_id = %session.user_id,
+                action = "ping_member_add",
+                target_name = %name,
+                target_user = %username,
+                result = "error",
+                error = %msg,
+            );
+            render_with(
+                StatusCode::BAD_REQUEST,
+                &FormTpl {
+                    is_new: false,
+                    name: &name,
+                    template_text: &template_text,
+                    csrf: &csrf_hex,
+                    error: None,
+                    user_login: &session.user_login,
+                    current_page: crate::nav::PINGS,
+                    members,
+                    member_error: Some(msg),
+                },
+            )
+        }
+    }
+}
+
+async fn remove_member(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    Path((name, username)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, WebError> {
+    let header_token = headers
+        .get("X-Csrf-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(WebError::CsrfMismatch)?;
+    if !csrf::verify(header_token, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+
+    let mut mgr = state.ping_manager.write().await;
+    // Idempotent: missing ping or non-member is a no-op so the row swap
+    // succeeds without flashing an error to the user.
+    let _ = mgr.remove_member(&name, &username);
+    drop(mgr);
+
+    tracing::info!(
+        target: "twitch_1337_web",
+        user_id = %session.user_id,
+        action = "ping_member_remove",
+        target_name = %name,
+        target_user = %username,
+        result = "ok",
+    );
+    flash::set(&cookies, &format!("Removed `{username}` from `{name}`."));
+    // Empty body so HTMX `hx-swap="outerHTML"` removes the row.
+    Ok((StatusCode::OK, "").into_response())
 }
 
 async fn delete(

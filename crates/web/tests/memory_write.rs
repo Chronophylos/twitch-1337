@@ -238,6 +238,92 @@ async fn delete_state_round_trip() {
 }
 
 #[tokio::test]
+async fn edit_user_form_renders_frontmatter_fields() {
+    let (state, sid, csrf, _bare, _tdp, _tdm) = authed_setup().await;
+    let kind = FileKind::User {
+        user_id: "12345".into(),
+    };
+    state
+        .memory_store
+        .write(&kind, "body", Some("oldlogin"), Some("OldDisplay"))
+        .await
+        .unwrap();
+    let app = build_router(state);
+    let req = Request::builder()
+        .uri("/memory/users/12345")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(html.contains("fm_username"), "username input present");
+    assert!(
+        html.contains("fm_display_name"),
+        "display_name input present"
+    );
+    assert!(html.contains("oldlogin"), "current login pre-filled");
+    assert!(
+        html.contains("OldDisplay"),
+        "current display name pre-filled"
+    );
+}
+
+#[tokio::test]
+async fn save_user_with_frontmatter_override_persists() {
+    let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
+    let kind = FileKind::User {
+        user_id: "12345".into(),
+    };
+    state
+        .memory_store
+        .write(&kind, "old body", Some("oldlogin"), Some("OldDisplay"))
+        .await
+        .unwrap();
+    let mtime = state.memory_store.current_mtime(&kind).await.unwrap();
+    let body = format!(
+        "_csrf={csrf}&mtime={mtime}&body=new+body&fm_username=newlogin&fm_display_name=NewName",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(post_form("/memory/users/12345", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let mf = state.memory_store.read_kind(&kind).await.unwrap();
+    assert_eq!(mf.frontmatter.username.as_deref(), Some("newlogin"));
+    assert_eq!(mf.frontmatter.display_name.as_deref(), Some("NewName"));
+    assert!(mf.body.contains("new body"));
+}
+
+#[tokio::test]
+async fn save_state_with_frontmatter_override_replaces_created_by() {
+    let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
+    let kind = FileKind::State {
+        slug: "notes".into(),
+    };
+    state
+        .memory_store
+        .write_state(&kind, "x", Some("9001"))
+        .await
+        .unwrap();
+    let mtime = state.memory_store.current_mtime(&kind).await.unwrap();
+    let body = format!(
+        "_csrf={csrf}&mtime={mtime}&body=fresh&fm_created_by=42",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(post_form("/memory/state/notes", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let mf = state.memory_store.read_kind(&kind).await.unwrap();
+    assert_eq!(mf.frontmatter.created_by.as_deref(), Some("42"));
+}
+
+#[tokio::test]
 async fn save_user_id_invalid_400() {
     let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
     let body = format!(

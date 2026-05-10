@@ -12,4 +12,32 @@
   <button type="submit">Save</button>
   <a href="/pings" role="button" class="secondary">Cancel</a>
 </form>
+
+{% if !is_new %}
+<h3>Members ({{ members.len() }})</h3>
+{% if let Some(e) = member_error %}<div class="error">{{ e }}</div>{% endif %}
+<table>
+  <tbody>
+    {% for m in members %}
+    <tr>
+      <td>{{ m }}</td>
+      <td>
+        <button hx-post="/pings/{{ name }}/members/{{ m }}/delete"
+                hx-confirm="Remove {{ m }} from {{ name }}?"
+                hx-target="closest tr"
+                hx-swap="outerHTML"
+                hx-headers='{"X-Csrf-Token": "{{ csrf }}"}'>Remove</button>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<form method="post" action="/pings/{{ name }}/members">
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+  <label>Add member
+    <input name="username" placeholder="twitch_login" required>
+  </label>
+  <button type="submit">Add</button>
+</form>
+{% endif %}
 {% endblock %}
