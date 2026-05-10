@@ -72,6 +72,7 @@ struct EditorTpl<'a> {
     /// `usize` into a percentage cleanly.
     pct: u8,
     save_url: &'a str,
+    cancel_url: &'a str,
     delete_url: Option<&'a str>,
     error: Option<String>,
     user_login: &'a str,
@@ -225,6 +226,7 @@ async fn view_kind(
     kind: FileKind,
     title: String,
     save_url: String,
+    cancel_url: &'static str,
     delete_url: Option<String>,
     current_page: &'static str,
     preloaded: Option<MemoryFile>,
@@ -255,6 +257,7 @@ async fn view_kind(
         byte_cap,
         pct,
         save_url: &save_url,
+        cancel_url,
         delete_url: delete_url.as_deref(),
         error: None,
         user_login: &session.user_login,
@@ -277,6 +280,7 @@ async fn view_soul(
         FileKind::Soul,
         "SOUL".to_owned(),
         "/memory/soul".to_owned(),
+        "/memory",
         None,
         crate::nav::MEMORY_SOUL,
         None,
@@ -294,6 +298,7 @@ async fn view_lore(
         FileKind::Lore,
         "LORE".to_owned(),
         "/memory/lore".to_owned(),
+        "/memory",
         None,
         crate::nav::MEMORY_LORE,
         None,
@@ -375,6 +380,7 @@ async fn view_user(
         kind,
         title,
         save_url,
+        "/memory/users",
         None,
         crate::nav::MEMORY_USERS,
         Some(mf),
@@ -451,6 +457,7 @@ async fn view_state(
         FileKind::State { slug: slug.clone() },
         title,
         save_url,
+        "/memory/state",
         Some(delete_url),
         crate::nav::MEMORY_STATE,
         None,
@@ -512,6 +519,11 @@ async fn save_kind(
         FileKind::User { .. } => crate::nav::MEMORY_USERS,
         FileKind::State { .. } => crate::nav::MEMORY_STATE,
     };
+    let cancel_url: &'static str = match &kind {
+        FileKind::Soul | FileKind::Lore => "/memory",
+        FileKind::User { .. } => "/memory/users",
+        FileKind::State { .. } => "/memory/state",
+    };
     let fm_override = FrontmatterOverride {
         username: Some(form.fm_username.clone()),
         display_name: Some(form.fm_display_name.clone()),
@@ -557,6 +569,7 @@ async fn save_kind(
                 csrf: csrf_hex,
                 user_login: session.user_login.clone(),
                 current_page,
+                cancel_url,
             })))
         }
         Err(err) => {
@@ -590,6 +603,7 @@ async fn save_kind(
                     byte_cap: cap,
                     pct: pct_of(form.body.len(), cap),
                     save_url: &redirect_to,
+                    cancel_url,
                     delete_url: delete_url.as_deref(),
                     error: Some(msg),
                     user_login: &session.user_login,
@@ -807,6 +821,7 @@ fn render_state_create(
             byte_cap: cap,
             pct: pct_of(body.len(), cap),
             save_url: "/memory/state",
+            cancel_url: "/memory/state",
             delete_url: None,
             error,
             user_login,

@@ -54,6 +54,8 @@ pub struct ConflictPayload {
     pub user_login: String,
     /// Sidebar highlight key matching the originating editor's section.
     pub current_page: &'static str,
+    /// Where the Cancel link should point — kind-aware (e.g. `/memory/users`).
+    pub cancel_url: &'static str,
 }
 
 #[derive(Template)]
@@ -76,6 +78,7 @@ struct ConflictTpl<'a> {
     csrf: &'a str,
     user_login: &'a str,
     current_page: &'static str,
+    cancel_url: &'static str,
 }
 
 /// Allow only same-origin absolute paths. Anything that smells like a
@@ -138,6 +141,7 @@ impl IntoResponse for WebError {
                     csrf: &payload.csrf,
                     user_login: &payload.user_login,
                     current_page: payload.current_page,
+                    cancel_url: payload.cancel_url,
                 },
             ),
             WebError::OAuthExchange(err) => {
