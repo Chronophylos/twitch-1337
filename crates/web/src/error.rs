@@ -54,7 +54,6 @@ pub struct ConflictPayload {
     pub user_login: String,
     /// Sidebar highlight key matching the originating editor's section.
     pub current_page: &'static str,
-    /// Where the Cancel link should point — kind-aware (e.g. `/memory/users`).
     pub cancel_url: &'static str,
 }
 

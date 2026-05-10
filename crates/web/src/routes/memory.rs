@@ -168,6 +168,25 @@ fn subtitle_for_kind(kind: &FileKind) -> &'static str {
     }
 }
 
+/// Section list URL — the page Cancel/Back should return to. SOUL/LORE
+/// have no list page so they fall back to the tree.
+fn list_url_for(kind: &FileKind) -> &'static str {
+    match kind {
+        FileKind::Soul | FileKind::Lore => "/memory",
+        FileKind::User { .. } => "/memory/users",
+        FileKind::State { .. } => "/memory/state",
+    }
+}
+
+fn nav_slug_for(kind: &FileKind) -> &'static str {
+    match kind {
+        FileKind::Soul => crate::nav::MEMORY_SOUL,
+        FileKind::Lore => crate::nav::MEMORY_LORE,
+        FileKind::User { .. } => crate::nav::MEMORY_USERS,
+        FileKind::State { .. } => crate::nav::MEMORY_STATE,
+    }
+}
+
 /// First non-empty line, stripped of a leading `# `, truncated to 140 chars.
 /// Char-aware so we never slice mid-codepoint.
 fn note_excerpt(body: &str) -> String {
@@ -219,18 +238,17 @@ async fn tree(
     })
 }
 
-#[allow(clippy::too_many_arguments)] // distinct view-shape inputs; bundling adds noise
 async fn view_kind(
     state: &WebState,
     session: &Session,
     kind: FileKind,
     title: String,
     save_url: String,
-    cancel_url: &'static str,
     delete_url: Option<String>,
-    current_page: &'static str,
     preloaded: Option<MemoryFile>,
 ) -> Result<Response, WebError> {
+    let cancel_url = list_url_for(&kind);
+    let current_page = nav_slug_for(&kind);
     let store = &state.memory_store;
     let mf = match preloaded {
         Some(mf) => mf,
@@ -280,9 +298,7 @@ async fn view_soul(
         FileKind::Soul,
         "SOUL".to_owned(),
         "/memory/soul".to_owned(),
-        "/memory",
         None,
-        crate::nav::MEMORY_SOUL,
         None,
     )
     .await
@@ -298,9 +314,7 @@ async fn view_lore(
         FileKind::Lore,
         "LORE".to_owned(),
         "/memory/lore".to_owned(),
-        "/memory",
         None,
-        crate::nav::MEMORY_LORE,
         None,
     )
     .await
@@ -374,18 +388,7 @@ async fn view_user(
         .unwrap_or(&user_id)
         .to_owned();
     let save_url = format!("/memory/users/{user_id}");
-    view_kind(
-        &state,
-        &session,
-        kind,
-        title,
-        save_url,
-        "/memory/users",
-        None,
-        crate::nav::MEMORY_USERS,
-        Some(mf),
-    )
-    .await
+    view_kind(&state, &session, kind, title, save_url, None, Some(mf)).await
 }
 
 async fn list_state(
@@ -457,9 +460,7 @@ async fn view_state(
         FileKind::State { slug: slug.clone() },
         title,
         save_url,
-        "/memory/state",
         Some(delete_url),
-        crate::nav::MEMORY_STATE,
         None,
     )
     .await
@@ -513,17 +514,8 @@ async fn save_kind(
     if !csrf::verify(&form.csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    let current_page: &'static str = match &kind {
-        FileKind::Soul => crate::nav::MEMORY_SOUL,
-        FileKind::Lore => crate::nav::MEMORY_LORE,
-        FileKind::User { .. } => crate::nav::MEMORY_USERS,
-        FileKind::State { .. } => crate::nav::MEMORY_STATE,
-    };
-    let cancel_url: &'static str = match &kind {
-        FileKind::Soul | FileKind::Lore => "/memory",
-        FileKind::User { .. } => "/memory/users",
-        FileKind::State { .. } => "/memory/state",
-    };
+    let current_page = nav_slug_for(&kind);
+    let cancel_url = list_url_for(&kind);
     let fm_override = FrontmatterOverride {
         username: Some(form.fm_username.clone()),
         display_name: Some(form.fm_display_name.clone()),
