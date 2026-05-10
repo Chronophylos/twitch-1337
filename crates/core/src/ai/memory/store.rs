@@ -66,6 +66,18 @@ pub enum WriteOutcome {
     },
 }
 
+/// Per-write frontmatter overrides for `write_with_guard`. `Some(non_empty)`
+/// replaces the on-disk value; `Some("")` and `None` both preserve the
+/// prior value (matches `write`'s existing empty-string filtering, so
+/// untouched form inputs round-trip safely through the conflict resubmit
+/// path which doesn't carry these fields).
+#[derive(Default, Debug, Clone)]
+pub struct FrontmatterOverride {
+    pub username: Option<String>,
+    pub display_name: Option<String>,
+    pub created_by: Option<String>,
+}
+
 const SOUL_SEED: &str = include_str!("../../../data/prompts/seed_soul.md");
 const PROMPT_SYSTEM: &str = include_str!("../../../data/prompts/system.md");
 const PROMPT_INSTRUCTIONS: &str = include_str!("../../../data/prompts/ai_instructions.md");
@@ -292,6 +304,19 @@ impl MemoryStore {
         body: &str,
         creator_user_id: Option<&str>,
     ) -> Result<(), WriteError> {
+        self.write_state_inner(kind, body, creator_user_id, None)
+            .await
+    }
+
+    /// `created_by_override`: `Some(non_empty)` replaces the on-disk
+    /// `created_by`; `Some("")` and `None` both fall back to preserve-or-init.
+    async fn write_state_inner(
+        &self,
+        kind: &FileKind,
+        body: &str,
+        creator_user_id: Option<&str>,
+        created_by_override: Option<&str>,
+    ) -> Result<(), WriteError> {
         let FileKind::State { slug } = kind else {
             return Err(WriteError::Io(eyre!(
                 "write_state called on non-state kind"
@@ -308,15 +333,16 @@ impl MemoryStore {
         let lock = self.lock_for(&rel).await;
         let _g = lock.lock().await;
 
-        // Preserve existing created_by; only set on first write.
         let prior_raw = tokio::fs::read_to_string(&abs).await.ok();
         let is_new = prior_raw.is_none();
         let prior_created_by = prior_raw
             .as_deref()
             .and_then(|raw| frontmatter::parse(raw).ok())
             .and_then(|(fm, _)| fm.created_by);
-        let created_by =
-            prior_created_by.or_else(|| creator_user_id.map(std::string::ToString::to_string));
+        let created_by = match created_by_override {
+            Some(s) if !s.is_empty() => Some(s.to_string()),
+            _ => prior_created_by.or_else(|| creator_user_id.map(std::string::ToString::to_string)),
+        };
 
         let fm = Frontmatter {
             updated_at: Utc::now(),
@@ -406,6 +432,7 @@ impl MemoryStore {
         id: &str,
         body: &str,
         expected: Option<Mtime>,
+        fm_override: FrontmatterOverride,
     ) -> Result<WriteOutcome, WriteError> {
         let _ = id; // already encoded in `kind`; arg kept for ergonomic call sites
 
@@ -431,10 +458,24 @@ impl MemoryStore {
         drop(g);
         match &kind {
             FileKind::State { slug } => {
-                self.write_state(&FileKind::State { slug: slug.clone() }, body, None)
-                    .await?;
+                self.write_state_inner(
+                    &FileKind::State { slug: slug.clone() },
+                    body,
+                    None,
+                    fm_override.created_by.as_deref(),
+                )
+                .await?;
             }
-            _ => {
+            FileKind::User { .. } => {
+                self.write(
+                    &kind,
+                    body,
+                    fm_override.username.as_deref(),
+                    fm_override.display_name.as_deref(),
+                )
+                .await?;
+            }
+            FileKind::Soul | FileKind::Lore => {
                 self.write(&kind, body, None, None).await?;
             }
         }
@@ -793,7 +834,13 @@ mod tests {
 
         // Stale token → Conflict.
         let outcome = store
-            .write_with_guard(FileKind::Soul, "", "loser", Some(0))
+            .write_with_guard(
+                FileKind::Soul,
+                "",
+                "loser",
+                Some(0),
+                FrontmatterOverride::default(),
+            )
             .await
             .unwrap();
         match outcome {
@@ -812,7 +859,13 @@ mod tests {
 
         // Fresh token → Written.
         let outcome = store
-            .write_with_guard(FileKind::Soul, "", "winner", Some(mt1))
+            .write_with_guard(
+                FileKind::Soul,
+                "",
+                "winner",
+                Some(mt1),
+                FrontmatterOverride::default(),
+            )
             .await
             .unwrap();
         let new_mt = match outcome {
@@ -835,12 +888,93 @@ mod tests {
             .await
             .unwrap();
         let outcome = store
-            .write_with_guard(FileKind::Lore, "", "after", None)
+            .write_with_guard(
+                FileKind::Lore,
+                "",
+                "after",
+                None,
+                FrontmatterOverride::default(),
+            )
             .await
             .unwrap();
         assert!(matches!(outcome, WriteOutcome::Written { .. }));
         let mf = store.read_kind(&FileKind::Lore).await.unwrap();
         assert!(mf.body.contains("after"));
+    }
+
+    #[tokio::test]
+    async fn write_with_guard_override_replaces_user_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), Caps::default())
+            .await
+            .unwrap();
+        let kind = FileKind::User {
+            user_id: "42".into(),
+        };
+        store
+            .write(&kind, "body", Some("oldlogin"), Some("OldDisplay"))
+            .await
+            .unwrap();
+        let mt = store.current_mtime(&kind).await.unwrap();
+        let fm = FrontmatterOverride {
+            username: Some("newlogin".into()),
+            display_name: Some("NewDisplay".into()),
+            created_by: None,
+        };
+        let outcome = store
+            .write_with_guard(kind.clone(), "42", "body2", Some(mt), fm)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, WriteOutcome::Written { .. }));
+        let mf = store.read_kind(&kind).await.unwrap();
+        assert_eq!(mf.frontmatter.username.as_deref(), Some("newlogin"));
+        assert_eq!(mf.frontmatter.display_name.as_deref(), Some("NewDisplay"));
+    }
+
+    #[tokio::test]
+    async fn write_with_guard_override_replaces_state_created_by() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), Caps::default())
+            .await
+            .unwrap();
+        let kind = FileKind::State {
+            slug: "quiz".into(),
+        };
+        store.write_state(&kind, "x", Some("12345")).await.unwrap();
+        let mt = store.current_mtime(&kind).await.unwrap();
+        let fm = FrontmatterOverride {
+            created_by: Some("99999".into()),
+            ..FrontmatterOverride::default()
+        };
+        store
+            .write_with_guard(kind.clone(), "quiz", "y", Some(mt), fm)
+            .await
+            .unwrap();
+        let mf = store.read_kind(&kind).await.unwrap();
+        assert_eq!(mf.frontmatter.created_by.as_deref(), Some("99999"));
+    }
+
+    #[tokio::test]
+    async fn write_with_guard_empty_override_preserves_state_created_by() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), Caps::default())
+            .await
+            .unwrap();
+        let kind = FileKind::State {
+            slug: "notes".into(),
+        };
+        store.write_state(&kind, "x", Some("12345")).await.unwrap();
+        let mt = store.current_mtime(&kind).await.unwrap();
+        let fm = FrontmatterOverride {
+            created_by: Some(String::new()),
+            ..FrontmatterOverride::default()
+        };
+        store
+            .write_with_guard(kind.clone(), "notes", "y", Some(mt), fm)
+            .await
+            .unwrap();
+        let mf = store.read_kind(&kind).await.unwrap();
+        assert_eq!(mf.frontmatter.created_by.as_deref(), Some("12345"));
     }
 
     #[tokio::test]

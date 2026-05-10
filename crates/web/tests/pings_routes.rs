@@ -317,6 +317,131 @@ async fn update_invalid_template_renders_form_with_error() {
 }
 
 #[tokio::test]
+async fn edit_form_lists_members() {
+    let (state, sid, csrf, _bare, _td) = authed_setup().await;
+    {
+        let mut mgr = state.ping_manager.write().await;
+        mgr.create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
+            .unwrap();
+        mgr.add_member("team", "alice").unwrap();
+        mgr.add_member("team", "bob").unwrap();
+    }
+    let app = build_router(state);
+    let req = Request::builder()
+        .uri("/pings/team")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(html.contains("alice"), "alice listed");
+    assert!(html.contains("bob"), "bob listed");
+    assert!(
+        html.contains(r#"name="username""#),
+        "add-member input present"
+    );
+}
+
+#[tokio::test]
+async fn add_member_round_trip() {
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
+    {
+        let mut mgr = state.ping_manager.write().await;
+        mgr.create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
+            .unwrap();
+    }
+    let body = format!(
+        "_csrf={csrf}&username=Alice",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings/team/members")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let app = build_router(state.clone());
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let mgr = state.ping_manager.read().await;
+    assert!(mgr.is_member("team", "alice"), "alice lowercased + added");
+}
+
+#[tokio::test]
+async fn add_member_rejects_invalid_login() {
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
+    {
+        let mut mgr = state.ping_manager.write().await;
+        mgr.create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
+            .unwrap();
+    }
+    let body = format!(
+        "_csrf={csrf}&username=bad+name%21",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings/team/members")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let app = build_router(state.clone());
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let mgr = state.ping_manager.read().await;
+    let m = mgr.get("team").unwrap();
+    assert!(m.members.is_empty(), "invalid username must not persist");
+}
+
+#[tokio::test]
+async fn remove_member_via_htmx_header_succeeds() {
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
+    {
+        let mut mgr = state.ping_manager.write().await;
+        mgr.create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
+            .unwrap();
+        mgr.add_member("team", "alice").unwrap();
+    }
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings/team/members/alice/delete")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header("X-Csrf-Token", bare_csrf.clone())
+        .body(Body::empty())
+        .unwrap();
+    let app = build_router(state.clone());
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let mgr = state.ping_manager.read().await;
+    assert!(!mgr.is_member("team", "alice"));
+}
+
+#[tokio::test]
+async fn remove_member_without_csrf_rejected() {
+    let (state, sid, csrf, _bare, _td) = authed_setup().await;
+    {
+        let mut mgr = state.ping_manager.write().await;
+        mgr.create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
+            .unwrap();
+        mgr.add_member("team", "alice").unwrap();
+    }
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings/team/members/alice/delete")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .body(Body::empty())
+        .unwrap();
+    let app = build_router(state.clone());
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let mgr = state.ping_manager.read().await;
+    assert!(mgr.is_member("team", "alice"), "must persist on rejection");
+}
+
+#[tokio::test]
 async fn create_rejects_bad_form_csrf() {
     let (state, sid, csrf, _bare_csrf, _td) = authed_setup().await;
     let app = build_router(state.clone());
