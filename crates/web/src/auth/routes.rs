@@ -19,8 +19,8 @@ use axum::routing::{get, post};
 use eyre::{Result, WrapErr as _, eyre};
 use oauth2::basic::BasicClient;
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet,
-    RedirectUrl, Scope, TokenResponse as _, TokenUrl,
+    AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet,
+    EndpointSet, RedirectUrl, Scope, TokenResponse as _, TokenUrl,
 };
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
@@ -55,13 +55,18 @@ pub struct OAuthCtx {
 impl OAuthCtx {
     pub fn new(client_id: &str, client_secret: &SecretString, public_url: &str) -> Result<Self> {
         let redirect = format!("{}/auth/callback", public_url.trim_end_matches('/'));
+        // Twitch's token endpoint only reads `client_id` / `client_secret` from
+        // the form body and ignores HTTP Basic auth, so override oauth2 v5's
+        // BasicAuth default — otherwise Twitch returns
+        // `{"status":400,"message":"missing client id"}`.
         let basic = BasicClient::new(ClientId::new(client_id.to_owned()))
             .set_client_secret(ClientSecret::new(client_secret.expose_secret().to_owned()))
             .set_auth_uri(AuthUrl::new(
                 "https://id.twitch.tv/oauth2/authorize".into(),
             )?)
             .set_token_uri(TokenUrl::new("https://id.twitch.tv/oauth2/token".into())?)
-            .set_redirect_uri(RedirectUrl::new(redirect)?);
+            .set_redirect_uri(RedirectUrl::new(redirect)?)
+            .set_auth_type(AuthType::RequestBody);
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
