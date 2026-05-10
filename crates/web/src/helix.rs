@@ -114,10 +114,10 @@ impl HelixClient for ReqwestHelixClient {
 }
 
 /// Single helix moderator-list call filtered by `user_id`. Returns true iff
-/// `user_id` is a moderator of `broadcaster_id`. Used by both
-/// `ReqwestHelixClient::is_moderator` (bot token) and the OAuth callback's
-/// `is_moderator_with_user_token` (user token); the only difference is the
-/// bearer.
+/// `user_id` is a moderator of `broadcaster_id`. Used by
+/// `ReqwestHelixClient::is_moderator` (bot token); the OAuth callback path
+/// uses [`user_moderates_channel`] instead because Twitch requires the
+/// token's user to *be* the broadcaster on this endpoint.
 pub async fn helix_moderator_check(
     http: &reqwest::Client,
     helix_base: &str,
@@ -146,4 +146,50 @@ pub async fn helix_moderator_check(
         .json()
         .await?;
     Ok(!resp.data.is_empty())
+}
+
+/// Calls `helix/moderation/channels?user_id=USER` with the user's own
+/// access token (requires `user:read:moderated_channels` scope) and
+/// returns true iff `broadcaster_id` appears in the returned data.
+///
+/// Used during OAuth callback because `helix/moderation/moderators`
+/// requires the bearer's user id to match `broadcaster_id` (i.e. only
+/// the broadcaster can list their own mods), so a logging-in mod cannot
+/// query their own status that way.
+///
+/// Pagination: `first=100` (Twitch's max) without follow-up — at that
+/// many moderated channels the user is almost certainly already an
+/// admin somewhere; deny on overflow is acceptable for this use case.
+pub async fn user_moderates_channel(
+    http: &reqwest::Client,
+    helix_base: &str,
+    client_id: &str,
+    user_access_token: &str,
+    user_id: &str,
+    broadcaster_id: &str,
+    context: &'static str,
+) -> Result<bool> {
+    #[derive(Deserialize)]
+    struct Channel {
+        broadcaster_id: String,
+    }
+    #[derive(Deserialize)]
+    struct Resp {
+        data: Vec<Channel>,
+    }
+    let mut url = url::Url::parse(&format!("{helix_base}/helix/moderation/channels"))?;
+    url.query_pairs_mut()
+        .append_pair("user_id", user_id)
+        .append_pair("first", "100");
+    let resp: Resp = http
+        .get(url)
+        .bearer_auth(user_access_token)
+        .header("Client-Id", client_id)
+        .send()
+        .await?
+        .error_for_status()
+        .wrap_err(context)?
+        .json()
+        .await?;
+    Ok(resp.data.iter().any(|c| c.broadcaster_id == broadcaster_id))
 }
