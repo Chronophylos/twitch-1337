@@ -9,19 +9,19 @@
   --accent-fade: oklch(var(--accent-l) var(--accent-c) var(--accent-h) / 0.06);
   --accent-ink: oklch(0.18 0.02 var(--accent-h));
 
-  --bg-0: oklch(0.155 0.005 270);
-  --bg-1: oklch(0.185 0.006 270);
-  --bg-2: oklch(0.215 0.007 270);
-  --bg-3: oklch(0.255 0.008 270);
+  --bg-0: oklch(0.155 0 0);
+  --bg-1: oklch(0.185 0 0);
+  --bg-2: oklch(0.215 0 0);
+  --bg-3: oklch(0.255 0 0);
 
   --line:        oklch(1 0 0 / 0.06);
   --line-2:      oklch(1 0 0 / 0.10);
   --line-strong: oklch(1 0 0 / 0.18);
 
-  --fg:   oklch(0.96 0.005 270);
-  --fg-2: oklch(0.78 0.01 270);
-  --fg-3: oklch(0.62 0.01 270);
-  --fg-4: oklch(0.48 0.01 270);
+  --fg:   oklch(0.96 0 0);
+  --fg-2: oklch(0.78 0 0);
+  --fg-3: oklch(0.62 0 0);
+  --fg-4: oklch(0.48 0 0);
 
   --warn:   oklch(0.78 0.13 75);
   --danger: oklch(0.7 0.16 25);
@@ -102,7 +102,7 @@ kbd {
 .sidebar {
   border-right: 1px solid var(--line);
   display: flex; flex-direction: column;
-  background: linear-gradient(180deg, oklch(0.165 0.006 270), oklch(0.155 0.005 270));
+  background: linear-gradient(180deg, oklch(0.165 0 0), oklch(0.155 0 0));
   min-height: 0;
 }
 .brand {
@@ -196,7 +196,7 @@ kbd {
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 28px;
   border-bottom: 1px solid var(--line);
-  background: oklch(0.165 0.006 270 / 0.7);
+  background: oklch(0.165 0 0 / 0.7);
   backdrop-filter: blur(8px);
   position: relative;
   z-index: 2;
@@ -452,7 +452,7 @@ kbd {
   color: var(--fg-4);
 }
 .th-right { text-align: right; }
-.tbody { background: oklch(0.175 0.005 270); }
+.tbody { background: oklch(0.175 0 0); }
 .tr {
   padding: 0 18px;
   min-height: var(--row-h);
@@ -602,7 +602,7 @@ kbd {
 .editor textarea {
   width: 100%;
   min-height: 480px;
-  background: oklch(0.165 0.005 270);
+  background: oklch(0.165 0 0);
   border: 0; outline: 0;
   font-family: var(--mono);
   font-size: 13.5px;
@@ -798,7 +798,7 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   margin: 0 0 8px;
 }
 .conflict-pre {
-  background: oklch(0.165 0.005 270);
+  background: oklch(0.165 0 0);
   border: 1px solid var(--line);
   border-radius: var(--r);
   padding: 14px 16px;
