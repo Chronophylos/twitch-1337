@@ -20,14 +20,26 @@
       <span class="mono" title="mtime {{ mtime }}">{{ mtime_display }}</span>
     </div>
     {% if show_user_fm %}
-    <input type="text" class="editor-input" name="fm_username" value="{{ fm_username }}" placeholder="username (Twitch login) — leave empty to preserve" autocomplete="off" spellcheck="false">
-    <input type="text" class="editor-input" name="fm_display_name" value="{{ fm_display_name }}" placeholder="display_name — leave empty to preserve" autocomplete="off" spellcheck="false">
+    <label class="editor-field">
+      <span class="field-label">username</span>
+      <input type="text" class="editor-input" name="fm_username" value="{{ fm_username }}" placeholder="Twitch login — leave empty to preserve" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="editor-field">
+      <span class="field-label">display name</span>
+      <input type="text" class="editor-input" name="fm_display_name" value="{{ fm_display_name }}" placeholder="leave empty to preserve" autocomplete="off" spellcheck="false">
+    </label>
     {% endif %}
     {% if show_state_fm %}
-    <input type="text" class="editor-input" name="fm_created_by" value="{{ fm_created_by }}" placeholder="created_by (Twitch user id) — leave empty to preserve" autocomplete="off" spellcheck="false">
+    <label class="editor-field">
+      <span class="field-label">created by</span>
+      <input type="text" class="editor-input" name="fm_created_by" value="{{ fm_created_by }}" placeholder="Twitch user id — leave empty to preserve" autocomplete="off" spellcheck="false">
+    </label>
     {% endif %}
     {% if title == "new state note" %}
-    <input type="text" class="editor-input" name="slug" placeholder="slug (1-64 chars: a-z, 0-9, ._-)" required autocomplete="off" spellcheck="false">
+    <label class="editor-field">
+      <span class="field-label">slug</span>
+      <input type="text" class="editor-input" name="slug" placeholder="1-64 chars: a-z, 0-9, ._-" required autocomplete="off" spellcheck="false">
+    </label>
     {% endif %}
     <textarea name="body" rows="22" spellcheck="false">{{ body }}</textarea>
     <div class="editor-foot">
