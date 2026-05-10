@@ -16,9 +16,10 @@
 
 use async_trait::async_trait;
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::Redirect;
 use axum::routing::get;
+use serde::Deserialize;
 use tower_cookies::Cookies;
 
 use crate::auth::routes::issue_session_cookies;
@@ -34,13 +35,30 @@ pub fn router(state: WebState) -> Router {
         .with_state(state)
 }
 
-async fn login(State(state): State<WebState>, cookies: Cookies) -> Redirect {
+#[derive(Deserialize)]
+pub struct DevLoginQuery {
+    /// Same-origin path to land on after the session is minted. Anything
+    /// not starting with `/` (or starting with `//`) falls back to
+    /// `/pings` so the route can't be coerced into open-redirecting.
+    next: Option<String>,
+}
+
+async fn login(
+    State(state): State<WebState>,
+    cookies: Cookies,
+    Query(q): Query<DevLoginQuery>,
+) -> Redirect {
     let (sid, csrf_bytes) = state
         .sessions
         .insert(DEV_USER_ID.to_owned(), DEV_USER_LOGIN.to_owned())
         .expect("insert dev session");
     issue_session_cookies(&cookies, &state.signed_key, sid, &csrf_bytes, false);
-    Redirect::to("/pings")
+    let target = q
+        .next
+        .as_deref()
+        .filter(|p| p.starts_with('/') && !p.starts_with("//"))
+        .unwrap_or("/pings");
+    Redirect::to(target)
 }
 
 /// Zero-network [`HelixClient`] for the `web-dev` bin.
