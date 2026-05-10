@@ -189,9 +189,7 @@ async fn callback(
         .exchange_code(AuthorizationCode::new(params.code))
         .request_async(&http_call)
         .await
-        .map_err(|e| {
-            WebError::OAuthExchange(eyre::Report::new(e).wrap_err("token exchange"))
-        })?;
+        .map_err(|e| WebError::OAuthExchange(eyre::Report::new(e).wrap_err("token exchange")))?;
 
     let user_token = token.access_token().secret().to_owned();
     let me = fetch_caller_user(&state, &user_token)
