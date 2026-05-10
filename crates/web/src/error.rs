@@ -44,6 +44,10 @@ pub struct ConflictPayload {
     pub id: String,
     pub current_body: String,
     pub current_mtime: u64,
+    /// Human-rendered `current_mtime` for the conflict header. Hidden form
+    /// input still carries the raw `current_mtime` u64 so resubmits round-trip
+    /// byte-identical millis through the optimistic-concurrency guard.
+    pub current_mtime_display: String,
     pub draft: String,
     /// Hex-encoded csrf token to embed in the conflict resubmit form.
     /// The conflict template renders a fresh save form so the user can
@@ -70,6 +74,7 @@ struct ConflictTpl<'a> {
     id: &'a str,
     current_body: &'a str,
     current_mtime: u64,
+    current_mtime_display: &'a str,
     draft: &'a str,
     csrf: &'a str,
     user_login: &'a str,
@@ -131,6 +136,7 @@ impl IntoResponse for WebError {
                     id: &payload.id,
                     current_body: &payload.current_body,
                     current_mtime: payload.current_mtime,
+                    current_mtime_display: &payload.current_mtime_display,
                     draft: &payload.draft,
                     csrf: &payload.csrf,
                     user_login: &payload.user_login,

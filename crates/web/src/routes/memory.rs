@@ -65,6 +65,10 @@ struct EditorTpl<'a> {
     body: &'a str,
     csrf: &'a str,
     mtime: u64,
+    /// Human-rendered `mtime` for the meta strip. Hidden form input still
+    /// emits the raw `mtime` so the conflict guard sees byte-identical
+    /// millis on round-trip.
+    mtime_display: String,
     byte_cap: usize,
     /// Pre-computed `body.len() * 100 / byte_cap`, clamped to 100.
     /// Lives here (not the template) because Askama can't divide a
@@ -128,6 +132,19 @@ struct UsersListTpl {
 
 fn fmt_ts(t: DateTime<Utc>) -> String {
     t.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
+/// Render a `MemoryStore::current_mtime` value (millis since epoch) as a
+/// human date. The raw u64 is still threaded into the hidden form input
+/// so the optimistic-concurrency guard keeps working byte-for-byte.
+fn fmt_mtime_ms(ms: u64) -> String {
+    if ms == 0 {
+        return "new".to_owned();
+    }
+    let signed = i64::try_from(ms).unwrap_or(i64::MAX);
+    DateTime::<Utc>::from_timestamp_millis(signed)
+        .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| "—".to_owned())
 }
 
 /// `(used * 100 / cap).min(100)` as a `u8`. Clamps to 100 on `cap == 0`.
@@ -231,6 +248,7 @@ async fn view_kind(
         body: &mf.body,
         csrf: &csrf_hex,
         mtime,
+        mtime_display: fmt_mtime_ms(mtime),
         byte_cap,
         pct,
         save_url: &save_url,
@@ -513,6 +531,7 @@ async fn save_kind(
                 kind: label,
                 id,
                 current_body,
+                current_mtime_display: fmt_mtime_ms(current_mtime),
                 current_mtime,
                 draft: form.body,
                 csrf: csrf_hex,
@@ -547,6 +566,7 @@ async fn save_kind(
                     body: &form.body,
                     csrf: &csrf_hex,
                     mtime: form.mtime,
+                    mtime_display: fmt_mtime_ms(form.mtime),
                     byte_cap: cap,
                     pct: pct_of(form.body.len(), cap),
                     save_url: &redirect_to,
@@ -763,6 +783,7 @@ fn render_state_create(
             body,
             csrf: csrf_hex,
             mtime: 0,
+            mtime_display: fmt_mtime_ms(0),
             byte_cap: cap,
             pct: pct_of(body.len(), cap),
             save_url: "/memory/state",
