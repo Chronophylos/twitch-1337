@@ -44,9 +44,6 @@ pub struct ConflictPayload {
     pub id: String,
     pub current_body: String,
     pub current_mtime: u64,
-    /// Human-rendered `current_mtime` for the conflict header. Hidden form
-    /// input still carries the raw `current_mtime` u64 so resubmits round-trip
-    /// byte-identical millis through the optimistic-concurrency guard.
     pub current_mtime_display: String,
     pub draft: String,
     /// Hex-encoded csrf token to embed in the conflict resubmit form.

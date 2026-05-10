@@ -605,7 +605,12 @@ kbd {
   align-items: stretch;
   border-bottom: 1px solid var(--line);
 }
-.editor-field .field-label {
+.editor-field-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--fg-4);
   display: flex;
   align-items: center;
   padding: 0 16px;
