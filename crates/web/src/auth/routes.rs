@@ -101,7 +101,7 @@ async fn oauth_http_call(
     let resp = builder.send().await?;
     let status = resp.status();
     let headers = resp.headers().clone();
-    let bytes = resp.bytes().await?.to_vec();
+    let bytes = normalize_twitch_scope(resp.bytes().await?.to_vec());
 
     let mut http_resp = http::Response::builder().status(status.as_u16());
     for (name, value) in headers.iter() {
@@ -110,6 +110,50 @@ async fn oauth_http_call(
     http_resp
         .body(bytes)
         .map_err(|e| OAuthHttpError::Header(e.to_string()))
+}
+
+/// Twitch returns `scope` as a JSON array (`["a","b"]`), but RFC 6749 — and
+/// therefore oauth2 v5's `StandardTokenResponse` deserializer — expects a
+/// space-separated string. Rewrite arrays to strings so token parsing
+/// succeeds. No-op on non-JSON, non-object, or already-string shapes.
+fn normalize_twitch_scope(body: Vec<u8>) -> Vec<u8> {
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return body;
+    };
+    let Some(obj) = value.as_object_mut() else {
+        return body;
+    };
+    let Some(arr) = obj.get("scope").and_then(serde_json::Value::as_array) else {
+        return body;
+    };
+    let joined = arr
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>()
+        .join(" ");
+    obj.insert("scope".to_owned(), serde_json::Value::String(joined));
+    serde_json::to_vec(&value).unwrap_or(body)
+}
+
+/// Replace values of known credential-bearing JSON fields with `<redacted>`
+/// so error logs that include a response body never leak access/refresh
+/// tokens. No-op on non-JSON or non-object bodies.
+fn redact_token_body(body: &[u8]) -> String {
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return String::from_utf8_lossy(body).into_owned();
+    };
+    let Some(obj) = value.as_object_mut() else {
+        return String::from_utf8_lossy(body).into_owned();
+    };
+    for key in ["access_token", "refresh_token", "id_token"] {
+        if obj.contains_key(key) {
+            obj.insert(
+                key.to_owned(),
+                serde_json::Value::String("<redacted>".into()),
+            );
+        }
+    }
+    value.to_string()
 }
 
 pub fn auth_router() -> Router<WebState> {
@@ -196,12 +240,13 @@ async fn callback(
         .await
         .map_err(|e| {
             // Twitch returns non-RFC-6749 error bodies that fail Parse; surface
-            // the raw body so logs show the upstream message.
+            // the (token-redacted) raw body so logs show the upstream message
+            // without leaking access/refresh tokens on success-shaped bodies.
             let msg = match &e {
                 oauth2::RequestTokenError::Parse(_, body) => {
                     format!(
                         "token exchange (response body: {})",
-                        String::from_utf8_lossy(body)
+                        redact_token_body(body)
                     )
                 }
                 _ => "token exchange".into(),
@@ -386,4 +431,57 @@ pub async fn require_mod(
 
     req.extensions_mut().insert(session);
     Ok(next.run(req).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_twitch_scope_rewrites_array_to_space_string() {
+        let body = br#"{"access_token":"x","scope":["a","b"],"token_type":"bearer"}"#.to_vec();
+        let out = normalize_twitch_scope(body);
+        let parsed: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(parsed["scope"], serde_json::Value::String("a b".into()));
+    }
+
+    #[test]
+    fn normalize_twitch_scope_passes_through_string_scope() {
+        let body = br#"{"access_token":"x","scope":"a b","token_type":"bearer"}"#.to_vec();
+        let out = normalize_twitch_scope(body.clone());
+        // Re-parse rather than byte-compare; serialization order is not guaranteed.
+        let parsed: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(parsed["scope"], serde_json::Value::String("a b".into()));
+    }
+
+    #[test]
+    fn normalize_twitch_scope_passes_through_non_json() {
+        let body = b"not json".to_vec();
+        assert_eq!(normalize_twitch_scope(body.clone()), body);
+    }
+
+    #[test]
+    fn redact_token_body_replaces_known_credential_fields() {
+        let body = br#"{"access_token":"secret","refresh_token":"rsecret","scope":["a"]}"#;
+        let out = redact_token_body(body);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["access_token"], "<redacted>");
+        assert_eq!(parsed["refresh_token"], "<redacted>");
+        assert_eq!(parsed["scope"], serde_json::json!(["a"]));
+    }
+
+    #[test]
+    fn redact_token_body_passes_through_error_body() {
+        let body = br#"{"status":400,"message":"missing client id"}"#;
+        let out = redact_token_body(body);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["status"], 400);
+        assert_eq!(parsed["message"], "missing client id");
+    }
+
+    #[test]
+    fn redact_token_body_passes_through_non_json() {
+        let body = b"plain text";
+        assert_eq!(redact_token_body(body), "plain text");
+    }
 }
