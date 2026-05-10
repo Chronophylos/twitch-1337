@@ -18,7 +18,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 fn main() {
     let manifest = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    for name in ["app.css", "app.js", "htmx.min.js"] {
+    for name in ["app.css", "app.js", "htmx.min.js", "favicon.svg"] {
         let path = Path::new(&manifest).join("assets").join(name);
         let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         let key = name.replace(['.', '-'], "_").to_uppercase();
