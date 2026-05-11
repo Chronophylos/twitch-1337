@@ -7,12 +7,12 @@ use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
 
-/// `HH:MM:SS.mmm` (UTC). The default `SystemTime` formatter emits the
-/// full RFC3339 timestamp on every line (~30 chars including date + tz
-/// + microseconds), which is overkill for a single-process bot whose
-/// logs always belong to today. The short form preserves millisecond
-/// precision — enough to order events within a handler — while leaving
-/// room for the actual message content.
+/// `HH:MM:SS.mmm` (UTC). The default `SystemTime` formatter emits the full
+/// RFC3339 timestamp on every line (~30 chars including date + tz +
+/// microseconds), which is overkill for a single-process bot whose logs
+/// always belong to today. The short form preserves millisecond precision —
+/// enough to order events within a handler — while leaving room for the
+/// actual message content.
 struct ShortTimer;
 
 impl FormatTime for ShortTimer {
