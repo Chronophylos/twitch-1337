@@ -49,15 +49,18 @@ pub async fn bind(addr: SocketAddr) -> Result<TcpListener> {
 }
 
 pub async fn run_web(listener: TcpListener, deps: WebDeps, shutdown: Arc<Notify>) -> Result<()> {
-    let local_addr = listener.local_addr().ok();
+    let url = listener
+        .local_addr()
+        .map(|a| format!("http://{a}/"))
+        .unwrap_or_else(|_| "<unknown>".to_owned());
     let app = build_router(deps.state);
     info!(
         target: "twitch_1337_web",
-        ?local_addr,
         version = routes::health::PKG_VERSION,
         sha = routes::health::GIT_SHA,
-        "Web dashboard listening",
+        "Build info",
     );
+    info!(target: "twitch_1337_web", %url, "Web dashboard listening");
     axum::serve(listener, app)
         .with_graceful_shutdown(async move { shutdown.notified().await })
         .await
