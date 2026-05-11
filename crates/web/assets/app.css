@@ -21,6 +21,12 @@
 
 /* ====================== Tokens ====================== */
 :root {
+  /* Tells the UA (and well-behaved injectors like Dark Reader) that this
+     page is already a dark theme — pairs with the `darkreader-lock` meta
+     in base.html so the extension stops re-tinting our own oklch palette
+     to its preset blue. */
+  color-scheme: dark;
+
   /* Accent: violet (curated alternate from design handoff) */
   --accent-h: 295;
   --accent-c: 0.18;
