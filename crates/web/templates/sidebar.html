@@ -26,9 +26,8 @@
     </div>
 
     <div class="nav-group">
-      <div class="nav-group-label">Memory</div>
+      <a class="nav-group-label nav-group-link{% if current_page == "memory" %} active{% endif %}" href="/memory">Memory</a>
       <ul class="nav-list">
-        {% call nav_item("memory", "/memory", "Tree") %}{% endcall %}
         {% call nav_item("memory_soul", "/memory/soul", "SOUL") %}{% endcall %}
         {% call nav_item("memory_lore", "/memory/lore", "LORE") %}{% endcall %}
         {% call nav_item("memory_users", "/memory/users", "Users") %}{% endcall %}

@@ -19,8 +19,10 @@
       <header class="topbar">
         <nav class="crumbs" aria-label="Breadcrumb">
           <span class="crumb-root">~</span>
+          {% for seg in current_page.split('_') %}
           <span class="crumb-sep">/</span>
-          <span class="crumb-current">{% block crumb %}{{ current_page.replace('_', "/") }}{% endblock %}</span>
+          <span class="crumb-current">{{ seg }}</span>
+          {% endfor %}
         </nav>
         <div class="topbar-right">
           <label class="search">
