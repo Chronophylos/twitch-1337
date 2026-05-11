@@ -1,0 +1,179 @@
+# Twitch 1337 Bot Configuration
+# Copy this file to config.toml and fill in your credentials
+
+[twitch]
+# Twitch channel to monitor (without the # prefix)
+channel = "your_channel"
+
+# Bot's Twitch username
+username = "your_bot_username"
+
+# OAuth refresh token (used to get new access tokens automatically)
+refresh_token = "your_refresh_token_here"
+
+# Twitch application client ID
+client_id = "your_client_id"
+
+# Twitch application client secret
+client_secret = "your_client_secret"
+
+# Initial seed for IRC latency estimate in milliseconds (optional, default: 100)
+# The bot measures actual latency via PING/PONG every 5 minutes and auto-adjusts.
+# expected_latency = 89
+
+# Twitch user IDs of hidden admins (can manage pings without being a mod)
+# hidden_admins = ["12345678"]
+
+# Optional: A separate channel for testing bot commands (broadcaster-only access)
+# admin_channel = "my_test_channel"
+
+# Optional: A dedicated channel where only `!ai` is reachable. Useful for
+# moving AI command spam off the primary channel. Must differ from both
+# `channel` and `admin_channel`.
+# ai_channel = "my_bot_account"
+
+# Optional: Pings configuration
+# [pings]
+# cooldown = 300  # Cooldown in seconds between triggers (default: 300)
+# public = false  # Allow anyone to trigger pings (default: false, members-only)
+
+# Optional: Command cooldowns in seconds
+# [cooldowns]
+# ai = 30        # !ai command (default: 30)
+# news = 60      # !news command (default: 60)
+# up = 30        # !up command (default: 30)
+# feedback = 300 # !fb command (default: 300)
+
+# Optional: Aviationstack metadata enrichment for !track.
+# The bot uses this at most once per newly tracked flight to fetch route,
+# actual departure time, and to accept known flights before live ADS-B has data.
+# After that, availability checks use the ADS-B pending-flight cadence; live
+# tracking uses the ADS-B aggregator fallback chain.
+# Free Aviationstack accounts have a small monthly request quota, so keep this
+# disabled unless you have configured an API key.
+# [aviationstack]
+# enabled = false
+# api_key = "your_aviationstack_api_key_here"
+# base_url = "https://api.aviationstack.com/v1"
+# timeout_secs = 5
+
+# Optional: Suspend configuration
+# Controls the default suspend duration applied when no explicit duration is given.
+# Must be between 1 second and 604800 seconds (7 days).
+# [suspend]
+# default_duration_secs = 600  # Default suspend duration in seconds (default: 600 = 10 min)
+
+# Optional: AI configuration for the !ai command
+# If not configured, the !ai command will be disabled.
+#
+# Backend "openai" works with any OpenAI-compatible API (OpenRouter, OpenAI, etc.)
+# Backend "ollama" uses Ollama's native API
+#
+# [ai]
+# backend = "openai"                                  # or "ollama"
+# api_key = "sk-or-your_api_key"                      # Required for openai backend
+# base_url = "https://openrouter.ai/api/v1"           # Optional: OpenRouter default for openai; localhost for ollama
+# model = "google/gemini-2.0-flash-exp:free"          # or "gemma3:4b" for ollama
+# timeout = 30                                        # Optional, AI request timeout in seconds (default: 30)
+# reasoning_effort = "medium"                         # Optional reasoning hint for !ai. Keep provider/model-specific values as-is.
+# history_length = 200                                # Optional, local chat messages available via get_recent_chat (0 = disabled, max 5000)
+# ai_channel_history_length = 50                     # Optional, rolling buffer for twitch.ai_channel messages (max 5000, no rustlog prefill)
+# max_turn_rounds = 4                                 # Max tool-call rounds per !ai turn (1..=20, default: 4)
+# max_writes_per_turn = 8                             # Max memory writes the model may make per turn (1..=64, default: 8)
+#
+# Optional: 7TV emote grounding for !ai
+# The glossary that maps emote names to meanings is baked into the binary;
+# enable the feature here, no glossary file is read at runtime.
+# [ai.emotes]
+# enabled = true
+# include_global = true
+# refresh_interval_secs = 3600
+# max_prompt_emotes = 12      # Hard cap on emotes injected per turn (1..=200)
+# min_baseline_emotes = 4     # Floor when scoring picks nothing; filled in glossary order (must be <= max_prompt_emotes)
+#
+# Optional: expose web tools to !ai (`web_search` + `read_url`) via SearXNG.
+# The model can search current events and fetch article text at runtime.
+# [ai.web]
+# enabled = false
+# base_url = "https://searxng.example/search"  # SearXNG /search endpoint, queried with format=json
+# timeout = 15                                  # Per outbound web HTTP call timeout in seconds
+# max_results = 5                               # Default cap for web_search (1..=10)
+# max_rounds = 3                                # Max web tool-call rounds per !ai request (1..=6)
+# cache_ttl_secs = 300                          # In-memory TTL cache for search/fetch results
+# cache_capacity = 100                          # Max cache entries before oldest eviction
+
+#
+# Optional: Prefill chat history from a log API at startup
+# Requires history_length > 0 to have any effect
+# [ai.history_prefill]
+# base_url = "https://logs.zonian.dev"  # Rustlog-compatible API (default)
+# threshold = 0.5                        # Fetch yesterday too if today < 50% of history_length (default: 0.5)
+
+# ────────────────────────────────────────────────────────────────────────────
+# AI memory — long-term Markdown file store managed by the LLM.
+# Always enabled when [ai] is configured.
+#
+# On first v2 startup any legacy ai_memory.ron is renamed to
+# ai_memory.ron.discarded-<timestamp> so it is not accidentally loaded.
+#
+# Files are split into named scopes:
+#   soul/   — AI personality anchors (max soul_bytes, bot-readable only)
+#   lore/   — Channel/community facts (max lore_bytes, mods+broadcaster can write)
+#   users/  — Per-user fact files (max user_bytes each)
+#   state/  — Ephemeral session state snapshots (max state_bytes, max_state_files files)
+#
+# inject_byte_budget controls how many bytes of memory context are injected
+# into each system prompt. Must be >= soul_bytes + lore_bytes.
+# ────────────────────────────────────────────────────────────────────────────
+# [ai.memory]
+# soul_bytes         = 4096    # Max bytes for the soul/ scope injected per turn
+# lore_bytes         = 12288   # Max bytes for the lore/ scope injected per turn
+# user_bytes         = 4096    # Max bytes per user file
+# state_bytes        = 2048    # Max bytes per state snapshot file
+# inject_byte_budget = 24576   # Total byte cap for memory injected into system prompt (>= soul+lore)
+# max_state_files    = 16      # Max number of state snapshot files kept on disk
+
+# Dreamer: nightly pass that rewrites and consolidates memory files.
+# Quality matters more than speed — use the strongest model you can afford.
+# Falls back to [ai].model / [ai].reasoning_effort when omitted.
+# [ai.dreamer]
+# enabled          = true
+# model            = "gpt-4o"      # fallback → [ai].model
+# reasoning_effort = "high"        # fallback → [ai].reasoning_effort
+# run_at           = "04:00"       # HH:MM in Europe/Berlin
+# timeout_secs     = 120
+# max_rounds       = 20            # Max tool-call rounds per ritual (1..=200, default: 20).
+                                  # Independent from ai.max_turn_rounds since the ritual
+                                  # touches every memory file plus the day's transcript.
+
+# Optional: Scheduled messages configuration
+# Add [[schedules]] sections to define scheduled messages.
+# The bot watches config.toml for changes and reloads schedules automatically.
+#
+# Example schedule (uncomment to use):
+#
+# [[schedules]]
+# name = "hydration"
+# message = "Stay hydrated! DinkDonk"
+# interval = "00:30"  # Post every 30 minutes (hh:mm format)
+# enabled = true
+#
+# [[schedules]]
+# name = "stream-reminder"
+# message = "Don't forget to follow!"
+# interval = "01:00"  # Post every hour
+# # Optional: Only post during specific dates
+# start_date = "2026-01-01T00:00:00"  # ISO 8601 format
+# end_date = "2026-12-31T23:59:59"
+# # Optional: Only post during specific daily time window (Europe/Berlin)
+# active_time_start = "18:00"  # HH:MM format
+# active_time_end = "23:00"
+# enabled = true
+
+# [web]                            # uncomment to enable the dashboard
+# enabled = true
+# bind_addr = "0.0.0.0:8080"
+# public_url = "https://bot.example.com"
+# session_secret = "<32+ bytes of hex>"
+# session_ttl = "7d"
+# mod_check_refresh = "5m"

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="darkreader-lock">
+  <title>{% block title %}twitch-1337{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v={{ env!("ASSET_V_FAVICON_SVG") }}">
+  <link rel="stylesheet" href="/assets/app.css?v={{ env!("ASSET_V_APP_CSS") }}">
+  <script src="/assets/htmx.min.js?v={{ env!("ASSET_V_HTMX_MIN_JS") }}" defer></script>
+  <script src="/assets/app.js?v={{ env!("ASSET_V_APP_JS") }}" defer></script>
+</head>
+<body>
+  {% block layout %}
+  <div class="shell">
+    {% include "sidebar.html" %}
+    <div class="main">
+      <header class="topbar">
+        <nav class="crumbs" aria-label="Breadcrumb">
+          <span class="crumb-root">~</span>
+          {% for seg in current_page.split('_') %}
+          <span class="crumb-sep">/</span>
+          <span class="crumb-current">{{ seg }}</span>
+          {% endfor %}
+        </nav>
+        <div class="topbar-right">
+          <label class="search">
+            <span class="search-icon" aria-hidden="true">⌕</span>
+            <input id="page-search" type="search" placeholder="Search" autocomplete="off" spellcheck="false">
+            <kbd>/</kbd>
+          </label>
+          <div id="berlin-timer" class="timer-chip" data-armed="false">
+            <span class="timer-pulse" aria-hidden="true"></span>
+            <span class="timer-label">T-MINUS</span>
+            <span class="timer-clock">--:--:--</span>
+            <span class="timer-tz">CET</span>
+          </div>
+          <button type="button" class="cmdk" aria-label="Command palette" disabled>
+            <kbd>⌘</kbd><kbd>K</kbd>
+          </button>
+        </div>
+      </header>
+      <div class="scroll">
+        <div class="page">
+          {% block content %}{% endblock %}
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endblock %}
+</body>
+</html>

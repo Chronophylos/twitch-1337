@@ -31,6 +31,8 @@ just build | just push | just restart | just deploy
 `main` is branch-protected (admin enforced). Direct pushes rejected — use a PR.
 Linear history required, force-push + delete blocked, conversations must resolve.
 
+**Branch naming:** `feature/` features, `spec/` specs, `fix/` bug fixes, `refactor/` refactors, `build/` CI / dependencies / Docker. Slug after slash, kebab-case.
+
 **Required status checks (7, must all pass to merge):**
 
 | Check | Workflow | Purpose |
@@ -84,11 +86,13 @@ Others pinned to major tags; Dependabot keeps them current.
 
 Schedules hot-reload on save (2s debounce via notify-debouncer-mini). No restart.
 
+`twitch.ai_channel` (optional): bot also joins this channel; only `!ai` is reachable there. Every other command, the 1337 tracker, and chat-history recording skip messages from it. AI memory and chat history remain global / primary-only.
+
 OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config structs are `Deserialize`-only; do NOT add `Serialize` derive (closes credential-leak via debug dump).
 
 ## Data dir
 
-All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `pings.ron`, `ai_memory.ron`, `leaderboard.ron`, `flights.ron`, `feedback.txt`.
+All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `pings.ron`, `leaderboard.ron`, `flights.ron`, `feedback.txt`. Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/state/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt overrides: `prompts/system.md`, `prompts/ai_instructions.md`, `prompts/dreamer.md`.
 
 Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `flight_tracker.rs`.
 
@@ -106,7 +110,7 @@ Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `fli
 - Aviation client init failure: log + disable `!up`/`!fl`/flight tracker + track commands. Don't abort.
 - Latency monitor: PING/PONG every 5min, EMA alpha=0.2, shared `Arc<AtomicU32>`. Read by 1337 handler for precise wake-up.
 - Flight tracker: `Arc<mpsc::Sender<TrackerCommand>>` from commands to long task. Adaptive poll 30/60/120s based on phase mix. adsb.lol v2; fallback aggregators in memory `reference_adsb_aggregators.md`.
-- AI memory: LLM manages via `save_memory`/`delete_memory` tool calls. Fire-and-forget extraction after each response. Cap `max_memories` (default 50, max 200).
+- AI memory (v2): per-user character sheets + chat LORE + bot SOUL as markdown under $DATA_DIR/memories/. Single-loop !ai turn drives the model with write_file/write_state/delete_state tools (run_agent in the llm crate); the model's final assistant text is sent to chat verbatim. Daily dreamer ritual rewrites files from yesterday's transcript at [ai.dreamer].run_at (Berlin local). Memory bodies are byte-capped (SOUL/user 4 KiB, LORE 12 KiB, state 2 KiB).
 - Scheduled messages: on Ctrl+C, main notifies `Arc<Notify>`; children finish in-flight `say()` then exit; main awaits handler with 5s timeout.
 
 ## Gotchas
@@ -118,10 +122,10 @@ Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `fli
 
 ## Adding handler
 
-Handlers live in `src/handlers/` and are spawned from `src/lib.rs::run_bot`. Each handler is generic over `<T: Transport, L: LoginCredentials>` so integration tests can swap in a fake transport. Shared deps (clock, data_dir, llm, aviation) come from `Services` in `src/lib.rs`.
+Handlers live in `src/twitch/handlers/` and are spawned from `src/lib.rs::run_bot`. Each handler is generic over `<T: Transport, L: LoginCredentials>` so integration tests can swap in a fake transport. Shared deps (clock, data_dir, llm, aviation) come from `Services` in `src/lib.rs`.
 
 ```rust
-// src/handlers/my_handler.rs
+// src/twitch/handlers/my_handler.rs
 pub async fn run_my_handler<T, L>(
     broadcast_tx: broadcast::Sender<ServerMessage>,
     client: Arc<TwitchIRCClient<T, L>>,
@@ -135,11 +139,11 @@ Integration-testable via `TestBotBuilder` in `tests/common/`.
 
 ## Key constants
 
-`src/handlers/tracker_1337.rs`: `TARGET_HOUR=13`, `TARGET_MINUTE=37`, `MAX_USERS=10_000`.
+`src/twitch/handlers/tracker_1337.rs`: `TARGET_HOUR=13`, `TARGET_MINUTE=37`, `MAX_USERS=10_000`.
 
-`src/handlers/latency.rs`: `LATENCY_PING_INTERVAL=300s`, `LATENCY_EMA_ALPHA=0.2`.
+`src/twitch/handlers/latency.rs`: `LATENCY_PING_INTERVAL=300s`, `LATENCY_EMA_ALPHA=0.2`.
 
-`src/flight_tracker.rs`: `MAX_TRACKED_FLIGHTS=12`, `MAX_FLIGHTS_PER_USER=3`, `TRACKING_LOST_THRESHOLD=300s`, `TRACKING_LOST_REMOVAL=1800s`, `POLL_FAST/NORMAL/SLOW=30/60/120s`.
+`src/aviation/tracker.rs`: `MAX_TRACKED_FLIGHTS=12`, `MAX_FLIGHTS_PER_USER=3`, `TRACKING_LOST_THRESHOLD=300s`, `TRACKING_LOST_REMOVAL=1800s`, `POLL_FAST/NORMAL/SLOW=30/60/120s`.
 
 ## Binary / Docker
 

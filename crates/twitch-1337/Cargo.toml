@@ -1,0 +1,30 @@
+[package]
+name = "twitch-1337"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+color-eyre = { workspace = true }
+eyre = { workspace = true }
+reqwest = { workspace = true }
+secrecy = { workspace = true }
+tokio = { workspace = true }
+tower-cookies = { workspace = true }
+tracing = { workspace = true }
+twitch-1337-core = { path = "../core" }
+twitch-1337-web = { path = "../web" }
+twitch-irc = { git = "https://github.com/Chronophylos/twitch-irc-rs", branch = "ring-tls", default-features = false, features = [
+  "refreshing-token-rustls-webpki-roots",
+  "transport-tcp-rustls-webpki-roots",
+] }
+
+[features]
+# Enable the web crate's dev-login bypass (`/_dev/login`). Local dev only.
+dev-login = ["twitch-1337-web/dev-login"]
+
+[lints]
+workspace = true

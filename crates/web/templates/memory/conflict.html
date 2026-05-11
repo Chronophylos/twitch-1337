@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Conflict — twitch-1337{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Edit conflict — {{ kind }}{% if !id.is_empty() %} / {{ id }}{% endif %}</h1>
+    <p class="page-sub">File changed on disk while you were editing — likely the dreamer ritual or an AI tool wrote in between. Your draft is preserved on the right; the hidden mtime token has been refreshed so resubmitting will overwrite the current contents.</p>
+  </div>
+</div>
+
+<div class="error">File changed since you opened it. Copy what you need from the left into the textarea on the right and resubmit.</div>
+
+<div class="conflict-grid">
+  <div>
+    <h3 title="mtime {{ current_mtime }}">Current on-disk ({{ current_mtime_display }})</h3>
+    <pre class="conflict-pre">{{ current_body }}</pre>
+  </div>
+  <form method="post" action="">
+    <h3>Your draft (resubmit)</h3>
+    <input type="hidden" name="_csrf" value="{{ csrf }}">
+    <input type="hidden" name="mtime" value="{{ current_mtime }}">
+    <textarea class="input" name="body" rows="24" spellcheck="false">{{ draft }}</textarea>
+    <div class="form-actions">
+      <button type="submit" class="btn primary">Save (overwrite current)</button>
+      <a href="{{ cancel_url }}" class="btn ghost">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

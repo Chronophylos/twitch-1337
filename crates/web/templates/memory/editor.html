@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — twitch-1337{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a href="{{ cancel_url }}" class="link muted" style="display:inline-block;margin-bottom:6px;">← Back</a>
+    <h1>{{ title }}</h1>
+    <p class="page-sub">{{ subtitle }}</p>
+  </div>
+</div>
+
+{% if let Some(e) = error %}<div class="error">{{ e }}</div>{% endif %}
+
+<form method="post" action="{{ save_url }}">
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+  <input type="hidden" name="mtime" value="{{ mtime }}">
+  <div class="editor">
+    <div class="editor-meta">
+      <span class="meta-tag mono">{{ meta_path }}</span>
+      <span class="meta-dot"></span>
+      <span class="mono" title="mtime {{ mtime }}">{{ mtime_display }}</span>
+    </div>
+    {% if show_user_fm %}
+    <label class="editor-field">
+      <span class="editor-field-label">username</span>
+      <input type="text" class="editor-input" name="fm_username" value="{{ fm_username }}" placeholder="Twitch login — leave empty to preserve" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="editor-field">
+      <span class="editor-field-label">display name</span>
+      <input type="text" class="editor-input" name="fm_display_name" value="{{ fm_display_name }}" placeholder="leave empty to preserve" autocomplete="off" spellcheck="false">
+    </label>
+    {% endif %}
+    {% if show_state_fm %}
+    <label class="editor-field">
+      <span class="editor-field-label">created by</span>
+      <input type="text" class="editor-input" name="fm_created_by" value="{{ fm_created_by }}" placeholder="Twitch user id — leave empty to preserve" autocomplete="off" spellcheck="false">
+    </label>
+    {% endif %}
+    {% if title == "new state note" %}
+    <label class="editor-field">
+      <span class="editor-field-label">slug</span>
+      <input type="text" class="editor-input" name="slug" placeholder="1-64 chars: a-z, 0-9, ._-" required autocomplete="off" spellcheck="false">
+    </label>
+    {% endif %}
+    <textarea name="body" rows="22" spellcheck="false">{{ body }}</textarea>
+    <div class="editor-foot">
+      <div class="bytes">
+        <span>{{ body.len() }} / {{ byte_cap }} B</span>
+        <div class="bytes-bar"><span style="width: {{ pct }}%"></span></div>
+      </div>
+      <span class="kbd-hint"><kbd>⌘</kbd><kbd>S</kbd> to save</span>
+    </div>
+  </div>
+  <div class="editor-actions">
+    <button type="submit" class="btn primary">Save</button>
+    <a href="{{ cancel_url }}" class="btn ghost">Cancel</a>
+  </div>
+</form>
+{% if let Some(url) = delete_url %}
+<form method="post" action="{{ url }}" class="editor-actions" onsubmit="return confirm('Delete?')">
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+  <button type="submit" class="btn danger">Delete</button>
+</form>
+{% endif %}
+{% endblock %}

@@ -13,11 +13,12 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           token: ${{ secrets.DATA_REFRESH_PAT }}
+          persist-credentials: false
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Regenerate airlines.csv
         run: bash scripts/generate_airlines_csv.sh
@@ -32,12 +33,12 @@ jobs:
         id: counts
         run: |
           {
-            echo "airlines=$(wc -l < data/airlines.csv)"
-            echo "airports=$(wc -l < data/airports.csv)"
-            echo "plz=$(wc -l < data/plz.csv)"
+            echo "airlines=$(wc -l < crates/core/data/airlines.csv)"
+            echo "airports=$(wc -l < crates/core/data/airports.csv)"
+            echo "plz=$(wc -l < crates/core/data/plz.csv)"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: peter-evans/create-pull-request@v8
+      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
         with:
           token: ${{ secrets.DATA_REFRESH_PAT }}
           branch: chore/data-refresh
@@ -47,9 +48,9 @@ jobs:
             Automated weekly refresh of public-dataset CSVs.
 
             **Row counts**
-            - `data/airlines.csv`: ${{ steps.counts.outputs.airlines }} rows
-            - `data/airports.csv`: ${{ steps.counts.outputs.airports }} rows
-            - `data/plz.csv`: ${{ steps.counts.outputs.plz }} rows
+            - `crates/core/data/airlines.csv`: ${{ steps.counts.outputs.airlines }} rows
+            - `crates/core/data/airports.csv`: ${{ steps.counts.outputs.airports }} rows
+            - `crates/core/data/plz.csv`: ${{ steps.counts.outputs.plz }} rows
 
             Merge if the diff looks reasonable. If CI fails, a parser likely
             needs to be adjusted for an upstream schema change.

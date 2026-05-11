@@ -85,6 +85,8 @@ Per-flight state:
 | `last_seen` | `Option<DateTime<Utc>>` | Last successful poll with data |
 | `last_phase_change` | `Option<DateTime<Utc>>` | When phase last changed |
 | `polls_since_change` | `u32` | Polls since last phase change (for adaptive timing) |
+| `scheduled_departure_at` | `Option<DateTime<Utc>>` | Scheduled departure from one-time Aviationstack metadata |
+| `last_adsb_poll_at` | `Option<DateTime<Utc>>` | Last ADS-B lookup attempt, including empty/error responses |
 
 ### FlightTrackerState
 
@@ -186,13 +188,30 @@ Messages degrade gracefully — if route or aircraft type is unknown, those part
 
 ## Adaptive Polling
 
-The handler uses the shortest needed interval across all tracked flights:
+The handler computes per-flight due times and sleeps until the next due poll.
+Live flights keep phase-based intervals:
 
 | Condition | Interval |
 |-----------|----------|
-| Any flight has `polls_since_change < 5` OR phase is Takeoff/Approach/Landing | **30s** |
-| Any flight is in Climb or Descent | **60s** |
-| All flights are in Cruise or Ground | **120s** |
+| Flight has `polls_since_change < 5` OR phase is Takeoff/Approach/Landing | **30s** |
+| Flight is in Climb or Descent | **60s** |
+| Flight is in Cruise or Ground | **120s** |
+
+Flights accepted from metadata before ADS-B visibility are pending (`last_seen == None`) and use a lower-call schedule:
+
+| Pending condition | Interval |
+|-------------------|----------|
+| Scheduled departure > 6h away | **30m** |
+| Scheduled departure 6h..90m away | **15m** |
+| 90m before to 45m after scheduled departure | **2m** |
+| 45m..3h after scheduled departure | **5m** |
+| 3h..12h after scheduled departure | **15m** |
+| No scheduled departure, tracked < 10m ago | **2m** |
+| No scheduled departure, tracked 10m..6h ago | **10m** |
+| No scheduled departure, tracked 6h..24h ago | **30m** |
+
+Pending flights expire without another ADS-B call after 12h past scheduled
+departure, or after 24h when no scheduled departure is known.
 
 ## Persistence
 

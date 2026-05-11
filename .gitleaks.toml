@@ -1,0 +1,11 @@
+[allowlist]
+description = "Vendor doc examples using literal REDACTED placeholder"
+commits = []
+paths = []
+regexTarget = "match"
+regexes = []
+stopwords = []
+fingerprints = [
+  "327bad673a71fdda6ba696eaedb8a5fb0e375093:vendor/twitch-irc/src/lib.rs:generic-api-key:120",
+  "327bad673a71fdda6ba696eaedb8a5fb0e375093:vendor/twitch-irc/src/lib.rs:generic-api-key:168",
+]
