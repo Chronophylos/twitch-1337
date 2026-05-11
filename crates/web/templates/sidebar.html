@@ -11,7 +11,7 @@
     <div class="brand-mark"><span class="brand-glyph">⌬</span></div>
     <div class="brand-text">
       <span class="brand-name">twitch-1337</span>
-      <span class="brand-meta">v{{ env!("CARGO_PKG_VERSION") }} · main</span>
+      <span class="brand-meta" title="commit {{ env!("GIT_SHA_SHORT") }}">v{{ env!("CARGO_PKG_VERSION") }} · {{ env!("GIT_SHA_SHORT") }}</span>
     </div>
   </div>
 
