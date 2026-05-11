@@ -34,9 +34,9 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 
 **Memory model**. Files round-trip as opaque bodies after the YAML frontmatter — the store doesn't enforce any internal structure. The system prompt is the only place that teaches the model what to put in `SOUL.md`, `LORE.md`, `user/<id>.md`, and `state/<slug>.md`. Suggest informal section conventions in prose; don't expect them to be policed.
 
-**Replies**. The model's final assistant text (returned when it makes no more tool calls) is sent to chat verbatim. Newlines collapse into a single chat line. There is no `say` tool — encourage the model to do memory updates first, then end the turn with the reply text.
+**Replies**. The model's final assistant text (returned when it makes no more tool calls) is sent as one chat line. Newlines collapse into spaces. If the reply is over the chat limit, the app asks the model for a shorter rewrite once and only truncates if that fallback is still too long. There is no `say` tool — encourage the model to do memory updates first, then end the turn with the reply text.
 
-**Length nudge**. The final reply is truncated app-side at `MAX_RESPONSE_LENGTH` chars. Asking for "≤3 sentences" in the prompt keeps lines tidy.
+**Length nudge**. The final reply is capped app-side at `MAX_RESPONSE_LENGTH` chars. Asking for "≤3 sentences" in the prompt keeps lines tidy, and overlong replies get a rewrite pass before the truncation fallback.
 
 **Refusal**. The bot refuses by returning empty final text — nothing is sent to chat. Encourage the model to stay silent on harassment, off-topic, or low-signal prompts rather than producing a defensive reply.
 

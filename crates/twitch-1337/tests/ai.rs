@@ -27,6 +27,32 @@ async fn ai_command_returns_fake_response() {
 
 #[tokio::test]
 #[serial]
+async fn ai_command_rewrites_long_response_before_sending() {
+    let bot = TestBotBuilder::new().with_ai().spawn().await;
+    let long = "das ist viel zu lang ".repeat(40);
+    bot.llm.push_tool_message(long);
+    bot.llm.push_chat("kurz und passend");
+
+    let mut bot = bot;
+    bot.send("alice", "!ai ping").await;
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
+    assert_eq!(body, "kurz und passend");
+    bot.expect_silent(Duration::from_millis(200)).await;
+
+    let tool_calls = bot.llm.tool_calls();
+    assert_eq!(tool_calls.len(), 1, "expected original agent call only");
+    let chat_calls = bot.llm.chat_calls();
+    assert_eq!(chat_calls.len(), 1, "expected one rewrite call");
+    assert!(
+        chat_calls[0].messages[1].content.contains("<= 500"),
+        "rewrite prompt should carry the chat limit"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
 async fn ai_command_empty_shows_usage() {
     let mut bot = TestBotBuilder::new().with_ai().spawn().await;
 
