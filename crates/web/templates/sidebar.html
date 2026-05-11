@@ -28,6 +28,7 @@
     <div class="nav-group">
       <div class="nav-group-label">Memory</div>
       <ul class="nav-list">
+        {% call nav_item("memory", "/memory", "Tree") %}{% endcall %}
         {% call nav_item("memory_soul", "/memory/soul", "SOUL") %}{% endcall %}
         {% call nav_item("memory_lore", "/memory/lore", "LORE") %}{% endcall %}
         {% call nav_item("memory_users", "/memory/users", "Users") %}{% endcall %}

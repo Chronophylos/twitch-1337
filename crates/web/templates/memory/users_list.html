@@ -15,7 +15,7 @@
   {% for u in items %}
   <div class="user-card" data-filter="{{ u.user_id }} {{ u.display_name }} {{ u.note }}">
     <div class="user-card-head">
-      <span class="avatar" style="width:36px;height:36px;font-size:13px;background:oklch(0.55 0.10 220);">{{ u.initial }}</span>
+      <span class="avatar" style="width:36px;height:36px;font-size:13px;background:oklch(0.55 0.10 var(--accent-h));">{{ u.initial }}</span>
       <div>
         <div class="user-name">{{ u.display_name }}</div>
         <div class="user-id">id {{ u.user_id }}</div>

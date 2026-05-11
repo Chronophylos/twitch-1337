@@ -18,7 +18,7 @@
         <nav class="crumbs" aria-label="Breadcrumb">
           <span class="crumb-root">~</span>
           <span class="crumb-sep">/</span>
-          <span class="crumb-current">{% block crumb %}{{ current_page }}{% endblock %}</span>
+          <span class="crumb-current">{% block crumb %}{{ current_page.replace('_', "/") }}{% endblock %}</span>
         </nav>
         <div class="topbar-right">
           <label class="search">

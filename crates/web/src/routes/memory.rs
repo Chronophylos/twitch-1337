@@ -72,6 +72,7 @@ struct EditorTpl<'a> {
     /// `usize` into a percentage cleanly.
     pct: u8,
     save_url: &'a str,
+    cancel_url: &'a str,
     delete_url: Option<&'a str>,
     error: Option<String>,
     user_login: &'a str,
@@ -167,6 +168,25 @@ fn subtitle_for_kind(kind: &FileKind) -> &'static str {
     }
 }
 
+/// Section list URL — the page Cancel/Back should return to. SOUL/LORE
+/// have no list page so they fall back to the tree.
+fn list_url_for(kind: &FileKind) -> &'static str {
+    match kind {
+        FileKind::Soul | FileKind::Lore => "/memory",
+        FileKind::User { .. } => "/memory/users",
+        FileKind::State { .. } => "/memory/state",
+    }
+}
+
+fn nav_slug_for(kind: &FileKind) -> &'static str {
+    match kind {
+        FileKind::Soul => crate::nav::MEMORY_SOUL,
+        FileKind::Lore => crate::nav::MEMORY_LORE,
+        FileKind::User { .. } => crate::nav::MEMORY_USERS,
+        FileKind::State { .. } => crate::nav::MEMORY_STATE,
+    }
+}
+
 /// First non-empty line, stripped of a leading `# `, truncated to 140 chars.
 /// Char-aware so we never slice mid-codepoint.
 fn note_excerpt(body: &str) -> String {
@@ -218,7 +238,6 @@ async fn tree(
     })
 }
 
-#[allow(clippy::too_many_arguments)] // distinct view-shape inputs; bundling adds noise
 async fn view_kind(
     state: &WebState,
     session: &Session,
@@ -226,9 +245,10 @@ async fn view_kind(
     title: String,
     save_url: String,
     delete_url: Option<String>,
-    current_page: &'static str,
     preloaded: Option<MemoryFile>,
 ) -> Result<Response, WebError> {
+    let cancel_url = list_url_for(&kind);
+    let current_page = nav_slug_for(&kind);
     let store = &state.memory_store;
     let mf = match preloaded {
         Some(mf) => mf,
@@ -255,6 +275,7 @@ async fn view_kind(
         byte_cap,
         pct,
         save_url: &save_url,
+        cancel_url,
         delete_url: delete_url.as_deref(),
         error: None,
         user_login: &session.user_login,
@@ -278,7 +299,6 @@ async fn view_soul(
         "SOUL".to_owned(),
         "/memory/soul".to_owned(),
         None,
-        crate::nav::MEMORY_SOUL,
         None,
     )
     .await
@@ -295,7 +315,6 @@ async fn view_lore(
         "LORE".to_owned(),
         "/memory/lore".to_owned(),
         None,
-        crate::nav::MEMORY_LORE,
         None,
     )
     .await
@@ -369,17 +388,7 @@ async fn view_user(
         .unwrap_or(&user_id)
         .to_owned();
     let save_url = format!("/memory/users/{user_id}");
-    view_kind(
-        &state,
-        &session,
-        kind,
-        title,
-        save_url,
-        None,
-        crate::nav::MEMORY_USERS,
-        Some(mf),
-    )
-    .await
+    view_kind(&state, &session, kind, title, save_url, None, Some(mf)).await
 }
 
 async fn list_state(
@@ -452,7 +461,6 @@ async fn view_state(
         title,
         save_url,
         Some(delete_url),
-        crate::nav::MEMORY_STATE,
         None,
     )
     .await
@@ -506,12 +514,8 @@ async fn save_kind(
     if !csrf::verify(&form.csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    let current_page: &'static str = match &kind {
-        FileKind::Soul => crate::nav::MEMORY_SOUL,
-        FileKind::Lore => crate::nav::MEMORY_LORE,
-        FileKind::User { .. } => crate::nav::MEMORY_USERS,
-        FileKind::State { .. } => crate::nav::MEMORY_STATE,
-    };
+    let current_page = nav_slug_for(&kind);
+    let cancel_url = list_url_for(&kind);
     let fm_override = FrontmatterOverride {
         username: Some(form.fm_username.clone()),
         display_name: Some(form.fm_display_name.clone()),
@@ -557,6 +561,7 @@ async fn save_kind(
                 csrf: csrf_hex,
                 user_login: session.user_login.clone(),
                 current_page,
+                cancel_url,
             })))
         }
         Err(err) => {
@@ -590,6 +595,7 @@ async fn save_kind(
                     byte_cap: cap,
                     pct: pct_of(form.body.len(), cap),
                     save_url: &redirect_to,
+                    cancel_url,
                     delete_url: delete_url.as_deref(),
                     error: Some(msg),
                     user_login: &session.user_login,
@@ -807,6 +813,7 @@ fn render_state_create(
             byte_cap: cap,
             pct: pct_of(body.len(), cap),
             save_url: "/memory/state",
+            cancel_url: "/memory/state",
             delete_url: None,
             error,
             user_login,
