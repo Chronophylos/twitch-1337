@@ -13,6 +13,7 @@ pub mod database;
 pub mod doener;
 pub mod llm_factory;
 pub mod ping;
+pub mod settings;
 pub mod suspend;
 pub mod twitch;
 pub mod util;
