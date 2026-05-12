@@ -345,7 +345,7 @@ kbd {
   /* Center align reads slightly too high vs the title cap-height;
      baseline reads too low because of paren descenders. Nudge down
      a hair from center to land between them. */
-  transform: translateY(0.14em);
+  transform: translateY(0.12em);
 }
 .page-sub {
   color: var(--fg-3);
