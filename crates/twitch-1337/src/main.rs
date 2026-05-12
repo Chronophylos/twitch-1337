@@ -178,6 +178,8 @@ pub async fn main() -> Result<()> {
 /// the helix client + OAuth context, binds the listener loud (port-in-use
 /// aborts startup), and returns a closure that — given the shared
 /// shutdown `Notify` — spawns `run_web` on a tokio task.
+// Top-level DI compositor for the web spawner; argument count tracks the
+// dashboard's dependency surface and is intentionally explicit.
 #[allow(clippy::too_many_arguments)]
 async fn build_web_spawner(
     config: &twitch_1337::config::Configuration,
