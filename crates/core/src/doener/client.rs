@@ -49,6 +49,24 @@ impl DoenerClient {
             .await
             .wrap_err("doener stats: parse JSON")
     }
+
+    pub async fn search_cities(&self, q: &str) -> Result<Vec<CityHit>> {
+        let url = format!("{}/api/cities.php", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("q", q)])
+            .send()
+            .await
+            .wrap_err("doener cities: request failed")?
+            .error_for_status()
+            .wrap_err("doener cities: non-2xx")?;
+        let body = resp
+            .json::<CitiesResponse>()
+            .await
+            .wrap_err("doener cities: parse JSON")?;
+        Ok(body.cities)
+    }
 }
 
 #[cfg(test)]
@@ -105,5 +123,59 @@ mod tests {
 
         let client = test_client(&server);
         assert!(client.stats().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn search_cities_returns_hits_in_upstream_order() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/cities.php"))
+            .and(wiremock::matchers::query_param("q", "Han"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                br#"{"ok":true,"query":"Han","count":3,"cities":[
+                    {"city":"Hannover","zip":"30459","location_count":51,"min_price":"6.00","max_price":"6.00","avg_price":"6.00"},
+                    {"city":"Hanau","zip":"63456","location_count":3,"min_price":"6.00","max_price":"6.00","avg_price":"6.00"},
+                    {"city":"Handewitt","zip":"24983","location_count":1,"min_price":null,"max_price":null,"avg_price":null}
+                ]}"#.as_slice(),
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server);
+        let hits = client.search_cities("Han").await.expect("cities ok");
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].city, "Hannover");
+        assert_eq!(hits[2].avg_price, None);
+    }
+
+    #[tokio::test]
+    async fn search_cities_empty_array_is_ok_empty() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/cities.php"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                br#"{"ok":true,"query":"zzz","count":0,"cities":[]}"#.as_slice(),
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server);
+        let hits = client.search_cities("zzz").await.expect("ok");
+        assert!(hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_cities_returns_err_on_500() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/cities.php"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server);
+        assert!(client.search_cities("x").await.is_err());
     }
 }
