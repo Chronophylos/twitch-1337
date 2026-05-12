@@ -6,6 +6,7 @@ use crate::error::WebError;
 
 pub mod assets;
 pub mod health;
+pub mod leaderboard;
 pub mod memory;
 pub mod pings;
 pub mod stubs;
