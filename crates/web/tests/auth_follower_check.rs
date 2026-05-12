@@ -14,7 +14,9 @@ async fn run_check(total: u64) -> GateOutcome {
         .and(path("/helix/channels/followed"))
         .and(query_param("user_id", "42"))
         .and(query_param("broadcaster_id", "100"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "total": total, "data": [] })))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({ "total": total, "data": [] })),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -61,8 +63,8 @@ async fn follower_total_zero_denies() {
 #[tokio::test]
 async fn check_is_follower_with_token_is_callable() {
     install_crypto();
-    use std::sync::Arc;
     use helpers::FakeHelix;
+    use std::sync::Arc;
 
     let helix: Arc<dyn twitch_1337_web::helix::HelixClient> = Arc::new(FakeHelix {
         moderators: vec![],
@@ -71,7 +73,6 @@ async fn check_is_follower_with_token_is_callable() {
     });
     let state = build_state(helix).await;
     // Will fail to connect (test-invalid host); we assert it's an Err, not a panic.
-    let result =
-        check_is_follower_with_token(&state, "42", "user-token", "100").await;
+    let result = check_is_follower_with_token(&state, "42", "user-token", "100").await;
     assert!(result.is_err(), "expected network error, got {:?}", result);
 }

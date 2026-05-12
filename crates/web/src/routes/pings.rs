@@ -84,6 +84,7 @@ struct FormTpl<'a> {
     error: Option<String>,
     user_login: &'a str,
     current_page: &'static str,
+    is_mod: bool,
     /// Sorted lowercase logins. Empty on the create form.
     members: Vec<String>,
     /// Inline error from a recent add/remove attempt, rendered above the
@@ -160,6 +161,7 @@ async fn new_form(Extension(session): Extension<Session>) -> Result<Response, We
         error: None,
         user_login: &session.user_login,
         current_page: crate::nav::PINGS,
+        is_mod: session.role == crate::auth::role::Role::Mod,
         members: Vec::new(),
         member_error: None,
     })
@@ -205,6 +207,7 @@ async fn create(
                 error: Some(format!("ping `{name}` already exists")),
                 user_login: &session.user_login,
                 current_page: crate::nav::PINGS,
+                is_mod: session.role == crate::auth::role::Role::Mod,
                 members: Vec::new(),
                 member_error: None,
             },
@@ -234,6 +237,7 @@ async fn create(
                 error: Some(e.to_string()),
                 user_login: &session.user_login,
                 current_page: crate::nav::PINGS,
+                is_mod: session.role == crate::auth::role::Role::Mod,
                 members: Vec::new(),
                 member_error: None,
             },
@@ -274,6 +278,7 @@ async fn edit_form(
         error: None,
         user_login: &session.user_login,
         current_page: crate::nav::PINGS,
+        is_mod: session.role == crate::auth::role::Role::Mod,
         members,
         member_error: None,
     })
@@ -322,6 +327,7 @@ async fn update(
                 error: Some(e.to_string()),
                 user_login: &session.user_login,
                 current_page: crate::nav::PINGS,
+                is_mod: session.role == crate::auth::role::Role::Mod,
                 members,
                 member_error: None,
             },
@@ -417,6 +423,7 @@ async fn add_member(
                     error: None,
                     user_login: &session.user_login,
                     current_page: crate::nav::PINGS,
+                    is_mod: session.role == crate::auth::role::Role::Mod,
                     members,
                     member_error: Some(msg),
                 },

@@ -17,11 +17,7 @@ pub enum GateOutcome {
 
 /// Hidden_admins / broadcaster shortcuts shared by both check variants. Returns
 /// `Some(Allow)` iff a shortcut applies; `None` means the helix lookup runs.
-fn shortcut(
-    user_id: &str,
-    broadcaster_id: &str,
-    hidden_admins: &[String],
-) -> Option<GateOutcome> {
+fn shortcut(user_id: &str, broadcaster_id: &str, hidden_admins: &[String]) -> Option<GateOutcome> {
     if hidden_admins.iter().any(|s| s == user_id) || user_id == broadcaster_id {
         Some(GateOutcome::Allow)
     } else {

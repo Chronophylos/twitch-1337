@@ -25,6 +25,7 @@ struct ListTpl {
     user_login: String,
     csrf: String,
     current_page: &'static str,
+    is_mod: bool,
 }
 
 pub fn router() -> Router<WebState> {
@@ -58,11 +59,13 @@ async fn list(
         None => (Vec::new(), true),
     };
     let csrf = csrf::encode(&session.csrf_value);
+    let is_mod = session.role == crate::auth::role::Role::Mod;
     render(&ListTpl {
         flights,
         aviation_disabled,
         user_login: session.user_login,
         csrf,
         current_page: nav::FLIGHTS,
+        is_mod,
     })
 }

@@ -19,6 +19,7 @@ struct ListTpl {
     user_login: String,
     csrf: String,
     current_page: &'static str,
+    is_mod: bool,
 }
 
 struct RowView {
@@ -58,10 +59,12 @@ async fn list(
         .collect();
 
     let csrf = csrf::encode(&session.csrf_value);
+    let is_mod = session.role == crate::auth::role::Role::Mod;
     render(&ListTpl {
         rows,
         user_login: session.user_login,
         csrf,
         current_page: crate::nav::LEADERBOARD,
+        is_mod,
     })
 }
