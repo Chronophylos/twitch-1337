@@ -198,6 +198,21 @@ mod resolve_tests {
     }
 
     #[test]
+    fn pings_cooldown_override_leaves_public_at_default() {
+        let defaults = Settings::compiled_defaults();
+        let overrides = SettingsOverrides {
+            pings: PingsOverrides {
+                cooldown: Some(600),
+                ..Default::default()
+            },
+            ..SettingsOverrides::default()
+        };
+        let resolved = Settings::resolve(&defaults, &overrides);
+        assert_eq!(resolved.pings.cooldown, 600);
+        assert_eq!(resolved.pings.public, defaults.pings.public);
+    }
+
+    #[test]
     fn validate_collects_multiple_errors() {
         let mut s = Settings::compiled_defaults();
         s.cooldowns.ai = 0;
