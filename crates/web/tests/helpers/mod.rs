@@ -211,6 +211,7 @@ pub fn insert_session_as(
             user_login: user_login.to_owned(),
             role,
             avatar_url: None,
+            is_broadcaster: false,
         })
         .expect("insert session");
     let bare_csrf = hex::encode(csrf);

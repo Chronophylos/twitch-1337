@@ -72,6 +72,7 @@ struct ListTpl {
     user_avatar_url: Option<String>,
     current_page: &'static str,
     is_mod: bool,
+    is_broadcaster: bool,
 }
 
 #[derive(Template)]
@@ -86,6 +87,7 @@ struct FormTpl<'a> {
     user_avatar_url: Option<&'a str>,
     current_page: &'static str,
     is_mod: bool,
+    is_broadcaster: bool,
     /// Sorted lowercase logins. Empty on the create form.
     members: Vec<String>,
     /// Inline error from a recent add/remove attempt, rendered above the
@@ -144,6 +146,7 @@ async fn list(
         user_avatar_url: session.avatar_url.clone(),
         current_page: crate::nav::PINGS,
         is_mod,
+        is_broadcaster: session.is_broadcaster,
     };
     render(&tpl)
 }
@@ -160,6 +163,7 @@ async fn new_form(Extension(session): Extension<Session>) -> Result<Response, We
         user_avatar_url: session.avatar_url.as_deref(),
         current_page: crate::nav::PINGS,
         is_mod: session.is_mod(),
+        is_broadcaster: session.is_broadcaster,
         members: Vec::new(),
         member_error: None,
     })
@@ -207,6 +211,7 @@ async fn create(
                 user_avatar_url: session.avatar_url.as_deref(),
                 current_page: crate::nav::PINGS,
                 is_mod: session.is_mod(),
+                is_broadcaster: session.is_broadcaster,
                 members: Vec::new(),
                 member_error: None,
             },
@@ -238,6 +243,7 @@ async fn create(
                 user_avatar_url: session.avatar_url.as_deref(),
                 current_page: crate::nav::PINGS,
                 is_mod: session.is_mod(),
+                is_broadcaster: session.is_broadcaster,
                 members: Vec::new(),
                 member_error: None,
             },
@@ -280,6 +286,7 @@ async fn edit_form(
         user_avatar_url: session.avatar_url.as_deref(),
         current_page: crate::nav::PINGS,
         is_mod: session.is_mod(),
+        is_broadcaster: session.is_broadcaster,
         members,
         member_error: None,
     })
@@ -330,6 +337,7 @@ async fn update(
                 user_avatar_url: session.avatar_url.as_deref(),
                 current_page: crate::nav::PINGS,
                 is_mod: session.is_mod(),
+                is_broadcaster: session.is_broadcaster,
                 members,
                 member_error: None,
             },
@@ -427,6 +435,7 @@ async fn add_member(
                     user_avatar_url: session.avatar_url.as_deref(),
                     current_page: crate::nav::PINGS,
                     is_mod: session.is_mod(),
+                    is_broadcaster: session.is_broadcaster,
                     members,
                     member_error: Some(msg),
                 },

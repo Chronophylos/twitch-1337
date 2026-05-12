@@ -61,6 +61,7 @@ struct TreeTpl {
     user_avatar_url: Option<String>,
     current_page: &'static str,
     is_mod: bool,
+    is_broadcaster: bool,
 }
 
 #[derive(Template)]
@@ -86,6 +87,7 @@ struct EditorTpl<'a> {
     user_avatar_url: Option<&'a str>,
     current_page: &'static str,
     is_mod: bool,
+    is_broadcaster: bool,
     /// Render the user-only frontmatter inputs (`username`, `display_name`).
     show_user_fm: bool,
     /// Render the state-only frontmatter input (`created_by`).
@@ -118,6 +120,7 @@ struct StateListTpl {
     user_avatar_url: Option<String>,
     current_page: &'static str,
     is_mod: bool,
+    is_broadcaster: bool,
 }
 
 struct UserRow {
@@ -143,6 +146,7 @@ struct UsersListTpl {
     user_avatar_url: Option<String>,
     current_page: &'static str,
     is_mod: bool,
+    is_broadcaster: bool,
 }
 
 #[derive(Template)]
@@ -153,6 +157,7 @@ struct UsersNewTpl {
     user_avatar_url: Option<String>,
     current_page: &'static str,
     is_mod: bool,
+    is_broadcaster: bool,
 }
 
 /// Resolve avatar URLs for a slice of Twitch user ids. Cache hits skip
@@ -303,6 +308,7 @@ async fn tree(
         user_avatar_url: session.avatar_url.clone(),
         current_page: crate::nav::MEMORY_TREE,
         is_mod: session.is_mod(),
+        is_broadcaster: session.is_broadcaster,
     })
 }
 
@@ -350,6 +356,7 @@ async fn view_kind(
         user_avatar_url: session.avatar_url.as_deref(),
         current_page,
         is_mod: session.is_mod(),
+        is_broadcaster: session.is_broadcaster,
         show_user_fm: matches!(kind, FileKind::User { .. }),
         show_state_fm: matches!(kind, FileKind::State { .. }),
         fm_username: mf.frontmatter.username.as_deref().unwrap_or(""),
@@ -441,6 +448,7 @@ async fn list_users(
         user_avatar_url: session.avatar_url.clone(),
         current_page: crate::nav::MEMORY_USERS,
         is_mod: session.is_mod(),
+        is_broadcaster: session.is_broadcaster,
     })
 }
 
@@ -489,6 +497,7 @@ async fn new_user_form(Extension(session): Extension<Session>) -> Result<Respons
         user_avatar_url: session.avatar_url.clone(),
         current_page: crate::nav::MEMORY_USERS,
         is_mod: session.is_mod(),
+        is_broadcaster: session.is_broadcaster,
     })
 }
 
@@ -562,6 +571,7 @@ async fn list_state(
         user_avatar_url: session.avatar_url.clone(),
         current_page: crate::nav::MEMORY_STATE,
         is_mod: session.is_mod(),
+        is_broadcaster: session.is_broadcaster,
     })
 }
 
@@ -580,6 +590,7 @@ async fn new_state_form(
         &session.user_login,
         session.avatar_url.as_deref(),
         session.is_mod(),
+        session.is_broadcaster,
     )
 }
 
@@ -700,6 +711,7 @@ async fn save_kind(
                 user_login: session.user_login.clone(),
                 user_avatar_url: session.avatar_url.clone(),
                 is_mod: session.is_mod(),
+                is_broadcaster: session.is_broadcaster,
                 current_page,
                 cancel_url,
             })))
@@ -742,6 +754,7 @@ async fn save_kind(
                     user_avatar_url: session.avatar_url.as_deref(),
                     current_page,
                     is_mod: session.is_mod(),
+                    is_broadcaster: session.is_broadcaster,
                     show_user_fm: matches!(&kind, FileKind::User { .. }),
                     show_state_fm: matches!(&kind, FileKind::State { .. }),
                     fm_username: &form.fm_username,
@@ -884,6 +897,7 @@ async fn create_state(
             &session.user_login,
             session.avatar_url.as_deref(),
             session.is_mod(),
+            session.is_broadcaster,
         );
     }
     let slug = form.slug.clone();
@@ -933,6 +947,7 @@ async fn create_state(
                 &session.user_login,
                 session.avatar_url.as_deref(),
                 session.is_mod(),
+                session.is_broadcaster,
             )
         }
     }
@@ -948,6 +963,7 @@ fn render_state_create(
     user_login: &str,
     user_avatar_url: Option<&str>,
     is_mod: bool,
+    is_broadcaster: bool,
 ) -> Result<Response, WebError> {
     render_with(
         status,
@@ -969,6 +985,7 @@ fn render_state_create(
             user_avatar_url,
             current_page: crate::nav::MEMORY_STATE,
             is_mod,
+            is_broadcaster,
             show_user_fm: false,
             show_state_fm: false,
             fm_username: "",

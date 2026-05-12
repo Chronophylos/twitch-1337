@@ -353,6 +353,7 @@ async fn callback(
             user_login: me.login.clone(),
             role,
             avatar_url: me.profile_image_url.clone(),
+            is_broadcaster: me.id == *state.broadcaster_id,
         })
         .map_err(WebError::Internal)?;
     if let Some(url) = &me.profile_image_url {

@@ -112,5 +112,8 @@ async fn sidebar_hides_memory_and_system_for_viewer() {
     );
     assert!(!body.contains("/logs"), "logs hidden for viewer");
     assert!(!body.contains("/schedules"), "schedules hidden for viewer");
-    assert!(body.contains(">viewer<"), "footer shows viewer role");
+    assert!(
+        body.contains("class=\"me-role\"></span>"),
+        "viewer footer renders empty role chip"
+    );
 }

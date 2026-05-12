@@ -36,6 +36,7 @@ fn session_round_trips() {
             user_login: "alice".into(),
             role: Role::Mod,
             avatar_url: None,
+            is_broadcaster: false,
         })
         .expect("insert");
     let got = table.get_and_touch(&id).expect("present");
@@ -55,6 +56,7 @@ fn session_expires_after_ttl() {
             user_login: "alice".into(),
             role: Role::Mod,
             avatar_url: None,
+            is_broadcaster: false,
         })
         .unwrap();
     clock.advance(61);
@@ -76,6 +78,7 @@ fn session_sliding_refresh_keeps_alive() {
             user_login: "alice".into(),
             role: Role::Mod,
             avatar_url: None,
+            is_broadcaster: false,
         })
         .unwrap();
     clock.advance(60);

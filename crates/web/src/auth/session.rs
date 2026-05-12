@@ -26,6 +26,7 @@ pub struct NewSession {
     pub user_login: String,
     pub role: Role,
     pub avatar_url: Option<String>,
+    pub is_broadcaster: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -40,6 +41,10 @@ pub struct Session {
     /// Twitch helix `profile_image_url` captured at login. Static for the
     /// session lifetime; sidebar reads this without per-request helix calls.
     pub avatar_url: Option<String>,
+    /// True when `user_id` matches the configured broadcaster. Captured at
+    /// session creation so role badges and broadcaster-only UI bits don't
+    /// need to re-read app state.
+    pub is_broadcaster: bool,
 }
 
 impl Session {
@@ -85,6 +90,7 @@ impl SessionTable {
                 last_role_check: now,
                 csrf_value: csrf,
                 avatar_url: new.avatar_url,
+                is_broadcaster: new.is_broadcaster,
             },
         );
         Ok((id, csrf))

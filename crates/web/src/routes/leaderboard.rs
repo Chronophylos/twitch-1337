@@ -21,6 +21,7 @@ struct ListTpl {
     csrf: String,
     current_page: &'static str,
     is_mod: bool,
+    is_broadcaster: bool,
 }
 
 struct RowView {
@@ -68,5 +69,6 @@ async fn list(
         csrf,
         current_page: crate::nav::LEADERBOARD,
         is_mod,
+        is_broadcaster: session.is_broadcaster,
     })
 }

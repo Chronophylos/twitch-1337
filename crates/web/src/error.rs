@@ -58,6 +58,7 @@ pub struct ConflictPayload {
     /// Whether the session user holds a Mod role. Forwarded to the
     /// conflict template so the sidebar gates correctly.
     pub is_mod: bool,
+    pub is_broadcaster: bool,
     /// Sidebar highlight key matching the originating editor's section.
     pub current_page: &'static str,
     pub cancel_url: &'static str,
@@ -84,6 +85,7 @@ struct ConflictTpl<'a> {
     user_login: &'a str,
     user_avatar_url: Option<&'a str>,
     is_mod: bool,
+    is_broadcaster: bool,
     current_page: &'static str,
     cancel_url: &'static str,
 }
@@ -149,6 +151,7 @@ impl IntoResponse for WebError {
                     user_login: &payload.user_login,
                     user_avatar_url: payload.user_avatar_url.as_deref(),
                     is_mod: payload.is_mod,
+                    is_broadcaster: payload.is_broadcaster,
                     current_page: payload.current_page,
                     cancel_url: payload.cancel_url,
                 },

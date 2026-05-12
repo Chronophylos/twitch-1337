@@ -31,6 +31,7 @@ struct ListTpl {
     flash: Option<String>,
     current_page: &'static str,
     is_mod: bool,
+    is_broadcaster: bool,
 }
 
 pub fn viewer_router() -> Router<WebState> {
@@ -80,6 +81,7 @@ async fn list(
         flash: flash::take(&cookies),
         current_page: nav::FLIGHTS,
         is_mod,
+        is_broadcaster: session.is_broadcaster,
     })
 }
 

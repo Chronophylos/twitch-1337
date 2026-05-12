@@ -65,6 +65,7 @@ struct StubTpl<'a> {
     user_avatar_url: Option<&'a str>,
     current_page: &'static str,
     is_mod: bool,
+    is_broadcaster: bool,
 }
 
 async fn render_stub(
@@ -81,5 +82,6 @@ async fn render_stub(
         user_avatar_url: session.avatar_url.as_deref(),
         current_page: meta.nav,
         is_mod: session.is_mod(),
+        is_broadcaster: session.is_broadcaster,
     })
 }
