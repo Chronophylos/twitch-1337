@@ -32,6 +32,8 @@ pub enum WebError {
     /// 502 has a matching server-side trace.
     #[error("oauth exchange: {0}")]
     OAuthExchange(eyre::Report),
+    #[error("method not allowed")]
+    MethodNotAllowed,
     #[error("internal: {0}")]
     Internal(#[from] eyre::Report),
 }
@@ -151,6 +153,9 @@ impl IntoResponse for WebError {
                 );
                 // Almost always a stale/reused auth code (refresh, double-tab); offer retry instead of bare 502.
                 render(StatusCode::BAD_GATEWAY, &OAuthFailedTpl)
+            }
+            WebError::MethodNotAllowed => {
+                (StatusCode::METHOD_NOT_ALLOWED, "method not allowed").into_response()
             }
             WebError::Internal(err) => {
                 tracing::error!(

@@ -18,4 +18,4 @@ pub(crate) mod routes;
 // silently admit form-only POSTs by design, so exporting it would mislead
 // callers into thinking it provides blanket protection.
 pub use role::Role;
-pub use routes::{CSRF_COOKIE, OAuthCtx, SID_COOKIE, auth_router, require_mod};
+pub use routes::{CSRF_COOKIE, OAuthCtx, SID_COOKIE, auth_router, require_mod, viewer_method_guard};

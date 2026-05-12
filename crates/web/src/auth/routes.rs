@@ -424,6 +424,17 @@ async fn fetch_caller_user(
         .ok_or_else(|| eyre!("helix /users returned empty data array"))
 }
 
+pub async fn viewer_method_guard(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, WebError> {
+    use axum::http::Method;
+    match *req.method() {
+        Method::GET | Method::HEAD => Ok(next.run(req).await),
+        _ => Err(WebError::MethodNotAllowed),
+    }
+}
+
 pub async fn require_mod(
     State(state): State<WebState>,
     cookies: Cookies,
