@@ -10,6 +10,7 @@ pub mod commands;
 pub mod config;
 pub mod cooldown;
 pub mod database;
+pub mod doener;
 pub mod llm_factory;
 pub mod ping;
 pub mod suspend;
