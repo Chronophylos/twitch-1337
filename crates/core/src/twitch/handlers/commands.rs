@@ -272,8 +272,7 @@ where
     // so built-in commands earlier in the list take priority and can't be shadowed.
     cmd_list.push(Box::new(commands::ping_trigger::PingTriggerCommand::new(
         ping_manager,
-        Duration::from_secs(snapshot.pings.cooldown),
-        snapshot.pings.public,
+        settings.clone(),
     )));
 
     run_command_dispatcher(
