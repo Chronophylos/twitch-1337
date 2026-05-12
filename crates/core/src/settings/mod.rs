@@ -123,9 +123,95 @@ impl Settings {
         bound("pings.cooldown", self.pings.cooldown, 1, 86_400, &mut errs);
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
+
+    pub fn resolve(defaults: &Settings, overrides: &overrides::SettingsOverrides) -> Settings {
+        Settings {
+            schema_version: SCHEMA_VERSION,
+            cooldowns: Cooldowns {
+                ai: overrides.cooldowns.ai.unwrap_or(defaults.cooldowns.ai),
+                news: overrides.cooldowns.news.unwrap_or(defaults.cooldowns.news),
+                up: overrides.cooldowns.up.unwrap_or(defaults.cooldowns.up),
+                feedback: overrides
+                    .cooldowns
+                    .feedback
+                    .unwrap_or(defaults.cooldowns.feedback),
+                doener: overrides
+                    .cooldowns
+                    .doener
+                    .unwrap_or(defaults.cooldowns.doener),
+            },
+            pings: PingsSettings {
+                cooldown: overrides.pings.cooldown.unwrap_or(defaults.pings.cooldown),
+                public: overrides.pings.public.unwrap_or(defaults.pings.public),
+            },
+        }
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]
 pub fn test_handle() -> SettingsHandle {
     Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::overrides::{CooldownsOverrides, PingsOverrides, SettingsOverrides};
+    use super::*;
+
+    #[test]
+    fn empty_overrides_equal_defaults() {
+        let defaults = Settings::compiled_defaults();
+        let overrides = SettingsOverrides::default();
+        assert_eq!(Settings::resolve(&defaults, &overrides), defaults);
+    }
+
+    #[test]
+    fn cooldown_override_wins_per_field() {
+        let defaults = Settings::compiled_defaults();
+        let overrides = SettingsOverrides {
+            schema_version: SCHEMA_VERSION,
+            cooldowns: CooldownsOverrides {
+                ai: Some(15),
+                ..Default::default()
+            },
+            pings: PingsOverrides::default(),
+        };
+        let resolved = Settings::resolve(&defaults, &overrides);
+        assert_eq!(resolved.cooldowns.ai, 15);
+        assert_eq!(resolved.cooldowns.news, defaults.cooldowns.news);
+        assert_eq!(resolved.pings, defaults.pings);
+    }
+
+    #[test]
+    fn pings_public_override_flips_bool() {
+        let defaults = Settings::compiled_defaults();
+        let overrides = SettingsOverrides {
+            pings: PingsOverrides {
+                public: Some(true),
+                ..Default::default()
+            },
+            ..SettingsOverrides::default()
+        };
+        let resolved = Settings::resolve(&defaults, &overrides);
+        assert!(resolved.pings.public);
+        assert_eq!(resolved.pings.cooldown, defaults.pings.cooldown);
+    }
+
+    #[test]
+    fn validate_collects_multiple_errors() {
+        let mut s = Settings::compiled_defaults();
+        s.cooldowns.ai = 0;
+        s.pings.cooldown = 0;
+        let errs = s.validate().expect_err("both bounds violated");
+        let fields: Vec<&str> = errs.iter().map(|e| e.field.as_str()).collect();
+        assert!(fields.contains(&"cooldowns.ai"));
+        assert!(fields.contains(&"pings.cooldown"));
+    }
+
+    #[test]
+    fn validate_accepts_compiled_defaults() {
+        Settings::compiled_defaults()
+            .validate()
+            .expect("compiled defaults pass validate()");
+    }
 }
