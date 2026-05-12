@@ -121,9 +121,19 @@ pub fn build_router(state: WebState) -> Router {
         ))
         .with_state(mod_state);
 
+    let owner_state = state.clone();
+    let owner_only = Router::new()
+        .merge(routes::settings::owner_router())
+        .route_layer(axum::middleware::from_fn_with_state(
+            owner_state.clone(),
+            auth::require_owner,
+        ))
+        .with_state(owner_state);
+
     public
         .merge(viewer)
         .merge(mod_only)
+        .merge(owner_only)
         .layer(CookieManagerLayer::new())
         .layer(TraceLayer::new_for_http())
 }
