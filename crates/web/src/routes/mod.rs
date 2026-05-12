@@ -5,6 +5,7 @@ use axum::response::{Html, IntoResponse, Response};
 use crate::error::WebError;
 
 pub mod assets;
+pub mod flights;
 pub mod health;
 pub mod leaderboard;
 pub mod memory;
