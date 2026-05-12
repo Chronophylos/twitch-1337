@@ -75,6 +75,7 @@ pub struct Services {
     pub clock: Arc<dyn Clock>,
     pub llm: Option<Arc<dyn LlmClient>>,
     pub aviation: Option<AviationClient>,
+    pub doener: Arc<crate::doener::DoenerClient>,
     pub whisper: Option<Arc<dyn WhisperSender>>,
     pub data_dir: PathBuf,
     /// Optional override for the 7TV emote glossary TOML. Production leaves
@@ -130,6 +131,7 @@ where
         clock,
         llm,
         aviation,
+        doener,
         whisper,
         data_dir,
         emote_glossary_override,
@@ -138,6 +140,8 @@ where
         ping_manager,
         memory_store,
     } = services;
+
+    let _ = doener; // consumed in Task 10
 
     let schedules_enabled = !config.schedules.is_empty();
 

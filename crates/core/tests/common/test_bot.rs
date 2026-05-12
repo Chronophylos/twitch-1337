@@ -248,6 +248,10 @@ impl TestBotBuilder {
                 .is_some()
                 .then(|| llm.clone() as Arc<dyn LlmClient>),
             aviation: Some(aviation),
+            doener: Arc::new(twitch_1337::doener::DoenerClient::with_base_url(
+                reqwest::Client::new(),
+                "http://127.0.0.1:1".to_string(),
+            )),
             whisper: Some(whisper.clone() as Arc<dyn WhisperSender>),
             data_dir: data_dir.path().to_path_buf(),
             emote_glossary_override: self.emote_glossary_override,
