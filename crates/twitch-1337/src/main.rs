@@ -196,6 +196,24 @@ async fn build_web_spawner(
         .wrap_err("resolve broadcaster id")?
         .ok_or_else(|| eyre!("channel `{}` not found on twitch", config.twitch.channel))?;
 
+    // One-shot scope probe. The bot token needs `moderator:read:followers` for
+    // the viewer-tier sliding follower recheck. Call /channels/followers with
+    // (broadcaster_id, broadcaster_id) — a benign self-probe that returns 200
+    // with `total=0` when scoped correctly, and 401/403 when the scope is
+    // missing. Log a warn so a deployer sees the failure before viewers do.
+    match helix.as_ref().is_follower(&broadcaster.id, &broadcaster.id).await {
+        Ok(_) => tracing::info!(
+            target: "twitch_1337",
+            "helix /channels/followers reachable with current bot scopes",
+        ),
+        Err(e) => tracing::warn!(
+            target: "twitch_1337",
+            error = ?e,
+            "helix /channels/followers probe failed — viewer-tier sliding rechecks \
+             will degrade. Reissue the bot token with `moderator:read:followers`.",
+        ),
+    }
+
     let oauth = Arc::new(twitch_1337_web::auth::OAuthCtx::new(
         config.twitch.client_id.expose_secret(),
         &config.twitch.client_secret,
