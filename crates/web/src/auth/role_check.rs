@@ -84,3 +84,29 @@ async fn is_moderator_with_user_token(
     )
     .await
 }
+
+/// Variant used during the OAuth callback to check follower status using the
+/// viewer's own user token. Calls `GET /helix/channels/followed` (scope
+/// `user:read:follows`) and returns `Allow` iff `total > 0`.
+pub async fn check_is_follower_with_token(
+    state: &WebState,
+    user_id: &str,
+    user_access_token: &str,
+    broadcaster_id: &str,
+) -> eyre::Result<GateOutcome> {
+    if crate::helix::user_follows_channel(
+        &state.oauth.http,
+        "https://api.twitch.tv",
+        state.client_id.expose_secret(),
+        user_access_token,
+        user_id,
+        broadcaster_id,
+        "helix channels/followed (user token)",
+    )
+    .await?
+    {
+        Ok(GateOutcome::Allow)
+    } else {
+        Ok(GateOutcome::Deny)
+    }
+}

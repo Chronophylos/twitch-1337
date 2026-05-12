@@ -190,6 +190,37 @@ pub async fn helix_moderator_check(
     Ok(!resp.data.is_empty())
 }
 
+/// Used during OAuth callback to check follows using the viewer's own user token.
+///
+/// `GET /helix/channels/followed?user_id=…&broadcaster_id=…` requires the
+/// `user:read:follows` scope on the **user token** (not the broadcaster's).
+/// Returns `true` iff `total > 0`.
+pub async fn user_follows_channel(
+    http: &reqwest::Client,
+    helix_base: &str,
+    client_id: &str,
+    user_access_token: &str,
+    user_id: &str,
+    broadcaster_id: &str,
+    context: &'static str,
+) -> Result<bool> {
+    #[derive(Deserialize)]
+    struct Resp {
+        total: u64,
+    }
+    let resp: Resp = helix_get(
+        http,
+        helix_base,
+        "/helix/channels/followed",
+        &[("user_id", user_id), ("broadcaster_id", broadcaster_id)],
+        user_access_token,
+        client_id,
+        context,
+    )
+    .await?;
+    Ok(resp.total > 0)
+}
+
 /// Used during OAuth callback because `helix/moderation/moderators`
 /// requires the bearer's user id to match `broadcaster_id` (i.e. only
 /// the broadcaster can list their own mods), so a logging-in mod cannot
