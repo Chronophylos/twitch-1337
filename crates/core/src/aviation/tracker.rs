@@ -294,10 +294,7 @@ pub struct TrackedFlightView {
 ///
 /// Pure function — no I/O, safe to call from tests without a full tracker
 /// harness.
-pub fn build_flight_view(
-    state: &FlightTrackerState,
-    now: DateTime<Utc>,
-) -> Vec<TrackedFlightView> {
+pub fn build_flight_view(state: &FlightTrackerState, now: DateTime<Utc>) -> Vec<TrackedFlightView> {
     state
         .flights
         .iter()

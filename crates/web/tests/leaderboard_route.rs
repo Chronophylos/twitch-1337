@@ -19,7 +19,7 @@ use twitch_1337_web::auth::require_mod;
 use twitch_1337_web::routes::leaderboard;
 
 mod helpers;
-use helpers::{FakeHelix, build_state_with_dirs, cookie_header, install_crypto, insert_session};
+use helpers::{FakeHelix, build_state_with_dirs, cookie_header, insert_session, install_crypto};
 
 fn helix() -> Arc<FakeHelix> {
     let mut users = HashMap::new();

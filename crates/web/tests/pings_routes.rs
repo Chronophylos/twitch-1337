@@ -474,13 +474,11 @@ async fn create_rejects_bad_form_csrf() {
 /// Build a minimal router that mounts the pings viewer routes under
 /// `require_role(Viewer)` so tests can exercise viewer-rendered HTML via the
 /// real viewer sub-router surface.
-fn viewer_pings_app(
-    state: twitch_1337_web::WebState,
-) -> axum::Router {
+fn viewer_pings_app(state: twitch_1337_web::WebState) -> axum::Router {
     use axum::Router;
     use axum::middleware::from_fn_with_state;
     use tower_cookies::CookieManagerLayer;
-    use twitch_1337_web::auth::{require_role, Role};
+    use twitch_1337_web::auth::{Role, require_role};
     use twitch_1337_web::routes::pings::viewer_router;
 
     Router::new()

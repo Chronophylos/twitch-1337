@@ -8,8 +8,8 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use helpers::{
-    FakeHelix, build_state_with_dirs, build_state_with_overrides, cookie_header, install_crypto,
-    insert_session_as,
+    FakeHelix, build_state_with_dirs, build_state_with_overrides, cookie_header, insert_session_as,
+    install_crypto,
 };
 use tower::ServiceExt as _;
 use twitch_1337_web::auth::Role;
@@ -21,7 +21,6 @@ fn viewer_helix(user_id: &str) -> Arc<FakeHelix> {
         users: Default::default(),
     })
 }
-
 
 #[tokio::test]
 async fn viewer_can_read_pings_leaderboard_flights() {
@@ -156,8 +155,7 @@ async fn viewer_loses_follow_after_recheck_window() {
     // Keep a typed handle for mutation; pass a dyn handle to build_state.
     let helix_typed = helix.clone();
     let helix_dyn: Arc<dyn twitch_1337_web::helix::HelixClient> = helix.clone();
-    let (state, _td_p, _td_m) =
-        build_state_with_overrides(helix_dyn, Duration::from_secs(0)).await;
+    let (state, _td_p, _td_m) = build_state_with_overrides(helix_dyn, Duration::from_secs(0)).await;
     let (sid, csrf, _bare) = insert_session_as(&state, "42", "alice", Role::Viewer);
     let cookie = cookie_header(&sid, &csrf);
     let app = twitch_1337_web::build_router(state.clone());

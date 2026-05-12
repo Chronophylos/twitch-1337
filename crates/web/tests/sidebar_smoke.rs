@@ -102,9 +102,15 @@ async fn sidebar_hides_memory_and_system_for_viewer() {
     assert_eq!(res.status(), StatusCode::OK, "/leaderboard: status");
     let bytes = to_bytes(res.into_body(), 128 * 1024).await.unwrap();
     let body = String::from_utf8(bytes.to_vec()).unwrap();
-    assert!(body.contains("Leaderboard"), "leaderboard nav entry present");
+    assert!(
+        body.contains("Leaderboard"),
+        "leaderboard nav entry present"
+    );
     assert!(body.contains("Flights"), "flights nav entry present");
-    assert!(!body.contains("/memory/soul"), "memory group hidden for viewer");
+    assert!(
+        !body.contains("/memory/soul"),
+        "memory group hidden for viewer"
+    );
     assert!(!body.contains("/logs"), "logs hidden for viewer");
     assert!(!body.contains("/schedules"), "schedules hidden for viewer");
     assert!(

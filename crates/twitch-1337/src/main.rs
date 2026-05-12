@@ -201,7 +201,11 @@ async fn build_web_spawner(
     // (broadcaster_id, broadcaster_id) — a benign self-probe that returns 200
     // with `total=0` when scoped correctly, and 401/403 when the scope is
     // missing. Log a warn so a deployer sees the failure before viewers do.
-    match helix.as_ref().is_follower(&broadcaster.id, &broadcaster.id).await {
+    match helix
+        .as_ref()
+        .is_follower(&broadcaster.id, &broadcaster.id)
+        .await
+    {
         Ok(_) => tracing::info!(
             target: "twitch_1337",
             "helix /channels/followers reachable with current bot scopes",
