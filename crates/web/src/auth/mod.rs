@@ -8,6 +8,7 @@
 
 pub mod csrf;
 pub mod mod_check;
+pub mod role;
 pub mod session;
 
 pub(crate) mod routes;
@@ -16,4 +17,5 @@ pub(crate) mod routes;
 // per-handler (form-field `_csrf` path); the header-path middleware would
 // silently admit form-only POSTs by design, so exporting it would mislead
 // callers into thinking it provides blanket protection.
+pub use role::Role;
 pub use routes::{CSRF_COOKIE, OAuthCtx, SID_COOKIE, auth_router, require_mod};
