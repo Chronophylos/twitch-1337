@@ -92,6 +92,17 @@ pub async fn main() -> Result<()> {
         PingManager::load(&get_data_dir()).wrap_err("Failed to load ping manager")?,
     ));
 
+    // Dashboard-managed runtime settings. Opened here so the same Arc-backed
+    // store can be shared with both the IRC handlers (via `Services.settings`)
+    // and `WebState` (Task 10 wires the POST handler). The audit log lives at
+    // `$DATA_DIR/settings.audit.jsonl`.
+    let audit_log: Arc<dyn twitch_1337::settings::AuditLog> = Arc::new(
+        twitch_1337::settings::FileAuditLog::new(get_data_dir().join("settings.audit.jsonl")),
+    );
+    let (settings_store, settings_handle) =
+        twitch_1337::settings::SettingsStore::open(&get_data_dir(), audit_log)
+            .wrap_err("Failed to open settings store")?;
+
     // Memory v2 store opens unconditionally so the dashboard editor has a
     // handle even when `[ai]` is disabled. The same `Arc`-backed store is
     // shared with the bot's IRC handlers / dreamer ritual via `Services`.
@@ -140,6 +151,8 @@ pub async fn main() -> Result<()> {
         doener: doener_client,
         whisper: Some(whisper),
         data_dir: get_data_dir(),
+        settings: settings_handle,
+        settings_store,
         emote_glossary_override: None,
         irc_connected,
         web_spawner,
