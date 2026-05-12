@@ -109,11 +109,17 @@ async fn validation_error_renders_form_with_errors() {
     let before = state.settings.load().cooldowns.ai;
     let app = build_router(state.clone());
     let defaults = state.settings_store.defaults().clone();
+    // The submitted news value (900) is valid and *different* from the
+    // default (60), so the re-rendered form must echo it back to verify
+    // we don't discard the user's other typed input on a validation error.
+    assert_ne!(
+        defaults.cooldowns.news, 900,
+        "fixture assumes the default news cooldown is not already 900",
+    );
     // cooldown_ai = 0 violates the 1..=3600 bound.
     let body = format!(
-        "_csrf={csrf}&cooldown_ai=0&cooldown_news={n}&cooldown_up={u}&cooldown_feedback={f}&cooldown_doener={d}&ping_cooldown={p}",
+        "_csrf={csrf}&cooldown_ai=0&cooldown_news=900&cooldown_up={u}&cooldown_feedback={f}&cooldown_doener={d}&ping_cooldown={p}",
         csrf = urlencoding::encode(&bare_csrf),
-        n = defaults.cooldowns.news,
         u = defaults.cooldowns.up,
         f = defaults.cooldowns.feedback,
         d = defaults.cooldowns.doener,
@@ -136,6 +142,20 @@ async fn validation_error_renders_form_with_errors() {
     assert!(
         html.contains("cooldowns.ai"),
         "response must surface the failing field; got: {html}"
+    );
+    // Submitted-value preservation: the valid sibling field (news=900) must
+    // be echoed back into the form, not replaced by the stored default.
+    assert!(
+        html.contains("value=\"900\""),
+        "submitted cooldown_news must be preserved on validation error; got: {html}"
+    );
+    assert!(
+        !html.contains(&format!(
+            "name=\"cooldown_news\" min=\"1\" max=\"3600\" value=\"{}\"",
+            defaults.cooldowns.news
+        )),
+        "the stored default for news ({}) must NOT replace the submitted 900",
+        defaults.cooldowns.news,
     );
     assert_eq!(
         state.settings.load().cooldowns.ai,

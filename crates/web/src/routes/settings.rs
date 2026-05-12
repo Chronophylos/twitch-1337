@@ -15,8 +15,8 @@ use axum::routing::{get, post};
 use serde::Deserialize;
 use tower_cookies::Cookies;
 use twitch_1337_core::settings::{
-    Actor, CooldownsOverrides, FieldError, PingsOverrides, Settings, SettingsError,
-    SettingsOverrides, SettingsSection,
+    Actor, Cooldowns, CooldownsOverrides, FieldError, PingsOverrides, PingsSettings, Settings,
+    SettingsError, SettingsOverrides, SettingsSection,
 };
 
 use crate::auth::Role;
@@ -137,7 +137,23 @@ async fn save(
                 result = "validation",
                 error_count = errors.len(),
             );
-            let current = (**state.settings.load()).clone();
+            // Preserve the user's submitted (raw) values so they can correct
+            // the invalid field without having to retype every other input.
+            // Spec §7.2: "previously entered values are preserved".
+            let submitted = Settings {
+                schema_version: twitch_1337_core::settings::SCHEMA_VERSION,
+                cooldowns: Cooldowns {
+                    ai: form.cooldown_ai,
+                    news: form.cooldown_news,
+                    up: form.cooldown_up,
+                    feedback: form.cooldown_feedback,
+                    doener: form.cooldown_doener,
+                },
+                pings: PingsSettings {
+                    cooldown: form.ping_cooldown,
+                    public: form.ping_public.is_some(),
+                },
+            };
             let defaults = state.settings_store.defaults().clone();
             render_with(
                 axum::http::StatusCode::BAD_REQUEST,
@@ -150,7 +166,7 @@ async fn save(
                     is_mod: session.is_mod(),
                     is_broadcaster: session.is_broadcaster,
                     is_owner: matches!(session.role, Role::Owner),
-                    current,
+                    current: submitted,
                     defaults,
                     errors,
                 },
