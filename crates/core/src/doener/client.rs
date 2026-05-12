@@ -81,6 +81,15 @@ mod tests {
         DoenerClient::with_base_url(reqwest::Client::new(), server.uri())
     }
 
+    fn test_client_with_timeout(server: &MockServer, timeout: std::time::Duration) -> DoenerClient {
+        crate::install_crypto_provider();
+        let http = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .expect("build timeout test client");
+        DoenerClient::with_base_url(http, server.uri())
+    }
+
     #[tokio::test]
     async fn stats_parses_canonical_response() {
         let server = MockServer::start().await;
@@ -122,6 +131,23 @@ mod tests {
             .await;
 
         let client = test_client(&server);
+        assert!(client.stats().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn stats_returns_err_on_timeout() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/stats.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(b"{}".as_slice(), "application/json")
+                    .set_delay(std::time::Duration::from_secs(2)),
+            )
+            .mount(&server)
+            .await;
+
+        let client = test_client_with_timeout(&server, std::time::Duration::from_millis(150));
         assert!(client.stats().await.is_err());
     }
 
