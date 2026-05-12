@@ -144,9 +144,6 @@ mod tests {
             hit("Handewitt", 1, false),
         ];
         let out = decide_city_response("Han", hits);
-        assert_eq!(
-            out,
-            "Meintest du: Hannover (51), Hanau (3), Handewitt (1)?"
-        );
+        assert_eq!(out, "Meintest du: Hannover (51), Hanau (3), Handewitt (1)?");
     }
 }

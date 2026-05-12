@@ -33,10 +33,7 @@ pub fn doener_tool() -> ToolDefinition {
     }
 }
 
-pub async fn execute_doener_index(
-    client: &DoenerClient,
-    call: &ToolCall,
-) -> ToolResultMessage {
+pub async fn execute_doener_index(client: &DoenerClient, call: &ToolCall) -> ToolResultMessage {
     let args = match call.parse_args::<DoenerArgs>() {
         Ok(a) => a,
         Err(e) => {
@@ -51,7 +48,12 @@ pub async fn execute_doener_index(
         }
     };
 
-    let payload = match args.city.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let payload = match args
+        .city
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         None => match client.stats().await {
             Ok(stats) => json!({"scope": "global", "stats": stats}),
             Err(e) => {
@@ -149,11 +151,7 @@ mod tests {
             .await;
 
         let client = test_client(&server);
-        let msg = execute_doener_index(
-            &client,
-            &call(serde_json::json!({"city": "Han"})),
-        )
-        .await;
+        let msg = execute_doener_index(&client, &call(serde_json::json!({"city": "Han"}))).await;
         let body = content(&msg);
         assert!(body.contains("\"scope\":\"city\""), "got: {body}");
         assert!(body.contains("Hannover"), "got: {body}");
@@ -172,11 +170,7 @@ mod tests {
             .await;
 
         let client = test_client(&server);
-        let msg = execute_doener_index(
-            &client,
-            &call(serde_json::json!({"city": "zzz"})),
-        )
-        .await;
+        let msg = execute_doener_index(&client, &call(serde_json::json!({"city": "zzz"}))).await;
         let body = content(&msg);
         assert!(body.contains("\"hits\":[]"), "got: {body}");
     }
@@ -193,7 +187,10 @@ mod tests {
         let client = test_client(&server);
         let msg = execute_doener_index(&client, &call(serde_json::json!({}))).await;
         let body = content(&msg);
-        assert!(body.contains("\"error\":\"doener_index API unavailable\""), "got: {body}");
+        assert!(
+            body.contains("\"error\":\"doener_index API unavailable\""),
+            "got: {body}"
+        );
     }
 
     #[tokio::test]
@@ -202,12 +199,11 @@ mod tests {
         let server = MockServer::start().await;
         // No mock needed; the args parse error short-circuits before any HTTP.
         let client = test_client(&server);
-        let msg = execute_doener_index(
-            &client,
-            &call(serde_json::json!({"city": 123})),
-        )
-        .await;
+        let msg = execute_doener_index(&client, &call(serde_json::json!({"city": 123}))).await;
         let body = content(&msg);
-        assert!(body.contains("\"error\":\"invalid_arguments\""), "got: {body}");
+        assert!(
+            body.contains("\"error\":\"invalid_arguments\""),
+            "got: {body}"
+        );
     }
 }

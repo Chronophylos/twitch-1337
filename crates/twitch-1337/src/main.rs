@@ -11,8 +11,8 @@ use tracing::info;
 use twitch_1337_core::{
     AuthenticatedLoginCredentials, Services,
     ai::{command::memory_caps_from_config, memory::store::MemoryStore},
-    aviation, doener, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing, llm_factory,
-    load_configuration,
+    aviation, doener, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing,
+    llm_factory, load_configuration,
     ping::PingManager,
     run_bot, setup_and_verify_twitch_client,
     twitch::whisper,
@@ -72,9 +72,8 @@ pub async fn main() -> Result<()> {
         }
     };
 
-    let doener_client = Arc::new(
-        doener::DoenerClient::new().wrap_err("Failed to initialize Döner-index client")?,
-    );
+    let doener_client =
+        Arc::new(doener::DoenerClient::new().wrap_err("Failed to initialize Döner-index client")?);
 
     let whisper_credentials = credentials.clone();
     let whisper = whisper::HelixWhisperSender::new(

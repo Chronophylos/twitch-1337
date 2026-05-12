@@ -15,7 +15,11 @@ pub fn format_global(s: &GlobalStats) -> String {
 }
 
 pub fn format_city(c: &CityHit) -> String {
-    let bude = if c.location_count == 1 { "Bude" } else { "Buden" };
+    let bude = if c.location_count == 1 {
+        "Bude"
+    } else {
+        "Buden"
+    };
     match (c.avg_price, c.min_price, c.max_price) {
         (Some(avg), Some(min), Some(max)) => format!(
             "{name}: {count} {bude}, ⌀ {avg:.2}€ ({min:.2}–{max:.2}€).",
@@ -98,10 +102,7 @@ mod tests {
     #[test]
     fn city_with_prices_uses_plural_buden() {
         let c = hit("Hannover", 51, Some((6.0, 6.0, 6.0)));
-        assert_eq!(
-            format_city(&c),
-            "Hannover: 51 Buden, ⌀ 6.00€ (6.00–6.00€)."
-        );
+        assert_eq!(format_city(&c), "Hannover: 51 Buden, ⌀ 6.00€ (6.00–6.00€).");
     }
 
     #[test]
@@ -132,6 +133,9 @@ mod tests {
 
     #[test]
     fn not_found_quotes_query() {
-        assert_eq!(format_not_found("xyz"), "FeelsDankMan keine Stadt für 'xyz' gefunden.");
+        assert_eq!(
+            format_not_found("xyz"),
+            "FeelsDankMan keine Stadt für 'xyz' gefunden."
+        );
     }
 }
