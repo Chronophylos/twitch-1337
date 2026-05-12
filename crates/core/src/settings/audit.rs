@@ -149,7 +149,10 @@ mod tests {
         std::fs::remove_file(&path).expect("remove");
         log.append(&sample_entry()).expect("second after unlink");
         assert!(path.exists());
-        let lines = std::fs::read_to_string(&path).expect("read").lines().count();
+        let lines = std::fs::read_to_string(&path)
+            .expect("read")
+            .lines()
+            .count();
         assert_eq!(lines, 1);
     }
 }

@@ -13,6 +13,12 @@ pub mod audit;
 pub mod overrides;
 pub mod store;
 
+#[cfg(any(test, feature = "testing"))]
+pub use audit::MemoryAuditLog;
+pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
+pub use overrides::{CooldownsOverrides, PingsOverrides, SettingsOverrides};
+pub use store::{Actor, SettingsStore};
+
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
