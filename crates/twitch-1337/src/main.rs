@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -9,10 +10,10 @@ use secrecy::ExposeSecret as _;
 use tokio::sync::oneshot;
 use tracing::info;
 use twitch_1337_core::{
-    AuthenticatedLoginCredentials, Services,
+    AuthenticatedLoginCredentials, PersonalBest, Services,
     ai::{command::memory_caps_from_config, memory::store::MemoryStore},
     aviation, doener, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing,
-    llm_factory, load_configuration,
+    llm_factory, load_configuration, load_leaderboard,
     ping::PingManager,
     run_bot, setup_and_verify_twitch_client,
     twitch::whisper,
@@ -99,6 +100,21 @@ pub async fn main() -> Result<()> {
             .await
             .wrap_err("open memory store")?;
 
+    // Load the leaderboard before building the web spawner so the same Arc
+    // can be shared with WebState (dashboard read) and the IRC tracker (writes).
+    let leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>> = Arc::new(
+        tokio::sync::RwLock::new(load_leaderboard(&get_data_dir()).await),
+    );
+
+    // Pre-create the flight-tracker mpsc channel when aviation is enabled so
+    // the sender Arc can be wired into WebState before the handlers are spawned.
+    let (aviation_tracker_tx, aviation_tracker_rx) = if aviation_client.is_some() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<aviation::TrackerCommand>(32);
+        (Some(Arc::new(tx)), Some(rx))
+    } else {
+        (None, None)
+    };
+
     let web_spawner = if config.web.enabled {
         let credentials_for_web = credentials.clone();
         Some(
@@ -108,6 +124,8 @@ pub async fn main() -> Result<()> {
                 irc_connected.clone(),
                 ping_manager.clone(),
                 memory_store.clone(),
+                leaderboard.clone(),
+                aviation_tracker_tx.clone(),
             )
             .await?,
         )
@@ -127,6 +145,9 @@ pub async fn main() -> Result<()> {
         web_spawner,
         ping_manager,
         memory_store,
+        leaderboard,
+        aviation_tracker_tx,
+        aviation_tracker_rx,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -148,6 +169,8 @@ async fn build_web_spawner(
     irc_connected: Arc<AtomicBool>,
     ping_manager: Arc<tokio::sync::RwLock<PingManager>>,
     memory_store: MemoryStore,
+    leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
+    tracker_tx: Option<Arc<tokio::sync::mpsc::Sender<aviation::TrackerCommand>>>,
 ) -> Result<twitch_1337::WebSpawner> {
     let bind_addr: std::net::SocketAddr = config
         .web
@@ -220,6 +243,8 @@ async fn build_web_spawner(
         ping_manager,
         memory_store,
         signed_key,
+        leaderboard,
+        tracker_tx,
     };
 
     Ok(Box::new(move |shutdown| {

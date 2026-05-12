@@ -17,6 +17,7 @@
 //! against the same dev-data the production bot is actively writing to
 //! unless you're aware of that.
 
+use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -103,6 +104,8 @@ async fn main() -> Result<()> {
         ping_manager: Arc::new(RwLock::new(pings)),
         memory_store,
         signed_key,
+        leaderboard: Arc::new(RwLock::new(HashMap::new())),
+        tracker_tx: None,
     };
 
     let listener = bind(bind_addr).await?;

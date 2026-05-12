@@ -125,6 +125,8 @@ pub async fn build_state_with_dirs(helix: Arc<dyn HelixClient>) -> (WebState, Te
         ping_manager,
         memory_store,
         signed_key,
+        leaderboard: Arc::new(RwLock::new(HashMap::new())),
+        tracker_tx: None,
     };
     (state, pings_dir, memory_dir)
 }

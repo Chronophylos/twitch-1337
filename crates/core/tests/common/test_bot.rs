@@ -21,7 +21,7 @@ use twitch_1337::{
     PersonalBest, Services,
     aviation::AviationClient,
     config::{AiConfig, Configuration},
-    run_bot,
+    load_leaderboard, run_bot,
     twitch::whisper::{self, WhisperError, WhisperSender},
 };
 use twitch_irc::login::StaticLoginCredentials;
@@ -248,6 +248,11 @@ impl TestBotBuilder {
             None
         };
 
+        let (aviation_tracker_tx, aviation_tracker_rx) = {
+            let (tx, rx) = tokio::sync::mpsc::channel::<twitch_1337::aviation::TrackerCommand>(32);
+            (Some(Arc::new(tx)), Some(rx))
+        };
+
         let services = Services {
             clock: clock.clone(),
             llm: self
@@ -269,6 +274,11 @@ impl TestBotBuilder {
             web_spawner,
             ping_manager,
             memory_store,
+            leaderboard: Arc::new(tokio::sync::RwLock::new(
+                load_leaderboard(data_dir.path()).await,
+            )),
+            aviation_tracker_tx,
+            aviation_tracker_rx,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -658,5 +668,7 @@ fn build_test_web_state(
         ping_manager,
         memory_store,
         signed_key,
+        leaderboard: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        tracker_tx: None,
     }
 }
