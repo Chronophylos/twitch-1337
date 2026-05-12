@@ -15,10 +15,11 @@ pub mod store;
 
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub type SettingsHandle = Arc<arc_swap::ArcSwap<Settings>>;
+pub type SettingsHandle = Arc<ArcSwap<Settings>>;
 
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -66,6 +67,12 @@ pub enum SettingsError {
     Ron(#[from] ron::error::SpannedError),
     #[error("persist: {0}")]
     Persist(#[from] crate::util::persist::AtomicPersistError),
+}
+
+impl From<Vec<FieldError>> for SettingsError {
+    fn from(errs: Vec<FieldError>) -> Self {
+        Self::Validation(errs)
+    }
 }
 
 impl Settings {
@@ -120,5 +127,5 @@ impl Settings {
 
 #[cfg(any(test, feature = "testing"))]
 pub fn test_handle() -> SettingsHandle {
-    Arc::new(arc_swap::ArcSwap::from_pointee(Settings::compiled_defaults()))
+    Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
 }
