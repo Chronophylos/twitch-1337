@@ -27,7 +27,7 @@ use serde::Deserialize;
 use tower_cookies::cookie::SameSite;
 use tower_cookies::{Cookie, Cookies, Key};
 
-use crate::auth::mod_check::{ModCheckOutcome, check_is_mod};
+use crate::auth::role_check::{GateOutcome, check_is_mod};
 use crate::error::WebError;
 use crate::state::WebState;
 
@@ -325,7 +325,7 @@ async fn callback(
     // token does not need extra scopes. The require_mod middleware
     // re-checks via the bot token; on failure there it log+admits to
     // avoid lockout.
-    match crate::auth::mod_check::check_is_mod_with_token(
+    match crate::auth::role_check::check_is_mod_with_token(
         &state,
         &me.id,
         &user_token,
@@ -335,8 +335,8 @@ async fn callback(
     .await
     .map_err(|e| WebError::OAuthExchange(e.wrap_err("mod check")))?
     {
-        ModCheckOutcome::Allow => {}
-        ModCheckOutcome::Deny => {
+        GateOutcome::Allow => {}
+        GateOutcome::Deny => {
             tracing::info!(target: "twitch_1337_web", user_id=%me.id, user_login=%me.login, action="login", result="denied");
             return Err(WebError::Forbidden);
         }
@@ -458,8 +458,8 @@ pub async fn require_mod(
         )
         .await
         {
-            Ok(ModCheckOutcome::Allow) => state.sessions.record_role_check(sid_cookie.value()),
-            Ok(ModCheckOutcome::Deny) => {
+            Ok(GateOutcome::Allow) => state.sessions.record_role_check(sid_cookie.value()),
+            Ok(GateOutcome::Deny) => {
                 state.sessions.drop_session(sid_cookie.value());
                 tracing::info!(target: "twitch_1337_web", user_id=%session.user_id, action="mod_recheck", result="denied");
                 return Err(WebError::Forbidden);

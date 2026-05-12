@@ -1,14 +1,14 @@
-//! Web auth: OAuth + session + CSRF + mod-gate plumbing.
+//! Web auth: OAuth + session + CSRF + role-gate plumbing.
 //!
 //! Module map:
 //! - [`session`]: in-memory session table (TTL + sliding refresh)
 //! - [`csrf`]: hex-encoded double-submit token helpers
-//! - [`mod_check`]: hidden_admins → broadcaster → helix moderators
+//! - [`role_check`]: hidden_admins → broadcaster → helix moderators
 //! - [`routes`]: login / callback / logout handlers + middleware
 
 pub mod csrf;
-pub mod mod_check;
 pub mod role;
+pub mod role_check;
 pub mod session;
 
 pub(crate) mod routes;
