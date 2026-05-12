@@ -270,6 +270,55 @@ pub(crate) async fn save_tracker_state(data_dir: &Path, state: &FlightTrackerSta
     }
 }
 
+/// Read projection of [`TrackedFlight`] for the web dashboard.
+///
+/// Mirrors only the fields the dashboard renders so the IRC-side struct can
+/// evolve without breaking the wire shape. Serde-ready so future callers (or
+/// JSON endpoints) can reuse it without re-projecting.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct TrackedFlightView {
+    /// Human label: callsign, hex, or stringified [`FlightIdentifier`].
+    pub identifier: String,
+    pub callsign: Option<String>,
+    /// Twitch login of the user who requested tracking.
+    pub owner_login: String,
+    /// Display string of the current [`FlightPhase`].
+    pub phase: String,
+    pub altitude_ft: Option<i64>,
+    pub ground_speed_kts: Option<f64>,
+    /// Seconds since the last ADS-B update, or `None` if never seen.
+    pub last_seen_secs_ago: Option<u64>,
+}
+
+/// Converts the tracked flights in `state` into a snapshot of [`TrackedFlightView`]s.
+///
+/// Pure function — no I/O, safe to call from tests without a full tracker
+/// harness.
+pub fn build_flight_view(
+    state: &FlightTrackerState,
+    now: DateTime<Utc>,
+) -> Vec<TrackedFlightView> {
+    state
+        .flights
+        .iter()
+        .map(|f| TrackedFlightView {
+            identifier: f
+                .callsign
+                .clone()
+                .or_else(|| f.hex.clone())
+                .unwrap_or_else(|| format!("{}", f.identifier)),
+            callsign: f.callsign.clone(),
+            owner_login: f.tracked_by.clone(),
+            phase: format!("{}", f.phase),
+            altitude_ft: f.altitude_ft,
+            ground_speed_kts: f.ground_speed_kts,
+            last_seen_secs_ago: f
+                .last_seen
+                .map(|seen| (now - seen).num_seconds().max(0) as u64),
+        })
+        .collect()
+}
+
 /// Commands sent from chat command handlers to the flight tracker task.
 pub enum TrackerCommand {
     Track {
@@ -286,6 +335,14 @@ pub enum TrackerCommand {
     Status {
         identifier: Option<String>,
         reply_to: PrivmsgMessage,
+    },
+    /// Request a snapshot of all currently tracked flights.
+    ///
+    /// The handler projects [`FlightTrackerState::flights`] into
+    /// [`TrackedFlightView`] values and sends them back through `reply`.
+    /// Dropped receivers (e.g. timed-out web requests) are silently ignored.
+    Snapshot {
+        reply: tokio::sync::oneshot::Sender<Vec<TrackedFlightView>>,
     },
 }
 
@@ -1032,6 +1089,11 @@ async fn process_command<T, L>(
             reply_to,
         } => {
             handle_status(identifier.as_deref(), &reply_to, state, client, clock).await;
+        }
+        TrackerCommand::Snapshot { reply } => {
+            let now = clock.now_utc();
+            // Receiver may have dropped (web request timed out); ignore send failure.
+            let _ = reply.send(build_flight_view(state, now));
         }
     }
 }
@@ -2052,5 +2114,94 @@ mod tests {
     fn parse_rejects_empty() {
         assert!(FlightIdentifier::parse("").is_err());
         assert!(FlightIdentifier::parse("   ").is_err());
+    }
+
+    // --- build_flight_view tests ---
+
+    #[test]
+    fn build_flight_view_returns_one_entry_per_flight() {
+        let flight_a = TrackedFlight {
+            identifier: FlightIdentifier::Callsign("EZY100".to_string()),
+            callsign: Some("EZY100".to_string()),
+            phase: FlightPhase::Cruise,
+            altitude_ft: Some(35_000),
+            ground_speed_kts: Some(480.0),
+            tracked_by: "alice".to_string(),
+            last_seen: None,
+            ..tracked_flight()
+        };
+        let flight_b = TrackedFlight {
+            identifier: FlightIdentifier::Hex("4CA87D".to_string()),
+            callsign: None,
+            hex: Some("4CA87D".to_string()),
+            phase: FlightPhase::Ground,
+            altitude_ft: Some(0),
+            ground_speed_kts: Some(0.0),
+            tracked_by: "bob".to_string(),
+            last_seen: None,
+            ..tracked_flight()
+        };
+
+        let state = FlightTrackerState {
+            flights: vec![flight_a, flight_b],
+        };
+        let now = dt("2026-05-12T10:00:00Z");
+
+        let views = build_flight_view(&state, now);
+
+        assert_eq!(views.len(), 2);
+
+        assert_eq!(views[0].identifier, "EZY100");
+        assert_eq!(views[0].owner_login, "alice");
+        assert_eq!(views[0].phase, "Cruise");
+        assert_eq!(views[0].altitude_ft, Some(35_000));
+        assert!(views[0].last_seen_secs_ago.is_none());
+
+        // Hex flight: identifier falls back to hex string
+        assert_eq!(views[1].identifier, "4CA87D");
+        assert_eq!(views[1].owner_login, "bob");
+        assert_eq!(views[1].phase, "Ground");
+        assert!(views[1].callsign.is_none());
+    }
+
+    #[test]
+    fn build_flight_view_computes_last_seen_secs_ago() {
+        let seen_at = dt("2026-05-12T09:59:00Z");
+        let now = dt("2026-05-12T10:00:00Z");
+
+        let flight = TrackedFlight {
+            last_seen: Some(seen_at),
+            ..tracked_flight()
+        };
+
+        let state = FlightTrackerState {
+            flights: vec![flight],
+        };
+
+        let views = build_flight_view(&state, now);
+
+        assert_eq!(views[0].last_seen_secs_ago, Some(60));
+    }
+
+    #[test]
+    fn build_flight_view_falls_back_identifier_to_flight_identifier_display() {
+        // A flight with no callsign and no hex override — identifier comes from
+        // the FlightIdentifier Display impl.
+        let flight = TrackedFlight {
+            identifier: FlightIdentifier::Callsign("RYR42".to_string()),
+            callsign: None,
+            hex: None,
+            ..tracked_flight()
+        };
+
+        let state = FlightTrackerState {
+            flights: vec![flight],
+        };
+        let now = dt("2026-05-12T10:00:00Z");
+
+        let views = build_flight_view(&state, now);
+
+        // FlightIdentifier::Display outputs the inner string (as_str)
+        assert_eq!(views[0].identifier, "RYR42");
     }
 }
