@@ -26,6 +26,7 @@ struct ListTpl {
     flights: Vec<TrackedFlightView>,
     aviation_disabled: bool,
     user_login: String,
+    user_avatar_url: Option<String>,
     csrf: String,
     flash: Option<String>,
     current_page: &'static str,
@@ -73,6 +74,7 @@ async fn list(
     render(&ListTpl {
         flights,
         aviation_disabled,
+        user_avatar_url: session.avatar_url.clone(),
         user_login: session.user_login,
         csrf,
         flash: flash::take(&cookies),

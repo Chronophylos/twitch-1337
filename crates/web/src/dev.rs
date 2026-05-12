@@ -54,6 +54,7 @@ async fn login(
             DEV_USER_ID.to_owned(),
             DEV_USER_LOGIN.to_owned(),
             crate::auth::role::Role::Mod,
+            None,
         )
         .expect("insert dev session");
     issue_session_cookies(&cookies, &state.signed_key, sid, &csrf_bytes, false);

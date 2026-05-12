@@ -62,6 +62,7 @@ struct StubTpl<'a> {
     note: &'a str,
     csrf: String,
     user_login: &'a str,
+    user_avatar_url: Option<&'a str>,
     current_page: &'static str,
     is_mod: bool,
 }
@@ -77,6 +78,7 @@ async fn render_stub(
         note: meta.note,
         csrf: csrf::encode(&session.csrf_value),
         user_login: &session.user_login,
+        user_avatar_url: session.avatar_url.as_deref(),
         current_page: meta.nav,
         is_mod: session.is_mod(),
     })

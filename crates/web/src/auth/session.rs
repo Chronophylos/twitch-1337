@@ -28,6 +28,9 @@ pub struct Session {
     pub last_seen: DateTime<Utc>,
     pub last_role_check: DateTime<Utc>,
     pub csrf_value: [u8; 32],
+    /// Twitch helix `profile_image_url` captured at login. Static for the
+    /// session lifetime; sidebar reads this without per-request helix calls.
+    pub avatar_url: Option<String>,
 }
 
 impl Session {
@@ -59,6 +62,7 @@ impl SessionTable {
         user_id: String,
         user_login: String,
         role: Role,
+        avatar_url: Option<String>,
     ) -> Result<(SessionId, [u8; 32])> {
         let now = self.clock.now();
         let mut rng = rand::rng();
@@ -77,6 +81,7 @@ impl SessionTable {
                 last_seen: now,
                 last_role_check: now,
                 csrf_value: csrf,
+                avatar_url,
             },
         );
         Ok((id, csrf))

@@ -56,6 +56,7 @@ struct TreeTpl {
     state_count: usize,
     csrf: String,
     user_login: String,
+    user_avatar_url: Option<String>,
     current_page: &'static str,
     is_mod: bool,
 }
@@ -80,6 +81,7 @@ struct EditorTpl<'a> {
     delete_url: Option<&'a str>,
     error: Option<String>,
     user_login: &'a str,
+    user_avatar_url: Option<&'a str>,
     current_page: &'static str,
     is_mod: bool,
     /// Render the user-only frontmatter inputs (`username`, `display_name`).
@@ -101,6 +103,8 @@ struct StateRow {
     /// reason as `EditorTpl::pct`.
     pct: u8,
     created_initial: String,
+    /// `None` falls back to initial-circle in the template.
+    profile_image_url: Option<String>,
 }
 
 #[derive(Template)]
@@ -109,6 +113,7 @@ struct StateListTpl {
     items: Vec<StateRow>,
     csrf: String,
     user_login: String,
+    user_avatar_url: Option<String>,
     current_page: &'static str,
     is_mod: bool,
 }
@@ -133,6 +138,7 @@ struct UsersListTpl {
     items: Vec<UserRow>,
     csrf: String,
     user_login: String,
+    user_avatar_url: Option<String>,
     current_page: &'static str,
     is_mod: bool,
 }
@@ -142,8 +148,45 @@ struct UsersListTpl {
 struct UsersNewTpl {
     csrf: String,
     user_login: String,
+    user_avatar_url: Option<String>,
     current_page: &'static str,
     is_mod: bool,
+}
+
+/// Resolve avatar URLs for a slice of Twitch user ids. Cache hits skip
+/// helix entirely; cache misses fan out through a single batched helix
+/// call. A helix error logs and returns whatever the cache held.
+async fn fetch_avatars(
+    state: &WebState,
+    ids: &[&str],
+) -> std::collections::HashMap<String, String> {
+    let lookup = state.avatar_cache.lookup(ids, state.clock.as_ref()).await;
+    let mut avatars = lookup.cached;
+    if lookup.missing.is_empty() {
+        return avatars;
+    }
+    let missing_refs: Vec<&str> = lookup.missing.iter().map(String::as_str).collect();
+    match state.helix.fetch_users_by_ids(&missing_refs).await {
+        Ok(found) => {
+            state
+                .avatar_cache
+                .insert(&lookup.missing, &found, state.clock.as_ref())
+                .await;
+            for u in found {
+                if let Some(url) = u.profile_image_url {
+                    avatars.insert(u.id, url);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "twitch_1337_web",
+                error = ?e,
+                "helix fetch_users_by_ids failed; falling back to initials",
+            );
+        }
+    }
+    avatars
 }
 
 fn fmt_ts(t: DateTime<Utc>) -> String {
@@ -252,6 +295,7 @@ async fn tree(
         state_count: states.len(),
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
+        user_avatar_url: session.avatar_url.clone(),
         current_page: crate::nav::MEMORY_TREE,
         is_mod: session.is_mod(),
     })
@@ -298,6 +342,7 @@ async fn view_kind(
         delete_url: delete_url.as_deref(),
         error: None,
         user_login: &session.user_login,
+        user_avatar_url: session.avatar_url.as_deref(),
         current_page,
         is_mod: session.is_mod(),
         show_user_fm: matches!(kind, FileKind::User { .. }),
@@ -350,7 +395,6 @@ async fn list_users(
         .await
         .map_err(|e| WebError::Internal(eyre::eyre!("list_users: {e}")))?;
 
-    // Best-effort avatar enrichment: helix failure must not 500 the page.
     let user_ids: Vec<&str> = users
         .iter()
         .filter_map(|mf| match &mf.kind {
@@ -358,34 +402,7 @@ async fn list_users(
             _ => None,
         })
         .collect();
-    let lookup = state
-        .avatar_cache
-        .lookup(&user_ids, state.clock.as_ref())
-        .await;
-    let mut avatars = lookup.cached;
-    if !lookup.missing.is_empty() {
-        let missing_refs: Vec<&str> = lookup.missing.iter().map(String::as_str).collect();
-        match state.helix.fetch_users_by_ids(&missing_refs).await {
-            Ok(found) => {
-                state
-                    .avatar_cache
-                    .insert(&lookup.missing, &found, state.clock.as_ref())
-                    .await;
-                for u in found {
-                    if let Some(url) = u.profile_image_url {
-                        avatars.insert(u.id, url);
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    target: "twitch_1337_web",
-                    error = ?e,
-                    "helix fetch_users_by_ids failed; falling back to initials",
-                );
-            }
-        }
-    }
+    let avatars = fetch_avatars(&state, &user_ids).await;
 
     let items = users
         .into_iter()
@@ -416,6 +433,7 @@ async fn list_users(
         items,
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
+        user_avatar_url: session.avatar_url.clone(),
         current_page: crate::nav::MEMORY_USERS,
         is_mod: session.is_mod(),
     })
@@ -463,6 +481,7 @@ async fn new_user_form(Extension(session): Extension<Session>) -> Result<Respons
     render(&UsersNewTpl {
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
+        user_avatar_url: session.avatar_url.clone(),
         current_page: crate::nav::MEMORY_USERS,
         is_mod: session.is_mod(),
     })
@@ -499,6 +518,16 @@ async fn list_state(
         .await
         .map_err(|e| WebError::Internal(eyre::eyre!("list_state: {e}")))?;
     let cap = state.memory_store.caps().state_bytes;
+    let creator_ids: Vec<&str> = items
+        .iter()
+        .filter_map(|mf| {
+            mf.frontmatter
+                .created_by
+                .as_deref()
+                .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .collect();
+    let avatars = fetch_avatars(&state, &creator_ids).await;
     let items = items
         .into_iter()
         .map(|mf| {
@@ -509,6 +538,7 @@ async fn list_state(
             let bytes = mf.body.len();
             let created_by = mf.frontmatter.created_by.unwrap_or_default();
             let created_initial = initial_of(&created_by);
+            let profile_image_url = avatars.get(&created_by).cloned();
             StateRow {
                 slug,
                 updated_at: fmt_ts(mf.frontmatter.updated_at),
@@ -516,6 +546,7 @@ async fn list_state(
                 bytes,
                 pct: pct_of(bytes, cap),
                 created_initial,
+                profile_image_url,
             }
         })
         .collect();
@@ -523,6 +554,7 @@ async fn list_state(
         items,
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
+        user_avatar_url: session.avatar_url.clone(),
         current_page: crate::nav::MEMORY_STATE,
         is_mod: session.is_mod(),
     })
@@ -541,6 +573,7 @@ async fn new_state_form(
         cap,
         &csrf_hex,
         &session.user_login,
+        session.avatar_url.as_deref(),
         session.is_mod(),
     )
 }
@@ -660,6 +693,7 @@ async fn save_kind(
                 draft: form.body,
                 csrf: csrf_hex,
                 user_login: session.user_login.clone(),
+                user_avatar_url: session.avatar_url.clone(),
                 is_mod: session.is_mod(),
                 current_page,
                 cancel_url,
@@ -700,6 +734,7 @@ async fn save_kind(
                     delete_url: delete_url.as_deref(),
                     error: Some(msg),
                     user_login: &session.user_login,
+                    user_avatar_url: session.avatar_url.as_deref(),
                     current_page,
                     is_mod: session.is_mod(),
                     show_user_fm: matches!(&kind, FileKind::User { .. }),
@@ -842,6 +877,7 @@ async fn create_state(
             cap,
             &csrf_hex,
             &session.user_login,
+            session.avatar_url.as_deref(),
             session.is_mod(),
         );
     }
@@ -890,12 +926,14 @@ async fn create_state(
                 cap,
                 &csrf_hex,
                 &session.user_login,
+                session.avatar_url.as_deref(),
                 session.is_mod(),
             )
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_state_create(
     status: StatusCode,
     body: &str,
@@ -903,6 +941,7 @@ fn render_state_create(
     cap: usize,
     csrf_hex: &str,
     user_login: &str,
+    user_avatar_url: Option<&str>,
     is_mod: bool,
 ) -> Result<Response, WebError> {
     render_with(
@@ -922,6 +961,7 @@ fn render_state_create(
             delete_url: None,
             error,
             user_login,
+            user_avatar_url,
             current_page: crate::nav::MEMORY_STATE,
             is_mod,
             show_user_fm: false,

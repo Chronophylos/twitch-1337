@@ -206,7 +206,7 @@ pub fn insert_session_as(
 ) -> (String, String, String) {
     let (sid, csrf) = state
         .sessions
-        .insert(user_id.to_owned(), user_login.to_owned(), role)
+        .insert(user_id.to_owned(), user_login.to_owned(), role, None)
         .expect("insert session");
     let bare_csrf = hex::encode(csrf);
     let signed_sid = sign_for_tests(state, "tw1337_sid", &sid);

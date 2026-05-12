@@ -51,7 +51,12 @@
 
   <div class="side-footer">
     <div class="me">
-      <span class="avatar" style="width:28px;height:28px;font-size:11px;background:oklch(0.6 0.12 280);">{{ user_login.chars().next().unwrap_or('?') }}</span>
+      {% match user_avatar_url %}
+      {% when Some(url) %}
+        <img class="avatar avatar-img" src="{{ url }}" alt="" loading="lazy" width="28" height="28">
+      {% when None %}
+        <span class="avatar" style="width:28px;height:28px;font-size:11px;background:oklch(0.6 0.12 280);">{{ user_login.chars().next().unwrap_or('?') }}</span>
+      {% endmatch %}
       <div class="me-meta">
         <span class="me-name">{{ user_login }}</span>
         <span class="me-role">{% if is_mod %}broadcaster · mod{% else %}viewer{% endif %}</span>

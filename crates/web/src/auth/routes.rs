@@ -348,8 +348,19 @@ async fn callback(
 
     let (sid, csrf_value) = state
         .sessions
-        .insert(me.id.clone(), me.login.clone(), role)
+        .insert(
+            me.id.clone(),
+            me.login.clone(),
+            role,
+            me.profile_image_url.clone(),
+        )
         .map_err(WebError::Internal)?;
+    if let Some(url) = &me.profile_image_url {
+        state
+            .avatar_cache
+            .prime(&me.id, Some(url), state.clock.as_ref())
+            .await;
+    }
     issue_session_cookies(&cookies, &state.signed_key, sid, &csrf_value, true);
 
     let next_path = cookies

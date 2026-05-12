@@ -31,7 +31,7 @@ fn session_round_trips() {
     ));
     let table = SessionTable::new(Duration::from_secs(7 * 24 * 3600), clock.clone());
     let (id, _csrf) = table
-        .insert("12345".into(), "alice".into(), Role::Mod)
+        .insert("12345".into(), "alice".into(), Role::Mod, None)
         .expect("insert");
     let got = table.get_and_touch(&id).expect("present");
     assert_eq!(got.user_login, "alice");
@@ -45,7 +45,7 @@ fn session_expires_after_ttl() {
     ));
     let table = SessionTable::new(Duration::from_secs(60), clock.clone());
     let (id, _csrf) = table
-        .insert("12345".into(), "alice".into(), Role::Mod)
+        .insert("12345".into(), "alice".into(), Role::Mod, None)
         .unwrap();
     clock.advance(61);
     assert!(
@@ -61,7 +61,7 @@ fn session_sliding_refresh_keeps_alive() {
     ));
     let table = SessionTable::new(Duration::from_secs(120), clock.clone());
     let (id, _csrf) = table
-        .insert("12345".into(), "alice".into(), Role::Mod)
+        .insert("12345".into(), "alice".into(), Role::Mod, None)
         .unwrap();
     clock.advance(60);
     assert!(table.get_and_touch(&id).is_some()); // bumps last_seen

@@ -86,6 +86,20 @@ impl AvatarCache {
         AvatarLookup { cached, missing }
     }
 
+    /// Records a single avatar entry. Used by the OAuth callback so the
+    /// caller's own avatar lands in the cache without an extra batch call.
+    pub async fn prime(&self, user_id: &str, url: Option<&str>, clock: &dyn Clock) {
+        let now = clock.now();
+        let mut entries = self.entries.lock().await;
+        entries.insert(
+            user_id.to_owned(),
+            AvatarEntry {
+                url: url.map(str::to_owned),
+                fetched_at: now,
+            },
+        );
+    }
+
     /// Records helix response. `queried` is the full set of ids that were
     /// requested; ids absent from `users` are stored as negative entries
     /// so repeated lookups for empty/unknown users don't refetch.
