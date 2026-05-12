@@ -244,6 +244,7 @@ where
                 web: web.clone(),
                 emotes: emote_provider,
                 bot_username: bot_username.clone(),
+                doener: doener.clone(),
             },
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
