@@ -26,6 +26,7 @@ fn fake_helix_with_mod(user_id: &str, login: &str) -> Arc<dyn HelixClient> {
     );
     Arc::new(FakeHelix {
         moderators: vec![user_id.to_owned()],
+        followers: vec![],
         users,
     })
 }

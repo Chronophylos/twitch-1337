@@ -621,6 +621,9 @@ fn build_test_web_state(
         async fn is_moderator(&self, _b: &str, _u: &str) -> eyre::Result<bool> {
             Ok(false)
         }
+        async fn is_follower(&self, _b: &str, _u: &str) -> eyre::Result<bool> {
+            Ok(false)
+        }
     }
 
     let web_clock = Arc::new(WebSystemClock);

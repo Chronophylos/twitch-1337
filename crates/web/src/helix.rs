@@ -19,6 +19,8 @@ pub trait HelixClient: Send + Sync {
     async fn fetch_user_by_login(&self, login: &str) -> Result<Option<HelixUser>>;
     /// Single helix call filtered by `user_id`; returns true iff the user is in the moderator list.
     async fn is_moderator(&self, broadcaster_id: &str, user_id: &str) -> Result<bool>;
+    /// Single helix call filtered by `user_id`; returns true iff the user follows the broadcaster.
+    async fn is_follower(&self, broadcaster_id: &str, user_id: &str) -> Result<bool>;
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -135,6 +137,25 @@ impl HelixClient for ReqwestHelixClient {
             "helix moderators (bot token)",
         )
         .await
+    }
+
+    async fn is_follower(&self, broadcaster_id: &str, user_id: &str) -> Result<bool> {
+        #[derive(Deserialize)]
+        struct Resp {
+            total: u64,
+        }
+        let token = self.access_token_provider.current_access_token().await?;
+        let resp: Resp = helix_get(
+            &self.http,
+            &self.helix_base,
+            "/helix/channels/followers",
+            &[("broadcaster_id", broadcaster_id), ("user_id", user_id)],
+            &token,
+            self.client_id.expose_secret(),
+            "helix /channels/followers",
+        )
+        .await?;
+        Ok(resp.total > 0)
     }
 }
 

@@ -37,6 +37,7 @@ impl Clock for FixedClock {
 
 pub struct FakeHelix {
     pub moderators: Vec<String>,
+    pub followers: Vec<String>,
     pub users: HashMap<String, HelixUser>,
 }
 
@@ -50,6 +51,9 @@ impl HelixClient for FakeHelix {
     }
     async fn is_moderator(&self, _broadcaster: &str, user_id: &str) -> eyre::Result<bool> {
         Ok(self.moderators.iter().any(|m| m == user_id))
+    }
+    async fn is_follower(&self, _broadcaster: &str, user_id: &str) -> eyre::Result<bool> {
+        Ok(self.followers.iter().any(|f| f == user_id))
     }
 }
 
