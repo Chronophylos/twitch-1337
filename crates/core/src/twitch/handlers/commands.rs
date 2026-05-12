@@ -87,8 +87,6 @@ where
         emote_provider,
     } = cfg;
 
-    let _ = doener; // consumed in Task 11
-
     let default_suspend_duration = Duration::from_secs(suspend.default_duration_secs);
 
     let broadcast_rx = broadcast_tx.subscribe();
@@ -161,6 +159,10 @@ where
         Box::new(commands::feedback::FeedbackCommand::new(
             data_dir.clone(),
             Duration::from_secs(cooldowns.feedback),
+        )),
+        Box::new(commands::doener::DoenerCommand::new(
+            doener.clone(),
+            Duration::from_secs(cooldowns.doener),
         )),
     ];
 
