@@ -192,83 +192,131 @@ No `[doener]` config block. Base URL and timeout are consts.
 
 ## AI tool
 
-Registered in `crates/core/src/ai/content/tools.rs::ai_tools()` (always
-present when `[ai]` is configured — not gated by `[ai.web]`, since this is a
-first-party data tool, not generic web access).
+The existing `ai_tools()` in `crates/core/src/ai/content/tools.rs` is only
+pushed when `[ai.web]` is enabled (see `crates/core/src/ai/command.rs` near
+line 408: `if self.web.is_some() { tools.extend(content::ai_tools()); }`).
+The doener tool must work even when web is disabled, so it does not live
+inside `ContentToolExecutor`. Instead it gets its own thin module.
+
+New module `crates/core/src/ai/doener_tool.rs`:
 
 ```rust
-ToolDefinition {
-    name: "doener_index".into(),
-    description: "Look up the German Döner price index from dönerindex.com. \
-        Without `city`, returns the country-wide aggregate (location count, \
-        avg/min/max price). With `city` (free-form), returns the top matching \
-        cities and their per-city aggregate. Use this for any question about \
-        Döner prices, kebab prices, or how expensive Döner is in a German city.".into(),
-    parameters: serde_json::json!({
-        "type": "object",
-        "properties": {
-            "city": {
-                "type": "string",
-                "description": "Optional city name or prefix. German spelling preferred (e.g. 'Köln', 'München')."
+use std::sync::Arc;
+use llm::{ToolCall, ToolDefinition, ToolResultMessage};
+use serde::Deserialize;
+use serde_json::json;
+
+use crate::doener::DoenerClient;
+
+pub const DOENER_TOOL_NAME: &str = "doener_index";
+
+#[derive(Debug, Deserialize)]
+struct DoenerArgs {
+    #[serde(default)]
+    city: Option<String>,
+}
+
+pub fn doener_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: DOENER_TOOL_NAME.into(),
+        description: "Look up the German Döner price index from dönerindex.com. \
+            Without `city`, returns the country-wide aggregate (location count, \
+            avg/min/max price). With `city` (free-form), returns the top matching \
+            cities and their per-city aggregate. Use this for any question about \
+            Döner prices, kebab prices, or how expensive Döner is in a German city.".into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "Optional city name or prefix. German spelling preferred (e.g. 'Köln', 'München')."
+                }
             }
+        }),
+    }
+}
+
+pub async fn execute_doener_index(
+    client: &DoenerClient,
+    call: &ToolCall,
+) -> ToolResultMessage {
+    let args = match call.parse_args::<DoenerArgs>() {
+        Ok(a) => a,
+        Err(e) => {
+            return ToolResultMessage::for_call(
+                call,
+                json!({"error": "invalid_arguments", "details": e.to_string()}).to_string(),
+            );
         }
-    }),
+    };
+
+    let payload = match args.city.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => match client.stats().await {
+            Ok(stats) => json!({"scope": "global", "stats": stats}),
+            Err(_) => json!({"error": "doener_index API unavailable"}),
+        },
+        Some(q) => match client.search_cities(q).await {
+            Ok(hits) => {
+                let top: Vec<_> = hits.into_iter().take(5).collect();
+                json!({"scope": "city", "query": q, "hits": top})
+            }
+            Err(_) => json!({"error": "doener_index API unavailable"}),
+        },
+    };
+    ToolResultMessage::for_call(call, payload.to_string())
 }
 ```
 
-Dispatch added to `crates/core/src/ai/content/executor.rs::execute_tool_call`:
+`GlobalStats` and `CityHit` derive `Serialize` (in addition to `Deserialize`)
+so the `serde_json::json!` macro can embed them. They contain no secrets, so
+the project's "no Serialize on config" rule does not apply.
 
-```rust
-"doener_index" => match call.parse_args::<DoenerIndexArgs>() {
-    Ok(args) => self.execute_doener_index(args).await,
-    Err(err) => format_args_error(...),
-},
-```
+`AiCommand` is wired to receive the client and dispatch the tool:
 
-`DoenerIndexArgs { city: Option<String> }`.
+- `AiCommandDeps` grows `pub doener: Arc<DoenerClient>`.
+- `AiCommand` stores it in a `doener: Arc<DoenerClient>` field.
+- `V2Executor` grows `doener: &'a DoenerClient` and routes
+  `DOENER_TOOL_NAME` calls to `execute_doener_index`, regardless of whether
+  `web` is `Some`.
+- `command.rs` push site (line 407–410) becomes:
 
-`execute_doener_index` returns JSON (not formatted chat strings — the model
-phrases it):
+  ```rust
+  let mut tools = chat_turn_tools();
+  tools.push(crate::ai::doener_tool::doener_tool());
+  if self.web.is_some() {
+      tools.extend(content::ai_tools());
+  }
+  ```
 
-```jsonc
-// no city
-{"scope": "global", "stats": { /* GlobalStats */ }}
+- `is_web_tool` is **not** modified. `doener_index` is dispatched by an
+  explicit name check inside `V2Executor::execute` placed before the
+  `is_web_tool` branch.
 
-// city given, 0 hits
-{"scope": "city", "query": "xyz", "hits": []}
-
-// city given, N hits (top 5, raw aggregate)
-{"scope": "city", "query": "Han", "hits": [
-  {"city": "Hannover", "location_count": 51, "avg_price": 6.0, "min_price": 6.0, "max_price": 6.0},
-  ...
-]}
-
-// API failure
-{"error": "doener_index API unavailable"}
-```
-
-The `Executor` gains an `Arc<DoenerClient>` field; constructed in
-`Services` alongside the other shared clients.
-
-`is_web_tool` does not include `doener_index`. The tool is allowed even when
-`[ai.web]` is disabled.
+The tool ships any time `[ai]` is configured, regardless of `[ai.web]`.
 
 ## Wiring
 
-`Services` (the struct holding shared deps in `crates/core/src/lib.rs`) grows:
+`Services` (`crates/core/src/lib.rs`) grows:
 
 ```rust
 pub doener: Arc<DoenerClient>,
 ```
 
-Constructed once at startup with `DoenerClient::new()`. If construction fails
-(reqwest builder), bot startup fails — same posture as the aviation client's
-historical behavior wasn't quite this, but `DoenerClient::new` only fails on
-an invalid TLS root store / OS-level reqwest error, which is fatal anyway.
+Constructed once at startup in `crates/twitch-1337/src/main.rs` with
+`Arc::new(DoenerClient::new()?)`. `DoenerClient::new()` only fails on an
+invalid reqwest builder (OS-level TLS issue), which is fatal anyway, so the
+`?` propagation aborts startup the same way as other infrastructure-level
+errors.
 
-The doener client is consumed by:
-- the `!dpi` command handler (`crates/core/src/commands/doener.rs`)
-- the AI executor (`crates/core/src/ai/content/executor.rs`)
+`run_bot` destructures the new field. `CommandHandlerConfig` and
+`AiCommandDeps` both grow `pub doener: Arc<DoenerClient>`. The
+`run_generic_command_handler` body clones it once for the chat command and
+once for `AiCommandDeps`.
+
+Consumers:
+- `!dpi` command (`crates/core/src/commands/doener.rs`)
+- `V2Executor` inside `AiCommand` (`crates/core/src/ai/command.rs`) routes
+  `doener_index` to `crate::ai::doener_tool::execute_doener_index`.
 
 ## Error handling
 
@@ -305,26 +353,36 @@ model decides how to surface this; existing executor pattern.
   `with_base_url` + a low-timeout test-only `reqwest::Client` to keep the
   test fast.
 
-### Executor
+### Doener tool
 
-`crates/core/src/ai/content/executor.rs` — add tests beside existing ones:
+`crates/core/src/ai/doener_tool.rs#[cfg(test)] mod tests`:
 
-- `doener_index` with no city → JSON contains `"scope":"global"`.
-- `doener_index` with city → JSON contains `"scope":"city"` and hits.
-- Args parse error path covered (model passes a non-string `city`).
+- `doener_tool()` returns a definition named `"doener_index"`.
+- `execute_doener_index` with empty/missing `city` → JSON contains
+  `"scope":"global"` and the parsed stats.
+- `execute_doener_index` with a matching city → JSON contains
+  `"scope":"city"` and a non-empty `hits` array.
+- `execute_doener_index` with a query that returns 0 hits → `"hits":[]`.
+- Args parse error path (model passes `{"city": 123}`) → returned JSON
+  contains `"error":"invalid_arguments"`.
 
 Use wiremock with a base URL injected into the test `DoenerClient`.
 
 ### Command
 
-`crates/core/src/commands/doener.rs` — wiremock for the upstream, fake IRC
-client, assert the bot says the expected string for each branch.
+`crates/core/src/commands/doener.rs` — unit-test the branches via the
+`format::*` helpers (already tested) plus a wiremock-backed test using
+`TestBotBuilder` from `crates/core/tests/common/` for the global branch.
+Single happy-path integration test is enough — per-branch coverage lives in
+the format and client tests.
 
-### `ai_tools_surface_contains_search_and_read`
+### `ai_tools()` test
 
-Existing test in `tools.rs` asserts exact tool order. Update to include
-`doener_index`. Add a separate assertion that `doener_index` is **not** in
-`WEB_TOOL_NAMES`.
+Existing `ai_tools_surface_contains_search_and_read` test asserts exact tool
+order from `ai_tools()`. Do not modify it — the doener tool is not added by
+`ai_tools()`. Add a separate test in `crates/core/src/ai/doener_tool.rs`
+asserting that `is_web_tool(DOENER_TOOL_NAME)` is `false`, so a future
+refactor cannot silently regress by gating the doener tool behind `[ai.web]`.
 
 ## Out of scope
 
@@ -342,16 +400,31 @@ New:
 - `crates/core/src/doener/types.rs`
 - `crates/core/src/doener/format.rs`
 - `crates/core/src/commands/doener.rs`
+- `crates/core/src/ai/doener_tool.rs`
 - `docs/superpowers/specs/2026-05-11-donerpreisindex-design.md` (this file)
 
 Modified:
-- `crates/core/src/lib.rs` — add `pub mod doener;`, `Services.doener`, wire.
-- `crates/core/src/commands/mod.rs` — register `!dpi`.
-- `crates/core/src/config.rs` — `CooldownsConfig.doener` (default 30).
-- `crates/core/src/ai/content/tools.rs` — register `doener_index` tool def.
-- `crates/core/src/ai/content/executor.rs` — `execute_doener_index`, dispatch
-  arm, `Executor.doener` field, executor constructor sites.
+- `crates/core/src/lib.rs` — `pub mod doener;`, `Services.doener`, destructure
+  the new field, thread it through `SpawnDeps`/`spawn_handlers` to the
+  command handler.
+- `crates/core/src/ai/mod.rs` — `pub mod doener_tool;`.
+- `crates/core/src/commands/mod.rs` — `pub mod doener;`.
+- `crates/core/src/twitch/handlers/commands.rs` — `CommandHandlerConfig.doener`,
+  destructure it, push `DoenerCommand` into `cmd_list`, pass into
+  `AiCommandDeps`.
+- `crates/core/src/twitch/handlers/spawn.rs` — `SpawnDeps.doener`, plumb to
+  `CommandHandlerConfig`.
+- `crates/core/src/ai/command.rs` — `AiCommandDeps.doener`,
+  `AiCommand.doener`, push `doener_tool()` unconditionally, route the call
+  in `V2Executor::execute`.
+- `crates/core/src/config.rs` — `CooldownsConfig.doener` with
+  `default_doener_cooldown() -> 30`.
+- `crates/twitch-1337/src/main.rs` — construct `DoenerClient`, place in
+  `Services`.
 - `crates/twitch-1337/config.toml.example` — `# doener = 30` line.
+
+Cargo: no new dependencies (reqwest, serde, eyre, wiremock, async-trait
+already in tree).
 
 Cargo: no new dependencies (reqwest, serde, eyre, wiremock, async-trait
 already in tree).
