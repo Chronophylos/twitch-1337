@@ -475,7 +475,7 @@ kbd {
   gap: 8px;
 }
 .table.pings .thead, .table.pings .tr {
-  grid-template-columns: 1.4fr 2.4fr 0.9fr 1.1fr 1fr 80px;
+  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) 100px 200px 80px;
 }
 .table.state .thead, .table.state .tr {
   grid-template-columns: 1.6fr 1.4fr 1.4fr 1.2fr 80px;
