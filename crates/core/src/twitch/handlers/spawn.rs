@@ -69,8 +69,7 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     pub config: Configuration,
     pub clock: Arc<dyn Clock>,
     pub data_dir: PathBuf,
-    pub doener: Arc<crate::doener::DoenerClient>,
-    pub doeneratlas: Arc<crate::doener::DoeneratlasClient>,
+    pub doener: Arc<crate::doener::DoeneratlasClient>,
 
     // 1337 tracker.
     pub leaderboard: Arc<RwLock<HashMap<String, PersonalBest>>>,
@@ -116,7 +115,6 @@ where
         clock,
         data_dir,
         doener,
-        doeneratlas,
         leaderboard,
         ping_manager,
         suspension_manager,
@@ -261,7 +259,6 @@ where
                 channel: config.twitch.channel.clone(),
                 data_dir: data_dir.clone(),
                 doener: doener.clone(),
-                doeneratlas: doeneratlas.clone(),
                 suspension_manager: suspension_manager.clone(),
                 suspend: config.suspend.clone(),
                 emote_provider,

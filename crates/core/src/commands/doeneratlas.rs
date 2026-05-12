@@ -114,7 +114,7 @@ where
                 .client
                 .say_in_reply_to(
                     ctx.privmsg,
-                    "Nutze: !döner <Euro-Betrag> — Stadtpreise: !dpi <Suche> FDM".to_string(),
+                    "Nutze: !döner <Euro-Betrag> — Umrechnung nutzt den Döneratlas-Deutschland-Ø. Stadtpreise: !dpi <Suche> FDM".to_string(),
                 )
                 .await
             {

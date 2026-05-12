@@ -467,7 +467,7 @@ pub struct CooldownsConfig {
     pub news: u64,
     #[serde(default = "default_up_cooldown")]
     pub up: u64,
-    /// Cooldown for `!dpi` (Dönerindex API).
+    /// Cooldown for `!dpi` (Döneratlas search + stats).
     #[serde(default = "default_doener_cooldown")]
     pub doener: u64,
     /// Cooldown for `!döner` / `!doener` (Döneratlas JSON API).

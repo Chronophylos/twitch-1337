@@ -57,7 +57,6 @@ pub struct TestBotBuilder {
     whisper_failure: bool,
     emote_glossary_override: Option<String>,
     doener_base_url: Option<String>,
-    doeneratlas_base_url: Option<String>,
 }
 
 impl TestBotBuilder {
@@ -69,7 +68,6 @@ impl TestBotBuilder {
             whisper_failure: false,
             emote_glossary_override: None,
             doener_base_url: None,
-            doeneratlas_base_url: None,
         }
     }
 
@@ -136,15 +134,9 @@ impl TestBotBuilder {
         self
     }
 
-    /// Override the doener service base URL to point at a mock server.
+    /// Override the Döneratlas API base URL (wiremock) for `!dpi` / `!döner` / AI tool.
     pub fn with_doener_base_url(mut self, base: impl Into<String>) -> Self {
         self.doener_base_url = Some(base.into());
-        self
-    }
-
-    /// Override the Döneratlas API base URL to point at a mock server.
-    pub fn with_doeneratlas_base_url(mut self, base: impl Into<String>) -> Self {
-        self.doeneratlas_base_url = Some(base.into());
         self
     }
 
@@ -269,15 +261,9 @@ impl TestBotBuilder {
                 .is_some()
                 .then(|| llm.clone() as Arc<dyn LlmClient>),
             aviation: Some(aviation),
-            doener: Arc::new(twitch_1337::doener::DoenerClient::with_base_url(
+            doener: Arc::new(twitch_1337::doener::DoeneratlasClient::with_base_url(
                 reqwest::Client::new(),
                 self.doener_base_url
-                    .clone()
-                    .unwrap_or_else(|| "http://127.0.0.1:1".to_string()),
-            )),
-            doeneratlas: Arc::new(twitch_1337::doener::DoeneratlasClient::with_base_url(
-                reqwest::Client::new(),
-                self.doeneratlas_base_url
                     .clone()
                     .unwrap_or_else(|| "http://127.0.0.1:1".to_string()),
             )),
