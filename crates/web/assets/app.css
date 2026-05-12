@@ -337,6 +337,10 @@ kbd {
   font-family: var(--mono);
   font-size: 18px;
   margin-left: 6px;
+  /* Mono digits sit lower than the sans h1 baseline at this size; nudge
+     up so "Pings (1)" baseline-aligns. */
+  position: relative;
+  top: -0.18em;
 }
 .page-sub {
   color: var(--fg-3);
