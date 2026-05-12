@@ -1,10 +1,10 @@
 //! Owner-tier (`require_owner`) integration scenarios.
 //!
-//! Task 9 will land a real owner-gated `/settings` route. Until then we
-//! mount a tiny `/_test_owner` route behind the `require_owner` layer in
-//! the test fixture so we can exercise the middleware end-to-end. The
-//! shape mirrors the pattern in `auth_viewer_tier.rs` and
-//! `leaderboard_route.rs`.
+//! These tests focus on the `require_owner` middleware boundary via a
+//! small test-only `/_test_owner` route so the middleware can be
+//! exercised end-to-end in isolation. The real `/settings` route is
+//! covered in `settings_route.rs`. The shape mirrors the pattern in
+//! `auth_viewer_tier.rs` and `leaderboard_route.rs`.
 
 mod helpers;
 
