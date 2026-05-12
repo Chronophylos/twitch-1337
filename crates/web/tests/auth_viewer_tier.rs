@@ -147,7 +147,6 @@ async fn viewer_dropped_from_allowlist_after_recheck_window() {
     install_crypto();
     let (mut state, _td_p, _td_m) =
         build_state_with_overrides(empty_helix(), Duration::from_secs(0)).await;
-    // Start with user_id "42" allowlisted.
     state.viewer_allowlist = Arc::from(vec!["42".to_owned()].into_boxed_slice());
 
     let (sid, csrf, _bare) = insert_session_as(&state, "42", "alice", Role::Viewer);
@@ -168,8 +167,8 @@ async fn viewer_dropped_from_allowlist_after_recheck_window() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "first request should be 200");
 
-    // Build a new app from a fresh state with allowlist cleared, reusing the
-    // same SessionTable so the existing sid is still valid.
+    // Clone reuses the same SessionTable Arc, so the existing sid is still
+    // valid after we clear the allowlist on the new state.
     let mut state2 = state.clone();
     state2.viewer_allowlist = Arc::from(Vec::<String>::new().into_boxed_slice());
     let app2 = twitch_1337_web::build_router(state2);

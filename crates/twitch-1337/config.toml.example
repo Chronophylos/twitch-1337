@@ -24,10 +24,7 @@ client_secret = "your_client_secret"
 # Twitch user IDs of hidden admins (can manage pings without being a mod)
 # hidden_admins = ["12345678"]
 
-# Twitch user IDs granted read-only viewer access to the web dashboard. Same
-# shape as hidden_admins. Mods always pass; this list is consulted only when
-# the mod check denies. Empty by default — viewer access is opt-in. IDs are
-# used so allowlist entries survive Twitch login renames.
+# Twitch user IDs granted read-only viewer access to the web dashboard.
 # viewer_allowlist = ["12345678", "87654321"]
 
 # Optional: A separate channel for testing bot commands (broadcaster-only access)

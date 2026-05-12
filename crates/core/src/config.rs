@@ -25,11 +25,8 @@ pub struct TwitchConfiguration {
     pub expected_latency: u32,
     #[serde(default)]
     pub hidden_admins: Vec<String>,
-    /// Twitch user IDs (numeric strings, same shape as `hidden_admins`)
-    /// granted viewer-tier dashboard access. Mods always pass; this list is
-    /// consulted only when the mod check denies. Empty by default — viewer
-    /// access is opt-in. IDs are used so allowlist entries survive login
-    /// renames on Twitch.
+    /// Twitch user IDs granted read-only viewer access to the web dashboard.
+    /// IDs (not logins) so entries survive Twitch login renames.
     #[serde(default)]
     pub viewer_allowlist: Vec<String>,
     #[serde(default)]

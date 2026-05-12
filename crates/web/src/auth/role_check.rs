@@ -81,11 +81,7 @@ async fn is_moderator_with_user_token(
     .await
 }
 
-/// Synchronous allowlist check by Twitch user id. The list lives in
-/// `[twitch].viewer_allowlist` (numeric user IDs, same shape as
-/// `hidden_admins`) and grants viewer-tier dashboard access without any
-/// Helix round-trip. Mods are checked first; this list is consulted only
-/// when the mod check denies.
+/// Allow iff `user_id` appears in `allowlist`.
 pub fn check_in_allowlist(user_id: &str, allowlist: &[String]) -> GateOutcome {
     if allowlist.iter().any(|id| id == user_id) {
         GateOutcome::Allow

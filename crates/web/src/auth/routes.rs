@@ -320,9 +320,6 @@ async fn callback(
         .await
         .map_err(|e| WebError::OAuthExchange(e.wrap_err("user lookup")))?;
 
-    // Initial role check: try mod via the user's own access token (granted
-    // `user:read:moderated_channels` via OAuth), then the static allowlist,
-    // then deny.
     let role = match crate::auth::role_check::check_is_mod_with_token(
         &state,
         &me.id,
