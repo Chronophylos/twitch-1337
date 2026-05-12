@@ -262,6 +262,8 @@ impl TestBotBuilder {
                 irc_connected.clone(),
                 ping_manager.clone(),
                 memory_store.clone(),
+                settings_handle.clone(),
+                settings_store.clone(),
             );
             let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
                 let deps = twitch_1337_web::WebDeps { bind_addr, state };
@@ -642,6 +644,8 @@ fn build_test_web_state(
     irc_connected: Arc<AtomicBool>,
     ping_manager: Arc<tokio::sync::RwLock<twitch_1337::ping::PingManager>>,
     memory_store: twitch_1337::ai::memory::store::MemoryStore,
+    settings: twitch_1337::settings::SettingsHandle,
+    settings_store: Arc<twitch_1337::settings::SettingsStore>,
 ) -> twitch_1337_web::WebState {
     use twitch_1337_web::auth::OAuthCtx;
     use twitch_1337_web::auth::session::SessionTable;
@@ -701,5 +705,8 @@ fn build_test_web_state(
         avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
             std::time::Duration::from_secs(3600),
         )),
+        owner_id: None,
+        settings,
+        settings_store,
     }
 }

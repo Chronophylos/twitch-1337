@@ -157,6 +157,18 @@ async fn build_state_inner(
     // Tests don't need a real production secret; a fixed 32-byte key keeps
     // signed-cookie round-trips deterministic across reruns.
     let signed_key = tower_cookies::Key::from(&[0x42u8; 64]);
+    let settings_dir = TempDir::new().expect("settings tempdir");
+    let audit: Arc<dyn twitch_1337_core::settings::AuditLog> =
+        Arc::new(twitch_1337_core::settings::FileAuditLog::new(
+            settings_dir.path().join("settings_audit.log"),
+        ));
+    let (settings_store, settings_handle) =
+        twitch_1337_core::settings::SettingsStore::open(settings_dir.path(), audit)
+            .expect("open settings store");
+    // The TempDir is intentionally dropped here; no helper-driven test
+    // exercises the `apply`/`reset` paths that would touch the on-disk
+    // `settings.ron` or the audit log.
+    drop(settings_dir);
     let state = WebState {
         sessions,
         helix,
@@ -177,6 +189,9 @@ async fn build_state_inner(
         avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
             Duration::from_secs(3600),
         )),
+        owner_id: None,
+        settings: settings_handle,
+        settings_store,
     };
     (state, pings_dir, memory_dir)
 }

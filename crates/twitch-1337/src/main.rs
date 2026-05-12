@@ -137,6 +137,8 @@ pub async fn main() -> Result<()> {
                 memory_store.clone(),
                 leaderboard.clone(),
                 aviation_tracker_tx.clone(),
+                settings_handle.clone(),
+                settings_store.clone(),
             )
             .await?,
         )
@@ -176,6 +178,7 @@ pub async fn main() -> Result<()> {
 /// the helix client + OAuth context, binds the listener loud (port-in-use
 /// aborts startup), and returns a closure that — given the shared
 /// shutdown `Notify` — spawns `run_web` on a tokio task.
+#[allow(clippy::too_many_arguments)]
 async fn build_web_spawner(
     config: &twitch_1337::config::Configuration,
     credentials: AuthenticatedLoginCredentials,
@@ -184,6 +187,8 @@ async fn build_web_spawner(
     memory_store: MemoryStore,
     leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
     tracker_tx: Option<Arc<tokio::sync::mpsc::Sender<aviation::TrackerCommand>>>,
+    settings: twitch_1337::settings::SettingsHandle,
+    settings_store: Arc<twitch_1337::settings::SettingsStore>,
 ) -> Result<twitch_1337::WebSpawner> {
     let bind_addr: std::net::SocketAddr = config
         .web
@@ -242,6 +247,8 @@ async fn build_web_spawner(
         );
     }
 
+    let owner_id = config.twitch.owner.as_deref().map(Arc::<str>::from);
+
     let state = twitch_1337_web::WebState {
         sessions,
         helix: helix as Arc<dyn twitch_1337_web::helix::HelixClient>,
@@ -262,6 +269,9 @@ async fn build_web_spawner(
         avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
             std::time::Duration::from_secs(3600),
         )),
+        owner_id,
+        settings,
+        settings_store,
     };
 
     Ok(Box::new(move |shutdown| {
