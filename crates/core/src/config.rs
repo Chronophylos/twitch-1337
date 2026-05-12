@@ -6,7 +6,7 @@
 use eyre::{Result, WrapErr, bail};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::{ai::prefill, database};
 
@@ -436,73 +436,6 @@ fn validate_reasoning_effort(path: &str, value: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn default_cooldown() -> u64 {
-    300
-}
-
-fn default_ai_cooldown() -> u64 {
-    30
-}
-
-fn default_news_cooldown() -> u64 {
-    60
-}
-
-fn default_up_cooldown() -> u64 {
-    30
-}
-
-fn default_feedback_cooldown() -> u64 {
-    300
-}
-
-fn default_doener_cooldown() -> u64 {
-    30
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CooldownsConfig {
-    #[serde(default = "default_ai_cooldown")]
-    pub ai: u64,
-    #[serde(default = "default_news_cooldown")]
-    pub news: u64,
-    #[serde(default = "default_up_cooldown")]
-    pub up: u64,
-    #[serde(default = "default_feedback_cooldown")]
-    pub feedback: u64,
-    #[serde(default = "default_doener_cooldown")]
-    pub doener: u64,
-}
-
-impl Default for CooldownsConfig {
-    fn default() -> Self {
-        Self {
-            ai: default_ai_cooldown(),
-            news: default_news_cooldown(),
-            up: default_up_cooldown(),
-            feedback: default_feedback_cooldown(),
-            doener: default_doener_cooldown(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PingsConfig {
-    #[serde(default = "default_cooldown")]
-    pub cooldown: u64,
-    #[serde(default)]
-    pub public: bool,
-}
-
-impl Default for PingsConfig {
-    fn default() -> Self {
-        Self {
-            cooldown: default_cooldown(),
-            public: false,
-        }
-    }
-}
-
 fn default_suspend_duration() -> u64 {
     600
 }
@@ -597,10 +530,6 @@ pub struct Configuration {
     #[serde(default)]
     pub aviationstack: Option<AviationstackConfig>,
     #[serde(default)]
-    pub pings: PingsConfig,
-    #[serde(default)]
-    pub cooldowns: CooldownsConfig,
-    #[serde(default)]
     pub suspend: SuspendConfig,
     #[serde(default)]
     pub ai: Option<AiConfig>,
@@ -631,8 +560,6 @@ impl Configuration {
                 ai_channel: None,
             },
             aviationstack: None,
-            pings: PingsConfig::default(),
-            cooldowns: CooldownsConfig::default(),
             suspend: SuspendConfig::default(),
             ai: None,
             schedules: Vec::new(),
@@ -659,8 +586,6 @@ pub async fn load_configuration() -> Result<Configuration> {
         toml::from_str(&data).wrap_err("Failed to parse config.toml - check for syntax errors")?;
 
     validate_config(&config)?;
-
-    debug!(public = config.pings.public, "Ping trigger policy");
 
     info!(
         owner_configured = config.twitch.owner.is_some(),
@@ -1342,17 +1267,5 @@ mod tests {
         assert_eq!(cfg.cap_for(Bucket::Audio), cfg.max_audio_size);
         assert_eq!(cfg.cap_for(Bucket::Video), cfg.max_video_size);
         assert_eq!(cfg.cap_for(Bucket::Text), cfg.max_text_size);
-    }
-
-    #[test]
-    fn cooldowns_doener_defaults_to_30() {
-        let c: CooldownsConfig = toml::from_str("").expect("empty cooldowns parses");
-        assert_eq!(c.doener, 30);
-    }
-
-    #[test]
-    fn cooldowns_doener_overrides_via_toml() {
-        let c: CooldownsConfig = toml::from_str("doener = 5").expect("parses");
-        assert_eq!(c.doener, 5);
     }
 }
