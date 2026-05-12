@@ -329,7 +329,7 @@ async fn news_command_allows_longer_followup_whisper() {
 
     bot.send("carol", "a lot more happened").await;
     // Wait past the 1s news cooldown so alice's second !news isn't rate-limited.
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
     bot.llm.push_chat("lang ".repeat(300));
     bot.send_privmsg_as("alice", "alice-id", "!news").await;
     let second = bot.expect_whisper(Duration::from_secs(2)).await;
@@ -462,7 +462,7 @@ async fn tldr_command_allows_longer_followup_whisper() {
     bot.send_at("carol", "very long tldr topic", now.timestamp_millis())
         .await;
     // Wait past the 1s news cooldown so alice's second !tldr isn't rate-limited.
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
 
     bot.llm.push_chat("lang ".repeat(300));
     bot.send_privmsg_as("alice", "alice-id", "!tldr").await;

@@ -95,9 +95,9 @@ pub async fn main() -> Result<()> {
     // Dashboard-managed runtime settings. Opened here so the same Arc-backed
     // store can be shared with both the IRC handlers (via `Services.settings`)
     // and `WebState` (Task 10 wires the POST handler). The audit log lives at
-    // `$DATA_DIR/settings.audit.jsonl`.
+    // `$DATA_DIR/settings_audit.log`.
     let audit_log: Arc<dyn twitch_1337::settings::AuditLog> = Arc::new(
-        twitch_1337::settings::FileAuditLog::new(get_data_dir().join("settings.audit.jsonl")),
+        twitch_1337::settings::FileAuditLog::new(get_data_dir().join("settings_audit.log")),
     );
     let (settings_store, settings_handle) =
         twitch_1337::settings::SettingsStore::open(&get_data_dir(), audit_log)

@@ -162,7 +162,7 @@ where
         whisper,
         data_dir,
         settings,
-        settings_store: _settings_store,
+        settings_store: _,
         emote_glossary_override,
         irc_connected,
         web_spawner,
