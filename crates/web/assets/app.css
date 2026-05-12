@@ -342,6 +342,10 @@ kbd {
   font-weight: 400;
   font-family: var(--mono);
   font-size: 18px;
+  /* Center align reads slightly too high vs the title cap-height;
+     baseline reads too low because of paren descenders. Nudge down
+     a hair from center to land between them. */
+  transform: translateY(0.08em);
 }
 .page-sub {
   color: var(--fg-3);
