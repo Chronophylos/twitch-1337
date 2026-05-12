@@ -126,12 +126,13 @@ mod settings_live_tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::settings::{Settings, SettingsHandle};
+    use crate::settings::Settings;
 
     #[test]
     fn reads_cooldown_and_public_from_handle_at_call_time() {
         let initial = Settings::compiled_defaults();
-        let handle: SettingsHandle = Arc::new(arc_swap::ArcSwap::from_pointee(initial));
+        let handle: crate::settings::SettingsHandle =
+            Arc::new(arc_swap::ArcSwap::from_pointee(initial));
         let mgr = Arc::new(tokio::sync::RwLock::new(crate::ping::PingManager::empty()));
         let cmd = PingTriggerCommand::new(mgr.clone(), handle.clone());
         // Snapshot the values seen by the command before and after a swap.
