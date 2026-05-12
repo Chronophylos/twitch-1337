@@ -1,5 +1,6 @@
 //! Append-only JSON-lines audit log for settings changes.
 
+#[cfg(any(test, feature = "testing"))]
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
@@ -58,10 +59,12 @@ impl AuditLog for FileAuditLog {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 pub struct MemoryAuditLog {
     entries: Mutex<Vec<AuditEntry>>,
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl MemoryAuditLog {
     pub fn new() -> Self {
         Self {
@@ -74,12 +77,14 @@ impl MemoryAuditLog {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl Default for MemoryAuditLog {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl AuditLog for MemoryAuditLog {
     fn append(&self, entry: &AuditEntry) -> Result<(), AuditError> {
         self.entries.lock().unwrap().push(entry.clone());
