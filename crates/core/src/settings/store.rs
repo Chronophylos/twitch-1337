@@ -41,7 +41,7 @@ impl SettingsStore {
     ) -> Result<(Arc<Self>, SettingsHandle), SettingsError> {
         let path = data_dir.join(FILE_NAME);
         let defaults = Settings::compiled_defaults();
-        let overrides = load_or_quarantine(&path, &defaults)?;
+        let overrides = load_or_quarantine(&path)?;
         let resolved = Settings::resolve(&defaults, &overrides);
         if let Err(errs) = resolved.validate() {
             warn!(
@@ -85,14 +85,14 @@ impl SettingsStore {
         actor: Actor,
     ) -> Result<Settings, SettingsError> {
         let _g = self.write_lock.lock().await;
-        let mut current = load_overrides(&self.path)?.unwrap_or_default();
+        let mut current = load_overrides_async(&self.path).await?.unwrap_or_default();
         let prior_resolved = Settings::resolve(&self.defaults, &current);
         merge_into(&mut current, &patch);
         let resolved = Settings::resolve(&self.defaults, &current);
         if let Err(errs) = resolved.validate() {
             return Err(SettingsError::Validation(errs));
         }
-        crate::util::persist::atomic_save_ron(&current, &self.path)?;
+        crate::util::persist::atomic_save_ron_async(&current, &self.path).await?;
         self.handle.store(Arc::new(resolved.clone()));
         let changes = diff_changes(&prior_resolved, &resolved);
         if !changes.is_empty() {
@@ -115,14 +115,14 @@ impl SettingsStore {
         actor: Actor,
     ) -> Result<Settings, SettingsError> {
         let _g = self.write_lock.lock().await;
-        let mut current = load_overrides(&self.path)?.unwrap_or_default();
+        let mut current = load_overrides_async(&self.path).await?.unwrap_or_default();
         let prior_resolved = Settings::resolve(&self.defaults, &current);
         match section {
             SettingsSection::Cooldowns => current.cooldowns = Default::default(),
             SettingsSection::Pings => current.pings = Default::default(),
         }
         let resolved = Settings::resolve(&self.defaults, &current);
-        crate::util::persist::atomic_save_ron(&current, &self.path)?;
+        crate::util::persist::atomic_save_ron_async(&current, &self.path).await?;
         self.handle.store(Arc::new(resolved.clone()));
         let changes = diff_changes(&prior_resolved, &resolved);
         if !changes.is_empty() {
@@ -140,10 +140,7 @@ impl SettingsStore {
     }
 }
 
-fn load_or_quarantine(
-    path: &Path,
-    _defaults: &Settings,
-) -> Result<SettingsOverrides, SettingsError> {
+fn load_or_quarantine(path: &Path) -> Result<SettingsOverrides, SettingsError> {
     match load_overrides(path) {
         Ok(Some(o)) => Ok(o),
         Ok(None) => Ok(SettingsOverrides::default()),
@@ -160,6 +157,15 @@ fn load_overrides(path: &Path) -> Result<Option<SettingsOverrides>, SettingsErro
         return Ok(None);
     }
     let body = std::fs::read_to_string(path)?;
+    let parsed: SettingsOverrides = ron::from_str(&body)?;
+    Ok(Some(parsed))
+}
+
+async fn load_overrides_async(path: &Path) -> Result<Option<SettingsOverrides>, SettingsError> {
+    if !tokio::fs::try_exists(path).await? {
+        return Ok(None);
+    }
+    let body = tokio::fs::read_to_string(path).await?;
     let parsed: SettingsOverrides = ron::from_str(&body)?;
     Ok(Some(parsed))
 }
