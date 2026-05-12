@@ -267,6 +267,7 @@ async fn auth_start(
         .authorize_url(move || csrf_for_url.clone())
         .add_scope(Scope::new("user:read:email".to_owned()))
         .add_scope(Scope::new("user:read:moderated_channels".to_owned()))
+        .add_scope(Scope::new("user:read:follows".to_owned()))
         .url();
     Redirect::to(auth_url.as_ref()).into_response()
 }
@@ -320,12 +321,10 @@ async fn callback(
         .await
         .map_err(|e| WebError::OAuthExchange(e.wrap_err("user lookup")))?;
 
-    // Initial mod check uses the user's own access token (granted
-    // `user:read:moderated_channels` via OAuth scope), so the bot's IRC
-    // token does not need extra scopes. The require_mod middleware
-    // re-checks via the bot token; on failure there it log+admits to
-    // avoid lockout.
-    match crate::auth::role_check::check_is_mod_with_token(
+    // Initial role check uses the user's own access token (granted
+    // `user:read:moderated_channels` and `user:read:follows` via OAuth
+    // scopes). Try mod first, then follower, then deny.
+    let role = match crate::auth::role_check::check_is_mod_with_token(
         &state,
         &me.id,
         &user_token,
@@ -335,16 +334,33 @@ async fn callback(
     .await
     .map_err(|e| WebError::OAuthExchange(e.wrap_err("mod check")))?
     {
-        GateOutcome::Allow => {}
-        GateOutcome::Deny => {
-            tracing::info!(target: "twitch_1337_web", user_id=%me.id, user_login=%me.login, action="login", result="denied");
-            return Err(WebError::Forbidden);
-        }
-    }
+        GateOutcome::Allow => crate::auth::role::Role::Mod,
+        GateOutcome::Deny => match crate::auth::role_check::check_is_follower_with_token(
+            &state,
+            &me.id,
+            &user_token,
+            &state.broadcaster_id,
+        )
+        .await
+        .map_err(|e| WebError::OAuthExchange(e.wrap_err("follower check")))?
+        {
+            GateOutcome::Allow => crate::auth::role::Role::Viewer,
+            GateOutcome::Deny => {
+                tracing::info!(
+                    target: "twitch_1337_web",
+                    user_id = %me.id,
+                    user_login = %me.login,
+                    action = "login",
+                    result = "denied",
+                );
+                return Err(WebError::Forbidden);
+            }
+        },
+    };
 
     let (sid, csrf_value) = state
         .sessions
-        .insert(me.id.clone(), me.login.clone(), crate::auth::role::Role::Mod)
+        .insert(me.id.clone(), me.login.clone(), role)
         .map_err(WebError::Internal)?;
     issue_session_cookies(&cookies, &state.signed_key, sid, &csrf_value, true);
 
@@ -359,6 +375,7 @@ async fn callback(
         target: "twitch_1337_web",
         user_id = %me.id,
         user_login = %me.login,
+        role = role.label(),
         next_path = %next_path,
         action = "login",
         result = "ok",
