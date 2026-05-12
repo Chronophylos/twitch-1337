@@ -29,7 +29,7 @@ fn fake_helix_with_mod(user_id: &str, login: &str) -> Arc<dyn HelixClient> {
     );
     Arc::new(FakeHelix {
         moderators: vec![user_id.to_owned()],
-        followers: vec![],
+        followers: tokio::sync::RwLock::new(vec![]),
         users,
     })
 }
@@ -86,7 +86,7 @@ async fn sidebar_hides_memory_and_system_for_viewer() {
     install_crypto();
     let helix = Arc::new(FakeHelix {
         moderators: vec![],
-        followers: vec!["42".into()],
+        followers: tokio::sync::RwLock::new(vec!["42".into()]),
         users: HashMap::new(),
     });
     let (state, _td_pings, _td_mem) = build_state_with_dirs(helix).await;

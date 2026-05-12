@@ -68,7 +68,7 @@ async fn check_is_follower_with_token_is_callable() {
 
     let helix: Arc<dyn twitch_1337_web::helix::HelixClient> = Arc::new(FakeHelix {
         moderators: vec![],
-        followers: vec![],
+        followers: tokio::sync::RwLock::new(vec![]),
         users: Default::default(),
     });
     let state = build_state(helix).await;

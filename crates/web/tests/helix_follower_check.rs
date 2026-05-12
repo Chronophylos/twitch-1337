@@ -9,7 +9,7 @@ use twitch_1337_web::helix::HelixClient;
 async fn is_follower_reports_membership() {
     let helix: Arc<dyn HelixClient> = Arc::new(FakeHelix {
         moderators: vec![],
-        followers: vec!["42".into()],
+        followers: tokio::sync::RwLock::new(vec!["42".into()]),
         users: Default::default(),
     });
     assert!(helix.is_follower("b123", "42").await.unwrap());

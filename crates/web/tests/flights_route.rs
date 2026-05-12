@@ -22,7 +22,7 @@ use twitch_1337_web::routes::flights;
 fn mod_helix() -> Arc<FakeHelix> {
     Arc::new(FakeHelix {
         moderators: vec!["42".into()],
-        followers: vec![],
+        followers: tokio::sync::RwLock::new(vec![]),
         users: Default::default(),
     })
 }

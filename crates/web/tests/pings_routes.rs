@@ -34,7 +34,7 @@ fn admin_helix(user_id: &str) -> Arc<dyn HelixClient> {
     );
     Arc::new(FakeHelix {
         moderators: vec![user_id.to_owned()],
-        followers: vec![],
+        followers: tokio::sync::RwLock::new(vec![]),
         users,
     })
 }
@@ -497,7 +497,7 @@ async fn viewer_pings_list_has_no_mutation_controls() {
     install_crypto();
     let helix = Arc::new(FakeHelix {
         moderators: vec![],
-        followers: vec!["42".into()],
+        followers: tokio::sync::RwLock::new(vec!["42".into()]),
         users: Default::default(),
     });
     let (state, _td) = build_state_with_ping_dir(helix).await;
@@ -544,7 +544,7 @@ async fn mod_pings_list_shows_mutation_controls() {
     let user_id = "9002";
     let helix = Arc::new(FakeHelix {
         moderators: vec![user_id.into()],
-        followers: vec![],
+        followers: tokio::sync::RwLock::new(vec![]),
         users: Default::default(),
     });
     let (state, _td) = build_state_with_ping_dir(helix).await;
