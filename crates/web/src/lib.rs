@@ -50,11 +50,17 @@ pub async fn bind(addr: SocketAddr) -> Result<TcpListener> {
 }
 
 pub async fn run_web(listener: TcpListener, deps: WebDeps, shutdown: Arc<Notify>) -> Result<()> {
+    serve_app(listener, build_router(deps.state), shutdown).await
+}
+
+/// Serve a pre-built router. Lets `web-dev` layer extra dev-only
+/// middleware (livereload) on top of the production router before
+/// handing it to axum.
+pub async fn serve_app(listener: TcpListener, app: Router, shutdown: Arc<Notify>) -> Result<()> {
     let url = listener
         .local_addr()
         .map(|a| format!("http://{a}/"))
         .unwrap_or_else(|_| "<unknown>".to_owned());
-    let app = build_router(deps.state);
     info!(
         target: "twitch_1337_web",
         version = routes::health::PKG_VERSION,

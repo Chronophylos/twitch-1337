@@ -29,6 +29,13 @@ use crate::state::WebState;
 pub const DEV_USER_ID: &str = "1337";
 pub const DEV_USER_LOGIN: &str = "devmod";
 
+/// Deterministic session id used by `/_dev/login` and the web-dev
+/// pre-seed. Fixed so the signed browser cookie survives a server
+/// restart without a fresh login round-trip. 64 hex chars.
+pub const DEV_SID: &str = "de7de7de7de7de7de7de7de7de7de7de7de7de7de7de7de7de7de7de7de7de7d";
+/// Deterministic csrf paired with [`DEV_SID`].
+pub const DEV_CSRF: [u8; 32] = [0x42; 32];
+
 pub fn router(state: WebState) -> Router {
     Router::new()
         .route("/_dev/login", get(login))
@@ -48,17 +55,27 @@ async fn login(
     cookies: Cookies,
     Query(q): Query<DevLoginQuery>,
 ) -> Redirect {
-    let (sid, csrf_bytes) = state
+    let csrf_bytes = state
         .sessions
-        .insert(crate::auth::session::NewSession {
-            user_id: DEV_USER_ID.to_owned(),
-            user_login: DEV_USER_LOGIN.to_owned(),
-            role: crate::auth::role::Role::Mod,
-            avatar_url: None,
-            is_broadcaster: false,
-        })
+        .insert_with_id(
+            DEV_SID,
+            DEV_CSRF,
+            crate::auth::session::NewSession {
+                user_id: DEV_USER_ID.to_owned(),
+                user_login: DEV_USER_LOGIN.to_owned(),
+                role: crate::auth::role::Role::Mod,
+                avatar_url: None,
+                is_broadcaster: false,
+            },
+        )
         .expect("insert dev session");
-    issue_session_cookies(&cookies, &state.signed_key, sid, &csrf_bytes, false);
+    issue_session_cookies(
+        &cookies,
+        &state.signed_key,
+        DEV_SID.to_owned(),
+        &csrf_bytes,
+        false,
+    );
     let target = q
         .next
         .as_deref()

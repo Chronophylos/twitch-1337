@@ -33,13 +33,14 @@ use twitch_1337_core::ai::memory::types::Caps;
 use twitch_1337_core::ping::PingManager;
 use twitch_1337_core::{install_crypto_provider, install_tracing};
 use twitch_1337_web::auth::OAuthCtx;
-use twitch_1337_web::auth::session::SessionTable;
+use twitch_1337_web::auth::Role;
+use twitch_1337_web::auth::session::{NewSession, SessionTable};
 use twitch_1337_web::clock::SystemClock;
 use twitch_1337_web::config::WebConfig;
-use twitch_1337_web::dev::{DEV_USER_ID, StubHelix};
+use twitch_1337_web::dev::{DEV_CSRF, DEV_SID, DEV_USER_ID, DEV_USER_LOGIN, StubHelix};
 use twitch_1337_web::helix::HelixClient;
 use twitch_1337_web::state::derive_session_key;
-use twitch_1337_web::{WebDeps, WebState, bind, run_web};
+use twitch_1337_web::{WebState, bind, build_router, serve_app};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -70,6 +71,23 @@ async fn main() -> Result<()> {
     let clock = Arc::new(SystemClock);
     let session_ttl = Duration::from_secs(7 * 24 * 3600);
     let sessions = Arc::new(SessionTable::new(session_ttl, clock.clone()));
+
+    // Pre-seed a deterministic session so the browser cookie minted by
+    // any earlier `/_dev/login` still resolves after a restart. The id
+    // and csrf are fixed; `signed_key` is also deterministic (derived
+    // from the constant `session_secret` below), so the signed cookie
+    // value is stable across runs.
+    sessions.insert_with_id(
+        DEV_SID,
+        DEV_CSRF,
+        NewSession {
+            user_id: DEV_USER_ID.to_owned(),
+            user_login: DEV_USER_LOGIN.to_owned(),
+            role: Role::Mod,
+            avatar_url: None,
+            is_broadcaster: false,
+        },
+    )?;
 
     let session_secret = SecretString::new("0".repeat(64).into());
     let signed_key = derive_session_key(&session_secret)?;
@@ -119,5 +137,49 @@ async fn main() -> Result<()> {
         tokio::signal::ctrl_c().await.ok();
         s.notify_one();
     });
-    run_web(listener, WebDeps { bind_addr, state }, shutdown).await
+
+    let mut app = build_router(state);
+    let livereload = tower_livereload::LiveReloadLayer::new();
+    let reloader = livereload.reloader();
+    app = app.layer(livereload);
+    spawn_asset_watcher(reloader);
+
+    serve_app(listener, app, shutdown).await
+}
+
+/// Watch `crates/web/assets` and `crates/web/templates` for changes and
+/// trigger a livereload ping when a file mtime bumps. Templates are
+/// embedded at compile time, so editing one still requires a rebuild
+/// before the reload reflects the change — but cargo-watch (or a manual
+/// rerun) will land before the SSE ping, so the browser refreshes on
+/// the restarted server.
+fn spawn_asset_watcher(reloader: tower_livereload::Reloader) {
+    use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    let crate_dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
+    std::thread::spawn(move || {
+        let mut debouncer = match new_debouncer(
+            Duration::from_millis(200),
+            move |res: DebounceEventResult| {
+                if res.is_ok() {
+                    reloader.reload();
+                }
+            },
+        ) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(target: "twitch_1337_web", error = ?e, "livereload watcher init failed");
+                return;
+            }
+        };
+        for sub in ["assets", "templates"] {
+            let path = crate_dir.join(sub);
+            if let Err(e) = debouncer.watcher().watch(&path, RecursiveMode::Recursive) {
+                tracing::warn!(target: "twitch_1337_web", ?path, error = ?e, "livereload watch failed");
+            }
+        }
+        std::thread::park();
+    });
 }

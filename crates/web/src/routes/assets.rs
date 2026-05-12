@@ -2,6 +2,11 @@
 //!
 //! Bakes css/js straight into the binary so the FROM-scratch musl image
 //! stays self-contained.
+//!
+//! In debug builds, `rust_embed` falls back to filesystem reads relative
+//! to `CARGO_MANIFEST_DIR`, so editing `assets/app.css` is picked up on
+//! the next request without a rebuild — paired with the `no-store` cache
+//! header below, that means save → refresh for visual tweaks.
 
 use axum::Router;
 use axum::body::Body;
@@ -19,6 +24,16 @@ pub fn router() -> Router {
     Router::new().route("/assets/{*path}", get(serve))
 }
 
+#[cfg(debug_assertions)]
+fn cache_control() -> &'static str {
+    "no-store"
+}
+
+#[cfg(not(debug_assertions))]
+fn cache_control() -> &'static str {
+    "public, max-age=31536000, immutable"
+}
+
 async fn serve(Path(path): Path<String>) -> impl IntoResponse {
     match Assets::get(&path) {
         Some(content) => {
@@ -27,10 +42,7 @@ async fn serve(Path(path): Path<String>) -> impl IntoResponse {
                 StatusCode::OK,
                 [
                     (header::CONTENT_TYPE, mime.as_ref()),
-                    // Embedded assets ship with the binary, so a deploy is
-                    // the only thing that can change them — `immutable` is
-                    // safe and saves repeat downloads on every page load.
-                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                    (header::CACHE_CONTROL, cache_control()),
                 ],
                 Body::from(content.data),
             )

@@ -96,6 +96,30 @@ impl SessionTable {
         Ok((id, csrf))
     }
 
+    /// Insert a session at a caller-chosen id (must be 64-char hex). Returns
+    /// the csrf value paired with the new session. Dev-only: lets the
+    /// `web-dev` bin pre-seed a deterministic session across restarts so
+    /// the browser doesn't need to re-login.
+    #[cfg(feature = "dev-login")]
+    pub fn insert_with_id(&self, id: &str, csrf: [u8; 32], new: NewSession) -> Result<[u8; 32]> {
+        let now = self.clock.now();
+        self.inner.write().unwrap().insert(
+            id.to_owned(),
+            Session {
+                user_id: new.user_id,
+                user_login: new.user_login,
+                role: new.role,
+                issued_at: now,
+                last_seen: now,
+                last_role_check: now,
+                csrf_value: csrf,
+                avatar_url: new.avatar_url,
+                is_broadcaster: new.is_broadcaster,
+            },
+        );
+        Ok(csrf)
+    }
+
     pub fn get_and_touch(&self, id: &str) -> Option<Session> {
         let now = self.clock.now();
         let ttl = chrono::Duration::from_std(self.ttl).ok()?;
