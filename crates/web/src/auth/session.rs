@@ -19,6 +19,15 @@ use crate::clock::Clock;
 
 pub type SessionId = String;
 
+/// Inputs for [`SessionTable::insert`]. Named fields keep the call sites
+/// readable instead of relying on positional `String, String, Role, Option<String>`.
+pub struct NewSession {
+    pub user_id: String,
+    pub user_login: String,
+    pub role: Role,
+    pub avatar_url: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Session {
     pub user_id: String,
@@ -57,13 +66,7 @@ impl SessionTable {
     /// Returns the new session id together with the freshly-generated csrf
     /// value so the OAuth callback can set both cookies without a second
     /// lookup against the table.
-    pub fn insert(
-        &self,
-        user_id: String,
-        user_login: String,
-        role: Role,
-        avatar_url: Option<String>,
-    ) -> Result<(SessionId, [u8; 32])> {
+    pub fn insert(&self, new: NewSession) -> Result<(SessionId, [u8; 32])> {
         let now = self.clock.now();
         let mut rng = rand::rng();
         let mut id_bytes = [0u8; 32];
@@ -74,14 +77,14 @@ impl SessionTable {
         self.inner.write().unwrap().insert(
             id.clone(),
             Session {
-                user_id,
-                user_login,
-                role,
+                user_id: new.user_id,
+                user_login: new.user_login,
+                role: new.role,
                 issued_at: now,
                 last_seen: now,
                 last_role_check: now,
                 csrf_value: csrf,
-                avatar_url,
+                avatar_url: new.avatar_url,
             },
         );
         Ok((id, csrf))

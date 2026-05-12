@@ -348,12 +348,12 @@ async fn callback(
 
     let (sid, csrf_value) = state
         .sessions
-        .insert(
-            me.id.clone(),
-            me.login.clone(),
+        .insert(crate::auth::session::NewSession {
+            user_id: me.id.clone(),
+            user_login: me.login.clone(),
             role,
-            me.profile_image_url.clone(),
-        )
+            avatar_url: me.profile_image_url.clone(),
+        })
         .map_err(WebError::Internal)?;
     if let Some(url) = &me.profile_image_url {
         state

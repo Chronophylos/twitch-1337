@@ -48,6 +48,11 @@ pub trait HelixClient: Send + Sync {
 pub struct AvatarCache {
     entries: Mutex<HashMap<String, AvatarEntry>>,
     ttl: chrono::Duration,
+    /// Hard cap on cached entries. When `insert` or `prime` would push
+    /// the map past this, expired entries are pruned first and the
+    /// oldest survivor is dropped if still over. Prevents unbounded
+    /// growth from churned-through user ids over the bot's lifetime.
+    max_entries: usize,
 }
 
 struct AvatarEntry {
@@ -60,11 +65,44 @@ pub struct AvatarLookup {
     pub missing: Vec<String>,
 }
 
+/// Default upper bound on cached entries — generous enough for any
+/// reasonable channel's `memories/users/` directory.
+const DEFAULT_AVATAR_CACHE_CAP: usize = 4096;
+
 impl AvatarCache {
     pub fn new(ttl: Duration) -> Self {
+        Self::with_capacity(ttl, DEFAULT_AVATAR_CACHE_CAP)
+    }
+
+    pub fn with_capacity(ttl: Duration, max_entries: usize) -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
             ttl: chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::hours(1)),
+            max_entries: max_entries.max(1),
+        }
+    }
+
+    /// Drop expired entries; if still at-or-over cap, evict the
+    /// oldest-fetched survivor. Called from the insert paths.
+    fn evict_if_needed(
+        entries: &mut HashMap<String, AvatarEntry>,
+        now: DateTime<Utc>,
+        ttl: chrono::Duration,
+        cap: usize,
+    ) {
+        if entries.len() < cap {
+            return;
+        }
+        entries.retain(|_, e| now.signed_duration_since(e.fetched_at) < ttl);
+        while entries.len() >= cap {
+            let Some(oldest) = entries
+                .iter()
+                .min_by_key(|(_, e)| e.fetched_at)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            entries.remove(&oldest);
         }
     }
 
@@ -91,6 +129,7 @@ impl AvatarCache {
     pub async fn prime(&self, user_id: &str, url: Option<&str>, clock: &dyn Clock) {
         let now = clock.now();
         let mut entries = self.entries.lock().await;
+        Self::evict_if_needed(&mut entries, now, self.ttl, self.max_entries);
         entries.insert(
             user_id.to_owned(),
             AvatarEntry {
@@ -110,6 +149,7 @@ impl AvatarCache {
             .map(|u| (u.id.as_str(), u.profile_image_url.as_deref()))
             .collect();
         let mut entries = self.entries.lock().await;
+        Self::evict_if_needed(&mut entries, now, self.ttl, self.max_entries);
         for id in queried {
             let url = by_id.get(id.as_str()).copied().flatten().map(str::to_owned);
             entries.insert(

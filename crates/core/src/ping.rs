@@ -257,19 +257,17 @@ impl PingManager {
     }
 
     /// Record that a ping was triggered now. Bumps `fire_count`, stamps
-    /// `last_fired_at`, and persists to disk so the dashboard reflects
-    /// the new state across restarts. Cooldown still uses the in-memory
-    /// `Instant` map to dodge wall-clock skew.
-    pub fn record_trigger(&mut self, ping_name: &str) {
+    /// `last_fired_at`, and persists. Cooldown uses the in-memory
+    /// `Instant` map separately so wall-clock skew can't backdate it.
+    pub fn record_trigger(&mut self, ping_name: &str) -> Result<()> {
+        let Some(ping) = self.store.pings.get_mut(ping_name) else {
+            return Ok(());
+        };
         self.last_triggered
             .insert(ping_name.to_string(), Instant::now());
-        if let Some(ping) = self.store.pings.get_mut(ping_name) {
-            ping.last_fired_at = Some(Utc::now());
-            ping.fire_count = ping.fire_count.saturating_add(1);
-            if let Err(e) = self.save() {
-                tracing::warn!(ping = %ping_name, error = ?e, "Failed to persist fire stats");
-            }
-        }
+        ping.last_fired_at = Some(Utc::now());
+        ping.fire_count = ping.fire_count.saturating_add(1);
+        self.save()
     }
 
     /// Atomically check membership + cooldown, render the template, and
@@ -293,7 +291,9 @@ impl PingManager {
         let Some(rendered) = self.render_template(ping_name, sender) else {
             return TriggerDecision::Skip;
         };
-        self.record_trigger(ping_name);
+        if let Err(e) = self.record_trigger(ping_name) {
+            tracing::warn!(ping = %ping_name, error = ?e, "Failed to persist fire stats");
+        }
         TriggerDecision::Fire(rendered)
     }
 
@@ -517,7 +517,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut mgr = test_manager(dir.path());
         mgr.add_member("test", "alice").unwrap();
-        mgr.record_trigger("test");
+        mgr.record_trigger("test").unwrap();
 
         let remaining = mgr.remaining_cooldown("test", Duration::from_secs(300));
         assert!(remaining.is_some());

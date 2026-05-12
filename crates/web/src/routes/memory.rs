@@ -9,6 +9,8 @@
 //! `/memory/state/{slug}` so axum matches the literal first; a regression
 //! test pins this ordering.
 
+use std::collections::HashMap;
+
 use askama::Template;
 use axum::Router;
 use axum::extract::{Extension, Path, State};
@@ -156,11 +158,14 @@ struct UsersNewTpl {
 /// Resolve avatar URLs for a slice of Twitch user ids. Cache hits skip
 /// helix entirely; cache misses fan out through a single batched helix
 /// call. A helix error logs and returns whatever the cache held.
-async fn fetch_avatars(
-    state: &WebState,
-    ids: &[&str],
-) -> std::collections::HashMap<String, String> {
-    let lookup = state.avatar_cache.lookup(ids, state.clock.as_ref()).await;
+async fn fetch_avatars(state: &WebState, ids: &[&str]) -> HashMap<String, String> {
+    let mut dedup: Vec<&str> = ids.to_vec();
+    dedup.sort_unstable();
+    dedup.dedup();
+    let lookup = state
+        .avatar_cache
+        .lookup(&dedup, state.clock.as_ref())
+        .await;
     let mut avatars = lookup.cached;
     if lookup.missing.is_empty() {
         return avatars;
