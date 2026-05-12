@@ -27,7 +27,7 @@ use serde::Deserialize;
 use tower_cookies::cookie::SameSite;
 use tower_cookies::{Cookie, Cookies, Key};
 
-use crate::auth::mod_check::{ModCheckOutcome, check_is_mod};
+use crate::auth::role_check::{GateOutcome, check_is_follower, check_is_mod};
 use crate::error::WebError;
 use crate::state::WebState;
 
@@ -267,6 +267,7 @@ async fn auth_start(
         .authorize_url(move || csrf_for_url.clone())
         .add_scope(Scope::new("user:read:email".to_owned()))
         .add_scope(Scope::new("user:read:moderated_channels".to_owned()))
+        .add_scope(Scope::new("user:read:follows".to_owned()))
         .url();
     Redirect::to(auth_url.as_ref()).into_response()
 }
@@ -320,12 +321,10 @@ async fn callback(
         .await
         .map_err(|e| WebError::OAuthExchange(e.wrap_err("user lookup")))?;
 
-    // Initial mod check uses the user's own access token (granted
-    // `user:read:moderated_channels` via OAuth scope), so the bot's IRC
-    // token does not need extra scopes. The require_mod middleware
-    // re-checks via the bot token; on failure there it log+admits to
-    // avoid lockout.
-    match crate::auth::mod_check::check_is_mod_with_token(
+    // Initial role check uses the user's own access token (granted
+    // `user:read:moderated_channels` and `user:read:follows` via OAuth
+    // scopes). Try mod first, then follower, then deny.
+    let role = match crate::auth::role_check::check_is_mod_with_token(
         &state,
         &me.id,
         &user_token,
@@ -335,16 +334,33 @@ async fn callback(
     .await
     .map_err(|e| WebError::OAuthExchange(e.wrap_err("mod check")))?
     {
-        ModCheckOutcome::Allow => {}
-        ModCheckOutcome::Deny => {
-            tracing::info!(target: "twitch_1337_web", user_id=%me.id, user_login=%me.login, action="login", result="denied");
-            return Err(WebError::Forbidden);
-        }
-    }
+        GateOutcome::Allow => crate::auth::role::Role::Mod,
+        GateOutcome::Deny => match crate::auth::role_check::check_is_follower_with_token(
+            &state,
+            &me.id,
+            &user_token,
+            &state.broadcaster_id,
+        )
+        .await
+        .map_err(|e| WebError::OAuthExchange(e.wrap_err("follower check")))?
+        {
+            GateOutcome::Allow => crate::auth::role::Role::Viewer,
+            GateOutcome::Deny => {
+                tracing::info!(
+                    target: "twitch_1337_web",
+                    user_id = %me.id,
+                    user_login = %me.login,
+                    action = "login",
+                    result = "denied",
+                );
+                return Err(WebError::Forbidden);
+            }
+        },
+    };
 
     let (sid, csrf_value) = state
         .sessions
-        .insert(me.id.clone(), me.login.clone())
+        .insert(me.id.clone(), me.login.clone(), role)
         .map_err(WebError::Internal)?;
     issue_session_cookies(&cookies, &state.signed_key, sid, &csrf_value, true);
 
@@ -359,6 +375,7 @@ async fn callback(
         target: "twitch_1337_web",
         user_id = %me.id,
         user_login = %me.login,
+        role = role.label(),
         next_path = %next_path,
         action = "login",
         result = "ok",
@@ -424,7 +441,19 @@ async fn fetch_caller_user(
         .ok_or_else(|| eyre!("helix /users returned empty data array"))
 }
 
-pub async fn require_mod(
+pub async fn viewer_method_guard(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, WebError> {
+    use axum::http::Method;
+    match *req.method() {
+        Method::GET | Method::HEAD => Ok(next.run(req).await),
+        _ => Err(WebError::MethodNotAllowed),
+    }
+}
+
+pub async fn require_role(
+    min: crate::auth::role::Role,
     State(state): State<WebState>,
     cookies: Cookies,
     mut req: Request,
@@ -444,31 +473,53 @@ pub async fn require_mod(
         .get_and_touch(sid_cookie.value())
         .ok_or_else(unauth)?;
 
+    if session.role < min {
+        return Err(WebError::Forbidden);
+    }
+
     let now = state.clock.now();
     let elapsed = now
-        .signed_duration_since(session.last_mod_check)
+        .signed_duration_since(session.last_role_check)
         .to_std()
         .unwrap_or_default();
-    if elapsed > state.config.mod_check_refresh {
-        match check_is_mod(
-            state.helix.as_ref(),
-            &session.user_id,
-            &state.broadcaster_id,
-            &state.hidden_admins,
-        )
-        .await
-        {
-            Ok(ModCheckOutcome::Allow) => state.sessions.record_mod_check(sid_cookie.value()),
-            Ok(ModCheckOutcome::Deny) => {
+    if elapsed > state.config.role_check_refresh {
+        let outcome = match session.role {
+            crate::auth::role::Role::Mod => {
+                check_is_mod(
+                    state.helix.as_ref(),
+                    &session.user_id,
+                    &state.broadcaster_id,
+                    state.hidden_admins.as_ref(),
+                )
+                .await
+            }
+            crate::auth::role::Role::Viewer => {
+                check_is_follower(
+                    state.helix.as_ref(),
+                    &state.broadcaster_id,
+                    &session.user_id,
+                )
+                .await
+            }
+        };
+        match outcome {
+            Ok(GateOutcome::Allow) => state.sessions.record_role_check(sid_cookie.value()),
+            Ok(GateOutcome::Deny) => {
                 state.sessions.drop_session(sid_cookie.value());
-                tracing::info!(target: "twitch_1337_web", user_id=%session.user_id, action="mod_recheck", result="denied");
+                tracing::info!(
+                    target: "twitch_1337_web",
+                    user_id = %session.user_id,
+                    role = session.role.label(),
+                    action = "role_recheck",
+                    result = "denied",
+                );
                 return Err(WebError::Forbidden);
             }
             Err(e) => {
                 tracing::warn!(
                     target: "twitch_1337_web",
                     error = ?e,
-                    "mod refresh failed; admitting on stale check"
+                    "role refresh failed; admitting on stale check"
                 );
             }
         }
@@ -476,6 +527,15 @@ pub async fn require_mod(
 
     req.extensions_mut().insert(session);
     Ok(next.run(req).await)
+}
+
+pub async fn require_mod(
+    state: State<WebState>,
+    cookies: Cookies,
+    req: Request,
+    next: Next,
+) -> Result<Response, WebError> {
+    require_role(crate::auth::role::Role::Mod, state, cookies, req, next).await
 }
 
 #[cfg(test)]

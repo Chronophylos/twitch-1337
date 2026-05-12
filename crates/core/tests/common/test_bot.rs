@@ -21,7 +21,7 @@ use twitch_1337::{
     PersonalBest, Services,
     aviation::AviationClient,
     config::{AiConfig, Configuration},
-    run_bot,
+    load_leaderboard, run_bot,
     twitch::whisper::{self, WhisperError, WhisperSender},
 };
 use twitch_irc::login::StaticLoginCredentials;
@@ -248,6 +248,11 @@ impl TestBotBuilder {
             None
         };
 
+        let (aviation_tracker_tx, aviation_tracker_rx) = {
+            let (tx, rx) = tokio::sync::mpsc::channel::<twitch_1337::aviation::TrackerCommand>(32);
+            (Some(Arc::new(tx)), Some(rx))
+        };
+
         let services = Services {
             clock: clock.clone(),
             llm: self
@@ -269,6 +274,11 @@ impl TestBotBuilder {
             web_spawner,
             ping_manager,
             memory_store,
+            leaderboard: Arc::new(tokio::sync::RwLock::new(
+                load_leaderboard(data_dir.path()).await,
+            )),
+            aviation_tracker_tx,
+            aviation_tracker_rx,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -621,6 +631,9 @@ fn build_test_web_state(
         async fn is_moderator(&self, _b: &str, _u: &str) -> eyre::Result<bool> {
             Ok(false)
         }
+        async fn is_follower(&self, _b: &str, _u: &str) -> eyre::Result<bool> {
+            Ok(false)
+        }
     }
 
     let web_clock = Arc::new(WebSystemClock);
@@ -638,7 +651,7 @@ fn build_test_web_state(
         public_url: config.web.public_url.clone(),
         session_secret: config.web.session_secret.clone(),
         session_ttl: config.web.session_ttl,
-        mod_check_refresh: config.web.mod_check_refresh,
+        role_check_refresh: config.web.mod_check_refresh,
     });
     let signed_key = tower_cookies::Key::from(&[0x42u8; 64]);
     twitch_1337_web::WebState {
@@ -655,5 +668,7 @@ fn build_test_web_state(
         ping_manager,
         memory_store,
         signed_key,
+        leaderboard: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        tracker_tx: None,
     }
 }

@@ -36,7 +36,7 @@ use crate::{
     config::Configuration,
     twitch::handlers::{
         spawn::{SpawnDeps, spawn_handlers},
-        tracker_1337::{TARGET_HOUR, TARGET_MINUTE, load_leaderboard},
+        tracker_1337::{TARGET_HOUR, TARGET_MINUTE},
     },
     twitch::whisper::WhisperSender,
     util::clock::Clock,
@@ -58,7 +58,7 @@ pub use ai::chat_history::{
 };
 pub use config::{load_configuration, validate_config};
 pub use twitch::{
-    handlers::tracker_1337::PersonalBest,
+    handlers::tracker_1337::{PersonalBest, load_leaderboard},
     setup::{setup_and_verify_twitch_client, setup_twitch_client},
     token_storage::FileBasedTokenStorage,
 };
@@ -106,6 +106,24 @@ pub struct Services {
     /// the *same* per-path mutex map. Two independent stores against the
     /// same on-disk tree would silently race past each other's locks.
     pub memory_store: crate::ai::memory::store::MemoryStore,
+    /// Shared 1337 leaderboard. Created by the bin before the web spawner so
+    /// the same `Arc` is handed to both `WebState` and the IRC tracker handler
+    /// (via `SpawnDeps`). `run_bot` moves this into `SpawnDeps`; tests pass an
+    /// empty map.
+    pub leaderboard: Arc<
+        tokio::sync::RwLock<
+            std::collections::HashMap<String, crate::twitch::handlers::tracker_1337::PersonalBest>,
+        >,
+    >,
+    /// Sender half of the flight-tracker mpsc channel, wrapped in `Arc` so it
+    /// can be cheaply cloned into `WebState`. `None` when aviation is disabled.
+    /// The matching receiver lives in `aviation_tracker_rx` and is consumed by
+    /// `spawn_handlers` to start the flight-tracker task.
+    pub aviation_tracker_tx:
+        Option<Arc<tokio::sync::mpsc::Sender<crate::aviation::TrackerCommand>>>,
+    /// Receiver half of the flight-tracker mpsc channel. `None` when aviation
+    /// is disabled. Consumed exactly once by `spawn_handlers`.
+    pub aviation_tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
 }
 
 pub type WebSpawner =
@@ -139,11 +157,16 @@ where
         web_spawner,
         ping_manager,
         memory_store,
+        leaderboard,
+        aviation_tracker_tx,
+        aviation_tracker_rx,
     } = services;
 
-    let schedules_enabled = !config.schedules.is_empty();
+    // Clone the sender out of the Arc for SpawnDeps (which holds a plain mpsc::Sender).
+    // `tokio::sync::mpsc::Sender<T>` is `Clone`, so this is a cheap reference-count bump.
+    let aviation_tracker_tx_inner = aviation_tracker_tx.as_ref().map(|a| (**a).clone());
 
-    let leaderboard = Arc::new(tokio::sync::RwLock::new(load_leaderboard(&data_dir).await));
+    let schedules_enabled = !config.schedules.is_empty();
 
     let suspension_manager = Arc::new(suspend::SuspensionManager::new());
 
@@ -192,6 +215,8 @@ where
         whisper,
         aviation,
         aviation_for_commands,
+        aviation_tracker_tx: aviation_tracker_tx_inner,
+        aviation_tracker_rx,
         emote_provider,
         irc_connected: irc_connected.clone(),
     });
