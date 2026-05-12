@@ -47,8 +47,6 @@
     <div class="th col-tpl">Template</div>
     <div class="th col-members">Members</div>
     <div class="th col-by">Created by</div>
-    <div class="th col-fired">Last fired</div>
-    <div class="th col-fires">Fires</div>
     <div class="th col-act"></div>
   </div>
   {% if rows.is_empty() %}
@@ -80,8 +78,6 @@
             {{ row.created_by }}
           </span>
         </div>
-        <div class="td col-fired"><span class="mono muted">{{ row.last_fired }}</span></div>
-        <div class="td col-fires mono num">{% if row.fire_count == 0 %}<span class="muted">—</span>{% else %}{{ row.fire_count }}{% endif %}</div>
         <div class="td col-act">
           {% if is_mod %}
           <a class="row-act" href="/pings/{{ row.name }}" title="Edit">✎</a>
