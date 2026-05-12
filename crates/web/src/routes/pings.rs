@@ -57,6 +57,32 @@ struct RowView {
     members: usize,
     created_by: String,
     created_initial: String,
+    /// Human-friendly "5m ago" / "—" string for the list view.
+    last_fired: String,
+    /// Lifetime fire count rendered next to the relative timestamp.
+    fire_count: u64,
+}
+
+/// "5m ago", "2h ago", "3d ago", or "—" when never fired. Anchored
+/// against `now` so tests can pin output by feeding a fixed clock.
+fn fmt_relative(
+    then: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    let Some(then) = then else {
+        return "—".into();
+    };
+    let delta = now.signed_duration_since(then);
+    let secs = delta.num_seconds().max(0);
+    if secs < 60 {
+        "just now".into()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86_400)
+    }
 }
 
 #[derive(Template)]
@@ -109,6 +135,7 @@ async fn list(
     cookies: Cookies,
 ) -> Result<Response, WebError> {
     let mgr = state.ping_manager.read().await;
+    let now = state.clock.now();
     let mut rows: Vec<RowView> = Vec::new();
     let mut unique_members: HashSet<&str> = HashSet::new();
     let mut custom_cooldowns: usize = 0;
@@ -119,6 +146,8 @@ async fn list(
             members: ping.members.len(),
             created_initial: initial_of(&ping.created_by),
             created_by: ping.created_by.clone(),
+            last_fired: fmt_relative(ping.last_fired_at, now),
+            fire_count: ping.fire_count,
         });
         for m in &ping.members {
             unique_members.insert(m.as_str());
