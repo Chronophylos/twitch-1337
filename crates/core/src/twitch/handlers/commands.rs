@@ -158,6 +158,9 @@ where
             data_dir.clone(),
             Duration::from_secs(cooldowns.feedback),
         )),
+        Box::new(commands::doener::DoenerCommand::new(Duration::from_secs(
+            cooldowns.doener,
+        ))),
     ];
 
     if let Some(tx) = tracker_tx {

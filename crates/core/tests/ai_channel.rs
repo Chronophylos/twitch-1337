@@ -9,10 +9,12 @@ use std::time::Duration;
 use chrono::TimeZone;
 use chrono_tz::Europe::Berlin;
 use common::TestBotBuilder;
+use serial_test::serial;
 
 const AI_CHAN: &str = "ai_chan";
 
 #[tokio::test]
+#[serial]
 async fn ai_command_works_in_ai_channel() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
@@ -31,6 +33,7 @@ async fn ai_command_works_in_ai_channel() {
 }
 
 #[tokio::test]
+#[serial]
 async fn lb_is_ignored_in_ai_channel() {
     let mut bot = TestBotBuilder::new()
         .with_config(|c| c.twitch.ai_channel = Some(AI_CHAN.into()))
@@ -44,6 +47,7 @@ async fn lb_is_ignored_in_ai_channel() {
 }
 
 #[tokio::test]
+#[serial]
 async fn ping_is_ignored_in_ai_channel() {
     let mut bot = TestBotBuilder::new()
         .with_config(|c| c.twitch.ai_channel = Some(AI_CHAN.into()))
@@ -57,6 +61,7 @@ async fn ping_is_ignored_in_ai_channel() {
 }
 
 #[tokio::test]
+#[serial]
 async fn track_is_ignored_in_ai_channel() {
     let mut bot = TestBotBuilder::new()
         .with_config(|c| c.twitch.ai_channel = Some(AI_CHAN.into()))
@@ -70,6 +75,7 @@ async fn track_is_ignored_in_ai_channel() {
 }
 
 #[tokio::test]
+#[serial]
 async fn aviation_lookup_is_ignored_in_ai_channel() {
     let mut bot = TestBotBuilder::new()
         .with_config(|c| c.twitch.ai_channel = Some(AI_CHAN.into()))
@@ -83,6 +89,7 @@ async fn aviation_lookup_is_ignored_in_ai_channel() {
 }
 
 #[tokio::test]
+#[serial]
 async fn feedback_is_ignored_in_ai_channel() {
     let mut bot = TestBotBuilder::new()
         .with_config(|c| c.twitch.ai_channel = Some(AI_CHAN.into()))
@@ -96,6 +103,7 @@ async fn feedback_is_ignored_in_ai_channel() {
 }
 
 #[tokio::test]
+#[serial]
 async fn tracker_1337_ignores_ai_channel_messages() {
     // 13:37 Berlin → UTC instant; format as a `tmi-sent-ts` (ms since epoch)
     // matching what Twitch puts on incoming PRIVMSGs.
@@ -127,6 +135,7 @@ async fn tracker_1337_ignores_ai_channel_messages() {
 }
 
 #[tokio::test]
+#[serial]
 async fn ai_command_still_works_in_primary_channel() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
