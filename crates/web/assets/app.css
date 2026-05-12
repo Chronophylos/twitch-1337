@@ -330,17 +330,17 @@ kbd {
   font-weight: 600;
   letter-spacing: -0.02em;
   margin: 0 0 6px;
+  /* Flex with align-items: baseline so the mono .count sibling lines up
+     with the sans title baseline regardless of font-metric differences. */
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
 }
 .page-head h1 .count {
   color: var(--fg-4);
   font-weight: 400;
   font-family: var(--mono);
   font-size: 18px;
-  margin-left: 6px;
-  /* Mono digits sit lower than the sans h1 baseline at this size; nudge
-     up so "Pings (1)" baseline-aligns. */
-  position: relative;
-  top: -0.18em;
 }
 .page-sub {
   color: var(--fg-3);
