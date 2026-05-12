@@ -27,7 +27,7 @@ use serde::Deserialize;
 use tower_cookies::cookie::SameSite;
 use tower_cookies::{Cookie, Cookies, Key};
 
-use crate::auth::role_check::{GateOutcome, check_is_mod};
+use crate::auth::role_check::{GateOutcome, check_is_follower, check_is_mod};
 use crate::error::WebError;
 use crate::state::WebState;
 
@@ -435,7 +435,8 @@ pub async fn viewer_method_guard(
     }
 }
 
-pub async fn require_mod(
+pub async fn require_role(
+    min: crate::auth::role::Role,
     State(state): State<WebState>,
     cookies: Cookies,
     mut req: Request,
@@ -455,31 +456,53 @@ pub async fn require_mod(
         .get_and_touch(sid_cookie.value())
         .ok_or_else(unauth)?;
 
+    if session.role < min {
+        return Err(WebError::Forbidden);
+    }
+
     let now = state.clock.now();
     let elapsed = now
         .signed_duration_since(session.last_role_check)
         .to_std()
         .unwrap_or_default();
     if elapsed > state.config.role_check_refresh {
-        match check_is_mod(
-            state.helix.as_ref(),
-            &session.user_id,
-            &state.broadcaster_id,
-            &state.hidden_admins,
-        )
-        .await
-        {
+        let outcome = match session.role {
+            crate::auth::role::Role::Mod => {
+                check_is_mod(
+                    state.helix.as_ref(),
+                    &session.user_id,
+                    &state.broadcaster_id,
+                    state.hidden_admins.as_ref(),
+                )
+                .await
+            }
+            crate::auth::role::Role::Viewer => {
+                check_is_follower(
+                    state.helix.as_ref(),
+                    &state.broadcaster_id,
+                    &session.user_id,
+                )
+                .await
+            }
+        };
+        match outcome {
             Ok(GateOutcome::Allow) => state.sessions.record_role_check(sid_cookie.value()),
             Ok(GateOutcome::Deny) => {
                 state.sessions.drop_session(sid_cookie.value());
-                tracing::info!(target: "twitch_1337_web", user_id=%session.user_id, action="mod_recheck", result="denied");
+                tracing::info!(
+                    target: "twitch_1337_web",
+                    user_id = %session.user_id,
+                    role = session.role.label(),
+                    action = "role_recheck",
+                    result = "denied",
+                );
                 return Err(WebError::Forbidden);
             }
             Err(e) => {
                 tracing::warn!(
                     target: "twitch_1337_web",
                     error = ?e,
-                    "mod refresh failed; admitting on stale check"
+                    "role refresh failed; admitting on stale check"
                 );
             }
         }
@@ -487,6 +510,15 @@ pub async fn require_mod(
 
     req.extensions_mut().insert(session);
     Ok(next.run(req).await)
+}
+
+pub async fn require_mod(
+    state: State<WebState>,
+    cookies: Cookies,
+    req: Request,
+    next: Next,
+) -> Result<Response, WebError> {
+    require_role(crate::auth::role::Role::Mod, state, cookies, req, next).await
 }
 
 #[cfg(test)]

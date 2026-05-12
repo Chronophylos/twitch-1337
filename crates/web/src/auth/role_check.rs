@@ -85,6 +85,18 @@ async fn is_moderator_with_user_token(
     .await
 }
 
+pub async fn check_is_follower(
+    helix: &dyn HelixClient,
+    broadcaster_id: &str,
+    user_id: &str,
+) -> eyre::Result<GateOutcome> {
+    if helix.is_follower(broadcaster_id, user_id).await? {
+        Ok(GateOutcome::Allow)
+    } else {
+        Ok(GateOutcome::Deny)
+    }
+}
+
 /// Variant used during the OAuth callback to check follower status using the
 /// viewer's own user token. Calls `GET /helix/channels/followed` (scope
 /// `user:read:follows`) and returns `Allow` iff `total > 0`.
