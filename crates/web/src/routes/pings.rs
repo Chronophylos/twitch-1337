@@ -1,6 +1,9 @@
 //! `/pings` CRUD handlers.
 //!
-//! Mounted under the authed sub-router so every entry point is mod-gated.
+//! Surfaces split by auth tier:
+//! - [`viewer_router`]: `GET /pings` list — read-only, viewer-tier.
+//! - [`mod_router`]: everything else (create, edit, delete, member ops) — mod-tier.
+//!
 //! Form POSTs validate the `_csrf` field against the session csrf value;
 //! the HTMX delete uses an `X-Csrf-Token` header (no body to round-trip).
 //! Persistence + validation reuse `PingManager`'s existing checks
@@ -26,9 +29,17 @@ use crate::flash;
 use crate::routes::{initial_of, render, render_with};
 use crate::state::WebState;
 
-pub fn router() -> Router<WebState> {
+/// Viewer-tier surface: GET /pings list. Detail (`/pings/{name}` GET) and
+/// form (`/pings/new` GET) stay on the mod router because they target
+/// mutation flows the viewer can't initiate.
+pub fn viewer_router() -> Router<WebState> {
+    Router::new().route("/pings", get(list))
+}
+
+/// Mod-tier surface: everything that isn't the read-only list.
+pub fn mod_router() -> Router<WebState> {
     Router::new()
-        .route("/pings", get(list).post(create))
+        .route("/pings", post(create))
         .route("/pings/new", get(new_form))
         .route("/pings/{name}", get(edit_form).post(update))
         .route("/pings/{name}/delete", post(delete))
