@@ -144,13 +144,19 @@ pub fn insert_session(
     user_id: &str,
     user_login: &str,
 ) -> (String, String, String) {
+    insert_session_as(state, user_id, user_login, twitch_1337_web::auth::Role::Mod)
+}
+
+/// Like [`insert_session`] but lets the caller specify the role.
+pub fn insert_session_as(
+    state: &WebState,
+    user_id: &str,
+    user_login: &str,
+    role: twitch_1337_web::auth::Role,
+) -> (String, String, String) {
     let (sid, csrf) = state
         .sessions
-        .insert(
-            user_id.to_owned(),
-            user_login.to_owned(),
-            twitch_1337_web::auth::Role::Mod,
-        )
+        .insert(user_id.to_owned(), user_login.to_owned(), role)
         .expect("insert session");
     let bare_csrf = hex::encode(csrf);
     let signed_sid = sign_for_tests(state, "tw1337_sid", &sid);

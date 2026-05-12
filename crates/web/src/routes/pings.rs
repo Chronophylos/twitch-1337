@@ -60,6 +60,7 @@ struct ListTpl {
     csrf: String,
     user_login: String,
     current_page: &'static str,
+    is_mod: bool,
 }
 
 #[derive(Template)]
@@ -122,6 +123,7 @@ async fn list(
 
     rows.sort_by(|a, b| a.name.cmp(&b.name));
     let total_pings = rows.len();
+    let is_mod = session.role == crate::auth::role::Role::Mod;
     let tpl = ListTpl {
         rows,
         total_pings,
@@ -132,6 +134,7 @@ async fn list(
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
         current_page: crate::nav::PINGS,
+        is_mod,
     };
     render(&tpl)
 }
