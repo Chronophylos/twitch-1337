@@ -25,6 +25,13 @@ pub struct TwitchConfiguration {
     pub expected_latency: u32,
     #[serde(default)]
     pub hidden_admins: Vec<String>,
+    /// Twitch user IDs (numeric strings, same shape as `hidden_admins`)
+    /// granted viewer-tier dashboard access. Mods always pass; this list is
+    /// consulted only when the mod check denies. Empty by default — viewer
+    /// access is opt-in. IDs are used so allowlist entries survive login
+    /// renames on Twitch.
+    #[serde(default)]
+    pub viewer_allowlist: Vec<String>,
     #[serde(default)]
     pub admin_channel: Option<String>,
     #[serde(default)]
@@ -616,6 +623,7 @@ impl Configuration {
                 client_secret: SecretString::new("test".into()),
                 expected_latency: 100,
                 hidden_admins: Vec::new(),
+                viewer_allowlist: Vec::new(),
                 admin_channel: None,
                 ai_channel: None,
             },
