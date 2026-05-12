@@ -458,7 +458,13 @@ pub async fn require_role(
     mut req: Request,
     next: Next,
 ) -> Result<Response, WebError> {
-    let captured_next = req.uri().path_and_query().map(|pq| pq.as_str().to_owned());
+    // `/` already redirects post-login based on role, so capturing it as
+    // `next` produces a useless `/login?next=%2F` round-trip.
+    let captured_next = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str().to_owned())
+        .filter(|p| p != "/");
     let unauth = || WebError::Unauthenticated {
         next: captured_next.clone(),
     };
