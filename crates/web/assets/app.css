@@ -330,10 +330,11 @@ kbd {
   font-weight: 600;
   letter-spacing: -0.02em;
   margin: 0 0 6px;
-  /* Flex with align-items: baseline so the mono .count sibling lines up
-     with the sans title baseline regardless of font-metric differences. */
+  /* inline-flex so the .count sibling can be visually centered against
+     the title's cap-height rather than its baseline — mono parens have
+     a descender area that makes a true baseline-align read low. */
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
 }
 .page-head h1 .count {
