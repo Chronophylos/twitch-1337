@@ -190,7 +190,7 @@ async fn build_web_spawner(
         public_url: config.web.public_url.clone(),
         session_secret: config.web.session_secret.clone(),
         session_ttl: config.web.session_ttl,
-        mod_check_refresh: config.web.mod_check_refresh,
+        role_check_refresh: config.web.mod_check_refresh,
     });
 
     let signed_key = twitch_1337_web::state::derive_session_key(&config.web.session_secret)?;

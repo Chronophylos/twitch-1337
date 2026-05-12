@@ -344,7 +344,7 @@ async fn callback(
 
     let (sid, csrf_value) = state
         .sessions
-        .insert(me.id.clone(), me.login.clone())
+        .insert(me.id.clone(), me.login.clone(), crate::auth::role::Role::Mod)
         .map_err(WebError::Internal)?;
     issue_session_cookies(&cookies, &state.signed_key, sid, &csrf_value, true);
 
@@ -446,10 +446,10 @@ pub async fn require_mod(
 
     let now = state.clock.now();
     let elapsed = now
-        .signed_duration_since(session.last_mod_check)
+        .signed_duration_since(session.last_role_check)
         .to_std()
         .unwrap_or_default();
-    if elapsed > state.config.mod_check_refresh {
+    if elapsed > state.config.role_check_refresh {
         match check_is_mod(
             state.helix.as_ref(),
             &session.user_id,
@@ -458,7 +458,7 @@ pub async fn require_mod(
         )
         .await
         {
-            Ok(ModCheckOutcome::Allow) => state.sessions.record_mod_check(sid_cookie.value()),
+            Ok(ModCheckOutcome::Allow) => state.sessions.record_role_check(sid_cookie.value()),
             Ok(ModCheckOutcome::Deny) => {
                 state.sessions.drop_session(sid_cookie.value());
                 tracing::info!(target: "twitch_1337_web", user_id=%session.user_id, action="mod_recheck", result="denied");

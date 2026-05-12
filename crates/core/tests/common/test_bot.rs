@@ -638,7 +638,7 @@ fn build_test_web_state(
         public_url: config.web.public_url.clone(),
         session_secret: config.web.session_secret.clone(),
         session_ttl: config.web.session_ttl,
-        mod_check_refresh: config.web.mod_check_refresh,
+        role_check_refresh: config.web.mod_check_refresh,
     });
     let signed_key = tower_cookies::Key::from(&[0x42u8; 64]);
     twitch_1337_web::WebState {

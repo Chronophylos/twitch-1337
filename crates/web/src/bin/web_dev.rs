@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
         public_url,
         session_secret,
         session_ttl,
-        mod_check_refresh: Duration::from_secs(300),
+        role_check_refresh: Duration::from_secs(300),
     });
 
     let helix: Arc<dyn HelixClient> = Arc::new(StubHelix);

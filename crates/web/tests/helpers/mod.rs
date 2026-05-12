@@ -102,7 +102,7 @@ pub async fn build_state_with_dirs(helix: Arc<dyn HelixClient>) -> (WebState, Te
         public_url: "https://test.invalid".into(),
         session_secret: SecretString::new("0".repeat(64).into()),
         session_ttl: Duration::from_secs(7200),
-        mod_check_refresh: Duration::from_secs(300),
+        role_check_refresh: Duration::from_secs(300),
     });
     // Tests don't need a real production secret; a fixed 32-byte key keeps
     // signed-cookie round-trips deterministic across reruns.
@@ -140,7 +140,11 @@ pub fn insert_session(
 ) -> (String, String, String) {
     let (sid, csrf) = state
         .sessions
-        .insert(user_id.to_owned(), user_login.to_owned())
+        .insert(
+            user_id.to_owned(),
+            user_login.to_owned(),
+            twitch_1337_web::auth::Role::Mod,
+        )
         .expect("insert session");
     let bare_csrf = hex::encode(csrf);
     let signed_sid = sign_for_tests(state, "tw1337_sid", &sid);
