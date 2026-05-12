@@ -52,21 +52,18 @@ dev:
 dev-web bind="127.0.0.1:8761":
   DATA_DIR=./dev-data BIND_ADDR={{bind}} RUST_LOG=info,twitch_1337_web=debug cargo run -p twitch-1337-web --bin web-dev --features dev-login
 
-# Watch + rebuild + restart on Rust/template changes. Requires
-# `cargo-binstall cargo-watch` or `cargo install cargo-watch`.
-# CSS edits don't need this — assets are read from disk in debug builds.
-# Pair with the browser auto-reload wired into the web-dev binary: the
-# tab refreshes itself when the server comes back up after a rebuild.
+# Rebuild + restart dev-web on Rust/template changes. Requires
+# `cargo install cargo-watch`. Browser auto-refreshes via livereload
+# when the new server comes up.
 dev-web-watch bind="127.0.0.1:8761":
   DATA_DIR=./dev-data BIND_ADDR={{bind}} RUST_LOG=info,twitch_1337_web=debug \
     cargo watch -w crates/web/src -w crates/web/templates -w crates/core/src \
       -x 'run -p twitch-1337-web --bin web-dev --features dev-login'
 
-# Stop the dev-web process (matches the specific bin so it doesn't kill
-# the parent shell or a running cargo elsewhere).
+# Kill the running web-dev binary (matches the compiled path so it
+# doesn't escape to the parent shell or to a cargo invocation elsewhere).
 dev-web-stop:
   -pkill -f 'target/debug/web-dev' 2>/dev/null
-  -pkill -f 'run -p twitch-1337-web --bin web-dev' 2>/dev/null
 
 # One-shot: mint a dev session at /_dev/login + screenshot a path to PNG.
 # Requires `dev-web` already running on `base`. Reuses /tmp/wd-cprof so

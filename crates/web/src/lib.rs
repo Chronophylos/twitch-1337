@@ -53,9 +53,7 @@ pub async fn run_web(listener: TcpListener, deps: WebDeps, shutdown: Arc<Notify>
     serve_app(listener, build_router(deps.state), shutdown).await
 }
 
-/// Serve a pre-built router. Lets `web-dev` layer extra dev-only
-/// middleware (livereload) on top of the production router before
-/// handing it to axum.
+/// Serve a pre-built router with graceful shutdown.
 pub async fn serve_app(listener: TcpListener, app: Router, shutdown: Arc<Notify>) -> Result<()> {
     let url = listener
         .local_addr()

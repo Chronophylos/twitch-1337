@@ -36,6 +36,17 @@ pub const DEV_SID: &str = "de7de7de7de7de7de7de7de7de7de7de7de7de7de7de7de7de7de
 /// Deterministic csrf paired with [`DEV_SID`].
 pub const DEV_CSRF: [u8; 32] = [0x42; 32];
 
+/// Identity that both `/_dev/login` and the web-dev pre-seed install.
+pub fn dev_new_session() -> crate::auth::session::NewSession {
+    crate::auth::session::NewSession {
+        user_id: DEV_USER_ID.to_owned(),
+        user_login: DEV_USER_LOGIN.to_owned(),
+        role: crate::auth::role::Role::Mod,
+        avatar_url: None,
+        is_broadcaster: false,
+    }
+}
+
 pub fn router(state: WebState) -> Router {
     Router::new()
         .route("/_dev/login", get(login))
@@ -55,25 +66,14 @@ async fn login(
     cookies: Cookies,
     Query(q): Query<DevLoginQuery>,
 ) -> Redirect {
-    let csrf_bytes = state
+    state
         .sessions
-        .insert_with_id(
-            DEV_SID,
-            DEV_CSRF,
-            crate::auth::session::NewSession {
-                user_id: DEV_USER_ID.to_owned(),
-                user_login: DEV_USER_LOGIN.to_owned(),
-                role: crate::auth::role::Role::Mod,
-                avatar_url: None,
-                is_broadcaster: false,
-            },
-        )
-        .expect("insert dev session");
+        .insert_with_id(DEV_SID, DEV_CSRF, dev_new_session());
     issue_session_cookies(
         &cookies,
         &state.signed_key,
         DEV_SID.to_owned(),
-        &csrf_bytes,
+        &DEV_CSRF,
         false,
     );
     let target = q

@@ -72,36 +72,25 @@ impl SessionTable {
     /// value so the OAuth callback can set both cookies without a second
     /// lookup against the table.
     pub fn insert(&self, new: NewSession) -> Result<(SessionId, [u8; 32])> {
-        let now = self.clock.now();
         let mut rng = rand::rng();
         let mut id_bytes = [0u8; 32];
         rng.fill_bytes(&mut id_bytes);
         let mut csrf = [0u8; 32];
         rng.fill_bytes(&mut csrf);
         let id = hex::encode(id_bytes);
-        self.inner.write().unwrap().insert(
-            id.clone(),
-            Session {
-                user_id: new.user_id,
-                user_login: new.user_login,
-                role: new.role,
-                issued_at: now,
-                last_seen: now,
-                last_role_check: now,
-                csrf_value: csrf,
-                avatar_url: new.avatar_url,
-                is_broadcaster: new.is_broadcaster,
-            },
-        );
+        self.insert_at(&id, csrf, new);
         Ok((id, csrf))
     }
 
-    /// Insert a session at a caller-chosen id (must be 64-char hex). Returns
-    /// the csrf value paired with the new session. Dev-only: lets the
-    /// `web-dev` bin pre-seed a deterministic session across restarts so
-    /// the browser doesn't need to re-login.
+    /// Insert a session at a caller-chosen id with a caller-chosen csrf.
+    /// Dev-only: the web-dev bin and `/_dev/login` use this to seed a
+    /// deterministic session that survives server restarts.
     #[cfg(feature = "dev-login")]
-    pub fn insert_with_id(&self, id: &str, csrf: [u8; 32], new: NewSession) -> Result<[u8; 32]> {
+    pub fn insert_with_id(&self, id: &str, csrf: [u8; 32], new: NewSession) {
+        self.insert_at(id, csrf, new);
+    }
+
+    fn insert_at(&self, id: &str, csrf: [u8; 32], new: NewSession) {
         let now = self.clock.now();
         self.inner.write().unwrap().insert(
             id.to_owned(),
@@ -117,7 +106,6 @@ impl SessionTable {
                 is_broadcaster: new.is_broadcaster,
             },
         );
-        Ok(csrf)
     }
 
     pub fn get_and_touch(&self, id: &str) -> Option<Session> {

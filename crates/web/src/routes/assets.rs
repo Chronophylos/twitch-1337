@@ -1,12 +1,9 @@
 //! Embedded static asset router (`/assets/*`).
 //!
 //! Bakes css/js straight into the binary so the FROM-scratch musl image
-//! stays self-contained.
-//!
-//! In debug builds, `rust_embed` falls back to filesystem reads relative
-//! to `CARGO_MANIFEST_DIR`, so editing `assets/app.css` is picked up on
-//! the next request without a rebuild — paired with the `no-store` cache
-//! header below, that means save → refresh for visual tweaks.
+//! stays self-contained. Debug builds resolve from `CARGO_MANIFEST_DIR`
+//! via rust_embed's debug fallback + a `no-store` cache header, so asset
+//! edits show up on refresh without a rebuild.
 
 use axum::Router;
 use axum::body::Body;
