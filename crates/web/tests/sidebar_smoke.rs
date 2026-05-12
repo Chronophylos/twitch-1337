@@ -25,6 +25,7 @@ fn fake_helix_with_mod(user_id: &str, login: &str) -> Arc<dyn HelixClient> {
             id: user_id.to_owned(),
             login: login.to_owned(),
             display_name: login.to_owned(),
+            profile_image_url: None,
         },
     );
     Arc::new(FakeHelix {

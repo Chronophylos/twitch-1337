@@ -9,6 +9,8 @@
 //! `/memory/state/{slug}` so axum matches the literal first; a regression
 //! test pins this ordering.
 
+use std::collections::HashMap;
+
 use askama::Template;
 use axum::Router;
 use axum::extract::{Extension, Path, State};
@@ -38,7 +40,7 @@ pub fn router() -> Router<WebState> {
         .route("/memory/users", get(list_users))
         // `/memory/users/new` MUST precede `/memory/users/{user_id}` so the
         // literal route wins over the dynamic capture.
-        .route("/memory/users/new", post(create_user))
+        .route("/memory/users/new", get(new_user_form).post(create_user))
         .route("/memory/users/{user_id}", get(view_user).post(save_user))
         // `/memory/state/new` MUST precede `/memory/state/{slug}` so the
         // literal route wins over the dynamic capture.
@@ -123,12 +125,23 @@ struct UserRow {
     /// Uppercased first character of the display name (or `?` if empty)
     /// for the avatar circle.
     initial: String,
+    /// `None` falls back to the initial-circle in the template.
+    profile_image_url: Option<String>,
 }
 
 #[derive(Template)]
 #[template(path = "memory/users_list.html")]
 struct UsersListTpl {
     items: Vec<UserRow>,
+    csrf: String,
+    user_login: String,
+    current_page: &'static str,
+    is_mod: bool,
+}
+
+#[derive(Template)]
+#[template(path = "memory/users_new.html")]
+struct UsersNewTpl {
     csrf: String,
     user_login: String,
     current_page: &'static str,
@@ -338,6 +351,30 @@ async fn list_users(
         .list_users()
         .await
         .map_err(|e| WebError::Internal(eyre::eyre!("list_users: {e}")))?;
+
+    // Best-effort avatar enrichment: a helix failure must not 500 the page.
+    let user_ids: Vec<&str> = users
+        .iter()
+        .filter_map(|mf| match &mf.kind {
+            FileKind::User { user_id } => Some(user_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    let avatars: HashMap<String, String> = match state.helix.fetch_users_by_ids(&user_ids).await {
+        Ok(found) => found
+            .into_iter()
+            .filter_map(|u| u.profile_image_url.map(|url| (u.id, url)))
+            .collect(),
+        Err(e) => {
+            tracing::warn!(
+                target: "twitch_1337_web",
+                error = ?e,
+                "helix fetch_users_by_ids failed; falling back to initials",
+            );
+            HashMap::new()
+        }
+    };
+
     let items = users
         .into_iter()
         .map(|mf| {
@@ -352,12 +389,14 @@ async fn list_users(
                 &display_name
             });
             let note = note_excerpt(&mf.body);
+            let profile_image_url = avatars.get(&user_id).cloned();
             UserRow {
                 user_id,
                 display_name,
                 updated_at: fmt_ts(mf.frontmatter.updated_at),
                 note,
                 initial,
+                profile_image_url,
             }
         })
         .collect();
@@ -406,6 +445,15 @@ struct NewUserForm {
     user_id: String,
     #[serde(rename = "_csrf")]
     csrf: String,
+}
+
+async fn new_user_form(Extension(session): Extension<Session>) -> Result<Response, WebError> {
+    render(&UsersNewTpl {
+        csrf: csrf::encode(&session.csrf_value),
+        user_login: session.user_login.clone(),
+        current_page: crate::nav::MEMORY_USERS,
+        is_mod: session.is_mod(),
+    })
 }
 
 /// Reads a numeric `user_id` from the form, validates, and redirects to

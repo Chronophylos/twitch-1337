@@ -95,7 +95,7 @@ pub fn build_router(state: WebState) -> Router {
         .route("/", axum::routing::get(root_redirect))
         .merge(routes::pings::viewer_router())
         .merge(routes::leaderboard::router())
-        .merge(routes::flights::router())
+        .merge(routes::flights::viewer_router())
         .layer(axum::middleware::from_fn(auth::viewer_method_guard))
         .route_layer(axum::middleware::from_fn_with_state(
             viewer_state.clone(),
@@ -106,6 +106,7 @@ pub fn build_router(state: WebState) -> Router {
     let mod_state = state.clone();
     let mod_only = Router::new()
         .merge(routes::pings::mod_router())
+        .merge(routes::flights::mod_router())
         .merge(routes::memory::router())
         .merge(routes::stubs::router())
         .route_layer(axum::middleware::from_fn_with_state(

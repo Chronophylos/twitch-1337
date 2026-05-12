@@ -19,6 +19,17 @@ pub trait HelixClient: Send + Sync {
     async fn fetch_user_by_login(&self, login: &str) -> Result<Option<HelixUser>>;
     /// Single helix call filtered by `user_id`; returns true iff the user is in the moderator list.
     async fn is_moderator(&self, broadcaster_id: &str, user_id: &str) -> Result<bool>;
+    /// Batched lookup. [`ReqwestHelixClient`] overrides to a single helix
+    /// call (up to 100 ids per request).
+    async fn fetch_users_by_ids(&self, ids: &[&str]) -> Result<Vec<HelixUser>> {
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(u) = self.fetch_user_by_id(id).await? {
+                out.push(u);
+            }
+        }
+        Ok(out)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -26,6 +37,8 @@ pub struct HelixUser {
     pub id: String,
     pub login: String,
     pub display_name: String,
+    #[serde(default)]
+    pub profile_image_url: Option<String>,
 }
 
 #[async_trait]
@@ -123,6 +136,33 @@ impl HelixClient for ReqwestHelixClient {
         self.fetch_user(&[("login", login)]).await
     }
 
+    async fn fetch_users_by_ids(&self, ids: &[&str]) -> Result<Vec<HelixUser>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        #[derive(Deserialize)]
+        struct UserResp {
+            data: Vec<HelixUser>,
+        }
+        let token = self.access_token_provider.current_access_token().await?;
+        let mut out = Vec::with_capacity(ids.len());
+        // Twitch helix `/users` accepts up to 100 `id` query params per call.
+        for chunk in ids.chunks(100) {
+            let query: Vec<(&str, &str)> = chunk.iter().map(|id| ("id", *id)).collect();
+            let resp: UserResp = helix_get(
+                &self.http,
+                &self.helix_base,
+                "/helix/users",
+                &query,
+                &token,
+                self.client_id.expose_secret(),
+                "helix users (batch)",
+            )
+            .await?;
+            out.extend(resp.data);
+        }
+        Ok(out)
+    }
     async fn is_moderator(&self, broadcaster_id: &str, user_id: &str) -> Result<bool> {
         let token = self.access_token_provider.current_access_token().await?;
         helix_moderator_check(

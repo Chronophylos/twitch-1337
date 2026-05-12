@@ -65,7 +65,6 @@ struct ListTpl {
     rows: Vec<RowView>,
     total_pings: usize,
     total_members: usize,
-    with_variables: usize,
     custom_cooldowns: usize,
     flash: Option<String>,
     csrf: String,
@@ -110,7 +109,6 @@ async fn list(
     let mgr = state.ping_manager.read().await;
     let mut rows: Vec<RowView> = Vec::new();
     let mut unique_members: HashSet<&str> = HashSet::new();
-    let mut with_variables: usize = 0;
     let mut custom_cooldowns: usize = 0;
     for (name, ping) in mgr.iter() {
         rows.push(RowView {
@@ -122,9 +120,6 @@ async fn list(
         });
         for m in &ping.members {
             unique_members.insert(m.as_str());
-        }
-        if ping.template.contains("{mentions}") || ping.template.contains("{sender}") {
-            with_variables += 1;
         }
         if ping.cooldown.is_some() {
             custom_cooldowns += 1;
@@ -140,7 +135,6 @@ async fn list(
         rows,
         total_pings,
         total_members,
-        with_variables,
         custom_cooldowns,
         flash: flash::take(&cookies),
         csrf: csrf::encode(&session.csrf_value),

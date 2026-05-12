@@ -82,6 +82,7 @@ impl HelixClient for StubHelix {
             id: id.to_owned(),
             login: format!("user{id}"),
             display_name: format!("user{id}"),
+            profile_image_url: None,
         }))
     }
     async fn fetch_user_by_login(&self, login: &str) -> eyre::Result<Option<HelixUser>> {
@@ -89,6 +90,7 @@ impl HelixClient for StubHelix {
             id: "0".to_owned(),
             login: login.to_owned(),
             display_name: login.to_owned(),
+            profile_image_url: None,
         }))
     }
     async fn is_moderator(&self, _broadcaster: &str, user_id: &str) -> eyre::Result<bool> {

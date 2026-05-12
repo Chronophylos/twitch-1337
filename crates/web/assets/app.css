@@ -599,6 +599,7 @@ kbd {
   flex-shrink: 0;
   text-transform: uppercase;
 }
+.avatar-img { object-fit: cover; }
 
 /* ====================== Editor (SOUL/LORE/State) ====================== */
 .editor {
