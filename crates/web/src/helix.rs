@@ -5,13 +5,19 @@
 //! with the helix `user_id` filter so a single round-trip resolves it
 //! regardless of how many mods the channel has.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use eyre::{Result, WrapErr as _};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use tokio::sync::Mutex;
+
+use crate::clock::Clock;
 
 #[async_trait]
 pub trait HelixClient: Send + Sync {
@@ -29,6 +35,77 @@ pub trait HelixClient: Send + Sync {
             }
         }
         Ok(out)
+    }
+}
+
+/// TTL cache for `profile_image_url` lookups keyed by Twitch user id.
+///
+/// Negative results (helix returned no avatar for an id) are cached
+/// alongside positive ones so a missing user doesn't refetch every page
+/// load. `lookup` returns the cached subset plus the ids that need a
+/// fresh helix call; the caller is expected to feed the helix response
+/// back into `insert`.
+pub struct AvatarCache {
+    entries: Mutex<HashMap<String, AvatarEntry>>,
+    ttl: chrono::Duration,
+}
+
+struct AvatarEntry {
+    url: Option<String>,
+    fetched_at: DateTime<Utc>,
+}
+
+pub struct AvatarLookup {
+    pub cached: HashMap<String, String>,
+    pub missing: Vec<String>,
+}
+
+impl AvatarCache {
+    pub fn new(ttl: Duration) -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+            ttl: chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::hours(1)),
+        }
+    }
+
+    pub async fn lookup(&self, ids: &[&str], clock: &dyn Clock) -> AvatarLookup {
+        let now = clock.now();
+        let entries = self.entries.lock().await;
+        let mut cached = HashMap::new();
+        let mut missing = Vec::new();
+        for id in ids {
+            match entries.get(*id) {
+                Some(e) if now.signed_duration_since(e.fetched_at) < self.ttl => {
+                    if let Some(url) = &e.url {
+                        cached.insert((*id).to_owned(), url.clone());
+                    }
+                }
+                _ => missing.push((*id).to_owned()),
+            }
+        }
+        AvatarLookup { cached, missing }
+    }
+
+    /// Records helix response. `queried` is the full set of ids that were
+    /// requested; ids absent from `users` are stored as negative entries
+    /// so repeated lookups for empty/unknown users don't refetch.
+    pub async fn insert(&self, queried: &[String], users: &[HelixUser], clock: &dyn Clock) {
+        let now = clock.now();
+        let by_id: HashMap<&str, Option<&str>> = users
+            .iter()
+            .map(|u| (u.id.as_str(), u.profile_image_url.as_deref()))
+            .collect();
+        let mut entries = self.entries.lock().await;
+        for id in queried {
+            let url = by_id.get(id.as_str()).copied().flatten().map(str::to_owned);
+            entries.insert(
+                id.clone(),
+                AvatarEntry {
+                    url,
+                    fetched_at: now,
+                },
+            );
+        }
     }
 }
 

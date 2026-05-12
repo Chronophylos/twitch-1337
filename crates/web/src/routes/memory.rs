@@ -9,8 +9,6 @@
 //! `/memory/state/{slug}` so axum matches the literal first; a regression
 //! test pins this ordering.
 
-use std::collections::HashMap;
-
 use askama::Template;
 use axum::Router;
 use axum::extract::{Extension, Path, State};
@@ -352,7 +350,7 @@ async fn list_users(
         .await
         .map_err(|e| WebError::Internal(eyre::eyre!("list_users: {e}")))?;
 
-    // Best-effort avatar enrichment: a helix failure must not 500 the page.
+    // Best-effort avatar enrichment: helix failure must not 500 the page.
     let user_ids: Vec<&str> = users
         .iter()
         .filter_map(|mf| match &mf.kind {
@@ -360,20 +358,34 @@ async fn list_users(
             _ => None,
         })
         .collect();
-    let avatars: HashMap<String, String> = match state.helix.fetch_users_by_ids(&user_ids).await {
-        Ok(found) => found
-            .into_iter()
-            .filter_map(|u| u.profile_image_url.map(|url| (u.id, url)))
-            .collect(),
-        Err(e) => {
-            tracing::warn!(
-                target: "twitch_1337_web",
-                error = ?e,
-                "helix fetch_users_by_ids failed; falling back to initials",
-            );
-            HashMap::new()
+    let lookup = state
+        .avatar_cache
+        .lookup(&user_ids, state.clock.as_ref())
+        .await;
+    let mut avatars = lookup.cached;
+    if !lookup.missing.is_empty() {
+        let missing_refs: Vec<&str> = lookup.missing.iter().map(String::as_str).collect();
+        match state.helix.fetch_users_by_ids(&missing_refs).await {
+            Ok(found) => {
+                state
+                    .avatar_cache
+                    .insert(&lookup.missing, &found, state.clock.as_ref())
+                    .await;
+                for u in found {
+                    if let Some(url) = u.profile_image_url {
+                        avatars.insert(u.id, url);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "twitch_1337_web",
+                    error = ?e,
+                    "helix fetch_users_by_ids failed; falling back to initials",
+                );
+            }
         }
-    };
+    }
 
     let items = users
         .into_iter()

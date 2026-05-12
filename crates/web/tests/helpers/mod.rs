@@ -174,6 +174,9 @@ async fn build_state_inner(
         signed_key,
         leaderboard: Arc::new(RwLock::new(HashMap::new())),
         tracker_tx: None,
+        avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
+            Duration::from_secs(3600),
+        )),
     };
     (state, pings_dir, memory_dir)
 }
