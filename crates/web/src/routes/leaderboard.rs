@@ -59,7 +59,7 @@ async fn list(
         .collect();
 
     let csrf = csrf::encode(&session.csrf_value);
-    let is_mod = session.role == crate::auth::role::Role::Mod;
+    let is_mod = session.is_mod();
     render(&ListTpl {
         rows,
         user_login: session.user_login,

@@ -30,6 +30,12 @@ pub struct Session {
     pub csrf_value: [u8; 32],
 }
 
+impl Session {
+    pub fn is_mod(&self) -> bool {
+        self.role == Role::Mod
+    }
+}
+
 pub struct SessionTable {
     inner: RwLock<HashMap<SessionId, Session>>,
     ttl: Duration,

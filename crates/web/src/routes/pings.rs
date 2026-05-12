@@ -135,7 +135,7 @@ async fn list(
 
     rows.sort_by(|a, b| a.name.cmp(&b.name));
     let total_pings = rows.len();
-    let is_mod = session.role == crate::auth::role::Role::Mod;
+    let is_mod = session.is_mod();
     let tpl = ListTpl {
         rows,
         total_pings,
@@ -161,7 +161,7 @@ async fn new_form(Extension(session): Extension<Session>) -> Result<Response, We
         error: None,
         user_login: &session.user_login,
         current_page: crate::nav::PINGS,
-        is_mod: session.role == crate::auth::role::Role::Mod,
+        is_mod: session.is_mod(),
         members: Vec::new(),
         member_error: None,
     })
@@ -207,7 +207,7 @@ async fn create(
                 error: Some(format!("ping `{name}` already exists")),
                 user_login: &session.user_login,
                 current_page: crate::nav::PINGS,
-                is_mod: session.role == crate::auth::role::Role::Mod,
+                is_mod: session.is_mod(),
                 members: Vec::new(),
                 member_error: None,
             },
@@ -237,7 +237,7 @@ async fn create(
                 error: Some(e.to_string()),
                 user_login: &session.user_login,
                 current_page: crate::nav::PINGS,
-                is_mod: session.role == crate::auth::role::Role::Mod,
+                is_mod: session.is_mod(),
                 members: Vec::new(),
                 member_error: None,
             },
@@ -278,7 +278,7 @@ async fn edit_form(
         error: None,
         user_login: &session.user_login,
         current_page: crate::nav::PINGS,
-        is_mod: session.role == crate::auth::role::Role::Mod,
+        is_mod: session.is_mod(),
         members,
         member_error: None,
     })
@@ -327,7 +327,7 @@ async fn update(
                 error: Some(e.to_string()),
                 user_login: &session.user_login,
                 current_page: crate::nav::PINGS,
-                is_mod: session.role == crate::auth::role::Role::Mod,
+                is_mod: session.is_mod(),
                 members,
                 member_error: None,
             },
@@ -423,7 +423,7 @@ async fn add_member(
                     error: None,
                     user_login: &session.user_login,
                     current_page: crate::nav::PINGS,
-                    is_mod: session.role == crate::auth::role::Role::Mod,
+                    is_mod: session.is_mod(),
                     members,
                     member_error: Some(msg),
                 },

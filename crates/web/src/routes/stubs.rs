@@ -78,6 +78,6 @@ async fn render_stub(
         csrf: csrf::encode(&session.csrf_value),
         user_login: &session.user_login,
         current_page: meta.nav,
-        is_mod: session.role == crate::auth::role::Role::Mod,
+        is_mod: session.is_mod(),
     })
 }

@@ -59,7 +59,7 @@ async fn list(
         None => (Vec::new(), true),
     };
     let csrf = csrf::encode(&session.csrf_value);
-    let is_mod = session.role == crate::auth::role::Role::Mod;
+    let is_mod = session.is_mod();
     render(&ListTpl {
         flights,
         aviation_disabled,

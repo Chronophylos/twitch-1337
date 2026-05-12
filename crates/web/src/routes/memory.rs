@@ -242,7 +242,7 @@ async fn tree(
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
         current_page: crate::nav::MEMORY_TREE,
-        is_mod: session.role == crate::auth::role::Role::Mod,
+        is_mod: session.is_mod(),
     })
 }
 
@@ -288,7 +288,7 @@ async fn view_kind(
         error: None,
         user_login: &session.user_login,
         current_page,
-        is_mod: session.role == crate::auth::role::Role::Mod,
+        is_mod: session.is_mod(),
         show_user_fm: matches!(kind, FileKind::User { .. }),
         show_state_fm: matches!(kind, FileKind::State { .. }),
         fm_username: mf.frontmatter.username.as_deref().unwrap_or(""),
@@ -366,7 +366,7 @@ async fn list_users(
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
         current_page: crate::nav::MEMORY_USERS,
-        is_mod: session.role == crate::auth::role::Role::Mod,
+        is_mod: session.is_mod(),
     })
 }
 
@@ -464,7 +464,7 @@ async fn list_state(
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
         current_page: crate::nav::MEMORY_STATE,
-        is_mod: session.role == crate::auth::role::Role::Mod,
+        is_mod: session.is_mod(),
     })
 }
 
@@ -481,7 +481,7 @@ async fn new_state_form(
         cap,
         &csrf_hex,
         &session.user_login,
-        session.role == crate::auth::role::Role::Mod,
+        session.is_mod(),
     )
 }
 
@@ -600,7 +600,7 @@ async fn save_kind(
                 draft: form.body,
                 csrf: csrf_hex,
                 user_login: session.user_login.clone(),
-                is_mod: session.role == crate::auth::role::Role::Mod,
+                is_mod: session.is_mod(),
                 current_page,
                 cancel_url,
             })))
@@ -641,7 +641,7 @@ async fn save_kind(
                     error: Some(msg),
                     user_login: &session.user_login,
                     current_page,
-                    is_mod: session.role == crate::auth::role::Role::Mod,
+                    is_mod: session.is_mod(),
                     show_user_fm: matches!(&kind, FileKind::User { .. }),
                     show_state_fm: matches!(&kind, FileKind::State { .. }),
                     fm_username: &form.fm_username,
@@ -782,7 +782,7 @@ async fn create_state(
             cap,
             &csrf_hex,
             &session.user_login,
-            session.role == crate::auth::role::Role::Mod,
+            session.is_mod(),
         );
     }
     let slug = form.slug.clone();
@@ -830,7 +830,7 @@ async fn create_state(
                 cap,
                 &csrf_hex,
                 &session.user_login,
-                session.role == crate::auth::role::Role::Mod,
+                session.is_mod(),
             )
         }
     }
