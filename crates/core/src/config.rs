@@ -29,6 +29,11 @@ pub struct TwitchConfiguration {
     /// IDs (not logins) so entries survive Twitch login renames.
     #[serde(default)]
     pub viewer_allowlist: Vec<String>,
+    /// Twitch user ID granted full dashboard access including the settings
+    /// page. Single value for v1; a tiered permission system replaces it
+    /// later. Absent → no owner exists and the settings page returns 403.
+    #[serde(default)]
+    pub owner: Option<String>,
     #[serde(default)]
     pub admin_channel: Option<String>,
     #[serde(default)]
@@ -621,6 +626,7 @@ impl Configuration {
                 expected_latency: 100,
                 hidden_admins: Vec::new(),
                 viewer_allowlist: Vec::new(),
+                owner: None,
                 admin_channel: None,
                 ai_channel: None,
             },
@@ -655,6 +661,11 @@ pub async fn load_configuration() -> Result<Configuration> {
     validate_config(&config)?;
 
     debug!(public = config.pings.public, "Ping trigger policy");
+
+    info!(
+        owner_configured = config.twitch.owner.is_some(),
+        "Resolved dashboard owner"
+    );
 
     Ok(config)
 }

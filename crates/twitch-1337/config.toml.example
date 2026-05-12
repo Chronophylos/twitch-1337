@@ -27,6 +27,11 @@ client_secret = "your_client_secret"
 # Twitch user IDs granted read-only viewer access to the web dashboard.
 # viewer_allowlist = ["12345678", "87654321"]
 
+# Twitch user ID with full dashboard access, including the settings page.
+# Absent → settings page returns 403 for everyone. Single value for v1; a
+# tiered permission system replaces it later.
+# owner = "12345678"
+
 # Optional: A separate channel for testing bot commands (broadcaster-only access)
 # admin_channel = "my_test_channel"
 
