@@ -141,8 +141,6 @@ where
         memory_store,
     } = services;
 
-    let _ = doener; // consumed in Task 10
-
     let schedules_enabled = !config.schedules.is_empty();
 
     let leaderboard = Arc::new(tokio::sync::RwLock::new(load_leaderboard(&data_dir).await));
@@ -184,6 +182,7 @@ where
         config,
         clock,
         data_dir,
+        doener,
         leaderboard,
         ping_manager,
         suspension_manager,
