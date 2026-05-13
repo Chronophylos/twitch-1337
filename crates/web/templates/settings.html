@@ -28,13 +28,13 @@
     </div>
   </div>
   <div class="row-right">
-    <span class="row-default">default <span class="mono">{{ default }}{{ unit }}</span></span>
     <button
       type="button"
       class="row-reset"
       title="Reset to default"
       aria-label="Reset {{ key }} to default"
       hidden>↺</button>
+    <span class="row-default">default <span class="mono">{{ default }}{{ unit }}</span></span>
   </div>
 </div>
 {% endmacro %}
@@ -63,13 +63,13 @@
     </label>
   </div>
   <div class="row-right">
-    <span class="row-default">default <span class="mono">{% if default %}on{% else %}off{% endif %}</span></span>
     <button
       type="button"
       class="row-reset"
       title="Reset to default"
       aria-label="Reset {{ key }} to default"
       hidden>↺</button>
+    <span class="row-default">default <span class="mono">{% if default %}on{% else %}off{% endif %}</span></span>
   </div>
 </div>
 {% endmacro %}
@@ -121,7 +121,6 @@
             <p>Per-user cooldowns for chat commands. Live changes take effect on the next command invocation.</p>
           </div>
           <div class="settings-card-tag">
-            <code>[cooldowns]</code>
             <span class="card-dirty" hidden>0 modified</span>
           </div>
         </header>
@@ -141,7 +140,6 @@
             <p>Global policy for the community ping system. Per-ping membership lives on <code>/pings</code>.</p>
           </div>
           <div class="settings-card-tag">
-            <code>[pings]</code>
             <span class="card-dirty" hidden>0 modified</span>
           </div>
         </header>
