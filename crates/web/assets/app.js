@@ -90,18 +90,24 @@ document.addEventListener(
   });
 })();
 
-// Settings page: dirty tracking, sticky save-bar, sticky section-nav
-// active state, per-row reset. No fetch; Save submits the existing form.
 (function settingsPage() {
   const form = document.getElementById('settings-form');
-  if (!form) return;
   const saveBar = document.getElementById('settings-save-bar');
+  if (!form || !saveBar) return;
+
   const countEl = saveBar.querySelector('[data-count]');
   const nounEl = saveBar.querySelector('[data-noun]');
   const previewEl = saveBar.querySelector('[data-preview]');
   const discardBtn = saveBar.querySelector('[data-discard]');
 
-  const rows = Array.from(form.querySelectorAll('.settings-row'));
+  const rows = Array.from(form.querySelectorAll('.settings-row'))
+    .map((row) => ({
+      el: row,
+      input: row.querySelector('input[name]'),
+      reset: row.querySelector('.row-reset'),
+      section: row.dataset.section,
+    }))
+    .filter((r) => r.input);
   const cards = Array.from(form.querySelectorAll('.settings-card'));
   const navItems = Array.from(document.querySelectorAll('.settings-nav-item'));
 
@@ -109,12 +115,8 @@ document.addEventListener(
     return input.type === 'checkbox' ? (input.checked ? 'true' : 'false') : input.value;
   }
 
-  function defaultValue(input) {
-    return input.dataset.default ?? '';
-  }
-
   function applyDefault(input) {
-    const def = defaultValue(input);
+    const def = input.dataset.default ?? '';
     if (input.type === 'checkbox') {
       input.checked = def === 'true' || def === '1';
     } else {
@@ -122,27 +124,16 @@ document.addEventListener(
     }
   }
 
-  function refreshRow(row) {
-    const input = row.querySelector('input[name]');
-    if (!input) return false;
-    const dirty = currentValue(input) !== defaultValue(input);
-    row.classList.toggle('is-dirty', dirty);
-    const reset = row.querySelector('.row-reset');
-    if (reset) reset.hidden = !dirty;
-    return dirty;
-  }
-
   function refreshAll() {
     const dirtyKeys = [];
     const perSection = new Map();
-    for (const row of rows) {
-      const dirty = refreshRow(row);
+    for (const r of rows) {
+      const dirty = currentValue(r.input) !== (r.input.dataset.default ?? '');
+      r.el.classList.toggle('is-dirty', dirty);
+      if (r.reset) r.reset.hidden = !dirty;
       if (!dirty) continue;
-      const input = row.querySelector('input[name]');
-      const key = input?.dataset.key ?? input?.name ?? '?';
-      dirtyKeys.push(key);
-      const section = row.dataset.section;
-      if (section) perSection.set(section, (perSection.get(section) ?? 0) + 1);
+      dirtyKeys.push(r.input.dataset.key ?? r.input.name);
+      if (r.section) perSection.set(r.section, (perSection.get(r.section) ?? 0) + 1);
     }
 
     for (const card of cards) {
@@ -174,40 +165,33 @@ document.addEventListener(
   form.addEventListener('input', refreshAll);
   form.addEventListener('change', refreshAll);
 
-  for (const row of rows) {
-    const reset = row.querySelector('.row-reset');
-    if (!reset) continue;
-    reset.addEventListener('click', () => {
-      const input = row.querySelector('input[name]');
-      if (!input) return;
-      applyDefault(input);
-      refreshAll();
-      input.focus();
-    });
-  }
-
-  discardBtn.addEventListener('click', () => {
-    location.reload();
+  form.addEventListener('click', (e) => {
+    const btn = e.target.closest('.row-reset');
+    if (!btn) return;
+    const r = rows.find((row) => row.reset === btn);
+    if (!r) return;
+    applyDefault(r.input);
+    refreshAll();
+    r.input.focus();
   });
 
-  // Section nav active state. IntersectionObserver picks the topmost
-  // visible card; falls back to the first nav item before any scroll.
+  discardBtn?.addEventListener('click', () => location.reload());
+
   if (cards.length && 'IntersectionObserver' in window) {
     const byId = new Map(navItems.map((el) => [el.dataset.target, el]));
+    let active = null;
     const setActive = (section) => {
-      for (const item of navItems) item.classList.remove('active');
-      const el = byId.get(section);
-      if (el) el.classList.add('active');
+      if (section === active) return;
+      if (active) byId.get(active)?.classList.remove('active');
+      active = section;
+      byId.get(section)?.classList.add('active');
     };
     setActive(cards[0].dataset.section);
     const io = new IntersectionObserver(
       (entries) => {
         const vis = entries
           .filter((e) => e.isIntersecting)
-          .sort(
-            (a, b) =>
-              a.boundingClientRect.top - b.boundingClientRect.top,
-          )[0];
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
         if (vis) setActive(vis.target.dataset.section);
       },
       { rootMargin: '-72px 0px -60% 0px' },

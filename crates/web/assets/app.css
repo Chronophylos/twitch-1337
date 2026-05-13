@@ -934,13 +934,7 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   margin: 0 0 18px;
 }
 
-/* ====================== Settings page ======================
-   Two-column shell: sticky section nav + cards. Each row is a
-   1fr / control / right-meta grid. Toggle is a custom track/thumb
-   driven by `:has(input:checked)`. Save state surfaces in a fixed
-   bottom save-bar (`.save-bar.visible`), per-card `.card-dirty`
-   badges, per-row `.dirty-dot`, and per-section nav `.ndirty`
-   counters — all populated by the settings IIFE in app.js. */
+/* ====================== Settings page ====================== */
 .settings-grid {
   display: grid;
   grid-template-columns: 200px 1fr;
@@ -1095,8 +1089,6 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   padding-left: 14px;
 }
 
-.row-control { display: flex; justify-content: flex-start; }
-
 .row-right {
   display: flex;
   align-items: center;
@@ -1123,7 +1115,6 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 .row-reset:hover { background: var(--bg-2); color: var(--accent); }
 .row-reset[hidden] { display: none; }
 
-/* Number input with optional unit suffix. */
 .num-wrap {
   display: inline-flex;
   align-items: center;
@@ -1162,7 +1153,8 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   flex-shrink: 0;
 }
 
-/* Toggle (custom switch driven by hidden checkbox + :has). */
+/* `:has(input:checked)` drives on-state so dirty tracking is the only
+   piece that needs JS. */
 .toggle {
   width: 36px;
   height: 20px;
@@ -1208,8 +1200,7 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* Sticky save bar. Sits flush with the sidebar edge on the left so it
-   doesn't visually fight the rail. Hidden until JS adds `.visible`. */
+/* Offset by the sidebar so the bar doesn't visually fight the rail. */
 .save-bar {
   position: fixed;
   left: var(--rail-w);
