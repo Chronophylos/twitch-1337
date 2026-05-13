@@ -89,3 +89,140 @@ document.addEventListener(
     }
   });
 })();
+
+// Settings page: dirty tracking, sticky save-bar, sticky section-nav
+// active state, per-row reset. No fetch; Save submits the existing form.
+(function settingsPage() {
+  const form = document.getElementById('settings-form');
+  if (!form) return;
+  const saveBar = document.getElementById('settings-save-bar');
+  const countEl = saveBar.querySelector('[data-count]');
+  const nounEl = saveBar.querySelector('[data-noun]');
+  const previewEl = saveBar.querySelector('[data-preview]');
+  const discardBtn = saveBar.querySelector('[data-discard]');
+
+  const rows = Array.from(form.querySelectorAll('.settings-row'));
+  const cards = Array.from(form.querySelectorAll('.settings-card'));
+  const navItems = Array.from(document.querySelectorAll('.settings-nav-item'));
+
+  function currentValue(input) {
+    return input.type === 'checkbox' ? (input.checked ? 'true' : 'false') : input.value;
+  }
+
+  function defaultValue(input) {
+    return input.dataset.default ?? '';
+  }
+
+  function applyDefault(input) {
+    const def = defaultValue(input);
+    if (input.type === 'checkbox') {
+      input.checked = def === 'true' || def === '1';
+    } else {
+      input.value = def;
+    }
+  }
+
+  function refreshRow(row) {
+    const input = row.querySelector('input[name]');
+    if (!input) return false;
+    const dirty = currentValue(input) !== defaultValue(input);
+    row.classList.toggle('is-dirty', dirty);
+    const reset = row.querySelector('.row-reset');
+    if (reset) reset.hidden = !dirty;
+    return dirty;
+  }
+
+  function refreshAll() {
+    const dirtyKeys = [];
+    const perSection = new Map();
+    for (const row of rows) {
+      const dirty = refreshRow(row);
+      if (!dirty) continue;
+      const input = row.querySelector('input[name]');
+      const key = input?.dataset.key ?? input?.name ?? '?';
+      dirtyKeys.push(key);
+      const section = row.dataset.section;
+      if (section) perSection.set(section, (perSection.get(section) ?? 0) + 1);
+    }
+
+    for (const card of cards) {
+      const n = perSection.get(card.dataset.section) ?? 0;
+      const badge = card.querySelector('.card-dirty');
+      if (badge) {
+        badge.hidden = n === 0;
+        badge.textContent = `${n} modified`;
+      }
+    }
+    for (const item of navItems) {
+      const n = perSection.get(item.dataset.target) ?? 0;
+      const badge = item.querySelector('.ndirty');
+      if (badge) {
+        badge.hidden = n === 0;
+        badge.textContent = String(n);
+      }
+    }
+
+    const total = dirtyKeys.length;
+    countEl.textContent = String(total);
+    nounEl.textContent = total === 1 ? 'change' : 'changes';
+    const preview = dirtyKeys.slice(0, 3).join(' · ');
+    previewEl.textContent =
+      total > 3 ? `${preview} +${total - 3}` : preview;
+    saveBar.classList.toggle('visible', total > 0);
+  }
+
+  form.addEventListener('input', refreshAll);
+  form.addEventListener('change', refreshAll);
+
+  for (const row of rows) {
+    const reset = row.querySelector('.row-reset');
+    if (!reset) continue;
+    reset.addEventListener('click', () => {
+      const input = row.querySelector('input[name]');
+      if (!input) return;
+      applyDefault(input);
+      refreshAll();
+      input.focus();
+    });
+  }
+
+  discardBtn.addEventListener('click', () => {
+    location.reload();
+  });
+
+  // Section nav active state. IntersectionObserver picks the topmost
+  // visible card; falls back to the first nav item before any scroll.
+  if (cards.length && 'IntersectionObserver' in window) {
+    const byId = new Map(navItems.map((el) => [el.dataset.target, el]));
+    const setActive = (section) => {
+      for (const item of navItems) item.classList.remove('active');
+      const el = byId.get(section);
+      if (el) el.classList.add('active');
+    };
+    setActive(cards[0].dataset.section);
+    const io = new IntersectionObserver(
+      (entries) => {
+        const vis = entries
+          .filter((e) => e.isIntersecting)
+          .sort(
+            (a, b) =>
+              a.boundingClientRect.top - b.boundingClientRect.top,
+          )[0];
+        if (vis) setActive(vis.target.dataset.section);
+      },
+      { rootMargin: '-72px 0px -60% 0px' },
+    );
+    for (const card of cards) io.observe(card);
+  }
+
+  for (const item of navItems) {
+    item.addEventListener('click', (e) => {
+      const target = document.getElementById('sec-' + item.dataset.target);
+      if (!target) return;
+      e.preventDefault();
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
+  refreshAll();
+})();
