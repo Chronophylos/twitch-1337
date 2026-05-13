@@ -78,7 +78,7 @@
 <div class="page-head">
   <div>
     <h1>Settings</h1>
-    <p class="page-sub">Runtime configuration. Saved values apply immediately to running handlers; the overrides file at <code>$DATA_DIR/settings.ron</code> is rewritten atomically.</p>
+    <p class="page-sub">Runtime configuration. Saved values apply immediately to running handlers.</p>
   </div>
 </div>
 
@@ -152,18 +152,6 @@
       </section>
     </form>
 
-    <div class="section-resets">
-      <form method="post" action="/settings/reset/cooldowns">
-        <input type="hidden" name="_csrf" value="{{ csrf }}">
-        <button type="submit" class="btn ghost">Reset cooldowns to defaults</button>
-      </form>
-      <form method="post" action="/settings/reset/pings">
-        <input type="hidden" name="_csrf" value="{{ csrf }}">
-        <button type="submit" class="btn ghost">Reset pings to defaults</button>
-      </form>
-    </div>
-
-    <div class="settings-foot">$DATA_DIR/settings.ron · written atomically (tmp + rename)</div>
   </div>
 </div>
 

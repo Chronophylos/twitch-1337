@@ -1217,24 +1217,6 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* Section reset buttons live outside the main form. */
-.section-resets {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 4px;
-}
-.section-resets form { margin: 0; flex: 1 1 0; min-width: 220px; }
-.section-resets .btn { width: 100%; justify-content: center; }
-
-.settings-foot {
-  margin-top: 8px;
-  padding: 8px 4px 28px;
-  color: var(--fg-4);
-  font-size: 11.5px;
-  font-family: var(--mono);
-}
-
 /* Sticky save bar. Sits flush with the sidebar edge on the left so it
    doesn't visually fight the rail. Hidden until JS adds `.visible`. */
 .save-bar {
