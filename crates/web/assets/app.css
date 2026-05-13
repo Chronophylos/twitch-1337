@@ -1025,6 +1025,15 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   font-size: 13px;
   max-width: 60ch;
 }
+.page-sub a,
+.settings-card-head p a {
+  color: var(--accent);
+  border-bottom: 1px solid var(--accent-soft);
+}
+.page-sub a:hover,
+.settings-card-head p a:hover {
+  border-bottom-color: var(--accent);
+}
 .settings-card-tag {
   display: flex;
   align-items: center;
