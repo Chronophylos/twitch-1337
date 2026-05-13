@@ -105,9 +105,23 @@ document.addEventListener(
       el: row,
       input: row.querySelector('input[name]'),
       reset: row.querySelector('.row-reset'),
+      pretty: row.querySelector('.row-pretty'),
       section: row.dataset.section,
     }))
     .filter((r) => r.input);
+
+  function formatPretty(input, prettyEl) {
+    const unit = prettyEl?.dataset.prettyUnit ?? '';
+    if (unit === 'bool') return input.checked ? 'On' : 'Off';
+    const n = Number(input.value);
+    if (!Number.isFinite(n)) return input.value;
+    if (unit === 's') return n === 1 ? '1 second' : `${n} seconds`;
+    if (unit === 'B') {
+      if (n % 1024 === 0 && n >= 1024) return `${n / 1024} KiB`;
+      return `${n} B`;
+    }
+    return unit ? `${n} ${unit}` : String(n);
+  }
   const cards = Array.from(form.querySelectorAll('.settings-card'));
   const navItems = Array.from(document.querySelectorAll('.settings-nav-item'));
 
@@ -131,6 +145,7 @@ document.addEventListener(
       const dirty = currentValue(r.input) !== (r.input.dataset.default ?? '');
       r.el.classList.toggle('is-dirty', dirty);
       if (r.reset) r.reset.hidden = !dirty;
+      if (r.pretty) r.pretty.textContent = formatPretty(r.input, r.pretty);
       if (!dirty) continue;
       dirtyKeys.push(r.input.dataset.key ?? r.input.name);
       if (r.section) perSection.set(r.section, (perSection.get(r.section) ?? 0) + 1);

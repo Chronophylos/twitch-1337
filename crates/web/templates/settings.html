@@ -23,17 +23,20 @@
 {% macro num_row(section, field, key, hint, value, default, unit) %}
 <div class="settings-row" data-section="{{ section }}">
   {% call row_head(key, hint) %}{% endcall %}
-  <div class="num-wrap">
-    <input
-      type="number"
-      class="num-input"
-      name="{{ field }}"
-      min="1"
-      max="3600"
-      value="{{ value }}"
-      data-default="{{ default }}"
-      data-key="{{ key }}">
-    <span class="num-unit">{{ unit }}</span>
+  <div class="row-control-cell">
+    <span class="row-pretty" aria-hidden="true" data-pretty-unit="{{ unit }}">{{ value }} second{% if value != 1 %}s{% endif %}</span>
+    <div class="num-wrap">
+      <input
+        type="number"
+        class="num-input"
+        name="{{ field }}"
+        min="1"
+        max="3600"
+        value="{{ value }}"
+        data-default="{{ default }}"
+        data-key="{{ key }}">
+      <span class="num-unit">{{ unit }}</span>
+    </div>
   </div>
   <div class="row-right">
     {% call row_reset(key) %}{% endcall %}
@@ -45,18 +48,21 @@
 {% macro toggle_row(section, field, key, hint, value, default) %}
 <div class="settings-row" data-section="{{ section }}">
   {% call row_head(key, hint) %}{% endcall %}
-  <label class="toggle">
-    <input
-      type="checkbox"
-      name="{{ field }}"
-      value="1"
-      data-default="{{ default }}"
-      data-key="{{ key }}"
-      role="switch"
-      aria-label="{{ key }}"
-      {% if value %}checked{% endif %}>
-    <span class="toggle-thumb" aria-hidden="true"></span>
-  </label>
+  <div class="row-control-cell">
+    <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">{% if value %}On{% else %}Off{% endif %}</span>
+    <label class="toggle">
+      <input
+        type="checkbox"
+        name="{{ field }}"
+        value="1"
+        data-default="{{ default }}"
+        data-key="{{ key }}"
+        role="switch"
+        aria-label="{{ key }}"
+        {% if value %}checked{% endif %}>
+      <span class="toggle-thumb" aria-hidden="true"></span>
+    </label>
+  </div>
   <div class="row-right">
     {% call row_reset(key) %}{% endcall %}
     <span class="row-default">default <span class="mono">{% if default %}on{% else %}off{% endif %}</span></span>

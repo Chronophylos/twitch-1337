@@ -1098,6 +1098,38 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   padding-left: 14px;
 }
 
+.row-control-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+}
+.row-pretty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 13.5px;
+  color: var(--fg-2);
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.row-control-cell .num-wrap,
+.row-control-cell .toggle {
+  transition: opacity 0.12s ease;
+  opacity: 0;
+}
+.settings-row:hover .row-control-cell .num-wrap,
+.settings-row:hover .row-control-cell .toggle,
+.settings-row:focus-within .row-control-cell .num-wrap,
+.settings-row:focus-within .row-control-cell .toggle,
+.settings-row.is-dirty .row-control-cell .num-wrap,
+.settings-row.is-dirty .row-control-cell .toggle { opacity: 1; }
+.settings-row:hover .row-pretty,
+.settings-row:focus-within .row-pretty,
+.settings-row.is-dirty .row-pretty { opacity: 0; }
+
 .row-right {
   display: flex;
   align-items: center;
@@ -1106,7 +1138,12 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   font-family: var(--mono);
   font-size: 11.5px;
   color: var(--fg-4);
+  opacity: 0;
+  transition: opacity 0.12s ease;
 }
+.settings-row:hover .row-right,
+.settings-row:focus-within .row-right,
+.settings-row.is-dirty .row-right { opacity: 1; }
 .row-default .mono { color: var(--fg-2); }
 .row-reset {
   width: 24px;
