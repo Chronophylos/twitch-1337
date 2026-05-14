@@ -3,12 +3,10 @@ mod common;
 use std::time::Duration;
 
 use common::TestBotBuilder;
-use serial_test::serial;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
-#[serial]
 async fn dpi_global_returns_summary_from_upstream() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
