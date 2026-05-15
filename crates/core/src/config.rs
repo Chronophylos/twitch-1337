@@ -10,11 +10,6 @@ use tracing::info;
 
 use crate::database;
 
-/// Temporary re-export so handlers that still hard-code the old
-/// `crate::config::AiBackend` enum keep compiling during Phase 2/3.
-/// Removed in Task 15 once every handler reads the backend from settings.
-pub use crate::settings::ai::AiBackendKind as AiBackend;
-
 fn default_expected_latency() -> u32 {
     100
 }

@@ -12,7 +12,7 @@ use super::cache::TtlCache;
 use super::client::{SearchClient, SearchResult};
 use super::media::MediaClient;
 use crate::settings::SettingsHandle;
-use crate::settings::ai::AiMedia as AiMediaConfig;
+use crate::settings::ai::AiMedia;
 
 #[derive(Debug, Deserialize)]
 struct WebSearchArgs {
@@ -33,7 +33,6 @@ pub(super) struct ReadUrlArgs {
 pub struct ContentToolExecutor {
     client: SearchClient,
     media: Arc<MediaClient>,
-    caps: AiMediaConfig,
     settings: SettingsHandle,
     search_cache: Arc<Mutex<TtlCache<Vec<SearchResult>>>>,
     read_cache: Arc<Mutex<TtlCache<ReadCacheEntry>>>,
@@ -49,7 +48,6 @@ impl ContentToolExecutor {
     pub fn new(
         client: SearchClient,
         media: Arc<MediaClient>,
-        caps: AiMediaConfig,
         settings: SettingsHandle,
         cache_ttl: Duration,
         cache_capacity: usize,
@@ -57,11 +55,14 @@ impl ContentToolExecutor {
         Self {
             client,
             media,
-            caps,
             settings,
             search_cache: Arc::new(Mutex::new(TtlCache::new(cache_ttl, cache_capacity))),
             read_cache: Arc::new(Mutex::new(TtlCache::new(cache_ttl, cache_capacity))),
         }
+    }
+
+    fn live_media(&self) -> AiMedia {
+        self.settings.load().ai.media.clone()
     }
 
     fn current_max_results(&self) -> usize {
@@ -194,7 +195,8 @@ impl ContentToolExecutor {
             .to_string();
         }
 
-        let fetched = match self.client.fetch_for_read(&args.url, &self.caps).await {
+        let media_caps = self.live_media();
+        let fetched = match self.client.fetch_for_read(&args.url, &media_caps).await {
             Ok(f) => f,
             Err(err) => return Self::map_fetch_err(&err, &args.url),
         };
@@ -302,14 +304,7 @@ mod tests {
             "test-model".into(),
             Duration::from_secs(1),
         ));
-        ContentToolExecutor::new(
-            client,
-            media,
-            AiMediaConfig::default(),
-            test_handle(),
-            Duration::from_secs(300),
-            32,
-        )
+        ContentToolExecutor::new(client, media, test_handle(), Duration::from_secs(300), 32)
     }
 
     #[test]
@@ -342,14 +337,8 @@ mod tests {
             "test-model".into(),
             Duration::from_secs(1),
         ));
-        let executor = ContentToolExecutor::new(
-            client,
-            media,
-            AiMediaConfig::default(),
-            handle.clone(),
-            Duration::from_secs(300),
-            32,
-        );
+        let executor =
+            ContentToolExecutor::new(client, media, handle.clone(), Duration::from_secs(300), 32);
 
         assert_eq!(
             executor.max_results(),
@@ -373,6 +362,51 @@ mod tests {
             executor.max_results(),
             3,
             "max_results should update to 3 after store"
+        );
+    }
+
+    #[test]
+    fn live_media_reflects_settings_update() {
+        use crate::settings::Settings;
+        use crate::settings::ai::AiMedia;
+        use bytesize::ByteSize;
+
+        crate::install_crypto_provider();
+
+        let base = Settings::compiled_defaults();
+        let handle = crate::settings::SettingsHandle::new(arc_swap::ArcSwap::from_pointee(base));
+
+        let client = SearchClient::new_with_client(
+            "http://127.0.0.1:65535/search".to_string(),
+            Duration::from_secs(1),
+            reqwest::Client::new(),
+        );
+        let media = Arc::new(MediaClient::new(
+            reqwest::Client::new(),
+            "http://127.0.0.1:65535/v1".to_string(),
+            None,
+            "test-model".into(),
+            Duration::from_secs(1),
+        ));
+        let executor =
+            ContentToolExecutor::new(client, media, handle.clone(), Duration::from_secs(300), 32);
+
+        // Default image cap should be the compiled default.
+        let default_cap = executor.live_media().max_image_size;
+
+        // Mutate: set a tiny image cap.
+        let mut updated = Settings::compiled_defaults();
+        updated.ai.media = AiMedia {
+            max_image_size: ByteSize::b(1),
+            ..AiMedia::default()
+        };
+        handle.store(std::sync::Arc::new(updated));
+
+        assert_eq!(
+            executor.live_media().max_image_size,
+            ByteSize::b(1),
+            "live_media() must reflect updated cap; was {:?}",
+            default_cap
         );
     }
 

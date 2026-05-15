@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::APP_USER_AGENT;
 use crate::ai::content::detect::{Bucket, detect};
-use crate::settings::ai::AiMedia as AiMediaConfig;
+use crate::settings::ai::AiMedia;
 use crate::util::truncate_response;
 
 static SSRF_BYPASS: AtomicBool = AtomicBool::new(false);
@@ -153,7 +153,7 @@ pub struct FetchedContent {
     pub payload: Payload,
 }
 
-fn overall_cap(caps: &AiMediaConfig) -> u64 {
+fn overall_cap(caps: &AiMedia) -> u64 {
     [
         caps.max_image_size,
         caps.max_pdf_size,
@@ -240,11 +240,7 @@ impl SearchClient {
         Ok(results)
     }
 
-    pub async fn fetch_for_read(
-        &self,
-        raw_url: &str,
-        caps: &AiMediaConfig,
-    ) -> Result<FetchedContent> {
+    pub async fn fetch_for_read(&self, raw_url: &str, caps: &AiMedia) -> Result<FetchedContent> {
         let url = reqwest::Url::parse(raw_url).wrap_err("Invalid URL")?;
 
         match url.scheme() {
@@ -577,8 +573,8 @@ mod tests {
         assert_eq!(parsed.results[0].url, "https://example.com/news");
     }
 
-    fn caps() -> AiMediaConfig {
-        AiMediaConfig::default()
+    fn caps() -> AiMedia {
+        AiMedia::default()
     }
 
     fn make_test_client(base_url: &str) -> SearchClient {
@@ -653,13 +649,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let tiny_caps = AiMediaConfig {
+        let tiny_caps = AiMedia {
             max_image_size: bytesize::ByteSize::b(1),
             max_pdf_size: bytesize::ByteSize::b(1),
             max_audio_size: bytesize::ByteSize::b(1),
             max_video_size: bytesize::ByteSize::b(1),
             max_text_size: bytesize::ByteSize::b(1),
-            ..AiMediaConfig::default()
+            ..AiMedia::default()
         };
 
         let client = make_test_client(&format!("{}/search", server.uri()));

@@ -241,7 +241,6 @@ where
                 executor: Arc::new(ai::content::ContentToolExecutor::new(
                     client,
                     media,
-                    ai_media.clone(),
                     settings.clone(),
                     Duration::from_secs(web_cfg.cache_ttl_secs),
                     web_cfg.cache_capacity,
