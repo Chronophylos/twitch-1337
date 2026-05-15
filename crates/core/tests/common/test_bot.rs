@@ -709,5 +709,8 @@ fn build_test_web_state(
         owner_id: None,
         settings,
         settings_store,
+        ai_bootstrap: None,
+        model_cache: Arc::new(twitch_1337_web::routes::ai_models::ModelListCache::default()),
+        http: reqwest::Client::new(),
     }
 }

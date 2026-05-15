@@ -16,6 +16,7 @@ use tower_cookies::Key;
 use twitch_1337_core::ai::memory::store::MemoryStore;
 use twitch_1337_core::aviation::TrackerCommand;
 use twitch_1337_core::commands::leaderboard::PersonalBest;
+use twitch_1337_core::config::AiBootstrap;
 use twitch_1337_core::ping::PingManager;
 
 use crate::auth::OAuthCtx;
@@ -23,6 +24,7 @@ use crate::auth::session::SessionTable;
 use crate::clock::Clock;
 use crate::config::WebConfig;
 use crate::helix::{AvatarCache, HelixClient};
+use crate::routes::ai_models::ModelListCache;
 
 #[derive(Clone)]
 pub struct WebState {
@@ -77,6 +79,16 @@ pub struct WebState {
     /// Owning store for settings — apply/reset go through this. Web handlers
     /// for `/settings` post-back via `store.apply(...)`.
     pub settings_store: Arc<twitch_1337_core::settings::SettingsStore>,
+    /// Bootstrap AI config from `config.toml` (contains the `api_key` secret).
+    /// `None` when `[ai]` is absent from config. Used by the model-list proxy
+    /// to authenticate against the upstream LLM provider.
+    pub ai_bootstrap: Option<Arc<AiBootstrap>>,
+    /// Process-wide TTL cache for upstream model lists. Keyed by
+    /// `(backend, Option<base_url>)`; a single entry is stored at a time
+    /// because only one connection backend is active at once.
+    pub model_cache: Arc<ModelListCache>,
+    /// Shared `reqwest::Client` for outbound HTTP (model list proxy, etc.).
+    pub http: reqwest::Client,
 }
 
 /// Derive the signed-cookie [`Key`] from `[web].session_secret`.

@@ -213,6 +213,9 @@ async fn build_state_inner_keep_settings(
         owner_id: None,
         settings: settings_handle,
         settings_store,
+        ai_bootstrap: None,
+        model_cache: Arc::new(twitch_1337_web::routes::ai_models::ModelListCache::default()),
+        http: reqwest::Client::new(),
     };
     (state, pings_dir, memory_dir, settings_dir)
 }

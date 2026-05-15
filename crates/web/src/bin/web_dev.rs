@@ -122,6 +122,9 @@ async fn main() -> Result<()> {
         owner_id: Some(Arc::from(DEV_USER_ID)),
         settings: settings_handle,
         settings_store,
+        ai_bootstrap: None,
+        model_cache: Arc::new(twitch_1337_web::routes::ai_models::ModelListCache::default()),
+        http: reqwest::Client::new(),
     };
 
     let listener = bind(bind_addr).await?;

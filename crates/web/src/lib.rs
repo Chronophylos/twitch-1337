@@ -124,6 +124,10 @@ pub fn build_router(state: WebState) -> Router {
     let owner_state = state.clone();
     let owner_only = Router::new()
         .merge(routes::settings::owner_router())
+        .route(
+            "/settings/ai/models",
+            axum::routing::get(routes::ai_models::get_ai_models),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             owner_state.clone(),
             auth::require_owner,

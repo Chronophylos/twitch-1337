@@ -295,6 +295,9 @@ async fn build_web_spawner(
         owner_id,
         settings,
         settings_store,
+        ai_bootstrap: config.ai.clone().map(Arc::new),
+        model_cache: Arc::new(twitch_1337_web::routes::ai_models::ModelListCache::default()),
+        http: reqwest::Client::new(),
     };
 
     Ok(Box::new(move |shutdown| {
