@@ -82,7 +82,23 @@ Others pinned to major tags; Dependabot keeps them current.
 
 ## Config
 
-`config.toml` (copy `config.toml.example`). Sections: `[twitch]`, `[pings]`, `[ai]` (optional), `[cooldowns]`, `[[schedules]]` (optional, repeatable). Schema + defaults in `config.toml.example` — treat as source of truth.
+`config.toml` (copy `config.toml.example`). Sections: `[twitch]`, `[pings]`, `[ai]` (optional, api_key only), `[cooldowns]`, `[[schedules]]` (optional, repeatable). Schema + defaults in `config.toml.example` — treat as source of truth.
+
+`[ai]` carries only the API key. Backend, model, base URL, memory caps,
+dreamer schedule, web/emote/media tool toggles, history caps, and every
+other runtime knob live in the dashboard (`/settings`, owner only) and
+persist to `$DATA_DIR/settings.ron` (schema v2). On first v2 launch any
+legacy hoisted `[ai]` keys in `config.toml` are migrated into
+`settings.ron` once (sentinel: `$DATA_DIR/.ai_migrated_v2`); subsequent
+edits to those legacy keys are ignored.
+
+Backend and connection `base_url` changes from the dashboard require a
+bot restart (UI shows a "restart required" badge). Everything else
+applies live via `SettingsHandle` (model, timeout, reasoning_effort,
+behavior limits, history caps, memory byte budgets, dreamer schedule,
+web tools, emotes, media). The `GET /settings/ai/models` endpoint
+proxies upstream `/v1/models` (OpenAI) or `/api/tags` (Ollama) with a
+5-minute TTL cache so the model picker can autocomplete.
 
 **Dashboard viewer tier:** read-only viewer access is gated by a static
 allowlist at `[twitch].viewer_allowlist` (numeric Twitch user IDs, same shape
@@ -116,7 +132,7 @@ Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `fli
 - Aviation client init failure: log + disable `!up`/`!fl`/flight tracker + track commands. Don't abort.
 - Latency monitor: PING/PONG every 5min, EMA alpha=0.2, shared `Arc<AtomicU32>`. Read by 1337 handler for precise wake-up.
 - Flight tracker: `Arc<mpsc::Sender<TrackerCommand>>` from commands to long task. Adaptive poll 30/60/120s based on phase mix. adsb.lol v2; fallback aggregators in memory `reference_adsb_aggregators.md`.
-- AI memory (v2): per-user character sheets + chat LORE + bot SOUL as markdown under $DATA_DIR/memories/. Single-loop !ai turn drives the model with write_file/write_state/delete_state tools (run_agent in the llm crate); the model's final assistant text is sent to chat verbatim. Daily dreamer ritual rewrites files from yesterday's transcript at [ai.dreamer].run_at (Berlin local). Memory bodies are byte-capped (SOUL/user 4 KiB, LORE 12 KiB, state 2 KiB).
+- AI memory (v2): per-user character sheets + chat LORE + bot SOUL as markdown under $DATA_DIR/memories/. Single-loop !ai turn drives the model with write_file/write_state/delete_state tools (run_agent in the llm crate); the model's final assistant text is sent to chat verbatim. Daily dreamer ritual rewrites files from yesterday's transcript at the dashboard-configured `ai.dreamer.run_at` (Berlin local). Memory bodies are byte-capped (SOUL/user 4 KiB, LORE 12 KiB, state 2 KiB by default; tunable via the dashboard `AI · Memory` card).
 - Scheduled messages: on Ctrl+C, main notifies `Arc<Notify>`; children finish in-flight `say()` then exit; main awaits handler with 5s timeout.
 
 ## Gotchas
