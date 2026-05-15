@@ -225,3 +225,79 @@ document.addEventListener(
 
   refreshAll();
 })();
+
+// ─── Model autocomplete datalist (Task 20) ───────────────────────────────────
+async function refreshModelDatalist(input) {
+  const url = input.dataset.modelsUrl;
+  const scope = input.dataset.scope;
+  if (!url || !scope) return;
+  let body;
+  try {
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) return;
+    body = await res.json();
+  } catch {
+    return;
+  }
+  const dl = document.getElementById(`ai-models-${scope}`);
+  if (!dl) return;
+  while (dl.firstChild) dl.removeChild(dl.firstChild);
+  for (const m of body.models ?? []) {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.label = m.label;
+    dl.appendChild(opt);
+  }
+  if (body.error) {
+    input.setAttribute('aria-errormessage', body.error);
+  } else {
+    input.removeAttribute('aria-errormessage');
+  }
+}
+
+document.body.addEventListener('focusin', (evt) => {
+  const t = evt.target;
+  if (t instanceof HTMLInputElement && t.classList.contains('model-input')) {
+    if (!t.dataset.modelsLoaded) {
+      t.dataset.modelsLoaded = '1';
+      refreshModelDatalist(t);
+    }
+  }
+});
+
+// ─── Segmented selector active-state ─────────────────────────────────────────
+document.body.addEventListener('change', (evt) => {
+  const radio = evt.target;
+  if (!(radio instanceof HTMLInputElement) || radio.type !== 'radio') return;
+  const wrap = radio.closest('.segmented');
+  if (!wrap) return;
+  for (const seg of wrap.querySelectorAll('.segment')) {
+    seg.classList.toggle('is-active', seg.querySelector('input').checked);
+  }
+});
+
+// ─── Card toggle dimming ─────────────────────────────────────────────────────
+function syncCardEnabled(card) {
+  const toggle = card.querySelector('input[type=checkbox][data-card-toggle]');
+  if (!toggle) return;
+  const on = toggle.checked;
+  card.classList.toggle('is-card-off', !on);
+  for (const ctrl of card.querySelectorAll('[data-card-enabled-by]')) {
+    if (
+      ctrl instanceof HTMLInputElement ||
+      ctrl instanceof HTMLButtonElement ||
+      ctrl instanceof HTMLSelectElement ||
+      ctrl instanceof HTMLTextAreaElement
+    ) {
+      ctrl.disabled = !on;
+    } else {
+      ctrl.classList.toggle('is-disabled', !on);
+    }
+  }
+}
+document.querySelectorAll('.settings-card[data-section]').forEach(syncCardEnabled);
+document.body.addEventListener('change', (evt) => {
+  if (evt.target.hasAttribute?.('data-card-toggle')) {
+    syncCardEnabled(evt.target.closest('.settings-card'));
+  }
+});
