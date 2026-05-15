@@ -101,14 +101,19 @@ document.addEventListener(
   const discardBtn = saveBar.querySelector('[data-discard]');
 
   const rows = Array.from(form.querySelectorAll('.settings-row'))
-    .map((row) => ({
-      el: row,
-      input: row.querySelector('input[name]'),
-      reset: row.querySelector('.row-reset'),
-      pretty: row.querySelector('.row-pretty'),
-      section: row.dataset.section,
-    }))
+    .map((row) => {
+      const input = row.querySelector('input[name]');
+      return {
+        el: row,
+        input,
+        reset: row.querySelector('.row-reset'),
+        pretty: row.querySelector('.row-pretty'),
+        section: row.dataset.section,
+        baseline: input ? (input.type === 'checkbox' ? (input.checked ? 'true' : 'false') : input.value) : '',
+      };
+    })
     .filter((r) => r.input);
+
 
   function formatPretty(input, prettyEl) {
     const unit = prettyEl?.dataset.prettyUnit ?? '';
@@ -142,9 +147,11 @@ document.addEventListener(
     const dirtyKeys = [];
     const perSection = new Map();
     for (const r of rows) {
-      const dirty = currentValue(r.input) !== (r.input.dataset.default ?? '');
+      const cur = currentValue(r.input);
+      const dirty = cur !== r.baseline;
+      const offDefault = cur !== (r.input.dataset.default ?? '');
       r.el.classList.toggle('is-dirty', dirty);
-      if (r.reset) r.reset.hidden = !dirty;
+      if (r.reset) r.reset.hidden = !offDefault;
       if (r.pretty) r.pretty.textContent = formatPretty(r.input, r.pretty);
       if (!dirty) continue;
       dirtyKeys.push(r.input.dataset.key ?? r.input.name);
