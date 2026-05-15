@@ -143,6 +143,7 @@ impl Settings {
             &mut errs,
         );
         bound("pings.cooldown", self.pings.cooldown, 1, 86_400, &mut errs);
+        validate_ai(&self.ai, &mut errs);
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
 
@@ -328,6 +329,173 @@ fn resolve_emotes(
     })
 }
 
+fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
+    fn err(errs: &mut Vec<FieldError>, field: &str, msg: String) {
+        errs.push(FieldError {
+            field: field.into(),
+            message: msg,
+        });
+    }
+
+    if !(1..=20).contains(&ai.behavior.max_turn_rounds) {
+        err(
+            errs,
+            "ai.behavior.max_turn_rounds",
+            format!("must be 1..=20 (got {})", ai.behavior.max_turn_rounds),
+        );
+    }
+    if !(1..=64).contains(&ai.behavior.max_writes_per_turn) {
+        err(
+            errs,
+            "ai.behavior.max_writes_per_turn",
+            format!("must be 1..=64 (got {})", ai.behavior.max_writes_per_turn),
+        );
+    }
+    if ai.history.length > crate::ai::chat_history::MAX_HISTORY_LENGTH {
+        err(
+            errs,
+            "ai.history.length",
+            format!("must be <= {}", crate::ai::chat_history::MAX_HISTORY_LENGTH),
+        );
+    }
+    if ai.history.ai_channel_length > crate::ai::chat_history::MAX_HISTORY_LENGTH {
+        err(
+            errs,
+            "ai.history.ai_channel_length",
+            format!("must be <= {}", crate::ai::chat_history::MAX_HISTORY_LENGTH),
+        );
+    }
+    if ai.memory.inject_byte_budget < ai.memory.soul_bytes + ai.memory.lore_bytes {
+        err(
+            errs,
+            "ai.memory.inject_byte_budget",
+            "must be >= soul_bytes + lore_bytes".into(),
+        );
+    }
+    if !(1..=200).contains(&ai.dreamer.max_rounds) {
+        err(
+            errs,
+            "ai.dreamer.max_rounds",
+            format!("must be 1..=200 (got {})", ai.dreamer.max_rounds),
+        );
+    }
+    if ai.dreamer.timeout_secs == 0 {
+        err(errs, "ai.dreamer.timeout_secs", "must be > 0".into());
+    }
+    if chrono::NaiveTime::parse_from_str(&ai.dreamer.run_at, "%H:%M").is_err() {
+        err(
+            errs,
+            "ai.dreamer.run_at",
+            format!("must be HH:MM (got {:?})", ai.dreamer.run_at),
+        );
+    }
+    for (field, val) in [
+        (
+            "ai.connection.reasoning_effort",
+            ai.connection.reasoning_effort.as_deref(),
+        ),
+        (
+            "ai.dreamer.reasoning_effort",
+            ai.dreamer.reasoning_effort.as_deref(),
+        ),
+    ] {
+        if let Some(v) = val
+            && v.trim().is_empty()
+        {
+            err(errs, field, "must be non-empty when set".into());
+        }
+    }
+    if let Some(url) = ai.connection.base_url.as_deref()
+        && reqwest::Url::parse(url).is_err()
+    {
+        err(
+            errs,
+            "ai.connection.base_url",
+            format!("must be a valid URL (got {url:?})"),
+        );
+    }
+    if ai.connection.timeout == 0 {
+        err(errs, "ai.connection.timeout", "must be > 0".into());
+    }
+    if let Some(prefill) = &ai.prefill {
+        if reqwest::Url::parse(&prefill.base_url).is_err() {
+            err(
+                errs,
+                "ai.prefill.base_url",
+                format!("must be a valid URL (got {:?})", prefill.base_url),
+            );
+        }
+        if !(0.0..=1.0).contains(&prefill.threshold) {
+            err(
+                errs,
+                "ai.prefill.threshold",
+                format!("must be 0.0..=1.0 (got {})", prefill.threshold),
+            );
+        }
+        if ai.history.length == 0 {
+            err(errs, "ai.prefill", "requires ai.history.length > 0".into());
+        }
+    }
+    if let Some(web) = &ai.web {
+        if reqwest::Url::parse(&web.base_url).is_err() {
+            err(
+                errs,
+                "ai.web.base_url",
+                format!("must be a valid URL (got {:?})", web.base_url),
+            );
+        }
+        if !(1..=10).contains(&web.max_results) {
+            err(
+                errs,
+                "ai.web.max_results",
+                format!("must be 1..=10 (got {})", web.max_results),
+            );
+        }
+        if !(1..=6).contains(&web.max_rounds) {
+            err(
+                errs,
+                "ai.web.max_rounds",
+                format!("must be 1..=6 (got {})", web.max_rounds),
+            );
+        }
+        if web.cache_capacity == 0 {
+            err(errs, "ai.web.cache_capacity", "must be > 0".into());
+        }
+    }
+    if let Some(em) = &ai.emotes {
+        if em.refresh_interval_secs == 0 {
+            err(
+                errs,
+                "ai.emotes.refresh_interval_secs",
+                "must be > 0".into(),
+            );
+        }
+        if !(1..=200).contains(&em.max_prompt_emotes) {
+            err(
+                errs,
+                "ai.emotes.max_prompt_emotes",
+                format!("must be 1..=200 (got {})", em.max_prompt_emotes),
+            );
+        }
+        if em.min_baseline_emotes > em.max_prompt_emotes {
+            err(
+                errs,
+                "ai.emotes.min_baseline_emotes",
+                "must be <= max_prompt_emotes".into(),
+            );
+        }
+        if let Some(url) = em.base_url.as_deref()
+            && url.trim().is_empty()
+        {
+            err(
+                errs,
+                "ai.emotes.base_url",
+                "must be non-empty when set".into(),
+            );
+        }
+    }
+}
+
 #[cfg(any(test, feature = "testing"))]
 pub fn test_handle() -> SettingsHandle {
     Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
@@ -439,5 +607,45 @@ mod resolve_tests {
             resolved.ai.connection.timeout,
             defaults.ai.connection.timeout
         );
+    }
+
+    #[test]
+    fn validate_rejects_max_turn_rounds_out_of_range() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.behavior.max_turn_rounds = 0;
+        let errs = s.validate().expect_err("must fail");
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.behavior.max_turn_rounds")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_inject_budget_below_soul_plus_lore() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.memory.soul_bytes = 4096;
+        s.ai.memory.lore_bytes = 12288;
+        s.ai.memory.inject_byte_budget = 1024;
+        let errs = s.validate().expect_err("must fail");
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.memory.inject_byte_budget")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_malformed_dreamer_run_at() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.dreamer.run_at = "not-a-time".into();
+        let errs = s.validate().expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.dreamer.run_at"));
+    }
+
+    #[test]
+    fn validate_rejects_invalid_connection_base_url() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.connection.base_url = Some("not a url".into());
+        let errs = s.validate().expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.connection.base_url"));
     }
 }
