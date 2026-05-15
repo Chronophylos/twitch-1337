@@ -15,8 +15,8 @@ use axum::routing::{get, post};
 use serde::Deserialize;
 use tower_cookies::Cookies;
 use twitch_1337_core::settings::{
-    Actor, Cooldowns, CooldownsOverrides, FieldError, PingsOverrides, PingsSettings, Settings,
-    SettingsError, SettingsOverrides, SettingsSection,
+    Actor, AiSettings, Cooldowns, CooldownsOverrides, FieldError, PingsOverrides, PingsSettings,
+    Settings, SettingsError, SettingsOverrides, SettingsSection,
 };
 
 use crate::auth::Role;
@@ -153,6 +153,7 @@ async fn save(
                     cooldown: form.ping_cooldown,
                     public: form.ping_public.is_some(),
                 },
+                ai: AiSettings::default(), // placeholder until Task 4 wires AI form fields
             };
             let defaults = state.settings_store.defaults().clone();
             render_with(

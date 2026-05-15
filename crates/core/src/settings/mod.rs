@@ -32,13 +32,14 @@ use thiserror::Error;
 
 pub type SettingsHandle = Arc<ArcSwap<Settings>>;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Settings {
     pub schema_version: u32,
     pub cooldowns: Cooldowns,
     pub pings: PingsSettings,
+    pub ai: AiSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -60,6 +61,15 @@ pub struct PingsSettings {
 pub enum SettingsSection {
     Cooldowns,
     Pings,
+    AiConnection,
+    AiBehavior,
+    AiHistory,
+    AiMemory,
+    AiDreamer,
+    AiPrefill,
+    AiWeb,
+    AiEmotes,
+    AiMedia,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,7 +97,7 @@ impl From<Vec<FieldError>> for SettingsError {
 }
 
 impl Settings {
-    pub const fn compiled_defaults() -> Self {
+    pub fn compiled_defaults() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             cooldowns: Cooldowns {
@@ -101,6 +111,7 @@ impl Settings {
                 cooldown: 300,
                 public: false,
             },
+            ai: AiSettings::default(),
         }
     }
 
@@ -155,6 +166,7 @@ impl Settings {
                 cooldown: overrides.pings.cooldown.unwrap_or(defaults.pings.cooldown),
                 public: overrides.pings.public.unwrap_or(defaults.pings.public),
             },
+            ai: defaults.ai.clone(), // replaced in Task 4 with sparse-override resolution
         }
     }
 }
@@ -239,5 +251,12 @@ mod resolve_tests {
         Settings::compiled_defaults()
             .validate()
             .expect("compiled defaults pass validate()");
+    }
+
+    #[test]
+    fn compiled_defaults_include_ai_block_v2() {
+        let s = Settings::compiled_defaults();
+        assert_eq!(s.schema_version, 2);
+        assert_eq!(s.ai, AiSettings::default());
     }
 }

@@ -120,6 +120,7 @@ impl SettingsStore {
         match section {
             SettingsSection::Cooldowns => current.cooldowns = Default::default(),
             SettingsSection::Pings => current.pings = Default::default(),
+            _ => todo!("filled in Task 5"),
         }
         let resolved = Settings::resolve(&self.defaults, &current);
         crate::util::persist::atomic_save_ron_async(&current, &self.path).await?;
