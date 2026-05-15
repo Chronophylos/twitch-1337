@@ -72,3 +72,71 @@
   </div>
 </div>
 {% endmacro %}
+
+{% macro segmented_row(section, field, key, hint, value, default, options) %}
+{# options is a list of {value, label}; renders a radiogroup #}
+<div class="settings-row" data-section="{{ section }}">
+  {% call row_head(key, hint) %}{% endcall %}
+  <div class="row-control-cell">
+    <div class="segmented" role="radiogroup" aria-label="{{ key }}">
+      {% for opt in options %}
+      <label class="segment{% if opt.value == value %} is-active{% endif %}">
+        <input type="radio"
+               name="{{ field }}"
+               value="{{ opt.value }}"
+               data-default="{{ default }}"
+               data-key="{{ key }}"
+               {% if opt.value == value %}checked{% endif %}>
+        <span>{{ opt.label }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="row-right">
+    {% call row_reset(key) %}{% endcall %}
+    <span class="row-default">default <span class="mono">{{ default }}</span></span>
+  </div>
+</div>
+{% endmacro %}
+
+{% macro model_row(section, field, key, hint, value, default, scope) %}
+<div class="settings-row" data-section="{{ section }}">
+  {% call row_head(key, hint) %}{% endcall %}
+  <div class="row-control-cell">
+    <input type="text"
+           class="model-input"
+           name="{{ field }}"
+           list="ai-models-{{ scope }}"
+           value="{{ value }}"
+           data-default="{{ default }}"
+           data-key="{{ key }}"
+           data-scope="{{ scope }}"
+           data-models-url="/settings/ai/models?scope={{ scope }}">
+    <datalist id="ai-models-{{ scope }}"></datalist>
+  </div>
+  <div class="row-right">
+    {% call row_reset(key) %}{% endcall %}
+    <span class="row-default">default <span class="mono">{{ default }}</span></span>
+  </div>
+</div>
+{% endmacro %}
+
+{% macro bytesize_row(section, field, key, hint, value, default) %}
+<div class="settings-row" data-section="{{ section }}">
+  {% call row_head(key, hint) %}{% endcall %}
+  <div class="row-control-cell">
+    <input type="text"
+           class="bytesize-input"
+           name="{{ field }}"
+           value="{{ value }}"
+           data-default="{{ default }}"
+           data-key="{{ key }}"
+           pattern="^\d+(\.\d+)?\s?(B|KB|KiB|MB|MiB|GB|GiB)$"
+           title="e.g. 10 MiB">
+  </div>
+  <div class="row-right">
+    {% call row_reset(key) %}{% endcall %}
+    <span class="row-default">default <span class="mono">{{ default }}</span></span>
+  </div>
+</div>
+{% endmacro %}
