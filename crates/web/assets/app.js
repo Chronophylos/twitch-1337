@@ -102,17 +102,25 @@ document.addEventListener(
 
   const rows = Array.from(form.querySelectorAll('.settings-row'))
     .map((row) => {
-      const input = row.querySelector('input[name]');
+      const inputs = Array.from(row.querySelectorAll('input[name]'));
+      const isRadio = inputs.length > 1 && inputs.every((i) => i.type === 'radio');
+      const primary = inputs[0];
+      if (!primary) return null;
+      const baseline = isRadio
+        ? (inputs.find((i) => i.checked)?.value ?? '')
+        : primary.type === 'checkbox' ? (primary.checked ? 'true' : 'false') : primary.value;
       return {
         el: row,
-        input,
+        input: primary,
+        inputs,
+        isRadio,
         reset: row.querySelector('.row-reset'),
         pretty: row.querySelector('.row-pretty'),
         section: row.dataset.section,
-        baseline: input ? (input.type === 'checkbox' ? (input.checked ? 'true' : 'false') : input.value) : '',
+        baseline,
       };
     })
-    .filter((r) => r.input);
+    .filter((r) => r);
 
 
   function formatPretty(input, prettyEl) {
@@ -134,12 +142,21 @@ document.addEventListener(
     return input.type === 'checkbox' ? (input.checked ? 'true' : 'false') : input.value;
   }
 
-  function applyDefault(input) {
-    const def = input.dataset.default ?? '';
-    if (input.type === 'checkbox') {
-      input.checked = def === 'true' || def === '1';
+  function rowCurrent(r) {
+    if (r.isRadio) return r.inputs.find((i) => i.checked)?.value ?? '';
+    return currentValue(r.input);
+  }
+
+  function applyDefault(r) {
+    const def = r.input.dataset.default ?? '';
+    if (r.isRadio) {
+      for (const i of r.inputs) i.checked = i.value === def;
+      return;
+    }
+    if (r.input.type === 'checkbox') {
+      r.input.checked = def === 'true' || def === '1';
     } else {
-      input.value = def;
+      r.input.value = def;
     }
   }
 
@@ -147,7 +164,7 @@ document.addEventListener(
     const dirtyKeys = [];
     const perSection = new Map();
     for (const r of rows) {
-      const cur = currentValue(r.input);
+      const cur = rowCurrent(r);
       const dirty = cur !== r.baseline;
       const offDefault = cur !== (r.input.dataset.default ?? '');
       r.el.classList.toggle('is-dirty', dirty);
@@ -185,14 +202,23 @@ document.addEventListener(
   }
 
   form.addEventListener('input', refreshAll);
-  form.addEventListener('change', refreshAll);
+  form.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t instanceof HTMLInputElement && t.type === 'radio') {
+      const group = form.querySelectorAll(`input[type=radio][name="${t.name}"]`);
+      for (const i of group) {
+        i.closest('.segment')?.classList.toggle('is-active', i.checked);
+      }
+    }
+    refreshAll();
+  });
 
   form.addEventListener('click', (e) => {
     const btn = e.target.closest('.row-reset');
     if (!btn) return;
     const r = rows.find((row) => row.reset === btn);
     if (!r) return;
-    applyDefault(r.input);
+    applyDefault(r);
     refreshAll();
     r.input.focus();
   });
