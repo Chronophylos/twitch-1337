@@ -518,24 +518,30 @@ fn user_facing_provider_message(err: &LlmError) -> Option<&'static str> {
     }
 }
 
-/// Build the [`Caps`] used by the v2 memory store from the (optional)
-/// `[ai.memory]` config section. Falls back to [`Caps::default`] when AI is
-/// disabled — the web dashboard always needs *some* caps because it opens
-/// the store unconditionally.
-pub fn memory_caps_from_config(ai: Option<&crate::config::AiConfig>) -> Caps {
-    match ai {
-        Some(ai) => Caps {
-            soul_bytes: ai.memory.soul_bytes,
-            lore_bytes: ai.memory.lore_bytes,
-            user_bytes: ai.memory.user_bytes,
-            state_bytes: ai.memory.state_bytes,
-            max_state_files: ai.memory.max_state_files,
-        },
-        None => Caps::default(),
+/// Build the [`Caps`] used by the v2 memory store from the current dashboard
+/// settings snapshot. Caller decides whether `ai_present` (i.e. `[ai]` exists
+/// in `config.toml`); when AI is disabled we fall back to [`Caps::default`] —
+/// the web dashboard always needs *some* caps because it opens the store
+/// unconditionally.
+pub fn memory_caps_from_config(
+    ai_present: bool,
+    settings: &crate::settings::Settings,
+) -> Caps {
+    if !ai_present {
+        return Caps::default();
+    }
+    let memory = &settings.ai.memory;
+    Caps {
+        soul_bytes: memory.soul_bytes,
+        lore_bytes: memory.lore_bytes,
+        user_bytes: memory.user_bytes,
+        state_bytes: memory.state_bytes,
+        max_state_files: memory.max_state_files,
     }
 }
 
-/// Construct the AI memory v2 bundle from config. `None` when `[ai]` is absent.
+/// Construct the AI memory v2 bundle from settings. `None` when `[ai]` is
+/// absent from `config.toml`.
 ///
 /// `store` is built once in main.rs (or by tests) and shared with the web
 /// dashboard via [`crate::Services::memory_store`]. Sharing the same `Arc`-
@@ -544,18 +550,21 @@ pub fn memory_caps_from_config(ai: Option<&crate::config::AiConfig>) -> Caps {
 /// distinct stores would silently race past each other's locks and break
 /// byte-cap enforcement.
 pub async fn build_ai_memory_v2(
-    ai: Option<&crate::config::AiConfig>,
+    ai_present: bool,
+    settings: &crate::settings::Settings,
     store: MemoryStore,
 ) -> Result<Option<AiMemoryV2>> {
-    let Some(ai) = ai else { return Ok(None) };
+    if !ai_present {
+        return Ok(None);
+    }
 
     let transcript = TranscriptWriter::open(store.memories_dir()).await?;
     Ok(Some(AiMemoryV2 {
         store,
         transcript,
-        inject_byte_budget: ai.memory.inject_byte_budget,
-        max_turn_rounds: ai.max_turn_rounds,
-        max_writes_per_turn: ai.max_writes_per_turn,
-        turn_timeout: Duration::from_secs(ai.timeout),
+        inject_byte_budget: settings.ai.memory.inject_byte_budget,
+        max_turn_rounds: settings.ai.behavior.max_turn_rounds,
+        max_writes_per_turn: settings.ai.behavior.max_writes_per_turn,
+        turn_timeout: Duration::from_secs(settings.ai.connection.timeout),
     }))
 }

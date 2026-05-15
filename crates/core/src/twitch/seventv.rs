@@ -10,7 +10,7 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
-use crate::{APP_USER_AGENT, config::AiEmotesConfigSection};
+use crate::{APP_USER_AGENT, settings::ai::AiEmotes as AiEmotesConfigSection};
 
 const DEFAULT_BASE_URL: &str = "https://7tv.io/v3";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);

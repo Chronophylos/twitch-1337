@@ -8,39 +8,43 @@ use secrecy::ExposeSecret as _;
 use tracing::{debug, error, info};
 
 use crate::APP_USER_AGENT;
-use crate::config::{AiBackend, AiConfig};
+use crate::config::AiBootstrap;
+use crate::settings::Settings;
+use crate::settings::ai::AiBackendKind;
 
-/// Build an [`LlmClient`] from optional AI config.
+/// Build an [`LlmClient`] from the AI bootstrap + the current settings snapshot.
 ///
-/// Returns `Ok(None)` when no AI config is provided or AI is disabled.
+/// Returns `Ok(None)` when no AI bootstrap is provided. The connection knobs
+/// (backend, base_url, model) come from the dashboard settings — Task 8
+/// fleshes out call-site plumbing; this signature is the migration target.
+///
 /// Returns `Ok(Some(client))` when the client is successfully built.
-/// Returns `Err` only when the configuration is invalid (not when the backend is unreachable).
-pub fn build_llm_client(ai_config: Option<&AiConfig>) -> Result<Option<Arc<dyn LlmClient>>> {
-    let Some(ai_cfg) = ai_config else {
+/// Returns `Err` only when the configuration is invalid (not when the backend
+/// is unreachable).
+pub fn build_llm_client(
+    ai_bootstrap: Option<&AiBootstrap>,
+    settings: &Settings,
+) -> Result<Option<Arc<dyn LlmClient>>> {
+    let Some(ai_boot) = ai_bootstrap else {
         debug!("AI not configured, AI command disabled");
         return Ok(None);
     };
 
-    let result = match ai_cfg.backend {
-        AiBackend::OpenAi => {
-            let api_key = ai_cfg
-                .api_key
-                .as_ref()
-                .expect("validated: openai backend has api_key");
-            OpenAiClient::new(
-                api_key.expose_secret(),
-                ai_cfg.base_url.as_deref(),
-                APP_USER_AGENT,
-            )
-            .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
-        }
-        AiBackend::Ollama => OllamaClient::new(ai_cfg.base_url.as_deref(), APP_USER_AGENT)
+    let conn = &settings.ai.connection;
+    let result = match conn.backend {
+        AiBackendKind::OpenAi => OpenAiClient::new(
+            ai_boot.api_key.expose_secret(),
+            conn.base_url.as_deref(),
+            APP_USER_AGENT,
+        )
+        .map(|c| Arc::new(c) as Arc<dyn LlmClient>),
+        AiBackendKind::Ollama => OllamaClient::new(conn.base_url.as_deref(), APP_USER_AGENT)
             .map(|c| Arc::new(c) as Arc<dyn LlmClient>),
     };
 
     match result {
         Ok(client) => {
-            info!(backend = ?ai_cfg.backend, model = %ai_cfg.model, "LLM client initialized");
+            info!(backend = ?conn.backend, model = %conn.model, "LLM client initialized");
             Ok(Some(client))
         }
         Err(e) => {

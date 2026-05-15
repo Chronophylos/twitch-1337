@@ -13,7 +13,7 @@ use twitch_irc::{
 
 use crate::{
     ChatHistory, ChatHistoryBuffer, PersonalBest, ai, aviation, commands,
-    config::{AiConfig, SuspendConfig},
+    config::{AiBootstrap, SuspendConfig},
     ping,
     settings::SettingsHandle,
     suspend::SuspensionManager,
@@ -26,8 +26,9 @@ const GROK_ALIAS_TRIGGER: &str = "@grok";
 pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub broadcast_tx: broadcast::Sender<ServerMessage>,
     pub client: Arc<TwitchIRCClient<T, L>>,
-    /// Full AI config (system prompt, history, memory settings). `None` disables `!ai`.
-    pub ai_config: Option<AiConfig>,
+    /// Bootstrap AI config (api_key only). `None` disables `!ai`. All other
+    /// AI knobs are read from the dashboard settings snapshot at startup.
+    pub ai_config: Option<AiBootstrap>,
     /// Pre-built LLM client. When `None`, `!ai` is disabled regardless of `ai_config`.
     /// Injected so tests can supply a fake and production can call [`crate::llm_factory::build_llm_client`].
     pub llm: Option<Arc<dyn LlmClient>>,
@@ -92,18 +93,39 @@ where
 
     let broadcast_rx = broadcast_tx.subscribe();
 
-    // Extract history lengths before ai_config is consumed
-    let history_length = ai_config.as_ref().map_or(0, |c| c.history_length) as usize;
-    let ai_channel_history_length = ai_config
-        .as_ref()
-        .map_or(0, |c| c.ai_channel_history_length) as usize;
-    let prefill_config = ai_config.as_ref().and_then(|c| c.history_prefill.clone());
+    // Extract history lengths from the dashboard settings snapshot. AI is
+    // considered configured only when the bootstrap section is present *and*
+    // the LLM client built; tasks 10/11 move these reads to live snapshots.
+    let history_length = if ai_config.is_some() {
+        snapshot.ai.history.length as usize
+    } else {
+        0
+    };
+    let ai_channel_history_length = if ai_config.is_some() {
+        snapshot.ai.history.ai_channel_length as usize
+    } else {
+        0
+    };
+    let prefill_config = if ai_config.is_some() {
+        snapshot.ai.prefill.clone().map(|p| {
+            ai::prefill::HistoryPrefillConfig {
+                base_url: p.base_url,
+                threshold: p.threshold,
+            }
+        })
+    } else {
+        None
+    };
 
-    // Combine pre-built LLM client with AI config; both must be present to enable !ai.
-    let llm_client: Option<(Arc<dyn LlmClient>, AiConfig)> = match (llm, ai_config) {
-        (Some(llm_arc), Some(ai_cfg)) => {
-            info!(backend = ?ai_cfg.backend, model = %ai_cfg.model, "AI command enabled");
-            Some((llm_arc, ai_cfg))
+    // Combine pre-built LLM client with AI bootstrap; both must be present to enable !ai.
+    let llm_client: Option<(Arc<dyn LlmClient>, AiBootstrap)> = match (llm, ai_config) {
+        (Some(llm_arc), Some(ai_boot)) => {
+            info!(
+                backend = ?snapshot.ai.connection.backend,
+                model = %snapshot.ai.connection.model,
+                "AI command enabled"
+            );
+            Some((llm_arc, ai_boot))
         }
         _ => {
             debug!("AI not configured or LLM client unavailable, AI command disabled");
@@ -186,11 +208,13 @@ where
         )));
     }
 
-    if let (Some((llm, cfg)), Some(ai_memory_v2)) = (llm_client, ai_memory_v2) {
-        let web = if cfg.web.enabled {
+    if let (Some((llm, ai_boot)), Some(ai_memory_v2)) = (llm_client, ai_memory_v2) {
+        let ai_conn = &snapshot.ai.connection;
+        let ai_media = &snapshot.ai.media;
+        let web = if let Some(web_cfg) = snapshot.ai.web.as_ref() {
             let search = match ai::content::SearchClient::new(
-                &cfg.web.base_url,
-                Duration::from_secs(cfg.web.timeout),
+                &web_cfg.base_url,
+                Duration::from_secs(web_cfg.timeout),
             ) {
                 Ok(c) => Some(c),
                 Err(e) => {
@@ -203,27 +227,32 @@ where
                 .user_agent(crate::APP_USER_AGENT)
                 .build()
                 .expect("build media HTTP client");
-            let provider_base_url = cfg.base_url.clone().unwrap_or_else(|| match cfg.backend {
-                crate::config::AiBackend::OpenAi => "https://api.openai.com/v1".to_string(),
-                crate::config::AiBackend::Ollama => "http://localhost:11434/v1".to_string(),
-            });
+            let provider_base_url =
+                ai_conn.base_url.clone().unwrap_or_else(|| match ai_conn.backend {
+                    crate::settings::ai::AiBackendKind::OpenAi => {
+                        "https://api.openai.com/v1".to_string()
+                    }
+                    crate::settings::ai::AiBackendKind::Ollama => {
+                        "http://localhost:11434/v1".to_string()
+                    }
+                });
             let media = Arc::new(ai::content::MediaClient::new(
                 media_http,
                 provider_base_url,
-                cfg.api_key.clone(),
-                cfg.media.model.clone(),
-                Duration::from_secs(cfg.media.timeout),
+                Some(ai_boot.api_key.clone()),
+                ai_media.model.clone(),
+                Duration::from_secs(ai_media.timeout),
             ));
             search.map(|client| ai::command::AiWeb {
                 executor: Arc::new(ai::content::ContentToolExecutor::new(
                     client,
                     media,
-                    cfg.media.clone(),
-                    cfg.web.max_results,
-                    Duration::from_secs(cfg.web.cache_ttl_secs),
-                    cfg.web.cache_capacity,
+                    ai_media.clone(),
+                    web_cfg.max_results,
+                    Duration::from_secs(web_cfg.cache_ttl_secs),
+                    web_cfg.cache_capacity,
                 )),
-                max_rounds: cfg.web.max_rounds,
+                max_rounds: web_cfg.max_rounds,
             })
         } else {
             None
@@ -241,8 +270,8 @@ where
         cmd_list.push(Box::new(ai::command::AiCommand::new(
             ai::command::AiCommandDeps {
                 llm_client: llm.clone(),
-                model: cfg.model.clone(),
-                reasoning_effort: cfg.reasoning_effort.clone(),
+                model: ai_conn.model.clone(),
+                reasoning_effort: ai_conn.reasoning_effort.clone(),
                 cooldown: Duration::from_secs(snapshot.cooldowns.ai),
                 chat_ctx: chat_ctx.clone(),
                 memory: ai_memory_v2,
@@ -254,18 +283,18 @@ where
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm.clone(),
-            cfg.model.clone(),
+            ai_conn.model.clone(),
             commands::news::NewsMode::News,
-            Duration::from_secs(cfg.timeout),
+            Duration::from_secs(ai_conn.timeout),
             Duration::from_secs(snapshot.cooldowns.news),
             chat_ctx.clone(),
             whisper.clone(),
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm,
-            cfg.model,
+            ai_conn.model.clone(),
             commands::news::NewsMode::Tldr,
-            Duration::from_secs(cfg.timeout),
+            Duration::from_secs(ai_conn.timeout),
             Duration::from_secs(snapshot.cooldowns.news),
             chat_ctx,
             whisper,

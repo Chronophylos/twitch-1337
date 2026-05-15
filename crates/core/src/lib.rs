@@ -184,22 +184,34 @@ where
     // Aviation is consumed by the flight tracker; clone first so commands (!up/!fl) also get it.
     let aviation_for_commands = aviation.clone();
 
-    let ai_memory_v2 =
-        crate::ai::command::build_ai_memory_v2(config.ai.as_ref(), memory_store).await?;
+    let ai_memory_v2 = crate::ai::command::build_ai_memory_v2(
+        config.ai.is_some(),
+        &settings.load_full(),
+        memory_store,
+    )
+    .await?;
     let transcript = ai_memory_v2.as_ref().map(|m| m.transcript.clone());
 
     // 7TV emote provider: built once at startup so malformed glossary TOML
     // (baked or test-injected) fails fast instead of silently disabling emotes.
     let emote_provider = match (llm.as_ref(), config.ai.as_ref()) {
-        (Some(_), Some(ai)) if ai.emotes.enabled => {
-            let glossary_toml = emote_glossary_override
-                .as_deref()
-                .unwrap_or(crate::twitch::seventv::BAKED_GLOSSARY_TOML);
-            let provider =
-                crate::twitch::seventv::SevenTvEmoteProvider::new(ai.emotes.clone(), glossary_toml)
+        (Some(_), Some(_)) => {
+            let snapshot = settings.load_full();
+            match snapshot.ai.emotes.as_ref() {
+                Some(emotes_cfg) => {
+                    let glossary_toml = emote_glossary_override
+                        .as_deref()
+                        .unwrap_or(crate::twitch::seventv::BAKED_GLOSSARY_TOML);
+                    let provider = crate::twitch::seventv::SevenTvEmoteProvider::new(
+                        emotes_cfg.clone(),
+                        glossary_toml,
+                    )
                     .wrap_err("Failed to initialize 7TV emote provider")?;
-            tracing::info!("7TV emote glossary prompt grounding enabled");
-            Some(Arc::new(provider))
+                    tracing::info!("7TV emote glossary prompt grounding enabled");
+                    Some(Arc::new(provider))
+                }
+                None => None,
+            }
         }
         _ => None,
     };
@@ -207,7 +219,8 @@ where
     // Clone before moving into SpawnDeps so the dreamer ritual can also use them.
     let ai_memory_v2_for_ritual = ai_memory_v2.clone();
     let llm_for_ritual = llm.clone();
-    let ai_config_for_ritual = config.ai.clone();
+    let ai_present_for_ritual = config.ai.is_some();
+    let settings_for_ritual = settings.clone();
     let channel_for_ritual = config.twitch.channel.clone();
 
     let handlers = spawn_handlers(SpawnDeps {
@@ -239,34 +252,42 @@ where
     // spawn closure so this crate stays independent of `twitch_1337_web`.
     let web_handle = web_spawner.map(|spawner| spawner(shutdown_notify.clone()));
 
-    // Daily dreamer ritual.
+    // Daily dreamer ritual. Reads the dashboard settings snapshot at startup;
+    // Task 12 moves this to a live read.
     if let (Some(llm), Some(mem)) = (llm_for_ritual.as_ref(), &ai_memory_v2_for_ritual)
-        && let Some(ref ai) = ai_config_for_ritual
-        && ai.dreamer.enabled
+        && ai_present_for_ritual
     {
-        let run_at = chrono::NaiveTime::parse_from_str(&ai.dreamer.run_at, "%H:%M")
-            .expect("ai.dreamer.run_at validated at config load");
-        crate::ai::memory::ritual::spawn_ritual(
-            llm.clone(),
-            mem.store.clone(),
-            mem.transcript.clone(),
-            crate::ai::memory::ritual::RitualConfig {
-                model: ai.dreamer.model.clone().unwrap_or_else(|| ai.model.clone()),
-                reasoning_effort: ai
-                    .dreamer
-                    .reasoning_effort
-                    .clone()
-                    .or_else(|| ai.reasoning_effort.clone()),
-                run_at,
-                timeout_secs: ai.dreamer.timeout_secs,
-                max_rounds: ai.dreamer.max_rounds,
-                max_writes_per_turn: ai.max_writes_per_turn,
-                inject_byte_budget: ai.memory.inject_byte_budget,
-                channel: channel_for_ritual,
-            },
-            shutdown_notify.clone(),
-        );
-        tracing::info!(run_at = %ai.dreamer.run_at, "Daily AI memory dreamer ritual scheduled");
+        let snapshot = settings_for_ritual.load_full();
+        let ai = &snapshot.ai;
+        if ai.dreamer.enabled {
+            let run_at = chrono::NaiveTime::parse_from_str(&ai.dreamer.run_at, "%H:%M")
+                .expect("ai.dreamer.run_at validated at settings load");
+            crate::ai::memory::ritual::spawn_ritual(
+                llm.clone(),
+                mem.store.clone(),
+                mem.transcript.clone(),
+                crate::ai::memory::ritual::RitualConfig {
+                    model: ai
+                        .dreamer
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| ai.connection.model.clone()),
+                    reasoning_effort: ai
+                        .dreamer
+                        .reasoning_effort
+                        .clone()
+                        .or_else(|| ai.connection.reasoning_effort.clone()),
+                    run_at,
+                    timeout_secs: ai.dreamer.timeout_secs,
+                    max_rounds: ai.dreamer.max_rounds,
+                    max_writes_per_turn: ai.behavior.max_writes_per_turn,
+                    inject_byte_budget: ai.memory.inject_byte_budget,
+                    channel: channel_for_ritual,
+                },
+                shutdown_notify.clone(),
+            );
+            tracing::info!(run_at = %ai.dreamer.run_at, "Daily AI memory dreamer ritual scheduled");
+        }
     }
 
     if schedules_enabled {

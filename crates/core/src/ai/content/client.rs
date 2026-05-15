@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::APP_USER_AGENT;
 use crate::ai::content::detect::{Bucket, detect};
-use crate::config::AiMediaConfig;
+use crate::settings::ai::AiMedia as AiMediaConfig;
 use crate::util::truncate_response;
 
 static SSRF_BYPASS: AtomicBool = AtomicBool::new(false);

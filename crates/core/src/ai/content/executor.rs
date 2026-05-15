@@ -11,7 +11,7 @@ use llm::{ToolCall, ToolResultMessage, TraceIds};
 use super::cache::TtlCache;
 use super::client::{SearchClient, SearchResult};
 use super::media::MediaClient;
-use crate::config::AiMediaConfig;
+use crate::settings::ai::AiMedia as AiMediaConfig;
 
 #[derive(Debug, Deserialize)]
 struct WebSearchArgs {
