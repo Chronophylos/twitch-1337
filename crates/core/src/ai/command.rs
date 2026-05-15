@@ -79,7 +79,21 @@ pub fn classify_role(badges: &[twitch_irc::message::Badge]) -> Role {
 #[derive(Clone)]
 pub struct AiWeb {
     pub executor: Arc<content::ContentToolExecutor>,
-    pub max_rounds: usize,
+    pub settings: SettingsHandle,
+}
+
+impl AiWeb {
+    /// Live read of `ai.web.max_rounds`. Falls back to compiled default
+    /// (3) if the web card was disabled between construction and use.
+    pub fn max_rounds(&self) -> usize {
+        self.settings
+            .load()
+            .ai
+            .web
+            .as_ref()
+            .map(|w| w.max_rounds)
+            .unwrap_or(3)
+    }
 }
 
 pub struct AiCommand {

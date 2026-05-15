@@ -242,11 +242,11 @@ where
                     client,
                     media,
                     ai_media.clone(),
-                    web_cfg.max_results,
+                    settings.clone(),
                     Duration::from_secs(web_cfg.cache_ttl_secs),
                     web_cfg.cache_capacity,
                 )),
-                max_rounds: web_cfg.max_rounds,
+                settings: settings.clone(),
             })
         } else {
             None
