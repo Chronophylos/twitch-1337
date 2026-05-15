@@ -20,14 +20,16 @@
      the same hidden input is kept for symmetry with the optional cards. #}
   <input type="hidden" name="ai_dreamer_card_visible" value="1">
   <div class="settings-rows">
+    {% let dreamer_model = current.ai.dreamer.model.as_deref().unwrap_or("") %}
     <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
       {% call m::row_head("model", "Override the model used for the dreamer pass. Empty = use connection.model.") %}{% endcall %}
       <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true">{% if dreamer_model.is_empty() %}<span class="muted">(connection)</span>{% else %}{{ dreamer_model }}{% endif %}</span>
         <input type="text"
-               class="model-input"
+               class="text-input"
                name="ai_dreamer_model"
                list="ai-models-dreamer"
-               value="{% match current.ai.dreamer.model %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}"
+               value="{{ dreamer_model }}"
                placeholder="(use connection model)"
                data-default=""
                data-key="ai.dreamer.model"
@@ -59,22 +61,9 @@
       </div>
     </div>
 
-    <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
-      {% call m::row_head("run_at", "Berlin-local wallclock for the nightly run (HH:MM).") %}{% endcall %}
-      <div class="row-control-cell">
-        <input type="text"
-               name="ai_dreamer_run_at"
-               value="{{ current.ai.dreamer.run_at }}"
-               pattern="^\d{2}:\d{2}$"
-               placeholder="04:00"
-               data-default="{{ defaults.ai.dreamer.run_at }}"
-               data-key="ai.dreamer.run_at">
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.dreamer.run_at") %}{% endcall %}
-        <span class="row-default">default <span class="mono">{{ defaults.ai.dreamer.run_at }}</span></span>
-      </div>
-    </div>
+    {% call m::time_row("ai_dreamer", "ai_dreamer_run_at", "run_at",
+       "Berlin-local wallclock for the nightly run (HH:MM).",
+       current.ai.dreamer.run_at, defaults.ai.dreamer.run_at) %}{% endcall %}
 
     {% call m::num_row_bounded("ai_dreamer", "ai_dreamer_timeout_secs", "timeout_secs",
        "Per-pass timeout.",

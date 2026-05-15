@@ -101,20 +101,37 @@ document.addEventListener(
   const discardBtn = saveBar.querySelector('[data-discard]');
 
   const rows = Array.from(form.querySelectorAll('.settings-row'))
-    .map((row) => ({
-      el: row,
-      input: row.querySelector('input[name]'),
-      reset: row.querySelector('.row-reset'),
-      pretty: row.querySelector('.row-pretty'),
-      section: row.dataset.section,
-    }))
-    .filter((r) => r.input);
+    .map((row) => {
+      const inputs = Array.from(row.querySelectorAll('input[name]'));
+      const isRadio = inputs.length > 1 && inputs.every((i) => i.type === 'radio');
+      const primary = inputs[0];
+      if (!primary) return null;
+      const baseline = isRadio
+        ? (inputs.find((i) => i.checked)?.value ?? '')
+        : primary.type === 'checkbox' ? (primary.checked ? 'true' : 'false') : primary.value;
+      return {
+        el: row,
+        input: primary,
+        inputs,
+        isRadio,
+        reset: row.querySelector('.row-reset'),
+        pretty: row.querySelector('.row-pretty'),
+        section: row.dataset.section,
+        baseline,
+      };
+    })
+    .filter((r) => r);
+
 
   function formatPretty(input, prettyEl) {
     const unit = prettyEl?.dataset.prettyUnit ?? '';
     if (unit === 'bool') return input.checked ? 'On' : 'Off';
+    if (input.type === 'text' || input.type === 'time' || input.type === 'email' || input.type === 'url') {
+      return input.value || (input.placeholder ? `(${input.placeholder})` : '');
+    }
     const n = Number(input.value);
     if (!Number.isFinite(n)) return input.value;
+    if (unit === 'pct') return `${Math.round(n * 100)}%`;
     if (unit === 's') return n === 1 ? '1 second' : `${n} seconds`;
     if (unit === 'B') {
       if (n % 1024 === 0 && n >= 1024) return `${n / 1024} KiB`;
@@ -129,12 +146,21 @@ document.addEventListener(
     return input.type === 'checkbox' ? (input.checked ? 'true' : 'false') : input.value;
   }
 
-  function applyDefault(input) {
-    const def = input.dataset.default ?? '';
-    if (input.type === 'checkbox') {
-      input.checked = def === 'true' || def === '1';
+  function rowCurrent(r) {
+    if (r.isRadio) return r.inputs.find((i) => i.checked)?.value ?? '';
+    return currentValue(r.input);
+  }
+
+  function applyDefault(r) {
+    const def = r.input.dataset.default ?? '';
+    if (r.isRadio) {
+      for (const i of r.inputs) i.checked = i.value === def;
+      return;
+    }
+    if (r.input.type === 'checkbox') {
+      r.input.checked = def === 'true' || def === '1';
     } else {
-      input.value = def;
+      r.input.value = def;
     }
   }
 
@@ -142,10 +168,25 @@ document.addEventListener(
     const dirtyKeys = [];
     const perSection = new Map();
     for (const r of rows) {
-      const dirty = currentValue(r.input) !== (r.input.dataset.default ?? '');
+      const cur = rowCurrent(r);
+      const dirty = cur !== r.baseline;
+      const offDefault = cur !== (r.input.dataset.default ?? '');
       r.el.classList.toggle('is-dirty', dirty);
-      if (r.reset) r.reset.hidden = !dirty;
-      if (r.pretty) r.pretty.textContent = formatPretty(r.input, r.pretty);
+      if (r.reset) r.reset.hidden = !offDefault;
+      if (r.pretty) {
+        const isText = ['text', 'time', 'email', 'url'].includes(r.input.type);
+        // Server already renders nuanced markup (placeholder/empty muted span)
+        // for text-type rows; only overwrite the pretty when the user has
+        // edited the value, otherwise leave the SSR markup intact.
+        if (!isText || dirty) r.pretty.textContent = formatPretty(r.input, r.pretty);
+      }
+      if (r.input.type === 'range') {
+        const valEl = r.el.querySelector('[data-range-value]');
+        if (valEl) {
+          const n = Number(r.input.value);
+          valEl.textContent = Number.isFinite(n) ? `${Math.round(n * 100)}%` : r.input.value;
+        }
+      }
       if (!dirty) continue;
       dirtyKeys.push(r.input.dataset.key ?? r.input.name);
       if (r.section) perSection.set(r.section, (perSection.get(r.section) ?? 0) + 1);
@@ -178,14 +219,23 @@ document.addEventListener(
   }
 
   form.addEventListener('input', refreshAll);
-  form.addEventListener('change', refreshAll);
+  form.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t instanceof HTMLInputElement && t.type === 'radio') {
+      const group = form.querySelectorAll(`input[type=radio][name="${t.name}"]`);
+      for (const i of group) {
+        i.closest('.segment')?.classList.toggle('is-active', i.checked);
+      }
+    }
+    refreshAll();
+  });
 
   form.addEventListener('click', (e) => {
     const btn = e.target.closest('.row-reset');
     if (!btn) return;
     const r = rows.find((row) => row.reset === btn);
     if (!r) return;
-    applyDefault(r.input);
+    applyDefault(r);
     refreshAll();
     r.input.focus();
   });
