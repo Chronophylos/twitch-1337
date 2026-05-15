@@ -256,42 +256,20 @@ where
     // spawn closure so this crate stays independent of `twitch_1337_web`.
     let web_handle = web_spawner.map(|spawner| spawner(shutdown_notify.clone()));
 
-    // Daily dreamer ritual. Reads the dashboard settings snapshot at startup;
-    // Task 12 moves this to a live read.
+    // Daily dreamer ritual. Re-reads settings each loop iteration so dashboard
+    // edits to ai.dreamer.* apply on the next scheduled run without a restart.
     if let (Some(llm), Some(mem)) = (llm_for_ritual.as_ref(), &ai_memory_v2_for_ritual)
         && ai_present_for_ritual
     {
-        let snapshot = settings_for_ritual.load_full();
-        let ai = &snapshot.ai;
-        if ai.dreamer.enabled {
-            let run_at = chrono::NaiveTime::parse_from_str(&ai.dreamer.run_at, "%H:%M")
-                .expect("ai.dreamer.run_at validated at settings load");
-            crate::ai::memory::ritual::spawn_ritual(
-                llm.clone(),
-                mem.store.clone(),
-                mem.transcript.clone(),
-                crate::ai::memory::ritual::RitualConfig {
-                    model: ai
-                        .dreamer
-                        .model
-                        .clone()
-                        .unwrap_or_else(|| ai.connection.model.clone()),
-                    reasoning_effort: ai
-                        .dreamer
-                        .reasoning_effort
-                        .clone()
-                        .or_else(|| ai.connection.reasoning_effort.clone()),
-                    run_at,
-                    timeout_secs: ai.dreamer.timeout_secs,
-                    max_rounds: ai.dreamer.max_rounds,
-                    max_writes_per_turn: ai.behavior.max_writes_per_turn,
-                    inject_byte_budget: ai.memory.inject_byte_budget,
-                    channel: channel_for_ritual,
-                },
-                shutdown_notify.clone(),
-            );
-            tracing::info!(run_at = %ai.dreamer.run_at, "Daily AI memory dreamer ritual scheduled");
-        }
+        crate::ai::memory::ritual::spawn_ritual(
+            llm.clone(),
+            mem.store.clone(),
+            mem.transcript.clone(),
+            settings_for_ritual.clone(),
+            channel_for_ritual,
+            shutdown_notify.clone(),
+        );
+        tracing::info!("Daily AI memory dreamer ritual spawned (live settings)");
     }
 
     if schedules_enabled {

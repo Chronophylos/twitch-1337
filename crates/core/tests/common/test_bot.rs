@@ -543,10 +543,11 @@ impl TestBot {
     /// dreamer ritual for `yesterday`.
     pub async fn run_ritual_for(&self, yesterday: chrono::NaiveDate) {
         use twitch_1337::ai::memory::{
-            RitualConfig, run_ritual, store::MemoryStore as StoreV2, transcript::TranscriptWriter,
+            run_ritual, store::MemoryStore as StoreV2, transcript::TranscriptWriter,
         };
 
-        let store = StoreV2::open(self.data_dir.path(), twitch_1337::settings::test_handle())
+        let settings = twitch_1337::settings::test_handle();
+        let store = StoreV2::open(self.data_dir.path(), settings.clone())
             .await
             .expect("open store for ritual");
         let transcript = TranscriptWriter::open(store.memories_dir())
@@ -558,16 +559,8 @@ impl TestBot {
             llm_ref,
             &store,
             &transcript,
-            &RitualConfig {
-                model: "fake".into(),
-                reasoning_effort: None,
-                run_at: chrono::NaiveTime::from_hms_opt(4, 0, 0).unwrap(),
-                timeout_secs: 5,
-                max_rounds: 4,
-                max_writes_per_turn: 8,
-                inject_byte_budget: 16_384,
-                channel: self.channel.clone(),
-            },
+            &settings,
+            &self.channel,
             yesterday,
         )
         .await
