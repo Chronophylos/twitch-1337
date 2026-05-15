@@ -10,14 +10,10 @@ use secrecy::ExposeSecret as _;
 use tokio::sync::oneshot;
 use tracing::info;
 use twitch_1337_core::{
-    AuthenticatedLoginCredentials, PersonalBest, Services,
-    ai::{command::memory_caps_from_config, memory::store::MemoryStore},
+    AuthenticatedLoginCredentials, PersonalBest, Services, ai::memory::store::MemoryStore,
     aviation, doener, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing,
-    llm_factory, load_configuration, load_leaderboard,
-    ping::PingManager,
-    run_bot, setup_and_verify_twitch_client,
-    twitch::whisper,
-    util::clock::SystemClock,
+    llm_factory, load_configuration, load_leaderboard, ping::PingManager, run_bot,
+    setup_and_verify_twitch_client, twitch::whisper, util::clock::SystemClock,
 };
 use twitch_1337_web::helix::{AccessTokenProvider, HelixClient as _, ReqwestHelixClient};
 use twitch_irc::login::LoginCredentials as _;
@@ -131,12 +127,9 @@ pub async fn main() -> Result<()> {
     // Memory v2 store opens unconditionally so the dashboard editor has a
     // handle even when `[ai]` is disabled. The same `Arc`-backed store is
     // shared with the bot's IRC handlers / dreamer ritual via `Services`.
-    let memory_store = MemoryStore::open(
-        &get_data_dir(),
-        memory_caps_from_config(config.ai.is_some(), &settings_handle.load()),
-    )
-    .await
-    .wrap_err("open memory store")?;
+    let memory_store = MemoryStore::open(&get_data_dir(), settings_handle.clone())
+        .await
+        .wrap_err("open memory store")?;
 
     // Load the leaderboard before building the web spawner so the same Arc
     // can be shared with WebState (dashboard read) and the IRC tracker (writes).

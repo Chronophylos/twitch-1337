@@ -333,9 +333,28 @@ mod schema_tests {
 
 #[cfg(test)]
 mod exec_tests {
+    use std::sync::Arc;
+
+    use arc_swap::ArcSwap;
+
     use super::*;
     use crate::ai::memory::store::MemoryStore;
     use crate::ai::memory::types::Caps;
+    use crate::settings::Settings;
+
+    fn test_handle() -> crate::settings::SettingsHandle {
+        Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
+    }
+
+    fn handle_with_caps(caps: Caps) -> crate::settings::SettingsHandle {
+        let mut s = Settings::compiled_defaults();
+        s.ai.memory.soul_bytes = caps.soul_bytes;
+        s.ai.memory.lore_bytes = caps.lore_bytes;
+        s.ai.memory.user_bytes = caps.user_bytes;
+        s.ai.memory.state_bytes = caps.state_bytes;
+        s.ai.memory.max_state_files = caps.max_state_files;
+        Arc::new(ArcSwap::from_pointee(s))
+    }
 
     fn call(name: &str, args: serde_json::Value) -> ToolCall {
         ToolCall {
@@ -360,9 +379,7 @@ mod exec_tests {
     #[tokio::test]
     async fn regular_writes_own_user_file() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
@@ -376,9 +393,7 @@ mod exec_tests {
     #[tokio::test]
     async fn regular_cannot_write_other_user_file() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
@@ -392,9 +407,7 @@ mod exec_tests {
     #[tokio::test]
     async fn regular_cannot_write_lore_or_soul() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
         for path in ["LORE.md", "SOUL.md"] {
             let r = exec
@@ -410,9 +423,7 @@ mod exec_tests {
     #[tokio::test]
     async fn moderator_can_write_lore_but_not_soul() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = make_executor(Role::Moderator, store.clone(), 8).await;
         let r = exec
             .execute(&call(
@@ -433,9 +444,7 @@ mod exec_tests {
     #[tokio::test]
     async fn invalid_path_and_invalid_slug_round_trip() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
@@ -456,9 +465,7 @@ mod exec_tests {
     #[tokio::test]
     async fn dated_slug_is_blocked_on_write_but_delete_is_allowed() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
 
         // write rejects trailing -YYYY-MM-DD slugs so dated-suffix accumulation
@@ -494,9 +501,7 @@ mod exec_tests {
     #[tokio::test]
     async fn reserved_slug_is_blocked() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
@@ -510,11 +515,15 @@ mod exec_tests {
     #[tokio::test]
     async fn state_full_when_over_cap() {
         let dir = tempfile::tempdir().unwrap();
-        let caps = Caps {
-            max_state_files: 1,
-            ..Caps::default()
-        };
-        let store = MemoryStore::open(dir.path(), caps).await.unwrap();
+        let store = MemoryStore::open(
+            dir.path(),
+            handle_with_caps(Caps {
+                max_state_files: 1,
+                ..Caps::default()
+            }),
+        )
+        .await
+        .unwrap();
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
@@ -535,9 +544,7 @@ mod exec_tests {
     #[tokio::test]
     async fn write_quota_exhausts_after_n_writes() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = make_executor(Role::Regular, store.clone(), 1).await;
         let r1 = exec
             .execute(&call(
@@ -558,9 +565,7 @@ mod exec_tests {
     #[tokio::test]
     async fn delete_state_blocked_for_non_creator_regular() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         // Pre-seed state file owned by user 99.
         store
             .write_state(
@@ -580,9 +585,7 @@ mod exec_tests {
     #[tokio::test]
     async fn dreamer_can_write_soul_lore_any_user() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = DreamerExecutor::new(DreamerExecutorOpts {
             store: store.clone(),
             max_writes_per_turn: 32,

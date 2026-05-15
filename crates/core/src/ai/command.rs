@@ -18,7 +18,7 @@ use crate::ai::memory::inject;
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::{ChatTurnExecutor, ChatTurnExecutorOpts, chat_turn_tools};
 use crate::ai::memory::transcript::TranscriptWriter;
-use crate::ai::memory::types::{Caps, Role};
+use crate::ai::memory::types::Role;
 use crate::commands::{Command, CommandContext};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
@@ -524,25 +524,6 @@ fn user_facing_provider_message(err: &LlmError) -> Option<&'static str> {
             _ => None,
         },
         _ => None,
-    }
-}
-
-/// Build the [`Caps`] used by the v2 memory store from the current dashboard
-/// settings snapshot. Caller decides whether `ai_present` (i.e. `[ai]` exists
-/// in `config.toml`); when AI is disabled we fall back to [`Caps::default`] —
-/// the web dashboard always needs *some* caps because it opens the store
-/// unconditionally.
-pub fn memory_caps_from_config(ai_present: bool, settings: &crate::settings::Settings) -> Caps {
-    if !ai_present {
-        return Caps::default();
-    }
-    let memory = &settings.ai.memory;
-    Caps {
-        soul_bytes: memory.soul_bytes,
-        lore_bytes: memory.lore_bytes,
-        user_bytes: memory.user_bytes,
-        state_bytes: memory.state_bytes,
-        max_state_files: memory.max_state_files,
     }
 }
 

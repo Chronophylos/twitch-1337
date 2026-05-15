@@ -13,6 +13,7 @@ use tracing::info;
 use crate::ai::memory::frontmatter;
 use crate::ai::memory::sanitize::normalize_display_name;
 use crate::ai::memory::types::{Caps, FileKind, Frontmatter, MemoryFile};
+use crate::settings::SettingsHandle;
 use crate::util::persist::atomic_write_bytes_async;
 
 /// On-disk modification time, milliseconds since the UNIX epoch. Used as a
@@ -92,7 +93,7 @@ struct StoreInner {
     root: PathBuf,         // $DATA_DIR
     memories_dir: PathBuf, // $DATA_DIR/memories
     prompts_dir: PathBuf,  // $DATA_DIR/prompts
-    caps: Caps,
+    settings: SettingsHandle,
     locks: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
     /// Serialises new state-file creation so the `max_state_files` cap can't
     /// be smuggled past by two concurrent writes to two distinct new slugs.
@@ -101,7 +102,7 @@ struct StoreInner {
 }
 
 impl MemoryStore {
-    pub async fn open(data_dir: &Path, caps: Caps) -> Result<Self> {
+    pub async fn open(data_dir: &Path, settings: SettingsHandle) -> Result<Self> {
         let memories_dir = data_dir.join("memories");
         let prompts_dir = data_dir.join("prompts");
         for p in [
@@ -171,15 +172,17 @@ impl MemoryStore {
                 root: data_dir.to_path_buf(),
                 memories_dir,
                 prompts_dir,
-                caps,
+                settings,
                 locks: Mutex::new(HashMap::new()),
                 state_create_lock: Mutex::new(()),
             }),
         })
     }
 
+    /// Read the current byte caps live from the settings handle. Lock-free
+    /// (`ArcSwap::load` is a pointer swap) so safe to call on every operation.
     pub fn caps(&self) -> Caps {
-        self.inner.caps
+        Caps::from_settings(&self.inner.settings.load())
     }
 
     pub fn memories_dir(&self) -> &Path {
@@ -240,7 +243,7 @@ impl MemoryStore {
         username: Option<&str>,
         display_name: Option<&str>,
     ) -> Result<(), WriteError> {
-        let limit = self.inner.caps.limit_for(kind);
+        let limit = self.caps().limit_for(kind);
 
         let rel = kind.relative_path();
         let abs = self.inner.memories_dir.join(&rel);
@@ -326,7 +329,7 @@ impl MemoryStore {
         // dashboard, and the dreamer all funnel through this method, so the
         // slug rule lives here rather than at any one call site.
         validate_state_slug(slug)?;
-        let limit = self.inner.caps.state_bytes;
+        let limit = self.caps().state_bytes;
 
         let rel = kind.relative_path();
         let abs = self.inner.memories_dir.join(&rel);
@@ -364,7 +367,7 @@ impl MemoryStore {
         };
         if is_new {
             let count = count_state_files(&self.inner.memories_dir).await?;
-            if count >= self.inner.caps.max_state_files {
+            if count >= self.caps().max_state_files {
                 return Err(WriteError::StateFull);
             }
         }
@@ -570,15 +573,32 @@ async fn count_state_files(memories_dir: &Path) -> Result<usize, WriteError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use arc_swap::ArcSwap;
+
     use super::*;
     use crate::ai::memory::types::Caps;
+    use crate::settings::{Settings, SettingsHandle};
+
+    fn test_handle() -> SettingsHandle {
+        Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
+    }
+
+    fn handle_with_caps(caps: Caps) -> SettingsHandle {
+        let mut s = Settings::compiled_defaults();
+        s.ai.memory.soul_bytes = caps.soul_bytes;
+        s.ai.memory.lore_bytes = caps.lore_bytes;
+        s.ai.memory.user_bytes = caps.user_bytes;
+        s.ai.memory.state_bytes = caps.state_bytes;
+        s.ai.memory.max_state_files = caps.max_state_files;
+        Arc::new(ArcSwap::from_pointee(s))
+    }
 
     #[tokio::test]
     async fn open_creates_tree_and_seeds_soul() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         assert!(dir.path().join("memories/SOUL.md").exists());
         assert!(dir.path().join("memories/users").is_dir());
         assert!(dir.path().join("memories/state").is_dir());
@@ -594,9 +614,7 @@ mod tests {
         tokio::fs::write(dir.path().join("ai_memory.ron"), b"v1 garbage")
             .await
             .unwrap();
-        MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let mut entries = tokio::fs::read_dir(dir.path()).await.unwrap();
         let mut found = false;
         while let Some(e) = entries.next_entry().await.unwrap() {
@@ -611,16 +629,12 @@ mod tests {
     #[tokio::test]
     async fn open_seeds_prompts_on_first_run_only() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let p = dir.path().join("prompts/system.md");
         assert!(p.exists());
         tokio::fs::write(&p, b"USER EDITED").await.unwrap();
         // Reopen: edited file must be preserved.
-        let _ = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let _ = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let s = tokio::fs::read_to_string(&p).await.unwrap();
         assert_eq!(s, "USER EDITED");
         let _ = store; // suppress unused
@@ -632,11 +646,15 @@ mod tests {
         // Cap covers the *full* on-disk file (frontmatter + body), so it must
         // be larger than the ~80B frontmatter overhead but small enough to
         // still reject a 4 KiB body.
-        let caps = Caps {
-            user_bytes: 256,
-            ..Caps::default()
-        };
-        let store = MemoryStore::open(dir.path(), caps).await.unwrap();
+        let store = MemoryStore::open(
+            dir.path(),
+            handle_with_caps(Caps {
+                user_bytes: 256,
+                ..Caps::default()
+            }),
+        )
+        .await
+        .unwrap();
         let kind = FileKind::User {
             user_id: "12".into(),
         };
@@ -661,11 +679,15 @@ mod tests {
     #[tokio::test]
     async fn write_state_full_enforced_in_store() {
         let dir = tempfile::tempdir().unwrap();
-        let caps = Caps {
-            max_state_files: 1,
-            ..Caps::default()
-        };
-        let store = MemoryStore::open(dir.path(), caps).await.unwrap();
+        let store = MemoryStore::open(
+            dir.path(),
+            handle_with_caps(Caps {
+                max_state_files: 1,
+                ..Caps::default()
+            }),
+        )
+        .await
+        .unwrap();
         store
             .write_state(
                 &FileKind::State {
@@ -704,9 +726,7 @@ mod tests {
     #[tokio::test]
     async fn display_name_is_normalised_on_write() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let kind = FileKind::User {
             user_id: "99".into(),
         };
@@ -722,9 +742,7 @@ mod tests {
     #[tokio::test]
     async fn list_users_and_states_orders_by_updated_at_desc() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let a = FileKind::User {
             user_id: "1".into(),
         };
@@ -748,9 +766,7 @@ mod tests {
     #[tokio::test]
     async fn write_state_sets_created_by_on_create_only() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let kind = FileKind::State {
             slug: "quiz".into(),
         };
@@ -775,9 +791,7 @@ mod tests {
     #[tokio::test]
     async fn current_mtime_returns_positive_for_existing_files() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         // SOUL.md is seeded by `open`, so it must have a non-zero mtime.
         let mt = store.current_mtime(&FileKind::Soul).await.unwrap();
         assert!(mt > 0, "seeded file must have positive mtime; got {mt}");
@@ -786,9 +800,7 @@ mod tests {
     #[tokio::test]
     async fn current_mtime_returns_zero_for_missing_files() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let mt = store
             .current_mtime(&FileKind::User {
                 user_id: "404".into(),
@@ -808,9 +820,7 @@ mod tests {
     #[tokio::test]
     async fn delete_state_removes_file() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let kind = FileKind::State {
             slug: "quiz".into(),
         };
@@ -822,9 +832,7 @@ mod tests {
     #[tokio::test]
     async fn write_with_guard_detects_concurrent_change() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         // Bump SOUL.md so we have a known mtime to test against.
         store
             .write(&FileKind::Soul, "first", None, None)
@@ -880,9 +888,7 @@ mod tests {
     #[tokio::test]
     async fn write_with_guard_unconditional_when_expected_none() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         store
             .write(&FileKind::Lore, "before", None, None)
             .await
@@ -905,9 +911,7 @@ mod tests {
     #[tokio::test]
     async fn write_with_guard_override_replaces_user_identity() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let kind = FileKind::User {
             user_id: "42".into(),
         };
@@ -934,9 +938,7 @@ mod tests {
     #[tokio::test]
     async fn write_with_guard_override_replaces_state_created_by() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let kind = FileKind::State {
             slug: "quiz".into(),
         };
@@ -957,9 +959,7 @@ mod tests {
     #[tokio::test]
     async fn write_with_guard_empty_override_preserves_state_created_by() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let kind = FileKind::State {
             slug: "notes".into(),
         };
@@ -980,9 +980,7 @@ mod tests {
     #[tokio::test]
     async fn state_reserved_slugs_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         for reserved in ["new", "delete"] {
             let err = store
                 .write_state(
@@ -1004,9 +1002,7 @@ mod tests {
     #[tokio::test]
     async fn state_invalid_slug_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let too_long = "x".repeat(65);
         let cases = [too_long.as_str(), "", "with/slash", "..", "with..dots"];
         for slug in cases {
@@ -1019,5 +1015,26 @@ mod tests {
                 "slug `{slug}` must be rejected, got {err:?}"
             );
         }
+    }
+
+    /// Verify that `MemoryStore::caps()` reflects settings changes published
+    /// after construction — i.e., the store holds a live handle, not a snapshot.
+    #[tokio::test]
+    async fn memory_store_caps_rebind_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = test_handle();
+        let store = MemoryStore::open(dir.path(), handle.clone()).await.unwrap();
+        // Compiled default is 4096 bytes.
+        assert_eq!(store.caps().soul_bytes, 4096);
+
+        let mut new_settings = Settings::compiled_defaults();
+        new_settings.ai.memory.soul_bytes = 8192;
+        handle.store(Arc::new(new_settings));
+
+        assert_eq!(
+            store.caps().soul_bytes,
+            8192,
+            "store must reflect live settings update"
+        );
     }
 }

@@ -252,10 +252,7 @@ impl TestBotBuilder {
 
         let memory_store = twitch_1337::ai::memory::store::MemoryStore::open(
             data_dir.path(),
-            twitch_1337::ai::command::memory_caps_from_config(
-                self.config.ai.is_some(),
-                &settings_handle.load_full(),
-            ),
+            settings_handle.clone(),
         )
         .await
         .expect("open memory store");
@@ -547,10 +544,9 @@ impl TestBot {
     pub async fn run_ritual_for(&self, yesterday: chrono::NaiveDate) {
         use twitch_1337::ai::memory::{
             RitualConfig, run_ritual, store::MemoryStore as StoreV2, transcript::TranscriptWriter,
-            types::Caps,
         };
 
-        let store = StoreV2::open(self.data_dir.path(), Caps::default())
+        let store = StoreV2::open(self.data_dir.path(), twitch_1337::settings::test_handle())
             .await
             .expect("open store for ritual");
         let transcript = TranscriptWriter::open(store.memories_dir())

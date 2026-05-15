@@ -349,9 +349,18 @@ fn format_entry_line(entry: &ChatHistoryEntry) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use arc_swap::ArcSwap;
+
     use super::*;
     use crate::ai::memory::store::MemoryStore;
-    use crate::ai::memory::types::{Caps, FileKind};
+    use crate::ai::memory::types::FileKind;
+    use crate::settings::Settings;
+
+    fn test_handle() -> crate::settings::SettingsHandle {
+        Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
+    }
 
     #[test]
     fn fence_block_user_renders_identity_attrs() {
@@ -441,9 +450,7 @@ mod tests {
     #[tokio::test]
     async fn build_chat_turn_context_routes_state_to_volatile_and_users_to_durable() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         store
             .write(
                 &FileKind::User {
@@ -496,9 +503,7 @@ mod tests {
     #[tokio::test]
     async fn build_chat_turn_context_drops_oldest_users_when_over_budget() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         for id in ["1", "2", "3"] {
             store
                 .write(
@@ -542,9 +547,7 @@ mod tests {
         use tokio::sync::Mutex;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
 
         let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
             test_handle(),
@@ -595,9 +598,7 @@ mod tests {
         use tokio::sync::Mutex;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
 
         let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
             test_handle(),
@@ -636,9 +637,7 @@ mod tests {
         use tokio::sync::Mutex;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         // alice and bob have user files; carol speaks but has no file.
         store
             .write(
@@ -706,9 +705,7 @@ mod tests {
     #[tokio::test]
     async fn build_chat_turn_context_omits_mention_table_when_no_chat() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         store
             .write(
                 &FileKind::User {
@@ -749,9 +746,7 @@ mod tests {
         use tokio::sync::Mutex;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
 
         let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
             test_handle(),
