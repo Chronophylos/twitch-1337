@@ -245,8 +245,43 @@ Files added:
 - `crates/core/src/settings/ai.rs` — `AiSettings`, sub-structs, defaults
 - `crates/core/src/settings/ai_overrides.rs` — `AiOverrides` sparse mirror
 - `crates/web/src/routes/ai_models.rs` — `GET /settings/ai/models` handler
-- `crates/web/templates/settings/ai.html` (or new sections inside
-  `settings.html`; see *Open questions*)
+
+Template restructure (settings page splits into partials):
+
+```
+crates/web/templates/settings/
+  index.html             # page chrome: sidebar nav, save-bar, includes cards
+  _macros.html           # row_head, row_reset, num_row, toggle_row,
+                         # segmented_row, model_row, bytesize_row
+  cards/
+    cooldowns.html
+    pings.html
+    ai_connection.html   # backend (segmented), base_url, model picker,
+                         # timeout, reasoning_effort (segmented)
+    ai_behavior.html     # max_turn_rounds, max_writes_per_turn
+    ai_history.html      # history_length, ai_channel_history_length
+    ai_memory.html       # soul/lore/user/state bytes, inject_budget,
+                         # max_state_files
+    ai_dreamer.html      # toggle card: model picker + dreamer knobs
+    ai_prefill.html      # toggle card: base_url + threshold
+    ai_web.html          # toggle card: base_url + web knobs
+    ai_emotes.html       # toggle card: include_global + emote caps
+    ai_media.html        # media model picker + per-bucket caps
+```
+
+Each card file is self-contained and imports `_macros.html` at the top:
+`{% import "settings/_macros.html" as m %}`. `index.html` references cards
+via `{% include "settings/cards/<name>.html" %}`. The current
+`templates/settings.html` is moved to `templates/settings/index.html` and its
+existing macros + sections move into `_macros.html` and `cards/cooldowns.html`
+/ `cards/pings.html` respectively as part of Task 1 of the implementation
+plan (rename + extract before any AI work begins).
+
+Handler templates: `#[template(path = "settings/index.html")]` replaces the
+existing `path = "settings.html"`. No `Template`-derived struct needs to be
+split — `index.html` accesses the same fields (`current`, `defaults`, `csrf`,
+`flash`, `errors`) and forwards them to includes through askama's lexical
+scope.
 
 Files modified:
 
@@ -302,9 +337,6 @@ hoisted comments are removed.
 
 ## Open questions
 
-- One big `settings.html` or split into per-section partials? The current file
-  is already pushing the limit of one-page comprehension; splitting will land
-  here as part of the implementation plan rather than as a separate refactor.
 - Should we surface a "test connection" button next to the Connection card?
   Out of scope for v1, but the model-list endpoint already exercises the same
   code path — a thin wrapper would suffice later.
