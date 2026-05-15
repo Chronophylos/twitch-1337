@@ -126,8 +126,12 @@ document.addEventListener(
   function formatPretty(input, prettyEl) {
     const unit = prettyEl?.dataset.prettyUnit ?? '';
     if (unit === 'bool') return input.checked ? 'On' : 'Off';
+    if (input.type === 'text' || input.type === 'time' || input.type === 'email' || input.type === 'url') {
+      return input.value || (input.placeholder ? `(${input.placeholder})` : '');
+    }
     const n = Number(input.value);
     if (!Number.isFinite(n)) return input.value;
+    if (unit === 'pct') return `${Math.round(n * 100)}%`;
     if (unit === 's') return n === 1 ? '1 second' : `${n} seconds`;
     if (unit === 'B') {
       if (n % 1024 === 0 && n >= 1024) return `${n / 1024} KiB`;
@@ -169,7 +173,20 @@ document.addEventListener(
       const offDefault = cur !== (r.input.dataset.default ?? '');
       r.el.classList.toggle('is-dirty', dirty);
       if (r.reset) r.reset.hidden = !offDefault;
-      if (r.pretty) r.pretty.textContent = formatPretty(r.input, r.pretty);
+      if (r.pretty) {
+        const isText = ['text', 'time', 'email', 'url'].includes(r.input.type);
+        // Server already renders nuanced markup (placeholder/empty muted span)
+        // for text-type rows; only overwrite the pretty when the user has
+        // edited the value, otherwise leave the SSR markup intact.
+        if (!isText || dirty) r.pretty.textContent = formatPretty(r.input, r.pretty);
+      }
+      if (r.input.type === 'range') {
+        const valEl = r.el.querySelector('[data-range-value]');
+        if (valEl) {
+          const n = Number(r.input.value);
+          valEl.textContent = Number.isFinite(n) ? `${Math.round(n * 100)}%` : r.input.value;
+        }
+      }
       if (!dirty) continue;
       dirtyKeys.push(r.input.dataset.key ?? r.input.name);
       if (r.section) perSection.set(r.section, (perSection.get(r.section) ?? 0) + 1);

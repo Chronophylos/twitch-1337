@@ -45,19 +45,10 @@
     {% call m::num_row_bounded("ai_emotes", "ai_emotes_min_baseline_emotes", "min_baseline_emotes",
        "Minimum baseline emotes retained even when filtering by recency.",
        e.min_baseline_emotes, 4, "", 0, 200) %}{% endcall %}
-    <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai_emotes_enabled">
-      {% call m::row_head("base_url", "Override emote-source base URL. Empty = built-in default.") %}{% endcall %}
-      <div class="row-control-cell">
-        <input type="text" name="ai_emotes_base_url"
-               value="{% match e.base_url %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}"
-               placeholder="(built-in default)"
-               data-default="" data-key="ai.emotes.base_url">
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.emotes.base_url") %}{% endcall %}
-        <span class="row-default">default <span class="mono">(built-in)</span></span>
-      </div>
-    </div>
+    {% let emotes_base_url = e.base_url.as_deref().unwrap_or("") %}
+    {% call m::text_row("ai_emotes", "ai_emotes_base_url", "base_url",
+       "Override emote-source base URL. Empty = built-in default.",
+       emotes_base_url, "", "(built-in default)") %}{% endcall %}
     {% when None %}
     <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai_emotes_enabled">
       {% call m::row_head("include_global", "Include Twitch/3rd-party global emotes (not just channel-specific).") %}{% endcall %}
@@ -84,18 +75,9 @@
     {% call m::num_row_bounded("ai_emotes", "ai_emotes_min_baseline_emotes", "min_baseline_emotes",
        "Minimum baseline emotes retained even when filtering by recency.",
        4, 4, "", 0, 200) %}{% endcall %}
-    <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai_emotes_enabled">
-      {% call m::row_head("base_url", "Override emote-source base URL. Empty = built-in default.") %}{% endcall %}
-      <div class="row-control-cell">
-        <input type="text" name="ai_emotes_base_url" value=""
-               placeholder="(built-in default)"
-               data-default="" data-key="ai.emotes.base_url">
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.emotes.base_url") %}{% endcall %}
-        <span class="row-default">default <span class="mono">(built-in)</span></span>
-      </div>
-    </div>
+    {% call m::text_row("ai_emotes", "ai_emotes_base_url", "base_url",
+       "Override emote-source base URL. Empty = built-in default.",
+       "", "", "(built-in default)") %}{% endcall %}
     {% endmatch %}
   </div>
 </section>

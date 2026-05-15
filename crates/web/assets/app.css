@@ -1206,8 +1206,7 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   flex-shrink: 0;
 }
 
-.model-input,
-.bytesize-input {
+.text-input {
   background: var(--bg-3);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
@@ -1217,18 +1216,44 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   color: var(--fg);
   padding: 7px 12px;
   width: 260px;
-  transition: border-color 0.12s ease, background 0.12s ease;
+  transition: border-color 0.12s ease, background 0.12s ease, opacity 0.12s ease;
 }
-.bytesize-input { width: 160px; }
-.model-input:hover,
-.bytesize-input:hover { border-color: var(--line-2); }
-.model-input:focus,
-.bytesize-input:focus {
+.text-input.is-narrow { width: 160px; }
+.text-input.is-wide { width: 360px; }
+.text-input:focus {
   border-color: var(--line-strong);
   background: var(--bg-2);
 }
-.settings-row.is-dirty .model-input,
-.settings-row.is-dirty .bytesize-input { border-color: var(--accent-soft); }
+.settings-row.is-dirty .text-input { border-color: var(--accent-soft); }
+
+.row-control-cell .text-input { opacity: 0; }
+.settings-row:hover .row-control-cell .text-input,
+.settings-row:focus-within .row-control-cell .text-input,
+.settings-row.is-dirty .row-control-cell .text-input { opacity: 1; }
+
+.range-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: 260px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.settings-row:hover .range-wrap,
+.settings-row:focus-within .range-wrap,
+.settings-row.is-dirty .range-wrap { opacity: 1; }
+.range-wrap input[type=range] {
+  flex: 1;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.range-wrap .range-value {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  color: var(--fg-2);
+  min-width: 3ch;
+  text-align: right;
+}
 
 /* `:has(input:checked)` drives on-state so dirty tracking is the only
    piece that needs JS. */

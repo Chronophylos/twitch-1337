@@ -19,18 +19,9 @@
   <div class="settings-rows">
     {% match current.ai.web %}
     {% when Some with (w) %}
-    <div class="settings-row" data-section="ai_web" data-card-enabled-by="ai_web_enabled">
-      {% call m::row_head("base_url", "SearXNG /search endpoint.") %}{% endcall %}
-      <div class="row-control-cell">
-        <input type="text" name="ai_web_base_url" value="{{ w.base_url }}"
-               placeholder="http://localhost:8080/search"
-               data-default="http://localhost:8080/search" data-key="ai.web.base_url">
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.web.base_url") %}{% endcall %}
-        <span class="row-default">default <span class="mono">http://localhost:8080/search</span></span>
-      </div>
-    </div>
+    {% call m::text_row("ai_web", "ai_web_base_url", "base_url",
+       "SearXNG /search endpoint.",
+       w.base_url, "http://localhost:8080/search", "http://localhost:8080/search") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_timeout", "timeout",
        "Per-request timeout.",
        w.timeout, 15, "s", 1, 120) %}{% endcall %}
@@ -47,18 +38,9 @@
        "Max entries in the LRU search cache.",
        w.cache_capacity, 100, "", 1, 10000) %}{% endcall %}
     {% when None %}
-    <div class="settings-row" data-section="ai_web" data-card-enabled-by="ai_web_enabled">
-      {% call m::row_head("base_url", "SearXNG /search endpoint.") %}{% endcall %}
-      <div class="row-control-cell">
-        <input type="text" name="ai_web_base_url" value="http://localhost:8080/search"
-               placeholder="http://localhost:8080/search"
-               data-default="http://localhost:8080/search" data-key="ai.web.base_url">
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.web.base_url") %}{% endcall %}
-        <span class="row-default">default <span class="mono">http://localhost:8080/search</span></span>
-      </div>
-    </div>
+    {% call m::text_row("ai_web", "ai_web_base_url", "base_url",
+       "SearXNG /search endpoint.",
+       "http://localhost:8080/search", "http://localhost:8080/search", "http://localhost:8080/search") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_timeout", "timeout",
        "Per-request timeout.",
        15, 15, "s", 1, 120) %}{% endcall %}

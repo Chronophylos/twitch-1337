@@ -37,21 +37,10 @@
       </div>
     </div>
 
-    <div class="settings-row" data-section="ai_connection">
-      {% call m::row_head("base_url", "Override the provider's API base URL. Empty = provider default.") %}{% endcall %}
-      <div class="row-control-cell">
-        <input type="text"
-               name="ai_connection_base_url"
-               value="{% match current.ai.connection.base_url %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}"
-               placeholder="https://api.openai.com/v1"
-               data-default=""
-               data-key="ai.connection.base_url">
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.connection.base_url") %}{% endcall %}
-        <span class="row-default">default <span class="mono">(provider default)</span></span>
-      </div>
-    </div>
+    {% let conn_base_url = current.ai.connection.base_url.as_deref().unwrap_or("") %}
+    {% call m::text_row("ai_connection", "ai_connection_base_url", "base_url",
+       "Override the provider's API base URL. Empty = provider default.",
+       conn_base_url, "", "https://api.openai.com/v1") %}{% endcall %}
 
     {% call m::model_row("ai_connection", "ai_connection_model", "model",
        "Model used for !ai chat turns.",
