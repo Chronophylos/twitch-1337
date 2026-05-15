@@ -33,11 +33,13 @@ Linear history required, force-push + delete blocked, conversations must resolve
 
 **Branch naming:** `feature/` features, `spec/` specs, `fix/` bug fixes, `refactor/` refactors, `build/` CI / dependencies / Docker. Slug after slash, kebab-case.
 
-**Required status checks (7, must all pass to merge):**
+**Required status checks (9, must all pass to merge):**
 
 | Check | Workflow | Purpose |
 |---|---|---|
-| `fmt + clippy + test` | ci.yml | cargo fmt --check, clippy -D warnings, cargo test |
+| `fmt` | ci.yml | cargo fmt --check |
+| `clippy` | ci.yml | cargo clippy --workspace --all-targets -- -D warnings |
+| `test` | ci.yml | cargo nextest run --workspace |
 | `cargo audit` | ci.yml | RustSec CVE scan of Cargo.lock via rustsec/audit-check |
 | `hadolint (Dockerfile)` | sast.yml | Dockerfile lint, SARIF → Security tab |
 | `trivy config (IaC)` | sast.yml | IaC misconfig scan, HIGH/CRITICAL only |
@@ -64,7 +66,7 @@ Others pinned to major tags; Dependabot keeps them current.
 
 **Typical PR flow:**
 1. branch → commit → push → `gh pr create`
-2. wait for 7 checks green; rebase on main if `strict` blocks merge
+2. wait for 9 checks green; rebase on main if `strict` blocks merge
 3. `gh pr merge --squash`
 
 **When `cargo audit` fails:**
@@ -74,7 +76,7 @@ Others pinned to major tags; Dependabot keeps them current.
   both must be resolved — usually by bumping the dep pulling in the old major.
 - Last resort: ignore in `.cargo/audit.toml` with a written-down reason.
 
-**When Dependabot cargo PRs break `fmt + clippy + test`:**
+**When Dependabot cargo PRs break `clippy` or `test`:**
 - Breaking-API bump; adapt code on the dependabot branch and force-push
   (`git push origin dependabot/cargo/<name>-<ver>`). CI reruns, then merge.
 - Example: rand 0.10 moved `.random::<T>()` from `Rng` to `RngExt` — generic bounds
