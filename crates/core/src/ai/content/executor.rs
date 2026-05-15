@@ -11,7 +11,8 @@ use llm::{ToolCall, ToolResultMessage, TraceIds};
 use super::cache::TtlCache;
 use super::client::{SearchClient, SearchResult};
 use super::media::MediaClient;
-use crate::config::AiMediaConfig;
+use crate::settings::SettingsHandle;
+use crate::settings::ai::AiMedia;
 
 #[derive(Debug, Deserialize)]
 struct WebSearchArgs {
@@ -32,8 +33,7 @@ pub(super) struct ReadUrlArgs {
 pub struct ContentToolExecutor {
     client: SearchClient,
     media: Arc<MediaClient>,
-    caps: AiMediaConfig,
-    max_results: usize,
+    settings: SettingsHandle,
     search_cache: Arc<Mutex<TtlCache<Vec<SearchResult>>>>,
     read_cache: Arc<Mutex<TtlCache<ReadCacheEntry>>>,
 }
@@ -48,23 +48,35 @@ impl ContentToolExecutor {
     pub fn new(
         client: SearchClient,
         media: Arc<MediaClient>,
-        caps: AiMediaConfig,
-        max_results: usize,
+        settings: SettingsHandle,
         cache_ttl: Duration,
         cache_capacity: usize,
     ) -> Self {
         Self {
             client,
             media,
-            caps,
-            max_results,
+            settings,
             search_cache: Arc::new(Mutex::new(TtlCache::new(cache_ttl, cache_capacity))),
             read_cache: Arc::new(Mutex::new(TtlCache::new(cache_ttl, cache_capacity))),
         }
     }
 
+    fn live_media(&self) -> AiMedia {
+        self.settings.load().ai.media.clone()
+    }
+
+    fn current_max_results(&self) -> usize {
+        self.settings
+            .load()
+            .ai
+            .web
+            .as_ref()
+            .map(|w| w.max_results)
+            .unwrap_or(5)
+    }
+
     pub fn max_results(&self) -> usize {
-        self.max_results
+        self.current_max_results()
     }
 
     pub async fn execute_tool_call(&self, call: &ToolCall, trace: &TraceIds) -> ToolResultMessage {
@@ -118,8 +130,9 @@ impl ContentToolExecutor {
             .to_string();
         }
 
-        let requested = args.max_results.unwrap_or(self.max_results);
-        let effective_max = requested.clamp(1, self.max_results);
+        let live_max = self.current_max_results();
+        let requested = args.max_results.unwrap_or(live_max);
+        let effective_max = requested.clamp(1, live_max);
 
         let key = format!("{}::{}", normalize_query(query), effective_max);
         if let Some(cached) = self.search_cache.lock().await.get(&key) {
@@ -182,7 +195,8 @@ impl ContentToolExecutor {
             .to_string();
         }
 
-        let fetched = match self.client.fetch_for_read(&args.url, &self.caps).await {
+        let media_caps = self.live_media();
+        let fetched = match self.client.fetch_for_read(&args.url, &media_caps).await {
             Ok(f) => f,
             Err(err) => return Self::map_fetch_err(&err, &args.url),
         };
@@ -274,6 +288,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::settings::test_handle;
 
     fn test_executor() -> ContentToolExecutor {
         crate::install_crypto_provider();
@@ -289,14 +304,110 @@ mod tests {
             "test-model".into(),
             Duration::from_secs(1),
         ));
-        ContentToolExecutor::new(
-            client,
-            media,
-            AiMediaConfig::default(),
-            5,
-            Duration::from_secs(300),
-            32,
-        )
+        ContentToolExecutor::new(client, media, test_handle(), Duration::from_secs(300), 32)
+    }
+
+    #[test]
+    fn max_results_reflects_live_settings() {
+        use crate::settings::{Settings, ai::AiWeb as SettingsAiWeb};
+
+        crate::install_crypto_provider();
+
+        // Build a settings handle with web.max_results = 10.
+        let mut base = Settings::compiled_defaults();
+        base.ai.web = Some(SettingsAiWeb {
+            base_url: "http://127.0.0.1:65535/search".to_string(),
+            timeout: 1,
+            max_results: 10,
+            max_rounds: 3,
+            cache_ttl_secs: 300,
+            cache_capacity: 32,
+        });
+        let handle = crate::settings::SettingsHandle::new(arc_swap::ArcSwap::from_pointee(base));
+
+        let client = SearchClient::new_with_client(
+            "http://127.0.0.1:65535/search".to_string(),
+            Duration::from_secs(1),
+            reqwest::Client::new(),
+        );
+        let media = Arc::new(MediaClient::new(
+            reqwest::Client::new(),
+            "http://127.0.0.1:65535/v1".to_string(),
+            None,
+            "test-model".into(),
+            Duration::from_secs(1),
+        ));
+        let executor =
+            ContentToolExecutor::new(client, media, handle.clone(), Duration::from_secs(300), 32);
+
+        assert_eq!(
+            executor.max_results(),
+            10,
+            "initial max_results should be 10"
+        );
+
+        // Mutate the handle to max_results = 3.
+        let mut updated = Settings::compiled_defaults();
+        updated.ai.web = Some(SettingsAiWeb {
+            base_url: "http://127.0.0.1:65535/search".to_string(),
+            timeout: 1,
+            max_results: 3,
+            max_rounds: 3,
+            cache_ttl_secs: 300,
+            cache_capacity: 32,
+        });
+        handle.store(std::sync::Arc::new(updated));
+
+        assert_eq!(
+            executor.max_results(),
+            3,
+            "max_results should update to 3 after store"
+        );
+    }
+
+    #[test]
+    fn live_media_reflects_settings_update() {
+        use crate::settings::Settings;
+        use crate::settings::ai::AiMedia;
+        use bytesize::ByteSize;
+
+        crate::install_crypto_provider();
+
+        let base = Settings::compiled_defaults();
+        let handle = crate::settings::SettingsHandle::new(arc_swap::ArcSwap::from_pointee(base));
+
+        let client = SearchClient::new_with_client(
+            "http://127.0.0.1:65535/search".to_string(),
+            Duration::from_secs(1),
+            reqwest::Client::new(),
+        );
+        let media = Arc::new(MediaClient::new(
+            reqwest::Client::new(),
+            "http://127.0.0.1:65535/v1".to_string(),
+            None,
+            "test-model".into(),
+            Duration::from_secs(1),
+        ));
+        let executor =
+            ContentToolExecutor::new(client, media, handle.clone(), Duration::from_secs(300), 32);
+
+        // Default image cap should be the compiled default.
+        let default_cap = executor.live_media().max_image_size;
+
+        // Mutate: set a tiny image cap.
+        let mut updated = Settings::compiled_defaults();
+        updated.ai.media = AiMedia {
+            max_image_size: ByteSize::b(1),
+            ..AiMedia::default()
+        };
+        handle.store(std::sync::Arc::new(updated));
+
+        assert_eq!(
+            executor.live_media().max_image_size,
+            ByteSize::b(1),
+            "live_media() must reflect updated cap; was {:?}",
+            default_cap
+        );
     }
 
     #[tokio::test]

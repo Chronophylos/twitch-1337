@@ -18,7 +18,6 @@ use secrecy::SecretString;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 use twitch_1337_core::ai::memory::store::MemoryStore;
-use twitch_1337_core::ai::memory::types::Caps;
 use twitch_1337_core::ping::PingManager;
 use twitch_1337_web::WebState;
 use twitch_1337_web::auth::OAuthCtx;
@@ -161,9 +160,6 @@ async fn build_state_inner_keep_settings(
     let memory_dir = TempDir::new().expect("memory tempdir");
     let pings = PingManager::load(pings_dir.path()).expect("load empty ping manager");
     let ping_manager = Arc::new(RwLock::new(pings));
-    let memory_store = MemoryStore::open(memory_dir.path(), Caps::default())
-        .await
-        .expect("open memory store");
     let sessions = Arc::new(SessionTable::new(Duration::from_secs(7200), clock.clone()));
     let oauth = Arc::new(
         OAuthCtx::new(
@@ -191,6 +187,9 @@ async fn build_state_inner_keep_settings(
     let (settings_store, settings_handle) =
         twitch_1337_core::settings::SettingsStore::open(settings_dir.path(), audit)
             .expect("open settings store");
+    let memory_store = MemoryStore::open(memory_dir.path(), settings_handle.clone())
+        .await
+        .expect("open memory store");
     let state = WebState {
         sessions,
         helix,
@@ -214,6 +213,9 @@ async fn build_state_inner_keep_settings(
         owner_id: None,
         settings: settings_handle,
         settings_store,
+        ai_bootstrap: None,
+        model_cache: Arc::new(twitch_1337_web::routes::ai_models::ModelListCache::default()),
+        http: reqwest::Client::new(),
     };
     (state, pings_dir, memory_dir, settings_dir)
 }

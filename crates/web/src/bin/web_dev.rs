@@ -29,7 +29,6 @@ use eyre::{Result, WrapErr as _};
 use secrecy::SecretString;
 use tokio::sync::{Notify, RwLock};
 use twitch_1337_core::ai::memory::store::MemoryStore;
-use twitch_1337_core::ai::memory::types::Caps;
 use twitch_1337_core::ping::PingManager;
 use twitch_1337_core::{install_crypto_provider, install_tracing};
 use twitch_1337_web::auth::OAuthCtx;
@@ -63,14 +62,15 @@ async fn main() -> Result<()> {
     );
 
     let pings = PingManager::load(&data_dir).wrap_err("load ping manager")?;
-    let memory_store = MemoryStore::open(&data_dir, Caps::default())
-        .await
-        .wrap_err("open memory store")?;
 
     let audit_log = Arc::new(twitch_1337_core::settings::MemoryAuditLog::new());
     let (settings_store, settings_handle) =
         twitch_1337_core::settings::SettingsStore::open(&data_dir, audit_log)
             .wrap_err("open settings store")?;
+
+    let memory_store = MemoryStore::open(&data_dir, settings_handle.clone())
+        .await
+        .wrap_err("open memory store")?;
 
     let clock = Arc::new(SystemClock);
     let session_ttl = Duration::from_secs(7 * 24 * 3600);
@@ -122,6 +122,9 @@ async fn main() -> Result<()> {
         owner_id: Some(Arc::from(DEV_USER_ID)),
         settings: settings_handle,
         settings_store,
+        ai_bootstrap: None,
+        model_cache: Arc::new(twitch_1337_web::routes::ai_models::ModelListCache::default()),
+        http: reqwest::Client::new(),
     };
 
     let listener = bind(bind_addr).await?;

@@ -10,7 +10,11 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::doener::DoeneratlasClient;
-use crate::settings::SettingsHandle;
+use crate::settings::{Settings, SettingsHandle};
+
+fn doener_cooldown_duration(s: &Settings) -> Duration {
+    Duration::from_secs(s.cooldowns.doener)
+}
 
 use super::{Command, CommandContext};
 
@@ -246,20 +250,24 @@ fn matches_doener_trigger(word: &str) -> bool {
 pub struct DoenerCalcCommand {
     client: Arc<DoeneratlasClient>,
     cooldown: PerUserCooldown,
+    #[cfg(test)]
     settings: SettingsHandle,
 }
 
 impl DoenerCalcCommand {
     pub fn new(client: Arc<DoeneratlasClient>, settings: SettingsHandle) -> Self {
+        let cooldown = PerUserCooldown::live(settings.clone(), doener_cooldown_duration);
         Self {
             client,
-            cooldown: PerUserCooldown::new(Duration::ZERO),
+            cooldown,
+            #[cfg(test)]
             settings,
         }
     }
 
+    #[cfg(test)]
     fn current_cooldown(&self) -> Duration {
-        Duration::from_secs(self.settings.load().cooldowns.doener)
+        doener_cooldown_duration(&self.settings.load())
     }
 }
 
@@ -279,11 +287,7 @@ where
 
     async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
         let user = &ctx.privmsg.sender.login;
-        if let Some(rem) = self
-            .cooldown
-            .check_with_duration(user, self.current_cooldown())
-            .await
-        {
+        if let Some(rem) = self.cooldown.check(user).await {
             if let Err(e) = ctx
                 .client
                 .say_in_reply_to(

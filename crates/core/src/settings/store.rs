@@ -120,6 +120,15 @@ impl SettingsStore {
         match section {
             SettingsSection::Cooldowns => current.cooldowns = Default::default(),
             SettingsSection::Pings => current.pings = Default::default(),
+            SettingsSection::AiConnection => current.ai.connection = Default::default(),
+            SettingsSection::AiBehavior => current.ai.behavior = Default::default(),
+            SettingsSection::AiHistory => current.ai.history = Default::default(),
+            SettingsSection::AiMemory => current.ai.memory = Default::default(),
+            SettingsSection::AiDreamer => current.ai.dreamer = Default::default(),
+            SettingsSection::AiPrefill => current.ai.prefill = Default::default(),
+            SettingsSection::AiWeb => current.ai.web = Default::default(),
+            SettingsSection::AiEmotes => current.ai.emotes = Default::default(),
+            SettingsSection::AiMedia => current.ai.media = Default::default(),
         }
         let resolved = Settings::resolve(&self.defaults, &current);
         crate::util::persist::atomic_save_ron_async(&current, &self.path).await?;
@@ -203,34 +212,408 @@ fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides) {
     if let Some(v) = patch.pings.public {
         into.pings.public = Some(v);
     }
+    // AI connection
+    if let Some(v) = patch.ai.connection.backend {
+        into.ai.connection.backend = Some(v);
+    }
+    if patch.ai.connection.base_url.is_some() {
+        into.ai.connection.base_url = patch.ai.connection.base_url.clone();
+    }
+    if let Some(v) = patch.ai.connection.model.as_ref() {
+        into.ai.connection.model = Some(v.clone());
+    }
+    if let Some(v) = patch.ai.connection.timeout {
+        into.ai.connection.timeout = Some(v);
+    }
+    if patch.ai.connection.reasoning_effort.is_some() {
+        into.ai.connection.reasoning_effort = patch.ai.connection.reasoning_effort.clone();
+    }
+    // AI behavior
+    if let Some(v) = patch.ai.behavior.max_turn_rounds {
+        into.ai.behavior.max_turn_rounds = Some(v);
+    }
+    if let Some(v) = patch.ai.behavior.max_writes_per_turn {
+        into.ai.behavior.max_writes_per_turn = Some(v);
+    }
+    // AI history
+    if let Some(v) = patch.ai.history.length {
+        into.ai.history.length = Some(v);
+    }
+    if let Some(v) = patch.ai.history.ai_channel_length {
+        into.ai.history.ai_channel_length = Some(v);
+    }
+    // AI memory
+    if let Some(v) = patch.ai.memory.soul_bytes {
+        into.ai.memory.soul_bytes = Some(v);
+    }
+    if let Some(v) = patch.ai.memory.lore_bytes {
+        into.ai.memory.lore_bytes = Some(v);
+    }
+    if let Some(v) = patch.ai.memory.user_bytes {
+        into.ai.memory.user_bytes = Some(v);
+    }
+    if let Some(v) = patch.ai.memory.state_bytes {
+        into.ai.memory.state_bytes = Some(v);
+    }
+    if let Some(v) = patch.ai.memory.inject_byte_budget {
+        into.ai.memory.inject_byte_budget = Some(v);
+    }
+    if let Some(v) = patch.ai.memory.max_state_files {
+        into.ai.memory.max_state_files = Some(v);
+    }
+    // AI dreamer
+    if let Some(v) = patch.ai.dreamer.enabled {
+        into.ai.dreamer.enabled = Some(v);
+    }
+    if patch.ai.dreamer.model.is_some() {
+        into.ai.dreamer.model = patch.ai.dreamer.model.clone();
+    }
+    if patch.ai.dreamer.reasoning_effort.is_some() {
+        into.ai.dreamer.reasoning_effort = patch.ai.dreamer.reasoning_effort.clone();
+    }
+    if let Some(v) = patch.ai.dreamer.run_at.as_ref() {
+        into.ai.dreamer.run_at = Some(v.clone());
+    }
+    if let Some(v) = patch.ai.dreamer.timeout_secs {
+        into.ai.dreamer.timeout_secs = Some(v);
+    }
+    if let Some(v) = patch.ai.dreamer.max_rounds {
+        into.ai.dreamer.max_rounds = Some(v);
+    }
+    // AI prefill
+    if let Some(v) = patch.ai.prefill.enabled {
+        into.ai.prefill.enabled = Some(v);
+    }
+    if let Some(v) = patch.ai.prefill.base_url.as_ref() {
+        into.ai.prefill.base_url = Some(v.clone());
+    }
+    if let Some(v) = patch.ai.prefill.threshold {
+        into.ai.prefill.threshold = Some(v);
+    }
+    // AI web
+    if let Some(v) = patch.ai.web.enabled {
+        into.ai.web.enabled = Some(v);
+    }
+    if let Some(v) = patch.ai.web.base_url.as_ref() {
+        into.ai.web.base_url = Some(v.clone());
+    }
+    if let Some(v) = patch.ai.web.timeout {
+        into.ai.web.timeout = Some(v);
+    }
+    if let Some(v) = patch.ai.web.max_results {
+        into.ai.web.max_results = Some(v);
+    }
+    if let Some(v) = patch.ai.web.max_rounds {
+        into.ai.web.max_rounds = Some(v);
+    }
+    if let Some(v) = patch.ai.web.cache_ttl_secs {
+        into.ai.web.cache_ttl_secs = Some(v);
+    }
+    if let Some(v) = patch.ai.web.cache_capacity {
+        into.ai.web.cache_capacity = Some(v);
+    }
+    // AI emotes
+    if let Some(v) = patch.ai.emotes.enabled {
+        into.ai.emotes.enabled = Some(v);
+    }
+    if let Some(v) = patch.ai.emotes.include_global {
+        into.ai.emotes.include_global = Some(v);
+    }
+    if let Some(v) = patch.ai.emotes.refresh_interval_secs {
+        into.ai.emotes.refresh_interval_secs = Some(v);
+    }
+    if let Some(v) = patch.ai.emotes.max_prompt_emotes {
+        into.ai.emotes.max_prompt_emotes = Some(v);
+    }
+    if let Some(v) = patch.ai.emotes.min_baseline_emotes {
+        into.ai.emotes.min_baseline_emotes = Some(v);
+    }
+    if patch.ai.emotes.base_url.is_some() {
+        into.ai.emotes.base_url = patch.ai.emotes.base_url.clone();
+    }
+    // AI media
+    if let Some(v) = patch.ai.media.model.as_ref() {
+        into.ai.media.model = Some(v.clone());
+    }
+    if let Some(v) = patch.ai.media.timeout {
+        into.ai.media.timeout = Some(v);
+    }
+    if let Some(v) = patch.ai.media.max_image_size {
+        into.ai.media.max_image_size = Some(v);
+    }
+    if let Some(v) = patch.ai.media.max_pdf_size {
+        into.ai.media.max_pdf_size = Some(v);
+    }
+    if let Some(v) = patch.ai.media.max_audio_size {
+        into.ai.media.max_audio_size = Some(v);
+    }
+    if let Some(v) = patch.ai.media.max_video_size {
+        into.ai.media.max_video_size = Some(v);
+    }
+    if let Some(v) = patch.ai.media.max_text_size {
+        into.ai.media.max_text_size = Some(v);
+    }
 }
 
 fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
     let mut out = Vec::new();
-    macro_rules! cmp_u64 {
-        ($key:literal, $field:ident . $sub:ident) => {
-            if prior.$field.$sub != next.$field.$sub {
+    macro_rules! cmp {
+        ($key:literal, $prior:expr, $next:expr) => {
+            if $prior != $next {
                 out.push(AuditChange {
                     key: $key.into(),
-                    old: serde_json::Value::from(prior.$field.$sub),
-                    new: serde_json::Value::from(next.$field.$sub),
+                    old: serde_json::to_value($prior).expect(concat!("serialize prior ", $key)),
+                    new: serde_json::to_value($next).expect(concat!("serialize next ", $key)),
                 });
             }
         };
     }
-    cmp_u64!("cooldowns.ai", cooldowns.ai);
-    cmp_u64!("cooldowns.news", cooldowns.news);
-    cmp_u64!("cooldowns.up", cooldowns.up);
-    cmp_u64!("cooldowns.feedback", cooldowns.feedback);
-    cmp_u64!("cooldowns.doener", cooldowns.doener);
-    cmp_u64!("pings.cooldown", pings.cooldown);
-    if prior.pings.public != next.pings.public {
-        out.push(AuditChange {
-            key: "pings.public".into(),
-            old: serde_json::Value::from(prior.pings.public),
-            new: serde_json::Value::from(next.pings.public),
-        });
+    cmp!("cooldowns.ai", prior.cooldowns.ai, next.cooldowns.ai);
+    cmp!("cooldowns.news", prior.cooldowns.news, next.cooldowns.news);
+    cmp!("cooldowns.up", prior.cooldowns.up, next.cooldowns.up);
+    cmp!(
+        "cooldowns.feedback",
+        prior.cooldowns.feedback,
+        next.cooldowns.feedback
+    );
+    cmp!(
+        "cooldowns.doener",
+        prior.cooldowns.doener,
+        next.cooldowns.doener
+    );
+    cmp!("pings.cooldown", prior.pings.cooldown, next.pings.cooldown);
+    cmp!("pings.public", prior.pings.public, next.pings.public);
+    // AI connection
+    cmp!(
+        "ai.connection.backend",
+        prior.ai.connection.backend,
+        next.ai.connection.backend
+    );
+    cmp!(
+        "ai.connection.base_url",
+        prior.ai.connection.base_url.as_deref(),
+        next.ai.connection.base_url.as_deref()
+    );
+    cmp!(
+        "ai.connection.model",
+        prior.ai.connection.model.as_str(),
+        next.ai.connection.model.as_str()
+    );
+    cmp!(
+        "ai.connection.timeout",
+        prior.ai.connection.timeout,
+        next.ai.connection.timeout
+    );
+    cmp!(
+        "ai.connection.reasoning_effort",
+        prior.ai.connection.reasoning_effort.as_deref(),
+        next.ai.connection.reasoning_effort.as_deref()
+    );
+    // AI behavior
+    cmp!(
+        "ai.behavior.max_turn_rounds",
+        prior.ai.behavior.max_turn_rounds,
+        next.ai.behavior.max_turn_rounds
+    );
+    cmp!(
+        "ai.behavior.max_writes_per_turn",
+        prior.ai.behavior.max_writes_per_turn,
+        next.ai.behavior.max_writes_per_turn
+    );
+    // AI history
+    cmp!(
+        "ai.history.length",
+        prior.ai.history.length,
+        next.ai.history.length
+    );
+    cmp!(
+        "ai.history.ai_channel_length",
+        prior.ai.history.ai_channel_length,
+        next.ai.history.ai_channel_length
+    );
+    // AI memory
+    cmp!(
+        "ai.memory.soul_bytes",
+        prior.ai.memory.soul_bytes,
+        next.ai.memory.soul_bytes
+    );
+    cmp!(
+        "ai.memory.lore_bytes",
+        prior.ai.memory.lore_bytes,
+        next.ai.memory.lore_bytes
+    );
+    cmp!(
+        "ai.memory.user_bytes",
+        prior.ai.memory.user_bytes,
+        next.ai.memory.user_bytes
+    );
+    cmp!(
+        "ai.memory.state_bytes",
+        prior.ai.memory.state_bytes,
+        next.ai.memory.state_bytes
+    );
+    cmp!(
+        "ai.memory.inject_byte_budget",
+        prior.ai.memory.inject_byte_budget,
+        next.ai.memory.inject_byte_budget
+    );
+    cmp!(
+        "ai.memory.max_state_files",
+        prior.ai.memory.max_state_files,
+        next.ai.memory.max_state_files
+    );
+    // AI dreamer
+    cmp!(
+        "ai.dreamer.enabled",
+        prior.ai.dreamer.enabled,
+        next.ai.dreamer.enabled
+    );
+    cmp!(
+        "ai.dreamer.model",
+        prior.ai.dreamer.model.as_deref(),
+        next.ai.dreamer.model.as_deref()
+    );
+    cmp!(
+        "ai.dreamer.reasoning_effort",
+        prior.ai.dreamer.reasoning_effort.as_deref(),
+        next.ai.dreamer.reasoning_effort.as_deref()
+    );
+    cmp!(
+        "ai.dreamer.run_at",
+        prior.ai.dreamer.run_at.as_str(),
+        next.ai.dreamer.run_at.as_str()
+    );
+    cmp!(
+        "ai.dreamer.timeout_secs",
+        prior.ai.dreamer.timeout_secs,
+        next.ai.dreamer.timeout_secs
+    );
+    cmp!(
+        "ai.dreamer.max_rounds",
+        prior.ai.dreamer.max_rounds,
+        next.ai.dreamer.max_rounds
+    );
+    // AI prefill (toggle-card: diff the whole block as a single key on None<->Some
+    // transitions, then leaf-by-leaf when both are Some)
+    match (&prior.ai.prefill, &next.ai.prefill) {
+        (None, None) => {}
+        (Some(_), None) | (None, Some(_)) => {
+            out.push(AuditChange {
+                key: "ai.prefill".into(),
+                old: serde_json::to_value(&prior.ai.prefill).expect("serialize prior ai.prefill"),
+                new: serde_json::to_value(&next.ai.prefill).expect("serialize next ai.prefill"),
+            });
+        }
+        (Some(p), Some(n)) => {
+            cmp!(
+                "ai.prefill.base_url",
+                p.base_url.as_str(),
+                n.base_url.as_str()
+            );
+            if p.threshold.to_bits() != n.threshold.to_bits() {
+                out.push(AuditChange {
+                    key: "ai.prefill.threshold".into(),
+                    old: serde_json::to_value(p.threshold)
+                        .expect("serialize prior ai.prefill.threshold"),
+                    new: serde_json::to_value(n.threshold)
+                        .expect("serialize next ai.prefill.threshold"),
+                });
+            }
+        }
     }
+    // AI web
+    match (&prior.ai.web, &next.ai.web) {
+        (None, None) => {}
+        (Some(_), None) | (None, Some(_)) => {
+            out.push(AuditChange {
+                key: "ai.web".into(),
+                old: serde_json::to_value(&prior.ai.web).expect("serialize prior ai.web"),
+                new: serde_json::to_value(&next.ai.web).expect("serialize next ai.web"),
+            });
+        }
+        (Some(p), Some(n)) => {
+            cmp!("ai.web.base_url", p.base_url.as_str(), n.base_url.as_str());
+            cmp!("ai.web.timeout", p.timeout, n.timeout);
+            cmp!("ai.web.max_results", p.max_results, n.max_results);
+            cmp!("ai.web.max_rounds", p.max_rounds, n.max_rounds);
+            cmp!("ai.web.cache_ttl_secs", p.cache_ttl_secs, n.cache_ttl_secs);
+            cmp!("ai.web.cache_capacity", p.cache_capacity, n.cache_capacity);
+        }
+    }
+    // AI emotes
+    match (&prior.ai.emotes, &next.ai.emotes) {
+        (None, None) => {}
+        (Some(_), None) | (None, Some(_)) => {
+            out.push(AuditChange {
+                key: "ai.emotes".into(),
+                old: serde_json::to_value(&prior.ai.emotes).expect("serialize prior ai.emotes"),
+                new: serde_json::to_value(&next.ai.emotes).expect("serialize next ai.emotes"),
+            });
+        }
+        (Some(p), Some(n)) => {
+            cmp!(
+                "ai.emotes.include_global",
+                p.include_global,
+                n.include_global
+            );
+            cmp!(
+                "ai.emotes.refresh_interval_secs",
+                p.refresh_interval_secs,
+                n.refresh_interval_secs
+            );
+            cmp!(
+                "ai.emotes.max_prompt_emotes",
+                p.max_prompt_emotes,
+                n.max_prompt_emotes
+            );
+            cmp!(
+                "ai.emotes.min_baseline_emotes",
+                p.min_baseline_emotes,
+                n.min_baseline_emotes
+            );
+            cmp!(
+                "ai.emotes.base_url",
+                p.base_url.as_deref(),
+                n.base_url.as_deref()
+            );
+        }
+    }
+    // AI media
+    cmp!(
+        "ai.media.model",
+        prior.ai.media.model.as_str(),
+        next.ai.media.model.as_str()
+    );
+    cmp!(
+        "ai.media.timeout",
+        prior.ai.media.timeout,
+        next.ai.media.timeout
+    );
+    cmp!(
+        "ai.media.max_image_size",
+        prior.ai.media.max_image_size,
+        next.ai.media.max_image_size
+    );
+    cmp!(
+        "ai.media.max_pdf_size",
+        prior.ai.media.max_pdf_size,
+        next.ai.media.max_pdf_size
+    );
+    cmp!(
+        "ai.media.max_audio_size",
+        prior.ai.media.max_audio_size,
+        next.ai.media.max_audio_size
+    );
+    cmp!(
+        "ai.media.max_video_size",
+        prior.ai.media.max_video_size,
+        next.ai.media.max_video_size
+    );
+    cmp!(
+        "ai.media.max_text_size",
+        prior.ai.media.max_text_size,
+        next.ai.media.max_text_size
+    );
     out
 }
 
@@ -335,6 +718,35 @@ mod tests {
             s.cooldowns.news,
             Settings::compiled_defaults().cooldowns.news
         );
+    }
+
+    #[tokio::test]
+    async fn v2_round_trip_persists_ai_overrides() {
+        let (_dir, store, handle, _log) = fixture();
+        let patch = SettingsOverrides {
+            ai: crate::settings::overrides::AiOverrides {
+                connection: crate::settings::overrides::AiConnectionOverrides {
+                    model: Some("o5-pro".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..SettingsOverrides::default()
+        };
+        let actor = Actor {
+            user_id: "1".into(),
+            user_login: "tester".into(),
+        };
+        store.apply(patch, actor).await.expect("apply");
+        assert_eq!(handle.load().ai.connection.model, "o5-pro");
+        let reopened = SettingsStore::open(
+            store.path.parent().unwrap(),
+            Arc::new(crate::settings::audit::MemoryAuditLog::new()),
+        )
+        .expect("reopen")
+        .1;
+        assert_eq!(reopened.load().ai.connection.model, "o5-pro");
+        let _ = handle;
     }
 
     #[tokio::test]

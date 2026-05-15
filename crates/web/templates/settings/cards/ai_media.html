@@ -1,0 +1,35 @@
+{# crates/web/templates/settings/cards/ai_media.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-media" class="settings-card" data-section="ai_media">
+  <header class="settings-card-head">
+    <div>
+      <h2>AI · Media</h2>
+      <p>Sub-agent that handles image/PDF/audio/video/text attachments.</p>
+    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+  </header>
+  <div class="settings-rows">
+    {% call m::model_row("ai_media", "ai_media_model", "model",
+       "Vision-capable model for media analysis.",
+       current.ai.media.model, defaults.ai.media.model, "media") %}{% endcall %}
+    {% call m::num_row_bounded("ai_media", "ai_media_timeout", "timeout",
+       "Per-request timeout for media calls.",
+       current.ai.media.timeout, defaults.ai.media.timeout, "s", 5, 600) %}{% endcall %}
+    {% call m::bytesize_row("ai_media", "ai_media_max_image_size", "max_image_size",
+       "Maximum image size accepted.",
+       current.ai.media.max_image_size, defaults.ai.media.max_image_size) %}{% endcall %}
+    {% call m::bytesize_row("ai_media", "ai_media_max_pdf_size", "max_pdf_size",
+       "Maximum PDF size accepted.",
+       current.ai.media.max_pdf_size, defaults.ai.media.max_pdf_size) %}{% endcall %}
+    {% call m::bytesize_row("ai_media", "ai_media_max_audio_size", "max_audio_size",
+       "Maximum audio size accepted.",
+       current.ai.media.max_audio_size, defaults.ai.media.max_audio_size) %}{% endcall %}
+    {% call m::bytesize_row("ai_media", "ai_media_max_video_size", "max_video_size",
+       "Maximum video size accepted.",
+       current.ai.media.max_video_size, defaults.ai.media.max_video_size) %}{% endcall %}
+    {% call m::bytesize_row("ai_media", "ai_media_max_text_size", "max_text_size",
+       "Maximum raw-text size accepted (per attachment).",
+       current.ai.media.max_text_size, defaults.ai.media.max_text_size) %}{% endcall %}
+  </div>
+</section>

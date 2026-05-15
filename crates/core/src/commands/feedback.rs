@@ -22,7 +22,7 @@ impl FeedbackCommand {
     pub fn new(data_dir: PathBuf, cooldown: Duration) -> Self {
         Self {
             data_dir,
-            cooldown: PerUserCooldown::new(cooldown),
+            cooldown: PerUserCooldown::fixed(cooldown),
         }
     }
 }

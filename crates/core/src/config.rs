@@ -8,7 +8,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
 use tracing::info;
 
-use crate::{ai::prefill, database};
+use crate::database;
 
 fn default_expected_latency() -> u32 {
     100
@@ -40,138 +40,6 @@ pub struct TwitchConfiguration {
     pub ai_channel: Option<String>,
 }
 
-/// Which LLM backend to use.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AiBackend {
-    OpenAi,
-    Ollama,
-}
-
-fn default_ai_timeout() -> u64 {
-    30
-}
-
-fn default_history_length() -> u64 {
-    crate::ai::chat_history::DEFAULT_HISTORY_LENGTH
-}
-
-fn default_ai_channel_history_length() -> u64 {
-    50
-}
-
-fn default_emote_refresh_interval() -> u64 {
-    3600
-}
-
-fn default_max_prompt_emotes() -> usize {
-    12
-}
-
-fn default_min_baseline_emotes() -> usize {
-    4
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_soul_bytes() -> usize {
-    4096
-}
-
-fn default_lore_bytes() -> usize {
-    12_288
-}
-
-fn default_user_bytes() -> usize {
-    4096
-}
-
-fn default_state_bytes() -> usize {
-    2048
-}
-
-fn default_inject_budget() -> usize {
-    24_576
-}
-
-fn default_max_state_files() -> usize {
-    16
-}
-
-fn default_max_turn_rounds() -> usize {
-    4
-}
-
-fn default_max_writes_per_turn() -> usize {
-    8
-}
-
-fn default_dreamer_run_at() -> String {
-    "04:00".to_string()
-}
-
-fn default_dreamer_timeout() -> u64 {
-    120
-}
-
-fn default_dreamer_max_rounds() -> usize {
-    20
-}
-
-fn default_max_rounds() -> usize {
-    3
-}
-
-fn default_web_timeout() -> u64 {
-    15
-}
-
-fn default_web_max_results() -> usize {
-    5
-}
-
-fn default_web_cache_ttl_secs() -> u64 {
-    300
-}
-
-fn default_web_cache_capacity() -> usize {
-    100
-}
-
-fn default_web_base_url() -> String {
-    "http://localhost:8080/search".to_string()
-}
-
-fn default_media_model() -> String {
-    "~google/gemini-flash-latest".to_string()
-}
-
-fn default_media_timeout() -> u64 {
-    60
-}
-
-fn default_max_image_size() -> bytesize::ByteSize {
-    bytesize::ByteSize::mib(10)
-}
-
-fn default_max_pdf_size() -> bytesize::ByteSize {
-    bytesize::ByteSize::mib(25)
-}
-
-fn default_max_audio_size() -> bytesize::ByteSize {
-    bytesize::ByteSize::mib(25)
-}
-
-fn default_max_video_size() -> bytesize::ByteSize {
-    bytesize::ByteSize::mib(50)
-}
-
-fn default_max_text_size() -> bytesize::ByteSize {
-    bytesize::ByteSize::mib(1)
-}
-
 fn default_aviationstack_base_url() -> String {
     "https://api.aviationstack.com/v1".to_string()
 }
@@ -191,249 +59,12 @@ pub struct AviationstackConfig {
     pub timeout_secs: u64,
 }
 
-/// Byte-budget caps for the AI memory store. See `[ai.memory]` in
-/// `config.toml.example`.
+/// Bootstrap-only AI configuration. The secret api_key stays in
+/// config.toml; every other knob lives in the dashboard settings
+/// store and is read from the SettingsHandle at runtime.
 #[derive(Debug, Clone, Deserialize)]
-pub struct MemoryConfigSection {
-    #[serde(default = "default_soul_bytes")]
-    pub soul_bytes: usize,
-    #[serde(default = "default_lore_bytes")]
-    pub lore_bytes: usize,
-    #[serde(default = "default_user_bytes")]
-    pub user_bytes: usize,
-    #[serde(default = "default_state_bytes")]
-    pub state_bytes: usize,
-    #[serde(default = "default_inject_budget")]
-    pub inject_byte_budget: usize,
-    #[serde(default = "default_max_state_files")]
-    pub max_state_files: usize,
-}
-
-impl Default for MemoryConfigSection {
-    fn default() -> Self {
-        Self {
-            soul_bytes: default_soul_bytes(),
-            lore_bytes: default_lore_bytes(),
-            user_bytes: default_user_bytes(),
-            state_bytes: default_state_bytes(),
-            inject_byte_budget: default_inject_budget(),
-            max_state_files: default_max_state_files(),
-        }
-    }
-}
-
-/// Knobs for the nightly dreamer pass (replaces the old consolidation).
-/// See `[ai.dreamer]` in `config.toml.example`.
-#[derive(Debug, Clone, Deserialize)]
-pub struct DreamerConfigSection {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub reasoning_effort: Option<String>,
-    #[serde(default = "default_dreamer_run_at")]
-    pub run_at: String,
-    #[serde(default = "default_dreamer_timeout")]
-    pub timeout_secs: u64,
-    /// Max tool-call rounds the ritual is allowed. The dreamer touches every
-    /// memory file plus the day's transcript, so this is intentionally larger
-    /// than `ai.max_turn_rounds` (which caps a single chat turn).
-    #[serde(default = "default_dreamer_max_rounds")]
-    pub max_rounds: usize,
-}
-
-impl Default for DreamerConfigSection {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            model: None,
-            reasoning_effort: None,
-            run_at: default_dreamer_run_at(),
-            timeout_secs: default_dreamer_timeout(),
-            max_rounds: default_dreamer_max_rounds(),
-        }
-    }
-}
-
-/// Knobs for optional 7TV emote grounding in the `!ai` prompt.
-///
-/// Disabled by default. When enabled, the bot loads the current 7TV channel
-/// set, optionally global 7TV emotes, and intersects that catalog with a
-/// manually maintained glossary before adding emote hints to the model prompt.
-#[derive(Debug, Clone, Deserialize)]
-pub struct AiEmotesConfigSection {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_true")]
-    pub include_global: bool,
-    #[serde(default = "default_emote_refresh_interval")]
-    pub refresh_interval_secs: u64,
-    #[serde(default = "default_max_prompt_emotes")]
-    pub max_prompt_emotes: usize,
-    /// Floor for emotes injected even when nothing in the turn matches.
-    /// Filled in glossary order so the model always sees a baseline vocabulary;
-    /// scoring emotes (recent in chat or context-matched against the user
-    /// instruction) stack on top up to `max_prompt_emotes`.
-    #[serde(default = "default_min_baseline_emotes")]
-    pub min_baseline_emotes: usize,
-    /// Optional override for tests or private mirrors. Defaults to
-    /// `https://7tv.io/v3` when omitted.
-    #[serde(default)]
-    pub base_url: Option<String>,
-}
-
-impl Default for AiEmotesConfigSection {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            include_global: true,
-            refresh_interval_secs: default_emote_refresh_interval(),
-            max_prompt_emotes: default_max_prompt_emotes(),
-            min_baseline_emotes: default_min_baseline_emotes(),
-            base_url: None,
-        }
-    }
-}
-
-/// Tool-calling web access for `!ai` (`web_search` and `read_url`).
-#[derive(Debug, Clone, Deserialize)]
-pub struct AiWebConfigSection {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_web_base_url")]
-    pub base_url: String,
-    #[serde(default = "default_web_timeout")]
-    pub timeout: u64,
-    #[serde(default = "default_web_max_results")]
-    pub max_results: usize,
-    #[serde(default = "default_max_rounds")]
-    pub max_rounds: usize,
-    #[serde(default = "default_web_cache_ttl_secs")]
-    pub cache_ttl_secs: u64,
-    #[serde(default = "default_web_cache_capacity")]
-    pub cache_capacity: usize,
-}
-
-impl Default for AiWebConfigSection {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            base_url: default_web_base_url(),
-            timeout: default_web_timeout(),
-            max_results: default_web_max_results(),
-            max_rounds: default_max_rounds(),
-            cache_ttl_secs: default_web_cache_ttl_secs(),
-            cache_capacity: default_web_cache_capacity(),
-        }
-    }
-}
-
-/// Multimodal sub-agent for `read_url`. Reuses `[ai].api_key` and
-/// `[ai].base_url`; only the model and per-type size caps differ.
-#[derive(Debug, Clone, Deserialize)]
-pub struct AiMediaConfig {
-    #[serde(default = "default_media_model")]
-    pub model: String,
-    #[serde(default = "default_media_timeout")]
-    pub timeout: u64,
-    #[serde(default = "default_max_image_size")]
-    pub max_image_size: bytesize::ByteSize,
-    #[serde(default = "default_max_pdf_size")]
-    pub max_pdf_size: bytesize::ByteSize,
-    #[serde(default = "default_max_audio_size")]
-    pub max_audio_size: bytesize::ByteSize,
-    #[serde(default = "default_max_video_size")]
-    pub max_video_size: bytesize::ByteSize,
-    #[serde(default = "default_max_text_size")]
-    pub max_text_size: bytesize::ByteSize,
-}
-
-impl Default for AiMediaConfig {
-    fn default() -> Self {
-        Self {
-            model: default_media_model(),
-            timeout: default_media_timeout(),
-            max_image_size: default_max_image_size(),
-            max_pdf_size: default_max_pdf_size(),
-            max_audio_size: default_max_audio_size(),
-            max_video_size: default_max_video_size(),
-            max_text_size: default_max_text_size(),
-        }
-    }
-}
-
-impl AiMediaConfig {
-    pub fn cap_for(&self, bucket: crate::ai::content::detect::Bucket) -> bytesize::ByteSize {
-        use crate::ai::content::detect::Bucket;
-        match bucket {
-            Bucket::Image => self.max_image_size,
-            Bucket::Pdf => self.max_pdf_size,
-            Bucket::Audio => self.max_audio_size,
-            Bucket::Video => self.max_video_size,
-            Bucket::Text => self.max_text_size,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct AiConfig {
-    /// Backend type: "openai" or "ollama"
-    pub backend: AiBackend,
-    /// API key (required for openai, not used for ollama)
-    #[serde(default)]
-    pub api_key: Option<SecretString>,
-    /// Base URL for the API (optional, has per-backend defaults)
-    #[serde(default)]
-    pub base_url: Option<String>,
-    /// Model name to use
-    pub model: String,
-    /// Timeout for AI requests in seconds (default: 30)
-    #[serde(default = "default_ai_timeout")]
-    pub timeout: u64,
-    /// Optional reasoning effort hint. Values are provider/model-specific.
-    #[serde(default)]
-    pub reasoning_effort: Option<String>,
-    /// Number of recent chat messages to keep in the local tool-readable buffer.
-    #[serde(default = "default_history_length")]
-    pub history_length: u64,
-    /// Capacity of the rolling buffer recording messages from `twitch.ai_channel`.
-    /// Allocated only when `twitch.ai_channel` is set.
-    #[serde(default = "default_ai_channel_history_length")]
-    pub ai_channel_history_length: u64,
-    /// Optional: Prefill chat history from a rustlog-compatible API at startup
-    #[serde(default)]
-    pub history_prefill: Option<prefill::HistoryPrefillConfig>,
-    /// Byte-budget caps for the memory store.
-    #[serde(default)]
-    pub memory: MemoryConfigSection,
-    /// Max tool-call rounds per `!ai` request (default: 4).
-    #[serde(default = "default_max_turn_rounds")]
-    pub max_turn_rounds: usize,
-    /// Max memory writes the model may make per turn (default: 8).
-    #[serde(default = "default_max_writes_per_turn")]
-    pub max_writes_per_turn: usize,
-    /// Nightly dreamer pass knobs.
-    #[serde(default)]
-    pub dreamer: DreamerConfigSection,
-    /// Optional 7TV emote glossary prompt grounding.
-    #[serde(default)]
-    pub emotes: AiEmotesConfigSection,
-    /// Multimodal sub-agent for `read_url`.
-    #[serde(default)]
-    pub media: AiMediaConfig,
-    /// Optional web tool surface for `!ai` (`web_search`, `read_url`).
-    #[serde(default)]
-    pub web: AiWebConfigSection,
-}
-
-fn validate_reasoning_effort(path: &str, value: Option<&str>) -> Result<()> {
-    if let Some(v) = value
-        && v.trim().is_empty()
-    {
-        bail!("{path} cannot be empty when specified");
-    }
-    Ok(())
+pub struct AiBootstrap {
+    pub api_key: SecretString,
 }
 
 fn default_suspend_duration() -> u64 {
@@ -532,7 +163,7 @@ pub struct Configuration {
     #[serde(default)]
     pub suspend: SuspendConfig,
     #[serde(default)]
-    pub ai: Option<AiConfig>,
+    pub ai: Option<AiBootstrap>,
     #[serde(default)]
     pub schedules: Vec<ScheduleConfig>,
     #[serde(default)]
@@ -569,7 +200,11 @@ impl Configuration {
 }
 
 /// Load and validate configuration from the standard config path.
-pub async fn load_configuration() -> Result<Configuration> {
+///
+/// Returns both the deserialized `Configuration` and the raw `toml::Value` so
+/// callers can inspect legacy keys (e.g. the one-shot migration helper in
+/// `main.rs`) without re-parsing the file.
+pub async fn load_configuration() -> Result<(Configuration, toml::Value)> {
     let config_path = crate::get_config_path();
     let data = tokio::fs::read_to_string(&config_path)
         .await
@@ -582,8 +217,13 @@ pub async fn load_configuration() -> Result<Configuration> {
 
     info!("Loading configuration from {}", config_path.display());
 
-    let config: Configuration =
+    let value: toml::Value =
         toml::from_str(&data).wrap_err("Failed to parse config.toml - check for syntax errors")?;
+
+    let config: Configuration = value
+        .clone()
+        .try_into()
+        .wrap_err("Failed to deserialize config.toml into Configuration")?;
 
     validate_config(&config)?;
 
@@ -592,7 +232,7 @@ pub async fn load_configuration() -> Result<Configuration> {
         "Resolved dashboard owner"
     );
 
-    Ok(config)
+    Ok((config, value))
 }
 
 /// Validate config fields beyond what serde can express.
@@ -663,141 +303,9 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
     }
 
     if let Some(ref ai) = config.ai
-        && matches!(ai.backend, AiBackend::OpenAi)
-        && ai.api_key.is_none()
+        && ai.api_key.expose_secret().trim().is_empty()
     {
-        bail!("AI backend 'openai' requires an api_key");
-    }
-
-    if let Some(ref ai) = config.ai
-        && ai.history_length > crate::ai::chat_history::MAX_HISTORY_LENGTH
-    {
-        bail!(
-            "ai.history_length must be <= {} (got {})",
-            crate::ai::chat_history::MAX_HISTORY_LENGTH,
-            ai.history_length
-        );
-    }
-
-    if let Some(ref ai) = config.ai
-        && ai.ai_channel_history_length > crate::ai::chat_history::MAX_HISTORY_LENGTH
-    {
-        bail!(
-            "ai.ai_channel_history_length must be <= {} (got {})",
-            crate::ai::chat_history::MAX_HISTORY_LENGTH,
-            ai.ai_channel_history_length
-        );
-    }
-
-    if let Some(ref ai) = config.ai
-        && let Some(ref prefill) = ai.history_prefill
-    {
-        if prefill.base_url.trim().is_empty() {
-            bail!("ai.history_prefill.base_url cannot be empty");
-        }
-        if !(0.0..=1.0).contains(&prefill.threshold) {
-            bail!(
-                "ai.history_prefill.threshold must be between 0.0 and 1.0 (got {})",
-                prefill.threshold
-            );
-        }
-    }
-
-    if let Some(ref ai) = config.ai
-        && ai.history_prefill.is_some()
-        && ai.history_length == 0
-    {
-        bail!("ai.history_prefill requires history_length > 0");
-    }
-
-    if let Some(ref ai) = config.ai {
-        if !(1..=20).contains(&ai.max_turn_rounds) {
-            bail!(
-                "ai.max_turn_rounds must be 1..=20 (got {})",
-                ai.max_turn_rounds
-            );
-        }
-        if !(1..=64).contains(&ai.max_writes_per_turn) {
-            bail!(
-                "ai.max_writes_per_turn must be 1..=64 (got {})",
-                ai.max_writes_per_turn
-            );
-        }
-        if !(1..=200).contains(&ai.dreamer.max_rounds) {
-            bail!(
-                "ai.dreamer.max_rounds must be 1..=200 (got {})",
-                ai.dreamer.max_rounds
-            );
-        }
-        validate_reasoning_effort(
-            "ai.dreamer.reasoning_effort",
-            ai.dreamer.reasoning_effort.as_deref(),
-        )?;
-        chrono::NaiveTime::parse_from_str(&ai.dreamer.run_at, "%H:%M").wrap_err_with(|| {
-            format!(
-                "ai.dreamer.run_at must be HH:MM (got {:?})",
-                ai.dreamer.run_at
-            )
-        })?;
-        if ai.dreamer.timeout_secs == 0 {
-            bail!("ai.dreamer.timeout_secs must be > 0");
-        }
-        if ai.memory.inject_byte_budget < ai.memory.soul_bytes + ai.memory.lore_bytes {
-            bail!("ai.memory.inject_byte_budget must be >= soul_bytes + lore_bytes");
-        }
-    }
-
-    if let Some(ref ai) = config.ai {
-        validate_reasoning_effort("ai.reasoning_effort", ai.reasoning_effort.as_deref())?;
-        if ai.web.base_url.trim().is_empty() {
-            bail!("ai.web.base_url cannot be empty");
-        }
-        reqwest::Url::parse(&ai.web.base_url).wrap_err_with(|| {
-            format!(
-                "ai.web.base_url must be a valid URL (got {:?})",
-                ai.web.base_url
-            )
-        })?;
-        if !(1..=10).contains(&ai.web.max_results) {
-            bail!(
-                "ai.web.max_results must be between 1 and 10 (got {})",
-                ai.web.max_results
-            );
-        }
-        if !(1..=6).contains(&ai.web.max_rounds) {
-            bail!(
-                "ai.web.max_rounds must be between 1 and 6 (got {})",
-                ai.web.max_rounds
-            );
-        }
-        if ai.web.cache_capacity == 0 {
-            bail!("ai.web.cache_capacity must be > 0");
-        }
-    }
-    if let Some(ref ai) = config.ai
-        && ai.emotes.enabled
-    {
-        if ai.emotes.refresh_interval_secs == 0 {
-            bail!("ai.emotes.refresh_interval_secs must be > 0");
-        }
-        if !(1..=200).contains(&ai.emotes.max_prompt_emotes) {
-            bail!(
-                "ai.emotes.max_prompt_emotes must be between 1 and 200 (got {})",
-                ai.emotes.max_prompt_emotes
-            );
-        }
-        if ai.emotes.min_baseline_emotes > ai.emotes.max_prompt_emotes {
-            bail!(
-                "ai.emotes.min_baseline_emotes ({}) must be <= max_prompt_emotes ({})",
-                ai.emotes.min_baseline_emotes,
-                ai.emotes.max_prompt_emotes
-            );
-        }
-        if let Some(ref base_url) = ai.emotes.base_url
-            && base_url.trim().is_empty()
-        {
-            bail!("ai.emotes.base_url cannot be empty when specified");
-        }
+        bail!("ai.api_key cannot be empty");
     }
 
     for schedule in &config.schedules {
@@ -845,199 +353,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ai_memory_v2_defaults() {
-        let s = MemoryConfigSection::default();
-        assert_eq!(s.soul_bytes, 4096);
-        assert_eq!(s.lore_bytes, 12288);
-        assert_eq!(s.user_bytes, 4096);
-        assert_eq!(s.state_bytes, 2048);
-        assert_eq!(s.inject_byte_budget, 24576);
-        assert_eq!(s.max_state_files, 16);
-    }
-
-    #[test]
-    fn ai_dreamer_defaults() {
-        let d = DreamerConfigSection::default();
-        assert!(d.enabled);
-        assert_eq!(d.run_at, "04:00");
-        assert_eq!(d.timeout_secs, 120);
-        assert!(d.model.is_none());
-    }
-
-    #[test]
-    fn ai_top_level_v2_defaults() {
-        let ai: AiConfig = toml::from_str(
-            r#"
-            backend = "ollama"
-            model = "x"
-        "#,
-        )
-        .unwrap();
-        assert_eq!(ai.max_turn_rounds, 4);
-        assert_eq!(ai.max_writes_per_turn, 8);
-    }
-
-    fn ai_with_run_at(run_at: &str) -> AiConfig {
-        AiConfig {
-            backend: AiBackend::Ollama,
-            api_key: None,
-            base_url: None,
-            model: "x".into(),
-            timeout: default_ai_timeout(),
-            reasoning_effort: None,
-            history_length: default_history_length(),
-            ai_channel_history_length: default_ai_channel_history_length(),
-            history_prefill: None,
-            memory: MemoryConfigSection::default(),
-            max_turn_rounds: default_max_turn_rounds(),
-            max_writes_per_turn: default_max_writes_per_turn(),
-            dreamer: DreamerConfigSection {
-                run_at: run_at.into(),
-                ..DreamerConfigSection::default()
-            },
-            emotes: AiEmotesConfigSection::default(),
-            media: AiMediaConfig::default(),
-            web: AiWebConfigSection::default(),
-        }
-    }
-
-    #[test]
-    fn validate_rejects_malformed_run_at() {
-        let mut c = Configuration::test_default();
-        c.ai = Some(ai_with_run_at("not-a-time"));
-        let err = validate_config(&c).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("ai.dreamer.run_at"),
-            "got: {err:#}"
-        );
-    }
-
-    #[test]
-    fn validate_accepts_well_formed_run_at() {
-        let mut c = Configuration::test_default();
-        c.ai = Some(ai_with_run_at("04:00"));
-        validate_config(&c).unwrap();
-    }
-
-    #[test]
-    fn ai_defaults_keep_tool_history_enabled() {
-        let ai: AiConfig = toml::from_str(
-            r#"
-            backend = "ollama"
-            model = "x"
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            ai.history_length,
-            crate::ai::chat_history::DEFAULT_HISTORY_LENGTH
-        );
-    }
-
-    #[test]
-    fn validate_rejects_history_length_above_max() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.history_length = crate::ai::chat_history::MAX_HISTORY_LENGTH + 1;
-        c.ai = Some(ai);
-
-        let err = validate_config(&c).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("ai.history_length"),
-            "got: {err:#}"
-        );
-    }
-
-    #[test]
-    fn validate_accepts_history_length_200() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.history_length = 200;
-        c.ai = Some(ai);
-
-        validate_config(&c).unwrap();
-    }
-
-    #[test]
-    fn ai_emotes_default_disabled() {
-        assert!(!AiEmotesConfigSection::default().enabled);
-        assert!(AiEmotesConfigSection::default().include_global);
-    }
-
-    #[test]
-    fn validate_rejects_invalid_emote_settings() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.emotes.enabled = true;
-        ai.emotes.max_prompt_emotes = 0;
-        c.ai = Some(ai);
-
-        let err = validate_config(&c).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("ai.emotes.max_prompt_emotes"),
-            "got: {err:#}"
-        );
-    }
-
-    #[test]
-    fn validate_accepts_enabled_emote_settings() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.emotes.enabled = true;
-        ai.emotes.refresh_interval_secs = 60;
-        ai.emotes.max_prompt_emotes = 40;
-        c.ai = Some(ai);
-
-        validate_config(&c).unwrap();
-    }
-
-    #[test]
-    fn validate_rejects_empty_reasoning_effort() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.reasoning_effort = Some("   ".into());
-        c.ai = Some(ai);
-
-        let err = validate_config(&c).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("ai.reasoning_effort"),
-            "got: {err:#}"
-        );
-    }
-
-    #[test]
-    fn validate_accepts_non_empty_dreamer_reasoning_effort() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.reasoning_effort = Some("medium".into());
-        ai.dreamer.reasoning_effort = Some("high".into());
-        c.ai = Some(ai);
-
-        validate_config(&c).unwrap();
-    }
-
-    #[test]
-    fn validate_rejects_web_max_results_out_of_range() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.web.max_results = 0;
-        c.ai = Some(ai);
-        let err = validate_config(&c).unwrap_err();
-        assert!(format!("{err:#}").contains("ai.web.max_results"));
-    }
-
-    #[test]
-    fn validate_rejects_web_invalid_base_url() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.web.base_url = "not a url".into();
-        c.ai = Some(ai);
-        let err = validate_config(&c).unwrap_err();
-        assert!(format!("{err:#}").contains("ai.web.base_url"));
-    }
-
-    #[test]
     fn ai_channel_must_differ_from_main_channel() {
         let mut config = Configuration::test_default();
         config.twitch.ai_channel = Some(config.twitch.channel.clone());
@@ -1079,145 +394,23 @@ mod tests {
     }
 
     #[test]
-    fn ai_media_defaults_when_section_absent() {
-        let ai: AiConfig = toml::from_str(
+    fn ai_bootstrap_parses_api_key_only() {
+        let cfg: Configuration = toml::from_str(
             r#"
-                backend = "openai"
-                api_key = "k"
-                model = "m"
-            "#,
+            [twitch]
+            channel = "c"
+            username = "u"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+
+            [ai]
+            api_key = "sk-test"
+        "#,
         )
         .expect("parse");
-
-        assert_eq!(ai.media.model, "~google/gemini-flash-latest");
-        assert_eq!(ai.media.timeout, 60);
-        assert_eq!(ai.media.max_image_size.as_u64(), 10 * 1024 * 1024);
-        assert_eq!(ai.media.max_pdf_size.as_u64(), 25 * 1024 * 1024);
-        assert_eq!(ai.media.max_audio_size.as_u64(), 25 * 1024 * 1024);
-        assert_eq!(ai.media.max_video_size.as_u64(), 50 * 1024 * 1024);
-        assert_eq!(ai.media.max_text_size.as_u64(), 1024 * 1024);
-    }
-
-    #[test]
-    fn ai_media_parses_human_readable_sizes() {
-        let ai: AiConfig = toml::from_str(
-            r#"
-                backend = "openai"
-                api_key = "k"
-                model = "m"
-
-                [media]
-                model = "openai/gpt-4o-mini"
-                timeout = 90
-                max_image_size = "5 MB"
-                max_pdf_size = "15 MB"
-                max_audio_size = "20 MB"
-                max_video_size = "100 MB"
-                max_text_size = "512 KB"
-            "#,
-        )
-        .expect("parse");
-
-        assert_eq!(ai.media.model, "openai/gpt-4o-mini");
-        assert_eq!(ai.media.timeout, 90);
-        assert_eq!(ai.media.max_image_size.as_u64(), 5 * 1000 * 1000);
-        assert_eq!(ai.media.max_text_size.as_u64(), 512 * 1000);
-    }
-
-    #[test]
-    fn validate_rejects_max_turn_rounds_out_of_range() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.max_turn_rounds = 0;
-        c.ai = Some(ai);
-        let err = validate_config(&c).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("ai.max_turn_rounds"),
-            "got: {err:#}"
-        );
-
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.max_turn_rounds = 21;
-        c.ai = Some(ai);
-        let err = validate_config(&c).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("ai.max_turn_rounds"),
-            "got: {err:#}"
-        );
-    }
-
-    #[test]
-    fn validate_rejects_max_writes_per_turn_out_of_range() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.max_writes_per_turn = 0;
-        c.ai = Some(ai);
-        let err = validate_config(&c).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("ai.max_writes_per_turn"),
-            "got: {err:#}"
-        );
-
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.max_writes_per_turn = 65;
-        c.ai = Some(ai);
-        let err = validate_config(&c).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("ai.max_writes_per_turn"),
-            "got: {err:#}"
-        );
-    }
-
-    #[test]
-    fn validate_rejects_inject_budget_below_soul_plus_lore() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.memory.soul_bytes = 4096;
-        ai.memory.lore_bytes = 12_288;
-        ai.memory.inject_byte_budget = 8192; // less than 4096 + 12288
-        c.ai = Some(ai);
-        let err = validate_config(&c).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("inject_byte_budget"),
-            "got: {err:#}"
-        );
-    }
-
-    #[test]
-    fn ai_channel_history_length_default_is_50() {
-        let ai: AiConfig = toml::from_str(
-            r#"
-            backend = "ollama"
-            model = "x"
-            "#,
-        )
-        .unwrap();
-        assert_eq!(ai.ai_channel_history_length, 50);
-    }
-
-    #[test]
-    fn validate_rejects_ai_channel_history_length_above_max() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.ai_channel_history_length = crate::ai::chat_history::MAX_HISTORY_LENGTH + 1;
-        c.ai = Some(ai);
-
-        let err = validate_config(&c).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("ai.ai_channel_history_length"),
-            "got: {err:#}"
-        );
-    }
-
-    #[test]
-    fn validate_accepts_ai_channel_history_length_50() {
-        let mut c = Configuration::test_default();
-        let mut ai = ai_with_run_at("04:00");
-        ai.ai_channel_history_length = 50;
-        c.ai = Some(ai);
-        validate_config(&c).unwrap();
+        let boot = cfg.ai.as_ref().expect("ai present");
+        assert!(!boot.api_key.expose_secret().is_empty());
     }
 
     #[test]
@@ -1256,16 +449,5 @@ mod tests {
         cfg.web.session_ttl = std::time::Duration::from_secs(10); // below 1h
         let err = validate_config(&cfg).unwrap_err().to_string();
         assert!(err.contains("session_ttl"), "{err}");
-    }
-
-    #[test]
-    fn ai_media_cap_for_bucket_returns_correct_field() {
-        use crate::ai::content::detect::Bucket;
-        let cfg = AiMediaConfig::default();
-        assert_eq!(cfg.cap_for(Bucket::Image), cfg.max_image_size);
-        assert_eq!(cfg.cap_for(Bucket::Pdf), cfg.max_pdf_size);
-        assert_eq!(cfg.cap_for(Bucket::Audio), cfg.max_audio_size);
-        assert_eq!(cfg.cap_for(Bucket::Video), cfg.max_video_size);
-        assert_eq!(cfg.cap_for(Bucket::Text), cfg.max_text_size);
     }
 }

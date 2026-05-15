@@ -349,9 +349,18 @@ fn format_entry_line(entry: &ChatHistoryEntry) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use arc_swap::ArcSwap;
+
     use super::*;
     use crate::ai::memory::store::MemoryStore;
-    use crate::ai::memory::types::{Caps, FileKind};
+    use crate::ai::memory::types::FileKind;
+    use crate::settings::Settings;
+
+    fn test_handle() -> crate::settings::SettingsHandle {
+        Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
+    }
 
     #[test]
     fn fence_block_user_renders_identity_attrs() {
@@ -441,9 +450,7 @@ mod tests {
     #[tokio::test]
     async fn build_chat_turn_context_routes_state_to_volatile_and_users_to_durable() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         store
             .write(
                 &FileKind::User {
@@ -496,9 +503,7 @@ mod tests {
     #[tokio::test]
     async fn build_chat_turn_context_drops_oldest_users_when_over_budget() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         for id in ["1", "2", "3"] {
             store
                 .write(
@@ -536,18 +541,23 @@ mod tests {
 
     #[tokio::test]
     async fn build_chat_turn_context_renders_two_history_sections_invocation_first() {
-        use crate::ai::chat_history::ChatHistoryBuffer;
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use crate::settings::test_handle;
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
 
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(10)));
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
         primary.lock().await.push_user("alice", "hello primary");
-        let ai = Arc::new(Mutex::new(ChatHistoryBuffer::new(10)));
+        let ai = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
         ai.lock().await.push_user("bob", "hello ai");
 
         let body = build_chat_turn_context(
@@ -582,18 +592,23 @@ mod tests {
 
     #[tokio::test]
     async fn build_chat_turn_context_omits_empty_history_sections() {
-        use crate::ai::chat_history::ChatHistoryBuffer;
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use crate::settings::test_handle;
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
 
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(10)));
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
         primary.lock().await.push_user("alice", "hello");
-        let ai = Arc::new(Mutex::new(ChatHistoryBuffer::new(10))); // empty
+        let ai = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        ))); // empty
 
         let body = build_chat_turn_context(
             &store,
@@ -616,14 +631,13 @@ mod tests {
 
     #[tokio::test]
     async fn build_chat_turn_context_emits_mention_table_for_chat_users_with_files() {
-        use crate::ai::chat_history::ChatHistoryBuffer;
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use crate::settings::test_handle;
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         // alice and bob have user files; carol speaks but has no file.
         store
             .write(
@@ -648,7 +662,10 @@ mod tests {
             .await
             .unwrap();
 
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(10)));
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
         {
             let mut p = primary.lock().await;
             p.push_user("ALICE", "hi"); // mixed-case lookup
@@ -688,9 +705,7 @@ mod tests {
     #[tokio::test]
     async fn build_chat_turn_context_omits_mention_table_when_no_chat() {
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         store
             .write(
                 &FileKind::User {
@@ -725,16 +740,18 @@ mod tests {
 
     #[tokio::test]
     async fn build_chat_turn_context_drops_oldest_lines_over_per_section_cap() {
-        use crate::ai::chat_history::ChatHistoryBuffer;
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use crate::settings::test_handle;
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), Caps::default())
-            .await
-            .unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
 
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(200)));
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
         {
             let mut p = primary.lock().await;
             for _ in 0..200 {

@@ -156,10 +156,8 @@ async fn memory_v2_perms() {
 async fn memory_v2_cap() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.memory.user_bytes = 64; // tiny cap
-            }
+        .with_settings(|o| {
+            o.ai.memory.user_bytes = Some(64); // tiny cap
         })
         .spawn()
         .await;
@@ -235,10 +233,8 @@ async fn chat_turn_state_reserved() {
 async fn chat_turn_write_quota() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.max_writes_per_turn = 1; // tight quota
-            }
+        .with_settings(|o| {
+            o.ai.behavior.max_writes_per_turn = Some(1); // tight quota
         })
         .spawn()
         .await;

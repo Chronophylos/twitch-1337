@@ -1,0 +1,18 @@
+{# crates/web/templates/settings/cards/pings.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-pings" class="settings-card" data-section="pings">
+  <header class="settings-card-head">
+    <div>
+      <h2>Pings</h2>
+      <p>Channel-wide rules for the community ping system. Manage individual pings and their members on the <a href="/pings">pings page</a>.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    {% call m::num_row("pings", "ping_cooldown", "cooldown", "Minimum interval between any two ping fires from the same user.", current.pings.cooldown, defaults.pings.cooldown, "s") %}{% endcall %}
+    {% call m::toggle_row("pings", "ping_public", "public", "Non-members can also trigger pings. Membership only affects who gets @-mentioned.", current.pings.public, defaults.pings.public) %}{% endcall %}
+  </div>
+</section>

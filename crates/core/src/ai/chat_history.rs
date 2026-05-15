@@ -4,6 +4,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use crate::settings::{Settings, SettingsHandle};
+
 pub const MAX_HISTORY_LENGTH: u64 = 5_000;
 pub const DEFAULT_HISTORY_LENGTH: u64 = 200;
 pub const MAX_TOOL_RESULT_MESSAGES: usize = 200;
@@ -29,9 +31,20 @@ pub struct ChatHistoryEntry {
 
 #[derive(Debug)]
 pub struct ChatHistoryBuffer {
-    capacity: usize,
+    settings: SettingsHandle,
+    capacity_getter: fn(&Settings) -> usize,
     next_seq: u64,
     entries: VecDeque<ChatHistoryEntry>,
+}
+
+/// Capacity getter for the primary (main channel) chat history buffer.
+pub fn primary_history_capacity(s: &Settings) -> usize {
+    s.ai.history.length as usize
+}
+
+/// Capacity getter for the AI-channel chat history buffer.
+pub fn ai_channel_history_capacity(s: &Settings) -> usize {
+    s.ai.history.ai_channel_length as usize
 }
 
 #[derive(Debug, Clone, Default)]
@@ -50,28 +63,37 @@ pub struct ChatHistoryPage {
 }
 
 impl ChatHistoryBuffer {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(settings: SettingsHandle, capacity_getter: fn(&Settings) -> usize) -> Self {
         Self {
-            capacity,
+            settings,
+            capacity_getter,
             next_seq: 1,
-            entries: VecDeque::with_capacity(capacity),
+            entries: VecDeque::new(),
         }
     }
 
-    pub fn from_prefill<I>(capacity: usize, messages: I) -> Self
+    pub fn from_prefill<I>(
+        settings: SettingsHandle,
+        capacity_getter: fn(&Settings) -> usize,
+        messages: I,
+    ) -> Self
     where
         I: IntoIterator<Item = (String, String, DateTime<Utc>)>,
     {
+        let mut buf = Self::new(settings, capacity_getter);
+        let cap = buf.current_capacity();
         let mut items: Vec<(String, String, DateTime<Utc>)> = messages.into_iter().collect();
-        if items.len() > capacity {
-            items.drain(..items.len() - capacity);
+        if items.len() > cap {
+            items.drain(..items.len() - cap);
         }
-
-        let mut buffer = Self::new(capacity);
         for (username, text, timestamp) in items {
-            buffer.push_user_at(username, text, timestamp);
+            buf.push_user_at(username, text, timestamp);
         }
-        buffer
+        buf
+    }
+
+    fn current_capacity(&self) -> usize {
+        (self.capacity_getter)(&self.settings.load())
     }
 
     pub fn len(&self) -> usize {
@@ -115,10 +137,11 @@ impl ChatHistoryBuffer {
         source: ChatHistorySource,
         timestamp: DateTime<Utc>,
     ) {
-        if self.capacity == 0 {
+        let cap = self.current_capacity();
+        if cap == 0 {
             return;
         }
-        if self.entries.len() >= self.capacity {
+        while self.entries.len() >= cap {
             self.entries.pop_front();
         }
         let seq = self.next_seq;
@@ -197,10 +220,22 @@ impl ChatHistoryBuffer {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use arc_swap::ArcSwap;
+
     use super::*;
 
+    /// Build a `SettingsHandle` whose `ai.history.length` is set to `cap`.
+    fn make_handle(cap: u64) -> SettingsHandle {
+        let mut s = Settings::compiled_defaults();
+        s.ai.history.length = cap;
+        Arc::new(ArcSwap::from_pointee(s))
+    }
+
     fn sample_buffer() -> ChatHistoryBuffer {
-        let mut buffer = ChatHistoryBuffer::new(10);
+        let handle = make_handle(10);
+        let mut buffer = ChatHistoryBuffer::new(handle, primary_history_capacity);
         buffer.push_user("alice", "hello chat");
         buffer.push_user("bob", "weather is bad");
         buffer.push_user("alice", "weather got better");
@@ -266,7 +301,8 @@ mod tests {
 
     #[test]
     fn query_clamps_limit_to_tool_maximum() {
-        let mut buffer = ChatHistoryBuffer::new(250);
+        let handle = make_handle(250);
+        let mut buffer = ChatHistoryBuffer::new(handle, primary_history_capacity);
         for i in 0..250 {
             buffer.push_user("alice", format!("message {i}"));
         }
@@ -283,8 +319,10 @@ mod tests {
 
     #[test]
     fn from_prefill_assigns_sequence_numbers_and_marks_user_source() {
+        let handle = make_handle(2);
         let buffer = ChatHistoryBuffer::from_prefill(
-            2,
+            handle,
+            primary_history_capacity,
             vec![
                 ("alice".to_string(), "one".to_string(), Utc::now()),
                 ("bob".to_string(), "two".to_string(), Utc::now()),
@@ -301,5 +339,33 @@ mod tests {
         assert_eq!(page.messages[0].username, "bob");
         assert_eq!(page.messages[1].seq, 2);
         assert_eq!(page.messages[1].source, ChatHistorySource::User);
+    }
+
+    /// Demonstrates live capacity rebinding: fill the buffer, halve the capacity
+    /// via the settings handle, push one more entry, observe the buffer trimmed
+    /// to the new cap.
+    #[test]
+    fn live_capacity_rebind_trims_on_next_push() {
+        let handle = make_handle(6);
+        let mut buffer = ChatHistoryBuffer::new(handle.clone(), primary_history_capacity);
+
+        // Fill to capacity.
+        for i in 1..=6 {
+            buffer.push_user("alice", format!("msg {i}"));
+        }
+        assert_eq!(buffer.len(), 6);
+
+        // Halve the capacity through the settings handle.
+        let mut new_settings = Settings::compiled_defaults();
+        new_settings.ai.history.length = 3;
+        handle.store(Arc::new(new_settings));
+
+        // Push one more — the buffer should trim to the new cap (3) and then add
+        // the new entry, ending up with exactly 3 entries.
+        buffer.push_user("alice", "trigger trim");
+        assert_eq!(buffer.len(), 3);
+
+        let snap = buffer.snapshot();
+        assert_eq!(snap.last().unwrap().text, "trigger trim");
     }
 }

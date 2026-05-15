@@ -20,7 +20,7 @@ use llm::LlmClient;
 use twitch_1337::{
     PersonalBest, Services,
     aviation::AviationClient,
-    config::{AiConfig, Configuration},
+    config::{AiBootstrap, Configuration},
     load_leaderboard, run_bot,
     twitch::whisper::{self, WhisperError, WhisperSender},
 };
@@ -87,24 +87,19 @@ impl TestBotBuilder {
 
     pub fn with_ai(mut self) -> Self {
         if self.config.ai.is_none() {
-            self.config.ai = Some(AiConfig {
-                backend: twitch_1337::config::AiBackend::OpenAi,
-                api_key: Some(secrecy::SecretString::new("test".into())),
-                base_url: None,
-                model: "test-model".into(),
-                timeout: 30,
-                reasoning_effort: None,
-                history_length: twitch_1337::DEFAULT_HISTORY_LENGTH,
-                ai_channel_history_length: 50,
-                history_prefill: None,
-                memory: twitch_1337::config::MemoryConfigSection::default(),
-                max_turn_rounds: 4,
-                max_writes_per_turn: 8,
-                dreamer: twitch_1337::config::DreamerConfigSection::default(),
-                emotes: twitch_1337::config::AiEmotesConfigSection::default(),
-                media: twitch_1337::config::AiMediaConfig::default(),
-                web: twitch_1337::config::AiWebConfigSection::default(),
+            // AiBootstrap only holds the api_key secret. All other AI knobs
+            // (model, timeout, history, memory, etc.) live in the settings
+            // store and are read from SettingsHandle at runtime.
+            self.config.ai = Some(AiBootstrap {
+                api_key: secrecy::SecretString::new("test".into()),
             });
+            // Bake a recognizable test model name into the default settings
+            // override so tests that assert on `calls[0].model` get a stable
+            // value instead of the empty-string production default.
+            let o = self.settings_overrides.get_or_insert_with(Default::default);
+            if o.ai.connection.model.is_none() {
+                o.ai.connection.model = Some("test-model".into());
+            }
         }
         self
     }
@@ -195,11 +190,18 @@ impl TestBotBuilder {
         {
             aviationstack.base_url = adsb_mock.uri();
         }
-        if let Some(ai) = self.config.ai.as_mut()
-            && ai.emotes.enabled
-            && ai.emotes.base_url.is_none()
+        // If the test enabled emotes via settings overrides but hasn't set a
+        // base_url, redirect the 7TV API call to the wiremock server.
+        if self
+            .settings_overrides
+            .as_ref()
+            .and_then(|o| o.ai.emotes.enabled)
+            == Some(true)
         {
-            ai.emotes.base_url = Some(seventv_mock.uri());
+            let o = self.settings_overrides.get_or_insert_with(Default::default);
+            if o.ai.emotes.base_url.is_none() {
+                o.ai.emotes.base_url = Some(Some(seventv_mock.uri()));
+            }
         }
         let llm = Arc::new(FakeLlm::new());
         let whisper = Arc::new(FakeWhisperSender::new(self.whisper_failure));
@@ -250,7 +252,7 @@ impl TestBotBuilder {
 
         let memory_store = twitch_1337::ai::memory::store::MemoryStore::open(
             data_dir.path(),
-            twitch_1337::ai::command::memory_caps_from_config(self.config.ai.as_ref()),
+            settings_handle.clone(),
         )
         .await
         .expect("open memory store");
@@ -291,6 +293,7 @@ impl TestBotBuilder {
 
         let services = Services {
             clock: clock.clone(),
+            ai_bootstrap: self.config.ai.clone(),
             llm: self
                 .config
                 .ai
@@ -540,11 +543,11 @@ impl TestBot {
     /// dreamer ritual for `yesterday`.
     pub async fn run_ritual_for(&self, yesterday: chrono::NaiveDate) {
         use twitch_1337::ai::memory::{
-            RitualConfig, run_ritual, store::MemoryStore as StoreV2, transcript::TranscriptWriter,
-            types::Caps,
+            run_ritual, store::MemoryStore as StoreV2, transcript::TranscriptWriter,
         };
 
-        let store = StoreV2::open(self.data_dir.path(), Caps::default())
+        let settings = twitch_1337::settings::test_handle();
+        let store = StoreV2::open(self.data_dir.path(), settings.clone())
             .await
             .expect("open store for ritual");
         let transcript = TranscriptWriter::open(store.memories_dir())
@@ -556,16 +559,8 @@ impl TestBot {
             llm_ref,
             &store,
             &transcript,
-            &RitualConfig {
-                model: "fake".into(),
-                reasoning_effort: None,
-                run_at: chrono::NaiveTime::from_hms_opt(4, 0, 0).unwrap(),
-                timeout_secs: 5,
-                max_rounds: 4,
-                max_writes_per_turn: 8,
-                inject_byte_budget: 16_384,
-                channel: self.channel.clone(),
-            },
+            &settings,
+            &self.channel,
             yesterday,
         )
         .await
@@ -714,5 +709,8 @@ fn build_test_web_state(
         owner_id: None,
         settings,
         settings_store,
+        ai_bootstrap: None,
+        model_cache: Arc::new(twitch_1337_web::routes::ai_models::ModelListCache::default()),
+        http: reqwest::Client::new(),
     }
 }

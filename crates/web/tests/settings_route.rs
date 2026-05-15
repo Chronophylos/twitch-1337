@@ -164,6 +164,266 @@ async fn validation_error_renders_form_with_errors() {
     );
 }
 
+/// Build a form body containing every required cooldown/ping field at their
+/// default values plus any extra (form_field, value) pairs the test wants to
+/// submit. Returned bodies are ready for `application/x-www-form-urlencoded`.
+fn save_form_body(
+    bare_csrf: &str,
+    defaults: &twitch_1337_core::settings::Settings,
+    extra: &[(&str, &str)],
+) -> String {
+    let mut body = format!(
+        "_csrf={csrf}&cooldown_ai={a}&cooldown_news={n}&cooldown_up={u}&cooldown_feedback={f}&cooldown_doener={d}&ping_cooldown={p}",
+        csrf = urlencoding::encode(bare_csrf),
+        a = defaults.cooldowns.ai,
+        n = defaults.cooldowns.news,
+        u = defaults.cooldowns.up,
+        f = defaults.cooldowns.feedback,
+        d = defaults.cooldowns.doener,
+        p = defaults.pings.cooldown,
+    );
+    for (k, v) in extra {
+        body.push('&');
+        body.push_str(k);
+        body.push('=');
+        body.push_str(&urlencoding::encode(v));
+    }
+    body
+}
+
+/// Pluck the `tw1337_flash` cookie value out of `Set-Cookie` headers.
+/// Returns `None` if no flash cookie was emitted on the response.
+fn read_flash(res: &axum::http::Response<Body>) -> Option<String> {
+    for c in res.headers().get_all(header::SET_COOKIE) {
+        let s = c.to_str().ok()?;
+        if let Some(rest) = s.strip_prefix("tw1337_flash=") {
+            let value = rest.split(';').next()?;
+            return Some(
+                urlencoding::decode(value)
+                    .map(std::borrow::Cow::into_owned)
+                    .unwrap_or_else(|_| value.to_owned()),
+            );
+        }
+    }
+    None
+}
+
+#[tokio::test]
+async fn post_settings_applies_ai_connection_model() {
+    install_crypto();
+    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    state.owner_id = Some(Arc::from("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let app = build_router(state.clone());
+    let defaults = state.settings_store.defaults().clone();
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_connection_model", "gpt-5")]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::SEE_OTHER,
+        "AI model save should redirect (303)",
+    );
+    // The connection model is read live via the settings handle — no restart.
+    let flash = read_flash(&res).expect("save must emit a flash cookie");
+    assert!(
+        flash.starts_with("Settings saved."),
+        "flash should start with the saved confirmation; got {flash:?}",
+    );
+    assert!(
+        !flash.contains("Restart bot"),
+        "model change is live; restart hint must NOT appear; got {flash:?}",
+    );
+    assert_eq!(
+        state.settings.load().ai.connection.model,
+        "gpt-5",
+        "live handle must reflect saved AI model",
+    );
+}
+
+#[tokio::test]
+async fn post_settings_flags_backend_restart_required() {
+    install_crypto();
+    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    state.owner_id = Some(Arc::from("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let app = build_router(state.clone());
+    let defaults = state.settings_store.defaults().clone();
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[("ai_connection_backend", "ollama")],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let flash = read_flash(&res).expect("save must emit a flash cookie");
+    assert!(
+        flash.contains("Restart bot to apply"),
+        "backend swap must surface the restart hint; got {flash:?}",
+    );
+    assert!(
+        flash.contains("ai.connection.backend"),
+        "restart hint must name the field; got {flash:?}",
+    );
+    assert!(
+        matches!(
+            state.settings.load().ai.connection.backend,
+            twitch_1337_core::settings::AiBackendKind::Ollama,
+        ),
+        "the value still applies — the restart hint is advisory",
+    );
+}
+
+#[tokio::test]
+async fn post_settings_enabling_prefill_card_flags_restart() {
+    install_crypto();
+    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    state.owner_id = Some(Arc::from("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    // Prefill is disabled by default; rendering the toggle card and ticking
+    // the box enables it — that transition requires a restart.
+    assert!(
+        state.settings.load().ai.prefill.is_none(),
+        "fixture assumes prefill defaults to disabled",
+    );
+
+    let app = build_router(state.clone());
+    let defaults = state.settings_store.defaults().clone();
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[
+            ("ai_prefill_card_visible", "1"),
+            ("ai_prefill_enabled", "1"),
+            ("ai_prefill_base_url", "https://logs.zonian.dev"),
+            ("ai_prefill_threshold", "0.5"),
+        ],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let flash = read_flash(&res).expect("save must emit a flash cookie");
+    assert!(
+        flash.contains("ai.prefill"),
+        "enabling prefill must mention the field in the restart hint; got {flash:?}",
+    );
+    assert!(
+        state.settings.load().ai.prefill.is_some(),
+        "prefill must be enabled after apply",
+    );
+}
+
+#[tokio::test]
+async fn post_settings_card_invisible_leaves_toggle_alone() {
+    // Regression for the *_card_visible hidden-input pattern: a save that
+    // does not render a toggle card must NOT inadvertently disable it.
+    install_crypto();
+    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    state.owner_id = Some(Arc::from("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    // First, enable prefill via a "card visible" save so subsequent saves
+    // without the hidden input must preserve that state.
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[
+            ("ai_prefill_card_visible", "1"),
+            ("ai_prefill_enabled", "1"),
+            ("ai_prefill_base_url", "https://logs.zonian.dev"),
+            ("ai_prefill_threshold", "0.5"),
+        ],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(state.settings.load().ai.prefill.is_some());
+
+    // Now save again without rendering the card at all — prefill must stay on.
+    let app = build_router(state.clone());
+    let body = save_form_body(&bare_csrf, &defaults, &[]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(
+        state.settings.load().ai.prefill.is_some(),
+        "a save without the card_visible marker must NOT clear an enabled card",
+    );
+}
+
+#[tokio::test]
+async fn settings_page_renders_all_ai_cards() {
+    // Smoke test: GETting /settings as the owner must render every AI card
+    // we wired into `index.html`. Catches missing/typo'd `id="…"` anchors
+    // before they break the sidebar nav and the dirty-counters JS.
+    install_crypto();
+    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    state.owner_id = Some(Arc::from("123"));
+    let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let app = build_router(state);
+    let req = Request::builder()
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "owner GET /settings must 200");
+    let html = body_string(res).await;
+    for id in [
+        "sec-ai-connection",
+        "sec-ai-behavior",
+        "sec-ai-history",
+        "sec-ai-memory",
+        "sec-ai-dreamer",
+        "sec-ai-prefill",
+        "sec-ai-web",
+        "sec-ai-emotes",
+        "sec-ai-media",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "settings page is missing AI card anchor {id}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn reset_cooldowns_clears_section_overrides() {
     install_crypto();

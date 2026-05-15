@@ -12,10 +12,8 @@ use twitch_1337::twitch::whisper::{FIRST_WHISPER_MAX_CHARS, WHISPER_MAX_CHARS};
 async fn news_command_summarizes_since_previous_user_message() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 10;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
         })
         .spawn()
         .await;
@@ -85,10 +83,8 @@ async fn news_command_summarizes_since_previous_user_message() {
 async fn news_command_uses_full_history_without_previous_user_message() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 10;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
         })
         .spawn()
         .await;
@@ -137,10 +133,8 @@ async fn news_command_uses_full_history_without_previous_user_message() {
 async fn news_command_does_not_use_previous_news_response_as_boundary() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 10;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
         })
         .with_settings(|o| {
             o.cooldowns.news = Some(1);
@@ -195,10 +189,8 @@ async fn news_command_does_not_use_previous_news_response_as_boundary() {
 async fn news_command_uses_old_user_message_as_boundary_outside_recent_window() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 30;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(30);
         })
         .spawn()
         .await;
@@ -243,10 +235,8 @@ async fn news_command_uses_old_user_message_as_boundary_outside_recent_window() 
 async fn news_command_without_history_does_not_call_llm() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 0;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
         })
         .spawn()
         .await;
@@ -271,10 +261,8 @@ async fn news_command_without_history_does_not_call_llm() {
 async fn news_command_limits_first_whisper_to_500_chars() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 10;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
         })
         .spawn()
         .await;
@@ -301,10 +289,8 @@ async fn news_command_limits_first_whisper_to_500_chars() {
 async fn news_command_allows_longer_followup_whisper() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 10;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
         })
         .with_settings(|o| {
             o.cooldowns.news = Some(1);
@@ -341,10 +327,8 @@ async fn news_command_falls_back_to_chat_when_whisper_fails() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
         .with_failing_whispers()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 10;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
         })
         .spawn()
         .await;
@@ -365,10 +349,8 @@ async fn news_command_falls_back_to_chat_when_whisper_fails() {
 async fn tldr_command_summarizes_available_last_24_hours() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 10;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
         })
         .spawn()
         .await;
@@ -427,10 +409,8 @@ async fn tldr_command_summarizes_available_last_24_hours() {
 async fn tldr_command_allows_longer_followup_whisper() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 10;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
         })
         .with_settings(|o| {
             o.cooldowns.news = Some(1);

@@ -12,25 +12,33 @@ use crate::doener::format::{
     api_down_message, format_city, format_did_you_mean, format_global, format_not_found,
 };
 use crate::doener::{CityHit, DoeneratlasClient};
-use crate::settings::SettingsHandle;
+use crate::settings::{Settings, SettingsHandle};
+
+fn doener_cooldown_duration(s: &Settings) -> Duration {
+    Duration::from_secs(s.cooldowns.doener)
+}
 
 pub struct DoenerCommand {
     client: Arc<DoeneratlasClient>,
     cooldown: PerUserCooldown,
+    #[cfg(test)]
     settings: SettingsHandle,
 }
 
 impl DoenerCommand {
     pub fn new(client: Arc<DoeneratlasClient>, settings: SettingsHandle) -> Self {
+        let cooldown = PerUserCooldown::live(settings.clone(), doener_cooldown_duration);
         Self {
             client,
-            cooldown: PerUserCooldown::new(Duration::ZERO),
+            cooldown,
+            #[cfg(test)]
             settings,
         }
     }
 
+    #[cfg(test)]
     fn current_cooldown(&self) -> Duration {
-        Duration::from_secs(self.settings.load().cooldowns.doener)
+        doener_cooldown_duration(&self.settings.load())
     }
 }
 
@@ -46,11 +54,7 @@ where
 
     async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
         let user = &ctx.privmsg.sender.login;
-        if let Some(remaining) = self
-            .cooldown
-            .check_with_duration(user, self.current_cooldown())
-            .await
-        {
+        if let Some(remaining) = self.cooldown.check(user).await {
             send(
                 &ctx,
                 format!(

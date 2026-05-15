@@ -53,6 +53,13 @@
   --warn:   oklch(0.78 0.13 75);
   --danger: oklch(0.7 0.16 25);
 
+  /* Semantic aliases used by newer components */
+  --bg-subtle: var(--bg-2);
+  --bg-elev:   var(--bg-3);
+  --fg-muted:  var(--fg-3);
+  --accent-warn-bg: oklch(0.78 0.13 75 / 0.14);
+  --accent-warn-fg: oklch(0.78 0.13 75);
+
   --row-h: 56px;
   --rail-w: 256px;
 
@@ -1311,4 +1318,50 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   0%   { box-shadow: 0 0 0 0 var(--accent-soft); }
   70%  { box-shadow: 0 0 0 10px oklch(var(--accent-l) var(--accent-c) var(--accent-h) / 0); }
   100% { box-shadow: 0 0 0 0 oklch(var(--accent-l) var(--accent-c) var(--accent-h) / 0); }
+}
+
+/* ─── Segmented selector (Task 21) ──────────────────────────────────────── */
+.segmented {
+  display: inline-flex;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  padding: 2px;
+  gap: 2px;
+}
+.segmented .segment {
+  position: relative;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  font: inherit;
+  color: var(--fg-muted);
+  transition: background 0.15s, color 0.15s;
+}
+.segmented .segment input[type=radio] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.segmented .segment.is-active {
+  background: var(--bg-elev);
+  color: var(--fg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+/* ─── Card-off state (Task 21) ──────────────────────────────────────────── */
+.settings-card.is-card-off .settings-rows {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ─── Restart-required badge (Task 21) ──────────────────────────────────── */
+.restart-required {
+  background: var(--accent-warn-bg);
+  color: var(--accent-warn-fg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-left: 8px;
 }

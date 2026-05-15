@@ -1,0 +1,20 @@
+{# crates/web/templates/settings/cards/ai_history.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-history" class="settings-card" data-section="ai_history">
+  <header class="settings-card-head">
+    <div>
+      <h2>AI · History</h2>
+      <p>How much recent chat the bot keeps in memory per channel.</p>
+    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+  </header>
+  <div class="settings-rows">
+    {% call m::num_row_bounded("ai_history", "ai_history_length", "length",
+       "Rolling history kept for the primary channel.",
+       current.ai.history.length, defaults.ai.history.length, "msgs", 1, 5000) %}{% endcall %}
+    {% call m::num_row_bounded("ai_history", "ai_history_ai_channel_length", "ai_channel_length",
+       "Rolling history kept for the ai_channel (smaller — !ai only).",
+       current.ai.history.ai_channel_length, defaults.ai.history.ai_channel_length, "msgs", 1, 5000) %}{% endcall %}
+  </div>
+</section>

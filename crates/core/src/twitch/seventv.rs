@@ -5,12 +5,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eyre::{Result, WrapErr as _, bail};
+use eyre::{Result, WrapErr as _, bail, eyre};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
-use crate::{APP_USER_AGENT, config::AiEmotesConfigSection};
+use crate::{APP_USER_AGENT, settings::SettingsHandle, settings::ai::AiEmotes};
 
 const DEFAULT_BASE_URL: &str = "https://7tv.io/v3";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -23,14 +23,19 @@ pub const BAKED_GLOSSARY_TOML: &str = include_str!("../../data/7tv_emotes.toml")
 /// from the intersection with a manual glossary.
 #[derive(Debug)]
 pub struct SevenTvEmoteProvider {
+    settings: SettingsHandle,
     http: reqwest::Client,
     base_url: String,
     glossary: Vec<GlossaryEmote>,
+    cache: Mutex<PromptCache>,
+}
+
+/// Live-readable knobs snapshotted from [`SettingsHandle`] on each use.
+struct EmotesLiveCaps {
     include_global: bool,
     refresh_interval: Duration,
     max_prompt_emotes: usize,
     min_baseline_emotes: usize,
-    cache: Mutex<PromptCache>,
 }
 
 #[derive(Debug, Default)]
@@ -80,13 +85,49 @@ struct SevenTvEmote {
     name: String,
 }
 
+/// Read the live-tunable emote knobs from a [`SettingsHandle`].
+///
+/// Extracted as a free function so tests can verify live-rebinding without
+/// constructing a full [`SevenTvEmoteProvider`] (which requires a live
+/// `reqwest::Client`).
+fn live_caps_from_handle(settings: &SettingsHandle) -> EmotesLiveCaps {
+    let snap = settings.load();
+    if let Some(cfg) = snap.ai.emotes.as_ref() {
+        EmotesLiveCaps {
+            include_global: cfg.include_global,
+            refresh_interval: Duration::from_secs(cfg.refresh_interval_secs),
+            max_prompt_emotes: cfg.max_prompt_emotes,
+            min_baseline_emotes: cfg.min_baseline_emotes.min(cfg.max_prompt_emotes),
+        }
+    } else {
+        let fallback = AiEmotes::default();
+        EmotesLiveCaps {
+            include_global: fallback.include_global,
+            refresh_interval: Duration::from_secs(fallback.refresh_interval_secs),
+            max_prompt_emotes: fallback.max_prompt_emotes,
+            min_baseline_emotes: fallback.min_baseline_emotes.min(fallback.max_prompt_emotes),
+        }
+    }
+}
+
 impl SevenTvEmoteProvider {
-    /// Build a provider from `[ai.emotes]` and a TOML glossary string.
+    /// Build a provider from a [`SettingsHandle`] and a TOML glossary string.
     ///
     /// Production code passes [`BAKED_GLOSSARY_TOML`]; integration tests pass
     /// a custom fixture. The glossary is parsed eagerly so malformed TOML
     /// fails the bot at startup instead of silently disabling emotes.
-    pub fn new(config: AiEmotesConfigSection, glossary_toml: &str) -> Result<Self> {
+    ///
+    /// `base_url` is resolved once at startup from the current snapshot;
+    /// changing it requires a restart. All other emote knobs are read live
+    /// per-call via [`Self::live_caps`].
+    pub fn new(settings: SettingsHandle, glossary_toml: &str) -> Result<Self> {
+        let snap = settings.load();
+        let cfg = snap
+            .ai
+            .emotes
+            .as_ref()
+            .ok_or_else(|| eyre!("emotes not configured"))?;
+
         let glossary: Glossary =
             toml::from_str(glossary_toml).wrap_err("Failed to parse 7TV emote glossary")?;
 
@@ -96,21 +137,29 @@ impl SevenTvEmoteProvider {
             .build()
             .wrap_err("Failed to build 7TV HTTP client")?;
 
+        let base_url = cfg
+            .base_url
+            .as_deref()
+            .unwrap_or(DEFAULT_BASE_URL)
+            .trim_end_matches('/')
+            .to_string();
+
         Ok(Self {
+            settings,
             http,
-            base_url: config
-                .base_url
-                .as_deref()
-                .unwrap_or(DEFAULT_BASE_URL)
-                .trim_end_matches('/')
-                .to_string(),
+            base_url,
             glossary: glossary.emotes,
-            include_global: config.include_global,
-            refresh_interval: Duration::from_secs(config.refresh_interval_secs),
-            max_prompt_emotes: config.max_prompt_emotes,
-            min_baseline_emotes: config.min_baseline_emotes.min(config.max_prompt_emotes),
             cache: Mutex::new(PromptCache::default()),
         })
+    }
+
+    /// Snapshot the live-tunable knobs from the current settings.
+    ///
+    /// If the emotes section has somehow been removed from settings while the
+    /// provider is running, falls back to compiled defaults so the provider
+    /// degrades gracefully rather than panicking.
+    fn live_caps(&self) -> EmotesLiveCaps {
+        live_caps_from_handle(&self.settings)
     }
 
     /// Return a turn-specific prompt block for the Twitch channel id.
@@ -124,28 +173,33 @@ impl SevenTvEmoteProvider {
         instruction: &str,
         recent_chat: &str,
     ) -> Option<String> {
-        let emotes = self.prompt_emotes(twitch_channel_id).await?;
+        let caps = self.live_caps();
+        let emotes = self.prompt_emotes(twitch_channel_id, &caps).await?;
         build_prompt_block(
             &emotes,
-            self.max_prompt_emotes,
-            self.min_baseline_emotes,
+            caps.max_prompt_emotes,
+            caps.min_baseline_emotes,
             instruction,
             recent_chat,
         )
     }
 
-    async fn prompt_emotes(&self, twitch_channel_id: &str) -> Option<Vec<PromptEmote>> {
+    async fn prompt_emotes(
+        &self,
+        twitch_channel_id: &str,
+        caps: &EmotesLiveCaps,
+    ) -> Option<Vec<PromptEmote>> {
         let mut cache = self.cache.lock().await;
         let now = Instant::now();
 
         if cache
             .last_refresh
-            .is_some_and(|last| now.duration_since(last) < self.refresh_interval)
+            .is_some_and(|last| now.duration_since(last) < caps.refresh_interval)
         {
             return cache.emotes.clone();
         }
 
-        match self.refresh_prompt_emotes(twitch_channel_id).await {
+        match self.refresh_prompt_emotes(twitch_channel_id, caps).await {
             Ok(emotes) => {
                 cache.last_refresh = Some(now);
                 cache.emotes = emotes;
@@ -165,23 +219,28 @@ impl SevenTvEmoteProvider {
     async fn refresh_prompt_emotes(
         &self,
         twitch_channel_id: &str,
+        caps: &EmotesLiveCaps,
     ) -> Result<Option<Vec<PromptEmote>>> {
         if self.glossary.is_empty() {
             debug!("7TV emote glossary is empty");
             return Ok(None);
         }
 
-        let available = self.fetch_available_emotes(twitch_channel_id).await?;
+        let available = self.fetch_available_emotes(twitch_channel_id, caps).await?;
         let emotes = build_available_prompt_emotes(&self.glossary, &available);
         Ok(emotes)
     }
 
-    async fn fetch_available_emotes(&self, twitch_channel_id: &str) -> Result<HashSet<String>> {
+    async fn fetch_available_emotes(
+        &self,
+        twitch_channel_id: &str,
+        caps: &EmotesLiveCaps,
+    ) -> Result<HashSet<String>> {
         let mut global = Vec::new();
         let mut channel = Vec::new();
         let mut had_error = false;
 
-        if self.include_global {
+        if caps.include_global {
             match self.fetch_global_emotes().await {
                 Ok(emotes) => global = emotes,
                 Err(e) => {
@@ -909,5 +968,108 @@ mod tests {
         let emotes = build_available_prompt_emotes(&glossary, &available).unwrap();
 
         assert!(build_prompt_block(&emotes, 0, 0, "hi", "").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Live-rebinding tests
+    // -----------------------------------------------------------------------
+
+    /// Build a [`SettingsHandle`] with the given `max_prompt_emotes` set in the
+    /// emotes section.
+    fn make_emotes_handle(max_prompt_emotes: usize) -> crate::settings::SettingsHandle {
+        use std::sync::Arc;
+
+        use arc_swap::ArcSwap;
+
+        use crate::settings::Settings;
+
+        let mut s = Settings::compiled_defaults();
+        s.ai.emotes = Some(AiEmotes {
+            max_prompt_emotes,
+            min_baseline_emotes: 0, // no baseline padding so count is deterministic
+            ..AiEmotes::default()
+        });
+        Arc::new(ArcSwap::from_pointee(s))
+    }
+
+    /// Verify that [`live_caps_from_handle`] returns updated values after the
+    /// handle is mutated — i.e. that emote knobs are truly live-readable.
+    ///
+    /// This test deliberately avoids constructing a full [`SevenTvEmoteProvider`]
+    /// (which requires a TLS-enabled `reqwest::Client`) and instead calls the
+    /// extracted free function directly.
+    #[test]
+    fn live_caps_max_prompt_emotes_respected_and_live_rebindable() {
+        use std::sync::Arc;
+
+        // Build a glossary with 5 emotes
+        let glossary_toml = r#"
+[[emotes]]
+name = "A"
+meaning = "first"
+
+[[emotes]]
+name = "B"
+meaning = "second"
+
+[[emotes]]
+name = "C"
+meaning = "third"
+
+[[emotes]]
+name = "D"
+meaning = "fourth"
+
+[[emotes]]
+name = "E"
+meaning = "fifth"
+"#;
+
+        let available = merge_emote_sets(
+            vec![
+                SevenTvEmote { name: "A".into() },
+                SevenTvEmote { name: "B".into() },
+                SevenTvEmote { name: "C".into() },
+                SevenTvEmote { name: "D".into() },
+                SevenTvEmote { name: "E".into() },
+            ],
+            Vec::new(),
+        );
+        let emotes = build_available_prompt_emotes(
+            &toml::from_str::<Glossary>(glossary_toml).unwrap().emotes,
+            &available,
+        )
+        .unwrap();
+
+        // --- Phase 1: max = 5, baseline = 5 → all five emotes present ---
+        let handle = make_emotes_handle(5);
+        let caps = live_caps_from_handle(&handle);
+        assert_eq!(caps.max_prompt_emotes, 5);
+        let prompt5 = build_prompt_block(&emotes, caps.max_prompt_emotes, 5, "hi", "").unwrap();
+        assert!(prompt5.contains("- A:"));
+        assert!(prompt5.contains("- E:"));
+
+        // --- Phase 2: mutate the handle; live_caps_from_handle must reflect the change ---
+        let mut s = (*handle.load_full()).clone();
+        s.ai.emotes.as_mut().unwrap().max_prompt_emotes = 2;
+        s.ai.emotes.as_mut().unwrap().min_baseline_emotes = 2;
+        handle.store(Arc::new(s));
+
+        let caps2 = live_caps_from_handle(&handle);
+        assert_eq!(caps2.max_prompt_emotes, 2);
+        let prompt2 = build_prompt_block(
+            &emotes,
+            caps2.max_prompt_emotes,
+            caps2.min_baseline_emotes,
+            "hi",
+            "",
+        )
+        .unwrap();
+        assert!(prompt2.contains("- A:"));
+        assert!(prompt2.contains("- B:"));
+        assert!(
+            !prompt2.contains("- C:"),
+            "prompt should be capped at 2:\n{prompt2}"
+        );
     }
 }

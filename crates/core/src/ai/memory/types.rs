@@ -104,6 +104,20 @@ impl Caps {
             FileKind::State { .. } => self.state_bytes,
         }
     }
+
+    /// Build a `Caps` snapshot from the live settings. Placed here so every
+    /// call site (store, tests) can derive caps the same way without depending
+    /// on `ai::command`.
+    pub fn from_settings(s: &crate::settings::Settings) -> Self {
+        let m = &s.ai.memory;
+        Self {
+            soul_bytes: m.soul_bytes,
+            lore_bytes: m.lore_bytes,
+            user_bytes: m.user_bytes,
+            state_bytes: m.state_bytes,
+            max_state_files: m.max_state_files,
+        }
+    }
 }
 
 #[cfg(test)]

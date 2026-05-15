@@ -1,0 +1,86 @@
+{# crates/web/templates/settings/cards/ai_dreamer.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-dreamer" class="settings-card{% if !current.ai.dreamer.enabled %} is-card-off{% endif %}" data-section="ai_dreamer">
+  <header class="settings-card-head">
+    <div>
+      <h2>AI · Dreamer</h2>
+      <p>Nightly ritual that rewrites memory from yesterday's transcript.</p>
+      <label class="toggle">
+        <input type="checkbox" name="ai_dreamer_enabled" data-card-toggle value="1"
+               data-key="ai.dreamer.enabled"
+               {% if current.ai.dreamer.enabled %}checked{% endif %}>
+        <span class="toggle-thumb" aria-hidden="true"></span>
+      </label>
+    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+  </header>
+  {# Marker so the POST handler can tell "card rendered, toggle off" from
+     "card not in the form at all". The dreamer card is always rendered, but
+     the same hidden input is kept for symmetry with the optional cards. #}
+  <input type="hidden" name="ai_dreamer_card_visible" value="1">
+  <div class="settings-rows">
+    <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
+      {% call m::row_head("model", "Override the model used for the dreamer pass. Empty = use connection.model.") %}{% endcall %}
+      <div class="row-control-cell">
+        <input type="text"
+               class="model-input"
+               name="ai_dreamer_model"
+               list="ai-models-dreamer"
+               value="{% match current.ai.dreamer.model %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}"
+               placeholder="(use connection model)"
+               data-default=""
+               data-key="ai.dreamer.model"
+               data-scope="dreamer"
+               data-models-url="/settings/ai/models?scope=dreamer">
+        <datalist id="ai-models-dreamer"></datalist>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.dreamer.model") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(connection)</span></span>
+      </div>
+    </div>
+
+    {% let dreamer_effort = current.ai.dreamer.reasoning_effort.as_deref().unwrap_or("none") %}
+    <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
+      {% call m::row_head("reasoning_effort", "Override reasoning_effort for dreamer turns.") %}{% endcall %}
+      <div class="row-control-cell">
+        <div class="segmented" role="radiogroup" aria-label="reasoning_effort">
+          {% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "none", dreamer_effort) %}{% endcall %}
+          {% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "minimal", dreamer_effort) %}{% endcall %}
+          {% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "medium", dreamer_effort) %}{% endcall %}
+          {% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "high", dreamer_effort) %}{% endcall %}
+          {% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "xhigh", dreamer_effort) %}{% endcall %}
+        </div>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.dreamer.reasoning_effort") %}{% endcall %}
+        <span class="row-default">default <span class="mono">none</span></span>
+      </div>
+    </div>
+
+    <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
+      {% call m::row_head("run_at", "Berlin-local wallclock for the nightly run (HH:MM).") %}{% endcall %}
+      <div class="row-control-cell">
+        <input type="text"
+               name="ai_dreamer_run_at"
+               value="{{ current.ai.dreamer.run_at }}"
+               pattern="^\d{2}:\d{2}$"
+               placeholder="04:00"
+               data-default="{{ defaults.ai.dreamer.run_at }}"
+               data-key="ai.dreamer.run_at">
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.dreamer.run_at") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{{ defaults.ai.dreamer.run_at }}</span></span>
+      </div>
+    </div>
+
+    {% call m::num_row_bounded("ai_dreamer", "ai_dreamer_timeout_secs", "timeout_secs",
+       "Per-pass timeout.",
+       current.ai.dreamer.timeout_secs, defaults.ai.dreamer.timeout_secs, "s", 5, 1800) %}{% endcall %}
+    {% call m::num_row_bounded("ai_dreamer", "ai_dreamer_max_rounds", "max_rounds",
+       "Maximum tool rounds the dreamer may take.",
+       current.ai.dreamer.max_rounds, defaults.ai.dreamer.max_rounds, "", 1, 128) %}{% endcall %}
+  </div>
+</section>
