@@ -107,12 +107,14 @@ where
         0
     };
     let prefill_config = if ai_config.is_some() {
-        snapshot.ai.prefill.clone().map(|p| {
-            ai::prefill::HistoryPrefillConfig {
+        snapshot
+            .ai
+            .prefill
+            .clone()
+            .map(|p| ai::prefill::HistoryPrefillConfig {
                 base_url: p.base_url,
                 threshold: p.threshold,
-            }
-        })
+            })
     } else {
         None
     };
@@ -228,14 +230,17 @@ where
                 .build()
                 .expect("build media HTTP client");
             let provider_base_url =
-                ai_conn.base_url.clone().unwrap_or_else(|| match ai_conn.backend {
-                    crate::settings::ai::AiBackendKind::OpenAi => {
-                        "https://api.openai.com/v1".to_string()
-                    }
-                    crate::settings::ai::AiBackendKind::Ollama => {
-                        "http://localhost:11434/v1".to_string()
-                    }
-                });
+                ai_conn
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| match ai_conn.backend {
+                        crate::settings::ai::AiBackendKind::OpenAi => {
+                            "https://api.openai.com/v1".to_string()
+                        }
+                        crate::settings::ai::AiBackendKind::Ollama => {
+                            "http://localhost:11434/v1".to_string()
+                        }
+                    });
             let media = Arc::new(ai::content::MediaClient::new(
                 media_http,
                 provider_base_url,

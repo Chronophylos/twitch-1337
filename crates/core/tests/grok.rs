@@ -11,10 +11,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 async fn ai_reply_includes_parent_message() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 0;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
         })
         .spawn()
         .await;
@@ -46,10 +44,8 @@ async fn ai_reply_includes_parent_message() {
 async fn grok_without_reply_behaves_like_ai_alias() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 0;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
         })
         .spawn()
         .await;
@@ -77,10 +73,8 @@ async fn grok_without_reply_behaves_like_ai_alias() {
 async fn grok_reply_with_leading_mention_triggers_alias() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 0;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
         })
         .spawn()
         .await;
@@ -120,10 +114,8 @@ async fn grok_reply_with_leading_mention_triggers_alias() {
 async fn grok_empty_reply_with_leading_mention_uses_default_instruction() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 0;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
         })
         .spawn()
         .await;
@@ -157,10 +149,8 @@ async fn grok_empty_reply_with_leading_mention_uses_default_instruction() {
 async fn grok_strips_visible_reasoning_prefix_from_response() {
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 0;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
         })
         .spawn()
         .await;
@@ -193,14 +183,13 @@ async fn grok_uses_web_tools_when_enabled() {
         .mount(&search)
         .await;
 
+    let search_base_url = format!("{}/search", search.uri());
     let bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.web.enabled = true;
-                ai.web.base_url = format!("{}/search", search.uri());
-                ai.web.timeout = 5;
-            }
+        .with_settings(|o| {
+            o.ai.web.enabled = Some(true);
+            o.ai.web.base_url = Some(search_base_url);
+            o.ai.web.timeout = Some(5);
         })
         .spawn()
         .await;

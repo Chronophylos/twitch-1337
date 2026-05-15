@@ -175,6 +175,7 @@ pub async fn main() -> Result<()> {
 
     let services = Services {
         clock: Arc::new(SystemClock),
+        ai_bootstrap: config.ai.clone(),
         llm: llm_client,
         aviation: aviation_client,
         doener: doener_client,

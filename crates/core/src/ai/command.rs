@@ -523,10 +523,7 @@ fn user_facing_provider_message(err: &LlmError) -> Option<&'static str> {
 /// in `config.toml`); when AI is disabled we fall back to [`Caps::default`] —
 /// the web dashboard always needs *some* caps because it opens the store
 /// unconditionally.
-pub fn memory_caps_from_config(
-    ai_present: bool,
-    settings: &crate::settings::Settings,
-) -> Caps {
+pub fn memory_caps_from_config(ai_present: bool, settings: &crate::settings::Settings) -> Caps {
     if !ai_present {
         return Caps::default();
     }

@@ -50,12 +50,10 @@ async fn ai_command_empty_shows_usage() {
 async fn ai_command_injects_7tv_emote_glossary() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 10;
-                ai.emotes.enabled = true;
-                ai.emotes.include_global = true;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
+            o.ai.emotes.enabled = Some(true);
+            o.ai.emotes.include_global = Some(true);
         })
         .with_emote_glossary(
             r#"
@@ -140,11 +138,9 @@ meaning = "steht nicht im aktuellen 7TV-Katalog"
 async fn ai_command_continues_when_7tv_unavailable() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            if let Some(ai) = c.ai.as_mut() {
-                ai.history_length = 0;
-                ai.emotes.enabled = true;
-            }
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+            o.ai.emotes.enabled = Some(true);
         })
         .with_emote_glossary(
             r#"
@@ -205,13 +201,13 @@ async fn ai_command_web_tool_flow_search_success() {
         .mount(&search)
         .await;
 
+    let search_base_url = format!("{}/search", search.uri());
     let mut bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            let ai = c.ai.as_mut().expect("ai configured");
-            ai.web.enabled = true;
-            ai.web.base_url = format!("{}/search", search.uri());
-            ai.web.timeout = 5;
+        .with_settings(|o| {
+            o.ai.web.enabled = Some(true);
+            o.ai.web.base_url = Some(search_base_url);
+            o.ai.web.timeout = Some(5);
         })
         .spawn()
         .await;
@@ -295,14 +291,15 @@ async fn ai_command_read_url_round_trip() {
     let search_uri = search.uri();
     let png_url = format!("{}/p.png", origin.uri());
 
+    let media_base_url = format!("{media_uri}/v1");
+    let search_base_url_media = format!("{search_uri}/search");
     let mut bot = TestBotBuilder::new()
         .with_ai()
-        .with_config(|c| {
-            let ai = c.ai.as_mut().expect("ai configured");
-            ai.base_url = Some(format!("{media_uri}/v1"));
-            ai.web.enabled = true;
-            ai.web.base_url = format!("{search_uri}/search");
-            ai.web.timeout = 5;
+        .with_settings(|o| {
+            o.ai.connection.base_url = Some(Some(media_base_url));
+            o.ai.web.enabled = Some(true);
+            o.ai.web.base_url = Some(search_base_url_media);
+            o.ai.web.timeout = Some(5);
         })
         .spawn()
         .await;

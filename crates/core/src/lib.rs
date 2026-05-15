@@ -74,6 +74,9 @@ pub use util::{
 /// Production wires real implementations; integration tests wire fakes.
 pub struct Services {
     pub clock: Arc<dyn Clock>,
+    /// Bootstrap-only AI credentials from `config.toml`. Presence gates the
+    /// AI feature; all knobs come from the settings store.
+    pub ai_bootstrap: Option<crate::config::AiBootstrap>,
     pub llm: Option<Arc<dyn LlmClient>>,
     pub aviation: Option<AviationClient>,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
@@ -156,6 +159,7 @@ where
 {
     let Services {
         clock,
+        ai_bootstrap: _,
         llm,
         aviation,
         doener,
