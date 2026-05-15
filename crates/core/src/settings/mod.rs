@@ -21,7 +21,7 @@ pub use ai::{
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
 pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
-pub use overrides::{CooldownsOverrides, PingsOverrides, SettingsOverrides};
+pub use overrides::{AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides};
 pub use store::{Actor, SettingsStore};
 
 use std::sync::Arc;
@@ -166,9 +166,166 @@ impl Settings {
                 cooldown: overrides.pings.cooldown.unwrap_or(defaults.pings.cooldown),
                 public: overrides.pings.public.unwrap_or(defaults.pings.public),
             },
-            ai: defaults.ai.clone(), // replaced in Task 4 with sparse-override resolution
+            ai: resolve_ai(&defaults.ai, &overrides.ai),
         }
     }
+}
+
+fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
+    use ai::{AiBehavior, AiConnection, AiDreamer, AiHistory, AiMedia, AiMemory};
+    AiSettings {
+        connection: AiConnection {
+            backend: o.connection.backend.unwrap_or(defaults.connection.backend),
+            base_url: match &o.connection.base_url {
+                Some(v) => v.clone(),
+                None => defaults.connection.base_url.clone(),
+            },
+            model: o
+                .connection
+                .model
+                .clone()
+                .unwrap_or_else(|| defaults.connection.model.clone()),
+            timeout: o.connection.timeout.unwrap_or(defaults.connection.timeout),
+            reasoning_effort: match &o.connection.reasoning_effort {
+                Some(v) => v.clone(),
+                None => defaults.connection.reasoning_effort.clone(),
+            },
+        },
+        behavior: AiBehavior {
+            max_turn_rounds: o
+                .behavior
+                .max_turn_rounds
+                .unwrap_or(defaults.behavior.max_turn_rounds),
+            max_writes_per_turn: o
+                .behavior
+                .max_writes_per_turn
+                .unwrap_or(defaults.behavior.max_writes_per_turn),
+        },
+        history: AiHistory {
+            length: o.history.length.unwrap_or(defaults.history.length),
+            ai_channel_length: o
+                .history
+                .ai_channel_length
+                .unwrap_or(defaults.history.ai_channel_length),
+        },
+        memory: AiMemory {
+            soul_bytes: o.memory.soul_bytes.unwrap_or(defaults.memory.soul_bytes),
+            lore_bytes: o.memory.lore_bytes.unwrap_or(defaults.memory.lore_bytes),
+            user_bytes: o.memory.user_bytes.unwrap_or(defaults.memory.user_bytes),
+            state_bytes: o.memory.state_bytes.unwrap_or(defaults.memory.state_bytes),
+            inject_byte_budget: o
+                .memory
+                .inject_byte_budget
+                .unwrap_or(defaults.memory.inject_byte_budget),
+            max_state_files: o
+                .memory
+                .max_state_files
+                .unwrap_or(defaults.memory.max_state_files),
+        },
+        dreamer: AiDreamer {
+            enabled: o.dreamer.enabled.unwrap_or(defaults.dreamer.enabled),
+            model: match &o.dreamer.model {
+                Some(v) => v.clone(),
+                None => defaults.dreamer.model.clone(),
+            },
+            reasoning_effort: match &o.dreamer.reasoning_effort {
+                Some(v) => v.clone(),
+                None => defaults.dreamer.reasoning_effort.clone(),
+            },
+            run_at: o
+                .dreamer
+                .run_at
+                .clone()
+                .unwrap_or_else(|| defaults.dreamer.run_at.clone()),
+            timeout_secs: o
+                .dreamer
+                .timeout_secs
+                .unwrap_or(defaults.dreamer.timeout_secs),
+            max_rounds: o.dreamer.max_rounds.unwrap_or(defaults.dreamer.max_rounds),
+        },
+        prefill: resolve_prefill(defaults.prefill.as_ref(), &o.prefill),
+        web: resolve_web(defaults.web.as_ref(), &o.web),
+        emotes: resolve_emotes(defaults.emotes.as_ref(), &o.emotes),
+        media: AiMedia {
+            model: o
+                .media
+                .model
+                .clone()
+                .unwrap_or_else(|| defaults.media.model.clone()),
+            timeout: o.media.timeout.unwrap_or(defaults.media.timeout),
+            max_image_size: o
+                .media
+                .max_image_size
+                .unwrap_or(defaults.media.max_image_size),
+            max_pdf_size: o.media.max_pdf_size.unwrap_or(defaults.media.max_pdf_size),
+            max_audio_size: o
+                .media
+                .max_audio_size
+                .unwrap_or(defaults.media.max_audio_size),
+            max_video_size: o
+                .media
+                .max_video_size
+                .unwrap_or(defaults.media.max_video_size),
+            max_text_size: o
+                .media
+                .max_text_size
+                .unwrap_or(defaults.media.max_text_size),
+        },
+    }
+}
+
+fn resolve_prefill(
+    defaults: Option<&AiPrefill>,
+    o: &overrides::AiPrefillOverrides,
+) -> Option<AiPrefill> {
+    let enabled = o.enabled.unwrap_or_else(|| defaults.is_some());
+    if !enabled {
+        return None;
+    }
+    let base = defaults.cloned().unwrap_or_default();
+    Some(AiPrefill {
+        base_url: o.base_url.clone().unwrap_or(base.base_url),
+        threshold: o.threshold.unwrap_or(base.threshold),
+    })
+}
+
+fn resolve_web(defaults: Option<&AiWeb>, o: &overrides::AiWebOverrides) -> Option<AiWeb> {
+    let enabled = o.enabled.unwrap_or_else(|| defaults.is_some());
+    if !enabled {
+        return None;
+    }
+    let base = defaults.cloned().unwrap_or_default();
+    Some(AiWeb {
+        base_url: o.base_url.clone().unwrap_or(base.base_url),
+        timeout: o.timeout.unwrap_or(base.timeout),
+        max_results: o.max_results.unwrap_or(base.max_results),
+        max_rounds: o.max_rounds.unwrap_or(base.max_rounds),
+        cache_ttl_secs: o.cache_ttl_secs.unwrap_or(base.cache_ttl_secs),
+        cache_capacity: o.cache_capacity.unwrap_or(base.cache_capacity),
+    })
+}
+
+fn resolve_emotes(
+    defaults: Option<&AiEmotes>,
+    o: &overrides::AiEmotesOverrides,
+) -> Option<AiEmotes> {
+    let enabled = o.enabled.unwrap_or_else(|| defaults.is_some());
+    if !enabled {
+        return None;
+    }
+    let base = defaults.cloned().unwrap_or_default();
+    Some(AiEmotes {
+        include_global: o.include_global.unwrap_or(base.include_global),
+        refresh_interval_secs: o
+            .refresh_interval_secs
+            .unwrap_or(base.refresh_interval_secs),
+        max_prompt_emotes: o.max_prompt_emotes.unwrap_or(base.max_prompt_emotes),
+        min_baseline_emotes: o.min_baseline_emotes.unwrap_or(base.min_baseline_emotes),
+        base_url: match &o.base_url {
+            Some(v) => v.clone(),
+            None => base.base_url,
+        },
+    })
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -198,6 +355,7 @@ mod resolve_tests {
                 ..Default::default()
             },
             pings: PingsOverrides::default(),
+            ai: Default::default(),
         };
         let resolved = Settings::resolve(&defaults, &overrides);
         assert_eq!(resolved.cooldowns.ai, 15);
@@ -258,5 +416,28 @@ mod resolve_tests {
         let s = Settings::compiled_defaults();
         assert_eq!(s.schema_version, 2);
         assert_eq!(s.ai, AiSettings::default());
+    }
+
+    #[test]
+    fn ai_connection_model_override_wins() {
+        use crate::settings::overrides::{AiConnectionOverrides, AiOverrides};
+
+        let defaults = Settings::compiled_defaults();
+        let overrides = SettingsOverrides {
+            ai: AiOverrides {
+                connection: AiConnectionOverrides {
+                    model: Some("gpt-5".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..SettingsOverrides::default()
+        };
+        let resolved = Settings::resolve(&defaults, &overrides);
+        assert_eq!(resolved.ai.connection.model, "gpt-5");
+        assert_eq!(
+            resolved.ai.connection.timeout,
+            defaults.ai.connection.timeout
+        );
     }
 }

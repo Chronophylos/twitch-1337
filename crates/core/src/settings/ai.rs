@@ -169,6 +169,40 @@ impl Default for AiDreamer {
     }
 }
 
+impl Default for AiPrefill {
+    fn default() -> Self {
+        Self {
+            base_url: "https://logs.zonian.dev".into(),
+            threshold: 0.5,
+        }
+    }
+}
+
+impl Default for AiWeb {
+    fn default() -> Self {
+        Self {
+            base_url: "http://localhost:8080/search".into(),
+            timeout: 15,
+            max_results: 5,
+            max_rounds: 3,
+            cache_ttl_secs: 300,
+            cache_capacity: 100,
+        }
+    }
+}
+
+impl Default for AiEmotes {
+    fn default() -> Self {
+        Self {
+            include_global: true,
+            refresh_interval_secs: 3600,
+            max_prompt_emotes: 12,
+            min_baseline_emotes: 4,
+            base_url: None,
+        }
+    }
+}
+
 impl Default for AiMedia {
     fn default() -> Self {
         Self {

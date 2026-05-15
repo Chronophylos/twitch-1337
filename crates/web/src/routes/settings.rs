@@ -111,6 +111,7 @@ async fn save(
             cooldown: Some(form.ping_cooldown),
             public: Some(form.ping_public.is_some()),
         },
+        ai: Default::default(),
     };
 
     let actor = Actor {
