@@ -198,23 +198,23 @@ where
 
     // 7TV emote provider: built once at startup so malformed glossary TOML
     // (baked or test-injected) fails fast instead of silently disabling emotes.
+    // Presence of [ai.emotes] is checked here; all live knobs are re-read per
+    // call via SettingsHandle inside the provider.
     let emote_provider = match (llm.as_ref(), config.ai.as_ref()) {
         (Some(_), Some(_)) => {
-            let snapshot = settings.load_full();
-            match snapshot.ai.emotes.as_ref() {
-                Some(emotes_cfg) => {
-                    let glossary_toml = emote_glossary_override
-                        .as_deref()
-                        .unwrap_or(crate::twitch::seventv::BAKED_GLOSSARY_TOML);
-                    let provider = crate::twitch::seventv::SevenTvEmoteProvider::new(
-                        emotes_cfg.clone(),
-                        glossary_toml,
-                    )
-                    .wrap_err("Failed to initialize 7TV emote provider")?;
-                    tracing::info!("7TV emote glossary prompt grounding enabled");
-                    Some(Arc::new(provider))
-                }
-                None => None,
+            if settings.load().ai.emotes.is_some() {
+                let glossary_toml = emote_glossary_override
+                    .as_deref()
+                    .unwrap_or(crate::twitch::seventv::BAKED_GLOSSARY_TOML);
+                let provider = crate::twitch::seventv::SevenTvEmoteProvider::new(
+                    settings.clone(),
+                    glossary_toml,
+                )
+                .wrap_err("Failed to initialize 7TV emote provider")?;
+                tracing::info!("7TV emote glossary prompt grounding enabled");
+                Some(Arc::new(provider))
+            } else {
+                None
             }
         }
         _ => None,
