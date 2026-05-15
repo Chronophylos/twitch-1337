@@ -73,6 +73,10 @@
 </div>
 {% endmacro %}
 
+{# Reserved for future use — askama 0.16 cannot pass inline dict literals from
+   templates, so AI cards inline their own radio groups and call `effort_segment`
+   for reasoning_effort. Kept here for Rust-side callers that can pre-compute
+   the options slice. #}
 {% macro segmented_row(section, field, key, hint, value, default, options) %}
 {# options is a list of {value, label}; renders a radiogroup #}
 <div class="settings-row" data-section="{{ section }}">
@@ -119,6 +123,46 @@
     <span class="row-default">default <span class="mono">{{ default }}</span></span>
   </div>
 </div>
+{% endmacro %}
+
+{# Numeric row with caller-supplied min/max. Use for AI fields whose range
+   exceeds the cooldowns 1..=3600 default (history length, byte budgets, etc.).
+   Cooldowns + pings keep using the simpler `num_row` to avoid churn. #}
+{% macro num_row_bounded(section, field, key, hint, value, default, unit, min, max) %}
+<div class="settings-row" data-section="{{ section }}">
+  {% call row_head(key, hint) %}{% endcall %}
+  <div class="row-control-cell">
+    <span class="row-pretty" aria-hidden="true" data-pretty-unit="{{ unit }}">{{ value }}{% if !unit.is_empty() %} {{ unit }}{% endif %}</span>
+    <div class="num-wrap">
+      <input
+        type="number"
+        class="num-input"
+        name="{{ field }}"
+        min="{{ min }}"
+        max="{{ max }}"
+        value="{{ value }}"
+        data-default="{{ default }}"
+        data-key="{{ key }}">
+      {% if !unit.is_empty() %}<span class="num-unit">{{ unit }}</span>{% endif %}
+    </div>
+  </div>
+  <div class="row-right">
+    {% call row_reset(key) %}{% endcall %}
+    <span class="row-default">default <span class="mono">{{ default }}{% if !unit.is_empty() %}{{ unit }}{% endif %}</span></span>
+  </div>
+</div>
+{% endmacro %}
+
+{# One segmented radio for the reasoning_effort selector. Lifted into a macro
+   because askama 0.16 can't iterate `[&str; N]` and compare against a `&str`
+   `selected` arg in the same expression without type-mismatch errors. #}
+{% macro effort_segment(field, key, value, selected) %}
+<label class="segment{% if value == selected %} is-active{% endif %}">
+  <input type="radio" name="{{ field }}" value="{{ value }}"
+         data-default="none" data-key="{{ key }}"
+         {% if value == selected %}checked{% endif %}>
+  <span>{{ value }}</span>
+</label>
 {% endmacro %}
 
 {% macro bytesize_row(section, field, key, hint, value, default) %}

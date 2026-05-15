@@ -1,0 +1,79 @@
+{# crates/web/templates/settings/cards/ai_web.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-web" class="settings-card{% if current.ai.web.is_none() %} is-card-off{% endif %}" data-section="ai_web">
+  <header class="settings-card-head">
+    <div>
+      <h2>AI · Web tools</h2>
+      <p>Lets the model search a SearXNG instance. Enabling requires a restart.</p>
+      <label class="toggle">
+        <input type="checkbox" name="ai_web_enabled" data-card-toggle value="1"
+               data-key="ai.web.enabled"
+               {% if current.ai.web.is_some() %}checked{% endif %}>
+        <span class="toggle-thumb" aria-hidden="true"></span>
+      </label>
+    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+  </header>
+  <input type="hidden" name="ai_web_card_visible" value="1">
+  <div class="settings-rows">
+    {% match current.ai.web %}
+    {% when Some with (w) %}
+    <div class="settings-row" data-section="ai_web" data-card-enabled-by="ai_web_enabled">
+      {% call m::row_head("base_url", "SearXNG /search endpoint.") %}{% endcall %}
+      <div class="row-control-cell">
+        <input type="text" name="ai_web_base_url" value="{{ w.base_url }}"
+               placeholder="http://localhost:8080/search"
+               data-default="http://localhost:8080/search" data-key="ai.web.base_url">
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.web.base_url") %}{% endcall %}
+        <span class="row-default">default <span class="mono">http://localhost:8080/search</span></span>
+      </div>
+    </div>
+    {% call m::num_row_bounded("ai_web", "ai_web_timeout", "timeout",
+       "Per-request timeout.",
+       w.timeout, 15, "s", 1, 120) %}{% endcall %}
+    {% call m::num_row_bounded("ai_web", "ai_web_max_results", "max_results",
+       "Results returned to the model per query.",
+       w.max_results, 5, "", 1, 50) %}{% endcall %}
+    {% call m::num_row_bounded("ai_web", "ai_web_max_rounds", "max_rounds",
+       "Maximum search tool calls per !ai turn.",
+       w.max_rounds, 3, "", 1, 16) %}{% endcall %}
+    {% call m::num_row_bounded("ai_web", "ai_web_cache_ttl_secs", "cache_ttl_secs",
+       "How long a cached search is reused.",
+       w.cache_ttl_secs, 300, "s", 0, 86400) %}{% endcall %}
+    {% call m::num_row_bounded("ai_web", "ai_web_cache_capacity", "cache_capacity",
+       "Max entries in the LRU search cache.",
+       w.cache_capacity, 100, "", 1, 10000) %}{% endcall %}
+    {% when None %}
+    <div class="settings-row" data-section="ai_web" data-card-enabled-by="ai_web_enabled">
+      {% call m::row_head("base_url", "SearXNG /search endpoint.") %}{% endcall %}
+      <div class="row-control-cell">
+        <input type="text" name="ai_web_base_url" value="http://localhost:8080/search"
+               placeholder="http://localhost:8080/search"
+               data-default="http://localhost:8080/search" data-key="ai.web.base_url">
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.web.base_url") %}{% endcall %}
+        <span class="row-default">default <span class="mono">http://localhost:8080/search</span></span>
+      </div>
+    </div>
+    {% call m::num_row_bounded("ai_web", "ai_web_timeout", "timeout",
+       "Per-request timeout.",
+       15, 15, "s", 1, 120) %}{% endcall %}
+    {% call m::num_row_bounded("ai_web", "ai_web_max_results", "max_results",
+       "Results returned to the model per query.",
+       5, 5, "", 1, 50) %}{% endcall %}
+    {% call m::num_row_bounded("ai_web", "ai_web_max_rounds", "max_rounds",
+       "Maximum search tool calls per !ai turn.",
+       3, 3, "", 1, 16) %}{% endcall %}
+    {% call m::num_row_bounded("ai_web", "ai_web_cache_ttl_secs", "cache_ttl_secs",
+       "How long a cached search is reused.",
+       300, 300, "s", 0, 86400) %}{% endcall %}
+    {% call m::num_row_bounded("ai_web", "ai_web_cache_capacity", "cache_capacity",
+       "Max entries in the LRU search cache.",
+       100, 100, "", 1, 10000) %}{% endcall %}
+    {% endmatch %}
+  </div>
+</section>

@@ -1,0 +1,20 @@
+{# crates/web/templates/settings/cards/ai_behavior.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-behavior" class="settings-card" data-section="ai_behavior">
+  <header class="settings-card-head">
+    <div>
+      <h2>AI · Behavior</h2>
+      <p>Per-turn limits for the !ai agent loop.</p>
+    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+  </header>
+  <div class="settings-rows">
+    {% call m::num_row_bounded("ai_behavior", "ai_behavior_max_turn_rounds", "max_turn_rounds",
+       "Maximum tool-use rounds inside a single !ai turn.",
+       current.ai.behavior.max_turn_rounds, defaults.ai.behavior.max_turn_rounds, "", 1, 32) %}{% endcall %}
+    {% call m::num_row_bounded("ai_behavior", "ai_behavior_max_writes_per_turn", "max_writes_per_turn",
+       "How many memory writes the model may issue per turn.",
+       current.ai.behavior.max_writes_per_turn, defaults.ai.behavior.max_writes_per_turn, "", 0, 64) %}{% endcall %}
+  </div>
+</section>

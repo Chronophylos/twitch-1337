@@ -388,6 +388,43 @@ async fn post_settings_card_invisible_leaves_toggle_alone() {
 }
 
 #[tokio::test]
+async fn settings_page_renders_all_ai_cards() {
+    // Smoke test: GETting /settings as the owner must render every AI card
+    // we wired into `index.html`. Catches missing/typo'd `id="…"` anchors
+    // before they break the sidebar nav and the dirty-counters JS.
+    install_crypto();
+    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    state.owner_id = Some(Arc::from("123"));
+    let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let app = build_router(state);
+    let req = Request::builder()
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "owner GET /settings must 200");
+    let html = body_string(res).await;
+    for id in [
+        "sec-ai-connection",
+        "sec-ai-behavior",
+        "sec-ai-history",
+        "sec-ai-memory",
+        "sec-ai-dreamer",
+        "sec-ai-prefill",
+        "sec-ai-web",
+        "sec-ai-emotes",
+        "sec-ai-media",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "settings page is missing AI card anchor {id}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn reset_cooldowns_clears_section_overrides() {
     install_crypto();
     let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;

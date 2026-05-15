@@ -1,0 +1,101 @@
+{# crates/web/templates/settings/cards/ai_emotes.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-emotes" class="settings-card{% if current.ai.emotes.is_none() %} is-card-off{% endif %}" data-section="ai_emotes">
+  <header class="settings-card-head">
+    <div>
+      <h2>AI · Emotes</h2>
+      <p>Inject channel + global emote names into the system prompt. Enabling requires a restart.</p>
+      <label class="toggle">
+        <input type="checkbox" name="ai_emotes_enabled" data-card-toggle value="1"
+               data-key="ai.emotes.enabled"
+               {% if current.ai.emotes.is_some() %}checked{% endif %}>
+        <span class="toggle-thumb" aria-hidden="true"></span>
+      </label>
+    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+  </header>
+  <input type="hidden" name="ai_emotes_card_visible" value="1">
+  <div class="settings-rows">
+    {% match current.ai.emotes %}
+    {% when Some with (e) %}
+    <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai_emotes_enabled">
+      {% call m::row_head("include_global", "Include Twitch/3rd-party global emotes (not just channel-specific).") %}{% endcall %}
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">{% if e.include_global %}On{% else %}Off{% endif %}</span>
+        <label class="toggle">
+          <input type="checkbox" name="ai_emotes_include_global" value="1"
+                 data-default="true" data-key="ai.emotes.include_global"
+                 role="switch" aria-label="include_global"
+                 {% if e.include_global %}checked{% endif %}>
+          <span class="toggle-thumb" aria-hidden="true"></span>
+        </label>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.emotes.include_global") %}{% endcall %}
+        <span class="row-default">default <span class="mono">on</span></span>
+      </div>
+    </div>
+    {% call m::num_row_bounded("ai_emotes", "ai_emotes_refresh_interval_secs", "refresh_interval_secs",
+       "How often the bot re-pulls the emote list.",
+       e.refresh_interval_secs, 3600, "s", 60, 86400) %}{% endcall %}
+    {% call m::num_row_bounded("ai_emotes", "ai_emotes_max_prompt_emotes", "max_prompt_emotes",
+       "Max emotes injected into a single prompt.",
+       e.max_prompt_emotes, 12, "", 1, 200) %}{% endcall %}
+    {% call m::num_row_bounded("ai_emotes", "ai_emotes_min_baseline_emotes", "min_baseline_emotes",
+       "Minimum baseline emotes retained even when filtering by recency.",
+       e.min_baseline_emotes, 4, "", 0, 200) %}{% endcall %}
+    <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai_emotes_enabled">
+      {% call m::row_head("base_url", "Override emote-source base URL. Empty = built-in default.") %}{% endcall %}
+      <div class="row-control-cell">
+        <input type="text" name="ai_emotes_base_url"
+               value="{% match e.base_url %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}"
+               placeholder="(built-in default)"
+               data-default="" data-key="ai.emotes.base_url">
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.emotes.base_url") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(built-in)</span></span>
+      </div>
+    </div>
+    {% when None %}
+    <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai_emotes_enabled">
+      {% call m::row_head("include_global", "Include Twitch/3rd-party global emotes (not just channel-specific).") %}{% endcall %}
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">On</span>
+        <label class="toggle">
+          <input type="checkbox" name="ai_emotes_include_global" value="1"
+                 data-default="true" data-key="ai.emotes.include_global"
+                 role="switch" aria-label="include_global" checked>
+          <span class="toggle-thumb" aria-hidden="true"></span>
+        </label>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.emotes.include_global") %}{% endcall %}
+        <span class="row-default">default <span class="mono">on</span></span>
+      </div>
+    </div>
+    {% call m::num_row_bounded("ai_emotes", "ai_emotes_refresh_interval_secs", "refresh_interval_secs",
+       "How often the bot re-pulls the emote list.",
+       3600, 3600, "s", 60, 86400) %}{% endcall %}
+    {% call m::num_row_bounded("ai_emotes", "ai_emotes_max_prompt_emotes", "max_prompt_emotes",
+       "Max emotes injected into a single prompt.",
+       12, 12, "", 1, 200) %}{% endcall %}
+    {% call m::num_row_bounded("ai_emotes", "ai_emotes_min_baseline_emotes", "min_baseline_emotes",
+       "Minimum baseline emotes retained even when filtering by recency.",
+       4, 4, "", 0, 200) %}{% endcall %}
+    <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai_emotes_enabled">
+      {% call m::row_head("base_url", "Override emote-source base URL. Empty = built-in default.") %}{% endcall %}
+      <div class="row-control-cell">
+        <input type="text" name="ai_emotes_base_url" value=""
+               placeholder="(built-in default)"
+               data-default="" data-key="ai.emotes.base_url">
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.emotes.base_url") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(built-in)</span></span>
+      </div>
+    </div>
+    {% endmatch %}
+  </div>
+</section>

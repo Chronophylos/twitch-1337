@@ -1,0 +1,32 @@
+{# crates/web/templates/settings/cards/ai_memory.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-memory" class="settings-card" data-section="ai_memory">
+  <header class="settings-card-head">
+    <div>
+      <h2>AI · Memory</h2>
+      <p>Per-file byte caps and the total budget injected into prompts.</p>
+    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+  </header>
+  <div class="settings-rows">
+    {% call m::num_row_bounded("ai_memory", "ai_memory_soul_bytes", "soul_bytes",
+       "Hard cap on SOUL.md size.",
+       current.ai.memory.soul_bytes, defaults.ai.memory.soul_bytes, "B", 256, 65536) %}{% endcall %}
+    {% call m::num_row_bounded("ai_memory", "ai_memory_lore_bytes", "lore_bytes",
+       "Hard cap on LORE.md size.",
+       current.ai.memory.lore_bytes, defaults.ai.memory.lore_bytes, "B", 256, 131072) %}{% endcall %}
+    {% call m::num_row_bounded("ai_memory", "ai_memory_user_bytes", "user_bytes",
+       "Hard cap on each per-user character sheet.",
+       current.ai.memory.user_bytes, defaults.ai.memory.user_bytes, "B", 256, 65536) %}{% endcall %}
+    {% call m::num_row_bounded("ai_memory", "ai_memory_state_bytes", "state_bytes",
+       "Hard cap on each per-state file.",
+       current.ai.memory.state_bytes, defaults.ai.memory.state_bytes, "B", 128, 32768) %}{% endcall %}
+    {% call m::num_row_bounded("ai_memory", "ai_memory_inject_byte_budget", "inject_byte_budget",
+       "Total memory bytes injected into a single !ai prompt.",
+       current.ai.memory.inject_byte_budget, defaults.ai.memory.inject_byte_budget, "B", 1024, 262144) %}{% endcall %}
+    {% call m::num_row_bounded("ai_memory", "ai_memory_max_state_files", "max_state_files",
+       "Max per-state files kept on disk.",
+       current.ai.memory.max_state_files, defaults.ai.memory.max_state_files, "", 1, 256) %}{% endcall %}
+  </div>
+</section>

@@ -1,0 +1,76 @@
+{# crates/web/templates/settings/cards/ai_prefill.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-prefill" class="settings-card{% if current.ai.prefill.is_none() %} is-card-off{% endif %}" data-section="ai_prefill">
+  <header class="settings-card-head">
+    <div>
+      <h2>AI · History prefill</h2>
+      <p>Backfill chat history from a Rustlog-compatible API on startup. Enabling requires a restart.</p>
+      <label class="toggle">
+        <input type="checkbox" name="ai_prefill_enabled" data-card-toggle value="1"
+               data-key="ai.prefill.enabled"
+               {% if current.ai.prefill.is_some() %}checked{% endif %}>
+        <span class="toggle-thumb" aria-hidden="true"></span>
+      </label>
+    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+  </header>
+  <input type="hidden" name="ai_prefill_card_visible" value="1">
+  <div class="settings-rows">
+    {% match current.ai.prefill %}
+    {% when Some with (p) %}
+    <div class="settings-row" data-section="ai_prefill" data-card-enabled-by="ai_prefill_enabled">
+      {% call m::row_head("base_url", "Rustlog endpoint. Restart needed when changed.") %}{% endcall %}
+      <div class="row-control-cell">
+        <input type="text" name="ai_prefill_base_url" value="{{ p.base_url }}"
+               placeholder="https://logs.zonian.dev"
+               data-default="https://logs.zonian.dev" data-key="ai.prefill.base_url">
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.prefill.base_url") %}{% endcall %}
+        <span class="row-default">default <span class="mono">https://logs.zonian.dev</span></span>
+      </div>
+    </div>
+    <div class="settings-row" data-section="ai_prefill" data-card-enabled-by="ai_prefill_enabled">
+      {% call m::row_head("threshold", "If today's history is below this fraction, also pull yesterday.") %}{% endcall %}
+      <div class="row-control-cell">
+        <input type="number" step="0.05" min="0" max="1" name="ai_prefill_threshold"
+               value="{{ p.threshold }}"
+               data-default="0.5" data-key="ai.prefill.threshold">
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.prefill.threshold") %}{% endcall %}
+        <span class="row-default">default <span class="mono">0.5</span></span>
+      </div>
+    </div>
+    {% when None %}
+    {# Card is off: render the same fields with the compiled defaults so that
+       enabling the toggle gives admins something sensible to edit. JS (Task
+       20) disables them visually via data-card-enabled-by. #}
+    <div class="settings-row" data-section="ai_prefill" data-card-enabled-by="ai_prefill_enabled">
+      {% call m::row_head("base_url", "Rustlog endpoint. Restart needed when changed.") %}{% endcall %}
+      <div class="row-control-cell">
+        <input type="text" name="ai_prefill_base_url" value="https://logs.zonian.dev"
+               placeholder="https://logs.zonian.dev"
+               data-default="https://logs.zonian.dev" data-key="ai.prefill.base_url">
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.prefill.base_url") %}{% endcall %}
+        <span class="row-default">default <span class="mono">https://logs.zonian.dev</span></span>
+      </div>
+    </div>
+    <div class="settings-row" data-section="ai_prefill" data-card-enabled-by="ai_prefill_enabled">
+      {% call m::row_head("threshold", "If today's history is below this fraction, also pull yesterday.") %}{% endcall %}
+      <div class="row-control-cell">
+        <input type="number" step="0.05" min="0" max="1" name="ai_prefill_threshold"
+               value="0.5"
+               data-default="0.5" data-key="ai.prefill.threshold">
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.prefill.threshold") %}{% endcall %}
+        <span class="row-default">default <span class="mono">0.5</span></span>
+      </div>
+    </div>
+    {% endmatch %}
+  </div>
+</section>

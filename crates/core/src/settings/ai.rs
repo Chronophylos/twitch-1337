@@ -36,6 +36,18 @@ pub enum AiBackendKind {
     Ollama,
 }
 
+impl AiBackendKind {
+    /// Stable lowercase string form — matches the `serde(rename_all)` output
+    /// and is consumed by the settings page (`<input value=…>`) plus the POST
+    /// parser. Keeping this in code lets templates avoid re-doing the match.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::Ollama => "ollama",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiBehavior {
     pub max_turn_rounds: usize,

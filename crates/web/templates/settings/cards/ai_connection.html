@@ -1,0 +1,87 @@
+{# crates/web/templates/settings/cards/ai_connection.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-connection" class="settings-card" data-section="ai_connection">
+  <header class="settings-card-head">
+    <div>
+      <h2>AI · Connection</h2>
+      <p>How the bot reaches the LLM. Backend and base URL changes need a restart.</p>
+    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+  </header>
+  <div class="settings-rows">
+    {# Inlined segmented row — `segmented_row` macro takes a list-of-dicts
+       which askama 0.16 can't construct inline. The `AiBackendKind::as_str`
+       helper makes the comparisons cheap and stringly-typed in one place. #}
+    <div class="settings-row" data-section="ai_connection">
+      {% call m::row_head("backend", "Which LLM backend the bot talks to.") %}{% endcall %}
+      <div class="row-control-cell">
+        <div class="segmented" role="radiogroup" aria-label="backend">
+          <label class="segment{% if current.ai.connection.backend.as_str() == "ollama" %} is-active{% endif %}">
+            <input type="radio" name="ai_connection_backend" value="ollama"
+                   data-default="{{ defaults.ai.connection.backend.as_str() }}" data-key="ai.connection.backend"
+                   {% if current.ai.connection.backend.as_str() == "ollama" %}checked{% endif %}>
+            <span>Ollama</span>
+          </label>
+          <label class="segment{% if current.ai.connection.backend.as_str() == "openai" %} is-active{% endif %}">
+            <input type="radio" name="ai_connection_backend" value="openai"
+                   data-default="{{ defaults.ai.connection.backend.as_str() }}" data-key="ai.connection.backend"
+                   {% if current.ai.connection.backend.as_str() == "openai" %}checked{% endif %}>
+            <span>OpenAI</span>
+          </label>
+        </div>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.connection.backend") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{{ defaults.ai.connection.backend.as_str() }}</span></span>
+      </div>
+    </div>
+
+    <div class="settings-row" data-section="ai_connection">
+      {% call m::row_head("base_url", "Override the provider's API base URL. Empty = provider default.") %}{% endcall %}
+      <div class="row-control-cell">
+        <input type="text"
+               name="ai_connection_base_url"
+               value="{% match current.ai.connection.base_url %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}"
+               placeholder="https://api.openai.com/v1"
+               data-default=""
+               data-key="ai.connection.base_url">
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.connection.base_url") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(provider default)</span></span>
+      </div>
+    </div>
+
+    {% call m::model_row("ai_connection", "ai_connection_model", "model",
+       "Model used for !ai chat turns.",
+       current.ai.connection.model, defaults.ai.connection.model, "connection") %}{% endcall %}
+
+    {% call m::num_row_bounded("ai_connection", "ai_connection_timeout", "timeout",
+       "Per-request timeout for chat completions.",
+       current.ai.connection.timeout, defaults.ai.connection.timeout, "s", 1, 600) %}{% endcall %}
+
+    {% if current.ai.connection.backend.as_str() == "openai" %}
+    {# Resolve the active effort value once as a &str so the segments below
+       can do plain &str == &str comparisons (askama can't compare `&String`
+       to a `&str` literal directly). #}
+    {% let effort = current.ai.connection.reasoning_effort.as_deref().unwrap_or("none") %}
+    <div class="settings-row" data-section="ai_connection">
+      {% call m::row_head("reasoning_effort", "Hint for reasoning-capable OpenAI/OpenRouter models.") %}{% endcall %}
+      <div class="row-control-cell">
+        <div class="segmented" role="radiogroup" aria-label="reasoning_effort">
+          {% call m::effort_segment("ai_connection_reasoning_effort", "ai.connection.reasoning_effort", "none", effort) %}{% endcall %}
+          {% call m::effort_segment("ai_connection_reasoning_effort", "ai.connection.reasoning_effort", "minimal", effort) %}{% endcall %}
+          {% call m::effort_segment("ai_connection_reasoning_effort", "ai.connection.reasoning_effort", "medium", effort) %}{% endcall %}
+          {% call m::effort_segment("ai_connection_reasoning_effort", "ai.connection.reasoning_effort", "high", effort) %}{% endcall %}
+          {% call m::effort_segment("ai_connection_reasoning_effort", "ai.connection.reasoning_effort", "xhigh", effort) %}{% endcall %}
+        </div>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.connection.reasoning_effort") %}{% endcall %}
+        <span class="row-default">default <span class="mono">none</span></span>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</section>

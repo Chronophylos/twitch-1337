@@ -36,6 +36,52 @@
       <span>Pings</span>
       <span class="ndirty" hidden>0</span>
     </a>
+    <div class="settings-nav-label settings-nav-group">AI</div>
+    <a href="#sec-ai-connection" class="settings-nav-item" data-target="ai_connection">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Connection</span>
+      <span class="ndirty" hidden>0</span>
+    </a>
+    <a href="#sec-ai-behavior" class="settings-nav-item" data-target="ai_behavior">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Behavior</span>
+      <span class="ndirty" hidden>0</span>
+    </a>
+    <a href="#sec-ai-history" class="settings-nav-item" data-target="ai_history">
+      <span class="dot" aria-hidden="true"></span>
+      <span>History</span>
+      <span class="ndirty" hidden>0</span>
+    </a>
+    <a href="#sec-ai-memory" class="settings-nav-item" data-target="ai_memory">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Memory</span>
+      <span class="ndirty" hidden>0</span>
+    </a>
+    <a href="#sec-ai-dreamer" class="settings-nav-item" data-target="ai_dreamer">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Dreamer</span>
+      <span class="ndirty" hidden>0</span>
+    </a>
+    <a href="#sec-ai-prefill" class="settings-nav-item" data-target="ai_prefill">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Prefill</span>
+      <span class="ndirty" hidden>0</span>
+    </a>
+    <a href="#sec-ai-web" class="settings-nav-item" data-target="ai_web">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Web tools</span>
+      <span class="ndirty" hidden>0</span>
+    </a>
+    <a href="#sec-ai-emotes" class="settings-nav-item" data-target="ai_emotes">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Emotes</span>
+      <span class="ndirty" hidden>0</span>
+    </a>
+    <a href="#sec-ai-media" class="settings-nav-item" data-target="ai_media">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Media</span>
+      <span class="ndirty" hidden>0</span>
+    </a>
   </aside>
 
   <div class="settings-main">
@@ -43,6 +89,15 @@
       <input type="hidden" name="_csrf" value="{{ csrf }}">
       {% include "settings/cards/cooldowns.html" %}
       {% include "settings/cards/pings.html" %}
+      {% include "settings/cards/ai_connection.html" %}
+      {% include "settings/cards/ai_behavior.html" %}
+      {% include "settings/cards/ai_history.html" %}
+      {% include "settings/cards/ai_memory.html" %}
+      {% include "settings/cards/ai_dreamer.html" %}
+      {% include "settings/cards/ai_prefill.html" %}
+      {% include "settings/cards/ai_web.html" %}
+      {% include "settings/cards/ai_emotes.html" %}
+      {% include "settings/cards/ai_media.html" %}
     </form>
 
   </div>
