@@ -24,18 +24,60 @@ fn ssrf_active() -> bool {
     !SSRF_BYPASS.load(Ordering::Relaxed)
 }
 
-struct SsrfSafeResolver;
+#[derive(Default, Clone)]
+struct TrustedHost {
+    name: Option<String>,
+    ip: Option<IpAddr>,
+}
+
+impl TrustedHost {
+    fn from_url(url: &reqwest::Url) -> Self {
+        let Some(host) = url.host_str() else {
+            return Self::default();
+        };
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            Self {
+                name: None,
+                ip: Some(ip),
+            }
+        } else {
+            Self {
+                name: Some(host.to_ascii_lowercase()),
+                ip: None,
+            }
+        }
+    }
+
+    fn matches_name(&self, host: &str) -> bool {
+        self.name
+            .as_deref()
+            .is_some_and(|n| host.eq_ignore_ascii_case(n))
+    }
+
+    fn matches_ip(&self, ip: IpAddr) -> bool {
+        self.ip.is_some_and(|t| t == ip)
+    }
+}
+
+struct SsrfSafeResolver {
+    trusted: Arc<TrustedHost>,
+}
 
 impl Resolve for SsrfSafeResolver {
     fn resolve(&self, name: Name) -> Resolving {
         let host = name.as_str().to_string();
+        let trusted = Arc::clone(&self.trusted);
         Box::pin(async move {
             let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
                 .await
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
                 .collect();
+            let host_trusted = trusted.matches_name(&host);
             if ssrf_active()
-                && let Some(a) = addrs.iter().find(|a| is_blocked_ip(a.ip()))
+                && !host_trusted
+                && let Some(a) = addrs
+                    .iter()
+                    .find(|a| is_blocked_ip(a.ip()) && !trusted.matches_ip(a.ip()))
             {
                 return Err(Box::new(io::Error::new(
                     io::ErrorKind::PermissionDenied,
@@ -49,9 +91,9 @@ impl Resolve for SsrfSafeResolver {
     }
 }
 
-fn ssrf_safe_redirect_policy() -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::custom(|attempt| {
-        if ssrf_active() && is_blocked_host_literal(attempt.url()) {
+fn ssrf_safe_redirect_policy(trusted: Arc<TrustedHost>) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if ssrf_active() && !redirect_target_trusted(attempt.url(), &trusted) {
             attempt.error(BLOCKED_TARGET)
         } else if attempt.previous().len() >= 10 {
             attempt.stop()
@@ -61,11 +103,30 @@ fn ssrf_safe_redirect_policy() -> reqwest::redirect::Policy {
     })
 }
 
-fn build_ssrf_safe_client() -> Result<reqwest::Client> {
+fn redirect_target_trusted(url: &reqwest::Url, trusted: &TrustedHost) -> bool {
+    if !is_blocked_host_literal(url) {
+        return true;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if trusted.matches_name(host) {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return trusted.matches_ip(ip);
+    }
+    false
+}
+
+fn build_ssrf_safe_client(trusted: TrustedHost) -> Result<reqwest::Client> {
+    let trusted = Arc::new(trusted);
     reqwest::Client::builder()
         .user_agent(APP_USER_AGENT)
-        .dns_resolver(Arc::new(SsrfSafeResolver))
-        .redirect(ssrf_safe_redirect_policy())
+        .dns_resolver(Arc::new(SsrfSafeResolver {
+            trusted: Arc::clone(&trusted),
+        }))
+        .redirect(ssrf_safe_redirect_policy(trusted))
         .build()
         .wrap_err("Failed to build web-search HTTP client")
 }
@@ -117,20 +178,30 @@ pub struct SearchResult {
 
 #[derive(Debug, Clone)]
 pub struct SearchClient {
-    http: reqwest::Client,
+    search_http: reqwest::Client,
+    fetch_http: reqwest::Client,
     base_url: String,
     timeout: Duration,
 }
 
 impl SearchClient {
     pub fn new(base_url: &str, timeout: Duration) -> Result<Self> {
-        let http = build_ssrf_safe_client()?;
-        Ok(Self::new_with_client(base_url.to_string(), timeout, http))
+        let parsed = reqwest::Url::parse(base_url).wrap_err("Invalid SearXNG base_url")?;
+        let trusted = TrustedHost::from_url(&parsed);
+        let search_http = build_ssrf_safe_client(trusted)?;
+        let fetch_http = build_ssrf_safe_client(TrustedHost::default())?;
+        Ok(Self {
+            search_http,
+            fetch_http,
+            base_url: base_url.to_string(),
+            timeout,
+        })
     }
 
     pub fn new_with_client(base_url: String, timeout: Duration, http: reqwest::Client) -> Self {
         Self {
-            http,
+            search_http: http.clone(),
+            fetch_http: http,
             base_url,
             timeout,
         }
@@ -140,7 +211,7 @@ impl SearchClient {
         let effective_max = max_results.min(SEARX_RESPONSE_LIMIT);
 
         let response: SearxSearchResponse = self
-            .http
+            .search_http
             .get(&self.base_url)
             .query(&[("q", query), ("format", "json")])
             .timeout(self.timeout)
@@ -186,7 +257,7 @@ impl SearchClient {
         }
 
         let response = self
-            .http
+            .fetch_http
             .get(url.clone())
             .timeout(self.timeout)
             .send()
@@ -376,6 +447,44 @@ mod tests {
 
     use super::*;
     use crate::ai::content::detect::Bucket;
+
+    #[test]
+    fn trusted_host_from_url_extracts_name_or_ip() {
+        let by_name = TrustedHost::from_url(
+            &reqwest::Url::parse("http://searxng-core:8080/search").expect("url"),
+        );
+        assert_eq!(by_name.name.as_deref(), Some("searxng-core"));
+        assert!(by_name.ip.is_none());
+        assert!(by_name.matches_name("searxng-core"));
+        assert!(by_name.matches_name("SearXNG-Core"));
+        assert!(!by_name.matches_name("evil.example"));
+
+        let by_ip = TrustedHost::from_url(
+            &reqwest::Url::parse("http://172.22.0.3:8080/search").expect("url"),
+        );
+        assert!(by_ip.name.is_none());
+        assert!(by_ip.matches_ip("172.22.0.3".parse().expect("ip")));
+        assert!(!by_ip.matches_ip("172.22.0.4".parse().expect("ip")));
+    }
+
+    #[test]
+    fn redirect_trusts_configured_host() {
+        let trusted = TrustedHost::from_url(
+            &reqwest::Url::parse("http://searxng-core:8080/search").expect("url"),
+        );
+        assert!(redirect_target_trusted(
+            &reqwest::Url::parse("http://searxng-core:8080/results").expect("url"),
+            &trusted
+        ));
+        assert!(!redirect_target_trusted(
+            &reqwest::Url::parse("http://10.0.0.1/results").expect("url"),
+            &trusted
+        ));
+        assert!(redirect_target_trusted(
+            &reqwest::Url::parse("https://example.com/results").expect("url"),
+            &trusted
+        ));
+    }
 
     #[test]
     fn blocks_localhost_and_private_ips() {

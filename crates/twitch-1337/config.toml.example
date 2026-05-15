@@ -95,6 +95,9 @@ client_secret = "your_client_secret"
 # [ai.web]
 # enabled = false
 # base_url = "https://searxng.example/search"  # SearXNG /search endpoint, queried with format=json
+# # The host portion of base_url is auto-trusted by the SSRF guard, so an in-cluster
+# # SearXNG on a private network (e.g. http://searxng-core:8080/search) works. The
+# # read_url tool is unaffected and still blocks RFC1918 / loopback targets.
 # timeout = 15                                  # Per outbound web HTTP call timeout in seconds
 # max_results = 5                               # Default cap for web_search (1..=10)
 # max_rounds = 3                                # Max web tool-call rounds per !ai request (1..=6)
