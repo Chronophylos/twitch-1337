@@ -275,9 +275,7 @@ where
         cmd_list.push(Box::new(ai::command::AiCommand::new(
             ai::command::AiCommandDeps {
                 llm_client: llm.clone(),
-                model: ai_conn.model.clone(),
-                reasoning_effort: ai_conn.reasoning_effort.clone(),
-                cooldown: Duration::from_secs(snapshot.cooldowns.ai),
+                settings: settings.clone(),
                 chat_ctx: chat_ctx.clone(),
                 memory: ai_memory_v2,
                 web: web.clone(),
@@ -288,19 +286,15 @@ where
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm.clone(),
-            ai_conn.model.clone(),
+            settings.clone(),
             commands::news::NewsMode::News,
-            Duration::from_secs(ai_conn.timeout),
-            Duration::from_secs(snapshot.cooldowns.news),
             chat_ctx.clone(),
             whisper.clone(),
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm,
-            ai_conn.model.clone(),
+            settings.clone(),
             commands::news::NewsMode::Tldr,
-            Duration::from_secs(ai_conn.timeout),
-            Duration::from_secs(snapshot.cooldowns.news),
             chat_ctx,
             whisper,
         )));

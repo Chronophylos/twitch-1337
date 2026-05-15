@@ -3,26 +3,65 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 
+use crate::settings::{Settings, SettingsHandle};
+
+/// Inner source of the cooldown duration — either a live settings handle or a
+/// fixed value (used by commands that aren't yet wired to `SettingsHandle`).
+enum CooldownSource {
+    Live {
+        settings: SettingsHandle,
+        getter: fn(&Settings) -> Duration,
+    },
+    Fixed(Duration),
+}
+
+impl CooldownSource {
+    fn duration(&self) -> Duration {
+        match self {
+            Self::Live { settings, getter } => getter(&settings.load()),
+            Self::Fixed(d) => *d,
+        }
+    }
+}
+
 /// Per-user cooldown tracker.
 ///
 /// Stores the last usage timestamp per user and checks whether the cooldown
 /// period has elapsed. Thread-safe via internal `Mutex`.
+///
+/// Prefer [`PerUserCooldown::live`] so that dashboard edits take effect on the
+/// next command invocation without a restart. [`PerUserCooldown::fixed`] is
+/// provided for commands that are not yet wired to `SettingsHandle`.
 pub struct PerUserCooldown {
-    duration: Duration,
+    source: CooldownSource,
     last_use: Mutex<HashMap<String, Instant>>,
 }
 
 impl PerUserCooldown {
-    pub fn new(duration: Duration) -> Self {
+    /// Create a cooldown tracker whose duration is read live from `settings`
+    /// via `getter` on every check. The per-user timestamp map persists across
+    /// turns; only the configured duration is re-read each call.
+    pub fn live(settings: SettingsHandle, getter: fn(&Settings) -> Duration) -> Self {
         Self {
-            duration,
+            source: CooldownSource::Live { settings, getter },
             last_use: Mutex::new(HashMap::new()),
         }
     }
 
+    /// Create a cooldown tracker with a fixed duration baked in at construction
+    /// time. Dashboard edits do not affect it until the bot restarts.
+    pub fn fixed(duration: Duration) -> Self {
+        Self {
+            source: CooldownSource::Fixed(duration),
+            last_use: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl PerUserCooldown {
     /// Returns `Some(remaining)` if the user is still on cooldown, `None` if clear.
     pub async fn check(&self, user: &str) -> Option<Duration> {
-        self.check_with_duration(user, self.duration).await
+        self.check_with_duration(user, self.source.duration()).await
     }
 
     /// Like [`Self::check`], but uses a caller-supplied cooldown duration.

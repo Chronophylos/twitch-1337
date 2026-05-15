@@ -15,7 +15,7 @@ impl FlightsAboveCommand {
     pub fn new(aviation_client: Option<AviationClient>, cooldown: std::time::Duration) -> Self {
         Self {
             aviation_client,
-            cooldown: PerUserCooldown::new(cooldown),
+            cooldown: PerUserCooldown::fixed(cooldown),
         }
     }
 }

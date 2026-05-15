@@ -11,6 +11,7 @@ use llm::{ChatCompletionRequest, LlmClient, Message, TraceIds};
 
 use crate::ai::command::ChatContext;
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
+use crate::settings::{Settings, SettingsHandle};
 use crate::twitch::whisper::{WHISPER_MAX_CHARS, WhisperSender};
 use crate::util::{MAX_RESPONSE_LENGTH, truncate_response};
 
@@ -64,12 +65,15 @@ impl NewsMode {
     }
 }
 
+fn news_cooldown_duration(s: &Settings) -> Duration {
+    Duration::from_secs(s.cooldowns.news)
+}
+
 pub struct NewsCommand {
     llm_client: Arc<dyn LlmClient>,
-    model: String,
+    settings: SettingsHandle,
     mode: NewsMode,
     cooldown: PerUserCooldown,
-    timeout: Duration,
     chat_ctx: Option<ChatContext>,
     whisper: Option<Arc<dyn WhisperSender>>,
 }
@@ -77,19 +81,17 @@ pub struct NewsCommand {
 impl NewsCommand {
     pub fn new(
         llm_client: Arc<dyn LlmClient>,
-        model: String,
+        settings: SettingsHandle,
         mode: NewsMode,
-        timeout: Duration,
-        cooldown: Duration,
         chat_ctx: Option<ChatContext>,
         whisper: Option<Arc<dyn WhisperSender>>,
     ) -> Self {
+        let cooldown = PerUserCooldown::live(settings.clone(), news_cooldown_duration);
         Self {
             llm_client,
-            model,
+            settings,
             mode,
-            cooldown: PerUserCooldown::new(cooldown),
-            timeout,
+            cooldown,
             chat_ctx,
             whisper,
         }
@@ -256,6 +258,13 @@ where
 
         self.cooldown.record(user).await;
 
+        // Snapshot connection knobs once per turn so dashboard edits take
+        // effect on the next invocation without a bot restart.
+        let snap = self.settings.load();
+        let model = snap.ai.connection.model.clone();
+        let timeout = Duration::from_secs(snap.ai.connection.timeout);
+        drop(snap);
+
         let user_message = format!(
             "{}\n{}",
             match self.mode {
@@ -270,7 +279,7 @@ where
         );
 
         let request = ChatCompletionRequest {
-            model: self.model.clone(),
+            model,
             messages: vec![
                 Message::system(self.mode.system_prompt()),
                 Message::user(user_message),
@@ -282,8 +291,7 @@ where
             },
         };
 
-        let result =
-            tokio::time::timeout(self.timeout, self.llm_client.chat_completion(request)).await;
+        let result = tokio::time::timeout(timeout, self.llm_client.chat_completion(request)).await;
 
         let (response, success) = match result {
             Ok(Ok(text)) => (
