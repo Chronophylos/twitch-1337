@@ -21,6 +21,15 @@ pub struct HistoryPrefillConfig {
     pub threshold: f64,
 }
 
+impl From<&crate::settings::ai::AiPrefill> for HistoryPrefillConfig {
+    fn from(p: &crate::settings::ai::AiPrefill) -> Self {
+        Self {
+            base_url: p.base_url.clone(),
+            threshold: p.threshold,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct LogResponse {
     messages: Vec<LogMessage>,

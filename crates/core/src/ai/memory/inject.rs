@@ -536,7 +536,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_chat_turn_context_renders_two_history_sections_invocation_first() {
-        use crate::ai::chat_history::ChatHistoryBuffer;
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use crate::settings::test_handle;
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
@@ -545,9 +546,15 @@ mod tests {
             .await
             .unwrap();
 
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(10)));
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
         primary.lock().await.push_user("alice", "hello primary");
-        let ai = Arc::new(Mutex::new(ChatHistoryBuffer::new(10)));
+        let ai = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
         ai.lock().await.push_user("bob", "hello ai");
 
         let body = build_chat_turn_context(
@@ -582,7 +589,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_chat_turn_context_omits_empty_history_sections() {
-        use crate::ai::chat_history::ChatHistoryBuffer;
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use crate::settings::test_handle;
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
@@ -591,9 +599,15 @@ mod tests {
             .await
             .unwrap();
 
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(10)));
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
         primary.lock().await.push_user("alice", "hello");
-        let ai = Arc::new(Mutex::new(ChatHistoryBuffer::new(10))); // empty
+        let ai = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        ))); // empty
 
         let body = build_chat_turn_context(
             &store,
@@ -616,7 +630,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_chat_turn_context_emits_mention_table_for_chat_users_with_files() {
-        use crate::ai::chat_history::ChatHistoryBuffer;
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use crate::settings::test_handle;
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
@@ -648,7 +663,10 @@ mod tests {
             .await
             .unwrap();
 
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(10)));
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
         {
             let mut p = primary.lock().await;
             p.push_user("ALICE", "hi"); // mixed-case lookup
@@ -725,7 +743,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_chat_turn_context_drops_oldest_lines_over_per_section_cap() {
-        use crate::ai::chat_history::ChatHistoryBuffer;
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use crate::settings::test_handle;
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
@@ -734,7 +753,10 @@ mod tests {
             .await
             .unwrap();
 
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(200)));
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
         {
             let mut p = primary.lock().await;
             for _ in 0..200 {

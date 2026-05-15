@@ -12,7 +12,9 @@ use twitch_irc::{
 };
 
 use crate::{
-    ChatHistory, ChatHistoryBuffer, PersonalBest, ai, aviation, commands,
+    ChatHistory, ChatHistoryBuffer, PersonalBest, ai,
+    ai::chat_history::{ai_channel_history_capacity, primary_history_capacity},
+    aviation, commands,
     config::{AiBootstrap, SuspendConfig},
     ping,
     settings::SettingsHandle,
@@ -93,32 +95,6 @@ where
 
     let broadcast_rx = broadcast_tx.subscribe();
 
-    // Extract history lengths from the dashboard settings snapshot. AI is
-    // considered configured only when the bootstrap section is present *and*
-    // the LLM client built; tasks 10/11 move these reads to live snapshots.
-    let history_length = if ai_config.is_some() {
-        snapshot.ai.history.length as usize
-    } else {
-        0
-    };
-    let ai_channel_history_length = if ai_config.is_some() {
-        snapshot.ai.history.ai_channel_length as usize
-    } else {
-        0
-    };
-    let prefill_config = if ai_config.is_some() {
-        snapshot
-            .ai
-            .prefill
-            .clone()
-            .map(|p| ai::prefill::HistoryPrefillConfig {
-                base_url: p.base_url,
-                threshold: p.threshold,
-            })
-    } else {
-        None
-    };
-
     // Combine pre-built LLM client with AI bootstrap; both must be present to enable !ai.
     let llm_client: Option<(Arc<dyn LlmClient>, AiBootstrap)> = match (llm, ai_config) {
         (Some(llm_arc), Some(ai_boot)) => {
@@ -135,14 +111,24 @@ where
         }
     };
 
-    // Create chat history buffer for AI context (if history_length > 0)
-    let primary_history: Option<ChatHistory> = if history_length > 0 {
-        let buffer = if let Some(ref prefill_cfg) = prefill_config {
-            let prefilled =
-                ai::prefill::prefill_chat_history(&channel, history_length, prefill_cfg).await;
-            ChatHistoryBuffer::from_prefill(history_length, prefilled)
+    // Create chat history buffer for AI context. Capacity is read live from
+    // the settings handle on every push; the initial snapshot is only used to
+    // decide whether to allocate the buffer at all and to run the one-shot
+    // prefill (which is restart-required for off↔on transitions anyway).
+    let primary_history: Option<ChatHistory> = if llm_client.is_some()
+        && snapshot.ai.history.length > 0
+    {
+        let history_length = snapshot.ai.history.length as usize;
+        let prefill_cfg = snapshot
+            .ai
+            .prefill
+            .as_ref()
+            .map(ai::prefill::HistoryPrefillConfig::from);
+        let buffer = if let Some(ref cfg) = prefill_cfg {
+            let prefilled = ai::prefill::prefill_chat_history(&channel, history_length, cfg).await;
+            ChatHistoryBuffer::from_prefill(settings.clone(), primary_history_capacity, prefilled)
         } else {
-            ChatHistoryBuffer::new(history_length)
+            ChatHistoryBuffer::new(settings.clone(), primary_history_capacity)
         };
         Some(Arc::new(tokio::sync::Mutex::new(buffer)))
     } else {
@@ -150,11 +136,14 @@ where
     };
 
     // ai_channel buffer: allocated only when an ai_channel is configured AND
-    // chat history is enabled. Capacity from ai.ai_channel_history_length.
+    // chat history is enabled. Capacity is read live from the settings handle.
     let ai_channel_history: Option<ChatHistory> = match (&ai_channel, primary_history.is_some()) {
-        (Some(_), true) if ai_channel_history_length > 0 => Some(Arc::new(
-            tokio::sync::Mutex::new(ChatHistoryBuffer::new(ai_channel_history_length)),
-        )),
+        (Some(_), true) if snapshot.ai.history.ai_channel_length > 0 => {
+            Some(Arc::new(tokio::sync::Mutex::new(ChatHistoryBuffer::new(
+                settings.clone(),
+                ai_channel_history_capacity,
+            ))))
+        }
         _ => None,
     };
 
