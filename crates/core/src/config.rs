@@ -205,7 +205,11 @@ impl Configuration {
 }
 
 /// Load and validate configuration from the standard config path.
-pub async fn load_configuration() -> Result<Configuration> {
+///
+/// Returns both the deserialized `Configuration` and the raw `toml::Value` so
+/// callers can inspect legacy keys (e.g. the one-shot migration helper in
+/// `main.rs`) without re-parsing the file.
+pub async fn load_configuration() -> Result<(Configuration, toml::Value)> {
     let config_path = crate::get_config_path();
     let data = tokio::fs::read_to_string(&config_path)
         .await
@@ -218,8 +222,13 @@ pub async fn load_configuration() -> Result<Configuration> {
 
     info!("Loading configuration from {}", config_path.display());
 
-    let config: Configuration =
+    let value: toml::Value =
         toml::from_str(&data).wrap_err("Failed to parse config.toml - check for syntax errors")?;
+
+    let config: Configuration = value
+        .clone()
+        .try_into()
+        .wrap_err("Failed to deserialize config.toml into Configuration")?;
 
     validate_config(&config)?;
 
@@ -228,7 +237,7 @@ pub async fn load_configuration() -> Result<Configuration> {
         "Resolved dashboard owner"
     );
 
-    Ok(config)
+    Ok((config, value))
 }
 
 /// Validate config fields beyond what serde can express.

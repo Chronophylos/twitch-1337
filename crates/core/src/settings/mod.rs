@@ -11,6 +11,7 @@
 
 pub mod ai;
 pub mod audit;
+pub mod migrate;
 pub mod overrides;
 pub mod store;
 

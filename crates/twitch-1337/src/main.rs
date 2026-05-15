@@ -39,7 +39,7 @@ pub async fn main() -> Result<()> {
     install_tracing();
     install_crypto_provider();
 
-    let config = load_configuration().await?;
+    let (config, raw_toml) = load_configuration().await?;
 
     let local = Utc::now().with_timezone(&chrono_tz::Europe::Berlin);
     info!(
@@ -57,8 +57,6 @@ pub async fn main() -> Result<()> {
     let (incoming, client, credentials, bot_user_id) =
         setup_and_verify_twitch_client(&config).await?;
     let client = Arc::new(client);
-
-    let llm_client = llm_factory::build_llm_client(config.ai.as_ref())?;
 
     let aviation_client = match aviation::AviationClient::new()
         .map(|client| client.with_aviationstack_config(config.aviationstack.clone()))
@@ -103,13 +101,42 @@ pub async fn main() -> Result<()> {
         twitch_1337::settings::SettingsStore::open(&get_data_dir(), audit_log)
             .wrap_err("Failed to open settings store")?;
 
+    // One-shot migration: promote legacy [ai] keys from config.toml into
+    // settings.ron on first v2 launch. A sentinel file prevents re-migration
+    // on subsequent boots so later admin edits aren't clobbered.
+    let migrated_marker = get_data_dir().join(".ai_migrated_v2");
+    if !migrated_marker.exists() {
+        let ai_patch = twitch_1337::settings::migrate::migrate_legacy_ai(&raw_toml)
+            .wrap_err("ai migration")?;
+        if ai_patch != twitch_1337::settings::overrides::AiOverrides::default() {
+            let patch = twitch_1337::settings::overrides::SettingsOverrides {
+                ai: ai_patch,
+                ..twitch_1337::settings::overrides::SettingsOverrides::default()
+            };
+            let actor = twitch_1337::settings::Actor {
+                user_id: "migrate".into(),
+                user_login: "migrate".into(),
+            };
+            settings_store
+                .apply(patch, actor)
+                .await
+                .wrap_err("ai migration apply")?;
+            info!("migrated legacy [ai] keys into settings.ron");
+        }
+        std::fs::write(&migrated_marker, "").wrap_err("write .ai_migrated_v2 marker")?;
+    }
+
+    let llm_client = llm_factory::build_llm_client(config.ai.as_ref(), &settings_handle.load())?;
+
     // Memory v2 store opens unconditionally so the dashboard editor has a
     // handle even when `[ai]` is disabled. The same `Arc`-backed store is
     // shared with the bot's IRC handlers / dreamer ritual via `Services`.
-    let memory_store =
-        MemoryStore::open(&get_data_dir(), memory_caps_from_config(config.ai.as_ref()))
-            .await
-            .wrap_err("open memory store")?;
+    let memory_store = MemoryStore::open(
+        &get_data_dir(),
+        memory_caps_from_config(config.ai.is_some(), &settings_handle.load()),
+    )
+    .await
+    .wrap_err("open memory store")?;
 
     // Load the leaderboard before building the web spawner so the same Arc
     // can be shared with WebState (dashboard read) and the IRC tracker (writes).
@@ -311,7 +338,7 @@ impl AccessTokenProvider for CredsTokenProvider {
 /// disabled, exits 0 without touching the network so the container is still
 /// considered healthy.
 async fn run_healthcheck() -> Result<()> {
-    let config = load_configuration().await?;
+    let (config, _raw_toml) = load_configuration().await?;
     if !config.web.enabled {
         return Ok(());
     }
