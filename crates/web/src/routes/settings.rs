@@ -34,7 +34,7 @@ pub fn owner_router() -> Router<WebState> {
 }
 
 #[derive(Template)]
-#[template(path = "settings.html")]
+#[template(path = "settings/index.html")]
 struct ShowTpl {
     csrf: String,
     flash: Option<String>,

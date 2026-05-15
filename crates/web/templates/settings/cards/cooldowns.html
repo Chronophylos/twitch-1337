@@ -1,0 +1,21 @@
+{# crates/web/templates/settings/cards/cooldowns.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-cooldowns" class="settings-card" data-section="cooldowns">
+  <header class="settings-card-head">
+    <div>
+      <h2>Cooldowns</h2>
+      <p>How long a user has to wait between uses of each chat command.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    {% call m::num_row("cooldowns", "cooldown_ai", "ai", "Per-user cooldown for !ai.", current.cooldowns.ai, defaults.cooldowns.ai, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", "cooldown_news", "news", "Per-user cooldown for !news.", current.cooldowns.news, defaults.cooldowns.news, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", "cooldown_up", "up", "Per-user cooldown for !up.", current.cooldowns.up, defaults.cooldowns.up, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", "cooldown_feedback", "feedback", "Per-user cooldown for !fb.", current.cooldowns.feedback, defaults.cooldowns.feedback, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", "cooldown_doener", "doener", "Per-user cooldown for !dpi and !döner (!doener); both use Döneratlas.", current.cooldowns.doener, defaults.cooldowns.doener, "s") %}{% endcall %}
+  </div>
+</section>

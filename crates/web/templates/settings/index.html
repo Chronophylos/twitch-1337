@@ -1,0 +1,64 @@
+{# crates/web/templates/settings/index.html #}
+{% extends "base.html" %}
+{% block title %}Settings — twitch-1337{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p class="page-sub">Tune how the bot behaves in chat. Changes take effect right away — no restart needed.</p>
+  </div>
+</div>
+
+{% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
+
+{% if !errors.is_empty() %}
+<div class="flash error">
+  <strong>Validation failed:</strong>
+  <ul>
+  {% for e in errors %}
+    <li><code>{{ e.field }}</code>: {{ e.message }}</li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="settings-grid">
+  <aside class="settings-nav" aria-label="Settings sections">
+    <div class="settings-nav-label">Sections</div>
+    <a href="#sec-cooldowns" class="settings-nav-item" data-target="cooldowns">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Cooldowns</span>
+      <span class="ndirty" hidden>0</span>
+    </a>
+    <a href="#sec-pings" class="settings-nav-item" data-target="pings">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Pings</span>
+      <span class="ndirty" hidden>0</span>
+    </a>
+  </aside>
+
+  <div class="settings-main">
+    <form id="settings-form" method="post" action="/settings">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      {% include "settings/cards/cooldowns.html" %}
+      {% include "settings/cards/pings.html" %}
+    </form>
+
+  </div>
+</div>
+
+<div id="settings-save-bar" class="save-bar" role="region" aria-label="Unsaved changes">
+  <div class="save-bar-inner">
+    <div class="save-bar-text">
+      <span class="save-pulse" aria-hidden="true"></span>
+      <span><strong data-count>0</strong> <span data-noun>changes</span> pending</span>
+      <span class="muted" data-preview></span>
+    </div>
+    <div class="save-bar-actions">
+      <button type="button" class="btn ghost" data-discard>Discard</button>
+      <button type="submit" class="btn primary" form="settings-form">Save changes</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
