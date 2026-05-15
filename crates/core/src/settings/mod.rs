@@ -9,10 +9,15 @@
 //! validates, atomically persists, swaps the handle, and appends an audit
 //! entry.
 
+pub mod ai;
 pub mod audit;
 pub mod overrides;
 pub mod store;
 
+pub use ai::{
+    AiBackendKind, AiBehavior, AiConnection, AiDreamer, AiEmotes, AiHistory, AiMedia, AiMemory,
+    AiPrefill, AiSettings, AiWeb,
+};
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
 pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
