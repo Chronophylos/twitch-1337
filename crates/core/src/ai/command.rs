@@ -388,6 +388,8 @@ where
                 ai_channel_history: cc.and_then(|c| c.ai_channel_history.clone()),
                 ai_channel_login: cc.and_then(|c| c.ai_channel_login.clone()),
                 invocation_channel,
+                bot_login: self.bot_username.clone(),
+                persona_name: persona_name.clone(),
             },
         )
         .await?;

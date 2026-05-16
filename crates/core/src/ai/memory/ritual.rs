@@ -130,6 +130,10 @@ pub async fn run_ritual(
             ai_channel_history: None,
             ai_channel_login: None,
             invocation_channel: InvocationChannel::Primary,
+            // Dreamer never renders recent_chat (no history buffers supplied),
+            // so these are never read; pass empties to satisfy the type.
+            bot_login: String::new(),
+            persona_name: String::new(),
         },
     )
     .await?;

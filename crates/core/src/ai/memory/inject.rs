@@ -8,7 +8,7 @@ use eyre::Result;
 use rand::Rng as _;
 use tokio::sync::Mutex;
 
-use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry};
+use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry, ChatHistorySource};
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::types::{FileKind, MemoryFile};
 
@@ -125,6 +125,8 @@ pub struct BuildOpts {
     pub ai_channel_history: Option<Arc<Mutex<ChatHistoryBuffer>>>,
     pub ai_channel_login: Option<String>,
     pub invocation_channel: InvocationChannel,
+    pub bot_login: String,
+    pub persona_name: String,
 }
 
 /// Result of [`build_chat_turn_context`].
@@ -158,6 +160,8 @@ pub async fn build_chat_turn_context(
         opts.primary_history.as_ref(),
         &opts.primary_login,
         RECENT_CHAT_PRIMARY_BYTES,
+        &opts.bot_login,
+        &opts.persona_name,
     )
     .await;
     let ai_rendered = match (
@@ -165,7 +169,14 @@ pub async fn build_chat_turn_context(
         opts.ai_channel_login.as_ref(),
     ) {
         (Some(buf), Some(login)) => {
-            render_recent_section(Some(buf), login, RECENT_CHAT_AI_CHANNEL_BYTES).await
+            render_recent_section(
+                Some(buf),
+                login,
+                RECENT_CHAT_AI_CHANNEL_BYTES,
+                &opts.bot_login,
+                &opts.persona_name,
+            )
+            .await
         }
         _ => None,
     };
@@ -307,6 +318,8 @@ async fn render_recent_section(
     buf: Option<&Arc<Mutex<ChatHistoryBuffer>>>,
     login: &str,
     cap: usize,
+    bot_login: &str,
+    persona_name: &str,
 ) -> Option<RenderedRecentSection> {
     let buf = buf?;
     let snapshot: Vec<ChatHistoryEntry> = buf.lock().await.snapshot();
@@ -318,7 +331,7 @@ async fn render_recent_section(
     let mut usernames: Vec<String> = Vec::new();
     let mut bytes = 0usize;
     for entry in snapshot.iter().rev() {
-        let line = format_entry_line(entry);
+        let line = format_entry_line(entry, bot_login, persona_name);
         let line_bytes = line.len() + 1;
         if bytes + line_bytes > cap {
             break;
@@ -337,14 +350,19 @@ async fn render_recent_section(
     Some(RenderedRecentSection { body, usernames })
 }
 
-fn format_entry_line(entry: &ChatHistoryEntry) -> String {
-    let ts = entry.timestamp.with_timezone(&Berlin);
-    format!(
-        "[{}] {}: {}",
-        ts.format("%H:%M"),
-        entry.username,
-        entry.text
-    )
+fn format_entry_line(entry: &ChatHistoryEntry, bot_login: &str, persona_name: &str) -> String {
+    let ts = entry.timestamp.with_timezone(&Berlin).format("%H:%M");
+    let is_self =
+        entry.source == ChatHistorySource::Bot || entry.username.eq_ignore_ascii_case(bot_login);
+    if is_self {
+        return format!("[{ts}] {persona_name} (self): {}", entry.text);
+    }
+    let name = entry
+        .display_name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(entry.username.as_str());
+    format!("[{ts}] {name}: {}", entry.text)
 }
 
 #[cfg(test)]
@@ -357,6 +375,51 @@ mod tests {
     use crate::ai::memory::store::MemoryStore;
     use crate::ai::memory::types::FileKind;
     use crate::settings::Settings;
+
+    #[test]
+    fn format_entry_line_self_uses_persona_and_self_tag() {
+        let entry = ChatHistoryEntry {
+            seq: 1,
+            username: "chronophylosbot".into(),
+            display_name: Some("Aurora".into()),
+            user_id: None,
+            text: "gemerkt".into(),
+            source: ChatHistorySource::Bot,
+            timestamp: chrono::Utc::now(),
+        };
+        let line = format_entry_line(&entry, "chronophylosbot", "Aurora");
+        assert!(line.ends_with(" Aurora (self): gemerkt"), "got: {line}");
+    }
+
+    #[test]
+    fn format_entry_line_other_uses_display_name() {
+        let entry = ChatHistoryEntry {
+            seq: 1,
+            username: "magie_023".into(),
+            display_name: Some("MagieDisplay".into()),
+            user_id: Some("141690010".into()),
+            text: "hi".into(),
+            source: ChatHistorySource::User,
+            timestamp: chrono::Utc::now(),
+        };
+        let line = format_entry_line(&entry, "chronophylosbot", "Aurora");
+        assert!(line.ends_with(" MagieDisplay: hi"), "got: {line}");
+    }
+
+    #[test]
+    fn format_entry_line_other_falls_back_to_username_when_no_display() {
+        let entry = ChatHistoryEntry {
+            seq: 1,
+            username: "lurker42".into(),
+            display_name: None,
+            user_id: None,
+            text: "?".into(),
+            source: ChatHistorySource::User,
+            timestamp: chrono::Utc::now(),
+        };
+        let line = format_entry_line(&entry, "chronophylosbot", "Aurora");
+        assert!(line.ends_with(" lurker42: ?"), "got: {line}");
+    }
 
     fn test_handle() -> crate::settings::SettingsHandle {
         Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
@@ -483,6 +546,8 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
             },
         )
         .await
@@ -529,6 +594,8 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
             },
         )
         .await
@@ -570,6 +637,8 @@ mod tests {
                 ai_channel_history: Some(ai.clone()),
                 ai_channel_login: Some("ai_chan".into()),
                 invocation_channel: InvocationChannel::AiChannel,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
             },
         )
         .await
@@ -620,6 +689,8 @@ mod tests {
                 ai_channel_history: Some(ai),
                 ai_channel_login: Some("ai_chan".into()),
                 invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
             },
         )
         .await
@@ -683,6 +754,8 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
             },
         )
         .await
@@ -728,6 +801,8 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
             },
         )
         .await
@@ -769,6 +844,8 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
             },
         )
         .await
