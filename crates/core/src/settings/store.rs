@@ -235,6 +235,9 @@ fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides) {
     if let Some(v) = patch.ai.behavior.max_writes_per_turn {
         into.ai.behavior.max_writes_per_turn = Some(v);
     }
+    if let Some(v) = &patch.ai.behavior.persona_name {
+        into.ai.behavior.persona_name = Some(v.clone());
+    }
     // AI history
     if let Some(v) = patch.ai.history.length {
         into.ai.history.length = Some(v);
@@ -419,6 +422,11 @@ fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
         "ai.behavior.max_writes_per_turn",
         prior.ai.behavior.max_writes_per_turn,
         next.ai.behavior.max_writes_per_turn
+    );
+    cmp!(
+        "ai.behavior.persona_name",
+        prior.ai.behavior.persona_name.as_str(),
+        next.ai.behavior.persona_name.as_str()
     );
     // AI history
     cmp!(

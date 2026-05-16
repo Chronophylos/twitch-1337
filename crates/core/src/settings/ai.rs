@@ -52,6 +52,16 @@ impl AiBackendKind {
 pub struct AiBehavior {
     pub max_turn_rounds: usize,
     pub max_writes_per_turn: usize,
+    /// Persona name the bot uses in chat-history identity push and chat-line
+    /// rendering. Defaults to `"Aurora"`. Missing in pre-existing settings.ron
+    /// files is handled by `#[serde(default = ...)]` so v2 reads stay forward-
+    /// compatible without a new migration sentinel.
+    #[serde(default = "default_persona_name")]
+    pub persona_name: String,
+}
+
+fn default_persona_name() -> String {
+    "Aurora".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -142,6 +152,7 @@ impl Default for AiBehavior {
         Self {
             max_turn_rounds: 4,
             max_writes_per_turn: 8,
+            persona_name: default_persona_name(),
         }
     }
 }
@@ -245,6 +256,12 @@ impl AiMedia {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ai_behavior_default_has_persona_aurora() {
+        let b = AiBehavior::default();
+        assert_eq!(b.persona_name, "Aurora");
+    }
 
     #[test]
     fn defaults_match_legacy_ai_config_defaults() {

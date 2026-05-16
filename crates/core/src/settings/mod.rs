@@ -202,6 +202,11 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .behavior
                 .max_writes_per_turn
                 .unwrap_or(defaults.behavior.max_writes_per_turn),
+            persona_name: o
+                .behavior
+                .persona_name
+                .clone()
+                .unwrap_or_else(|| defaults.behavior.persona_name.clone()),
         },
         history: AiHistory {
             length: o.history.length.unwrap_or(defaults.history.length),
@@ -351,6 +356,9 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
             "ai.behavior.max_writes_per_turn",
             format!("must be 1..=64 (got {})", ai.behavior.max_writes_per_turn),
         );
+    }
+    if ai.behavior.persona_name.trim().is_empty() {
+        err(errs, "ai.behavior.persona_name", "must not be empty".into());
     }
     if ai.history.length > crate::ai::chat_history::MAX_HISTORY_LENGTH {
         err(
@@ -608,6 +616,14 @@ mod resolve_tests {
             resolved.ai.connection.timeout,
             defaults.ai.connection.timeout
         );
+    }
+
+    #[test]
+    fn validate_rejects_empty_persona_name() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.behavior.persona_name = "   ".into();
+        let errs = s.validate().expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.behavior.persona_name"));
     }
 
     #[test]
