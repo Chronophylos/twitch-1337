@@ -50,6 +50,9 @@ pub struct TestBot {
     whisper: Arc<FakeWhisperSender>,
     pub channel: String,
     pub irc_connected: Arc<AtomicBool>,
+    /// Filled by the commands handler when AI + chat history are enabled; lets
+    /// tests inspect chat-history entries (display_name / user_id / source).
+    primary_history_tap: Arc<Mutex<Option<twitch_1337::ai::chat_history::ChatHistory>>>,
     shutdown: Option<oneshot::Sender<()>>,
     bot_task: Option<JoinHandle<EyreResult<()>>>,
 }
@@ -291,6 +294,9 @@ impl TestBotBuilder {
             (Some(Arc::new(tx)), Some(rx))
         };
 
+        let primary_history_tap: Arc<Mutex<Option<twitch_1337::ai::chat_history::ChatHistory>>> =
+            Arc::new(Mutex::new(None));
+
         let services = Services {
             clock: clock.clone(),
             ai_bootstrap: self.config.ai.clone(),
@@ -320,6 +326,7 @@ impl TestBotBuilder {
             )),
             aviation_tracker_tx,
             aviation_tracker_rx,
+            primary_history_tap: Some(primary_history_tap.clone()),
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -345,6 +352,7 @@ impl TestBotBuilder {
             whisper,
             channel,
             irc_connected,
+            primary_history_tap,
             shutdown: Some(shutdown_tx),
             bot_task: Some(bot_task),
         }
@@ -470,6 +478,19 @@ impl TestBot {
                     // Ignore non-PRIVMSG framing noise.
                 }
             }
+        }
+    }
+
+    /// Snapshot the primary chat-history buffer. Returns an empty `Vec` when
+    /// AI / chat history are disabled (the tap is never filled in that case).
+    /// Used to assert chat-history identity (`display_name`, `user_id`, etc.).
+    pub async fn primary_history_snapshot(
+        &self,
+    ) -> Vec<twitch_1337::ai::chat_history::ChatHistoryEntry> {
+        let tap = self.primary_history_tap.lock().await;
+        match tap.as_ref() {
+            Some(history) => history.lock().await.snapshot(),
+            None => Vec::new(),
         }
     }
 

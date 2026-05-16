@@ -103,6 +103,8 @@ pub struct AiBehaviorOverrides {
     pub max_turn_rounds: Option<usize>,
     #[serde(default)]
     pub max_writes_per_turn: Option<usize>,
+    #[serde(default)]
+    pub persona_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

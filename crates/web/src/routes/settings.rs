@@ -108,6 +108,8 @@ struct SaveForm {
     ai_behavior_max_turn_rounds: Option<usize>,
     #[serde(default)]
     ai_behavior_max_writes_per_turn: Option<usize>,
+    #[serde(default)]
+    ai_behavior_persona_name: Option<String>,
 
     // ---- AI history card ----
     #[serde(default)]
@@ -259,6 +261,11 @@ fn form_into_ai_overrides(form: &SaveForm) -> AiOverrides {
     let behavior = AiBehaviorOverrides {
         max_turn_rounds: form.ai_behavior_max_turn_rounds,
         max_writes_per_turn: form.ai_behavior_max_writes_per_turn,
+        persona_name: form
+            .ai_behavior_persona_name
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
     };
 
     let history = AiHistoryOverrides {

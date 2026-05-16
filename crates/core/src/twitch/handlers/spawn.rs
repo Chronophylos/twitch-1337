@@ -101,6 +101,12 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
 
     // Dashboard-managed runtime settings (cooldowns, pings.cooldown, pings.public).
     pub settings: crate::settings::SettingsHandle,
+
+    /// Optional test-only sink: when set, the commands handler stores the
+    /// freshly built primary `ChatHistory` here so integration tests can
+    /// peek at chat-history entries. Production wires `None`.
+    pub primary_history_tap:
+        Option<Arc<tokio::sync::Mutex<Option<crate::ai::chat_history::ChatHistory>>>>,
 }
 
 /// Spawn every long-running handler task in the order they currently
@@ -132,6 +138,7 @@ where
         emote_provider,
         irc_connected,
         settings,
+        primary_history_tap,
     } = deps;
 
     let schedules_enabled = !config.schedules.is_empty();
@@ -264,6 +271,7 @@ where
                 suspension_manager: suspension_manager.clone(),
                 suspend: config.suspend.clone(),
                 emote_provider,
+                primary_history_tap,
             })
             .await;
         }

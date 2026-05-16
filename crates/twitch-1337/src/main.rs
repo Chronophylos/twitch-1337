@@ -184,6 +184,7 @@ pub async fn main() -> Result<()> {
         leaderboard,
         aviation_tracker_tx,
         aviation_tracker_rx,
+        primary_history_tap: None,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();

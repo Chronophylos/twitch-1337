@@ -8,9 +8,9 @@ use eyre::Result;
 use rand::Rng as _;
 use tokio::sync::Mutex;
 
-use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry};
+use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry, ChatHistorySource};
 use crate::ai::memory::store::MemoryStore;
-use crate::ai::memory::types::{FileKind, MemoryFile};
+use crate::ai::memory::types::FileKind;
 
 const FENCE_OPEN: &str = "<<<FILE";
 const FENCE_CLOSE: &str = "<<<ENDFILE";
@@ -104,6 +104,8 @@ pub fn scrub_for_inject(body: &str) -> String {
 #[derive(Clone, Copy)]
 pub struct SubstitutionVars<'a> {
     pub speaker_username: &'a str,
+    pub speaker_display: &'a str,
+    pub speaker_user_id: &'a str,
     pub speaker_role: &'a str,
     pub channel: &'a str,
     pub date: &'a str,
@@ -112,6 +114,8 @@ pub struct SubstitutionVars<'a> {
 pub fn substitute(template: &str, v: SubstitutionVars<'_>) -> String {
     template
         .replace("{speaker_username}", v.speaker_username)
+        .replace("{speaker_display}", v.speaker_display)
+        .replace("{speaker_user_id}", v.speaker_user_id)
         .replace("{speaker_role}", v.speaker_role)
         .replace("{channel}", v.channel)
         .replace("{date}", v.date)
@@ -125,6 +129,13 @@ pub struct BuildOpts {
     pub ai_channel_history: Option<Arc<Mutex<ChatHistoryBuffer>>>,
     pub ai_channel_login: Option<String>,
     pub invocation_channel: InvocationChannel,
+    pub bot_login: String,
+    pub persona_name: String,
+    /// Lowercased Twitch login of the user that triggered this turn (i.e.
+    /// `!ai` invoker). Empty string for the dreamer ritual (no speaker).
+    /// Used by [`build_chat_turn_context`] to scope the injected user-file
+    /// set down to chat-window users plus the speaker.
+    pub speaker_login: String,
 }
 
 /// Result of [`build_chat_turn_context`].
@@ -136,8 +147,8 @@ pub struct BuildOpts {
 /// - `volatile_state` holds the state/<slug> blocks (every `write_state` /
 ///   `delete_state` mutates them). Lives in the user message so it can change
 ///   freely without invalidating the system-message cache.
-/// - `recent_chat` holds the rolling per-turn chat history + mention table
-///   (volatile by definition). Lives in the user message.
+/// - `recent_chat` holds the rolling per-turn chat history (volatile by
+///   definition). Lives in the user message.
 ///
 /// Any field may be empty. Callers that want the legacy combined memory blob
 /// (dreamer) concatenate `durable_memory` + `volatile_state` themselves.
@@ -158,6 +169,8 @@ pub async fn build_chat_turn_context(
         opts.primary_history.as_ref(),
         &opts.primary_login,
         RECENT_CHAT_PRIMARY_BYTES,
+        &opts.bot_login,
+        &opts.persona_name,
     )
     .await;
     let ai_rendered = match (
@@ -165,7 +178,14 @@ pub async fn build_chat_turn_context(
         opts.ai_channel_login.as_ref(),
     ) {
         (Some(buf), Some(login)) => {
-            render_recent_section(Some(buf), login, RECENT_CHAT_AI_CHANNEL_BYTES).await
+            render_recent_section(
+                Some(buf),
+                login,
+                RECENT_CHAT_AI_CHANNEL_BYTES,
+                &opts.bot_login,
+                &opts.persona_name,
+            )
+            .await
         }
         _ => None,
     };
@@ -188,15 +208,55 @@ pub async fn build_chat_turn_context(
     let mut users = store.list_users().await?;
     let mut states = store.list_state().await?;
 
-    // Build a mention table from the full users list before draining for memory
-    // blocks, so users dropped by the byte budget still appear in the table.
-    let mention_table = render_mention_table(&users, &mentioned);
-
     let mut durable_blocks: Vec<String> = Vec::new();
     durable_blocks.push(fence_block(FenceLabel::Soul, &opts.nonce, &soul.body));
     durable_blocks.push(fence_block(FenceLabel::Lore, &opts.nonce, &lore.body));
 
-    users.sort_by_key(|f| std::cmp::Reverse(f.frontmatter.updated_at));
+    // Scope user files to logins present in the chat window plus the speaker.
+    // Users who didn't appear in either are excluded outright: the model only
+    // needs character sheets for people it's actually about to talk to or
+    // about. Without this filter, lurkers with recent `updated_at` would
+    // crowd out the speaker's own file when the budget is tight.
+    //
+    // Short-circuit for the dreamer: no history buffers AND no speaker means
+    // this isn't a chat turn, it's the dreamer ritual, which wants every user
+    // file in its system prompt. Skipping the filter in that case keeps the
+    // dreamer's pre-existing "every memory file in one shot" contract intact.
+    let speaker_lc = opts.speaker_login.to_ascii_lowercase();
+    let is_chat_turn = opts.primary_history.is_some()
+        || opts.ai_channel_history.is_some()
+        || !speaker_lc.is_empty();
+    if is_chat_turn {
+        let mut scope: std::collections::BTreeSet<String> = mentioned.clone();
+        if !speaker_lc.is_empty() {
+            scope.insert(speaker_lc.clone());
+        }
+        users.retain(|f| {
+            let Some(login) = f.frontmatter.username.as_deref() else {
+                return false;
+            };
+            scope.contains(&login.to_ascii_lowercase())
+        });
+    }
+
+    // Speaker first, then newest-first. Ensures the speaker's file always
+    // survives the byte-budget packing loop below. When speaker_login is
+    // empty (dreamer), this collapses to a plain updated_at DESC sort.
+    users.sort_by(|a, b| {
+        let a_is_speaker = !speaker_lc.is_empty()
+            && a.frontmatter
+                .username
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(&speaker_lc));
+        let b_is_speaker = !speaker_lc.is_empty()
+            && b.frontmatter
+                .username
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(&speaker_lc));
+        b_is_speaker
+            .cmp(&a_is_speaker)
+            .then_with(|| b.frontmatter.updated_at.cmp(&a.frontmatter.updated_at))
+    });
     states.sort_by_key(|f| std::cmp::Reverse(f.frontmatter.updated_at));
 
     // Pack user blocks until the durable-memory budget is hit. State blocks get
@@ -237,61 +297,12 @@ pub async fn build_chat_turn_context(
 
     let durable_memory = durable_blocks.join("\n");
     let volatile_state = state_blocks.join("\n");
-    let mut recent_chat = recent_sections.join("\n\n");
-    if !mention_table.is_empty() {
-        if !recent_chat.is_empty() {
-            recent_chat.push_str("\n\n");
-        }
-        recent_chat.push_str(&mention_table);
-    }
+    let recent_chat = recent_sections.join("\n\n");
     Ok(ChatTurnContext {
         recent_chat,
         durable_memory,
         volatile_state,
     })
-}
-
-/// Build a markdown table mapping the lowercased login of every user file whose
-/// login appears in `mentioned` to its Twitch user_id and display name. Users
-/// without a memory file are skipped, since we have no user_id for them.
-fn render_mention_table(
-    users: &[MemoryFile],
-    mentioned: &std::collections::BTreeSet<String>,
-) -> String {
-    if mentioned.is_empty() {
-        return String::new();
-    }
-    let mut rows: Vec<(String, String, String)> = Vec::new();
-    for u in users {
-        let FileKind::User { user_id } = &u.kind else {
-            continue;
-        };
-        let Some(login) = u.frontmatter.username.as_deref() else {
-            continue;
-        };
-        let key = login.to_ascii_lowercase();
-        if !mentioned.contains(&key) {
-            continue;
-        }
-        let display = u
-            .frontmatter
-            .display_name
-            .as_deref()
-            .unwrap_or(login)
-            .to_string();
-        rows.push((login.to_string(), display, user_id.clone()));
-    }
-    if rows.is_empty() {
-        return String::new();
-    }
-    rows.sort();
-    let mut s = String::from(
-        "## Mentioned users\n\n| login | display_name | user_id |\n| --- | --- | --- |\n",
-    );
-    for (login, display, id) in rows {
-        s.push_str(&format!("| {login} | {display} | {id} |\n"));
-    }
-    s
 }
 
 struct RenderedRecentSection {
@@ -307,6 +318,8 @@ async fn render_recent_section(
     buf: Option<&Arc<Mutex<ChatHistoryBuffer>>>,
     login: &str,
     cap: usize,
+    bot_login: &str,
+    persona_name: &str,
 ) -> Option<RenderedRecentSection> {
     let buf = buf?;
     let snapshot: Vec<ChatHistoryEntry> = buf.lock().await.snapshot();
@@ -318,7 +331,7 @@ async fn render_recent_section(
     let mut usernames: Vec<String> = Vec::new();
     let mut bytes = 0usize;
     for entry in snapshot.iter().rev() {
-        let line = format_entry_line(entry);
+        let line = format_entry_line(entry, bot_login, persona_name);
         let line_bytes = line.len() + 1;
         if bytes + line_bytes > cap {
             break;
@@ -337,14 +350,19 @@ async fn render_recent_section(
     Some(RenderedRecentSection { body, usernames })
 }
 
-fn format_entry_line(entry: &ChatHistoryEntry) -> String {
-    let ts = entry.timestamp.with_timezone(&Berlin);
-    format!(
-        "[{}] {}: {}",
-        ts.format("%H:%M"),
-        entry.username,
-        entry.text
-    )
+fn format_entry_line(entry: &ChatHistoryEntry, bot_login: &str, persona_name: &str) -> String {
+    let ts = entry.timestamp.with_timezone(&Berlin).format("%H:%M");
+    let is_self =
+        entry.source == ChatHistorySource::Bot || entry.username.eq_ignore_ascii_case(bot_login);
+    if is_self {
+        return format!("[{ts}] {persona_name} (self): {}", entry.text);
+    }
+    let name = entry
+        .display_name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(entry.username.as_str());
+    format!("[{ts}] {name}: {}", entry.text)
 }
 
 #[cfg(test)]
@@ -357,6 +375,51 @@ mod tests {
     use crate::ai::memory::store::MemoryStore;
     use crate::ai::memory::types::FileKind;
     use crate::settings::Settings;
+
+    #[test]
+    fn format_entry_line_self_uses_persona_and_self_tag() {
+        let entry = ChatHistoryEntry {
+            seq: 1,
+            username: "chronophylosbot".into(),
+            display_name: Some("Aurora".into()),
+            user_id: None,
+            text: "gemerkt".into(),
+            source: ChatHistorySource::Bot,
+            timestamp: chrono::Utc::now(),
+        };
+        let line = format_entry_line(&entry, "chronophylosbot", "Aurora");
+        assert!(line.ends_with(" Aurora (self): gemerkt"), "got: {line}");
+    }
+
+    #[test]
+    fn format_entry_line_other_uses_display_name() {
+        let entry = ChatHistoryEntry {
+            seq: 1,
+            username: "magie_023".into(),
+            display_name: Some("MagieDisplay".into()),
+            user_id: Some("141690010".into()),
+            text: "hi".into(),
+            source: ChatHistorySource::User,
+            timestamp: chrono::Utc::now(),
+        };
+        let line = format_entry_line(&entry, "chronophylosbot", "Aurora");
+        assert!(line.ends_with(" MagieDisplay: hi"), "got: {line}");
+    }
+
+    #[test]
+    fn format_entry_line_other_falls_back_to_username_when_no_display() {
+        let entry = ChatHistoryEntry {
+            seq: 1,
+            username: "lurker42".into(),
+            display_name: None,
+            user_id: None,
+            text: "?".into(),
+            source: ChatHistorySource::User,
+            timestamp: chrono::Utc::now(),
+        };
+        let line = format_entry_line(&entry, "chronophylosbot", "Aurora");
+        assert!(line.ends_with(" lurker42: ?"), "got: {line}");
+    }
 
     fn test_handle() -> crate::settings::SettingsHandle {
         Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
@@ -432,12 +495,104 @@ mod tests {
             "hi {speaker_username} on {channel} {date} {speaker_role} {unknown}",
             SubstitutionVars {
                 speaker_username: "alice",
+                speaker_display: "Alice",
+                speaker_user_id: "42",
                 speaker_role: "regular",
                 channel: "ch",
                 date: "2026-04-30",
             },
         );
         assert_eq!(s, "hi alice on ch 2026-04-30 regular {unknown}");
+    }
+
+    #[test]
+    fn substitute_renders_speaker_marker_block() {
+        // Mirror the shape of the bundled `ai_instructions.md` marker line so
+        // this test fails if the prompt format drifts from substitute()'s tokens.
+        let tmpl = ">>> Antwort auf {speaker_display} (login={speaker_username}, id={speaker_user_id}, role={speaker_role}):\n";
+        let out = substitute(
+            tmpl,
+            SubstitutionVars {
+                speaker_username: "magie_023",
+                speaker_display: "MagieDisplay",
+                speaker_user_id: "141690010",
+                speaker_role: "regular",
+                channel: "euterheissgetraenk",
+                date: "2026-05-16",
+            },
+        );
+        assert!(out.contains(
+            ">>> Antwort auf MagieDisplay (login=magie_023, id=141690010, role=regular):"
+        ));
+    }
+
+    #[test]
+    fn bundled_ai_instructions_substitutes_speaker_marker_cleanly() {
+        // Drives the production prompt through substitute() and verifies the
+        // marker line emerges with no leftover `{...}` placeholders.
+        let tmpl = include_str!("../../../data/prompts/ai_instructions.md");
+        let out = substitute(
+            tmpl,
+            SubstitutionVars {
+                speaker_username: "magie_023",
+                speaker_display: "MagieDisplay",
+                speaker_user_id: "141690010",
+                speaker_role: "regular",
+                channel: "euterheissgetraenk",
+                date: "2026-05-16",
+            },
+        );
+        assert!(
+            out.contains(
+                ">>> Antwort auf MagieDisplay (login=magie_023, id=141690010, role=regular):"
+            ),
+            "bundled prompt missing or malformed marker line:\n{out}"
+        );
+        // No `{token}` placeholders should remain in the output.
+        for tok in [
+            "{speaker_username}",
+            "{speaker_display}",
+            "{speaker_user_id}",
+            "{speaker_role}",
+            "{channel}",
+            "{date}",
+        ] {
+            assert!(
+                !out.contains(tok),
+                "bundled prompt leaked unsubstituted token {tok}:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_system_substitutes_cleanly() {
+        // Mirror the ai_instructions check: drive the bundled system prompt
+        // through substitute() and verify no `{...}` placeholders survive.
+        let tmpl = include_str!("../../../data/prompts/system.md");
+        let out = substitute(
+            tmpl,
+            SubstitutionVars {
+                speaker_username: "magie_023",
+                speaker_display: "MagieDisplay",
+                speaker_user_id: "141690010",
+                speaker_role: "regular",
+                channel: "euterheissgetraenk",
+                date: "2026-05-16",
+            },
+        );
+        for tok in [
+            "{speaker_username}",
+            "{speaker_display}",
+            "{speaker_user_id}",
+            "{speaker_role}",
+            "{channel}",
+            "{date}",
+        ] {
+            assert!(
+                !out.contains(tok),
+                "bundled system prompt leaked unsubstituted token {tok}:\n{out}"
+            );
+        }
     }
 
     #[test]
@@ -483,6 +638,9 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
+                speaker_login: String::new(),
             },
         )
         .await
@@ -529,6 +687,12 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
+                // Empty speaker + None history: dreamer-style path, no
+                // chat-window scope filter is applied, so the byte-budget
+                // ordering this test exercises remains in force.
+                speaker_login: String::new(),
             },
         )
         .await
@@ -570,6 +734,9 @@ mod tests {
                 ai_channel_history: Some(ai.clone()),
                 ai_channel_login: Some("ai_chan".into()),
                 invocation_channel: InvocationChannel::AiChannel,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
+                speaker_login: String::new(),
             },
         )
         .await
@@ -620,6 +787,9 @@ mod tests {
                 ai_channel_history: Some(ai),
                 ai_channel_login: Some("ai_chan".into()),
                 invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
+                speaker_login: String::new(),
             },
         )
         .await
@@ -627,115 +797,6 @@ mod tests {
 
         assert!(body.recent_chat.contains("Recent chat (#main)"));
         assert!(!body.recent_chat.contains("Recent chat (#ai_chan)"));
-    }
-
-    #[tokio::test]
-    async fn build_chat_turn_context_emits_mention_table_for_chat_users_with_files() {
-        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-        use crate::settings::test_handle;
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
-
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        // alice and bob have user files; carol speaks but has no file.
-        store
-            .write(
-                &FileKind::User {
-                    user_id: "111".into(),
-                },
-                "alice body",
-                Some("alice"),
-                Some("Alice"),
-            )
-            .await
-            .unwrap();
-        store
-            .write(
-                &FileKind::User {
-                    user_id: "222".into(),
-                },
-                "bob body",
-                Some("bob"),
-                Some("Bob"),
-            )
-            .await
-            .unwrap();
-
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-            test_handle(),
-            primary_history_capacity,
-        )));
-        {
-            let mut p = primary.lock().await;
-            p.push_user("ALICE", "hi"); // mixed-case lookup
-            p.push_user("carol", "no file");
-            p.push_user("bob", "hello");
-        }
-
-        let body = build_chat_turn_context(
-            &store,
-            BuildOpts {
-                inject_byte_budget: 24576,
-                nonce: "n00000000000000nn".into(),
-                primary_history: Some(primary),
-                primary_login: "main".into(),
-                ai_channel_history: None,
-                ai_channel_login: None,
-                invocation_channel: InvocationChannel::Primary,
-            },
-        )
-        .await
-        .unwrap();
-
-        assert!(
-            body.recent_chat.contains("## Mentioned users"),
-            "missing table: {}",
-            body.recent_chat
-        );
-        assert!(body.recent_chat.contains("| alice | Alice | 111 |"));
-        assert!(body.recent_chat.contains("| bob | Bob | 222 |"));
-        // carol has no user file → no row.
-        assert!(!body.recent_chat.contains("carol |"));
-        // Memory section must not contain the table.
-        assert!(!body.durable_memory.contains("Mentioned users"));
-        assert!(!body.volatile_state.contains("Mentioned users"));
-    }
-
-    #[tokio::test]
-    async fn build_chat_turn_context_omits_mention_table_when_no_chat() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        store
-            .write(
-                &FileKind::User {
-                    user_id: "111".into(),
-                },
-                "alice body",
-                Some("alice"),
-                Some("Alice"),
-            )
-            .await
-            .unwrap();
-
-        let body = build_chat_turn_context(
-            &store,
-            BuildOpts {
-                inject_byte_budget: 24576,
-                nonce: "n00000000000000nn".into(),
-                primary_history: None,
-                primary_login: "main".into(),
-                ai_channel_history: None,
-                ai_channel_login: None,
-                invocation_channel: InvocationChannel::Primary,
-            },
-        )
-        .await
-        .unwrap();
-
-        assert!(body.recent_chat.is_empty());
-        assert!(!body.durable_memory.contains("Mentioned users"));
-        assert!(!body.volatile_state.contains("Mentioned users"));
     }
 
     #[tokio::test]
@@ -769,6 +830,9 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
+                speaker_login: String::new(),
             },
         )
         .await
@@ -783,6 +847,161 @@ mod tests {
         assert!(
             primary_section_bytes <= RECENT_CHAT_PRIMARY_BYTES + 256, // slack for header
             "primary section over cap: {primary_section_bytes}"
+        );
+    }
+
+    /// Seed a user/<id>.md directly with a hand-rolled frontmatter so the test
+    /// can pin `updated_at` precisely. `MemoryStore::write` always stamps
+    /// `Utc::now()`, which is not enough control to verify that the newest
+    /// user (`lurker`) is dropped by the scope filter rather than by recency.
+    async fn seed_user_file(
+        dir: &std::path::Path,
+        id: &str,
+        login: &str,
+        display: &str,
+        updated_at: chrono::DateTime<chrono::Utc>,
+        body: &str,
+    ) {
+        let users_dir = dir.join("memories/users");
+        tokio::fs::create_dir_all(&users_dir).await.unwrap();
+        let raw = format!(
+            "---\nupdated_at: {}\nusername: {login}\ndisplay_name: {display}\n---\n{body}",
+            updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        );
+        tokio::fs::write(users_dir.join(format!("{id}.md")), raw)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn build_chat_turn_context_no_longer_emits_mention_table() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+
+        // Seed a user file so that the previous code WOULD have emitted a
+        // mention table row for `alice`. We assert no table appears.
+        seed_user_file(
+            dir.path(),
+            "111",
+            "alice",
+            "Alice",
+            chrono::Utc::now(),
+            "alice body",
+        )
+        .await;
+
+        let history = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        history.lock().await.push_user("alice", "hi");
+
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(history),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
+                speaker_login: "alice".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !ctx.recent_chat.contains("## Mentioned users"),
+            "mention table should be dropped, got:\n{}",
+            ctx.recent_chat
+        );
+    }
+
+    #[tokio::test]
+    async fn build_chat_turn_context_scopes_users_to_chat_window_plus_speaker() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+
+        // Seed four user files. `lurker` has the newest `updated_at` and
+        // would normally win the recency scan; we expect it to be excluded
+        // because it's neither the speaker nor present in the chat window.
+        let now = chrono::Utc::now();
+        let backdate = chrono::Duration::days(7);
+        for (id, login, display) in [
+            ("11", "alice", "Alice"),
+            ("22", "bob", "Bob"),
+            ("33", "carol", "Carol"),
+        ] {
+            seed_user_file(dir.path(), id, login, display, now - backdate, "body").await;
+        }
+        seed_user_file(dir.path(), "99", "lurker", "Lurker", now, "body").await;
+
+        let history = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        {
+            let mut h = history.lock().await;
+            h.push_user("alice", "hi");
+            h.push_user("bob", "yo");
+        }
+
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(history),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
+                speaker_login: "carol".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            ctx.durable_memory.contains("login=alice"),
+            "alice (chat-window) missing:\n{}",
+            ctx.durable_memory
+        );
+        assert!(
+            ctx.durable_memory.contains("login=bob"),
+            "bob (chat-window) missing:\n{}",
+            ctx.durable_memory
+        );
+        assert!(
+            ctx.durable_memory.contains("login=carol"),
+            "carol (speaker) missing:\n{}",
+            ctx.durable_memory
+        );
+        assert!(
+            !ctx.durable_memory.contains("login=lurker"),
+            "lurker is neither speaker nor in chat window, must be excluded:\n{}",
+            ctx.durable_memory
+        );
+
+        // Speaker (carol) must appear before the chat-window users so the
+        // byte-budget packing loop can never drop the speaker's own file.
+        let carol_idx = ctx.durable_memory.find("login=carol").unwrap();
+        let alice_idx = ctx.durable_memory.find("login=alice").unwrap();
+        let bob_idx = ctx.durable_memory.find("login=bob").unwrap();
+        assert!(
+            carol_idx < alice_idx && carol_idx < bob_idx,
+            "speaker must come first:\n{}",
+            ctx.durable_memory
         );
     }
 }

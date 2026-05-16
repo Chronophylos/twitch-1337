@@ -16,5 +16,8 @@
     {% call m::num_row_bounded("ai_behavior", "ai_behavior_max_writes_per_turn", "max_writes_per_turn",
        "How many memory writes the model may issue per turn.",
        current.ai.behavior.max_writes_per_turn, defaults.ai.behavior.max_writes_per_turn, "", 0, 64) %}{% endcall %}
+    {% call m::text_row("ai_behavior", "ai_behavior_persona_name", "persona_name",
+       "Bot persona name used in chat-history identity and rendered chat lines.",
+       current.ai.behavior.persona_name, defaults.ai.behavior.persona_name, "Aurora") %}{% endcall %}
   </div>
 </section>

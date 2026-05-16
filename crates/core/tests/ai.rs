@@ -5,8 +5,40 @@ use std::time::Duration;
 
 use common::TestBotBuilder;
 use llm::{Role, ToolCall, ToolChatCompletionResponse};
+use twitch_1337::ChatHistorySource;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[tokio::test]
+async fn bot_reply_pushes_persona_display_name() {
+    let mut bot = TestBotBuilder::new().with_ai().spawn().await;
+    bot.llm.push_tool_message("oki");
+
+    bot.send("speaker", "!ai hi").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+
+    // Poll for the bot entry: the chat-history push lands after say_in_reply_to
+    // returns, so on a multi-thread runtime we can race the reply receipt.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let bot_entry = loop {
+        let snap = bot.primary_history_snapshot().await;
+        if let Some(e) = snap
+            .iter()
+            .rev()
+            .find(|e| e.source == ChatHistorySource::Bot)
+        {
+            break e.clone();
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("expected a bot reply in chat history within deadline");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    assert_eq!(bot_entry.display_name.as_deref(), Some("Aurora"));
+    assert_eq!(bot_entry.user_id, None);
+
+    bot.shutdown().await;
+}
 
 #[tokio::test]
 async fn ai_command_returns_fake_response() {

@@ -334,6 +334,7 @@ where
         let snap = self.settings.load();
         let model = snap.ai.connection.model.clone();
         let reasoning_effort = snap.ai.connection.reasoning_effort.clone();
+        let persona_name = snap.ai.behavior.persona_name.clone();
         drop(snap);
 
         self.cooldown.record(user).await;
@@ -352,8 +353,16 @@ where
             tokio::fs::read_to_string(prompts_dir.join("system.md")),
             tokio::fs::read_to_string(prompts_dir.join("ai_instructions.md")),
         )?;
+        let sender_display = if ctx.privmsg.sender.name.is_empty() {
+            ctx.privmsg.sender.login.as_str()
+        } else {
+            ctx.privmsg.sender.name.as_str()
+        };
+        let sender_user_id = ctx.privmsg.sender.id.as_str();
         let vars = inject::SubstitutionVars {
             speaker_username: &ctx.privmsg.sender.login,
+            speaker_display: sender_display,
+            speaker_user_id: sender_user_id,
             speaker_role: role.as_str(),
             channel: &ctx.privmsg.channel_login,
             date: &now_berlin,
@@ -387,6 +396,9 @@ where
                 ai_channel_history: cc.and_then(|c| c.ai_channel_history.clone()),
                 ai_channel_login: cc.and_then(|c| c.ai_channel_login.clone()),
                 invocation_channel,
+                bot_login: self.bot_username.clone(),
+                persona_name: persona_name.clone(),
+                speaker_login: ctx.privmsg.sender.login.clone(),
             },
         )
         .await?;
@@ -504,7 +516,12 @@ where
                     chat.buffer_for(&ctx.privmsg.channel_login)
                         .lock()
                         .await
-                        .push_bot_at(self.bot_username.clone(), line.clone(), ts);
+                        .push_bot_with_identity_at(
+                            self.bot_username.clone(),
+                            Some(&persona_name),
+                            line.clone(),
+                            ts,
+                        );
                 }
                 let is_primary_source =
                     !cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));
