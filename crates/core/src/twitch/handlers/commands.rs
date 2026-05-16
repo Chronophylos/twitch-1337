@@ -398,8 +398,12 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                     primary_history_for_dispatch.as_ref()
                 };
                 if let Some(buffer) = target_buffer {
-                    buffer.lock().await.push_user_at(
+                    let display_name = Some(privmsg.sender.name.as_str()).filter(|s| !s.is_empty());
+                    let user_id = Some(privmsg.sender.id.as_str()).filter(|s| !s.is_empty());
+                    buffer.lock().await.push_user_with_identity_at(
                         privmsg.sender.login.clone(),
+                        display_name,
+                        user_id,
                         privmsg.message_text.clone(),
                         privmsg.server_timestamp,
                     );
