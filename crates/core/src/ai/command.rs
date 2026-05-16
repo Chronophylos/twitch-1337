@@ -353,8 +353,16 @@ where
             tokio::fs::read_to_string(prompts_dir.join("system.md")),
             tokio::fs::read_to_string(prompts_dir.join("ai_instructions.md")),
         )?;
+        let sender_display = if ctx.privmsg.sender.name.is_empty() {
+            ctx.privmsg.sender.login.as_str()
+        } else {
+            ctx.privmsg.sender.name.as_str()
+        };
+        let sender_user_id = ctx.privmsg.sender.id.as_str();
         let vars = inject::SubstitutionVars {
             speaker_username: &ctx.privmsg.sender.login,
+            speaker_display: sender_display,
+            speaker_user_id: sender_user_id,
             speaker_role: role.as_str(),
             channel: &ctx.privmsg.channel_login,
             date: &now_berlin,

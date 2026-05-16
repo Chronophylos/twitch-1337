@@ -18,8 +18,9 @@ The loader runs a simple `str::replace` pass before sending. Available tokens:
 
 | Token | Meaning | Available in |
 |---|---|---|
-| `{speaker_id}` | Twitch numeric user id of the speaker | `system.md`, `ai_instructions.md` |
-| `{speaker_username}` | Display name | `system.md`, `ai_instructions.md` |
+| `{speaker_username}` | Twitch login (lowercase) of the speaker | `system.md`, `ai_instructions.md` |
+| `{speaker_display}` | Display name (falls back to login) | `system.md`, `ai_instructions.md` |
+| `{speaker_user_id}` | Twitch numeric user id of the speaker | `system.md`, `ai_instructions.md` |
 | `{speaker_role}` | `regular`, `moderator`, `broadcaster` | `system.md`, `ai_instructions.md` |
 | `{channel}` | Channel name (without `#`) | all |
 | `{date}` | Today's Berlin-local date, `YYYY-MM-DD` | all |

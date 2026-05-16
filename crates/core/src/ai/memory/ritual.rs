@@ -154,6 +154,8 @@ pub async fn run_ritual(
         &dreamer_template,
         SubstitutionVars {
             speaker_username: "dreamer",
+            speaker_display: "dreamer",
+            speaker_user_id: "",
             speaker_role: "dreamer",
             channel,
             date: &now_str,

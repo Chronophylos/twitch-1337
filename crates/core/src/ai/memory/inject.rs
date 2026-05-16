@@ -104,6 +104,8 @@ pub fn scrub_for_inject(body: &str) -> String {
 #[derive(Clone, Copy)]
 pub struct SubstitutionVars<'a> {
     pub speaker_username: &'a str,
+    pub speaker_display: &'a str,
+    pub speaker_user_id: &'a str,
     pub speaker_role: &'a str,
     pub channel: &'a str,
     pub date: &'a str,
@@ -112,6 +114,8 @@ pub struct SubstitutionVars<'a> {
 pub fn substitute(template: &str, v: SubstitutionVars<'_>) -> String {
     template
         .replace("{speaker_username}", v.speaker_username)
+        .replace("{speaker_display}", v.speaker_display)
+        .replace("{speaker_user_id}", v.speaker_user_id)
         .replace("{speaker_role}", v.speaker_role)
         .replace("{channel}", v.channel)
         .replace("{date}", v.date)
@@ -495,12 +499,73 @@ mod tests {
             "hi {speaker_username} on {channel} {date} {speaker_role} {unknown}",
             SubstitutionVars {
                 speaker_username: "alice",
+                speaker_display: "Alice",
+                speaker_user_id: "42",
                 speaker_role: "regular",
                 channel: "ch",
                 date: "2026-04-30",
             },
         );
         assert_eq!(s, "hi alice on ch 2026-04-30 regular {unknown}");
+    }
+
+    #[test]
+    fn substitute_renders_speaker_marker_block() {
+        // Mirror the shape of the bundled `ai_instructions.md` marker line so
+        // this test fails if the prompt format drifts from substitute()'s tokens.
+        let tmpl = ">>> Antwort auf {speaker_display} (login={speaker_username}, id={speaker_user_id}, role={speaker_role}):\n";
+        let out = substitute(
+            tmpl,
+            SubstitutionVars {
+                speaker_username: "magie_023",
+                speaker_display: "MagieDisplay",
+                speaker_user_id: "141690010",
+                speaker_role: "regular",
+                channel: "euterheissgetraenk",
+                date: "2026-05-16",
+            },
+        );
+        assert!(out.contains(
+            ">>> Antwort auf MagieDisplay (login=magie_023, id=141690010, role=regular):"
+        ));
+    }
+
+    #[test]
+    fn bundled_ai_instructions_substitutes_speaker_marker_cleanly() {
+        // Drives the production prompt through substitute() and verifies the
+        // marker line emerges with no leftover `{...}` placeholders.
+        let tmpl = include_str!("../../../data/prompts/ai_instructions.md");
+        let out = substitute(
+            tmpl,
+            SubstitutionVars {
+                speaker_username: "magie_023",
+                speaker_display: "MagieDisplay",
+                speaker_user_id: "141690010",
+                speaker_role: "regular",
+                channel: "euterheissgetraenk",
+                date: "2026-05-16",
+            },
+        );
+        assert!(
+            out.contains(
+                ">>> Antwort auf MagieDisplay (login=magie_023, id=141690010, role=regular):"
+            ),
+            "bundled prompt missing or malformed marker line:\n{out}"
+        );
+        // No `{token}` placeholders should remain in the output.
+        for tok in [
+            "{speaker_username}",
+            "{speaker_display}",
+            "{speaker_user_id}",
+            "{speaker_role}",
+            "{channel}",
+            "{date}",
+        ] {
+            assert!(
+                !out.contains(tok),
+                "bundled prompt leaked unsubstituted token {tok}:\n{out}"
+            );
+        }
     }
 
     #[test]
