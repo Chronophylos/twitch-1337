@@ -24,6 +24,10 @@ pub enum ChatHistorySource {
 pub struct ChatHistoryEntry {
     pub seq: u64,
     pub username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
     pub text: String,
     pub source: ChatHistorySource,
     pub timestamp: DateTime<Utc>,
@@ -114,7 +118,42 @@ impl ChatHistoryBuffer {
         text: impl Into<String>,
         timestamp: DateTime<Utc>,
     ) {
-        self.push(username, text, ChatHistorySource::User, timestamp);
+        self.push(
+            username,
+            None,
+            None,
+            text,
+            ChatHistorySource::User,
+            timestamp,
+        );
+    }
+
+    pub fn push_user_with_identity(
+        &mut self,
+        username: impl Into<String>,
+        display_name: Option<&str>,
+        user_id: Option<&str>,
+        text: impl Into<String>,
+    ) {
+        self.push_user_with_identity_at(username, display_name, user_id, text, Utc::now());
+    }
+
+    pub fn push_user_with_identity_at(
+        &mut self,
+        username: impl Into<String>,
+        display_name: Option<&str>,
+        user_id: Option<&str>,
+        text: impl Into<String>,
+        timestamp: DateTime<Utc>,
+    ) {
+        self.push(
+            username,
+            display_name.map(str::to_string),
+            user_id.map(str::to_string),
+            text,
+            ChatHistorySource::User,
+            timestamp,
+        );
     }
 
     pub fn push_bot(&mut self, username: impl Into<String>, text: impl Into<String>) {
@@ -127,12 +166,47 @@ impl ChatHistoryBuffer {
         text: impl Into<String>,
         timestamp: DateTime<Utc>,
     ) {
-        self.push(username, text, ChatHistorySource::Bot, timestamp);
+        self.push(
+            username,
+            None,
+            None,
+            text,
+            ChatHistorySource::Bot,
+            timestamp,
+        );
+    }
+
+    pub fn push_bot_with_identity(
+        &mut self,
+        username: impl Into<String>,
+        display_name: Option<&str>,
+        text: impl Into<String>,
+    ) {
+        self.push_bot_with_identity_at(username, display_name, text, Utc::now());
+    }
+
+    pub fn push_bot_with_identity_at(
+        &mut self,
+        username: impl Into<String>,
+        display_name: Option<&str>,
+        text: impl Into<String>,
+        timestamp: DateTime<Utc>,
+    ) {
+        self.push(
+            username,
+            display_name.map(str::to_string),
+            None,
+            text,
+            ChatHistorySource::Bot,
+            timestamp,
+        );
     }
 
     fn push(
         &mut self,
         username: impl Into<String>,
+        display_name: Option<String>,
+        user_id: Option<String>,
         text: impl Into<String>,
         source: ChatHistorySource,
         timestamp: DateTime<Utc>,
@@ -149,6 +223,8 @@ impl ChatHistoryBuffer {
         self.entries.push_back(ChatHistoryEntry {
             seq,
             username: username.into(),
+            display_name,
+            user_id,
             text: text.into(),
             source,
             timestamp,
@@ -339,6 +415,19 @@ mod tests {
         assert_eq!(page.messages[0].username, "bob");
         assert_eq!(page.messages[1].seq, 2);
         assert_eq!(page.messages[1].source, ChatHistorySource::User);
+    }
+
+    #[test]
+    fn push_user_with_identity_round_trips_display_and_id() {
+        let handle = make_handle(10);
+        let mut buf = ChatHistoryBuffer::new(handle, primary_history_capacity);
+        buf.push_user_with_identity("magie_023", Some("magie_023"), Some("141690010"), "hi");
+        let snap = buf.snapshot();
+        let e = &snap[0];
+        assert_eq!(e.username, "magie_023");
+        assert_eq!(e.display_name.as_deref(), Some("magie_023"));
+        assert_eq!(e.user_id.as_deref(), Some("141690010"));
+        assert_eq!(e.source, ChatHistorySource::User);
     }
 
     /// Demonstrates live capacity rebinding: fill the buffer, halve the capacity
