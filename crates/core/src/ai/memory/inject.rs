@@ -131,6 +131,11 @@ pub struct BuildOpts {
     pub invocation_channel: InvocationChannel,
     pub bot_login: String,
     pub persona_name: String,
+    /// Lowercased Twitch login of the user that triggered this turn (i.e.
+    /// `!ai` invoker). Empty string for the dreamer ritual (no speaker).
+    /// Used by [`build_chat_turn_context`] to scope the injected user-file
+    /// set down to chat-window users plus the speaker.
+    pub speaker_login: String,
 }
 
 /// Result of [`build_chat_turn_context`].
@@ -211,7 +216,51 @@ pub async fn build_chat_turn_context(
     durable_blocks.push(fence_block(FenceLabel::Soul, &opts.nonce, &soul.body));
     durable_blocks.push(fence_block(FenceLabel::Lore, &opts.nonce, &lore.body));
 
-    users.sort_by_key(|f| std::cmp::Reverse(f.frontmatter.updated_at));
+    // Scope user files to logins present in the chat window plus the speaker.
+    // Users who didn't appear in either are excluded outright: the model only
+    // needs character sheets for people it's actually about to talk to or
+    // about. Without this filter, lurkers with recent `updated_at` would
+    // crowd out the speaker's own file when the budget is tight.
+    //
+    // Short-circuit for the dreamer: no history buffers AND no speaker means
+    // this isn't a chat turn, it's the dreamer ritual, which wants every user
+    // file in its system prompt. Skipping the filter in that case keeps the
+    // dreamer's pre-existing "every memory file in one shot" contract intact.
+    let speaker_lc = opts.speaker_login.to_ascii_lowercase();
+    let is_chat_turn = opts.primary_history.is_some()
+        || opts.ai_channel_history.is_some()
+        || !speaker_lc.is_empty();
+    if is_chat_turn {
+        let mut scope: std::collections::BTreeSet<String> = mentioned.clone();
+        if !speaker_lc.is_empty() {
+            scope.insert(speaker_lc.clone());
+        }
+        users.retain(|f| {
+            let Some(login) = f.frontmatter.username.as_deref() else {
+                return false;
+            };
+            scope.contains(&login.to_ascii_lowercase())
+        });
+    }
+
+    // Speaker first, then newest-first. Ensures the speaker's file always
+    // survives the byte-budget packing loop below. When speaker_login is
+    // empty (dreamer), this collapses to a plain updated_at DESC sort.
+    users.sort_by(|a, b| {
+        let a_is_speaker = !speaker_lc.is_empty()
+            && a.frontmatter
+                .username
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(&speaker_lc));
+        let b_is_speaker = !speaker_lc.is_empty()
+            && b.frontmatter
+                .username
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(&speaker_lc));
+        b_is_speaker
+            .cmp(&a_is_speaker)
+            .then_with(|| b.frontmatter.updated_at.cmp(&a.frontmatter.updated_at))
+    });
     states.sort_by_key(|f| std::cmp::Reverse(f.frontmatter.updated_at));
 
     // Pack user blocks until the durable-memory budget is hit. State blocks get
@@ -613,6 +662,7 @@ mod tests {
                 invocation_channel: InvocationChannel::Primary,
                 bot_login: "bot".into(),
                 persona_name: "Aurora".into(),
+                speaker_login: String::new(),
             },
         )
         .await
@@ -661,6 +711,10 @@ mod tests {
                 invocation_channel: InvocationChannel::Primary,
                 bot_login: "bot".into(),
                 persona_name: "Aurora".into(),
+                // Empty speaker + None history: dreamer-style path, no
+                // chat-window scope filter is applied, so the byte-budget
+                // ordering this test exercises remains in force.
+                speaker_login: String::new(),
             },
         )
         .await
@@ -704,6 +758,7 @@ mod tests {
                 invocation_channel: InvocationChannel::AiChannel,
                 bot_login: "bot".into(),
                 persona_name: "Aurora".into(),
+                speaker_login: String::new(),
             },
         )
         .await
@@ -756,6 +811,7 @@ mod tests {
                 invocation_channel: InvocationChannel::Primary,
                 bot_login: "bot".into(),
                 persona_name: "Aurora".into(),
+                speaker_login: String::new(),
             },
         )
         .await
@@ -821,6 +877,7 @@ mod tests {
                 invocation_channel: InvocationChannel::Primary,
                 bot_login: "bot".into(),
                 persona_name: "Aurora".into(),
+                speaker_login: String::new(),
             },
         )
         .await
@@ -868,6 +925,7 @@ mod tests {
                 invocation_channel: InvocationChannel::Primary,
                 bot_login: "bot".into(),
                 persona_name: "Aurora".into(),
+                speaker_login: String::new(),
             },
         )
         .await
@@ -911,6 +969,7 @@ mod tests {
                 invocation_channel: InvocationChannel::Primary,
                 bot_login: "bot".into(),
                 persona_name: "Aurora".into(),
+                speaker_login: String::new(),
             },
         )
         .await
@@ -925,6 +984,111 @@ mod tests {
         assert!(
             primary_section_bytes <= RECENT_CHAT_PRIMARY_BYTES + 256, // slack for header
             "primary section over cap: {primary_section_bytes}"
+        );
+    }
+
+    /// Seed a user/<id>.md directly with a hand-rolled frontmatter so the test
+    /// can pin `updated_at` precisely. `MemoryStore::write` always stamps
+    /// `Utc::now()`, which is not enough control to verify that the newest
+    /// user (`lurker`) is dropped by the scope filter rather than by recency.
+    async fn seed_user_file(
+        dir: &std::path::Path,
+        id: &str,
+        login: &str,
+        display: &str,
+        updated_at: chrono::DateTime<chrono::Utc>,
+        body: &str,
+    ) {
+        let users_dir = dir.join("memories/users");
+        tokio::fs::create_dir_all(&users_dir).await.unwrap();
+        let raw = format!(
+            "---\nupdated_at: {}\nusername: {login}\ndisplay_name: {display}\n---\n{body}",
+            updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        );
+        tokio::fs::write(users_dir.join(format!("{id}.md")), raw)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn build_chat_turn_context_scopes_users_to_chat_window_plus_speaker() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+
+        // Seed four user files. `lurker` has the newest `updated_at` and
+        // would normally win the recency scan; we expect it to be excluded
+        // because it's neither the speaker nor present in the chat window.
+        let now = chrono::Utc::now();
+        let backdate = chrono::Duration::days(7);
+        for (id, login, display) in [
+            ("11", "alice", "Alice"),
+            ("22", "bob", "Bob"),
+            ("33", "carol", "Carol"),
+        ] {
+            seed_user_file(dir.path(), id, login, display, now - backdate, "body").await;
+        }
+        seed_user_file(dir.path(), "99", "lurker", "Lurker", now, "body").await;
+
+        let history = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        {
+            let mut h = history.lock().await;
+            h.push_user("alice", "hi");
+            h.push_user("bob", "yo");
+        }
+
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(history),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
+                speaker_login: "carol".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            ctx.durable_memory.contains("login=alice"),
+            "alice (chat-window) missing:\n{}",
+            ctx.durable_memory
+        );
+        assert!(
+            ctx.durable_memory.contains("login=bob"),
+            "bob (chat-window) missing:\n{}",
+            ctx.durable_memory
+        );
+        assert!(
+            ctx.durable_memory.contains("login=carol"),
+            "carol (speaker) missing:\n{}",
+            ctx.durable_memory
+        );
+        assert!(
+            !ctx.durable_memory.contains("login=lurker"),
+            "lurker is neither speaker nor in chat window, must be excluded:\n{}",
+            ctx.durable_memory
+        );
+
+        // Speaker (carol) must appear before the chat-window users so the
+        // byte-budget packing loop can never drop the speaker's own file.
+        let carol_idx = ctx.durable_memory.find("login=carol").unwrap();
+        let alice_idx = ctx.durable_memory.find("login=alice").unwrap();
+        let bob_idx = ctx.durable_memory.find("login=bob").unwrap();
+        assert!(
+            carol_idx < alice_idx && carol_idx < bob_idx,
+            "speaker must come first:\n{}",
+            ctx.durable_memory
         );
     }
 }

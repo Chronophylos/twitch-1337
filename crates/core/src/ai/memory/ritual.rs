@@ -134,6 +134,11 @@ pub async fn run_ritual(
             // so these are never read; pass empties to satisfy the type.
             bot_login: String::new(),
             persona_name: String::new(),
+            // Dreamer has no speaker. Empty string + no history buffers
+            // tells build_chat_turn_context to skip the chat-window scope
+            // filter so the dreamer still sees every user file in its
+            // system prompt.
+            speaker_login: String::new(),
         },
     )
     .await?;

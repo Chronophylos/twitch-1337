@@ -398,6 +398,7 @@ where
                 invocation_channel,
                 bot_login: self.bot_username.clone(),
                 persona_name: persona_name.clone(),
+                speaker_login: ctx.privmsg.sender.login.clone(),
             },
         )
         .await?;
