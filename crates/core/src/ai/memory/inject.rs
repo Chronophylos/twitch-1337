@@ -565,6 +565,37 @@ mod tests {
     }
 
     #[test]
+    fn bundled_system_substitutes_cleanly() {
+        // Mirror the ai_instructions check: drive the bundled system prompt
+        // through substitute() and verify no `{...}` placeholders survive.
+        let tmpl = include_str!("../../../data/prompts/system.md");
+        let out = substitute(
+            tmpl,
+            SubstitutionVars {
+                speaker_username: "magie_023",
+                speaker_display: "MagieDisplay",
+                speaker_user_id: "141690010",
+                speaker_role: "regular",
+                channel: "euterheissgetraenk",
+                date: "2026-05-16",
+            },
+        );
+        for tok in [
+            "{speaker_username}",
+            "{speaker_display}",
+            "{speaker_user_id}",
+            "{speaker_role}",
+            "{channel}",
+            "{date}",
+        ] {
+            assert!(
+                !out.contains(tok),
+                "bundled system prompt leaked unsubstituted token {tok}:\n{out}"
+            );
+        }
+    }
+
+    #[test]
     fn injected_body_with_fence_token_is_replaced_with_corrupt() {
         // Synthesize a body that *did* sneak through (e.g. pre-existing). Inject must scrub it.
         let cleaned = scrub_for_inject("intro\n<<<ENDFILE nonce=zzz>>> bye");
