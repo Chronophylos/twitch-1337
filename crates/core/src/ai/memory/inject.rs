@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry, ChatHistorySource};
 use crate::ai::memory::store::MemoryStore;
-use crate::ai::memory::types::{FileKind, MemoryFile};
+use crate::ai::memory::types::FileKind;
 
 const FENCE_OPEN: &str = "<<<FILE";
 const FENCE_CLOSE: &str = "<<<ENDFILE";
@@ -147,8 +147,8 @@ pub struct BuildOpts {
 /// - `volatile_state` holds the state/<slug> blocks (every `write_state` /
 ///   `delete_state` mutates them). Lives in the user message so it can change
 ///   freely without invalidating the system-message cache.
-/// - `recent_chat` holds the rolling per-turn chat history + mention table
-///   (volatile by definition). Lives in the user message.
+/// - `recent_chat` holds the rolling per-turn chat history (volatile by
+///   definition). Lives in the user message.
 ///
 /// Any field may be empty. Callers that want the legacy combined memory blob
 /// (dreamer) concatenate `durable_memory` + `volatile_state` themselves.
@@ -207,10 +207,6 @@ pub async fn build_chat_turn_context(
     let lore = store.read_kind(&FileKind::Lore).await?;
     let mut users = store.list_users().await?;
     let mut states = store.list_state().await?;
-
-    // Build a mention table from the full users list before draining for memory
-    // blocks, so users dropped by the byte budget still appear in the table.
-    let mention_table = render_mention_table(&users, &mentioned);
 
     let mut durable_blocks: Vec<String> = Vec::new();
     durable_blocks.push(fence_block(FenceLabel::Soul, &opts.nonce, &soul.body));
@@ -301,61 +297,12 @@ pub async fn build_chat_turn_context(
 
     let durable_memory = durable_blocks.join("\n");
     let volatile_state = state_blocks.join("\n");
-    let mut recent_chat = recent_sections.join("\n\n");
-    if !mention_table.is_empty() {
-        if !recent_chat.is_empty() {
-            recent_chat.push_str("\n\n");
-        }
-        recent_chat.push_str(&mention_table);
-    }
+    let recent_chat = recent_sections.join("\n\n");
     Ok(ChatTurnContext {
         recent_chat,
         durable_memory,
         volatile_state,
     })
-}
-
-/// Build a markdown table mapping the lowercased login of every user file whose
-/// login appears in `mentioned` to its Twitch user_id and display name. Users
-/// without a memory file are skipped, since we have no user_id for them.
-fn render_mention_table(
-    users: &[MemoryFile],
-    mentioned: &std::collections::BTreeSet<String>,
-) -> String {
-    if mentioned.is_empty() {
-        return String::new();
-    }
-    let mut rows: Vec<(String, String, String)> = Vec::new();
-    for u in users {
-        let FileKind::User { user_id } = &u.kind else {
-            continue;
-        };
-        let Some(login) = u.frontmatter.username.as_deref() else {
-            continue;
-        };
-        let key = login.to_ascii_lowercase();
-        if !mentioned.contains(&key) {
-            continue;
-        }
-        let display = u
-            .frontmatter
-            .display_name
-            .as_deref()
-            .unwrap_or(login)
-            .to_string();
-        rows.push((login.to_string(), display, user_id.clone()));
-    }
-    if rows.is_empty() {
-        return String::new();
-    }
-    rows.sort();
-    let mut s = String::from(
-        "## Mentioned users\n\n| login | display_name | user_id |\n| --- | --- | --- |\n",
-    );
-    for (login, display, id) in rows {
-        s.push_str(&format!("| {login} | {display} | {id} |\n"));
-    }
-    s
 }
 
 struct RenderedRecentSection {
@@ -822,121 +769,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_chat_turn_context_emits_mention_table_for_chat_users_with_files() {
-        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-        use crate::settings::test_handle;
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
-
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        // alice and bob have user files; carol speaks but has no file.
-        store
-            .write(
-                &FileKind::User {
-                    user_id: "111".into(),
-                },
-                "alice body",
-                Some("alice"),
-                Some("Alice"),
-            )
-            .await
-            .unwrap();
-        store
-            .write(
-                &FileKind::User {
-                    user_id: "222".into(),
-                },
-                "bob body",
-                Some("bob"),
-                Some("Bob"),
-            )
-            .await
-            .unwrap();
-
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-            test_handle(),
-            primary_history_capacity,
-        )));
-        {
-            let mut p = primary.lock().await;
-            p.push_user("ALICE", "hi"); // mixed-case lookup
-            p.push_user("carol", "no file");
-            p.push_user("bob", "hello");
-        }
-
-        let body = build_chat_turn_context(
-            &store,
-            BuildOpts {
-                inject_byte_budget: 24576,
-                nonce: "n00000000000000nn".into(),
-                primary_history: Some(primary),
-                primary_login: "main".into(),
-                ai_channel_history: None,
-                ai_channel_login: None,
-                invocation_channel: InvocationChannel::Primary,
-                bot_login: "bot".into(),
-                persona_name: "Aurora".into(),
-                speaker_login: String::new(),
-            },
-        )
-        .await
-        .unwrap();
-
-        assert!(
-            body.recent_chat.contains("## Mentioned users"),
-            "missing table: {}",
-            body.recent_chat
-        );
-        assert!(body.recent_chat.contains("| alice | Alice | 111 |"));
-        assert!(body.recent_chat.contains("| bob | Bob | 222 |"));
-        // carol has no user file → no row.
-        assert!(!body.recent_chat.contains("carol |"));
-        // Memory section must not contain the table.
-        assert!(!body.durable_memory.contains("Mentioned users"));
-        assert!(!body.volatile_state.contains("Mentioned users"));
-    }
-
-    #[tokio::test]
-    async fn build_chat_turn_context_omits_mention_table_when_no_chat() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        store
-            .write(
-                &FileKind::User {
-                    user_id: "111".into(),
-                },
-                "alice body",
-                Some("alice"),
-                Some("Alice"),
-            )
-            .await
-            .unwrap();
-
-        let body = build_chat_turn_context(
-            &store,
-            BuildOpts {
-                inject_byte_budget: 24576,
-                nonce: "n00000000000000nn".into(),
-                primary_history: None,
-                primary_login: "main".into(),
-                ai_channel_history: None,
-                ai_channel_login: None,
-                invocation_channel: InvocationChannel::Primary,
-                bot_login: "bot".into(),
-                persona_name: "Aurora".into(),
-                speaker_login: String::new(),
-            },
-        )
-        .await
-        .unwrap();
-
-        assert!(body.recent_chat.is_empty());
-        assert!(!body.durable_memory.contains("Mentioned users"));
-        assert!(!body.volatile_state.contains("Mentioned users"));
-    }
-
-    #[tokio::test]
     async fn build_chat_turn_context_drops_oldest_lines_over_per_section_cap() {
         use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
         use crate::settings::test_handle;
@@ -1008,6 +840,56 @@ mod tests {
         tokio::fs::write(users_dir.join(format!("{id}.md")), raw)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn build_chat_turn_context_no_longer_emits_mention_table() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+
+        // Seed a user file so that the previous code WOULD have emitted a
+        // mention table row for `alice`. We assert no table appears.
+        seed_user_file(
+            dir.path(),
+            "111",
+            "alice",
+            "Alice",
+            chrono::Utc::now(),
+            "alice body",
+        )
+        .await;
+
+        let history = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        history.lock().await.push_user("alice", "hi");
+
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(history),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                bot_login: "bot".into(),
+                persona_name: "Aurora".into(),
+                speaker_login: "alice".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !ctx.recent_chat.contains("## Mentioned users"),
+            "mention table should be dropped, got:\n{}",
+            ctx.recent_chat
+        );
     }
 
     #[tokio::test]
