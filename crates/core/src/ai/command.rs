@@ -334,6 +334,7 @@ where
         let snap = self.settings.load();
         let model = snap.ai.connection.model.clone();
         let reasoning_effort = snap.ai.connection.reasoning_effort.clone();
+        let persona_name = snap.ai.behavior.persona_name.clone();
         drop(snap);
 
         self.cooldown.record(user).await;
@@ -504,7 +505,12 @@ where
                     chat.buffer_for(&ctx.privmsg.channel_login)
                         .lock()
                         .await
-                        .push_bot_at(self.bot_username.clone(), line.clone(), ts);
+                        .push_bot_with_identity_at(
+                            self.bot_username.clone(),
+                            Some(&persona_name),
+                            line.clone(),
+                            ts,
+                        );
                 }
                 let is_primary_source =
                     !cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));

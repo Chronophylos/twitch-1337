@@ -136,6 +136,12 @@ pub struct Services {
     /// Receiver half of the flight-tracker mpsc channel. `None` when aviation
     /// is disabled. Consumed exactly once by `spawn_handlers`.
     pub aviation_tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
+    /// Optional test-only sink: when set, the commands handler stores the
+    /// freshly built `primary_history` `Arc` here once the AI command is
+    /// wired up. Production passes `None`; integration tests use this to
+    /// peek at chat-history entries (display_name / user_id) for assertions.
+    pub primary_history_tap:
+        Option<Arc<tokio::sync::Mutex<Option<crate::ai::chat_history::ChatHistory>>>>,
 }
 
 pub type WebSpawner =
@@ -175,6 +181,7 @@ where
         leaderboard,
         aviation_tracker_tx,
         aviation_tracker_rx,
+        primary_history_tap,
     } = services;
 
     // Clone the sender out of the Arc for SpawnDeps (which holds a plain mpsc::Sender).
@@ -248,6 +255,7 @@ where
         emote_provider,
         irc_connected: irc_connected.clone(),
         settings: settings.clone(),
+        primary_history_tap,
     });
 
     let shutdown_notify = handlers.shutdown_notify.clone();

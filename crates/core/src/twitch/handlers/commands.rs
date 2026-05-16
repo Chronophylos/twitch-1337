@@ -53,6 +53,10 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub suspend: SuspendConfig,
     /// Pre-built 7TV emote provider. `None` disables emote grounding for `!ai`.
     pub emote_provider: Option<Arc<SevenTvEmoteProvider>>,
+    /// Optional test-only sink: when set, the freshly built primary
+    /// `ChatHistory` `Arc` is stored here so integration tests can peek at
+    /// chat-history entries. Production wires `None`.
+    pub primary_history_tap: Option<Arc<tokio::sync::Mutex<Option<ChatHistory>>>>,
 }
 
 /// Handler for generic text commands that start with `!`.
@@ -85,6 +89,7 @@ where
         suspension_manager,
         suspend,
         emote_provider,
+        primary_history_tap,
     } = cfg;
 
     // Snapshot of the dashboard-managed settings at startup. Reads below use
@@ -134,6 +139,12 @@ where
     } else {
         None
     };
+
+    // Hand the primary history Arc to the (test-only) tap so integration
+    // tests can peek at chat-history entries. Production wires `None`.
+    if let (Some(tap), Some(ph)) = (primary_history_tap.as_ref(), primary_history.as_ref()) {
+        *tap.lock().await = Some(ph.clone());
+    }
 
     // ai_channel buffer: allocated only when an ai_channel is configured AND
     // chat history is enabled. Capacity is read live from the settings handle.
