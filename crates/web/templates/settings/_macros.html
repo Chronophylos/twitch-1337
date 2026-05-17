@@ -264,20 +264,18 @@
   <div class="row-control-cell">
     <span class="row-pretty" aria-hidden="true" data-pretty-unit="bytes">{{ value }}</span>
     <div class="bytes-wrap">
-      <div class="bytes-input-wrap">
-        <input
-          type="number"
-          class="num-input bytes-display"
-          min="0"
-          step="any"
-          value=""
-          data-unit=""
-          aria-label="{{ key }} amount">
-      </div>
-      <div class="segmented bytes-units" role="group" aria-label="{{ key }} unit">
-        <button type="button" class="segment bytes-unit" data-unit="B" aria-pressed="false"><span>B</span></button>
-        <button type="button" class="segment bytes-unit" data-unit="KiB" aria-pressed="false"><span>KiB</span></button>
-        <button type="button" class="segment bytes-unit" data-unit="MiB" aria-pressed="false"><span>MiB</span></button>
+      <input
+        type="number"
+        class="num-input bytes-display"
+        min="0"
+        step="any"
+        value=""
+        data-unit=""
+        aria-label="{{ key }} amount">
+      <div class="bytes-units" role="group" aria-label="{{ key }} unit">
+        <button type="button" class="bytes-unit" data-unit="B" aria-pressed="false">B</button>
+        <button type="button" class="bytes-unit" data-unit="KiB" aria-pressed="false">KiB</button>
+        <button type="button" class="bytes-unit" data-unit="MiB" aria-pressed="false">MiB</button>
       </div>
       <input type="hidden"
              class="bytes-canonical"
