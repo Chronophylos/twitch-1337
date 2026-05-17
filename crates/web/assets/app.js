@@ -289,8 +289,6 @@ document.addEventListener(
     const hidden = row.querySelector('.bytes-canonical');
     const display = row.querySelector('.bytes-display');
     const buttons = Array.from(row.querySelectorAll('.bytes-unit'));
-    const auxBytes = row.querySelector('[data-bytes-aux-bytes]');
-    const auxPretty = row.querySelector('[data-bytes-aux-pretty]');
     if (!hidden || !display) return;
     const bytes = Number(hidden.value) || 0;
     const unit = display.dataset.unit || pickBestUnit(bytes);
@@ -303,8 +301,6 @@ document.addEventListener(
       b.classList.toggle('is-active', active);
       b.setAttribute('aria-pressed', active ? 'true' : 'false');
     }
-    if (auxBytes) auxBytes.textContent = String(bytes);
-    if (auxPretty) auxPretty.textContent = formatBytesIec(bytes);
   }
 
   function syncAllBytesRows() {
@@ -323,7 +319,6 @@ document.addEventListener(
   for (const row of bytesRows) {
     const display = row.querySelector('.bytes-display');
     const buttons = Array.from(row.querySelectorAll('.bytes-unit'));
-    const presets = Array.from(row.querySelectorAll('.bytes-preset'));
 
     display?.addEventListener('input', () => {
       const v = Number(display.value);
@@ -349,13 +344,6 @@ document.addEventListener(
         if (!newUnit || !display) return;
         display.dataset.unit = newUnit;
         syncBytesRow(row);
-      });
-    }
-    for (const p of presets) {
-      p.addEventListener('click', () => {
-        const bytes = Number(p.dataset.bytes) || 0;
-        if (display) display.dataset.unit = pickBestUnit(bytes);
-        commitBytes(row, bytes);
       });
     }
   }

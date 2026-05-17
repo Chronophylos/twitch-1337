@@ -286,15 +286,6 @@
              data-default="{{ default_bytes }}"
              data-key="{{ key }}">
     </div>
-    <div class="bytes-aux" aria-live="polite">
-      <span class="mono" data-bytes-aux-bytes>{{ bytes }}</span> bytes
-      <span class="muted">· <span data-bytes-aux-pretty>{{ value }}</span></span>
-    </div>
-    <div class="bytes-presets" aria-label="Common caps">
-      <button type="button" class="bytes-preset" data-bytes="1024">1 KiB</button>
-      <button type="button" class="bytes-preset" data-bytes="65536">64 KiB</button>
-      <button type="button" class="bytes-preset" data-bytes="1048576">1 MiB</button>
-    </div>
   </div>
   <div class="row-right">
     {% call row_reset(key) %}{% endcall %}

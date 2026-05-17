@@ -1333,8 +1333,10 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   background: transparent;
   border: 0;
   font: inherit;
-  color: var(--fg-muted);
-  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg-4);
+  padding: 5px 10px;
   border-radius: 4px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
@@ -1344,44 +1346,6 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   background: var(--bg-elev);
   color: var(--accent);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
-}
-.bytes-aux {
-  display: block;
-  margin-top: 6px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--fg-3);
-  opacity: 0;
-  transition: opacity 0.12s ease;
-}
-.bytes-aux .muted { color: var(--fg-4); }
-.settings-row:hover .bytes-aux,
-.settings-row:focus-within .bytes-aux,
-.settings-row.is-dirty .bytes-aux { opacity: 1; }
-.bytes-presets {
-  display: flex;
-  gap: 6px;
-  margin-top: 6px;
-  opacity: 0;
-  transition: opacity 0.12s ease;
-}
-.settings-row:hover .bytes-presets,
-.settings-row:focus-within .bytes-presets { opacity: 1; }
-.bytes-preset {
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--fg-3);
-  padding: 2px 8px;
-  cursor: pointer;
-  transition: border-color 0.12s, color 0.12s, background 0.12s;
-}
-.bytes-preset:hover {
-  border-color: var(--accent-soft);
-  color: var(--accent);
-  background: var(--bg-2);
 }
 
 .text-input {
