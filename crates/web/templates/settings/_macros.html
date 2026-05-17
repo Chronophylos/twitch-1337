@@ -232,19 +232,48 @@
 </label>
 {% endmacro %}
 
+{# Bytes row: one numeric input + B / KiB / MiB segmented unit picker.
+   Canonical stored value is bytes (hidden input is the form-posted field).
+   Unit governs display only. Server accepts `"6144"` via ByteSize::from_str. #}
 {% macro bytesize_row(section, field, key, hint, value, default) %}
-<div class="settings-row" data-section="{{ section }}">
+{% let bytes = value.as_u64() %}
+{% let default_bytes = default.as_u64() %}
+<div class="settings-row" data-section="{{ section }}" data-bytes-row>
   {% call row_head(key, hint) %}{% endcall %}
   <div class="row-control-cell">
-    <span class="row-pretty" aria-hidden="true">{{ value }}</span>
-    <input type="text"
-           class="text-input is-narrow"
-           name="{{ field }}"
-           value="{{ value }}"
-           data-default="{{ default }}"
-           data-key="{{ key }}"
-           pattern="^\d+(\.\d+)?\s?(B|KB|KiB|MB|MiB|GB|GiB)$"
-           title="e.g. 10 MiB">
+    <span class="row-pretty" aria-hidden="true" data-pretty-unit="bytes">{{ value }}</span>
+    <div class="bytes-wrap">
+      <div class="bytes-input-wrap">
+        <input
+          type="number"
+          class="num-input bytes-display"
+          min="0"
+          step="any"
+          value=""
+          data-unit=""
+          aria-label="{{ key }} amount">
+      </div>
+      <div class="segmented bytes-units" role="group" aria-label="{{ key }} unit">
+        <button type="button" class="segment bytes-unit" data-unit="B" aria-pressed="false"><span>B</span></button>
+        <button type="button" class="segment bytes-unit" data-unit="KiB" aria-pressed="false"><span>KiB</span></button>
+        <button type="button" class="segment bytes-unit" data-unit="MiB" aria-pressed="false"><span>MiB</span></button>
+      </div>
+      <input type="hidden"
+             class="bytes-canonical"
+             name="{{ field }}"
+             value="{{ bytes }}"
+             data-default="{{ default_bytes }}"
+             data-key="{{ key }}">
+    </div>
+    <div class="bytes-aux" aria-live="polite">
+      <span class="mono" data-bytes-aux-bytes>{{ bytes }}</span> bytes
+      <span class="muted">· <span data-bytes-aux-pretty>{{ value }}</span></span>
+    </div>
+    <div class="bytes-presets" aria-label="Common caps">
+      <button type="button" class="bytes-preset" data-bytes="1024">1 KiB</button>
+      <button type="button" class="bytes-preset" data-bytes="65536">64 KiB</button>
+      <button type="button" class="bytes-preset" data-bytes="1048576">1 MiB</button>
+    </div>
   </div>
   <div class="row-right">
     {% call row_reset(key) %}{% endcall %}

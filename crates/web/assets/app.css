@@ -1123,16 +1123,20 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   transition: opacity 0.12s ease;
 }
 .row-control-cell .num-wrap,
-.row-control-cell .toggle {
+.row-control-cell .toggle,
+.row-control-cell .bytes-wrap {
   transition: opacity 0.12s ease;
   opacity: 0;
 }
 .settings-row:hover .row-control-cell .num-wrap,
 .settings-row:hover .row-control-cell .toggle,
+.settings-row:hover .row-control-cell .bytes-wrap,
 .settings-row:focus-within .row-control-cell .num-wrap,
 .settings-row:focus-within .row-control-cell .toggle,
+.settings-row:focus-within .row-control-cell .bytes-wrap,
 .settings-row.is-dirty .row-control-cell .num-wrap,
-.settings-row.is-dirty .row-control-cell .toggle { opacity: 1; }
+.settings-row.is-dirty .row-control-cell .toggle,
+.settings-row.is-dirty .row-control-cell .bytes-wrap { opacity: 1; }
 .settings-row:hover .row-pretty,
 .settings-row:focus-within .row-pretty,
 .settings-row.is-dirty .row-pretty { opacity: 0; }
@@ -1204,6 +1208,82 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   font-size: 12px;
   color: var(--fg-4);
   flex-shrink: 0;
+}
+
+/* ─── Bytes row (numeric + unit segmented + aux) ─────────────────────────── */
+.bytes-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.bytes-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  transition: border-color 0.12s ease, background 0.12s ease;
+  width: 96px;
+}
+.bytes-input-wrap:focus-within {
+  border-color: var(--line-strong);
+  background: var(--bg-2);
+}
+.settings-row.is-dirty .bytes-input-wrap { border-color: var(--accent-soft); }
+.bytes-input-wrap .bytes-display { padding: 7px 10px; text-align: right; }
+.segmented.bytes-units .bytes-unit {
+  background: transparent;
+  border: 0;
+  font: inherit;
+  color: var(--fg-muted);
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.segmented.bytes-units .bytes-unit:hover { color: var(--fg-2); }
+.segmented.bytes-units .bytes-unit.is-active {
+  background: var(--bg-elev);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+.bytes-aux {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fg-3);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.bytes-aux .muted { color: var(--fg-4); }
+.settings-row:hover .bytes-aux,
+.settings-row:focus-within .bytes-aux,
+.settings-row.is-dirty .bytes-aux { opacity: 1; }
+.bytes-presets {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.settings-row:hover .bytes-presets,
+.settings-row:focus-within .bytes-presets { opacity: 1; }
+.bytes-preset {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-3);
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.bytes-preset:hover {
+  border-color: var(--accent-soft);
+  color: var(--accent);
+  background: var(--bg-2);
 }
 
 .text-input {

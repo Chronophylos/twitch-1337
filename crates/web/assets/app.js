@@ -123,8 +123,21 @@ document.addEventListener(
     .filter((r) => r);
 
 
+  const BYTES_UNIT_FACTOR = { B: 1, KiB: 1024, MiB: 1024 * 1024 };
+
+  function formatBytesIec(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n < 0) return `${bytes} B`;
+    if (n >= 1048576 && n % 1048576 === 0) return `${n / 1048576} MiB`;
+    if (n >= 1024 && n % 1024 === 0) return `${n / 1024} KiB`;
+    if (n >= 1048576) return `${(n / 1048576).toFixed(2)} MiB`;
+    if (n >= 1024) return `${(n / 1024).toFixed(2)} KiB`;
+    return `${n} B`;
+  }
+
   function formatPretty(input, prettyEl) {
     const unit = prettyEl?.dataset.prettyUnit ?? '';
+    if (unit === 'bytes') return formatBytesIec(input.value);
     if (unit === 'bool') return input.checked ? 'On' : 'Off';
     if (input.type === 'text' || input.type === 'time' || input.type === 'email' || input.type === 'url') {
       return input.value || (input.placeholder ? `(${input.placeholder})` : '');
@@ -209,6 +222,8 @@ document.addEventListener(
       }
     }
 
+    syncAllBytesRows();
+
     const total = dirtyKeys.length;
     countEl.textContent = String(total);
     nounEl.textContent = total === 1 ? 'change' : 'changes';
@@ -217,6 +232,97 @@ document.addEventListener(
       total > 3 ? `${preview} +${total - 3}` : preview;
     saveBar.classList.toggle('visible', total > 0);
   }
+
+  const bytesRows = Array.from(form.querySelectorAll('[data-bytes-row]'));
+
+  function pickBestUnit(bytes) {
+    if (bytes >= 1048576 && bytes % 1048576 === 0) return 'MiB';
+    if (bytes >= 1024 && bytes % 1024 === 0) return 'KiB';
+    return 'B';
+  }
+
+  function displayInUnit(bytes, unit) {
+    const f = BYTES_UNIT_FACTOR[unit] ?? 1;
+    const v = bytes / f;
+    return Number(v.toFixed(6)).toString();
+  }
+
+  function syncBytesRow(row) {
+    const hidden = row.querySelector('.bytes-canonical');
+    const display = row.querySelector('.bytes-display');
+    const buttons = Array.from(row.querySelectorAll('.bytes-unit'));
+    const auxBytes = row.querySelector('[data-bytes-aux-bytes]');
+    const auxPretty = row.querySelector('[data-bytes-aux-pretty]');
+    if (!hidden || !display) return;
+    const bytes = Number(hidden.value) || 0;
+    const unit = display.dataset.unit || pickBestUnit(bytes);
+    display.dataset.unit = unit;
+    if (document.activeElement !== display) {
+      display.value = displayInUnit(bytes, unit);
+    }
+    for (const b of buttons) {
+      const active = b.dataset.unit === unit;
+      b.classList.toggle('is-active', active);
+      b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+    if (auxBytes) auxBytes.textContent = String(bytes);
+    if (auxPretty) auxPretty.textContent = formatBytesIec(bytes);
+  }
+
+  function syncAllBytesRows() {
+    for (const r of bytesRows) syncBytesRow(r);
+  }
+
+  function commitBytes(row, bytes) {
+    const hidden = row.querySelector('.bytes-canonical');
+    if (!hidden) return;
+    const clamped = Math.max(0, Math.round(bytes));
+    if (Number(hidden.value) === clamped) return;
+    hidden.value = String(clamped);
+    hidden.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  for (const row of bytesRows) {
+    const display = row.querySelector('.bytes-display');
+    const buttons = Array.from(row.querySelectorAll('.bytes-unit'));
+    const presets = Array.from(row.querySelectorAll('.bytes-preset'));
+
+    display?.addEventListener('input', () => {
+      const v = Number(display.value);
+      if (!Number.isFinite(v) || v < 0) return;
+      const f = BYTES_UNIT_FACTOR[display.dataset.unit || 'B'] ?? 1;
+      commitBytes(row, v * f);
+    });
+    display?.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        syncBytesRow(row);
+        display.blur();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        display.blur();
+      }
+    });
+    display?.addEventListener('blur', () => syncBytesRow(row));
+
+    for (const b of buttons) {
+      b.addEventListener('click', () => {
+        const newUnit = b.dataset.unit;
+        if (!newUnit || !display) return;
+        display.dataset.unit = newUnit;
+        syncBytesRow(row);
+      });
+    }
+    for (const p of presets) {
+      p.addEventListener('click', () => {
+        const bytes = Number(p.dataset.bytes) || 0;
+        if (display) display.dataset.unit = pickBestUnit(bytes);
+        commitBytes(row, bytes);
+      });
+    }
+  }
+
+  syncAllBytesRows();
 
   form.addEventListener('input', refreshAll);
   form.addEventListener('change', (e) => {
