@@ -253,15 +253,16 @@
 </label>
 {% endmacro %}
 
-{# Server accepts raw byte counts via ByteSize::from_str, so the hidden
-   input posts the canonical integer; the unit selector is display-only. #}
-{% macro bytesize_row(section, field, key, hint, value, default) %}
-{% let bytes = value.as_u64() %}
-{% let default_bytes = default.as_u64() %}
+{# `bytes` and `default_bytes` are raw u64. The hidden input posts the
+   canonical integer — `ByteSize::from_str` (server side) accepts it, and
+   `Deserialize<Option<usize>>` does too — so this macro covers both
+   ByteSize-typed (ai.media) and usize-typed (ai.memory) fields. Pretty
+   text + default label are rendered from JS on init via formatBytesIec. #}
+{% macro bytesize_row(section, field, key, hint, bytes, default_bytes) %}
 <div class="settings-row" data-section="{{ section }}" data-bytes-row>
   {% call row_head(key, hint) %}{% endcall %}
   <div class="row-control-cell">
-    <span class="row-pretty" aria-hidden="true" data-pretty-unit="bytes">{{ value }}</span>
+    <span class="row-pretty" aria-hidden="true" data-pretty-unit="bytes">{{ bytes }}</span>
     <div class="bytes-wrap">
       <input
         type="number"
@@ -285,7 +286,7 @@
   </div>
   <div class="row-right">
     {% call row_reset(key) %}{% endcall %}
-    <span class="row-default">default <span class="mono">{{ default }}</span></span>
+    <span class="row-default">default <span class="mono" data-bytes-default="{{ default_bytes }}">{{ default_bytes }}</span></span>
   </div>
 </div>
 {% endmacro %}

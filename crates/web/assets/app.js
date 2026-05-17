@@ -330,7 +330,11 @@ document.addEventListener(
     }
   }
 
-  for (const b of bytesRows) syncBytesRow(b);
+  for (const b of bytesRows) {
+    const def = b.el.querySelector('[data-bytes-default]');
+    if (def) def.textContent = formatBytesIec(def.dataset.bytesDefault);
+    syncBytesRow(b);
+  }
 
   form.addEventListener('input', refreshAll);
   form.addEventListener('change', (e) => {
