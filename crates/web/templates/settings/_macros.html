@@ -4,6 +4,27 @@
    then call e.g. {% call m::num_row(...) %}{% endcall %}.
 #}
 
+{% macro nav_group_head(group_id, label, count) %}
+<button type="button" class="settings-nav-group-head" data-group-toggle="{{ group_id }}" aria-expanded="true" aria-controls="nav-group-body-{{ group_id }}">
+  <span class="chev" aria-hidden="true">▸</span>
+  <span class="lbl">{{ label }}</span>
+  <span class="meta">
+    <span class="count" aria-label="{{ count }} sections">{{ count }}</span>
+    <span class="gdirty" hidden aria-label="Group has unsaved changes">0</span>
+  </span>
+</button>
+{% endmacro %}
+
+{% macro nav_section_item(slug, target, label) %}
+<li>
+  <a href="#sec-{{ slug }}" class="settings-nav-item" data-target="{{ target }}">
+    <span class="dot" aria-hidden="true"></span>
+    <span class="lbl">{{ label }}</span>
+    <span class="ndirty" hidden>0</span>
+  </a>
+</li>
+{% endmacro %}
+
 {% macro row_head(key, hint) %}
 <div class="row-left">
   <div class="row-label">

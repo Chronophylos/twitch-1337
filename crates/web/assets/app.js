@@ -154,6 +154,32 @@ document.addEventListener(
   }
   const cards = Array.from(form.querySelectorAll('.settings-card'));
   const navItems = Array.from(document.querySelectorAll('.settings-nav-item'));
+  const navGroups = Array.from(document.querySelectorAll('.settings-nav-group'));
+
+  // Collapsible groups (persisted per-group in localStorage).
+  const STORAGE_KEY = 'settings-nav-groups-collapsed';
+  let collapsed = new Set();
+  try { collapsed = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')); } catch { /* ignore */ }
+  for (const g of navGroups) {
+    const id = g.dataset.group;
+    const open = !collapsed.has(id);
+    g.dataset.open = open ? 'true' : 'false';
+    const head = g.querySelector('.settings-nav-group-head');
+    head?.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  for (const head of document.querySelectorAll('[data-group-toggle]')) {
+    head.addEventListener('click', () => {
+      const group = head.closest('.settings-nav-group');
+      if (!group) return;
+      const id = group.dataset.group;
+      const wasOpen = group.dataset.open !== 'false';
+      const open = !wasOpen;
+      group.dataset.open = open ? 'true' : 'false';
+      head.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) collapsed.delete(id); else collapsed.add(id);
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify([...collapsed])); } catch { /* ignore */ }
+    });
+  }
 
   function currentValue(input) {
     return input.type === 'checkbox' ? (input.checked ? 'true' : 'false') : input.value;
@@ -216,6 +242,18 @@ document.addEventListener(
     for (const item of navItems) {
       const n = perSection.get(item.dataset.target) ?? 0;
       const badge = item.querySelector('.ndirty');
+      if (badge) {
+        badge.hidden = n === 0;
+        badge.textContent = String(n);
+      }
+    }
+
+    for (const group of navGroups) {
+      let n = 0;
+      for (const item of group.querySelectorAll('.settings-nav-item')) {
+        n += perSection.get(item.dataset.target) ?? 0;
+      }
+      const badge = group.querySelector('.gdirty');
       if (badge) {
         badge.hidden = n === 0;
         badge.textContent = String(n);
@@ -356,6 +394,9 @@ document.addEventListener(
       if (active) byId.get(active)?.classList.remove('active');
       active = section;
       byId.get(section)?.classList.add('active');
+      const activeItem = byId.get(section);
+      const activeGroup = activeItem?.closest('.settings-nav-group');
+      for (const g of navGroups) g.classList.toggle('has-active', g === activeGroup);
     };
     setActive(cards[0].dataset.section);
     const io = new IntersectionObserver(
