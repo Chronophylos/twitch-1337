@@ -63,7 +63,9 @@ async fn main() -> Result<()> {
 
     let pings = PingManager::load(&data_dir).wrap_err("load ping manager")?;
 
-    let audit_log = Arc::new(twitch_1337_core::settings::MemoryAuditLog::new());
+    let audit_log: Arc<dyn twitch_1337_core::settings::AuditLog> = Arc::new(
+        twitch_1337_core::settings::FileAuditLog::new(data_dir.join("settings_audit.log")),
+    );
     let (settings_store, settings_handle) =
         twitch_1337_core::settings::SettingsStore::open(&data_dir, audit_log)
             .wrap_err("open settings store")?;

@@ -18,18 +18,18 @@
        current.ai.media.timeout, defaults.ai.media.timeout, "s", 5, 600) %}{% endcall %}
     {% call m::bytesize_row("ai_media", "ai_media_max_image_size", "max_image_size",
        "Maximum image size accepted.",
-       current.ai.media.max_image_size, defaults.ai.media.max_image_size) %}{% endcall %}
+       current.ai.media.max_image_size.as_u64(), defaults.ai.media.max_image_size.as_u64()) %}{% endcall %}
     {% call m::bytesize_row("ai_media", "ai_media_max_pdf_size", "max_pdf_size",
        "Maximum PDF size accepted.",
-       current.ai.media.max_pdf_size, defaults.ai.media.max_pdf_size) %}{% endcall %}
+       current.ai.media.max_pdf_size.as_u64(), defaults.ai.media.max_pdf_size.as_u64()) %}{% endcall %}
     {% call m::bytesize_row("ai_media", "ai_media_max_audio_size", "max_audio_size",
        "Maximum audio size accepted.",
-       current.ai.media.max_audio_size, defaults.ai.media.max_audio_size) %}{% endcall %}
+       current.ai.media.max_audio_size.as_u64(), defaults.ai.media.max_audio_size.as_u64()) %}{% endcall %}
     {% call m::bytesize_row("ai_media", "ai_media_max_video_size", "max_video_size",
        "Maximum video size accepted.",
-       current.ai.media.max_video_size, defaults.ai.media.max_video_size) %}{% endcall %}
+       current.ai.media.max_video_size.as_u64(), defaults.ai.media.max_video_size.as_u64()) %}{% endcall %}
     {% call m::bytesize_row("ai_media", "ai_media_max_text_size", "max_text_size",
        "Maximum raw-text size accepted (per attachment).",
-       current.ai.media.max_text_size, defaults.ai.media.max_text_size) %}{% endcall %}
+       current.ai.media.max_text_size.as_u64(), defaults.ai.media.max_text_size.as_u64()) %}{% endcall %}
   </div>
 </section>

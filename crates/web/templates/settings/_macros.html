@@ -4,6 +4,27 @@
    then call e.g. {% call m::num_row(...) %}{% endcall %}.
 #}
 
+{% macro nav_group_head(group_id, label, count) %}
+<button type="button" class="settings-nav-group-head" data-group-toggle="{{ group_id }}" aria-expanded="true" aria-controls="nav-group-body-{{ group_id }}">
+  <span class="chev" aria-hidden="true">▸</span>
+  <span class="lbl">{{ label }}</span>
+  <span class="meta">
+    <span class="count" aria-label="{{ count }} sections">{{ count }}</span>
+    <span class="gdirty" hidden aria-label="Group has unsaved changes">0</span>
+  </span>
+</button>
+{% endmacro %}
+
+{% macro nav_section_item(slug, target, label) %}
+<li>
+  <a href="#sec-{{ slug }}" class="settings-nav-item" data-target="{{ target }}">
+    <span class="dot" aria-hidden="true"></span>
+    <span class="lbl">{{ label }}</span>
+    <span class="ndirty" hidden>0</span>
+  </a>
+</li>
+{% endmacro %}
+
 {% macro row_head(key, hint) %}
 <div class="row-left">
   <div class="row-label">
@@ -232,23 +253,40 @@
 </label>
 {% endmacro %}
 
-{% macro bytesize_row(section, field, key, hint, value, default) %}
-<div class="settings-row" data-section="{{ section }}">
+{# `bytes` and `default_bytes` are raw u64. The hidden input posts the
+   canonical integer — `ByteSize::from_str` (server side) accepts it, and
+   `Deserialize<Option<usize>>` does too — so this macro covers both
+   ByteSize-typed (ai.media) and usize-typed (ai.memory) fields. Pretty
+   text + default label are rendered from JS on init via formatBytesIec. #}
+{% macro bytesize_row(section, field, key, hint, bytes, default_bytes) %}
+<div class="settings-row" data-section="{{ section }}" data-bytes-row>
   {% call row_head(key, hint) %}{% endcall %}
   <div class="row-control-cell">
-    <span class="row-pretty" aria-hidden="true">{{ value }}</span>
-    <input type="text"
-           class="text-input is-narrow"
-           name="{{ field }}"
-           value="{{ value }}"
-           data-default="{{ default }}"
-           data-key="{{ key }}"
-           pattern="^\d+(\.\d+)?\s?(B|KB|KiB|MB|MiB|GB|GiB)$"
-           title="e.g. 10 MiB">
+    <span class="row-pretty" aria-hidden="true" data-pretty-unit="bytes">{{ bytes }}</span>
+    <div class="bytes-wrap">
+      <input
+        type="number"
+        class="num-input bytes-display"
+        min="0"
+        step="any"
+        value=""
+        aria-label="{{ key }} amount">
+      <div class="bytes-units" role="group" aria-label="{{ key }} unit">
+        <button type="button" class="bytes-unit" data-unit="B" aria-pressed="false">B</button>
+        <button type="button" class="bytes-unit" data-unit="KiB" aria-pressed="false">KiB</button>
+        <button type="button" class="bytes-unit" data-unit="MiB" aria-pressed="false">MiB</button>
+      </div>
+      <input type="hidden"
+             class="bytes-canonical"
+             name="{{ field }}"
+             value="{{ bytes }}"
+             data-default="{{ default_bytes }}"
+             data-key="{{ key }}">
+    </div>
   </div>
   <div class="row-right">
     {% call row_reset(key) %}{% endcall %}
-    <span class="row-default">default <span class="mono">{{ default }}</span></span>
+    <span class="row-default">default <span class="mono" data-bytes-default="{{ default_bytes }}">{{ default_bytes }}</span></span>
   </div>
 </div>
 {% endmacro %}

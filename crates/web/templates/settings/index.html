@@ -1,5 +1,6 @@
 {# crates/web/templates/settings/index.html #}
 {% extends "base.html" %}
+{% import "settings/_macros.html" as m %}
 {% block title %}Settings — twitch-1337{% endblock %}
 
 {% block content %}
@@ -25,70 +26,41 @@
 
 <div class="settings-grid">
   <aside class="settings-nav" aria-label="Settings sections">
-    <div class="settings-nav-label">Sections</div>
-    <a href="#sec-cooldowns" class="settings-nav-item" data-target="cooldowns">
-      <span class="dot" aria-hidden="true"></span>
-      <span>Cooldowns</span>
-      <span class="ndirty" hidden>0</span>
-    </a>
-    <a href="#sec-pings" class="settings-nav-item" data-target="pings">
-      <span class="dot" aria-hidden="true"></span>
-      <span>Pings</span>
-      <span class="ndirty" hidden>0</span>
-    </a>
-    <div class="settings-nav-label settings-nav-group">AI</div>
-    <a href="#sec-ai-connection" class="settings-nav-item" data-target="ai_connection">
-      <span class="dot" aria-hidden="true"></span>
-      <span>Connection</span>
-      <span class="ndirty" hidden>0</span>
-    </a>
-    <a href="#sec-ai-behavior" class="settings-nav-item" data-target="ai_behavior">
-      <span class="dot" aria-hidden="true"></span>
-      <span>Behavior</span>
-      <span class="ndirty" hidden>0</span>
-    </a>
-    <a href="#sec-ai-history" class="settings-nav-item" data-target="ai_history">
-      <span class="dot" aria-hidden="true"></span>
-      <span>History</span>
-      <span class="ndirty" hidden>0</span>
-    </a>
-    <a href="#sec-ai-memory" class="settings-nav-item" data-target="ai_memory">
-      <span class="dot" aria-hidden="true"></span>
-      <span>Memory</span>
-      <span class="ndirty" hidden>0</span>
-    </a>
-    <a href="#sec-ai-dreamer" class="settings-nav-item" data-target="ai_dreamer">
-      <span class="dot" aria-hidden="true"></span>
-      <span>Dreamer</span>
-      <span class="ndirty" hidden>0</span>
-    </a>
-    <a href="#sec-ai-prefill" class="settings-nav-item" data-target="ai_prefill">
-      <span class="dot" aria-hidden="true"></span>
-      <span>Prefill</span>
-      <span class="ndirty" hidden>0</span>
-    </a>
-    <a href="#sec-ai-web" class="settings-nav-item" data-target="ai_web">
-      <span class="dot" aria-hidden="true"></span>
-      <span>Web tools</span>
-      <span class="ndirty" hidden>0</span>
-    </a>
-    <a href="#sec-ai-emotes" class="settings-nav-item" data-target="ai_emotes">
-      <span class="dot" aria-hidden="true"></span>
-      <span>Emotes</span>
-      <span class="ndirty" hidden>0</span>
-    </a>
-    <a href="#sec-ai-media" class="settings-nav-item" data-target="ai_media">
-      <span class="dot" aria-hidden="true"></span>
-      <span>Media</span>
-      <span class="ndirty" hidden>0</span>
-    </a>
+    <div class="settings-nav-group" data-group="chat">
+      {% call m::nav_group_head("chat", "Chat", 2) %}{% endcall %}
+      <div class="settings-nav-group-body" id="nav-group-body-chat">
+        <ul class="settings-nav-group-items">
+          {% call m::nav_section_item("cooldowns", "cooldowns", "Cooldowns") %}{% endcall %}
+          {% call m::nav_section_item("pings", "pings", "Pings") %}{% endcall %}
+        </ul>
+      </div>
+    </div>
+
+    <div class="settings-nav-group" data-group="ai">
+      {% call m::nav_group_head("ai", "AI", 9) %}{% endcall %}
+      <div class="settings-nav-group-body" id="nav-group-body-ai">
+        <ul class="settings-nav-group-items">
+          {% call m::nav_section_item("ai-connection", "ai_connection", "Connection") %}{% endcall %}
+          {% call m::nav_section_item("ai-behavior", "ai_behavior", "Behavior") %}{% endcall %}
+          {% call m::nav_section_item("ai-history", "ai_history", "History") %}{% endcall %}
+          {% call m::nav_section_item("ai-memory", "ai_memory", "Memory") %}{% endcall %}
+          {% call m::nav_section_item("ai-dreamer", "ai_dreamer", "Dreamer") %}{% endcall %}
+          {% call m::nav_section_item("ai-prefill", "ai_prefill", "Prefill") %}{% endcall %}
+          {% call m::nav_section_item("ai-web", "ai_web", "Web tools") %}{% endcall %}
+          {% call m::nav_section_item("ai-emotes", "ai_emotes", "Emotes") %}{% endcall %}
+          {% call m::nav_section_item("ai-media", "ai_media", "Media") %}{% endcall %}
+        </ul>
+      </div>
+    </div>
   </aside>
 
   <div class="settings-main">
     <form id="settings-form" method="post" action="/settings">
       <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <div class="settings-group-divider" data-group="chat"><span>CHAT</span></div>
       {% include "settings/cards/cooldowns.html" %}
       {% include "settings/cards/pings.html" %}
+      <div class="settings-group-divider" data-group="ai"><span>AI</span></div>
       {% include "settings/cards/ai_connection.html" %}
       {% include "settings/cards/ai_behavior.html" %}
       {% include "settings/cards/ai_history.html" %}
