@@ -253,9 +253,8 @@
 </label>
 {% endmacro %}
 
-{# Bytes row: one numeric input + B / KiB / MiB segmented unit picker.
-   Canonical stored value is bytes (hidden input is the form-posted field).
-   Unit governs display only. Server accepts `"6144"` via ByteSize::from_str. #}
+{# Server accepts raw byte counts via ByteSize::from_str, so the hidden
+   input posts the canonical integer; the unit selector is display-only. #}
 {% macro bytesize_row(section, field, key, hint, value, default) %}
 {% let bytes = value.as_u64() %}
 {% let default_bytes = default.as_u64() %}
@@ -270,7 +269,6 @@
         min="0"
         step="any"
         value=""
-        data-unit=""
         aria-label="{{ key }} amount">
       <div class="bytes-units" role="group" aria-label="{{ key }} unit">
         <button type="button" class="bytes-unit" data-unit="B" aria-pressed="false">B</button>

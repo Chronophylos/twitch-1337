@@ -125,19 +125,24 @@ document.addEventListener(
 
   const BYTES_UNIT_FACTOR = { B: 1, KiB: 1024, MiB: 1024 * 1024 };
 
+  function pickBestBytesUnit(n) {
+    if (n >= BYTES_UNIT_FACTOR.MiB) return 'MiB';
+    if (n >= BYTES_UNIT_FACTOR.KiB) return 'KiB';
+    return 'B';
+  }
+
   function formatBytesIec(bytes) {
     const n = Number(bytes);
-    if (!Number.isFinite(n) || n < 0) return `${bytes} B`;
-    if (n >= 1048576 && n % 1048576 === 0) return `${n / 1048576} MiB`;
-    if (n >= 1024 && n % 1024 === 0) return `${n / 1024} KiB`;
-    if (n >= 1048576) return `${(n / 1048576).toFixed(2)} MiB`;
-    if (n >= 1024) return `${(n / 1024).toFixed(2)} KiB`;
-    return `${n} B`;
+    if (!Number.isFinite(n)) return String(bytes);
+    const unit = pickBestBytesUnit(n);
+    const f = BYTES_UNIT_FACTOR[unit];
+    const v = n / f;
+    return `${n % f === 0 ? v : v.toFixed(2)} ${unit}`;
   }
 
   function formatPretty(input, prettyEl) {
     const unit = prettyEl?.dataset.prettyUnit ?? '';
-    if (unit === 'bytes') return formatBytesIec(input.value);
+    if (unit === 'bytes' || unit === 'B') return formatBytesIec(input.value);
     if (unit === 'bool') return input.checked ? 'On' : 'Off';
     if (input.type === 'text' || input.type === 'time' || input.type === 'email' || input.type === 'url') {
       return input.value || (input.placeholder ? `(${input.placeholder})` : '');
@@ -146,38 +151,34 @@ document.addEventListener(
     if (!Number.isFinite(n)) return input.value;
     if (unit === 'pct') return `${Math.round(n * 100)}%`;
     if (unit === 's') return n === 1 ? '1 second' : `${n} seconds`;
-    if (unit === 'B') {
-      if (n % 1024 === 0 && n >= 1024) return `${n / 1024} KiB`;
-      return `${n} B`;
-    }
     return unit ? `${n} ${unit}` : String(n);
   }
   const cards = Array.from(form.querySelectorAll('.settings-card'));
   const navItems = Array.from(document.querySelectorAll('.settings-nav-item'));
-  const navGroups = Array.from(document.querySelectorAll('.settings-nav-group'));
+  const navGroups = Array.from(document.querySelectorAll('.settings-nav-group')).map((el) => ({
+    el,
+    items: Array.from(el.querySelectorAll('.settings-nav-item')),
+    badge: el.querySelector('.gdirty'),
+  }));
 
-  // Collapsible groups (persisted per-group in localStorage).
   const STORAGE_KEY = 'settings-nav-groups-collapsed';
   let collapsed = new Set();
-  try { collapsed = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')); } catch { /* ignore */ }
-  for (const g of navGroups) {
-    const id = g.dataset.group;
-    const open = !collapsed.has(id);
-    g.dataset.open = open ? 'true' : 'false';
-    const head = g.querySelector('.settings-nav-group-head');
-    head?.setAttribute('aria-expanded', open ? 'true' : 'false');
+  try { collapsed = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')); } catch { /* ignore corrupt JSON, start fresh */ }
+  for (const { el } of navGroups) {
+    const open = !collapsed.has(el.dataset.group);
+    el.dataset.open = open ? 'true' : 'false';
+    el.querySelector('.settings-nav-group-head')?.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
   for (const head of document.querySelectorAll('[data-group-toggle]')) {
     head.addEventListener('click', () => {
       const group = head.closest('.settings-nav-group');
       if (!group) return;
       const id = group.dataset.group;
-      const wasOpen = group.dataset.open !== 'false';
-      const open = !wasOpen;
+      const open = group.dataset.open === 'false';
       group.dataset.open = open ? 'true' : 'false';
       head.setAttribute('aria-expanded', open ? 'true' : 'false');
       if (open) collapsed.delete(id); else collapsed.add(id);
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify([...collapsed])); } catch { /* ignore */ }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([...collapsed]));
     });
   }
 
@@ -248,19 +249,14 @@ document.addEventListener(
       }
     }
 
-    for (const group of navGroups) {
+    for (const g of navGroups) {
       let n = 0;
-      for (const item of group.querySelectorAll('.settings-nav-item')) {
-        n += perSection.get(item.dataset.target) ?? 0;
-      }
-      const badge = group.querySelector('.gdirty');
-      if (badge) {
-        badge.hidden = n === 0;
-        badge.textContent = String(n);
+      for (const item of g.items) n += perSection.get(item.dataset.target) ?? 0;
+      if (g.badge) {
+        g.badge.hidden = n === 0;
+        g.badge.textContent = String(n);
       }
     }
-
-    syncAllBytesRows();
 
     const total = dirtyKeys.length;
     countEl.textContent = String(total);
@@ -271,84 +267,70 @@ document.addEventListener(
     saveBar.classList.toggle('visible', total > 0);
   }
 
-  const bytesRows = Array.from(form.querySelectorAll('[data-bytes-row]'));
-
-  function pickBestUnit(bytes) {
-    if (bytes >= 1048576 && bytes % 1048576 === 0) return 'MiB';
-    if (bytes >= 1024 && bytes % 1024 === 0) return 'KiB';
-    return 'B';
-  }
+  const bytesRows = Array.from(form.querySelectorAll('[data-bytes-row]'))
+    .map((el) => ({
+      el,
+      hidden: el.querySelector('.bytes-canonical'),
+      display: el.querySelector('.bytes-display'),
+      buttons: Array.from(el.querySelectorAll('.bytes-unit')),
+    }))
+    .filter((b) => b.hidden && b.display);
+  const bytesRowByHidden = new Map(bytesRows.map((b) => [b.hidden, b]));
 
   function displayInUnit(bytes, unit) {
-    const f = BYTES_UNIT_FACTOR[unit] ?? 1;
-    const v = bytes / f;
-    return Number(v.toFixed(6)).toString();
+    return parseFloat((bytes / BYTES_UNIT_FACTOR[unit]).toFixed(6)).toString();
   }
 
-  function syncBytesRow(row) {
-    const hidden = row.querySelector('.bytes-canonical');
-    const display = row.querySelector('.bytes-display');
-    const buttons = Array.from(row.querySelectorAll('.bytes-unit'));
-    if (!hidden || !display) return;
-    const bytes = Number(hidden.value) || 0;
-    const unit = display.dataset.unit || pickBestUnit(bytes);
-    display.dataset.unit = unit;
-    if (document.activeElement !== display) {
-      display.value = displayInUnit(bytes, unit);
-    }
-    for (const b of buttons) {
-      const active = b.dataset.unit === unit;
-      b.classList.toggle('is-active', active);
-      b.setAttribute('aria-pressed', active ? 'true' : 'false');
+  function activeUnit(b) {
+    return b.buttons.find((btn) => btn.classList.contains('is-active'))?.dataset.unit
+      ?? pickBestBytesUnit(Number(b.hidden.value) || 0);
+  }
+
+  function syncBytesRow(b) {
+    const bytes = Number(b.hidden.value) || 0;
+    const unit = activeUnit(b);
+    if (document.activeElement !== b.display) b.display.value = displayInUnit(bytes, unit);
+    for (const btn of b.buttons) {
+      const active = btn.dataset.unit === unit;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     }
   }
 
-  function syncAllBytesRows() {
-    for (const r of bytesRows) syncBytesRow(r);
-  }
-
-  function commitBytes(row, bytes) {
-    const hidden = row.querySelector('.bytes-canonical');
-    if (!hidden) return;
+  function commitBytes(b, bytes) {
     const clamped = Math.max(0, Math.round(bytes));
-    if (Number(hidden.value) === clamped) return;
-    hidden.value = String(clamped);
-    hidden.dispatchEvent(new Event('input', { bubbles: true }));
+    if (Number(b.hidden.value) === clamped) return;
+    b.hidden.value = String(clamped);
+    b.hidden.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
-  for (const row of bytesRows) {
-    const display = row.querySelector('.bytes-display');
-    const buttons = Array.from(row.querySelectorAll('.bytes-unit'));
-
-    display?.addEventListener('input', () => {
-      const v = Number(display.value);
+  for (const b of bytesRows) {
+    b.display.addEventListener('input', () => {
+      const v = Number(b.display.value);
       if (!Number.isFinite(v) || v < 0) return;
-      const f = BYTES_UNIT_FACTOR[display.dataset.unit || 'B'] ?? 1;
-      commitBytes(row, v * f);
+      commitBytes(b, v * BYTES_UNIT_FACTOR[activeUnit(b)]);
     });
-    display?.addEventListener('keydown', (e) => {
+    b.display.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        syncBytesRow(row);
-        display.blur();
+        syncBytesRow(b);
+        b.display.blur();
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        display.blur();
+        b.display.blur();
       }
     });
-    display?.addEventListener('blur', () => syncBytesRow(row));
+    b.display.addEventListener('blur', () => syncBytesRow(b));
 
-    for (const b of buttons) {
-      b.addEventListener('click', () => {
-        const newUnit = b.dataset.unit;
-        if (!newUnit || !display) return;
-        display.dataset.unit = newUnit;
-        syncBytesRow(row);
+    for (const btn of b.buttons) {
+      btn.addEventListener('click', () => {
+        for (const other of b.buttons) other.classList.toggle('is-active', other === btn);
+        syncBytesRow(b);
       });
     }
   }
 
-  syncAllBytesRows();
+  for (const b of bytesRows) syncBytesRow(b);
 
   form.addEventListener('input', refreshAll);
   form.addEventListener('change', (e) => {
@@ -368,6 +350,8 @@ document.addEventListener(
     const r = rows.find((row) => row.reset === btn);
     if (!r) return;
     applyDefault(r);
+    const b = bytesRowByHidden.get(r.input);
+    if (b) syncBytesRow(b);
     refreshAll();
     r.input.focus();
   });
@@ -384,7 +368,7 @@ document.addEventListener(
       byId.get(section)?.classList.add('active');
       const activeItem = byId.get(section);
       const activeGroup = activeItem?.closest('.settings-nav-group');
-      for (const g of navGroups) g.classList.toggle('has-active', g === activeGroup);
+      for (const g of navGroups) g.el.classList.toggle('has-active', g.el === activeGroup);
     };
     setActive(cards[0].dataset.section);
     const io = new IntersectionObserver(
