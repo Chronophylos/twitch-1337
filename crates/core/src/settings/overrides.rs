@@ -95,6 +95,8 @@ pub struct AiConnectionOverrides {
     pub timeout: Option<u64>,
     #[serde(default)]
     pub reasoning_effort: Option<Option<String>>,
+    #[serde(default)]
+    pub service_tier: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -139,6 +141,8 @@ pub struct AiDreamerOverrides {
     pub model: Option<Option<String>>,
     #[serde(default)]
     pub reasoning_effort: Option<Option<String>>,
+    #[serde(default)]
+    pub service_tier: Option<Option<String>>,
     #[serde(default)]
     pub run_at: Option<String>,
     #[serde(default)]
