@@ -334,6 +334,7 @@ where
         let snap = self.settings.load();
         let model = snap.ai.connection.model.clone();
         let reasoning_effort = snap.ai.connection.reasoning_effort.clone();
+        let service_tier = snap.ai.connection.service_tier.clone();
         let persona_name = snap.ai.behavior.persona_name.clone();
         drop(snap);
 
@@ -466,6 +467,7 @@ where
             messages: vec![Message::system(system_prompt), Message::user(user_message)],
             tools,
             reasoning_effort,
+            service_tier,
             prior_rounds,
             trace: trace.clone(),
         };

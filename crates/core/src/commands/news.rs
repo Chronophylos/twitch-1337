@@ -285,6 +285,7 @@ where
                 Message::user(user_message),
             ],
             reasoning_effort: None,
+            service_tier: None,
             trace: TraceIds {
                 user: Some(user.clone()),
                 session_id: Some(crate::ai::session::new_session_id()),
