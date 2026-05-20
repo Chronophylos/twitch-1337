@@ -192,6 +192,7 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 Some(v) => v.clone(),
                 None => defaults.connection.reasoning_effort.clone(),
             },
+            service_tier: defaults.connection.service_tier.clone(),
         },
         behavior: AiBehavior {
             max_turn_rounds: o
@@ -239,6 +240,7 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 Some(v) => v.clone(),
                 None => defaults.dreamer.reasoning_effort.clone(),
             },
+            service_tier: defaults.dreamer.service_tier.clone(),
             run_at: o
                 .dreamer
                 .run_at
