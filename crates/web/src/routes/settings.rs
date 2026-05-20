@@ -75,7 +75,7 @@ async fn show(
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct SaveForm {
     #[serde(rename = "_csrf")]
     csrf: String,
@@ -102,6 +102,8 @@ struct SaveForm {
     ai_connection_timeout: Option<u64>,
     #[serde(default)]
     ai_connection_reasoning_effort: Option<String>,
+    #[serde(default)]
+    ai_connection_service_tier: Option<String>,
 
     // ---- AI behavior card ----
     #[serde(default)]
@@ -138,6 +140,8 @@ struct SaveForm {
     ai_dreamer_model: Option<String>,
     #[serde(default)]
     ai_dreamer_reasoning_effort: Option<String>,
+    #[serde(default)]
+    ai_dreamer_service_tier: Option<String>,
     #[serde(default)]
     ai_dreamer_run_at: Option<String>,
     #[serde(default)]
@@ -218,8 +222,9 @@ struct SaveForm {
 ///   so the validator can surface them.
 /// - `base_url` (connection + emotes): empty string is an explicit clear
 ///   (`Some(None)`); non-empty is `Some(Some(_))`.
-/// - `reasoning_effort` (connection + dreamer): the `"none"` sentinel from the
-///   segmented selector clears the override; empty also clears.
+/// - `reasoning_effort` / `service_tier` (connection + dreamer): the `"none"`
+///   sentinel from the segmented selector clears the override; empty also
+///   clears.
 /// - Toggle cards (prefill/web/emotes) use a `*_card_visible` hidden input
 ///   to differentiate "card rendered but unchecked" (`Some(false)`) from
 ///   "card not in form" (`None`).
@@ -250,6 +255,13 @@ fn form_into_ai_overrides(form: &SaveForm) -> AiOverrides {
         model: form.ai_connection_model.clone(),
         timeout: form.ai_connection_timeout,
         reasoning_effort: form.ai_connection_reasoning_effort.as_ref().map(|s| {
+            if s == "none" || s.trim().is_empty() {
+                None
+            } else {
+                Some(s.clone())
+            }
+        }),
+        service_tier: form.ai_connection_service_tier.as_ref().map(|s| {
             if s == "none" || s.trim().is_empty() {
                 None
             } else {
@@ -291,6 +303,13 @@ fn form_into_ai_overrides(form: &SaveForm) -> AiOverrides {
             .as_ref()
             .map(|v| if v.is_empty() { None } else { Some(v.clone()) }),
         reasoning_effort: form.ai_dreamer_reasoning_effort.as_ref().map(|v| {
+            if v == "none" || v.is_empty() {
+                None
+            } else {
+                Some(v.clone())
+            }
+        }),
+        service_tier: form.ai_dreamer_service_tier.as_ref().map(|v| {
             if v == "none" || v.is_empty() {
                 None
             } else {
@@ -549,4 +568,39 @@ async fn reset(
     );
     flash::set(&cookies, "Reset to defaults.");
     Ok(Redirect::to("/settings").into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn form_parses_service_tier_flex_priority_and_none_sentinel() {
+        let form = SaveForm {
+            ai_connection_service_tier: Some("flex".to_string()),
+            ai_dreamer_service_tier: Some("priority".to_string()),
+            ..Default::default()
+        };
+        let o = form_into_ai_overrides(&form);
+        assert_eq!(
+            o.connection
+                .service_tier
+                .as_ref()
+                .and_then(|v| v.as_deref()),
+            Some("flex")
+        );
+        assert_eq!(
+            o.dreamer.service_tier.as_ref().and_then(|v| v.as_deref()),
+            Some("priority")
+        );
+
+        let form = SaveForm {
+            ai_connection_service_tier: Some("none".to_string()),
+            ai_dreamer_service_tier: Some(String::new()),
+            ..Default::default()
+        };
+        let o = form_into_ai_overrides(&form);
+        assert!(matches!(o.connection.service_tier, Some(None)));
+        assert!(matches!(o.dreamer.service_tier, Some(None)));
+    }
 }

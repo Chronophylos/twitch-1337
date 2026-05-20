@@ -228,6 +228,9 @@ fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides) {
     if patch.ai.connection.reasoning_effort.is_some() {
         into.ai.connection.reasoning_effort = patch.ai.connection.reasoning_effort.clone();
     }
+    if patch.ai.connection.service_tier.is_some() {
+        into.ai.connection.service_tier = patch.ai.connection.service_tier.clone();
+    }
     // AI behavior
     if let Some(v) = patch.ai.behavior.max_turn_rounds {
         into.ai.behavior.max_turn_rounds = Some(v);
@@ -273,6 +276,9 @@ fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides) {
     }
     if patch.ai.dreamer.reasoning_effort.is_some() {
         into.ai.dreamer.reasoning_effort = patch.ai.dreamer.reasoning_effort.clone();
+    }
+    if patch.ai.dreamer.service_tier.is_some() {
+        into.ai.dreamer.service_tier = patch.ai.dreamer.service_tier.clone();
     }
     if let Some(v) = patch.ai.dreamer.run_at.as_ref() {
         into.ai.dreamer.run_at = Some(v.clone());
@@ -412,6 +418,11 @@ fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
         prior.ai.connection.reasoning_effort.as_deref(),
         next.ai.connection.reasoning_effort.as_deref()
     );
+    cmp!(
+        "ai.connection.service_tier",
+        prior.ai.connection.service_tier.as_deref(),
+        next.ai.connection.service_tier.as_deref()
+    );
     // AI behavior
     cmp!(
         "ai.behavior.max_turn_rounds",
@@ -485,6 +496,11 @@ fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
         "ai.dreamer.reasoning_effort",
         prior.ai.dreamer.reasoning_effort.as_deref(),
         next.ai.dreamer.reasoning_effort.as_deref()
+    );
+    cmp!(
+        "ai.dreamer.service_tier",
+        prior.ai.dreamer.service_tier.as_deref(),
+        next.ai.dreamer.service_tier.as_deref()
     );
     cmp!(
         "ai.dreamer.run_at",
@@ -775,5 +791,42 @@ mod tests {
                     .starts_with("settings.ron.quarantine-")
             });
         assert!(quarantined, "quarantine file must exist");
+    }
+
+    #[test]
+    fn patch_round_trips_service_tier_on_connection_and_dreamer() {
+        let mut into = SettingsOverrides::default();
+        let mut patch = SettingsOverrides::default();
+        patch.ai.connection.service_tier = Some(Some("flex".to_string()));
+        patch.ai.dreamer.service_tier = Some(Some("priority".to_string()));
+        merge_into(&mut into, &patch);
+        assert_eq!(
+            into.ai
+                .connection
+                .service_tier
+                .as_ref()
+                .and_then(|v| v.as_deref()),
+            Some("flex")
+        );
+        assert_eq!(
+            into.ai
+                .dreamer
+                .service_tier
+                .as_ref()
+                .and_then(|v| v.as_deref()),
+            Some("priority")
+        );
+    }
+
+    #[test]
+    fn diff_emits_service_tier_changes() {
+        let prior = Settings::compiled_defaults();
+        let mut next = Settings::compiled_defaults();
+        next.ai.connection.service_tier = Some("flex".to_string());
+        next.ai.dreamer.service_tier = Some("priority".to_string());
+        let changes = diff_changes(&prior, &next);
+        let keys: Vec<&str> = changes.iter().map(|c| c.key.as_str()).collect();
+        assert!(keys.contains(&"ai.connection.service_tier"), "got {keys:?}");
+        assert!(keys.contains(&"ai.dreamer.service_tier"), "got {keys:?}");
     }
 }

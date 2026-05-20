@@ -301,6 +301,7 @@ mod tests {
             messages: vec![Message::system("sys"), Message::user("hi")],
             tools: vec![],
             reasoning_effort: None,
+            service_tier: None,
             prior_rounds: vec![
                 ToolCallRound {
                     calls: vec![ToolCall {

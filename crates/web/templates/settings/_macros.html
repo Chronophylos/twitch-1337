@@ -253,6 +253,18 @@
 </label>
 {% endmacro %}
 
+{# Segmented radio item for the OpenRouter `service_tier` selector. Distinct
+   from `effort_segment` because the displayed label ("Default" / "Flex" /
+   "Priority") differs from the wire value ("none" / "flex" / "priority"). #}
+{% macro tier_segment(field, key, value, label, selected) %}
+<label class="segment{% if value == selected %} is-active{% endif %}">
+  <input type="radio" name="{{ field }}" value="{{ value }}"
+         data-default="none" data-key="{{ key }}"
+         {% if value == selected %}checked{% endif %}>
+  <span>{{ label }}</span>
+</label>
+{% endmacro %}
+
 {# `bytes` and `default_bytes` are raw u64. The hidden input posts the
    canonical integer — `ByteSize::from_str` (server side) accepts it, and
    `Deserialize<Option<usize>>` does too — so this macro covers both
