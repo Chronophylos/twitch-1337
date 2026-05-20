@@ -192,6 +192,7 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 Some(v) => v.clone(),
                 None => defaults.connection.reasoning_effort.clone(),
             },
+            // TODO(Task 3): wire `o.connection.service_tier` once the override field exists.
             service_tier: defaults.connection.service_tier.clone(),
         },
         behavior: AiBehavior {
@@ -240,6 +241,7 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 Some(v) => v.clone(),
                 None => defaults.dreamer.reasoning_effort.clone(),
             },
+            // TODO(Task 3): wire `o.dreamer.service_tier` once the override field exists.
             service_tier: defaults.dreamer.service_tier.clone(),
             run_at: o
                 .dreamer
