@@ -175,6 +175,7 @@ mod tests {
             messages: vec![Message::user("hi")],
             tools: vec![],
             reasoning_effort: None,
+            service_tier: None,
             prior_rounds: vec![],
             trace: crate::types::TraceIds::default(),
         }

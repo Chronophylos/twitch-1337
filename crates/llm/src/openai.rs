@@ -27,6 +27,8 @@ struct ApiRequest {
     reasoning_effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<ApiReasoning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    service_tier: Option<String>,
     #[serde(flatten)]
     trace: TraceIds,
 }
@@ -75,6 +77,8 @@ struct ApiToolRequest {
     reasoning_effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<ApiReasoning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    service_tier: Option<String>,
     #[serde(flatten)]
     trace: TraceIds,
 }
@@ -222,6 +226,13 @@ impl OpenAiClient {
         }
     }
 
+    /// Return the tier verbatim when the client is OpenRouter, otherwise
+    /// `None`. Defence-in-depth so a stale value in settings can't leak into
+    /// a stock OpenAI or Ollama request body.
+    fn map_service_tier(&self, tier: Option<String>) -> Option<String> {
+        if self.is_openrouter { tier } else { None }
+    }
+
     /// Creates a new OpenAI-compatible API client.
     #[instrument(skip(api_key))]
     pub fn new(api_key: &str, base_url: Option<&str>, user_agent: &str) -> Result<Self> {
@@ -268,10 +279,11 @@ impl LlmClient for OpenAiClient {
             model,
             messages,
             reasoning_effort,
-            service_tier: _,
+            service_tier,
             trace,
         } = request;
         let (reasoning_effort, reasoning) = self.map_reasoning(reasoning_effort);
+        let service_tier = self.map_service_tier(service_tier);
 
         let api_request = ApiRequest {
             model,
@@ -284,6 +296,7 @@ impl LlmClient for OpenAiClient {
                 .collect(),
             reasoning_effort,
             reasoning,
+            service_tier,
             trace,
         };
 
@@ -334,11 +347,12 @@ impl LlmClient for OpenAiClient {
             messages,
             tools,
             reasoning_effort,
-            service_tier: _,
+            service_tier,
             prior_rounds,
             trace,
         } = request;
         let (reasoning_effort, reasoning) = self.map_reasoning(reasoning_effort);
+        let service_tier = self.map_service_tier(service_tier);
 
         let wire_messages = build_openai_messages(&messages, &prior_rounds);
 
@@ -360,6 +374,7 @@ impl LlmClient for OpenAiClient {
             tools: api_tools,
             reasoning_effort,
             reasoning,
+            service_tier,
             trace,
         };
 
@@ -483,6 +498,7 @@ mod tests {
             messages: vec![Message::system("sys"), Message::user("hi")],
             tools: vec![],
             reasoning_effort: None,
+            service_tier: None,
             prior_rounds: rounds,
             trace: TraceIds::default(),
         }
@@ -701,6 +717,7 @@ mod tests {
             tools: vec![],
             reasoning_effort: None,
             reasoning: None,
+            service_tier: None,
             trace: TraceIds {
                 user: Some("nikolai".to_string()),
                 session_id: Some("turn-42".to_string()),
@@ -712,6 +729,36 @@ mod tests {
     }
 
     #[test]
+    fn api_tool_request_serializes_service_tier_when_set() {
+        let req = ApiToolRequest {
+            model: "m".to_string(),
+            messages: vec![],
+            tools: vec![],
+            reasoning_effort: None,
+            reasoning: None,
+            service_tier: Some("priority".to_string()),
+            trace: TraceIds::default(),
+        };
+        let value = serde_json::to_value(&req).unwrap();
+        assert_eq!(value["service_tier"], "priority");
+    }
+
+    #[test]
+    fn api_tool_request_omits_service_tier_when_none() {
+        let req = ApiToolRequest {
+            model: "m".to_string(),
+            messages: vec![],
+            tools: vec![],
+            reasoning_effort: None,
+            reasoning: None,
+            service_tier: None,
+            trace: TraceIds::default(),
+        };
+        let value = serde_json::to_value(&req).unwrap();
+        assert!(value.get("service_tier").is_none());
+    }
+
+    #[test]
     fn api_tool_request_omits_trace_ids_when_default() {
         let req = ApiToolRequest {
             model: "m".to_string(),
@@ -719,6 +766,7 @@ mod tests {
             tools: vec![],
             reasoning_effort: None,
             reasoning: None,
+            service_tier: None,
             trace: TraceIds::default(),
         };
         let value = serde_json::to_value(&req).unwrap();
@@ -733,6 +781,7 @@ mod tests {
             messages: vec![],
             reasoning_effort: None,
             reasoning: None,
+            service_tier: None,
             trace: TraceIds {
                 user: Some("u".to_string()),
                 session_id: Some("s".to_string()),
@@ -741,5 +790,60 @@ mod tests {
         let value = serde_json::to_value(&req).unwrap();
         assert_eq!(value["user"], "u");
         assert_eq!(value["session_id"], "s");
+    }
+
+    #[test]
+    fn map_service_tier_attached_when_openrouter() {
+        let client = test_client(true);
+        assert_eq!(
+            client.map_service_tier(Some("flex".to_string())).as_deref(),
+            Some("flex")
+        );
+        assert_eq!(
+            client
+                .map_service_tier(Some("priority".to_string()))
+                .as_deref(),
+            Some("priority")
+        );
+    }
+
+    #[test]
+    fn map_service_tier_stripped_when_not_openrouter() {
+        let client = test_client(false);
+        assert!(client.map_service_tier(Some("flex".to_string())).is_none());
+    }
+
+    #[test]
+    fn map_service_tier_omitted_when_none() {
+        let client = test_client(true);
+        assert!(client.map_service_tier(None).is_none());
+    }
+
+    #[test]
+    fn api_request_serializes_service_tier_when_set() {
+        let req = ApiRequest {
+            model: "m".to_string(),
+            messages: vec![],
+            reasoning_effort: None,
+            reasoning: None,
+            service_tier: Some("flex".to_string()),
+            trace: TraceIds::default(),
+        };
+        let value = serde_json::to_value(&req).unwrap();
+        assert_eq!(value["service_tier"], "flex");
+    }
+
+    #[test]
+    fn api_request_omits_service_tier_when_none() {
+        let req = ApiRequest {
+            model: "m".to_string(),
+            messages: vec![],
+            reasoning_effort: None,
+            reasoning: None,
+            service_tier: None,
+            trace: TraceIds::default(),
+        };
+        let value = serde_json::to_value(&req).unwrap();
+        assert!(value.get("service_tier").is_none());
     }
 }
