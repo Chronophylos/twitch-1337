@@ -268,6 +268,7 @@ impl LlmClient for OpenAiClient {
             model,
             messages,
             reasoning_effort,
+            service_tier: _,
             trace,
         } = request;
         let (reasoning_effort, reasoning) = self.map_reasoning(reasoning_effort);
@@ -333,6 +334,7 @@ impl LlmClient for OpenAiClient {
             messages,
             tools,
             reasoning_effort,
+            service_tier: _,
             prior_rounds,
             trace,
         } = request;
