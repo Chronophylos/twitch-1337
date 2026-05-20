@@ -256,6 +256,8 @@ fn form_into_ai_overrides(form: &SaveForm) -> AiOverrides {
                 Some(s.clone())
             }
         }),
+        // TODO(Task 8): parse `form.ai_connection_service_tier` here.
+        service_tier: None,
     };
 
     let behavior = AiBehaviorOverrides {
@@ -297,6 +299,8 @@ fn form_into_ai_overrides(form: &SaveForm) -> AiOverrides {
                 Some(v.clone())
             }
         }),
+        // TODO(Task 8): parse `form.ai_dreamer_service_tier` here.
+        service_tier: None,
         run_at: form.ai_dreamer_run_at.clone(),
         timeout_secs: form.ai_dreamer_timeout_secs,
         max_rounds: form.ai_dreamer_max_rounds,
