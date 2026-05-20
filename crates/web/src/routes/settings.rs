@@ -576,12 +576,17 @@ mod tests {
 
     #[test]
     fn form_parses_service_tier_flex_priority_and_none_sentinel() {
-        let mut form = SaveForm::default();
-        form.ai_connection_service_tier = Some("flex".to_string());
-        form.ai_dreamer_service_tier = Some("priority".to_string());
+        let form = SaveForm {
+            ai_connection_service_tier: Some("flex".to_string()),
+            ai_dreamer_service_tier: Some("priority".to_string()),
+            ..Default::default()
+        };
         let o = form_into_ai_overrides(&form);
         assert_eq!(
-            o.connection.service_tier.as_ref().and_then(|v| v.as_deref()),
+            o.connection
+                .service_tier
+                .as_ref()
+                .and_then(|v| v.as_deref()),
             Some("flex")
         );
         assert_eq!(
@@ -589,8 +594,11 @@ mod tests {
             Some("priority")
         );
 
-        form.ai_connection_service_tier = Some("none".to_string());
-        form.ai_dreamer_service_tier = Some(String::new());
+        let form = SaveForm {
+            ai_connection_service_tier: Some("none".to_string()),
+            ai_dreamer_service_tier: Some(String::new()),
+            ..Default::default()
+        };
         let o = form_into_ai_overrides(&form);
         assert!(matches!(o.connection.service_tier, Some(None)));
         assert!(matches!(o.dreamer.service_tier, Some(None)));

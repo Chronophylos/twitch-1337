@@ -801,11 +801,19 @@ mod tests {
         patch.ai.dreamer.service_tier = Some(Some("priority".to_string()));
         merge_into(&mut into, &patch);
         assert_eq!(
-            into.ai.connection.service_tier.as_ref().and_then(|v| v.as_deref()),
+            into.ai
+                .connection
+                .service_tier
+                .as_ref()
+                .and_then(|v| v.as_deref()),
             Some("flex")
         );
         assert_eq!(
-            into.ai.dreamer.service_tier.as_ref().and_then(|v| v.as_deref()),
+            into.ai
+                .dreamer
+                .service_tier
+                .as_ref()
+                .and_then(|v| v.as_deref()),
             Some("priority")
         );
     }
