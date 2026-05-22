@@ -192,6 +192,10 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 Some(v) => v.clone(),
                 None => defaults.connection.reasoning_effort.clone(),
             },
+            service_tier: match &o.connection.service_tier {
+                Some(v) => v.clone(),
+                None => defaults.connection.service_tier.clone(),
+            },
         },
         behavior: AiBehavior {
             max_turn_rounds: o
@@ -238,6 +242,10 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
             reasoning_effort: match &o.dreamer.reasoning_effort {
                 Some(v) => v.clone(),
                 None => defaults.dreamer.reasoning_effort.clone(),
+            },
+            service_tier: match &o.dreamer.service_tier {
+                Some(v) => v.clone(),
+                None => defaults.dreamer.service_tier.clone(),
             },
             run_at: o
                 .dreamer
@@ -412,6 +420,29 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
             && v.trim().is_empty()
         {
             err(errs, field, "must be non-empty when set".into());
+        }
+    }
+    for (field, val) in [
+        (
+            "ai.connection.service_tier",
+            ai.connection.service_tier.as_deref(),
+        ),
+        (
+            "ai.dreamer.service_tier",
+            ai.dreamer.service_tier.as_deref(),
+        ),
+    ] {
+        if let Some(v) = val {
+            let trimmed = v.trim();
+            if trimmed.is_empty() {
+                err(errs, field, "must be non-empty when set".into());
+            } else if !matches!(trimmed, "flex" | "priority") {
+                err(
+                    errs,
+                    field,
+                    format!("must be one of 'flex' | 'priority' (got {v:?})"),
+                );
+            }
         }
     }
     if let Some(url) = ai.connection.base_url.as_deref()
@@ -664,5 +695,37 @@ mod resolve_tests {
         s.ai.connection.base_url = Some("not a url".into());
         let errs = s.validate().expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.connection.base_url"));
+    }
+
+    #[test]
+    fn service_tier_override_resolves_for_connection_and_dreamer() {
+        let mut overrides = overrides::SettingsOverrides::default();
+        overrides.ai.connection.service_tier = Some(Some("flex".to_string()));
+        overrides.ai.dreamer.service_tier = Some(Some("priority".to_string()));
+        let s = Settings::resolve(&Settings::compiled_defaults(), &overrides);
+        assert_eq!(s.ai.connection.service_tier.as_deref(), Some("flex"));
+        assert_eq!(s.ai.dreamer.service_tier.as_deref(), Some("priority"));
+    }
+
+    #[test]
+    fn service_tier_explicit_clear_resolves_to_none() {
+        // Set a non-None default to prove `Some(None)` clears it.
+        let mut defaults = Settings::compiled_defaults();
+        defaults.ai.connection.service_tier = Some("flex".to_string());
+        let mut overrides = overrides::SettingsOverrides::default();
+        overrides.ai.connection.service_tier = Some(None);
+        let s = Settings::resolve(&defaults, &overrides);
+        assert!(s.ai.connection.service_tier.is_none());
+    }
+
+    #[test]
+    fn validate_rejects_unknown_service_tier_value() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.connection.service_tier = Some("turbo".to_string());
+        let err = s.validate().expect_err("'turbo' must be rejected");
+        assert!(
+            err.iter().any(|e| e.field == "ai.connection.service_tier"),
+            "expected field error for ai.connection.service_tier, got {err:?}"
+        );
     }
 }

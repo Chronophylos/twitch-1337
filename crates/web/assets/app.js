@@ -123,8 +123,26 @@ document.addEventListener(
     .filter((r) => r);
 
 
+  const BYTES_UNIT_FACTOR = { B: 1, KiB: 1024, MiB: 1024 * 1024 };
+
+  function pickBestBytesUnit(n) {
+    if (n >= BYTES_UNIT_FACTOR.MiB) return 'MiB';
+    if (n >= BYTES_UNIT_FACTOR.KiB) return 'KiB';
+    return 'B';
+  }
+
+  function formatBytesIec(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n)) return String(bytes);
+    const unit = pickBestBytesUnit(n);
+    const f = BYTES_UNIT_FACTOR[unit];
+    const v = n / f;
+    return `${n % f === 0 ? v : v.toFixed(2)} ${unit}`;
+  }
+
   function formatPretty(input, prettyEl) {
     const unit = prettyEl?.dataset.prettyUnit ?? '';
+    if (unit === 'bytes' || unit === 'B') return formatBytesIec(input.value);
     if (unit === 'bool') return input.checked ? 'On' : 'Off';
     if (input.type === 'text' || input.type === 'time' || input.type === 'email' || input.type === 'url') {
       return input.value || (input.placeholder ? `(${input.placeholder})` : '');
@@ -133,14 +151,36 @@ document.addEventListener(
     if (!Number.isFinite(n)) return input.value;
     if (unit === 'pct') return `${Math.round(n * 100)}%`;
     if (unit === 's') return n === 1 ? '1 second' : `${n} seconds`;
-    if (unit === 'B') {
-      if (n % 1024 === 0 && n >= 1024) return `${n / 1024} KiB`;
-      return `${n} B`;
-    }
     return unit ? `${n} ${unit}` : String(n);
   }
   const cards = Array.from(form.querySelectorAll('.settings-card'));
   const navItems = Array.from(document.querySelectorAll('.settings-nav-item'));
+  const navGroups = Array.from(document.querySelectorAll('.settings-nav-group')).map((el) => ({
+    el,
+    items: Array.from(el.querySelectorAll('.settings-nav-item')),
+    badge: el.querySelector('.gdirty'),
+  }));
+
+  const STORAGE_KEY = 'settings-nav-groups-collapsed';
+  let collapsed = new Set();
+  try { collapsed = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')); } catch { /* ignore corrupt JSON, start fresh */ }
+  for (const { el } of navGroups) {
+    const open = !collapsed.has(el.dataset.group);
+    el.dataset.open = open ? 'true' : 'false';
+    el.querySelector('.settings-nav-group-head')?.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  for (const head of document.querySelectorAll('[data-group-toggle]')) {
+    head.addEventListener('click', () => {
+      const group = head.closest('.settings-nav-group');
+      if (!group) return;
+      const id = group.dataset.group;
+      const open = group.dataset.open === 'false';
+      group.dataset.open = open ? 'true' : 'false';
+      head.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) collapsed.delete(id); else collapsed.add(id);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([...collapsed]));
+    });
+  }
 
   function currentValue(input) {
     return input.type === 'checkbox' ? (input.checked ? 'true' : 'false') : input.value;
@@ -209,6 +249,15 @@ document.addEventListener(
       }
     }
 
+    for (const g of navGroups) {
+      let n = 0;
+      for (const item of g.items) n += perSection.get(item.dataset.target) ?? 0;
+      if (g.badge) {
+        g.badge.hidden = n === 0;
+        g.badge.textContent = String(n);
+      }
+    }
+
     const total = dirtyKeys.length;
     countEl.textContent = String(total);
     nounEl.textContent = total === 1 ? 'change' : 'changes';
@@ -216,6 +265,75 @@ document.addEventListener(
     previewEl.textContent =
       total > 3 ? `${preview} +${total - 3}` : preview;
     saveBar.classList.toggle('visible', total > 0);
+  }
+
+  const bytesRows = Array.from(form.querySelectorAll('[data-bytes-row]'))
+    .map((el) => ({
+      el,
+      hidden: el.querySelector('.bytes-canonical'),
+      display: el.querySelector('.bytes-display'),
+      buttons: Array.from(el.querySelectorAll('.bytes-unit')),
+    }))
+    .filter((b) => b.hidden && b.display);
+  const bytesRowByHidden = new Map(bytesRows.map((b) => [b.hidden, b]));
+
+  function displayInUnit(bytes, unit) {
+    return parseFloat((bytes / BYTES_UNIT_FACTOR[unit]).toFixed(6)).toString();
+  }
+
+  function activeUnit(b) {
+    return b.buttons.find((btn) => btn.classList.contains('is-active'))?.dataset.unit
+      ?? pickBestBytesUnit(Number(b.hidden.value) || 0);
+  }
+
+  function syncBytesRow(b) {
+    const bytes = Number(b.hidden.value) || 0;
+    const unit = activeUnit(b);
+    if (document.activeElement !== b.display) b.display.value = displayInUnit(bytes, unit);
+    for (const btn of b.buttons) {
+      const active = btn.dataset.unit === unit;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+  }
+
+  function commitBytes(b, bytes) {
+    const clamped = Math.max(0, Math.round(bytes));
+    if (Number(b.hidden.value) === clamped) return;
+    b.hidden.value = String(clamped);
+    b.hidden.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  for (const b of bytesRows) {
+    b.display.addEventListener('input', () => {
+      const v = Number(b.display.value);
+      if (!Number.isFinite(v) || v < 0) return;
+      commitBytes(b, v * BYTES_UNIT_FACTOR[activeUnit(b)]);
+    });
+    b.display.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        syncBytesRow(b);
+        b.display.blur();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        b.display.blur();
+      }
+    });
+    b.display.addEventListener('blur', () => syncBytesRow(b));
+
+    for (const btn of b.buttons) {
+      btn.addEventListener('click', () => {
+        for (const other of b.buttons) other.classList.toggle('is-active', other === btn);
+        syncBytesRow(b);
+      });
+    }
+  }
+
+  for (const b of bytesRows) {
+    const def = b.el.querySelector('[data-bytes-default]');
+    if (def) def.textContent = formatBytesIec(def.dataset.bytesDefault);
+    syncBytesRow(b);
   }
 
   form.addEventListener('input', refreshAll);
@@ -236,6 +354,8 @@ document.addEventListener(
     const r = rows.find((row) => row.reset === btn);
     if (!r) return;
     applyDefault(r);
+    const b = bytesRowByHidden.get(r.input);
+    if (b) syncBytesRow(b);
     refreshAll();
     r.input.focus();
   });
@@ -250,6 +370,9 @@ document.addEventListener(
       if (active) byId.get(active)?.classList.remove('active');
       active = section;
       byId.get(section)?.classList.add('active');
+      const activeItem = byId.get(section);
+      const activeGroup = activeItem?.closest('.settings-nav-group');
+      for (const g of navGroups) g.el.classList.toggle('has-active', g.el === activeGroup);
     };
     setActive(cards[0].dataset.section);
     const io = new IntersectionObserver(

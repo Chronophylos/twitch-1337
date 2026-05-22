@@ -72,5 +72,23 @@
       </div>
     </div>
     {% endif %}
+    {% let conn_or = conn_base_url.contains("openrouter.ai") %}
+    {% if conn_or %}
+    {% let tier = current.ai.connection.service_tier.as_deref().unwrap_or("none") %}
+    <div class="settings-row" data-section="ai_connection">
+      {% call m::row_head("service_tier", "OpenRouter pricing tier. Default 1×, Flex 0.5× (slower/availability-tradeoff), Priority 1.8× (faster).") %}{% endcall %}
+      <div class="row-control-cell">
+        <div class="segmented" role="radiogroup" aria-label="service_tier">
+          {% call m::tier_segment("ai_connection_service_tier", "ai.connection.service_tier", "none", "Default", tier) %}{% endcall %}
+          {% call m::tier_segment("ai_connection_service_tier", "ai.connection.service_tier", "flex", "Flex", tier) %}{% endcall %}
+          {% call m::tier_segment("ai_connection_service_tier", "ai.connection.service_tier", "priority", "Priority", tier) %}{% endcall %}
+        </div>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.connection.service_tier") %}{% endcall %}
+        <span class="row-default">default <span class="mono">Default</span></span>
+      </div>
+    </div>
+    {% endif %}
   </div>
 </section>

@@ -120,6 +120,9 @@ pub struct ChatCompletionRequest {
     pub messages: Vec<Message>,
     /// Optional reasoning effort hint (provider/model-specific values).
     pub reasoning_effort: Option<String>,
+    /// Optional OpenRouter `service_tier` (`"flex"` | `"priority"`). Stripped
+    /// at serialize time when the client is not OpenRouter.
+    pub service_tier: Option<String>,
     pub trace: TraceIds,
 }
 
@@ -131,6 +134,8 @@ pub struct ToolChatCompletionRequest {
     pub tools: Vec<ToolDefinition>,
     /// Optional reasoning effort hint (provider/model-specific values).
     pub reasoning_effort: Option<String>,
+    /// Optional OpenRouter `service_tier`. See [`ChatCompletionRequest`].
+    pub service_tier: Option<String>,
     /// Prior tool-call rounds, threaded back in order.
     pub prior_rounds: Vec<ToolCallRound>,
     pub trace: TraceIds,

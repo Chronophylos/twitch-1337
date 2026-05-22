@@ -27,6 +27,10 @@ pub struct AiConnection {
     pub model: String,
     pub timeout: u64,
     pub reasoning_effort: Option<String>,
+    /// OpenRouter service tier hint. `None` = default tier (no field sent).
+    /// Documented values: `"flex"`, `"priority"`. Only honored when the
+    /// connection points at OpenRouter; stripped at serialize time otherwise.
+    pub service_tier: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,6 +89,10 @@ pub struct AiDreamer {
     pub enabled: bool,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
+    /// OpenRouter service tier hint for the dreamer pass. Falls back to
+    /// `connection.service_tier` when `None`. Documented values: `"flex"`,
+    /// `"priority"`.
+    pub service_tier: Option<String>,
     pub run_at: String,
     pub timeout_secs: u64,
     pub max_rounds: usize,
@@ -143,6 +151,7 @@ impl Default for AiConnection {
             model: String::new(),
             timeout: 30,
             reasoning_effort: None,
+            service_tier: None,
         }
     }
 }
@@ -185,6 +194,7 @@ impl Default for AiDreamer {
             enabled: true,
             model: None,
             reasoning_effort: None,
+            service_tier: None,
             run_at: "04:00".into(),
             timeout_secs: 120,
             max_rounds: 20,
@@ -291,5 +301,7 @@ mod tests {
         assert_eq!(s.media.model, "~google/gemini-flash-latest");
         assert_eq!(s.media.timeout, 60);
         assert_eq!(s.media.max_image_size.as_u64(), 10 * 1024 * 1024);
+        assert!(s.connection.service_tier.is_none());
+        assert!(s.dreamer.service_tier.is_none());
     }
 }

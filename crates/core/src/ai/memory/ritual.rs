@@ -110,6 +110,11 @@ pub async fn run_ritual(
         .reasoning_effort
         .clone()
         .or_else(|| ai.connection.reasoning_effort.clone());
+    let service_tier = ai
+        .dreamer
+        .service_tier
+        .clone()
+        .or_else(|| ai.connection.service_tier.clone());
     let timeout_secs = ai.dreamer.timeout_secs;
     let max_rounds = ai.dreamer.max_rounds;
     let max_writes_per_turn = ai.behavior.max_writes_per_turn;
@@ -188,6 +193,7 @@ pub async fn run_ritual(
         messages: vec![Message::system(system_prompt), Message::user("revise.")],
         tools: dreamer_tools(),
         reasoning_effort,
+        service_tier,
         prior_rounds: Vec::new(),
         trace: llm::TraceIds {
             user: Some("<dreamer>".to_string()),

@@ -61,6 +61,24 @@
       </div>
     </div>
 
+    {% let dreamer_or = current.ai.connection.base_url.as_deref().unwrap_or("").contains("openrouter.ai") %}
+    {% if dreamer_or %}
+    {% let dreamer_tier = current.ai.dreamer.service_tier.as_deref().unwrap_or("none") %}
+    <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
+      {% call m::row_head("service_tier", "Override OpenRouter pricing tier for dreamer turns. Falls back to connection tier when set to Default.") %}{% endcall %}
+      <div class="row-control-cell">
+        <div class="segmented" role="radiogroup" aria-label="service_tier">
+          {% call m::tier_segment("ai_dreamer_service_tier", "ai.dreamer.service_tier", "none", "Default", dreamer_tier) %}{% endcall %}
+          {% call m::tier_segment("ai_dreamer_service_tier", "ai.dreamer.service_tier", "flex", "Flex", dreamer_tier) %}{% endcall %}
+          {% call m::tier_segment("ai_dreamer_service_tier", "ai.dreamer.service_tier", "priority", "Priority", dreamer_tier) %}{% endcall %}
+        </div>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.dreamer.service_tier") %}{% endcall %}
+        <span class="row-default">default <span class="mono">Default</span></span>
+      </div>
+    </div>
+    {% endif %}
     {% call m::time_row("ai_dreamer", "ai_dreamer_run_at", "run_at",
        "Berlin-local wallclock for the nightly run (HH:MM).",
        current.ai.dreamer.run_at, defaults.ai.dreamer.run_at) %}{% endcall %}

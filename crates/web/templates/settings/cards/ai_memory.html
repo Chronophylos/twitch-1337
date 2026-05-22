@@ -10,21 +10,21 @@
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
   <div class="settings-rows">
-    {% call m::num_row_bounded("ai_memory", "ai_memory_soul_bytes", "soul_bytes",
+    {% call m::bytesize_row("ai_memory", "ai_memory_soul_bytes", "soul_bytes",
        "Hard cap on SOUL.md size.",
-       current.ai.memory.soul_bytes, defaults.ai.memory.soul_bytes, "B", 256, 65536) %}{% endcall %}
-    {% call m::num_row_bounded("ai_memory", "ai_memory_lore_bytes", "lore_bytes",
+       current.ai.memory.soul_bytes, defaults.ai.memory.soul_bytes) %}{% endcall %}
+    {% call m::bytesize_row("ai_memory", "ai_memory_lore_bytes", "lore_bytes",
        "Hard cap on LORE.md size.",
-       current.ai.memory.lore_bytes, defaults.ai.memory.lore_bytes, "B", 256, 131072) %}{% endcall %}
-    {% call m::num_row_bounded("ai_memory", "ai_memory_user_bytes", "user_bytes",
+       current.ai.memory.lore_bytes, defaults.ai.memory.lore_bytes) %}{% endcall %}
+    {% call m::bytesize_row("ai_memory", "ai_memory_user_bytes", "user_bytes",
        "Hard cap on each per-user character sheet.",
-       current.ai.memory.user_bytes, defaults.ai.memory.user_bytes, "B", 256, 65536) %}{% endcall %}
-    {% call m::num_row_bounded("ai_memory", "ai_memory_state_bytes", "state_bytes",
+       current.ai.memory.user_bytes, defaults.ai.memory.user_bytes) %}{% endcall %}
+    {% call m::bytesize_row("ai_memory", "ai_memory_state_bytes", "state_bytes",
        "Hard cap on each per-state file.",
-       current.ai.memory.state_bytes, defaults.ai.memory.state_bytes, "B", 128, 32768) %}{% endcall %}
-    {% call m::num_row_bounded("ai_memory", "ai_memory_inject_byte_budget", "inject_byte_budget",
+       current.ai.memory.state_bytes, defaults.ai.memory.state_bytes) %}{% endcall %}
+    {% call m::bytesize_row("ai_memory", "ai_memory_inject_byte_budget", "inject_byte_budget",
        "Total memory bytes injected into a single !ai prompt.",
-       current.ai.memory.inject_byte_budget, defaults.ai.memory.inject_byte_budget, "B", 1024, 262144) %}{% endcall %}
+       current.ai.memory.inject_byte_budget, defaults.ai.memory.inject_byte_budget) %}{% endcall %}
     {% call m::num_row_bounded("ai_memory", "ai_memory_max_state_files", "max_state_files",
        "Max per-state files kept on disk.",
        current.ai.memory.max_state_files, defaults.ai.memory.max_state_files, "", 1, 256) %}{% endcall %}
