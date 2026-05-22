@@ -5,4 +5,4 @@ pub mod seventv;
 pub mod token_storage;
 pub mod whisper;
 
-pub use chat_sender::{ChatSender, sanitize_outbound};
+pub use chat_sender::ChatSender;

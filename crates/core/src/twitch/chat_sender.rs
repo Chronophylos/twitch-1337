@@ -23,10 +23,9 @@ const MAX_OUTBOUND_BYTES: usize = 480;
 /// [`MAX_OUTBOUND_BYTES`] with a `…` (U+2026) suffix on truncation.
 ///
 /// Idempotent: `sanitize_outbound(sanitize_outbound(x)) == sanitize_outbound(x)`.
-/// Never splits on a char boundary. Does not trim leading/trailing whitespace —
-/// callers handle that semantically; only collapse is performed here.
+/// Always truncates on a UTF-8 char boundary. Does not trim leading/trailing
+/// whitespace — callers handle that semantically; only collapse is performed here.
 pub fn sanitize_outbound(input: &str) -> String {
-    // First pass: rewrite control chars to space, collapse runs of whitespace.
     let mut collapsed = String::with_capacity(input.len());
     let mut prev_space = false;
     for ch in input.chars() {
@@ -149,14 +148,12 @@ mod tests {
 
     #[test]
     fn multibyte_input_clamped_on_char_boundary() {
-        // "ä" is 2 bytes UTF-8; 300 of them = 600 bytes.
+        // "ä" is 2 bytes UTF-8; 300 of them = 600 bytes. The real check is
+        // that slicing inside a multibyte char doesn't panic.
         let input: String = "ä".repeat(300);
         let out = sanitize_outbound(&input);
         assert!(out.len() <= MAX_OUTBOUND_BYTES);
         assert!(out.ends_with('…'));
-        // is_char_boundary at end of valid string is trivially true; the
-        // real check is that we didn't panic and stayed inside the limit.
-        assert!(out.is_char_boundary(out.len()));
     }
 
     #[test]
