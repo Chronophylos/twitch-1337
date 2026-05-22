@@ -271,6 +271,11 @@ where
                 ai_channel_login: ai_channel.clone(),
             });
 
+        let news_cooldown = Arc::new(crate::cooldown::PerUserCooldown::live(
+            settings.clone(),
+            commands::news_cooldown_duration,
+        ));
+
         cmd_list.push(Box::new(ai::command::AiCommand::new(
             ai::command::AiCommandDeps {
                 llm_client: llm.clone(),
@@ -289,6 +294,7 @@ where
             commands::news::NewsMode::News,
             chat_ctx.clone(),
             whisper.clone(),
+            news_cooldown.clone(),
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm.clone(),
@@ -296,11 +302,13 @@ where
             commands::news::NewsMode::Tldr,
             chat_ctx.clone(),
             whisper.clone(),
+            news_cooldown.clone(),
         )));
         cmd_list.push(Box::new(commands::haiku::HaikuCommand::new(
             llm,
             settings.clone(),
             chat_ctx,
+            news_cooldown,
         )));
     }
 

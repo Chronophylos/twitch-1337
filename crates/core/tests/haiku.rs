@@ -23,13 +23,11 @@ async fn haiku_command_posts_haiku_in_chat() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let haiku = "Mond über dem Chat\nKaffee kalt, Raid naht schon\nLUL am Ende";
+    let haiku = "Mond über dem Chat / Kaffee kalt, Raid naht schon / LUL am Ende";
     bot.llm.push_chat(haiku);
     bot.send("alice", "!haiku").await;
     let out = bot.expect_reply(Duration::from_secs(2)).await;
-    assert!(out.contains("Mond über dem Chat"), "missing first line: {out}");
-    assert!(out.contains("Kaffee kalt, Raid naht schon"), "missing second line: {out}");
-    assert!(out.contains("LUL am Ende"), "missing third line: {out}");
+    assert_eq!(out, haiku);
 
     let calls = bot.llm.chat_calls();
     assert_eq!(calls.len(), 1, "expected exactly one chat completion call");
@@ -53,7 +51,7 @@ async fn haiku_command_includes_history_and_excludes_trigger() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    bot.llm.push_chat("Zeile eins\nZeile zwei\nZeile drei");
+    bot.llm.push_chat("Zeile eins / Zeile zwei / Zeile drei");
     bot.send("alice", "!haiku").await;
     let _ = bot.expect_reply(Duration::from_secs(2)).await;
 
@@ -96,8 +94,8 @@ async fn haiku_command_includes_history_and_excludes_trigger() {
         .find(|m| m.role == Role::System)
         .expect("request has a system message");
     assert!(
-        system_msg.content.contains("5-7-5"),
-        "missing syllable instruction: {}",
+        system_msg.content.contains(" / "),
+        "missing Twitch slash format instruction: {}",
         system_msg.content
     );
 
@@ -121,7 +119,7 @@ async fn haiku_command_uses_only_last_80_messages() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    bot.llm.push_chat("Nur der Schwanz\nAchtzig Zeilen tief\nHaiku entsteht");
+    bot.llm.push_chat("Nur der Schwanz / Achtzig Zeilen tief / Haiku entsteht");
     bot.send("alice", "!haiku").await;
     let _ = bot.expect_reply(Duration::from_secs(2)).await;
 
@@ -172,7 +170,7 @@ async fn haiku_command_without_history_does_not_call_llm() {
     bot.send("alice", "!haiku").await;
     let out = bot.expect_reply(Duration::from_secs(2)).await;
     assert!(
-        out.contains("noch keine Chat-Historie"),
+        out.contains("noch keinen Chat-Verlauf"),
         "unexpected empty-history reply: {out}"
     );
 
@@ -196,11 +194,11 @@ async fn haiku_command_respects_cooldown() {
     bot.send("bob", "chat context").await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    bot.llm.push_chat("Erste Zeile eins\nZweite Zeile zwei\nDritte Zeile drei");
+    bot.llm.push_chat("Erste / Zweite / Dritte");
     bot.send("alice", "!haiku").await;
     let _ = bot.expect_reply(Duration::from_secs(2)).await;
 
-    bot.llm.push_chat("Noch ein Haiku\nZweite Zeile hier\nDritte Zeile da");
+    bot.llm.push_chat("Noch / Ein / Haiku");
     bot.send("alice", "!haiku").await;
     let out = bot.expect_reply(Duration::from_secs(2)).await;
     assert!(
@@ -210,6 +208,94 @@ async fn haiku_command_respects_cooldown() {
 
     let calls = bot.llm.chat_calls();
     assert_eq!(calls.len(), 1, "second invocation should not call LLM");
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn haiku_command_llm_failure_does_not_apply_cooldown() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
+            o.cooldowns.news = Some(60);
+        })
+        .spawn()
+        .await;
+
+    bot.send("bob", "chat context").await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    bot.send("alice", "!haiku").await;
+    let out = bot.expect_reply(Duration::from_secs(2)).await;
+    assert!(
+        out.contains("schiefgelaufen"),
+        "expected error reply, got: {out}"
+    );
+
+    bot.llm.push_chat("Retry / Works / Now");
+    bot.send("alice", "!haiku").await;
+    let out = bot.expect_reply(Duration::from_secs(2)).await;
+    assert_eq!(out, "Retry / Works / Now");
+
+    let calls = bot.llm.chat_calls();
+    assert_eq!(calls.len(), 2, "retry should call LLM again");
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn haiku_command_rejects_invalid_model_output() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
+        })
+        .spawn()
+        .await;
+
+    bot.send("bob", "chat context").await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    bot.llm.push_chat("ICYMI: this is a long news summary not a haiku at all");
+    bot.send("alice", "!haiku").await;
+    let out = bot.expect_reply(Duration::from_secs(2)).await;
+    assert!(
+        out.contains("schiefgelaufen"),
+        "expected validation error, got: {out}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn haiku_shares_cooldown_with_news() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
+            o.cooldowns.news = Some(60);
+        })
+        .spawn()
+        .await;
+
+    bot.send("bob", "topic for summary").await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    bot.llm.push_chat("icymi: short summary");
+    bot.send("alice", "!news").await;
+    let _ = bot.expect_whisper(Duration::from_secs(2)).await;
+
+    bot.llm.push_chat("Eins / Zwei / Drei");
+    bot.send("alice", "!haiku").await;
+    let out = bot.expect_reply(Duration::from_secs(2)).await;
+    assert!(
+        out.contains("Bitte warte noch"),
+        "expected shared cooldown with !news, got: {out}"
+    );
+
+    let calls = bot.llm.chat_calls();
+    assert_eq!(calls.len(), 1, "!haiku should not call LLM while on cooldown");
 
     bot.shutdown().await;
 }
