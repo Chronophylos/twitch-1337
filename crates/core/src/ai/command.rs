@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -292,9 +293,9 @@ where
         is_ai_trigger(word)
     }
 
-    fn suspend_key(&self, _trigger: &str) -> std::borrow::Cow<'_, str> {
+    fn suspend_key(&self, _trigger: &str) -> Cow<'_, str> {
         // Both !ai and the @grok alias share a single suspension entry.
-        std::borrow::Cow::Borrowed("ai")
+        Cow::Borrowed("ai")
     }
 
     #[instrument(skip(self, ctx))]
