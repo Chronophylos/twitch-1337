@@ -119,7 +119,8 @@ async fn haiku_command_uses_only_last_80_messages() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    bot.llm.push_chat("Nur der Schwanz / Achtzig Zeilen tief / Haiku entsteht");
+    bot.llm
+        .push_chat("Nur der Schwanz / Achtzig Zeilen tief / Haiku entsteht");
     bot.send("alice", "!haiku").await;
     let _ = bot.expect_reply(Duration::from_secs(2)).await;
 
@@ -257,7 +258,8 @@ async fn haiku_command_rejects_invalid_model_output() {
     bot.send("bob", "chat context").await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    bot.llm.push_chat("ICYMI: this is a long news summary not a haiku at all");
+    bot.llm
+        .push_chat("ICYMI: this is a long news summary not a haiku at all");
     bot.send("alice", "!haiku").await;
     let out = bot.expect_reply(Duration::from_secs(2)).await;
     assert!(
@@ -295,7 +297,11 @@ async fn haiku_shares_cooldown_with_news() {
     );
 
     let calls = bot.llm.chat_calls();
-    assert_eq!(calls.len(), 1, "!haiku should not call LLM while on cooldown");
+    assert_eq!(
+        calls.len(),
+        1,
+        "!haiku should not call LLM while on cooldown"
+    );
 
     bot.shutdown().await;
 }

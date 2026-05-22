@@ -19,8 +19,7 @@ const HAIKU_CONTEXT_MESSAGES: usize = 80;
 const HAIKU_LINE_MAX_CHARS: usize = 80;
 const HAIKU_PARTS: usize = 3;
 const HAIKU_SYSTEM_PROMPT: &str = "Du liest einen Twitch-Chat-Auszug und schreibst genau ein Haiku. Wähle intern ein salientes Thema aus dem Verlauf (erkläre die Wahl nicht). Antworte mit genau einer Zeile für Twitch: drei kurze Teile im 5-7-5-Silbenschema, getrennt durch \" / \" (Leerzeichen-Slash-Leerzeichen). Bei Deutsch ist die Silbenzählung näherungsweise. Kein Markdown, keine Anführungszeichen, keine erfundenen Chat-Ereignisse, keine Zusammenfassung oder Prosa.";
-const EMPTY_HISTORY_MESSAGE: &str =
-    "Ich habe noch keinen Chat-Verlauf für ein Haiku FDM";
+const EMPTY_HISTORY_MESSAGE: &str = "Ich habe noch keinen Chat-Verlauf für ein Haiku FDM";
 const LLM_ERROR_MESSAGE: &str = "Da ist was schiefgelaufen FDM";
 const LLM_TIMEOUT_MESSAGE: &str = "Das hat zu lange gedauert Waiting";
 
@@ -98,10 +97,7 @@ fn format_haiku_for_chat(raw: &str) -> Option<String> {
         return None;
     }
 
-    Some(truncate_plain(
-        &parts.join(" / "),
-        MAX_RESPONSE_LENGTH,
-    ))
+    Some(truncate_plain(&parts.join(" / "), MAX_RESPONSE_LENGTH))
 }
 
 fn is_valid_haiku_part(part: &str) -> bool {
