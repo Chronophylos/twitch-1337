@@ -174,7 +174,7 @@ where
         Box::new(aviation::commands::random_flight::RandomFlightCommand),
         Box::new(aviation::commands::flights_above::FlightsAboveCommand::new(
             aviation_client,
-            Duration::from_secs(snapshot.cooldowns.up),
+            settings.clone(),
         )),
         Box::new(commands::leaderboard::LeaderboardCommand::new(
             leaderboard.clone(),
@@ -182,7 +182,7 @@ where
         Box::new(commands::pb::PbCommand::new(leaderboard)),
         Box::new(commands::feedback::FeedbackCommand::new(
             data_dir.clone(),
-            Duration::from_secs(snapshot.cooldowns.feedback),
+            settings.clone(),
         )),
         Box::new(commands::doener::DoenerCommand::new(
             doener.clone(),
