@@ -292,6 +292,11 @@ where
         is_ai_trigger(word)
     }
 
+    fn suspend_key(&self, _trigger: &str) -> std::borrow::Cow<'_, str> {
+        // Both !ai and the @grok alias share a single suspension entry.
+        std::borrow::Cow::Borrowed("ai")
+    }
+
     #[instrument(skip(self, ctx))]
     async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
         let user = &ctx.privmsg.sender.login;

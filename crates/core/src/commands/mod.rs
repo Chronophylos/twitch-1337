@@ -86,6 +86,16 @@ where
         self.name() == word
     }
 
+    /// Key used when looking up suspension state. The default normalizes the
+    /// trigger word (strip leading `!`s, ASCII-lowercase) so it matches what
+    /// `SuspendCommand` writes for a single-trigger command. Override when the
+    /// matcher accepts multiple triggers that should share one suspension key
+    /// (e.g. `AiCommand` returns `"ai"` so both `!ai` and `@grok` collapse to
+    /// the same entry).
+    fn suspend_key(&self, trigger: &str) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Owned(normalize_command_name(trigger))
+    }
+
     /// Execute the command with the given context.
     async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()>;
 }

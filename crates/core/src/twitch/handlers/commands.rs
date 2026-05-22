@@ -441,9 +441,12 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                     continue;
                 };
 
-                // Must match SuspendCommand's normalization, else admin
-                // suspensions silently miss the dispatcher hook.
-                let suspend_key = crate::commands::normalize_command_name(invocation.trigger);
+                // Contract: `SuspendCommand` normalizes user input via
+                // `normalize_command_name`; commands expose `suspend_key()`
+                // that must match. The trigger word is fed in so commands
+                // whose `name()` is a placeholder (e.g. `PingTriggerCommand`
+                // returns `!<ping>`) can still produce the right key.
+                let suspend_key = cmd.suspend_key(invocation.trigger);
                 if suspension_manager
                     .is_suspended(&suspend_key)
                     .await
