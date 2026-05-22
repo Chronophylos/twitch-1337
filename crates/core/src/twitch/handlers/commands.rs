@@ -291,11 +291,16 @@ where
             whisper.clone(),
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
-            llm,
+            llm.clone(),
             settings.clone(),
             commands::news::NewsMode::Tldr,
+            chat_ctx.clone(),
+            whisper.clone(),
+        )));
+        cmd_list.push(Box::new(commands::haiku::HaikuCommand::new(
+            llm,
+            settings.clone(),
             chat_ctx,
-            whisper,
         )));
     }
 
