@@ -51,8 +51,9 @@ Linear history required, force-push + delete blocked, conversations must resolve
 triggers on `v*` tag push, which only fires when release-plz cuts a release —
 no per-commit images. Not a required check.
 `Release-plz` runs on push to main: opens/updates `release/<branch>` PR; on PR
-merge, tags `vX.Y.Z` and creates the GH release (requires `RELEASE_PLZ_TOKEN`
-PAT secret so the tag push triggers Docker).
+merge, tags `vX.Y.Z` and creates the GH release. Authenticates via a GitHub App
+(`RELEASE_PLZ_APP_ID` + `RELEASE_PLZ_APP_PRIVATE_KEY` repo secrets) so the tag
+push triggers Docker — GITHUB_TOKEN-authored events do not.
 `Data refresh` runs Sundays 03:00 UTC; opens a `chore/data-refresh` PR.
 
 **Native GitHub security (repo settings):** secret_scanning, push_protection,
@@ -65,9 +66,10 @@ both tag AND sha256 digest in Dockerfile.
 
 **Action pinning:** security-critical actions pinned to **commit SHA** with version
 comment: `rustsec/audit-check`, `gitleaks/gitleaks-action`, `zizmorcore/zizmor-action`,
-`release-plz/action` (writes tags + releases), `aquasecurity/trivy-action`
-(Mar 2026 supply-chain incident — always SHA-pin trivy). Others pinned to major
-tags; Dependabot keeps them current.
+`release-plz/action` (writes tags + releases), `actions/create-github-app-token`
+(mints release-plz's auth token), `aquasecurity/trivy-action` (Mar 2026 supply-chain
+incident — always SHA-pin trivy). Others pinned to major tags; Dependabot keeps
+them current.
 
 **Typical PR flow:**
 1. branch → commit → push → `gh pr create`
@@ -82,8 +84,8 @@ tags; Dependabot keeps them current.
    bumping `workspace.package.version` + writing `CHANGELOG.md`. PR accumulates
    commits until merged.
 3. Merging the release PR → `release-plz release` job tags `vX.Y.Z` and
-   creates the GH release. The PAT (`RELEASE_PLZ_TOKEN`) pushes the tag so
-   downstream workflows fire — GITHUB_TOKEN tag pushes do not trigger them.
+   creates the GH release. The GitHub App token pushes the tag so downstream
+   workflows fire — GITHUB_TOKEN tag pushes do not trigger them.
 4. Tag push → `docker.yml` builds + pushes `ghcr.io/chronophylos/twitch-1337`
    with tags `vX.Y.Z`, `X.Y`, `latest`. `just deploy` always pulls the latest
    released image — no bleeding-main deploys.
