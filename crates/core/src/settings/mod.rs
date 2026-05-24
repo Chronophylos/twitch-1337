@@ -17,6 +17,7 @@ pub mod overrides;
 pub mod store;
 pub mod suspend;
 pub mod twitch;
+pub mod web;
 
 pub use ai::{
     AiBackendKind, AiBehavior, AiConnection, AiDreamer, AiEmotes, AiHistory, AiMedia, AiMemory,
@@ -25,6 +26,7 @@ pub use ai::{
 pub use aviationstack::AviationstackSettings;
 pub use suspend::SuspendSettings;
 pub use twitch::TwitchRuntime;
+pub use web::WebRuntime;
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
 pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
