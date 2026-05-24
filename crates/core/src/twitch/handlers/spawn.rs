@@ -226,7 +226,7 @@ where
         (None, None)
     };
 
-    let latency_value = Arc::new(AtomicU32::new(config.twitch.expected_latency));
+    let latency_value = Arc::new(AtomicU32::new(settings.load().twitch.expected_latency));
 
     let latency = tokio::spawn({
         let client = client.clone();
