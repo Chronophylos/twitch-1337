@@ -565,13 +565,11 @@ mod resolve_tests {
     fn cooldown_override_wins_per_field() {
         let defaults = Settings::compiled_defaults();
         let overrides = SettingsOverrides {
-            schema_version: SCHEMA_VERSION,
             cooldowns: CooldownsOverrides {
                 ai: Some(15),
                 ..Default::default()
             },
-            pings: PingsOverrides::default(),
-            ai: Default::default(),
+            ..SettingsOverrides::default()
         };
         let resolved = Settings::resolve(&defaults, &overrides);
         assert_eq!(resolved.cooldowns.ai, 15);

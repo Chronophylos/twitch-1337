@@ -746,6 +746,10 @@ async fn save(
             }
             .into_overrides(),
         },
+        twitch: Default::default(),
+        aviationstack: Default::default(),
+        suspend: Default::default(),
+        web: Default::default(),
     };
 
     let actor = Actor {
