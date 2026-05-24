@@ -139,12 +139,16 @@ pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::Set
             .and_then(|i| u32::try_from(i).ok());
         if let Some(arr) = v.get("hidden_admins").and_then(toml::Value::as_array) {
             out.twitch.hidden_admins = Some(
-                arr.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect(),
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(str::to_owned))
+                    .collect(),
             );
         }
         if let Some(arr) = v.get("viewer_allowlist").and_then(toml::Value::as_array) {
             out.twitch.viewer_allowlist = Some(
-                arr.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect(),
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(str::to_owned))
+                    .collect(),
             );
         }
         if let Some(s) = v.get("owner").and_then(toml::Value::as_str) {
@@ -300,7 +304,10 @@ mod tests {
             overrides.twitch.hidden_admins.as_deref(),
             Some(&vec!["111".to_string(), "222".to_string()][..])
         );
-        assert_eq!(overrides.twitch.viewer_allowlist.as_deref(), Some(&vec!["999".to_string()][..]));
+        assert_eq!(
+            overrides.twitch.viewer_allowlist.as_deref(),
+            Some(&vec!["999".to_string()][..])
+        );
         assert_eq!(overrides.twitch.owner, Some(Some("777".into())));
         assert_eq!(overrides.twitch.admin_channel, Some(Some("admins".into())));
         assert_eq!(overrides.twitch.ai_channel, Some(Some("ai".into())));

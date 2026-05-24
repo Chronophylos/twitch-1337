@@ -275,7 +275,6 @@ where
                 leaderboard,
                 ping_actor_tx,
                 ping_names_rx,
-                hidden_admin_ids: config.twitch.hidden_admins.clone(),
                 settings: settings.clone(),
                 tracker_tx,
                 aviation_client: aviation_for_commands,

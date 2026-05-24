@@ -716,8 +716,6 @@ fn build_test_web_state(
         clock: web_clock,
         channel: Arc::from(config.twitch.channel.as_str()),
         broadcaster_id: Arc::from("0"),
-        hidden_admins: Arc::from(Vec::<String>::new().into_boxed_slice()),
-        viewer_allowlist: Arc::from(Vec::<String>::new().into_boxed_slice()),
         client_id: secrecy::SecretString::new("test-client-id".to_owned().into()),
         oauth,
         ping_actor,
@@ -728,7 +726,6 @@ fn build_test_web_state(
         avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
             std::time::Duration::from_secs(3600),
         )),
-        owner_id: None,
         settings,
         settings_store,
         ai_bootstrap: None,

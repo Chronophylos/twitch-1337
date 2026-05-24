@@ -200,8 +200,6 @@ async fn build_state_inner_keep_settings(
         clock,
         channel: Arc::from("testchannel"),
         broadcaster_id: Arc::from("100"),
-        hidden_admins: Arc::from(Vec::<String>::new().into_boxed_slice()),
-        viewer_allowlist: Arc::from(Vec::<String>::new().into_boxed_slice()),
         client_id: SecretString::new("test-client-id".to_owned().into()),
         oauth,
         ping_actor,
@@ -212,7 +210,6 @@ async fn build_state_inner_keep_settings(
         avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
             Duration::from_secs(3600),
         )),
-        owner_id: None,
         settings: settings_handle,
         settings_store,
         ai_bootstrap: None,
@@ -286,4 +283,12 @@ pub fn sign_for_tests(state: &WebState, name: &str, value: &str) -> String {
 /// because that's what hits the server in production.
 pub fn cookie_header(signed_sid: &str, signed_csrf: &str) -> String {
     format!("tw1337_sid={signed_sid}; tw1337_csrf={signed_csrf}")
+}
+
+/// Set `settings.twitch.owner` in the live in-memory settings snapshot.
+/// Tests use this instead of the removed `state.owner_id` field.
+pub fn set_owner(state: &WebState, owner: Option<&str>) {
+    let mut s = (*state.settings.load_full()).clone();
+    s.twitch.owner = owner.map(str::to_owned);
+    state.settings.store(std::sync::Arc::new(s));
 }

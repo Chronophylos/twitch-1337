@@ -38,7 +38,6 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
     pub ping_actor_tx: tokio::sync::mpsc::Sender<PingCommand>,
     pub ping_names_rx: tokio::sync::watch::Receiver<std::collections::HashSet<String>>,
-    pub hidden_admin_ids: Vec<String>,
     pub settings: SettingsHandle,
     pub tracker_tx: Option<tokio::sync::mpsc::Sender<aviation::TrackerCommand>>,
     pub aviation_client: Option<aviation::AviationClient>,
@@ -76,7 +75,6 @@ where
         leaderboard,
         ping_actor_tx,
         ping_names_rx,
-        hidden_admin_ids,
         settings,
         tracker_tx,
         aviation_client,
@@ -164,16 +162,16 @@ where
     let mut cmd_list: Vec<Box<dyn commands::Command<T, L>>> = vec![
         Box::new(commands::ping_admin::PingAdminCommand::new(
             ping_handle.clone(),
-            hidden_admin_ids.clone(),
+            settings.clone(),
         )),
         Box::new(commands::suspend::SuspendCommand::new(
             suspension_manager.clone(),
-            hidden_admin_ids.clone(),
+            settings.clone(),
             default_suspend_duration,
         )),
         Box::new(commands::suspend::UnsuspendCommand::new(
             suspension_manager.clone(),
-            hidden_admin_ids,
+            settings.clone(),
         )),
         Box::new(aviation::commands::random_flight::RandomFlightCommand),
         Box::new(aviation::commands::flights_above::FlightsAboveCommand::new(

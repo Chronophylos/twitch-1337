@@ -138,8 +138,8 @@ pub async fn main() -> Result<()> {
             .wrap_err("v3 migration")?;
         let twitch_empty =
             patch.twitch == twitch_1337::settings::overrides::TwitchOverrides::default();
-        let aviation_empty =
-            patch.aviationstack == twitch_1337::settings::overrides::AviationstackOverrides::default();
+        let aviation_empty = patch.aviationstack
+            == twitch_1337::settings::overrides::AviationstackOverrides::default();
         let suspend_empty =
             patch.suspend == twitch_1337::settings::overrides::SuspendOverrides::default();
         let web_empty =
@@ -167,10 +167,16 @@ pub async fn main() -> Result<()> {
         ("twitch.owner", &["twitch", "owner"]),
         ("twitch.admin_channel", &["twitch", "admin_channel"]),
         ("twitch.ai_channel", &["twitch", "ai_channel"]),
-        ("suspend.default_duration_secs", &["suspend", "default_duration_secs"]),
+        (
+            "suspend.default_duration_secs",
+            &["suspend", "default_duration_secs"],
+        ),
         ("aviationstack.enabled", &["aviationstack", "enabled"]),
         ("aviationstack.base_url", &["aviationstack", "base_url"]),
-        ("aviationstack.timeout_secs", &["aviationstack", "timeout_secs"]),
+        (
+            "aviationstack.timeout_secs",
+            &["aviationstack", "timeout_secs"],
+        ),
         ("web.session_ttl", &["web", "session_ttl"]),
         ("web.mod_check_refresh", &["web", "mod_check_refresh"]),
     ];
@@ -185,7 +191,10 @@ pub async fn main() -> Result<()> {
         })
         .collect();
     if v3_marker.exists() && !stale.is_empty() {
-        tracing::warn!(?stale, "legacy config.toml keys are now ignored after v3 migration; remove them from config.toml");
+        tracing::warn!(
+            ?stale,
+            "legacy config.toml keys are now ignored after v3 migration; remove them from config.toml"
+        );
     }
 
     let llm_client = llm_factory::build_llm_client(config.ai.as_ref(), &settings_handle.load())?;
@@ -330,18 +339,13 @@ async fn build_web_spawner(
 
     let signed_key = twitch_1337_web::state::derive_session_key(&config.web.session_secret)?;
 
-    #[allow(unused_mut)]
-    let mut hidden_admins = config.twitch.hidden_admins.clone();
     #[cfg(feature = "dev-login")]
     {
-        hidden_admins.push(twitch_1337_web::dev::DEV_USER_ID.to_owned());
         tracing::warn!(
             target: "twitch_1337_web",
             "dev-login feature compiled in — /_dev/login mints mod sessions without OAuth (DO NOT SHIP)",
         );
     }
-
-    let owner_id = config.twitch.owner.as_deref().map(Arc::<str>::from);
 
     let state = twitch_1337_web::WebState {
         sessions,
@@ -351,8 +355,6 @@ async fn build_web_spawner(
         clock: web_clock,
         channel: Arc::from(config.twitch.channel.as_str()),
         broadcaster_id: Arc::from(broadcaster.id.as_str()),
-        hidden_admins: Arc::from(hidden_admins.into_boxed_slice()),
-        viewer_allowlist: Arc::from(config.twitch.viewer_allowlist.clone().into_boxed_slice()),
         client_id: config.twitch.client_id.clone(),
         oauth,
         ping_actor,
@@ -363,7 +365,6 @@ async fn build_web_spawner(
         avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
             std::time::Duration::from_secs(3600),
         )),
-        owner_id,
         settings,
         settings_store,
         ai_bootstrap: config.ai.clone().map(Arc::new),

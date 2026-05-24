@@ -29,6 +29,7 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use super::{ADMIN_DENIED_MSG, Command, CommandContext, is_admin, normalize_command_name};
 use crate::cooldown::format_cooldown_remaining;
+use crate::settings::SettingsHandle;
 use crate::suspend::{ParseDurationError, SuspensionManager, parse_duration};
 
 /// Command names that must never be suspendable. Kept lowercase; the key
@@ -52,19 +53,19 @@ fn duration_error_message(err: &ParseDurationError) -> String {
 
 pub struct SuspendCommand {
     manager: Arc<SuspensionManager>,
-    hidden_admin_ids: Vec<String>,
+    settings: SettingsHandle,
     default_duration: Duration,
 }
 
 impl SuspendCommand {
     pub fn new(
         manager: Arc<SuspensionManager>,
-        hidden_admin_ids: Vec<String>,
+        settings: SettingsHandle,
         default_duration: Duration,
     ) -> Self {
         Self {
             manager,
-            hidden_admin_ids,
+            settings,
             default_duration,
         }
     }
@@ -81,10 +82,12 @@ where
     }
 
     async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
-        if !is_admin(ctx.privmsg, &self.hidden_admin_ids) {
+        let s = self.settings.load();
+        if !is_admin(ctx.privmsg, &s.twitch.hidden_admins) {
             ctx.sender.reply(ctx.privmsg, ADMIN_DENIED_MSG).await;
             return Ok(());
         }
+        drop(s);
 
         let raw_cmd = match ctx.args.first() {
             Some(c) => *c,
@@ -136,15 +139,12 @@ where
 
 pub struct UnsuspendCommand {
     manager: Arc<SuspensionManager>,
-    hidden_admin_ids: Vec<String>,
+    settings: SettingsHandle,
 }
 
 impl UnsuspendCommand {
-    pub fn new(manager: Arc<SuspensionManager>, hidden_admin_ids: Vec<String>) -> Self {
-        Self {
-            manager,
-            hidden_admin_ids,
-        }
+    pub fn new(manager: Arc<SuspensionManager>, settings: SettingsHandle) -> Self {
+        Self { manager, settings }
     }
 }
 
@@ -159,10 +159,12 @@ where
     }
 
     async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
-        if !is_admin(ctx.privmsg, &self.hidden_admin_ids) {
+        let s = self.settings.load();
+        if !is_admin(ctx.privmsg, &s.twitch.hidden_admins) {
             ctx.sender.reply(ctx.privmsg, ADMIN_DENIED_MSG).await;
             return Ok(());
         }
+        drop(s);
 
         let raw_cmd = match ctx.args.first() {
             Some(c) => *c,

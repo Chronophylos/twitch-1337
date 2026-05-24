@@ -101,8 +101,8 @@ async fn hidden_admin_can_suspend_lb() {
     // irc_line::privmsg sets user-id=67890; add it as a hidden admin.
     let mut bot = TestBotBuilder::new()
         .with_seeded_leaderboard(seeded_lb_with_alice())
-        .with_config(|c| {
-            c.twitch.hidden_admins = vec!["67890".into()];
+        .with_settings(|o| {
+            o.twitch.hidden_admins = Some(vec!["67890".into()]);
         })
         .spawn()
         .await;

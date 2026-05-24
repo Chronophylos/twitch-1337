@@ -16,6 +16,7 @@ use twitch_1337_web::build_router;
 mod helpers;
 use helpers::{
     FakeHelix, build_state_with_all_dirs, cookie_header, insert_session_as, install_crypto,
+    set_owner,
 };
 
 fn empty_helix() -> Arc<FakeHelix> {
@@ -33,8 +34,8 @@ async fn body_string(res: axum::http::Response<Body>) -> String {
 #[tokio::test]
 async fn owner_can_save_cooldown_and_handle_reflects_change() {
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    state.owner_id = Some(Arc::from("123"));
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     let app = build_router(state.clone());
@@ -80,9 +81,9 @@ async fn owner_can_save_cooldown_and_handle_reflects_change() {
 #[tokio::test]
 async fn non_owner_get_settings_returns_403() {
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     // Owner is someone else; the mod session must NOT be admitted as owner.
-    state.owner_id = Some(Arc::from("999"));
+    set_owner(&state, Some("999"));
     let (sid, csrf_cookie, _bare) = insert_session_as(&state, "42", "modder", Role::Mod);
 
     let app = build_router(state);
@@ -102,8 +103,8 @@ async fn non_owner_get_settings_returns_403() {
 #[tokio::test]
 async fn validation_error_renders_form_with_errors() {
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    state.owner_id = Some(Arc::from("123"));
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     let before = state.settings.load().cooldowns.ai;
@@ -211,8 +212,8 @@ fn read_flash(res: &axum::http::Response<Body>) -> Option<String> {
 #[tokio::test]
 async fn post_settings_applies_ai_connection_model() {
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    state.owner_id = Some(Arc::from("123"));
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     let app = build_router(state.clone());
@@ -251,8 +252,8 @@ async fn post_settings_applies_ai_connection_model() {
 #[tokio::test]
 async fn post_settings_flags_backend_restart_required() {
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    state.owner_id = Some(Arc::from("123"));
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     let app = build_router(state.clone());
@@ -292,8 +293,8 @@ async fn post_settings_flags_backend_restart_required() {
 #[tokio::test]
 async fn post_settings_enabling_prefill_card_flags_restart() {
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    state.owner_id = Some(Arc::from("123"));
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     // Prefill is disabled by default; rendering the toggle card and ticking
@@ -340,8 +341,8 @@ async fn post_settings_card_invisible_leaves_toggle_alone() {
     // Regression for the *_card_visible hidden-input pattern: a save that
     // does not render a toggle card must NOT inadvertently disable it.
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    state.owner_id = Some(Arc::from("123"));
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     // First, enable prefill via a "card visible" save so subsequent saves
@@ -393,8 +394,8 @@ async fn settings_page_renders_all_ai_cards() {
     // we wired into `index.html`. Catches missing/typo'd `id="…"` anchors
     // before they break the sidebar nav and the dirty-counters JS.
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    state.owner_id = Some(Arc::from("123"));
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
     let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     let app = build_router(state);
@@ -430,8 +431,8 @@ async fn settings_page_shows_openrouter_tiers_for_default_base_url() {
     // The dashboard must expose OpenRouter-only controls for that effective
     // runtime configuration, not only after an explicit URL override.
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    state.owner_id = Some(Arc::from("123"));
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
     let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     assert!(
@@ -462,8 +463,8 @@ async fn settings_page_shows_openrouter_tiers_for_default_base_url() {
 #[tokio::test]
 async fn reset_cooldowns_clears_section_overrides() {
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    state.owner_id = Some(Arc::from("123"));
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     let defaults = state.settings_store.defaults().clone();
@@ -517,8 +518,8 @@ async fn dreamer_checkbox_absent_sets_enabled_false() {
     // The dreamer card always renders (no *_card_visible pattern), so
     // omitting ai_dreamer_enabled from the POST means "disabled".
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    state.owner_id = Some(Arc::from("123"));
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     let app = build_router(state.clone());
@@ -545,8 +546,8 @@ async fn emotes_card_include_global_absent_without_card_visible() {
     // When ai_emotes_card_visible is not submitted (card not rendered),
     // include_global override must be None — i.e. no change to the existing value.
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    state.owner_id = Some(Arc::from("123"));
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     // First, enable emotes so there's an existing include_global value to preserve.
@@ -610,8 +611,8 @@ async fn media_size_malformed_string_is_ignored() {
     // A malformed byte-size string (e.g. "not-a-size") must not crash the
     // handler; the field parses to None so the previous value is preserved.
     install_crypto();
-    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    state.owner_id = Some(Arc::from("123"));
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     let defaults = state.settings_store.defaults().clone();
