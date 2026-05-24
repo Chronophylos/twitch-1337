@@ -11,6 +11,7 @@
 
 pub mod ai;
 pub mod audit;
+pub mod aviationstack;
 pub mod migrate;
 pub mod overrides;
 pub mod store;
@@ -20,6 +21,7 @@ pub use ai::{
     AiBackendKind, AiBehavior, AiConnection, AiDreamer, AiEmotes, AiHistory, AiMedia, AiMemory,
     AiPrefill, AiSettings, AiWeb,
 };
+pub use aviationstack::AviationstackSettings;
 pub use twitch::TwitchRuntime;
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
