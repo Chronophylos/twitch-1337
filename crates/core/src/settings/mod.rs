@@ -14,11 +14,13 @@ pub mod audit;
 pub mod migrate;
 pub mod overrides;
 pub mod store;
+pub mod twitch;
 
 pub use ai::{
     AiBackendKind, AiBehavior, AiConnection, AiDreamer, AiEmotes, AiHistory, AiMedia, AiMemory,
     AiPrefill, AiSettings, AiWeb,
 };
+pub use twitch::TwitchRuntime;
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
 pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
