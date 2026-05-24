@@ -70,7 +70,67 @@ pub async fn main() -> Result<()> {
     )
     .wrap_err("Failed to open settings store")?;
 
-    // Collect restart-required channel list from settings.
+    // One-shot migration: promote legacy [ai] keys from config.toml into
+    // settings.ron on first v2 launch. A sentinel file prevents re-migration
+    // on subsequent boots so later admin edits aren't clobbered.
+    let migrated_marker = get_data_dir().join(".ai_migrated_v2");
+    if !migrated_marker.exists() {
+        let ai_patch = twitch_1337::settings::migrate::migrate_legacy_ai(&raw_toml)
+            .wrap_err("ai migration")?;
+        if ai_patch != twitch_1337::settings::overrides::AiOverrides::default() {
+            let patch = twitch_1337::settings::overrides::SettingsOverrides {
+                ai: ai_patch,
+                ..twitch_1337::settings::overrides::SettingsOverrides::default()
+            };
+            let actor = twitch_1337::settings::Actor {
+                user_id: "migrate".into(),
+                user_login: "migrate".into(),
+            };
+            settings_store
+                .apply(patch, actor)
+                .await
+                .wrap_err("ai migration apply")?;
+            info!("migrated legacy [ai] keys into settings.ron");
+        }
+        std::fs::write(&migrated_marker, "").wrap_err("write .ai_migrated_v2 marker")?;
+    }
+
+    // One-shot v3 migration: promote remaining non-secret, non-bootstrap keys
+    // from config.toml into settings.ron. Sentinel `.config_migrated_v3`
+    // prevents re-migration so later dashboard edits aren't clobbered.
+    // This MUST happen before the extra_channels capture so that
+    // admin_channel/ai_channel are populated from config.toml on the first v3
+    // boot and don't require an extra restart to take effect.
+    let v3_marker = get_data_dir().join(".config_migrated_v3");
+    let was_first_v3_boot = !v3_marker.exists();
+    if was_first_v3_boot {
+        let patch = twitch_1337::settings::migrate::migrate_legacy_config(&raw_toml)
+            .wrap_err("v3 migration")?;
+        let twitch_empty =
+            patch.twitch == twitch_1337::settings::overrides::TwitchOverrides::default();
+        let aviation_empty = patch.aviationstack
+            == twitch_1337::settings::overrides::AviationstackOverrides::default();
+        let suspend_empty =
+            patch.suspend == twitch_1337::settings::overrides::SuspendOverrides::default();
+        let web_empty =
+            patch.web == twitch_1337::settings::overrides::WebRuntimeOverrides::default();
+        if !(twitch_empty && aviation_empty && suspend_empty && web_empty) {
+            let actor = twitch_1337::settings::Actor {
+                user_id: "migrate".into(),
+                user_login: "v3-migration".into(),
+            };
+            settings_store
+                .apply(patch, actor)
+                .await
+                .wrap_err("v3 migration apply")?;
+            info!("migrated legacy config.toml keys into settings.ron (v3)");
+        }
+        std::fs::write(&v3_marker, "").wrap_err("write .config_migrated_v3 marker")?;
+    }
+
+    // Collect restart-required channel list from the now-post-migration snapshot.
+    // Placed here (after v3 migration) so admin_channel/ai_channel set by the
+    // migration are available on the first v3 boot, not just subsequent ones.
     let twitch_runtime = settings_handle.load().twitch.clone();
     let extra_channels: Vec<String> = [
         twitch_runtime.admin_channel.clone(),
@@ -103,62 +163,9 @@ pub async fn main() -> Result<()> {
         PingManager::load(&get_data_dir()).wrap_err("Failed to load ping manager")?;
     let (ping_actor_tx, ping_actor_rx, ping_names_tx, ping_names_rx) = ping_actor_channel_full();
 
-    // One-shot migration: promote legacy [ai] keys from config.toml into
-    // settings.ron on first v2 launch. A sentinel file prevents re-migration
-    // on subsequent boots so later admin edits aren't clobbered.
-    let migrated_marker = get_data_dir().join(".ai_migrated_v2");
-    if !migrated_marker.exists() {
-        let ai_patch = twitch_1337::settings::migrate::migrate_legacy_ai(&raw_toml)
-            .wrap_err("ai migration")?;
-        if ai_patch != twitch_1337::settings::overrides::AiOverrides::default() {
-            let patch = twitch_1337::settings::overrides::SettingsOverrides {
-                ai: ai_patch,
-                ..twitch_1337::settings::overrides::SettingsOverrides::default()
-            };
-            let actor = twitch_1337::settings::Actor {
-                user_id: "migrate".into(),
-                user_login: "migrate".into(),
-            };
-            settings_store
-                .apply(patch, actor)
-                .await
-                .wrap_err("ai migration apply")?;
-            info!("migrated legacy [ai] keys into settings.ron");
-        }
-        std::fs::write(&migrated_marker, "").wrap_err("write .ai_migrated_v2 marker")?;
-    }
-
-    // One-shot v3 migration: promote remaining non-secret, non-bootstrap keys
-    // from config.toml into settings.ron. Sentinel `.config_migrated_v3`
-    // prevents re-migration so later dashboard edits aren't clobbered.
-    let v3_marker = get_data_dir().join(".config_migrated_v3");
-    if !v3_marker.exists() {
-        let patch = twitch_1337::settings::migrate::migrate_legacy_config(&raw_toml)
-            .wrap_err("v3 migration")?;
-        let twitch_empty =
-            patch.twitch == twitch_1337::settings::overrides::TwitchOverrides::default();
-        let aviation_empty = patch.aviationstack
-            == twitch_1337::settings::overrides::AviationstackOverrides::default();
-        let suspend_empty =
-            patch.suspend == twitch_1337::settings::overrides::SuspendOverrides::default();
-        let web_empty =
-            patch.web == twitch_1337::settings::overrides::WebRuntimeOverrides::default();
-        if !(twitch_empty && aviation_empty && suspend_empty && web_empty) {
-            let actor = twitch_1337::settings::Actor {
-                user_id: "migrate".into(),
-                user_login: "v3-migration".into(),
-            };
-            settings_store
-                .apply(patch, actor)
-                .await
-                .wrap_err("v3 migration apply")?;
-            info!("migrated legacy config.toml keys into settings.ron (v3)");
-        }
-        std::fs::write(&v3_marker, "").wrap_err("write .config_migrated_v3 marker")?;
-    }
-
-    // Warn once if any migrated key still appears in config.toml — it's silently
-    // ignored after the v3 marker has been written.
+    // Warn on subsequent boots if any migrated key still appears in config.toml
+    // — it's silently ignored after the v3 marker has been written. Skipped on
+    // the migration boot itself so we don't shout before the user can clean up.
     let legacy_v3_keys: &[(&str, &[&str])] = &[
         ("twitch.expected_latency", &["twitch", "expected_latency"]),
         ("twitch.hidden_admins", &["twitch", "hidden_admins"]),
@@ -189,7 +196,7 @@ pub async fn main() -> Result<()> {
             Some(*name)
         })
         .collect();
-    if v3_marker.exists() && !stale.is_empty() {
+    if !was_first_v3_boot && !stale.is_empty() {
         tracing::warn!(
             ?stale,
             "legacy config.toml keys are now ignored after v3 migration; remove them from config.toml"
@@ -207,6 +214,13 @@ pub async fn main() -> Result<()> {
         } else {
             // api_key comes from the bootstrap secret; other fields from settings.
             let api_key = config.aviationstack.as_ref().map(|b| b.api_key.clone());
+            if api_key.is_none() {
+                tracing::warn!(
+                    "aviationstack.enabled=true in settings but no [aviationstack].api_key in \
+                     config.toml; metadata enrichment disabled. Set the api_key or disable in \
+                     /settings → Aviationstack."
+                );
+            }
             match aviation::AviationClient::new().map(|client| {
                 client.with_aviationstack(
                     api_key,

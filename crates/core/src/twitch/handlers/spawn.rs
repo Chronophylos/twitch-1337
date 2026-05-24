@@ -266,6 +266,10 @@ where
         let btx = broadcast_tx.clone();
         let client = client.clone();
         async move {
+            let (admin_channel, ai_channel) = {
+                let s = settings.load();
+                (s.twitch.admin_channel.clone(), s.twitch.ai_channel.clone())
+            };
             run_generic_command_handler(CommandHandlerConfig {
                 broadcast_tx: btx,
                 client,
@@ -279,8 +283,8 @@ where
                 tracker_tx,
                 aviation_client: aviation_for_commands,
                 whisper,
-                admin_channel: settings.load().twitch.admin_channel.clone(),
-                ai_channel: settings.load().twitch.ai_channel.clone(),
+                admin_channel,
+                ai_channel,
                 bot_username: config.twitch.username.clone(),
                 channel: config.twitch.channel.clone(),
                 data_dir: data_dir.clone(),
