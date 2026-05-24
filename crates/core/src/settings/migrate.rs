@@ -122,6 +122,44 @@ pub fn migrate_legacy_ai(root: &toml::Value) -> Result<AiOverrides> {
     Ok(out)
 }
 
+/// Extract every legacy non-secret, non-bootstrap key from a raw config.toml
+/// `Value` and return a sparse `SettingsOverrides` patch suitable for
+/// `SettingsStore::apply`. Pairs with `migrate_legacy_ai` for the `[ai]`
+/// section; this helper covers the v3 migration of `[twitch]`, `[suspend]`,
+/// `[aviationstack]` (non-secret), and `[web]` (non-bootstrap) keys.
+pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::SettingsOverrides> {
+    let mut out = super::overrides::SettingsOverrides::default();
+
+    if let Some(t) = root.get("twitch").and_then(|v| v.as_table()) {
+        let v = toml::Value::Table(t.clone());
+        out.twitch.expected_latency = v
+            .get("expected_latency")
+            .and_then(toml::Value::as_integer)
+            .and_then(|i| u32::try_from(i).ok());
+        if let Some(arr) = v.get("hidden_admins").and_then(toml::Value::as_array) {
+            out.twitch.hidden_admins = Some(
+                arr.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect(),
+            );
+        }
+        if let Some(arr) = v.get("viewer_allowlist").and_then(toml::Value::as_array) {
+            out.twitch.viewer_allowlist = Some(
+                arr.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect(),
+            );
+        }
+        if let Some(s) = v.get("owner").and_then(toml::Value::as_str) {
+            out.twitch.owner = Some(Some(s.to_owned()));
+        }
+        if let Some(s) = v.get("admin_channel").and_then(toml::Value::as_str) {
+            out.twitch.admin_channel = Some(Some(s.to_owned()));
+        }
+        if let Some(s) = v.get("ai_channel").and_then(toml::Value::as_str) {
+            out.twitch.ai_channel = Some(Some(s.to_owned()));
+        }
+    }
+
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +239,49 @@ mod tests {
             Some(super::super::ai::AiBackendKind::OpenAi)
         );
         assert_eq!(overrides.connection.model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn legacy_twitch_keys_migrate_into_overrides() {
+        let raw = r#"
+            [twitch]
+            channel = "main"
+            username = "bot"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+            expected_latency = 250
+            hidden_admins = ["111", "222"]
+            viewer_allowlist = ["999"]
+            owner = "777"
+            admin_channel = "admins"
+            ai_channel = "ai"
+        "#;
+        let value: toml::Value = toml::from_str(raw).expect("parse");
+        let overrides = migrate_legacy_config(&value).expect("migrate");
+        assert_eq!(overrides.twitch.expected_latency, Some(250));
+        assert_eq!(
+            overrides.twitch.hidden_admins.as_deref(),
+            Some(&vec!["111".to_string(), "222".to_string()][..])
+        );
+        assert_eq!(overrides.twitch.viewer_allowlist.as_deref(), Some(&vec!["999".to_string()][..]));
+        assert_eq!(overrides.twitch.owner, Some(Some("777".into())));
+        assert_eq!(overrides.twitch.admin_channel, Some(Some("admins".into())));
+        assert_eq!(overrides.twitch.ai_channel, Some(Some("ai".into())));
+    }
+
+    #[test]
+    fn legacy_twitch_minimal_returns_default() {
+        let raw = r#"
+            [twitch]
+            channel = "main"
+            username = "bot"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+        "#;
+        let value: toml::Value = toml::from_str(raw).expect("parse");
+        let overrides = migrate_legacy_config(&value).expect("migrate");
+        assert_eq!(overrides.twitch, TwitchOverrides::default());
     }
 }
