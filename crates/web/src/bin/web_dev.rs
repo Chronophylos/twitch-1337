@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
         twitch_1337_core::settings::FileAuditLog::new(data_dir.join("settings_audit.log")),
     );
     let (settings_store, settings_handle) =
-        twitch_1337_core::settings::SettingsStore::open(&data_dir, audit_log)
+        twitch_1337_core::settings::SettingsStore::open(&data_dir, audit_log, &channel)
             .wrap_err("open settings store")?;
 
     let memory_store = MemoryStore::open(&data_dir, settings_handle.clone())

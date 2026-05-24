@@ -187,7 +187,7 @@ async fn build_state_inner_keep_settings(
             settings_dir.path().join("settings_audit.log"),
         ));
     let (settings_store, settings_handle) =
-        twitch_1337_core::settings::SettingsStore::open(settings_dir.path(), audit)
+        twitch_1337_core::settings::SettingsStore::open(settings_dir.path(), audit, "testchannel")
             .expect("open settings store");
     let memory_store = MemoryStore::open(memory_dir.path(), settings_handle.clone())
         .await

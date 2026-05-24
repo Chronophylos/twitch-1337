@@ -237,7 +237,7 @@ impl TestBotBuilder {
 
         let audit = Arc::new(twitch_1337::settings::MemoryAuditLog::new());
         let (settings_store, settings_handle) =
-            twitch_1337::settings::SettingsStore::open(data_dir.path(), audit)
+            twitch_1337::settings::SettingsStore::open(data_dir.path(), audit, "test_chan")
                 .expect("open settings");
         if let Some(o) = self.settings_overrides.take() {
             let actor = twitch_1337::settings::Actor {

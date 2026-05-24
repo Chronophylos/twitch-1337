@@ -23,15 +23,15 @@ pub use ai::{
     AiBackendKind, AiBehavior, AiConnection, AiDreamer, AiEmotes, AiHistory, AiMedia, AiMemory,
     AiPrefill, AiSettings, AiWeb,
 };
-pub use aviationstack::AviationstackSettings;
-pub use suspend::SuspendSettings;
-pub use twitch::TwitchRuntime;
-pub use web::WebRuntime;
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
 pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
+pub use aviationstack::AviationstackSettings;
 pub use overrides::{AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides};
 pub use store::{Actor, SettingsStore};
+pub use suspend::SuspendSettings;
+pub use twitch::TwitchRuntime;
+pub use web::WebRuntime;
 
 use std::sync::Arc;
 
@@ -91,6 +91,14 @@ pub struct FieldError {
     pub message: String,
 }
 
+/// Bootstrap-side context required for cross-field validation. `channel`
+/// is the IRC channel from config.toml, used to enforce that
+/// `twitch.admin_channel` and `twitch.ai_channel` differ from it.
+#[derive(Debug, Clone)]
+pub struct ValidationContext {
+    pub channel: String,
+}
+
 #[derive(Debug, Error)]
 pub enum SettingsError {
     #[error("validation failed")]
@@ -132,7 +140,7 @@ impl Settings {
         }
     }
 
-    pub fn validate(&self) -> Result<(), Vec<FieldError>> {
+    pub fn validate(&self, ctx: &ValidationContext) -> Result<(), Vec<FieldError>> {
         let mut errs = Vec::new();
         fn bound(name: &str, v: u64, lo: u64, hi: u64, errs: &mut Vec<FieldError>) {
             if v < lo || v > hi {
@@ -161,6 +169,104 @@ impl Settings {
         );
         bound("pings.cooldown", self.pings.cooldown, 1, 86_400, &mut errs);
         validate_ai(&self.ai, &mut errs);
+        if self.twitch.expected_latency > 1000 {
+            errs.push(FieldError {
+                field: "twitch.expected_latency".into(),
+                message: format!("must be <= 1000ms (got {})", self.twitch.expected_latency),
+            });
+        }
+        for (field, val) in [
+            ("twitch.admin_channel", self.twitch.admin_channel.as_deref()),
+            ("twitch.ai_channel", self.twitch.ai_channel.as_deref()),
+        ] {
+            if let Some(v) = val {
+                let t = v.trim();
+                if t.is_empty() {
+                    errs.push(FieldError {
+                        field: field.into(),
+                        message: "must not be blank when set".into(),
+                    });
+                } else if t == ctx.channel {
+                    errs.push(FieldError {
+                        field: field.into(),
+                        message: format!("must differ from twitch.channel ({:?})", ctx.channel),
+                    });
+                }
+            }
+        }
+        if let (Some(ad), Some(ai)) = (
+            self.twitch.admin_channel.as_deref(),
+            self.twitch.ai_channel.as_deref(),
+        ) && ad.trim() == ai.trim()
+        {
+            errs.push(FieldError {
+                field: "twitch.ai_channel".into(),
+                message: "must differ from twitch.admin_channel".into(),
+            });
+        }
+        if let Some(v) = self.twitch.owner.as_deref()
+            && v.trim().is_empty()
+        {
+            errs.push(FieldError {
+                field: "twitch.owner".into(),
+                message: "must not be blank when set".into(),
+            });
+        }
+        for (idx, id) in self.twitch.hidden_admins.iter().enumerate() {
+            if id.trim().is_empty() {
+                errs.push(FieldError {
+                    field: format!("twitch.hidden_admins[{idx}]"),
+                    message: "must not be blank".into(),
+                });
+            }
+        }
+        for (idx, id) in self.twitch.viewer_allowlist.iter().enumerate() {
+            if id.trim().is_empty() {
+                errs.push(FieldError {
+                    field: format!("twitch.viewer_allowlist[{idx}]"),
+                    message: "must not be blank".into(),
+                });
+            }
+        }
+        if !(1..=604_800).contains(&self.suspend.default_duration_secs) {
+            errs.push(FieldError {
+                field: "suspend.default_duration_secs".into(),
+                message: format!(
+                    "must be 1..=604800 (got {})",
+                    self.suspend.default_duration_secs
+                ),
+            });
+        }
+        if reqwest::Url::parse(&self.aviationstack.base_url).is_err() {
+            errs.push(FieldError {
+                field: "aviationstack.base_url".into(),
+                message: format!(
+                    "must be a valid URL (got {:?})",
+                    self.aviationstack.base_url
+                ),
+            });
+        }
+        if self.aviationstack.timeout_secs == 0 {
+            errs.push(FieldError {
+                field: "aviationstack.timeout_secs".into(),
+                message: "must be > 0".into(),
+            });
+        }
+        if !(3600..=2_592_000).contains(&self.web.session_ttl_secs) {
+            errs.push(FieldError {
+                field: "web.session_ttl_secs".into(),
+                message: format!("must be 3600..=2592000 (got {})", self.web.session_ttl_secs),
+            });
+        }
+        if !(30..=3600).contains(&self.web.mod_check_refresh_secs) {
+            errs.push(FieldError {
+                field: "web.mod_check_refresh_secs".into(),
+                message: format!(
+                    "must be 30..=3600 (got {})",
+                    self.web.mod_check_refresh_secs
+                ),
+            });
+        }
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
 
@@ -186,7 +292,10 @@ impl Settings {
             },
             ai: resolve_ai(&defaults.ai, &overrides.ai),
             twitch: TwitchRuntime {
-                expected_latency: overrides.twitch.expected_latency.unwrap_or(defaults.twitch.expected_latency),
+                expected_latency: overrides
+                    .twitch
+                    .expected_latency
+                    .unwrap_or(defaults.twitch.expected_latency),
                 hidden_admins: overrides
                     .twitch
                     .hidden_admins
@@ -211,7 +320,10 @@ impl Settings {
                 },
             },
             aviationstack: AviationstackSettings {
-                enabled: overrides.aviationstack.enabled.unwrap_or(defaults.aviationstack.enabled),
+                enabled: overrides
+                    .aviationstack
+                    .enabled
+                    .unwrap_or(defaults.aviationstack.enabled),
                 base_url: overrides
                     .aviationstack
                     .base_url
@@ -229,7 +341,10 @@ impl Settings {
                     .unwrap_or(defaults.suspend.default_duration_secs),
             },
             web: WebRuntime {
-                session_ttl_secs: overrides.web.session_ttl_secs.unwrap_or(defaults.web.session_ttl_secs),
+                session_ttl_secs: overrides
+                    .web
+                    .session_ttl_secs
+                    .unwrap_or(defaults.web.session_ttl_secs),
                 mod_check_refresh_secs: overrides
                     .web
                     .mod_check_refresh_secs
@@ -670,7 +785,11 @@ mod resolve_tests {
         let mut s = Settings::compiled_defaults();
         s.cooldowns.ai = 0;
         s.pings.cooldown = 0;
-        let errs = s.validate().expect_err("both bounds violated");
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("both bounds violated");
         let fields: Vec<&str> = errs.iter().map(|e| e.field.as_str()).collect();
         assert!(fields.contains(&"cooldowns.ai"));
         assert!(fields.contains(&"pings.cooldown"));
@@ -679,7 +798,9 @@ mod resolve_tests {
     #[test]
     fn validate_accepts_compiled_defaults() {
         Settings::compiled_defaults()
-            .validate()
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
             .expect("compiled defaults pass validate()");
     }
 
@@ -721,7 +842,11 @@ mod resolve_tests {
     fn validate_rejects_empty_persona_name() {
         let mut s = Settings::compiled_defaults();
         s.ai.behavior.persona_name = "   ".into();
-        let errs = s.validate().expect_err("must fail");
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.behavior.persona_name"));
     }
 
@@ -729,7 +854,11 @@ mod resolve_tests {
     fn validate_rejects_max_turn_rounds_out_of_range() {
         let mut s = Settings::compiled_defaults();
         s.ai.behavior.max_turn_rounds = 0;
-        let errs = s.validate().expect_err("must fail");
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
         assert!(
             errs.iter()
                 .any(|e| e.field == "ai.behavior.max_turn_rounds")
@@ -742,7 +871,11 @@ mod resolve_tests {
         s.ai.memory.soul_bytes = 4096;
         s.ai.memory.lore_bytes = 12288;
         s.ai.memory.inject_byte_budget = 1024;
-        let errs = s.validate().expect_err("must fail");
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
         assert!(
             errs.iter()
                 .any(|e| e.field == "ai.memory.inject_byte_budget")
@@ -753,7 +886,11 @@ mod resolve_tests {
     fn validate_rejects_malformed_dreamer_run_at() {
         let mut s = Settings::compiled_defaults();
         s.ai.dreamer.run_at = "not-a-time".into();
-        let errs = s.validate().expect_err("must fail");
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.dreamer.run_at"));
     }
 
@@ -761,7 +898,11 @@ mod resolve_tests {
     fn validate_rejects_invalid_connection_base_url() {
         let mut s = Settings::compiled_defaults();
         s.ai.connection.base_url = Some("not a url".into());
-        let errs = s.validate().expect_err("must fail");
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.connection.base_url"));
     }
 
@@ -790,7 +931,11 @@ mod resolve_tests {
     fn validate_rejects_unknown_service_tier_value() {
         let mut s = Settings::compiled_defaults();
         s.ai.connection.service_tier = Some("turbo".to_string());
-        let err = s.validate().expect_err("'turbo' must be rejected");
+        let err = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("'turbo' must be rejected");
         assert!(
             err.iter().any(|e| e.field == "ai.connection.service_tier"),
             "expected field error for ai.connection.service_tier, got {err:?}"
@@ -830,7 +975,9 @@ mod resolve_tests {
                 timeout_secs: Some(7),
                 ..Default::default()
             },
-            suspend: SuspendOverrides { default_duration_secs: Some(900) },
+            suspend: SuspendOverrides {
+                default_duration_secs: Some(900),
+            },
             web: WebRuntimeOverrides {
                 session_ttl_secs: Some(3600 * 12),
                 mod_check_refresh_secs: Some(120),
@@ -844,5 +991,81 @@ mod resolve_tests {
         assert_eq!(r.suspend.default_duration_secs, 900);
         assert_eq!(r.web.session_ttl_secs, 3600 * 12);
         assert_eq!(r.web.mod_check_refresh_secs, 120);
+    }
+
+    #[test]
+    fn validate_rejects_expected_latency_over_1000() {
+        let mut s = Settings::compiled_defaults();
+        s.twitch.expected_latency = 1500;
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "twitch.expected_latency"));
+    }
+
+    #[test]
+    fn validate_rejects_admin_channel_equal_to_bootstrap_channel() {
+        let mut s = Settings::compiled_defaults();
+        s.twitch.admin_channel = Some("test".into());
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "twitch.admin_channel"));
+    }
+
+    #[test]
+    fn validate_rejects_ai_channel_equal_to_admin_channel() {
+        let mut s = Settings::compiled_defaults();
+        s.twitch.admin_channel = Some("admins".into());
+        s.twitch.ai_channel = Some("admins".into());
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "main".into(),
+            })
+            .expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "twitch.ai_channel"));
+    }
+
+    #[test]
+    fn validate_rejects_suspend_out_of_range() {
+        let mut s = Settings::compiled_defaults();
+        s.suspend.default_duration_secs = 0;
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "suspend.default_duration_secs")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_invalid_aviationstack_url() {
+        let mut s = Settings::compiled_defaults();
+        s.aviationstack.base_url = "not a url".into();
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "aviationstack.base_url"));
+    }
+
+    #[test]
+    fn validate_rejects_web_session_ttl_out_of_range() {
+        let mut s = Settings::compiled_defaults();
+        s.web.session_ttl_secs = 60; // below 1h
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "web.session_ttl_secs"));
     }
 }

@@ -9,6 +9,8 @@ pub struct SuspendSettings {
 
 impl Default for SuspendSettings {
     fn default() -> Self {
-        Self { default_duration_secs: 600 }
+        Self {
+            default_duration_secs: 600,
+        }
     }
 }

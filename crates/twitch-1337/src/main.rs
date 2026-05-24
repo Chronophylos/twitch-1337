@@ -97,9 +97,12 @@ pub async fn main() -> Result<()> {
     let audit_log: Arc<dyn twitch_1337::settings::AuditLog> = Arc::new(
         twitch_1337::settings::FileAuditLog::new(get_data_dir().join("settings_audit.log")),
     );
-    let (settings_store, settings_handle) =
-        twitch_1337::settings::SettingsStore::open(&get_data_dir(), audit_log)
-            .wrap_err("Failed to open settings store")?;
+    let (settings_store, settings_handle) = twitch_1337::settings::SettingsStore::open(
+        &get_data_dir(),
+        audit_log,
+        &config.twitch.channel,
+    )
+    .wrap_err("Failed to open settings store")?;
 
     // One-shot migration: promote legacy [ai] keys from config.toml into
     // settings.ron on first v2 launch. A sentinel file prevents re-migration
