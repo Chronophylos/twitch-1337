@@ -5,9 +5,7 @@ use std::sync::Arc;
 
 use tempfile::tempdir;
 use twitch_1337_core::settings::{
-    Actor, SettingsStore,
-    audit::MemoryAuditLog,
-    migrate::migrate_legacy_config,
+    Actor, SettingsStore, audit::MemoryAuditLog, migrate::migrate_legacy_config,
 };
 
 #[tokio::test]
@@ -34,7 +32,13 @@ async fn legacy_keys_migrate_then_idempotent() {
     // First migration
     let patch = migrate_legacy_config(&value).expect("migrate");
     store
-        .apply(patch, Actor { user_id: "system".into(), user_login: "v3-migration".into() })
+        .apply(
+            patch,
+            Actor {
+                user_id: "system".into(),
+                user_login: "v3-migration".into(),
+            },
+        )
         .await
         .expect("apply");
     let s = store.handle().load();
@@ -45,7 +49,13 @@ async fn legacy_keys_migrate_then_idempotent() {
     // Second migration: same patch idempotently re-applied; resolved settings unchanged
     let patch2 = migrate_legacy_config(&value).expect("migrate");
     store
-        .apply(patch2, Actor { user_id: "system".into(), user_login: "v3-migration".into() })
+        .apply(
+            patch2,
+            Actor {
+                user_id: "system".into(),
+                user_login: "v3-migration".into(),
+            },
+        )
         .await
         .expect("apply");
     let s2 = store.handle().load();
