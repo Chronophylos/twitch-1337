@@ -3372,6 +3372,7 @@ dependencies = [
  "eyre",
  "futures-util",
  "hex",
+ "humantime",
  "humantime-serde",
  "infer",
  "llm",

@@ -1,6 +1,7 @@
 //! Migrate a v1 config.toml [ai] block into a v2 AiOverrides patch.
 
 use eyre::Result;
+use humantime::parse_duration;
 
 use super::overrides::*;
 
@@ -157,6 +158,41 @@ pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::Set
         }
     }
 
+    if let Some(t) = root.get("suspend").and_then(|v| v.as_table()) {
+        let v = toml::Value::Table(t.clone());
+        out.suspend.default_duration_secs = v
+            .get("default_duration_secs")
+            .and_then(toml::Value::as_integer)
+            .and_then(|i| u64::try_from(i).ok());
+    }
+
+    if let Some(t) = root.get("aviationstack").and_then(|v| v.as_table()) {
+        let v = toml::Value::Table(t.clone());
+        out.aviationstack.enabled = v.get("enabled").and_then(toml::Value::as_bool);
+        out.aviationstack.base_url = v
+            .get("base_url")
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned);
+        out.aviationstack.timeout_secs = v
+            .get("timeout_secs")
+            .and_then(toml::Value::as_integer)
+            .and_then(|i| u64::try_from(i).ok());
+    }
+
+    if let Some(t) = root.get("web").and_then(|v| v.as_table()) {
+        let v = toml::Value::Table(t.clone());
+        out.web.session_ttl_secs = v
+            .get("session_ttl")
+            .and_then(toml::Value::as_str)
+            .and_then(|s| parse_duration(s).ok())
+            .map(|d| d.as_secs());
+        out.web.mod_check_refresh_secs = v
+            .get("mod_check_refresh")
+            .and_then(toml::Value::as_str)
+            .and_then(|s| parse_duration(s).ok())
+            .map(|d| d.as_secs());
+    }
+
     Ok(out)
 }
 
@@ -283,5 +319,63 @@ mod tests {
         let value: toml::Value = toml::from_str(raw).expect("parse");
         let overrides = migrate_legacy_config(&value).expect("migrate");
         assert_eq!(overrides.twitch, TwitchOverrides::default());
+    }
+
+    #[test]
+    fn legacy_suspend_aviationstack_web_keys_migrate() {
+        let raw = r#"
+            [twitch]
+            channel = "c"
+            username = "u"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+
+            [suspend]
+            default_duration_secs = 900
+
+            [aviationstack]
+            enabled = true
+            api_key = "k"
+            base_url = "https://aviationstack.example/v1"
+            timeout_secs = 7
+
+            [web]
+            enabled = true
+            bind_addr = "127.0.0.1:8080"
+            public_url = "https://bot.example"
+            session_secret = "00112233"
+            session_ttl = "12h"
+            mod_check_refresh = "2m"
+        "#;
+        let value: toml::Value = toml::from_str(raw).expect("parse");
+        let overrides = migrate_legacy_config(&value).expect("migrate");
+        assert_eq!(overrides.suspend.default_duration_secs, Some(900));
+        assert_eq!(overrides.aviationstack.enabled, Some(true));
+        assert_eq!(
+            overrides.aviationstack.base_url.as_deref(),
+            Some("https://aviationstack.example/v1")
+        );
+        assert_eq!(overrides.aviationstack.timeout_secs, Some(7));
+        assert_eq!(overrides.web.session_ttl_secs, Some(12 * 3600));
+        assert_eq!(overrides.web.mod_check_refresh_secs, Some(120));
+    }
+
+    #[test]
+    fn legacy_web_invalid_humantime_is_skipped() {
+        let raw = r#"
+            [twitch]
+            channel = "c"
+            username = "u"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+
+            [web]
+            session_ttl = "not-a-duration"
+        "#;
+        let value: toml::Value = toml::from_str(raw).expect("parse");
+        let overrides = migrate_legacy_config(&value).expect("migrate");
+        assert_eq!(overrides.web.session_ttl_secs, None);
     }
 }
