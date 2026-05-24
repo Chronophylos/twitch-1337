@@ -145,9 +145,11 @@ impl SettingsStore {
                 current.twitch.owner = None;
             }
             SettingsSection::TwitchChannels => {
-                current.twitch.expected_latency = None;
                 current.twitch.admin_channel = None;
                 current.twitch.ai_channel = None;
+                // expected_latency is a network-tuning knob; intentionally not
+                // reset here so channel resets don't clobber latency tweaks.
+                // Users can clear it by setting the field to the default value.
             }
             SettingsSection::Aviationstack => current.aviationstack = Default::default(),
             SettingsSection::Suspend => current.suspend = Default::default(),
@@ -701,6 +703,70 @@ fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
         prior.ai.media.max_text_size,
         next.ai.media.max_text_size
     );
+    // Twitch runtime
+    cmp!(
+        "twitch.expected_latency",
+        prior.twitch.expected_latency,
+        next.twitch.expected_latency
+    );
+    cmp!(
+        "twitch.hidden_admins",
+        prior.twitch.hidden_admins.as_slice(),
+        next.twitch.hidden_admins.as_slice()
+    );
+    cmp!(
+        "twitch.viewer_allowlist",
+        prior.twitch.viewer_allowlist.as_slice(),
+        next.twitch.viewer_allowlist.as_slice()
+    );
+    cmp!(
+        "twitch.owner",
+        prior.twitch.owner.as_deref(),
+        next.twitch.owner.as_deref()
+    );
+    cmp!(
+        "twitch.admin_channel",
+        prior.twitch.admin_channel.as_deref(),
+        next.twitch.admin_channel.as_deref()
+    );
+    cmp!(
+        "twitch.ai_channel",
+        prior.twitch.ai_channel.as_deref(),
+        next.twitch.ai_channel.as_deref()
+    );
+    // Aviationstack
+    cmp!(
+        "aviationstack.enabled",
+        prior.aviationstack.enabled,
+        next.aviationstack.enabled
+    );
+    cmp!(
+        "aviationstack.base_url",
+        prior.aviationstack.base_url.as_str(),
+        next.aviationstack.base_url.as_str()
+    );
+    cmp!(
+        "aviationstack.timeout_secs",
+        prior.aviationstack.timeout_secs,
+        next.aviationstack.timeout_secs
+    );
+    // Suspend
+    cmp!(
+        "suspend.default_duration_secs",
+        prior.suspend.default_duration_secs,
+        next.suspend.default_duration_secs
+    );
+    // Web runtime
+    cmp!(
+        "web.session_ttl_secs",
+        prior.web.session_ttl_secs,
+        next.web.session_ttl_secs
+    );
+    cmp!(
+        "web.mod_check_refresh_secs",
+        prior.web.mod_check_refresh_secs,
+        next.web.mod_check_refresh_secs
+    );
     out
 }
 
@@ -895,6 +961,27 @@ mod tests {
         assert!(keys.contains(&"ai.connection.service_tier"), "got {keys:?}");
         assert!(keys.contains(&"ai.dreamer.service_tier"), "got {keys:?}");
     }
+
+    #[test]
+    fn diff_emits_twitch_section_changes() {
+        let prior = Settings::compiled_defaults();
+        let mut next = Settings::compiled_defaults();
+        next.twitch.expected_latency = 200;
+        next.twitch.hidden_admins = vec!["111".into()];
+        next.twitch.admin_channel = Some("admins".into());
+        let changes = diff_changes(&prior, &next);
+        let keys: Vec<&str> = changes.iter().map(|c| c.key.as_str()).collect();
+        assert!(
+            keys.iter().any(|k| k.starts_with("twitch.")),
+            "diff must include at least one twitch.* entry; got {keys:?}"
+        );
+        assert!(
+            keys.contains(&"twitch.expected_latency"),
+            "got {keys:?}"
+        );
+        assert!(keys.contains(&"twitch.hidden_admins"), "got {keys:?}");
+        assert!(keys.contains(&"twitch.admin_channel"), "got {keys:?}");
+    }
 }
 
 #[cfg(test)]
@@ -982,5 +1069,45 @@ mod merge_tests {
             .expect("reset");
         assert!(s.twitch.hidden_admins.is_empty());
         assert_eq!(s.twitch.expected_latency, 250); // perm reset does not touch channels
+    }
+
+    #[tokio::test]
+    async fn reset_twitch_channels_preserves_expected_latency() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let audit = std::sync::Arc::new(crate::settings::audit::MemoryAuditLog::default());
+        let (store, _h) = SettingsStore::open(dir.path(), audit, "main").expect("open");
+        store
+            .apply(
+                SettingsOverrides {
+                    twitch: crate::settings::overrides::TwitchOverrides {
+                        expected_latency: Some(300),
+                        admin_channel: Some(Some("admins".into())),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Actor {
+                    user_id: "owner".into(),
+                    user_login: "owner".into(),
+                },
+            )
+            .await
+            .expect("apply");
+        let s = store
+            .reset(
+                SettingsSection::TwitchChannels,
+                Actor {
+                    user_id: "owner".into(),
+                    user_login: "owner".into(),
+                },
+            )
+            .await
+            .expect("reset");
+        // Channels reset clears admin_channel/ai_channel but not expected_latency.
+        assert!(s.twitch.admin_channel.is_none());
+        assert_eq!(
+            s.twitch.expected_latency, 300,
+            "TwitchChannels reset must not wipe expected_latency"
+        );
     }
 }

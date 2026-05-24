@@ -152,13 +152,15 @@ pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::Set
             );
         }
         if let Some(s) = v.get("owner").and_then(toml::Value::as_str) {
-            out.twitch.owner = Some(Some(s.to_owned()));
+            out.twitch.owner = Some(if s.trim().is_empty() { None } else { Some(s.to_owned()) });
         }
         if let Some(s) = v.get("admin_channel").and_then(toml::Value::as_str) {
-            out.twitch.admin_channel = Some(Some(s.to_owned()));
+            out.twitch.admin_channel =
+                Some(if s.trim().is_empty() { None } else { Some(s.to_owned()) });
         }
         if let Some(s) = v.get("ai_channel").and_then(toml::Value::as_str) {
-            out.twitch.ai_channel = Some(Some(s.to_owned()));
+            out.twitch.ai_channel =
+                Some(if s.trim().is_empty() { None } else { Some(s.to_owned()) });
         }
     }
 
@@ -366,6 +368,26 @@ mod tests {
         assert_eq!(overrides.aviationstack.timeout_secs, Some(7));
         assert_eq!(overrides.web.session_ttl_secs, Some(12 * 3600));
         assert_eq!(overrides.web.mod_check_refresh_secs, Some(120));
+    }
+
+    #[test]
+    fn legacy_blank_optional_strings_migrate_as_explicit_clear() {
+        let raw = r#"
+            [twitch]
+            channel = "main"
+            username = "bot"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+            owner = ""
+            admin_channel = "   "
+            ai_channel = ""
+        "#;
+        let value: toml::Value = toml::from_str(raw).expect("parse");
+        let overrides = migrate_legacy_config(&value).expect("migrate");
+        assert_eq!(overrides.twitch.owner, Some(None));
+        assert_eq!(overrides.twitch.admin_channel, Some(None));
+        assert_eq!(overrides.twitch.ai_channel, Some(None));
     }
 
     #[test]

@@ -202,7 +202,9 @@ impl Settings {
         if let (Some(ad), Some(ai)) = (
             self.twitch.admin_channel.as_deref(),
             self.twitch.ai_channel.as_deref(),
-        ) && ad.trim() == ai.trim()
+        ) && !ad.trim().is_empty()
+            && !ai.trim().is_empty()
+            && ad.trim() == ai.trim()
         {
             errs.push(FieldError {
                 field: "twitch.ai_channel".into(),
@@ -242,20 +244,22 @@ impl Settings {
                 ),
             });
         }
-        if reqwest::Url::parse(&self.aviationstack.base_url).is_err() {
-            errs.push(FieldError {
-                field: "aviationstack.base_url".into(),
-                message: format!(
-                    "must be a valid URL (got {:?})",
-                    self.aviationstack.base_url
-                ),
-            });
-        }
-        if self.aviationstack.timeout_secs == 0 {
-            errs.push(FieldError {
-                field: "aviationstack.timeout_secs".into(),
-                message: "must be > 0".into(),
-            });
+        if self.aviationstack.enabled {
+            if reqwest::Url::parse(&self.aviationstack.base_url).is_err() {
+                errs.push(FieldError {
+                    field: "aviationstack.base_url".into(),
+                    message: format!(
+                        "must be a valid URL (got {:?})",
+                        self.aviationstack.base_url
+                    ),
+                });
+            }
+            if self.aviationstack.timeout_secs == 0 {
+                errs.push(FieldError {
+                    field: "aviationstack.timeout_secs".into(),
+                    message: "must be > 0".into(),
+                });
+            }
         }
         if !(3600..=2_592_000).contains(&self.web.session_ttl_secs) {
             errs.push(FieldError {
@@ -1053,6 +1057,7 @@ mod resolve_tests {
     #[test]
     fn validate_rejects_invalid_aviationstack_url() {
         let mut s = Settings::compiled_defaults();
+        s.aviationstack.enabled = true;
         s.aviationstack.base_url = "not a url".into();
         let errs = s
             .validate(&ValidationContext {
@@ -1060,6 +1065,48 @@ mod resolve_tests {
             })
             .expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "aviationstack.base_url"));
+    }
+
+    #[test]
+    fn validate_disabled_aviationstack_ignores_invalid_base_url() {
+        let mut s = Settings::compiled_defaults();
+        s.aviationstack.enabled = false;
+        s.aviationstack.base_url = "not a url".into();
+        s.aviationstack.timeout_secs = 0;
+        // Neither base_url nor timeout_secs should produce errors when disabled.
+        s.validate(&ValidationContext {
+            channel: "test".into(),
+        })
+        .expect("disabled aviationstack must not fail URL/timeout checks");
+    }
+
+    #[test]
+    fn validate_both_channels_blank_produces_two_errors_not_three() {
+        let mut s = Settings::compiled_defaults();
+        s.twitch.admin_channel = Some("".into());
+        s.twitch.ai_channel = Some("".into());
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("blank channels must fail");
+        // Exactly one error per blank channel, no spurious "must differ" entry.
+        assert!(
+            errs.iter().any(|e| e.field == "twitch.admin_channel"),
+            "expected error for blank admin_channel; got {errs:?}"
+        );
+        assert!(
+            errs.iter().any(|e| e.field == "twitch.ai_channel"),
+            "expected error for blank ai_channel; got {errs:?}"
+        );
+        let differ_errors = errs
+            .iter()
+            .filter(|e| e.message.contains("must differ from twitch.admin_channel"))
+            .count();
+        assert_eq!(
+            differ_errors, 0,
+            "spurious 'must differ' error must not fire when both channels are blank"
+        );
     }
 
     #[test]
