@@ -152,15 +152,25 @@ pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::Set
             );
         }
         if let Some(s) = v.get("owner").and_then(toml::Value::as_str) {
-            out.twitch.owner = Some(if s.trim().is_empty() { None } else { Some(s.to_owned()) });
+            out.twitch.owner = Some(if s.trim().is_empty() {
+                None
+            } else {
+                Some(s.to_owned())
+            });
         }
         if let Some(s) = v.get("admin_channel").and_then(toml::Value::as_str) {
-            out.twitch.admin_channel =
-                Some(if s.trim().is_empty() { None } else { Some(s.to_owned()) });
+            out.twitch.admin_channel = Some(if s.trim().is_empty() {
+                None
+            } else {
+                Some(s.to_owned())
+            });
         }
         if let Some(s) = v.get("ai_channel").and_then(toml::Value::as_str) {
-            out.twitch.ai_channel =
-                Some(if s.trim().is_empty() { None } else { Some(s.to_owned()) });
+            out.twitch.ai_channel = Some(if s.trim().is_empty() {
+                None
+            } else {
+                Some(s.to_owned())
+            });
         }
     }
 

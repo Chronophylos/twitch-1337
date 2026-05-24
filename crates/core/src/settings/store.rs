@@ -975,10 +975,7 @@ mod tests {
             keys.iter().any(|k| k.starts_with("twitch.")),
             "diff must include at least one twitch.* entry; got {keys:?}"
         );
-        assert!(
-            keys.contains(&"twitch.expected_latency"),
-            "got {keys:?}"
-        );
+        assert!(keys.contains(&"twitch.expected_latency"), "got {keys:?}");
         assert!(keys.contains(&"twitch.hidden_admins"), "got {keys:?}");
         assert!(keys.contains(&"twitch.admin_channel"), "got {keys:?}");
     }
