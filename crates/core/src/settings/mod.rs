@@ -185,11 +185,56 @@ impl Settings {
                 public: overrides.pings.public.unwrap_or(defaults.pings.public),
             },
             ai: resolve_ai(&defaults.ai, &overrides.ai),
-            // TODO(task-7): replace with override-aware resolution
-            twitch: defaults.twitch.clone(),
-            aviationstack: defaults.aviationstack.clone(),
-            suspend: defaults.suspend.clone(),
-            web: defaults.web.clone(),
+            twitch: TwitchRuntime {
+                expected_latency: overrides.twitch.expected_latency.unwrap_or(defaults.twitch.expected_latency),
+                hidden_admins: overrides
+                    .twitch
+                    .hidden_admins
+                    .clone()
+                    .unwrap_or_else(|| defaults.twitch.hidden_admins.clone()),
+                viewer_allowlist: overrides
+                    .twitch
+                    .viewer_allowlist
+                    .clone()
+                    .unwrap_or_else(|| defaults.twitch.viewer_allowlist.clone()),
+                owner: match &overrides.twitch.owner {
+                    Some(v) => v.clone(),
+                    None => defaults.twitch.owner.clone(),
+                },
+                admin_channel: match &overrides.twitch.admin_channel {
+                    Some(v) => v.clone(),
+                    None => defaults.twitch.admin_channel.clone(),
+                },
+                ai_channel: match &overrides.twitch.ai_channel {
+                    Some(v) => v.clone(),
+                    None => defaults.twitch.ai_channel.clone(),
+                },
+            },
+            aviationstack: AviationstackSettings {
+                enabled: overrides.aviationstack.enabled.unwrap_or(defaults.aviationstack.enabled),
+                base_url: overrides
+                    .aviationstack
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| defaults.aviationstack.base_url.clone()),
+                timeout_secs: overrides
+                    .aviationstack
+                    .timeout_secs
+                    .unwrap_or(defaults.aviationstack.timeout_secs),
+            },
+            suspend: SuspendSettings {
+                default_duration_secs: overrides
+                    .suspend
+                    .default_duration_secs
+                    .unwrap_or(defaults.suspend.default_duration_secs),
+            },
+            web: WebRuntime {
+                session_ttl_secs: overrides.web.session_ttl_secs.unwrap_or(defaults.web.session_ttl_secs),
+                mod_check_refresh_secs: overrides
+                    .web
+                    .mod_check_refresh_secs
+                    .unwrap_or(defaults.web.mod_check_refresh_secs),
+            },
         }
     }
 }
@@ -750,5 +795,54 @@ mod resolve_tests {
             err.iter().any(|e| e.field == "ai.connection.service_tier"),
             "expected field error for ai.connection.service_tier, got {err:?}"
         );
+    }
+
+    #[test]
+    fn twitch_override_resolves() {
+        use crate::settings::overrides::TwitchOverrides;
+        let defaults = Settings::compiled_defaults();
+        let overrides = SettingsOverrides {
+            twitch: TwitchOverrides {
+                expected_latency: Some(250),
+                hidden_admins: Some(vec!["111".into(), "222".into()]),
+                admin_channel: Some(Some("admins".into())),
+                ai_channel: Some(None), // explicit clear
+                ..Default::default()
+            },
+            ..SettingsOverrides::default()
+        };
+        let r = Settings::resolve(&defaults, &overrides);
+        assert_eq!(r.twitch.expected_latency, 250);
+        assert_eq!(r.twitch.hidden_admins, vec!["111", "222"]);
+        assert_eq!(r.twitch.admin_channel.as_deref(), Some("admins"));
+        assert!(r.twitch.ai_channel.is_none());
+    }
+
+    #[test]
+    fn aviationstack_suspend_web_resolve() {
+        use crate::settings::overrides::{
+            AviationstackOverrides, SuspendOverrides, WebRuntimeOverrides,
+        };
+        let defaults = Settings::compiled_defaults();
+        let overrides = SettingsOverrides {
+            aviationstack: AviationstackOverrides {
+                enabled: Some(true),
+                timeout_secs: Some(7),
+                ..Default::default()
+            },
+            suspend: SuspendOverrides { default_duration_secs: Some(900) },
+            web: WebRuntimeOverrides {
+                session_ttl_secs: Some(3600 * 12),
+                mod_check_refresh_secs: Some(120),
+            },
+            ..SettingsOverrides::default()
+        };
+        let r = Settings::resolve(&defaults, &overrides);
+        assert!(r.aviationstack.enabled);
+        assert_eq!(r.aviationstack.timeout_secs, 7);
+        assert_eq!(r.aviationstack.base_url, defaults.aviationstack.base_url);
+        assert_eq!(r.suspend.default_duration_secs, 900);
+        assert_eq!(r.web.session_ttl_secs, 3600 * 12);
+        assert_eq!(r.web.mod_check_refresh_secs, 120);
     }
 }
