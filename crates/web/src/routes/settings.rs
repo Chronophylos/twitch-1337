@@ -798,6 +798,7 @@ async fn save(
                 // values rather than the live `current.ai`. Until then, the
                 // re-render falls back to compiled defaults for the AI section.
                 ai: AiSettings::default(),
+                ..Settings::compiled_defaults()
             };
             let defaults = state.settings_store.defaults().clone();
             render_with(

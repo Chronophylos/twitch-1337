@@ -41,7 +41,7 @@ use thiserror::Error;
 
 pub type SettingsHandle = Arc<ArcSwap<Settings>>;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Settings {
@@ -49,6 +49,10 @@ pub struct Settings {
     pub cooldowns: Cooldowns,
     pub pings: PingsSettings,
     pub ai: AiSettings,
+    pub twitch: TwitchRuntime,
+    pub aviationstack: AviationstackSettings,
+    pub suspend: SuspendSettings,
+    pub web: WebRuntime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -121,6 +125,10 @@ impl Settings {
                 public: false,
             },
             ai: AiSettings::default(),
+            twitch: TwitchRuntime::default(),
+            aviationstack: AviationstackSettings::default(),
+            suspend: SuspendSettings::default(),
+            web: WebRuntime::default(),
         }
     }
 
@@ -177,6 +185,11 @@ impl Settings {
                 public: overrides.pings.public.unwrap_or(defaults.pings.public),
             },
             ai: resolve_ai(&defaults.ai, &overrides.ai),
+            // TODO(task-7): replace with override-aware resolution
+            twitch: defaults.twitch.clone(),
+            aviationstack: defaults.aviationstack.clone(),
+            suspend: defaults.suspend.clone(),
+            web: defaults.web.clone(),
         }
     }
 }
@@ -626,10 +639,14 @@ mod resolve_tests {
     }
 
     #[test]
-    fn compiled_defaults_include_ai_block_v2() {
+    fn compiled_defaults_v3_layout() {
         let s = Settings::compiled_defaults();
-        assert_eq!(s.schema_version, 2);
+        assert_eq!(s.schema_version, 3);
         assert_eq!(s.ai, AiSettings::default());
+        assert_eq!(s.twitch, TwitchRuntime::default());
+        assert_eq!(s.aviationstack, AviationstackSettings::default());
+        assert_eq!(s.suspend, SuspendSettings::default());
+        assert_eq!(s.web, WebRuntime::default());
     }
 
     #[test]
