@@ -17,6 +17,7 @@ use tower_cookies::Cookies;
 use twitch_1337_core::settings::overrides::{
     AiBehaviorOverrides, AiConnectionOverrides, AiDreamerOverrides, AiEmotesOverrides,
     AiHistoryOverrides, AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides, AiWebOverrides,
+    AviationstackOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
 };
 use twitch_1337_core::settings::{
     Actor, AiBackendKind, AiOverrides, AiSettings, Cooldowns, CooldownsOverrides, FieldError,
@@ -447,6 +448,107 @@ impl AiMediaForm {
     }
 }
 
+fn parse_id_list(s: &str) -> Vec<String> {
+    s.lines()
+        .map(|l| l.trim().to_owned())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+#[derive(Default, Deserialize)]
+struct TwitchPermissionsForm {
+    #[serde(default)]
+    twitch_hidden_admins: Option<String>,
+    #[serde(default)]
+    twitch_viewer_allowlist: Option<String>,
+    #[serde(default)]
+    twitch_owner: Option<String>,
+}
+
+impl TwitchPermissionsForm {
+    fn into_overrides(self) -> TwitchOverrides {
+        TwitchOverrides {
+            hidden_admins: self.twitch_hidden_admins.as_deref().map(parse_id_list),
+            viewer_allowlist: self.twitch_viewer_allowlist.as_deref().map(parse_id_list),
+            owner: tri_state(self.twitch_owner),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct TwitchChannelsForm {
+    #[serde(default)]
+    twitch_expected_latency: Option<u32>,
+    #[serde(default)]
+    twitch_admin_channel: Option<String>,
+    #[serde(default)]
+    twitch_ai_channel: Option<String>,
+}
+
+impl TwitchChannelsForm {
+    fn into_overrides(self) -> TwitchOverrides {
+        TwitchOverrides {
+            expected_latency: self.twitch_expected_latency,
+            admin_channel: tri_state(self.twitch_admin_channel),
+            ai_channel: tri_state(self.twitch_ai_channel),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct AviationstackForm {
+    /// Checkbox: `"1"` when checked, absent when unchecked.
+    #[serde(default)]
+    aviationstack_enabled: Option<String>,
+    #[serde(default)]
+    aviationstack_base_url: Option<String>,
+    #[serde(default)]
+    aviationstack_timeout_secs: Option<u64>,
+}
+
+impl AviationstackForm {
+    fn into_overrides(self) -> AviationstackOverrides {
+        AviationstackOverrides {
+            enabled: Some(self.aviationstack_enabled.is_some()),
+            base_url: self.aviationstack_base_url,
+            timeout_secs: self.aviationstack_timeout_secs,
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct SuspendForm {
+    #[serde(default)]
+    suspend_default_duration_secs: Option<u64>,
+}
+
+impl SuspendForm {
+    fn into_overrides(self) -> SuspendOverrides {
+        SuspendOverrides {
+            default_duration_secs: self.suspend_default_duration_secs,
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct WebRuntimeForm {
+    #[serde(default)]
+    web_session_ttl_secs: Option<u64>,
+    #[serde(default)]
+    web_mod_check_refresh_secs: Option<u64>,
+}
+
+impl WebRuntimeForm {
+    fn into_overrides(self) -> WebRuntimeOverrides {
+        WebRuntimeOverrides {
+            session_ttl_secs: self.web_session_ttl_secs,
+            mod_check_refresh_secs: self.web_mod_check_refresh_secs,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Top-level form — flat serde struct (serde_urlencoded does not support
 // #[serde(flatten)]; each field lives at the top level, then save() bundles
@@ -595,6 +697,40 @@ struct SaveForm {
     ai_media_max_video_size: Option<String>,
     #[serde(default)]
     ai_media_max_text_size: Option<String>,
+
+    // ---- Twitch · Permissions card ----
+    #[serde(default)]
+    twitch_hidden_admins: Option<String>,
+    #[serde(default)]
+    twitch_viewer_allowlist: Option<String>,
+    #[serde(default)]
+    twitch_owner: Option<String>,
+
+    // ---- Twitch · Channels card ----
+    #[serde(default)]
+    twitch_expected_latency: Option<u32>,
+    #[serde(default)]
+    twitch_admin_channel: Option<String>,
+    #[serde(default)]
+    twitch_ai_channel: Option<String>,
+
+    // ---- Aviationstack card ----
+    #[serde(default)]
+    aviationstack_enabled: Option<String>,
+    #[serde(default)]
+    aviationstack_base_url: Option<String>,
+    #[serde(default)]
+    aviationstack_timeout_secs: Option<u64>,
+
+    // ---- Suspend card ----
+    #[serde(default)]
+    suspend_default_duration_secs: Option<u64>,
+
+    // ---- Web · Sessions card ----
+    #[serde(default)]
+    web_session_ttl_secs: Option<u64>,
+    #[serde(default)]
+    web_mod_check_refresh_secs: Option<u64>,
 }
 
 /// Identify resolved AI fields whose change cannot take effect without a
@@ -746,10 +882,39 @@ async fn save(
             }
             .into_overrides(),
         },
-        twitch: Default::default(),
-        aviationstack: Default::default(),
-        suspend: Default::default(),
-        web: Default::default(),
+        twitch: {
+            let mut t = TwitchPermissionsForm {
+                twitch_hidden_admins: form.twitch_hidden_admins,
+                twitch_viewer_allowlist: form.twitch_viewer_allowlist,
+                twitch_owner: form.twitch_owner,
+            }
+            .into_overrides();
+            let c = TwitchChannelsForm {
+                twitch_expected_latency: form.twitch_expected_latency,
+                twitch_admin_channel: form.twitch_admin_channel,
+                twitch_ai_channel: form.twitch_ai_channel,
+            }
+            .into_overrides();
+            t.expected_latency = c.expected_latency;
+            t.admin_channel = c.admin_channel;
+            t.ai_channel = c.ai_channel;
+            t
+        },
+        aviationstack: AviationstackForm {
+            aviationstack_enabled: form.aviationstack_enabled,
+            aviationstack_base_url: form.aviationstack_base_url,
+            aviationstack_timeout_secs: form.aviationstack_timeout_secs,
+        }
+        .into_overrides(),
+        suspend: SuspendForm {
+            suspend_default_duration_secs: form.suspend_default_duration_secs,
+        }
+        .into_overrides(),
+        web: WebRuntimeForm {
+            web_session_ttl_secs: form.web_session_ttl_secs,
+            web_mod_check_refresh_secs: form.web_mod_check_refresh_secs,
+        }
+        .into_overrides(),
     };
 
     let actor = Actor {
@@ -841,6 +1006,11 @@ async fn reset(
     let section = match section.as_str() {
         "cooldowns" => SettingsSection::Cooldowns,
         "pings" => SettingsSection::Pings,
+        "twitch_permissions" => SettingsSection::TwitchPermissions,
+        "twitch_channels" => SettingsSection::TwitchChannels,
+        "aviationstack" => SettingsSection::Aviationstack,
+        "suspend" => SettingsSection::Suspend,
+        "web_runtime" => SettingsSection::WebRuntime,
         other => {
             return Err(WebError::Validation {
                 field: "section".into(),

@@ -654,3 +654,348 @@ async fn media_size_malformed_string_is_ignored() {
         res.status(),
     );
 }
+
+// ---------------------------------------------------------------------------
+// Tasks 21–25: new settings cards
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn twitch_permissions_save_persists() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[
+            ("twitch_hidden_admins", "111\n222"),
+            ("twitch_owner", "777"),
+        ],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::SEE_OTHER,
+        "twitch_permissions save must redirect"
+    );
+    let s = state.settings.load();
+    assert_eq!(
+        s.twitch.hidden_admins,
+        vec!["111".to_owned(), "222".to_owned()],
+        "hidden_admins must persist",
+    );
+    assert_eq!(s.twitch.owner.as_deref(), Some("777"), "owner must persist",);
+}
+
+#[tokio::test]
+async fn twitch_channels_save_persists() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    let body = save_form_body(&bare_csrf, &defaults, &[("twitch_expected_latency", "200")]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::SEE_OTHER,
+        "twitch_channels save must redirect"
+    );
+    assert_eq!(
+        state.settings.load().twitch.expected_latency,
+        200,
+        "expected_latency must persist",
+    );
+}
+
+#[tokio::test]
+async fn twitch_expected_latency_out_of_range_returns_400() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    // 1500 exceeds the 0..=1000 bound.
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[("twitch_expected_latency", "1500")],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::BAD_REQUEST,
+        "out-of-range expected_latency must return 400",
+    );
+}
+
+#[tokio::test]
+async fn aviationstack_save_persists() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[
+            ("aviationstack_enabled", "1"),
+            ("aviationstack_base_url", "https://api.example.com/v1"),
+            ("aviationstack_timeout_secs", "10"),
+        ],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::SEE_OTHER,
+        "aviationstack save must redirect"
+    );
+    let s = state.settings.load();
+    assert!(s.aviationstack.enabled, "enabled must persist");
+    assert_eq!(
+        s.aviationstack.base_url, "https://api.example.com/v1",
+        "base_url must persist",
+    );
+    assert_eq!(
+        s.aviationstack.timeout_secs, 10,
+        "timeout_secs must persist"
+    );
+}
+
+#[tokio::test]
+async fn suspend_save_persists() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[("suspend_default_duration_secs", "1800")],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::SEE_OTHER,
+        "suspend save must redirect"
+    );
+    assert_eq!(
+        state.settings.load().suspend.default_duration_secs,
+        1800,
+        "default_duration_secs must persist",
+    );
+}
+
+#[tokio::test]
+async fn web_runtime_save_persists() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[
+            ("web_session_ttl_secs", "14400"),
+            ("web_mod_check_refresh_secs", "60"),
+        ],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::SEE_OTHER,
+        "web_runtime save must redirect"
+    );
+    let s = state.settings.load();
+    assert_eq!(
+        s.web.session_ttl_secs, 14400,
+        "session_ttl_secs must persist"
+    );
+    assert_eq!(
+        s.web.mod_check_refresh_secs, 60,
+        "mod_check_refresh_secs must persist"
+    );
+}
+
+#[tokio::test]
+async fn reset_twitch_permissions_clears_section() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    // Push non-default values.
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[("twitch_hidden_admins", "111"), ("twitch_owner", "999")],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let _ = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        state.settings.load().twitch.hidden_admins,
+        vec!["111".to_owned()]
+    );
+
+    // Reset the section.
+    let app = build_router(state.clone());
+    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings/reset/twitch_permissions")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "reset must redirect");
+    assert!(
+        state.settings.load().twitch.hidden_admins.is_empty(),
+        "reset must clear hidden_admins",
+    );
+}
+
+#[tokio::test]
+async fn reset_aviationstack_clears_section() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    // Push a non-default enabled state.
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[
+            ("aviationstack_enabled", "1"),
+            ("aviationstack_timeout_secs", "30"),
+        ],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let _ = app.oneshot(req).await.unwrap();
+    assert!(state.settings.load().aviationstack.enabled);
+
+    // Reset the section.
+    let app = build_router(state.clone());
+    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings/reset/aviationstack")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "reset must redirect");
+    assert_eq!(
+        state.settings.load().aviationstack,
+        defaults.aviationstack,
+        "aviationstack must be restored to defaults after reset",
+    );
+}
+
+#[tokio::test]
+async fn settings_page_renders_new_cards() {
+    // Smoke-test: GET /settings must render all 5 new card section anchors.
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let app = build_router(state);
+    let req = Request::builder()
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "owner GET /settings must 200");
+    let html = body_string(res).await;
+    for id in [
+        "sec-twitch_permissions",
+        "sec-twitch_channels",
+        "sec-aviationstack",
+        "sec-suspend",
+        "sec-web_runtime",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "settings page is missing new card anchor {id}",
+        );
+    }
+}

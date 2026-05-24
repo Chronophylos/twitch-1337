@@ -36,6 +36,16 @@
       </div>
     </div>
 
+    <div class="settings-nav-group" data-group="twitch">
+      {% call m::nav_group_head("twitch", "Twitch", 2) %}{% endcall %}
+      <div class="settings-nav-group-body" id="nav-group-body-twitch">
+        <ul class="settings-nav-group-items">
+          {% call m::nav_section_item("twitch_permissions", "twitch_permissions", "Permissions") %}{% endcall %}
+          {% call m::nav_section_item("twitch_channels", "twitch_channels", "Channels") %}{% endcall %}
+        </ul>
+      </div>
+    </div>
+
     <div class="settings-nav-group" data-group="ai">
       {% call m::nav_group_head("ai", "AI", 9) %}{% endcall %}
       <div class="settings-nav-group-body" id="nav-group-body-ai">
@@ -52,6 +62,17 @@
         </ul>
       </div>
     </div>
+
+    <div class="settings-nav-group" data-group="other">
+      {% call m::nav_group_head("other", "Other", 3) %}{% endcall %}
+      <div class="settings-nav-group-body" id="nav-group-body-other">
+        <ul class="settings-nav-group-items">
+          {% call m::nav_section_item("aviationstack", "aviationstack", "Aviationstack") %}{% endcall %}
+          {% call m::nav_section_item("suspend", "suspend", "Suspend") %}{% endcall %}
+          {% call m::nav_section_item("web_runtime", "web_runtime", "Web · Sessions") %}{% endcall %}
+        </ul>
+      </div>
+    </div>
   </aside>
 
   <div class="settings-main">
@@ -60,6 +81,9 @@
       <div class="settings-group-divider" data-group="chat"><span>CHAT</span></div>
       {% include "settings/cards/cooldowns.html" %}
       {% include "settings/cards/pings.html" %}
+      <div class="settings-group-divider" data-group="twitch"><span>TWITCH</span></div>
+      {% include "settings/cards/twitch_permissions.html" %}
+      {% include "settings/cards/twitch_channels.html" %}
       <div class="settings-group-divider" data-group="ai"><span>AI</span></div>
       {% include "settings/cards/ai_connection.html" %}
       {% include "settings/cards/ai_behavior.html" %}
@@ -70,6 +94,10 @@
       {% include "settings/cards/ai_web.html" %}
       {% include "settings/cards/ai_emotes.html" %}
       {% include "settings/cards/ai_media.html" %}
+      <div class="settings-group-divider" data-group="other"><span>OTHER</span></div>
+      {% include "settings/cards/aviationstack.html" %}
+      {% include "settings/cards/suspend.html" %}
+      {% include "settings/cards/web_runtime.html" %}
     </form>
 
   </div>
