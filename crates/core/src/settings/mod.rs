@@ -15,6 +15,7 @@ pub mod aviationstack;
 pub mod migrate;
 pub mod overrides;
 pub mod store;
+pub mod suspend;
 pub mod twitch;
 
 pub use ai::{
@@ -22,6 +23,7 @@ pub use ai::{
     AiPrefill, AiSettings, AiWeb,
 };
 pub use aviationstack::AviationstackSettings;
+pub use suspend::SuspendSettings;
 pub use twitch::TwitchRuntime;
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
