@@ -129,6 +129,65 @@ pub async fn main() -> Result<()> {
         std::fs::write(&migrated_marker, "").wrap_err("write .ai_migrated_v2 marker")?;
     }
 
+    // One-shot v3 migration: promote remaining non-secret, non-bootstrap keys
+    // from config.toml into settings.ron. Sentinel `.config_migrated_v3`
+    // prevents re-migration so later dashboard edits aren't clobbered.
+    let v3_marker = get_data_dir().join(".config_migrated_v3");
+    if !v3_marker.exists() {
+        let patch = twitch_1337::settings::migrate::migrate_legacy_config(&raw_toml)
+            .wrap_err("v3 migration")?;
+        let twitch_empty =
+            patch.twitch == twitch_1337::settings::overrides::TwitchOverrides::default();
+        let aviation_empty =
+            patch.aviationstack == twitch_1337::settings::overrides::AviationstackOverrides::default();
+        let suspend_empty =
+            patch.suspend == twitch_1337::settings::overrides::SuspendOverrides::default();
+        let web_empty =
+            patch.web == twitch_1337::settings::overrides::WebRuntimeOverrides::default();
+        if !(twitch_empty && aviation_empty && suspend_empty && web_empty) {
+            let actor = twitch_1337::settings::Actor {
+                user_id: "migrate".into(),
+                user_login: "v3-migration".into(),
+            };
+            settings_store
+                .apply(patch, actor)
+                .await
+                .wrap_err("v3 migration apply")?;
+            info!("migrated legacy config.toml keys into settings.ron (v3)");
+        }
+        std::fs::write(&v3_marker, "").wrap_err("write .config_migrated_v3 marker")?;
+    }
+
+    // Warn once if any migrated key still appears in config.toml — it's silently
+    // ignored after the v3 marker has been written.
+    let legacy_v3_keys: &[(&str, &[&str])] = &[
+        ("twitch.expected_latency", &["twitch", "expected_latency"]),
+        ("twitch.hidden_admins", &["twitch", "hidden_admins"]),
+        ("twitch.viewer_allowlist", &["twitch", "viewer_allowlist"]),
+        ("twitch.owner", &["twitch", "owner"]),
+        ("twitch.admin_channel", &["twitch", "admin_channel"]),
+        ("twitch.ai_channel", &["twitch", "ai_channel"]),
+        ("suspend.default_duration_secs", &["suspend", "default_duration_secs"]),
+        ("aviationstack.enabled", &["aviationstack", "enabled"]),
+        ("aviationstack.base_url", &["aviationstack", "base_url"]),
+        ("aviationstack.timeout_secs", &["aviationstack", "timeout_secs"]),
+        ("web.session_ttl", &["web", "session_ttl"]),
+        ("web.mod_check_refresh", &["web", "mod_check_refresh"]),
+    ];
+    let stale: Vec<&str> = legacy_v3_keys
+        .iter()
+        .filter_map(|(name, path)| {
+            let mut node = &raw_toml;
+            for seg in *path {
+                node = node.get(seg)?;
+            }
+            Some(*name)
+        })
+        .collect();
+    if v3_marker.exists() && !stale.is_empty() {
+        tracing::warn!(?stale, "legacy config.toml keys are now ignored after v3 migration; remove them from config.toml");
+    }
+
     let llm_client = llm_factory::build_llm_client(config.ai.as_ref(), &settings_handle.load())?;
 
     // Memory v2 store opens unconditionally so the dashboard editor has a
