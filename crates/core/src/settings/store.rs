@@ -372,6 +372,46 @@ fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides) {
     if let Some(v) = patch.ai.media.max_text_size {
         into.ai.media.max_text_size = Some(v);
     }
+    // Twitch
+    if let Some(v) = patch.twitch.expected_latency {
+        into.twitch.expected_latency = Some(v);
+    }
+    if patch.twitch.hidden_admins.is_some() {
+        into.twitch.hidden_admins = patch.twitch.hidden_admins.clone();
+    }
+    if patch.twitch.viewer_allowlist.is_some() {
+        into.twitch.viewer_allowlist = patch.twitch.viewer_allowlist.clone();
+    }
+    if patch.twitch.owner.is_some() {
+        into.twitch.owner = patch.twitch.owner.clone();
+    }
+    if patch.twitch.admin_channel.is_some() {
+        into.twitch.admin_channel = patch.twitch.admin_channel.clone();
+    }
+    if patch.twitch.ai_channel.is_some() {
+        into.twitch.ai_channel = patch.twitch.ai_channel.clone();
+    }
+    // Aviationstack
+    if let Some(v) = patch.aviationstack.enabled {
+        into.aviationstack.enabled = Some(v);
+    }
+    if let Some(v) = patch.aviationstack.base_url.as_ref() {
+        into.aviationstack.base_url = Some(v.clone());
+    }
+    if let Some(v) = patch.aviationstack.timeout_secs {
+        into.aviationstack.timeout_secs = Some(v);
+    }
+    // Suspend
+    if let Some(v) = patch.suspend.default_duration_secs {
+        into.suspend.default_duration_secs = Some(v);
+    }
+    // Web
+    if let Some(v) = patch.web.session_ttl_secs {
+        into.web.session_ttl_secs = Some(v);
+    }
+    if let Some(v) = patch.web.mod_check_refresh_secs {
+        into.web.mod_check_refresh_secs = Some(v);
+    }
 }
 
 fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
@@ -841,5 +881,52 @@ mod tests {
         let keys: Vec<&str> = changes.iter().map(|c| c.key.as_str()).collect();
         assert!(keys.contains(&"ai.connection.service_tier"), "got {keys:?}");
         assert!(keys.contains(&"ai.dreamer.service_tier"), "got {keys:?}");
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+    use crate::settings::overrides::{
+        AviationstackOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
+    };
+
+    #[test]
+    fn merge_twitch_overrides_replaces_lists() {
+        let mut into = SettingsOverrides::default();
+        into.twitch.hidden_admins = Some(vec!["old".into()]);
+        let patch = SettingsOverrides {
+            twitch: TwitchOverrides {
+                hidden_admins: Some(vec!["new1".into(), "new2".into()]),
+                expected_latency: Some(150),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        merge_into(&mut into, &patch);
+        assert_eq!(into.twitch.expected_latency, Some(150));
+        assert_eq!(
+            into.twitch.hidden_admins.as_deref(),
+            Some(&vec!["new1".to_string(), "new2".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn merge_aviationstack_suspend_web() {
+        let mut into = SettingsOverrides::default();
+        let patch = SettingsOverrides {
+            aviationstack: AviationstackOverrides { enabled: Some(true), ..Default::default() },
+            suspend: SuspendOverrides { default_duration_secs: Some(900) },
+            web: WebRuntimeOverrides {
+                session_ttl_secs: Some(3600),
+                mod_check_refresh_secs: Some(60),
+            },
+            ..Default::default()
+        };
+        merge_into(&mut into, &patch);
+        assert_eq!(into.aviationstack.enabled, Some(true));
+        assert_eq!(into.suspend.default_duration_secs, Some(900));
+        assert_eq!(into.web.session_ttl_secs, Some(3600));
+        assert_eq!(into.web.mod_check_refresh_secs, Some(60));
     }
 }
