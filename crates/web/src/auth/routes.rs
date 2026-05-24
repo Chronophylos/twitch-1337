@@ -413,9 +413,11 @@ async fn logout(
         .get(SID_COOKIE)
         .map(|c| c.value().to_owned())
         .ok_or(WebError::CsrfMismatch)?;
+    let session_ttl =
+        std::time::Duration::from_secs(state.settings.load().web.session_ttl_secs);
     let session = state
         .sessions
-        .get_and_touch(&sid)
+        .get_and_touch(&sid, session_ttl)
         .ok_or(WebError::CsrfMismatch)?;
     if !crate::auth::csrf::verify(&form.csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
@@ -488,9 +490,18 @@ pub async fn require_role(
         .signed(&state.signed_key)
         .get(SID_COOKIE)
         .ok_or_else(unauth)?;
+    // Read both web timing values from settings once, before any .await, so
+    // the ArcSwap guard is not held across an async suspension point.
+    let (session_ttl_secs, mod_check_refresh_secs) = {
+        let web_cfg = state.settings.load();
+        (web_cfg.web.session_ttl_secs, web_cfg.web.mod_check_refresh_secs)
+    };
     let session = state
         .sessions
-        .get_and_touch(sid_cookie.value())
+        .get_and_touch(
+            sid_cookie.value(),
+            std::time::Duration::from_secs(session_ttl_secs),
+        )
         .ok_or_else(unauth)?;
 
     if session.role < min {
@@ -502,7 +513,7 @@ pub async fn require_role(
         .signed_duration_since(session.last_role_check)
         .to_std()
         .unwrap_or_default();
-    if elapsed > state.config.role_check_refresh {
+    if elapsed > std::time::Duration::from_secs(mod_check_refresh_secs) {
         // Load settings once and extract what we need before any `.await` so
         // the ArcSwap guard is not held across an async suspension point.
         let (owner, hidden_admins, viewer_allowlist) = {

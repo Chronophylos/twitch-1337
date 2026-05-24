@@ -86,8 +86,7 @@ async fn main() -> Result<()> {
         .wrap_err("open memory store")?;
 
     let clock = Arc::new(SystemClock);
-    let session_ttl = Duration::from_secs(7 * 24 * 3600);
-    let sessions = Arc::new(SessionTable::new(session_ttl, clock.clone()));
+    let sessions = Arc::new(SessionTable::new(clock.clone()));
 
     // Pair with the fixed signed_key below: stable signed cookie across
     // restarts means no re-login when iterating.
@@ -106,8 +105,6 @@ async fn main() -> Result<()> {
         bind_addr: bind_addr.to_string(),
         public_url,
         session_secret,
-        session_ttl,
-        role_check_refresh: Duration::from_secs(300),
     });
 
     let helix: Arc<dyn HelixClient> = Arc::new(StubHelix);

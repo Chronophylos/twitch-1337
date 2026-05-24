@@ -691,7 +691,7 @@ fn build_test_web_state(
     }
 
     let web_clock = Arc::new(WebSystemClock);
-    let sessions = Arc::new(SessionTable::new(config.web.session_ttl, web_clock.clone()));
+    let sessions = Arc::new(SessionTable::new(web_clock.clone()));
     let oauth = Arc::new(
         OAuthCtx::new(
             "test-client-id",
@@ -704,8 +704,6 @@ fn build_test_web_state(
         bind_addr: config.web.bind_addr.clone(),
         public_url: config.web.public_url.clone(),
         session_secret: config.web.session_secret.clone(),
-        session_ttl: config.web.session_ttl,
-        role_check_refresh: config.web.mod_check_refresh,
     });
     let signed_key = tower_cookies::Key::from(&[0x42u8; 64]);
     twitch_1337_web::WebState {

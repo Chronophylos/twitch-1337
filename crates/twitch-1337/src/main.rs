@@ -345,7 +345,6 @@ async fn build_web_spawner(
 
     let web_clock = Arc::new(twitch_1337_web::clock::SystemClock);
     let sessions = Arc::new(twitch_1337_web::auth::session::SessionTable::new(
-        config.web.session_ttl,
         web_clock.clone(),
     ));
 
@@ -353,8 +352,6 @@ async fn build_web_spawner(
         bind_addr: config.web.bind_addr.clone(),
         public_url: config.web.public_url.clone(),
         session_secret: config.web.session_secret.clone(),
-        session_ttl: config.web.session_ttl,
-        role_check_refresh: config.web.mod_check_refresh,
     });
 
     let signed_key = twitch_1337_web::state::derive_session_key(&config.web.session_secret)?;
