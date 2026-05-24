@@ -86,7 +86,7 @@ where
         data_dir,
         doener,
         suspension_manager,
-        suspend,
+        suspend: _,
         emote_provider,
         primary_history_tap,
     } = cfg;
@@ -96,8 +96,6 @@ where
     // Snapshot of the dashboard-managed settings at startup. Reads below use
     // these values; Tasks 6+ make selected commands consume the handle live.
     let snapshot = settings.load_full();
-
-    let default_suspend_duration = Duration::from_secs(suspend.default_duration_secs);
 
     let broadcast_rx = broadcast_tx.subscribe();
 
@@ -167,7 +165,6 @@ where
         Box::new(commands::suspend::SuspendCommand::new(
             suspension_manager.clone(),
             settings.clone(),
-            default_suspend_duration,
         )),
         Box::new(commands::suspend::UnsuspendCommand::new(
             suspension_manager.clone(),

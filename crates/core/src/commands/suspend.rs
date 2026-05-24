@@ -54,20 +54,11 @@ fn duration_error_message(err: &ParseDurationError) -> String {
 pub struct SuspendCommand {
     manager: Arc<SuspensionManager>,
     settings: SettingsHandle,
-    default_duration: Duration,
 }
 
 impl SuspendCommand {
-    pub fn new(
-        manager: Arc<SuspensionManager>,
-        settings: SettingsHandle,
-        default_duration: Duration,
-    ) -> Self {
-        Self {
-            manager,
-            settings,
-            default_duration,
-        }
+    pub fn new(manager: Arc<SuspensionManager>, settings: SettingsHandle) -> Self {
+        Self { manager, settings }
     }
 }
 
@@ -83,11 +74,14 @@ where
 
     async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
         let s = self.settings.load();
-        if !is_admin(ctx.privmsg, &s.twitch.hidden_admins) {
+        let is_admin_user = is_admin(ctx.privmsg, &s.twitch.hidden_admins);
+        let default_duration_secs = s.suspend.default_duration_secs;
+        drop(s);
+
+        if !is_admin_user {
             ctx.sender.reply(ctx.privmsg, ADMIN_DENIED_MSG).await;
             return Ok(());
         }
-        drop(s);
 
         let raw_cmd = match ctx.args.first() {
             Some(c) => *c,
@@ -109,7 +103,7 @@ where
         }
 
         let duration = match ctx.args.get(1) {
-            None => self.default_duration,
+            None => Duration::from_secs(default_duration_secs),
             Some(s) => match parse_duration(s) {
                 Ok(d) => d,
                 Err(err) => {

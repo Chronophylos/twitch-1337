@@ -180,8 +180,8 @@ async fn default_duration_used_when_omitted() {
 async fn custom_default_from_config() {
     let mut bot = TestBotBuilder::new()
         .with_seeded_leaderboard(seeded_lb_with_alice())
-        .with_config(|c| {
-            c.suspend.default_duration_secs = 90;
+        .with_settings(|o| {
+            o.suspend.default_duration_secs = Some(90);
         })
         .spawn()
         .await;
