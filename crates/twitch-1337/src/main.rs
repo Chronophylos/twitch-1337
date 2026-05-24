@@ -58,19 +58,6 @@ pub async fn main() -> Result<()> {
         setup_and_verify_twitch_client(&config).await?;
     let client = Arc::new(client);
 
-    let aviation_client = match aviation::AviationClient::new()
-        .map(|client| client.with_aviationstack_config(config.aviationstack.clone()))
-    {
-        Ok(c) => Some(c),
-        Err(e) => {
-            tracing::error!(
-                error = ?e,
-                "Failed to initialize aviation client; aviation commands and flight tracker disabled"
-            );
-            None
-        }
-    };
-
     let doener_client = Arc::new(
         doener::DoeneratlasClient::new().wrap_err("Failed to initialize Döneratlas client")?,
     );
@@ -196,6 +183,39 @@ pub async fn main() -> Result<()> {
             "legacy config.toml keys are now ignored after v3 migration; remove them from config.toml"
         );
     }
+
+    // Build aviation client from settings (restart-required fields).
+    // `enabled`, `base_url`, and `timeout_secs` come from the settings store;
+    // `api_key` remains in config.toml as a secret and is not dashboard-managed.
+    let aviation_client = {
+        let av_settings = settings_handle.load().aviationstack.clone();
+        if !av_settings.enabled {
+            info!("aviationstack disabled in settings; aviation features disabled");
+            None
+        } else {
+            // Assemble an AviationstackConfig from settings + secret api_key from config.
+            let aviationstack_cfg = config.aviationstack.as_ref().map(|bootstrap| {
+                twitch_1337::config::AviationstackConfig {
+                    enabled: av_settings.enabled,
+                    api_key: bootstrap.api_key.clone(),
+                    base_url: av_settings.base_url.clone(),
+                    timeout_secs: av_settings.timeout_secs,
+                }
+            });
+            match aviation::AviationClient::new()
+                .map(|client| client.with_aviationstack_config(aviationstack_cfg))
+            {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    tracing::error!(
+                        error = ?e,
+                        "Failed to initialize aviation client; aviation commands and flight tracker disabled"
+                    );
+                    None
+                }
+            }
+        }
+    };
 
     let llm_client = llm_factory::build_llm_client(config.ai.as_ref(), &settings_handle.load())?;
 
