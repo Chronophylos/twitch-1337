@@ -668,13 +668,11 @@ async fn twitch_permissions_save_persists() {
 
     let defaults = state.settings_store.defaults().clone();
     let app = build_router(state.clone());
+    // owner is now bootstrap-only (config.toml), not a form field.
     let body = save_form_body(
         &bare_csrf,
         &defaults,
-        &[
-            ("twitch_hidden_admins", "111\n222"),
-            ("twitch_owner", "777"),
-        ],
+        &[("twitch_hidden_admins", "111\n222")],
     );
     let req = Request::builder()
         .method("POST")
@@ -695,7 +693,6 @@ async fn twitch_permissions_save_persists() {
         vec!["111".to_owned(), "222".to_owned()],
         "hidden_admins must persist",
     );
-    assert_eq!(s.twitch.owner.as_deref(), Some("777"), "owner must persist",);
 }
 
 #[tokio::test]
@@ -884,14 +881,10 @@ async fn reset_twitch_permissions_clears_section() {
     set_owner(&state, Some("123"));
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
 
-    // Push non-default values.
+    // Push non-default values. owner is bootstrap-only (config.toml), not a form field.
     let defaults = state.settings_store.defaults().clone();
     let app = build_router(state.clone());
-    let body = save_form_body(
-        &bare_csrf,
-        &defaults,
-        &[("twitch_hidden_admins", "111"), ("twitch_owner", "999")],
-    );
+    let body = save_form_body(&bare_csrf, &defaults, &[("twitch_hidden_admins", "111")]);
     let req = Request::builder()
         .method("POST")
         .uri("/settings")

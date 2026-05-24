@@ -12,7 +12,7 @@ use crate::database;
 
 /// Bootstrap-only Twitch configuration. Only the fields required to connect
 /// to Twitch IRC and authenticate belong here. Runtime knobs (expected_latency,
-/// hidden_admins, viewer_allowlist, owner, admin_channel, ai_channel) live in
+/// hidden_admins, viewer_allowlist, admin_channel, ai_channel) live in
 /// the dashboard settings store.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TwitchConfiguration {
@@ -21,6 +21,11 @@ pub struct TwitchConfiguration {
     pub refresh_token: SecretString,
     pub client_id: SecretString,
     pub client_secret: SecretString,
+    /// Twitch user ID with full dashboard access including the settings page.
+    /// Single value for v1; a tiered permission system replaces it later.
+    /// Absent → no owner exists and the settings page returns 403.
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 /// Bootstrap-only aviationstack configuration. Only the secret api_key belongs
@@ -124,6 +129,7 @@ impl Configuration {
                 refresh_token: SecretString::new("test".into()),
                 client_id: SecretString::new("test".into()),
                 client_secret: SecretString::new("test".into()),
+                owner: None,
             },
             aviationstack: None,
             ai: None,
@@ -267,6 +273,7 @@ mod tests {
     #[test]
     fn legacy_twitch_keys_silently_ignored() {
         // Fields that have moved to the settings store should parse without error.
+        // `owner` is back in TwitchConfiguration, so it is parsed normally.
         let cfg: Configuration = toml::from_str(
             r#"
             [twitch]
@@ -282,8 +289,9 @@ mod tests {
             ai_channel = "ai"
         "#,
         )
-        .expect("parse — legacy keys are silently ignored by serde");
+        .expect("parse — legacy keys are silently ignored by serde (owner is parsed)");
         assert_eq!(cfg.twitch.channel, "c");
+        assert_eq!(cfg.twitch.owner.as_deref(), Some("456"));
     }
 
     #[test]

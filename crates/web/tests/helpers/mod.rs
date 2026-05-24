@@ -219,6 +219,7 @@ async fn build_state_inner_keep_settings(
         avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
             Duration::from_secs(3600),
         )),
+        owner: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
         settings: settings_handle,
         settings_store,
         ai_bootstrap: None,
@@ -294,10 +295,11 @@ pub fn cookie_header(signed_sid: &str, signed_csrf: &str) -> String {
     format!("tw1337_sid={signed_sid}; tw1337_csrf={signed_csrf}")
 }
 
-/// Set `settings.twitch.owner` in the live in-memory settings snapshot.
-/// Tests use this instead of the removed `state.owner_id` field.
+/// Set the owner in `state.owner` (bootstrap owner from config.toml).
+/// `WebState.owner` is `Arc<ArcSwap<Option<String>>>` so this write is
+/// immediately visible to all clones that share the same `Arc`.
 pub fn set_owner(state: &WebState, owner: Option<&str>) {
-    let mut s = (*state.settings.load_full()).clone();
-    s.twitch.owner = owner.map(str::to_owned);
-    state.settings.store(std::sync::Arc::new(s));
+    state
+        .owner
+        .store(std::sync::Arc::new(owner.map(str::to_owned)));
 }

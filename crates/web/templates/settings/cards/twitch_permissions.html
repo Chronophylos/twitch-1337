@@ -5,7 +5,7 @@
   <header class="settings-card-head">
     <div>
       <h2>Twitch · Permissions</h2>
-      <p>Static allowlists for hidden admins and dashboard viewer access, plus the owner ID.</p>
+      <p>Static allowlists for hidden admins and dashboard viewer access. Owner ID is set in <code>config.toml</code>.</p>
     </div>
     <div class="settings-card-tag">
       <span class="card-dirty" hidden>0 modified</span>
@@ -38,8 +38,5 @@
         <span class="row-default">default <span class="mono">(empty)</span></span>
       </div>
     </div>
-    {% let owner_val = current.twitch.owner.as_deref().unwrap_or("") %}
-    {% let owner_default = defaults.twitch.owner.as_deref().unwrap_or("") %}
-    {% call m::text_row("twitch_permissions", "twitch_owner", "owner", "Twitch user ID with full dashboard access (settings page). Empty to clear.", owner_val, owner_default, "12345678") %}{% endcall %}
   </div>
 </section>

@@ -211,14 +211,6 @@ impl Settings {
                 message: "must differ from twitch.admin_channel".into(),
             });
         }
-        if let Some(v) = self.twitch.owner.as_deref()
-            && v.trim().is_empty()
-        {
-            errs.push(FieldError {
-                field: "twitch.owner".into(),
-                message: "must not be blank when set".into(),
-            });
-        }
         for (idx, id) in self.twitch.hidden_admins.iter().enumerate() {
             if id.trim().is_empty() {
                 errs.push(FieldError {
@@ -315,10 +307,6 @@ impl Settings {
                     .viewer_allowlist
                     .clone()
                     .unwrap_or_else(|| defaults.twitch.viewer_allowlist.clone()),
-                owner: match &overrides.twitch.owner {
-                    Some(v) => v.clone(),
-                    None => defaults.twitch.owner.clone(),
-                },
                 admin_channel: match &overrides.twitch.admin_channel {
                     Some(v) => v.clone(),
                     None => defaults.twitch.admin_channel.clone(),

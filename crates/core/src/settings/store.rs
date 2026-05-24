@@ -142,7 +142,6 @@ impl SettingsStore {
             SettingsSection::TwitchPermissions => {
                 current.twitch.hidden_admins = None;
                 current.twitch.viewer_allowlist = None;
-                current.twitch.owner = None;
             }
             SettingsSection::TwitchChannels => {
                 current.twitch.admin_channel = None;
@@ -396,9 +395,6 @@ fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides) {
     }
     if patch.twitch.viewer_allowlist.is_some() {
         into.twitch.viewer_allowlist = patch.twitch.viewer_allowlist.clone();
-    }
-    if patch.twitch.owner.is_some() {
-        into.twitch.owner = patch.twitch.owner.clone();
     }
     if patch.twitch.admin_channel.is_some() {
         into.twitch.admin_channel = patch.twitch.admin_channel.clone();
@@ -718,11 +714,6 @@ fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
         "twitch.viewer_allowlist",
         prior.twitch.viewer_allowlist.as_slice(),
         next.twitch.viewer_allowlist.as_slice()
-    );
-    cmp!(
-        "twitch.owner",
-        prior.twitch.owner.as_deref(),
-        next.twitch.owner.as_deref()
     );
     cmp!(
         "twitch.admin_channel",

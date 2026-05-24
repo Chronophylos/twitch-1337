@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use arc_swap::ArcSwap;
 use eyre::eyre;
 use secrecy::ExposeSecret;
 use secrecy::SecretString;
@@ -67,6 +68,11 @@ pub struct WebState {
     /// across handlers so repeat `/memory/users` loads don't re-issue
     /// the same helix batch call.
     pub avatar_cache: Arc<AvatarCache>,
+    /// Twitch user ID with full dashboard access (settings page). Loaded from
+    /// `config.toml` at startup (bootstrap-only). `None` → no owner, settings
+    /// page returns 403. Stored behind `Arc<ArcSwap<…>>` so tests can mutate
+    /// it after construction without cloning the whole state.
+    pub owner: Arc<ArcSwap<Option<String>>>,
     /// Live settings handle (arc-swap snapshot of resolved `Settings`). Cloned
     /// into handlers that need the current effective config.
     pub settings: twitch_1337_core::settings::SettingsHandle,

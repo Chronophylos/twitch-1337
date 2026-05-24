@@ -248,10 +248,6 @@ pub struct TwitchOverrides {
     pub hidden_admins: Option<Vec<String>>,
     #[serde(default)]
     pub viewer_allowlist: Option<Vec<String>>,
-    /// Tri-state: `None` = leave at default, `Some(None)` = explicit clear,
-    /// `Some(Some(x))` = set.
-    #[serde(default)]
-    pub owner: Option<Option<String>>,
     #[serde(default)]
     pub admin_channel: Option<Option<String>>,
     #[serde(default)]

@@ -461,8 +461,6 @@ struct TwitchPermissionsForm {
     twitch_hidden_admins: Option<String>,
     #[serde(default)]
     twitch_viewer_allowlist: Option<String>,
-    #[serde(default)]
-    twitch_owner: Option<String>,
 }
 
 impl TwitchPermissionsForm {
@@ -470,7 +468,6 @@ impl TwitchPermissionsForm {
         TwitchOverrides {
             hidden_admins: self.twitch_hidden_admins.as_deref().map(parse_id_list),
             viewer_allowlist: self.twitch_viewer_allowlist.as_deref().map(parse_id_list),
-            owner: tri_state(self.twitch_owner),
             ..Default::default()
         }
     }
@@ -710,8 +707,6 @@ struct SaveForm {
     twitch_hidden_admins: Option<String>,
     #[serde(default)]
     twitch_viewer_allowlist: Option<String>,
-    #[serde(default)]
-    twitch_owner: Option<String>,
 
     // ---- Twitch · Channels card ----
     #[serde(default)]
@@ -895,7 +890,6 @@ async fn save(
             let mut t = TwitchPermissionsForm {
                 twitch_hidden_admins: form.twitch_hidden_admins,
                 twitch_viewer_allowlist: form.twitch_viewer_allowlist,
-                twitch_owner: form.twitch_owner,
             }
             .into_overrides();
             let c = TwitchChannelsForm {

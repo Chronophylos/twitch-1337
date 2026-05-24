@@ -73,14 +73,6 @@ async fn main() -> Result<()> {
         twitch_1337_core::settings::SettingsStore::open(&data_dir, audit_log, &channel)
             .wrap_err("open settings store")?;
 
-    // Inject DEV_USER_ID as owner into the in-memory settings snapshot so
-    // the role-recheck gate admits the dev session without persisting to disk.
-    {
-        let mut s = (*settings_handle.load_full()).clone();
-        s.twitch.owner = Some(DEV_USER_ID.to_owned());
-        settings_handle.store(Arc::new(s));
-    }
-
     let memory_store = MemoryStore::open(&data_dir, settings_handle.clone())
         .await
         .wrap_err("open memory store")?;
@@ -127,6 +119,12 @@ async fn main() -> Result<()> {
         avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
             Duration::from_secs(3600),
         )),
+        // Inject DEV_USER_ID as the bootstrap owner so the role-recheck gate
+        // admits the dev session. Stored directly in `state.owner` (not
+        // settings.ron) because owner is now bootstrap-only.
+        owner: Arc::new(arc_swap::ArcSwap::from_pointee(Some(
+            DEV_USER_ID.to_owned(),
+        ))),
         settings: settings_handle,
         settings_store,
         ai_bootstrap: None,

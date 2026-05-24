@@ -17,9 +17,13 @@ client_id = "your_client_id"
 # Twitch application client secret
 client_secret = "your_client_secret"
 
-# Permissions (hidden_admins, viewer_allowlist, owner), the secondary
-# channels (admin_channel, ai_channel), and expected_latency now live in
-# the dashboard (`/settings → Twitch · Permissions` and `Twitch · Channels`).
+# Twitch user ID with full dashboard access including the settings page.
+# Absent → no owner exists and the settings page returns 403.
+# owner = "12345678"
+
+# Permissions (hidden_admins, viewer_allowlist), the secondary channels
+# (admin_channel, ai_channel), and expected_latency now live in the
+# dashboard (`/settings → Twitch · Permissions` and `Twitch · Channels`).
 
 # Optional: Aviationstack metadata enrichment for !track.
 # The api_key is a secret and stays in config.toml. Enable + base_url +

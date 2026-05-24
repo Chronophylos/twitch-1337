@@ -320,12 +320,12 @@ async fn callback(
         .await
         .map_err(|e| WebError::OAuthExchange(e.wrap_err("user lookup")))?;
 
-    // Load settings and extract fields before any `.await` so the ArcSwap
-    // guard is not held across an async suspension point.
-    let (owner, hidden_admins, viewer_allowlist) = {
+    // Load owner (bootstrap-only from config.toml) and settings fields before
+    // any `.await` so the ArcSwap guards are not held across async suspension.
+    let owner = (**state.owner.load()).clone();
+    let (hidden_admins, viewer_allowlist) = {
         let twitch_cfg = state.settings.load();
         (
-            twitch_cfg.twitch.owner.clone(),
             twitch_cfg.twitch.hidden_admins.clone(),
             twitch_cfg.twitch.viewer_allowlist.clone(),
         )
@@ -516,12 +516,12 @@ pub async fn require_role(
         .to_std()
         .unwrap_or_default();
     if elapsed > std::time::Duration::from_secs(mod_check_refresh_secs) {
-        // Load settings once and extract what we need before any `.await` so
-        // the ArcSwap guard is not held across an async suspension point.
-        let (owner, hidden_admins, viewer_allowlist) = {
+        // Load owner (bootstrap-only from config.toml) and settings fields
+        // before any `.await` so the ArcSwap guards are not held across async.
+        let owner = (**state.owner.load()).clone();
+        let (hidden_admins, viewer_allowlist) = {
             let twitch_cfg = state.settings.load();
             (
-                twitch_cfg.twitch.owner.clone(),
                 twitch_cfg.twitch.hidden_admins.clone(),
                 twitch_cfg.twitch.viewer_allowlist.clone(),
             )

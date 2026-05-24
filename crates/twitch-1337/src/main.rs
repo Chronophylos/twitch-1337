@@ -170,7 +170,6 @@ pub async fn main() -> Result<()> {
         ("twitch.expected_latency", &["twitch", "expected_latency"]),
         ("twitch.hidden_admins", &["twitch", "hidden_admins"]),
         ("twitch.viewer_allowlist", &["twitch", "viewer_allowlist"]),
-        ("twitch.owner", &["twitch", "owner"]),
         ("twitch.admin_channel", &["twitch", "admin_channel"]),
         ("twitch.ai_channel", &["twitch", "ai_channel"]),
         (
@@ -405,6 +404,7 @@ async fn build_web_spawner(
         avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
             std::time::Duration::from_secs(3600),
         )),
+        owner: Arc::new(arc_swap::ArcSwap::from_pointee(config.twitch.owner.clone())),
         settings,
         settings_store,
         ai_bootstrap: config.ai.clone().map(Arc::new),

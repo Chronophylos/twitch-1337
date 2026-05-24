@@ -738,6 +738,7 @@ fn build_test_web_state(
         avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
             std::time::Duration::from_secs(3600),
         )),
+        owner: Arc::new(arc_swap::ArcSwap::from_pointee(config.twitch.owner.clone())),
         settings,
         settings_store,
         ai_bootstrap: None,

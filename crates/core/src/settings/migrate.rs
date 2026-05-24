@@ -151,13 +151,7 @@ pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::Set
                     .collect(),
             );
         }
-        if let Some(s) = v.get("owner").and_then(toml::Value::as_str) {
-            out.twitch.owner = Some(if s.trim().is_empty() {
-                None
-            } else {
-                Some(s.to_owned())
-            });
-        }
+        // `owner` is bootstrap-only (config.toml) — not migrated to settings.ron.
         if let Some(s) = v.get("admin_channel").and_then(toml::Value::as_str) {
             out.twitch.admin_channel = Some(if s.trim().is_empty() {
                 None
@@ -320,7 +314,7 @@ mod tests {
             overrides.twitch.viewer_allowlist.as_deref(),
             Some(&vec!["999".to_string()][..])
         );
-        assert_eq!(overrides.twitch.owner, Some(Some("777".into())));
+        // `owner` is bootstrap-only (config.toml) and is no longer migrated.
         assert_eq!(overrides.twitch.admin_channel, Some(Some("admins".into())));
         assert_eq!(overrides.twitch.ai_channel, Some(Some("ai".into())));
     }
@@ -395,7 +389,7 @@ mod tests {
         "#;
         let value: toml::Value = toml::from_str(raw).expect("parse");
         let overrides = migrate_legacy_config(&value).expect("migrate");
-        assert_eq!(overrides.twitch.owner, Some(None));
+        // `owner` is bootstrap-only (config.toml) and is no longer migrated.
         assert_eq!(overrides.twitch.admin_channel, Some(None));
         assert_eq!(overrides.twitch.ai_channel, Some(None));
     }

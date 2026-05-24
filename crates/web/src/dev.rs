@@ -3,8 +3,8 @@
 //! Compiled in only when the `dev-login` Cargo feature is enabled
 //! (`cargo run --features dev-login`, or `just dev`). When present,
 //! `/_dev/login` mints a signed session for [`DEV_USER_ID`] and redirects
-//! to `/pings`, skipping the OAuth round-trip. The bin injects
-//! [`DEV_USER_ID`] as `settings.twitch.owner` in-memory so the
+//! to `/pings`, skipping the OAuth round-trip. The bin populates
+//! `state.owner` with [`DEV_USER_ID`] at construction time so the
 //! owner role-recheck gate admits the session.
 //!
 //! Also exposes [`StubHelix`] — a zero-network HelixClient impl used by
