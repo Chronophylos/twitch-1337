@@ -771,6 +771,7 @@ async fn aviationstack_save_persists() {
         &bare_csrf,
         &defaults,
         &[
+            ("aviationstack_card_visible", "1"),
             ("aviationstack_enabled", "1"),
             ("aviationstack_base_url", "https://api.example.com/v1"),
             ("aviationstack_timeout_secs", "10"),
@@ -936,6 +937,7 @@ async fn reset_aviationstack_clears_section() {
         &bare_csrf,
         &defaults,
         &[
+            ("aviationstack_card_visible", "1"),
             ("aviationstack_enabled", "1"),
             ("aviationstack_timeout_secs", "30"),
         ],

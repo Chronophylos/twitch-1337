@@ -499,6 +499,10 @@ impl TwitchChannelsForm {
 
 #[derive(Default, Deserialize)]
 struct AviationstackForm {
+    /// Hidden sentinel emitted by the rendered card so the handler can tell
+    /// "card visible but checkbox unchecked" from "card absent (don't touch)".
+    #[serde(default)]
+    aviationstack_card_visible: Option<String>,
     /// Checkbox: `"1"` when checked, absent when unchecked.
     #[serde(default)]
     aviationstack_enabled: Option<String>,
@@ -511,7 +515,10 @@ struct AviationstackForm {
 impl AviationstackForm {
     fn into_overrides(self) -> AviationstackOverrides {
         AviationstackOverrides {
-            enabled: Some(self.aviationstack_enabled.is_some()),
+            enabled: enabled_from_card(
+                &self.aviationstack_card_visible,
+                &self.aviationstack_enabled,
+            ),
             base_url: self.aviationstack_base_url,
             timeout_secs: self.aviationstack_timeout_secs,
         }
@@ -716,6 +723,8 @@ struct SaveForm {
 
     // ---- Aviationstack card ----
     #[serde(default)]
+    aviationstack_card_visible: Option<String>,
+    #[serde(default)]
     aviationstack_enabled: Option<String>,
     #[serde(default)]
     aviationstack_base_url: Option<String>,
@@ -901,6 +910,7 @@ async fn save(
             t
         },
         aviationstack: AviationstackForm {
+            aviationstack_card_visible: form.aviationstack_card_visible,
             aviationstack_enabled: form.aviationstack_enabled,
             aviationstack_base_url: form.aviationstack_base_url,
             aviationstack_timeout_secs: form.aviationstack_timeout_secs,
