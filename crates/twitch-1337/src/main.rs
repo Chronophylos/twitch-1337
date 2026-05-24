@@ -54,8 +54,34 @@ pub async fn main() -> Result<()> {
 
     ensure_data_dir().await?;
 
+    // Dashboard-managed runtime settings. Opened before IRC connect so the
+    // settings-store values (admin_channel, ai_channel) can be passed to the
+    // IRC setup which needs them to join channels at startup.
+    // The same Arc-backed store is shared with both the IRC handlers (via
+    // `Services.settings`) and `WebState`.  The audit log lives at
+    // `$DATA_DIR/settings_audit.log`.
+    let audit_log: Arc<dyn twitch_1337::settings::AuditLog> = Arc::new(
+        twitch_1337::settings::FileAuditLog::new(get_data_dir().join("settings_audit.log")),
+    );
+    let (settings_store, settings_handle) = twitch_1337::settings::SettingsStore::open(
+        &get_data_dir(),
+        audit_log,
+        &config.twitch.channel,
+    )
+    .wrap_err("Failed to open settings store")?;
+
+    // Collect restart-required channel list from settings.
+    let twitch_runtime = settings_handle.load().twitch.clone();
+    let extra_channels: Vec<String> = [
+        twitch_runtime.admin_channel.clone(),
+        twitch_runtime.ai_channel.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
     let (incoming, client, credentials, bot_user_id) =
-        setup_and_verify_twitch_client(&config).await?;
+        setup_and_verify_twitch_client(&config, &extra_channels).await?;
     let client = Arc::new(client);
 
     let doener_client = Arc::new(
@@ -76,20 +102,6 @@ pub async fn main() -> Result<()> {
     let ping_manager =
         PingManager::load(&get_data_dir()).wrap_err("Failed to load ping manager")?;
     let (ping_actor_tx, ping_actor_rx, ping_names_tx, ping_names_rx) = ping_actor_channel_full();
-
-    // Dashboard-managed runtime settings. Opened here so the same Arc-backed
-    // store can be shared with both the IRC handlers (via `Services.settings`)
-    // and `WebState` (Task 10 wires the POST handler). The audit log lives at
-    // `$DATA_DIR/settings_audit.log`.
-    let audit_log: Arc<dyn twitch_1337::settings::AuditLog> = Arc::new(
-        twitch_1337::settings::FileAuditLog::new(get_data_dir().join("settings_audit.log")),
-    );
-    let (settings_store, settings_handle) = twitch_1337::settings::SettingsStore::open(
-        &get_data_dir(),
-        audit_log,
-        &config.twitch.channel,
-    )
-    .wrap_err("Failed to open settings store")?;
 
     // One-shot migration: promote legacy [ai] keys from config.toml into
     // settings.ron on first v2 launch. A sentinel file prevents re-migration
@@ -193,18 +205,15 @@ pub async fn main() -> Result<()> {
             info!("aviationstack disabled in settings; aviation features disabled");
             None
         } else {
-            // Assemble an AviationstackConfig from settings + secret api_key from config.
-            let aviationstack_cfg = config.aviationstack.as_ref().map(|bootstrap| {
-                twitch_1337::config::AviationstackConfig {
-                    enabled: av_settings.enabled,
-                    api_key: bootstrap.api_key.clone(),
-                    base_url: av_settings.base_url.clone(),
-                    timeout_secs: av_settings.timeout_secs,
-                }
-            });
-            match aviation::AviationClient::new()
-                .map(|client| client.with_aviationstack_config(aviationstack_cfg))
-            {
+            // api_key comes from the bootstrap secret; other fields from settings.
+            let api_key = config.aviationstack.as_ref().map(|b| b.api_key.clone());
+            match aviation::AviationClient::new().map(|client| {
+                client.with_aviationstack(
+                    api_key,
+                    av_settings.base_url.clone(),
+                    av_settings.timeout_secs,
+                )
+            }) {
                 Ok(c) => Some(c),
                 Err(e) => {
                     tracing::error!(

@@ -16,7 +16,7 @@ use crate::{
     ai::chat_history::{ai_channel_history_capacity, primary_history_capacity},
     ai::command::{GROK_ALIAS_TRIGGER, is_ai_trigger},
     aviation, commands,
-    config::{AiBootstrap, SuspendConfig},
+    config::AiBootstrap,
     ping::{PingCommand, PingHandle},
     settings::SettingsHandle,
     suspend::SuspensionManager,
@@ -49,7 +49,6 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub data_dir: std::path::PathBuf,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
     pub suspension_manager: Arc<SuspensionManager>,
-    pub suspend: SuspendConfig,
     /// Pre-built 7TV emote provider. `None` disables emote grounding for `!ai`.
     pub emote_provider: Option<Arc<SevenTvEmoteProvider>>,
     /// Optional test-only sink: when set, the freshly built primary
@@ -86,7 +85,6 @@ where
         data_dir,
         doener,
         suspension_manager,
-        suspend: _,
         emote_provider,
         primary_history_tap,
     } = cfg;

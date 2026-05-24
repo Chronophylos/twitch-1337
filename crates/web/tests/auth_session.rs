@@ -63,9 +63,7 @@ fn session_expires_after_ttl() {
         .unwrap();
     clock.advance(61);
     assert!(
-        table
-            .get_and_touch(&id, Duration::from_secs(60))
-            .is_none(),
+        table.get_and_touch(&id, Duration::from_secs(60)).is_none(),
         "expected expiry past TTL"
     );
 }

@@ -413,8 +413,7 @@ async fn logout(
         .get(SID_COOKIE)
         .map(|c| c.value().to_owned())
         .ok_or(WebError::CsrfMismatch)?;
-    let session_ttl =
-        std::time::Duration::from_secs(state.settings.load().web.session_ttl_secs);
+    let session_ttl = std::time::Duration::from_secs(state.settings.load().web.session_ttl_secs);
     let session = state
         .sessions
         .get_and_touch(&sid, session_ttl)
@@ -494,7 +493,10 @@ pub async fn require_role(
     // the ArcSwap guard is not held across an async suspension point.
     let (session_ttl_secs, mod_check_refresh_secs) = {
         let web_cfg = state.settings.load();
-        (web_cfg.web.session_ttl_secs, web_cfg.web.mod_check_refresh_secs)
+        (
+            web_cfg.web.session_ttl_secs,
+            web_cfg.web.mod_check_refresh_secs,
+        )
     };
     let session = state
         .sessions
