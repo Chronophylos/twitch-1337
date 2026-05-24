@@ -139,6 +139,19 @@ impl SettingsStore {
             SettingsSection::AiWeb => current.ai.web = Default::default(),
             SettingsSection::AiEmotes => current.ai.emotes = Default::default(),
             SettingsSection::AiMedia => current.ai.media = Default::default(),
+            SettingsSection::TwitchPermissions => {
+                current.twitch.hidden_admins = None;
+                current.twitch.viewer_allowlist = None;
+                current.twitch.owner = None;
+            }
+            SettingsSection::TwitchChannels => {
+                current.twitch.expected_latency = None;
+                current.twitch.admin_channel = None;
+                current.twitch.ai_channel = None;
+            }
+            SettingsSection::Aviationstack => current.aviationstack = Default::default(),
+            SettingsSection::Suspend => current.suspend = Default::default(),
+            SettingsSection::WebRuntime => current.web = Default::default(),
         }
         let resolved = Settings::resolve(&self.defaults, &current);
         crate::util::persist::atomic_save_ron_async(&current, &self.path).await?;
@@ -915,8 +928,13 @@ mod merge_tests {
     fn merge_aviationstack_suspend_web() {
         let mut into = SettingsOverrides::default();
         let patch = SettingsOverrides {
-            aviationstack: AviationstackOverrides { enabled: Some(true), ..Default::default() },
-            suspend: SuspendOverrides { default_duration_secs: Some(900) },
+            aviationstack: AviationstackOverrides {
+                enabled: Some(true),
+                ..Default::default()
+            },
+            suspend: SuspendOverrides {
+                default_duration_secs: Some(900),
+            },
             web: WebRuntimeOverrides {
                 session_ttl_secs: Some(3600),
                 mod_check_refresh_secs: Some(60),
@@ -928,5 +946,41 @@ mod merge_tests {
         assert_eq!(into.suspend.default_duration_secs, Some(900));
         assert_eq!(into.web.session_ttl_secs, Some(3600));
         assert_eq!(into.web.mod_check_refresh_secs, Some(60));
+    }
+
+    #[tokio::test]
+    async fn reset_twitch_permissions_clears_only_perm_fields() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let audit = std::sync::Arc::new(crate::settings::audit::MemoryAuditLog::default());
+        let (store, _h) = SettingsStore::open(dir.path(), audit, "main").expect("open");
+        store
+            .apply(
+                SettingsOverrides {
+                    twitch: crate::settings::overrides::TwitchOverrides {
+                        expected_latency: Some(250),
+                        hidden_admins: Some(vec!["111".into()]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Actor {
+                    user_id: "owner".into(),
+                    user_login: "owner".into(),
+                },
+            )
+            .await
+            .expect("apply");
+        let s = store
+            .reset(
+                SettingsSection::TwitchPermissions,
+                Actor {
+                    user_id: "owner".into(),
+                    user_login: "owner".into(),
+                },
+            )
+            .await
+            .expect("reset");
+        assert!(s.twitch.hidden_admins.is_empty());
+        assert_eq!(s.twitch.expected_latency, 250); // perm reset does not touch channels
     }
 }

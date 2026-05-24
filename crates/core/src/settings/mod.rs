@@ -83,6 +83,11 @@ pub enum SettingsSection {
     AiWeb,
     AiEmotes,
     AiMedia,
+    TwitchPermissions,
+    TwitchChannels,
+    Aviationstack,
+    Suspend,
+    WebRuntime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
