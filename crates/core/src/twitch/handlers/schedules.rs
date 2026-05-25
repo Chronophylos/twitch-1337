@@ -27,8 +27,15 @@ pub async fn run_schedule_settings_sync(
     // whatever was loaded at startup.
     regenerate(&settings, &cache).await;
     loop {
+        // Pre-register the Notified future BEFORE entering regenerate() so a
+        // notify_waiters() fired during regenerate() is captured rather than
+        // dropped. tokio::sync::Notify only wakes futures that are already
+        // polled or explicitly enabled — without enable(), a wakeup that
+        // races our subscription is silently lost (PR #227 review F1).
+        let mut notified = Box::pin(change.notified());
+        notified.as_mut().enable();
         tokio::select! {
-            () = change.notified() => {
+            () = &mut notified => {
                 regenerate(&settings, &cache).await;
             }
             () = shutdown.notified() => {
@@ -329,5 +336,83 @@ mod sync_tests {
         shutdown.notify_waiters();
         let _ = tokio::time::timeout(Duration::from_millis(500), task).await;
         let _ = FileAuditLog::new(dir.path().join("settings_audit.log")); // unused, silences import lint
+    }
+
+    /// Race regression: fires `notify_waiters()` while the sync task's
+    /// regenerate() is mid-flight. Pre-fix, the second wakeup was dropped
+    /// because the next `change.notified()` future hadn't been polled yet.
+    #[tokio::test]
+    async fn settings_apply_during_regenerate_is_not_lost() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let audit = Arc::new(MemoryAuditLog::default());
+        let (store, settings_handle) =
+            SettingsStore::open(dir.path(), audit, "main").expect("open");
+        let cache = Arc::new(RwLock::new(database::ScheduleCache::new()));
+        let shutdown = Arc::new(Notify::new());
+
+        let cache_for_task = cache.clone();
+        let store_for_task = store.clone();
+        let shutdown_for_task = shutdown.clone();
+        let handle_for_task = settings_handle.clone();
+        let task = tokio::spawn(async move {
+            super::run_schedule_settings_sync(
+                handle_for_task,
+                store_for_task,
+                cache_for_task,
+                shutdown_for_task,
+            )
+            .await;
+        });
+
+        // Give the sync task time to register its first notified() waiter.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Burst two applies back-to-back. The second fires while the task
+        // is regenerating from the first; the wakeup must not be lost.
+        for (i, name) in [(1usize, "one"), (2, "two")] {
+            store
+                .apply(
+                    SettingsOverrides {
+                        schedules: Some(vec![ScheduleSettings {
+                            name: name.into(),
+                            message: "hi".into(),
+                            interval: "01:00".into(),
+                            enabled: true,
+                            ..Default::default()
+                        }]),
+                        ..Default::default()
+                    },
+                    Actor {
+                        user_id: format!("{i}"),
+                        user_login: "tester".into(),
+                    },
+                )
+                .await
+                .expect("apply");
+        }
+
+        // Cache must converge to the *second* apply's content within 1s.
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            {
+                let g = cache.read().await;
+                if g.schedules.len() == 1 && g.schedules[0].name == "two" {
+                    break;
+                }
+            }
+            if std::time::Instant::now() > deadline {
+                let g = cache.read().await;
+                panic!(
+                    "cache did not converge to second apply within 1s; \
+                     version={}, schedules={:?}",
+                    g.version,
+                    g.schedules.iter().map(|s| &s.name).collect::<Vec<_>>()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        shutdown.notify_waiters();
+        let _ = tokio::time::timeout(Duration::from_millis(500), task).await;
     }
 }
