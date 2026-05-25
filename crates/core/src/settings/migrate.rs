@@ -203,6 +203,49 @@ pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::Set
             .map(|d| d.as_secs());
     }
 
+    if let Some(arr) = root.get("schedules").and_then(toml::Value::as_array) {
+        let mut out_vec: Vec<crate::settings::ScheduleSettings> = Vec::new();
+        for entry in arr {
+            let Some(t) = entry.as_table() else { continue };
+            let v = toml::Value::Table(t.clone());
+            let name = v
+                .get("name")
+                .and_then(toml::Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let message = v
+                .get("message")
+                .and_then(toml::Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let interval = v
+                .get("interval")
+                .and_then(toml::Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let enabled = v
+                .get("enabled")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(true);
+            let opt_str = |k: &str| -> Option<String> {
+                v.get(k).and_then(toml::Value::as_str).map(str::to_owned)
+            };
+            out_vec.push(crate::settings::ScheduleSettings {
+                name,
+                message,
+                interval,
+                start_date: opt_str("start_date"),
+                end_date: opt_str("end_date"),
+                active_time_start: opt_str("active_time_start"),
+                active_time_end: opt_str("active_time_end"),
+                enabled,
+            });
+        }
+        if !out_vec.is_empty() {
+            out.schedules = Some(out_vec);
+        }
+    }
+
     Ok(out)
 }
 
@@ -392,6 +435,80 @@ mod tests {
         // `owner` is bootstrap-only (config.toml) and is no longer migrated.
         assert_eq!(overrides.twitch.admin_channel, Some(None));
         assert_eq!(overrides.twitch.ai_channel, Some(None));
+    }
+
+    #[test]
+    fn legacy_schedules_array_migrates_into_overrides() {
+        let raw = r#"
+            [twitch]
+            channel = "c"
+            username = "u"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+
+            [[schedules]]
+            name = "noon"
+            message = "midday"
+            interval = "01:00"
+            enabled = true
+
+            [[schedules]]
+            name = "winter"
+            message = "snow"
+            interval = "06:00"
+            start_date = "2026-12-01T00:00:00"
+            end_date = "2027-03-01T00:00:00"
+            active_time_start = "08:00"
+            active_time_end = "20:00"
+            enabled = false
+        "#;
+        let value: toml::Value = toml::from_str(raw).expect("parse");
+        let overrides = migrate_legacy_config(&value).expect("migrate");
+        let v = overrides.schedules.expect("Some");
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].name, "noon");
+        assert!(v[0].enabled);
+        assert_eq!(v[1].name, "winter");
+        assert!(!v[1].enabled);
+        assert_eq!(v[1].start_date.as_deref(), Some("2026-12-01T00:00:00"));
+        assert_eq!(v[1].active_time_start.as_deref(), Some("08:00"));
+    }
+
+    #[test]
+    fn no_schedules_section_returns_none() {
+        let raw = r#"
+            [twitch]
+            channel = "c"
+            username = "u"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+        "#;
+        let value: toml::Value = toml::from_str(raw).expect("parse");
+        let overrides = migrate_legacy_config(&value).expect("migrate");
+        assert!(overrides.schedules.is_none());
+    }
+
+    #[test]
+    fn schedules_default_enabled_true_when_key_absent() {
+        let raw = r#"
+            [twitch]
+            channel = "c"
+            username = "u"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+
+            [[schedules]]
+            name = "x"
+            message = "y"
+            interval = "01:00"
+        "#;
+        let value: toml::Value = toml::from_str(raw).expect("parse");
+        let overrides = migrate_legacy_config(&value).expect("migrate");
+        let v = overrides.schedules.expect("Some");
+        assert!(v[0].enabled);
     }
 
     #[test]
