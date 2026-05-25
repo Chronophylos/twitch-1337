@@ -292,13 +292,22 @@ impl Settings {
                 let bad: Vec<char> = sc
                     .name
                     .chars()
-                    .filter(|c| matches!(c, '/' | '?' | '#' | '%'))
+                    .filter(|c| {
+                        // URL-reserved or query-decoded chars that break the
+                        // dashboard's /schedules/<name>/edit + ?edit=<name>
+                        // routes, plus ASCII control chars (log injection,
+                        // IRC framing). PR #227 review F6 + F9.
+                        matches!(
+                            c,
+                            '/' | '?' | '#' | '%' | '&' | '+' | '=' | ' ' | '\'' | '"'
+                        ) || c.is_control()
+                    })
                     .collect();
                 if !bad.is_empty() {
                     errs.push(FieldError {
                         field: format!("{prefix}.name"),
                         message: format!(
-                            "must not contain URL-reserved characters {bad:?} (used in dashboard route paths)"
+                            "must not contain URL-reserved, whitespace, quote, or control characters {bad:?}"
                         ),
                     });
                 }
@@ -1391,6 +1400,63 @@ mod resolve_tests {
                 channel: "test".into(),
             })
             .expect_err("slash in name must fail");
+        assert!(errs.iter().any(|e| e.field == "schedules[0].name"));
+    }
+
+    #[test]
+    fn validate_rejects_schedule_name_with_ampersand() {
+        use crate::settings::ScheduleSettings;
+        let mut s = Settings::compiled_defaults();
+        s.schedules = vec![ScheduleSettings {
+            name: "foo&bar".into(),
+            message: "m".into(),
+            interval: "01:00".into(),
+            enabled: true,
+            ..Default::default()
+        }];
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("should fail");
+        assert!(errs.iter().any(|e| e.field == "schedules[0].name"));
+    }
+
+    #[test]
+    fn validate_rejects_schedule_name_with_space() {
+        use crate::settings::ScheduleSettings;
+        let mut s = Settings::compiled_defaults();
+        s.schedules = vec![ScheduleSettings {
+            name: "foo bar".into(),
+            message: "m".into(),
+            interval: "01:00".into(),
+            enabled: true,
+            ..Default::default()
+        }];
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("should fail");
+        assert!(errs.iter().any(|e| e.field == "schedules[0].name"));
+    }
+
+    #[test]
+    fn validate_rejects_schedule_name_with_control_char() {
+        use crate::settings::ScheduleSettings;
+        let mut s = Settings::compiled_defaults();
+        s.schedules = vec![ScheduleSettings {
+            name: "foo\nbar".into(),
+            message: "m".into(),
+            interval: "01:00".into(),
+            enabled: true,
+            ..Default::default()
+        }];
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("should fail");
         assert!(errs.iter().any(|e| e.field == "schedules[0].name"));
     }
 }
