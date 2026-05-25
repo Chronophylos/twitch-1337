@@ -123,6 +123,9 @@ impl SettingsStore {
                 error!(error = ?e, "audit append failed");
             }
         }
+        // Notify unconditionally even on a no-op write: idempotent reload is
+        // cheap, and skipping based on diff_changes would couple change
+        // notifications to the audit-log diff logic.
         self.change_notify.notify_waiters();
         Ok(resolved)
     }
@@ -178,6 +181,9 @@ impl SettingsStore {
                 error!(error = ?e, "audit append failed");
             }
         }
+        // Notify unconditionally even on a no-op write: idempotent reload is
+        // cheap, and skipping based on diff_changes would couple change
+        // notifications to the audit-log diff logic.
         self.change_notify.notify_waiters();
         Ok(resolved)
     }
@@ -1069,6 +1075,49 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_millis(500), waiter)
             .await
             .expect("apply must notify change waiters within 500ms")
+            .expect("waiter task ok");
+    }
+
+    #[tokio::test]
+    async fn reset_signals_change_notify() {
+        let (_dir, store, _handle, _log) = fixture();
+        // Seed a non-default cooldowns override so reset has something to clear.
+        store
+            .apply(
+                SettingsOverrides {
+                    cooldowns: CooldownsOverrides {
+                        ai: Some(15),
+                        ..Default::default()
+                    },
+                    ..SettingsOverrides::default()
+                },
+                Actor {
+                    user_id: "1".into(),
+                    user_login: "tester".into(),
+                },
+            )
+            .await
+            .expect("apply");
+        let notify = store.change_notify();
+        let waiter = {
+            let n = notify.clone();
+            tokio::spawn(async move {
+                n.notified().await;
+            })
+        };
+        store
+            .reset(
+                SettingsSection::Cooldowns,
+                Actor {
+                    user_id: "1".into(),
+                    user_login: "tester".into(),
+                },
+            )
+            .await
+            .expect("reset");
+        tokio::time::timeout(std::time::Duration::from_millis(500), waiter)
+            .await
+            .expect("reset must notify change waiters within 500ms")
             .expect("waiter task ok");
     }
 
