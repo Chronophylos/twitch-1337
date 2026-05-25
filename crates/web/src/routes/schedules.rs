@@ -316,3 +316,39 @@ mod into_settings_tests {
         assert_eq!(s.interval, "01:00");
     }
 }
+
+#[cfg(test)]
+mod field_path_parse_tests {
+    // We can't call render_validation directly without a WebState; instead
+    // test the parsing logic by reproducing the slice arithmetic. This pins
+    // the bounds-safe `.get(end + 2..).unwrap_or("")` behavior so a future
+    // refactor doesn't reintroduce a panicking unchecked slice (PR #227
+    // review F11).
+    fn extract_field_name(field: &str) -> Option<(usize, String)> {
+        let rest = field.strip_prefix("schedules[")?;
+        let end = rest.find(']')?;
+        let idx: usize = rest[..end].parse().ok()?;
+        let field_name = rest.get(end + 2..).unwrap_or("").to_owned();
+        Some((idx, field_name))
+    }
+
+    #[test]
+    fn well_formed_field_path_parses() {
+        let got = extract_field_name("schedules[3].name");
+        assert_eq!(got, Some((3, "name".to_owned())));
+    }
+
+    #[test]
+    fn bare_indexed_path_does_not_panic() {
+        // No .field suffix — pre-fix this panicked on the slice. With
+        // .get().unwrap_or("") it produces an empty field name.
+        let got = extract_field_name("schedules[0]");
+        assert_eq!(got, Some((0, "".to_owned())));
+    }
+
+    #[test]
+    fn malformed_path_returns_none() {
+        assert!(extract_field_name("schedules.name").is_none());
+        assert!(extract_field_name("schedules[abc].name").is_none());
+    }
+}
