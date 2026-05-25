@@ -130,6 +130,49 @@ impl SettingsStore {
         Ok(resolved)
     }
 
+    /// Read-modify-write inside the store's write_lock. The closure receives
+    /// `&mut SettingsOverrides` (the freshly loaded overrides) and may mutate
+    /// any section. The store re-resolves, validates, persists, and notifies
+    /// exactly as `apply` does — but the snapshot the closure sees cannot be
+    /// stale (PR #227 review F4: prevents lost-update races on concurrent
+    /// /schedules CRUD POSTs).
+    pub async fn apply_with<F>(
+        &self,
+        mutate: F,
+        actor: Actor,
+    ) -> Result<Settings, SettingsError>
+    where
+        F: FnOnce(&mut SettingsOverrides),
+    {
+        let _g = self.write_lock.lock().await;
+        let mut current = load_overrides_async(&self.path).await?.unwrap_or_default();
+        let prior_resolved = Settings::resolve(&self.defaults, &current);
+        mutate(&mut current);
+        let resolved = Settings::resolve(&self.defaults, &current);
+        let ctx = super::ValidationContext {
+            channel: self.boot_channel.clone(),
+        };
+        if let Err(errs) = resolved.validate(&ctx) {
+            return Err(SettingsError::Validation(errs));
+        }
+        crate::util::persist::atomic_save_ron_async(&current, &self.path).await?;
+        self.handle.store(Arc::new(resolved.clone()));
+        let changes = diff_changes(&prior_resolved, &resolved);
+        if !changes.is_empty() {
+            let entry = AuditEntry {
+                ts: berlin_now(Utc::now()),
+                actor_id: actor.user_id,
+                actor_login: actor.user_login,
+                changes,
+            };
+            if let Err(e) = self.audit.append(&entry) {
+                error!(error = ?e, "audit append failed");
+            }
+        }
+        self.change_notify.notify_waiters();
+        Ok(resolved)
+    }
+
     pub async fn reset(
         &self,
         section: SettingsSection,
@@ -1111,6 +1154,67 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_millis(500), notified)
             .await
             .expect("reset must notify change waiters within 500ms");
+    }
+
+    #[tokio::test]
+    async fn concurrent_apply_with_does_not_lose_updates() {
+        use crate::settings::Actor;
+        use crate::settings::audit::MemoryAuditLog;
+        let dir = tempfile::tempdir().expect("tmp");
+        let audit = Arc::new(MemoryAuditLog::default());
+        let (store, _h) = SettingsStore::open(dir.path(), audit, "main").expect("open");
+
+        let store_a = store.clone();
+        let store_b = store.clone();
+
+        let task_a = tokio::spawn(async move {
+            store_a
+                .apply_with(
+                    |o| {
+                        let mut next = o.schedules.clone().unwrap_or_default();
+                        next.push(crate::settings::ScheduleSettings {
+                            name: "alpha".into(),
+                            message: "a".into(),
+                            interval: "01:00".into(),
+                            enabled: true,
+                            ..Default::default()
+                        });
+                        o.schedules = Some(next);
+                    },
+                    Actor { user_id: "1".into(), user_login: "a".into() },
+                )
+                .await
+                .expect("apply_with a");
+        });
+        let task_b = tokio::spawn(async move {
+            store_b
+                .apply_with(
+                    |o| {
+                        let mut next = o.schedules.clone().unwrap_or_default();
+                        next.push(crate::settings::ScheduleSettings {
+                            name: "bravo".into(),
+                            message: "b".into(),
+                            interval: "01:00".into(),
+                            enabled: true,
+                            ..Default::default()
+                        });
+                        o.schedules = Some(next);
+                    },
+                    Actor { user_id: "2".into(), user_login: "b".into() },
+                )
+                .await
+                .expect("apply_with b");
+        });
+        let _ = tokio::join!(task_a, task_b);
+
+        let final_resolved = store.handle().load();
+        let names: std::collections::BTreeSet<&str> =
+            final_resolved.schedules.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            std::collections::BTreeSet::from(["alpha", "bravo"]),
+            "both concurrent adds must survive — neither clobbers the other"
+        );
     }
 
     #[test]

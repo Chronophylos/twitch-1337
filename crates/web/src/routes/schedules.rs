@@ -11,9 +11,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use serde::Deserialize;
 use tower_cookies::Cookies;
-use twitch_1337_core::settings::{
-    Actor, ScheduleSettings, SettingsError, overrides::SettingsOverrides,
-};
+use twitch_1337_core::settings::{Actor, ScheduleSettings, SettingsError};
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
@@ -135,9 +133,18 @@ async fn create(
         return Err(WebError::CsrfMismatch);
     }
     let new_row = form.into_settings();
-    let mut next = state.settings.load().schedules.clone();
-    next.push(new_row);
-    apply_or_rerender(&state, &session, cookies, next, None).await
+    apply_or_rerender(
+        &state,
+        &session,
+        cookies,
+        Box::new(move |o| {
+            let mut next = o.schedules.clone().unwrap_or_default();
+            next.push(new_row.clone());
+            o.schedules = Some(next);
+        }),
+        None,
+    )
+    .await
 }
 
 async fn update(
@@ -152,13 +159,20 @@ async fn update(
     }
     let new_row = form.into_settings();
     let new_name = new_row.name.clone();
-    let mut next = state.settings.load().schedules.clone();
-    if let Some(idx) = next.iter().position(|s| s.name == name) {
-        next[idx] = new_row;
-    } else {
-        return Ok(Redirect::to("/schedules").into_response());
-    }
-    apply_or_rerender(&state, &session, cookies, next, Some(new_name)).await
+    apply_or_rerender(
+        &state,
+        &session,
+        cookies,
+        Box::new(move |o| {
+            let mut next = o.schedules.clone().unwrap_or_default();
+            if let Some(idx) = next.iter().position(|s| s.name == name) {
+                next[idx] = new_row.clone();
+            }
+            o.schedules = Some(next);
+        }),
+        Some(new_name),
+    )
+    .await
 }
 
 async fn delete(
@@ -171,78 +185,98 @@ async fn delete(
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    let next: Vec<ScheduleSettings> = state
-        .settings
-        .load()
-        .schedules
-        .iter()
-        .filter(|s| s.name != name)
-        .cloned()
-        .collect();
-    apply_or_rerender(&state, &session, cookies, next, None).await
+    apply_or_rerender(
+        &state,
+        &session,
+        cookies,
+        Box::new(move |o| {
+            let next: Vec<ScheduleSettings> = o
+                .schedules
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|s| s.name != name)
+                .collect();
+            o.schedules = Some(next);
+        }),
+        None,
+    )
+    .await
 }
+
+type Mutator =
+    Box<dyn FnOnce(&mut twitch_1337_core::settings::overrides::SettingsOverrides) + Send>;
 
 async fn apply_or_rerender(
     state: &WebState,
     session: &Session,
     cookies: Cookies,
-    next: Vec<ScheduleSettings>,
+    mutate: Mutator,
     edit_on_error: Option<String>,
 ) -> Result<Response, WebError> {
     let actor = Actor {
         user_id: session.user_id.clone(),
         user_login: session.user_login.clone(),
     };
-    let patch = SettingsOverrides {
-        schedules: Some(next.clone()),
-        ..Default::default()
-    };
-    match state.settings_store.apply(patch, actor).await {
+    match state.settings_store.apply_with(mutate, actor).await {
         Ok(_) => {
             flash::set(&cookies, "Schedules saved.");
             Ok(Redirect::to("/schedules").into_response())
         }
         Err(SettingsError::Validation(errs)) => {
-            let mut errors_for: std::collections::HashMap<String, Vec<(String, String)>> =
-                Default::default();
-            for e in errs {
-                if let Some(rest) = e.field.strip_prefix("schedules[")
-                    && let Some(end) = rest.find(']')
-                {
-                    let idx_str = &rest[..end];
-                    if let Ok(idx) = idx_str.parse::<usize>()
-                        && let Some(row) = next.get(idx)
-                    {
-                        // rest looks like "schedules[0].field" → strip the
-                        // "<idx>]." prefix to get just "field".
-                        let field_name = &rest[end + 2..];
-                        errors_for
-                            .entry(row.name.clone())
-                            .or_default()
-                            .push((field_name.to_owned(), e.message));
-                        continue;
-                    }
-                }
-                errors_for
-                    .entry(String::new())
-                    .or_default()
-                    .push((e.field, e.message));
-            }
-            let resp = ListTpl {
-                rows: next,
-                edit_name: edit_on_error,
-                errors_for,
-                flash: None,
-                csrf: csrf::encode(&session.csrf_value),
-                user_login: session.user_login.clone(),
-                user_avatar_url: session.avatar_url.clone(),
-                current_page: crate::nav::SCHEDULES,
-                is_mod: session.is_mod(),
-                is_broadcaster: session.is_broadcaster,
-                is_owner: matches!(session.role, crate::auth::Role::Owner),
-            };
-            render(&resp)
+            // The mutator was consumed by apply_with on failure; settings
+            // still reflect pre-submit state. Re-render using the live
+            // store snapshot so the user sees what's actually persisted,
+            // with per-row error attribution by index parsed from field
+            // paths (Task 7 restructures this further).
+            let rows = state.settings.load().schedules.clone();
+            render_validation(session, rows, errs, edit_on_error)
         }
         Err(e) => Err(WebError::Internal(eyre::eyre!("settings apply: {e}"))),
     }
+}
+
+fn render_validation(
+    session: &Session,
+    rows: Vec<ScheduleSettings>,
+    errs: Vec<twitch_1337_core::settings::FieldError>,
+    edit_on_error: Option<String>,
+) -> Result<Response, WebError> {
+    let mut errors_for: std::collections::HashMap<String, Vec<(String, String)>> =
+        Default::default();
+    for e in errs {
+        if let Some(rest) = e.field.strip_prefix("schedules[")
+            && let Some(end) = rest.find(']')
+        {
+            let idx_str = &rest[..end];
+            if let Ok(idx) = idx_str.parse::<usize>()
+                && let Some(row) = rows.get(idx)
+            {
+                let field_name = rest.get(end + 2..).unwrap_or("").to_owned();
+                errors_for
+                    .entry(row.name.clone())
+                    .or_default()
+                    .push((field_name, e.message));
+                continue;
+            }
+        }
+        errors_for
+            .entry(String::new())
+            .or_default()
+            .push((e.field, e.message));
+    }
+    let resp = ListTpl {
+        rows,
+        edit_name: edit_on_error,
+        errors_for,
+        flash: None,
+        csrf: csrf::encode(&session.csrf_value),
+        user_login: session.user_login.clone(),
+        user_avatar_url: session.avatar_url.clone(),
+        current_page: crate::nav::SCHEDULES,
+        is_mod: session.is_mod(),
+        is_broadcaster: session.is_broadcaster,
+        is_owner: matches!(session.role, crate::auth::Role::Owner),
+    };
+    render(&resp)
 }
