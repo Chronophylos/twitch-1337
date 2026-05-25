@@ -11,7 +11,7 @@ use tracing::{error, info, warn};
 
 use super::audit::{AuditChange, AuditEntry, AuditLog, berlin_now};
 use super::overrides::SettingsOverrides;
-use super::{Settings, SettingsError, SettingsHandle, SettingsSection};
+use super::{ScheduleSettings, Settings, SettingsError, SettingsHandle, SettingsSection};
 
 const FILE_NAME: &str = "settings.ron";
 
@@ -766,12 +766,12 @@ fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
     // Schedules — diff by name across vec
     {
         use std::collections::{BTreeMap, BTreeSet};
-        let prior_map: BTreeMap<&str, &crate::settings::ScheduleSettings> = prior
+        let prior_map: BTreeMap<&str, &ScheduleSettings> = prior
             .schedules
             .iter()
             .map(|s| (s.name.as_str(), s))
             .collect();
-        let next_map: BTreeMap<&str, &crate::settings::ScheduleSettings> = next
+        let next_map: BTreeMap<&str, &ScheduleSettings> = next
             .schedules
             .iter()
             .map(|s| (s.name.as_str(), s))
@@ -992,95 +992,6 @@ mod tests {
         assert!(keys.contains(&"ai.dreamer.service_tier"), "got {keys:?}");
     }
 
-    #[test]
-    fn merge_replaces_schedules_wholesale() {
-        use crate::settings::ScheduleSettings;
-        let mut into = SettingsOverrides::default();
-        into.schedules = Some(vec![ScheduleSettings {
-            name: "old".into(),
-            ..Default::default()
-        }]);
-        let patch = SettingsOverrides {
-            schedules: Some(vec![
-                ScheduleSettings {
-                    name: "new1".into(),
-                    ..Default::default()
-                },
-                ScheduleSettings {
-                    name: "new2".into(),
-                    ..Default::default()
-                },
-            ]),
-            ..Default::default()
-        };
-        merge_into(&mut into, &patch);
-        let v = into.schedules.expect("Some");
-        assert_eq!(v.len(), 2);
-        assert_eq!(v[0].name, "new1");
-        assert_eq!(v[1].name, "new2");
-    }
-
-    #[test]
-    fn merge_skips_schedules_when_patch_is_none() {
-        use crate::settings::ScheduleSettings;
-        let mut into = SettingsOverrides {
-            schedules: Some(vec![ScheduleSettings {
-                name: "keep".into(),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        };
-        let patch = SettingsOverrides::default();
-        merge_into(&mut into, &patch);
-        let v = into.schedules.expect("Some");
-        assert_eq!(v.len(), 1);
-        assert_eq!(v[0].name, "keep");
-    }
-
-    #[test]
-    fn diff_emits_schedule_added_removed_modified() {
-        use crate::settings::ScheduleSettings;
-        let mut prior = Settings::compiled_defaults();
-        let mut next = Settings::compiled_defaults();
-        prior.schedules = vec![
-            ScheduleSettings {
-                name: "keep".into(),
-                message: "old".into(),
-                interval: "01:00".into(),
-                enabled: true,
-                ..Default::default()
-            },
-            ScheduleSettings {
-                name: "drop".into(),
-                message: "x".into(),
-                interval: "01:00".into(),
-                enabled: true,
-                ..Default::default()
-            },
-        ];
-        next.schedules = vec![
-            ScheduleSettings {
-                name: "keep".into(),
-                message: "new".into(), // modified
-                interval: "01:00".into(),
-                enabled: true,
-                ..Default::default()
-            },
-            ScheduleSettings {
-                name: "add".into(),
-                message: "y".into(),
-                interval: "01:00".into(),
-                enabled: true,
-                ..Default::default()
-            },
-        ];
-        let changes = diff_changes(&prior, &next);
-        let keys: Vec<&str> = changes.iter().map(|c| c.key.as_str()).collect();
-        assert!(keys.contains(&"schedules.keep"), "got {keys:?}");
-        assert!(keys.contains(&"schedules.drop"), "got {keys:?}");
-        assert!(keys.contains(&"schedules.add"), "got {keys:?}");
-    }
-
     #[tokio::test]
     async fn reset_schedules_clears_override() {
         use crate::settings::ScheduleSettings;
@@ -1141,6 +1052,7 @@ mod tests {
 #[cfg(test)]
 mod merge_tests {
     use super::*;
+    use crate::settings::ScheduleSettings;
     use crate::settings::overrides::{
         AviationstackOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
     };
@@ -1263,5 +1175,91 @@ mod merge_tests {
             s.twitch.expected_latency, 300,
             "TwitchChannels reset must not wipe expected_latency"
         );
+    }
+
+    #[test]
+    fn merge_replaces_schedules_wholesale() {
+        let mut into = SettingsOverrides::default();
+        into.schedules = Some(vec![ScheduleSettings {
+            name: "old".into(),
+            ..Default::default()
+        }]);
+        let patch = SettingsOverrides {
+            schedules: Some(vec![
+                ScheduleSettings {
+                    name: "new1".into(),
+                    ..Default::default()
+                },
+                ScheduleSettings {
+                    name: "new2".into(),
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        };
+        merge_into(&mut into, &patch);
+        let v = into.schedules.expect("Some");
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].name, "new1");
+        assert_eq!(v[1].name, "new2");
+    }
+
+    #[test]
+    fn merge_skips_schedules_when_patch_is_none() {
+        let mut into = SettingsOverrides {
+            schedules: Some(vec![ScheduleSettings {
+                name: "keep".into(),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let patch = SettingsOverrides::default();
+        merge_into(&mut into, &patch);
+        let v = into.schedules.expect("Some");
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "keep");
+    }
+
+    #[test]
+    fn diff_emits_schedule_added_removed_modified() {
+        let mut prior = Settings::compiled_defaults();
+        let mut next = Settings::compiled_defaults();
+        prior.schedules = vec![
+            ScheduleSettings {
+                name: "keep".into(),
+                message: "old".into(),
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            },
+            ScheduleSettings {
+                name: "drop".into(),
+                message: "x".into(),
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            },
+        ];
+        next.schedules = vec![
+            ScheduleSettings {
+                name: "keep".into(),
+                message: "new".into(), // modified
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            },
+            ScheduleSettings {
+                name: "add".into(),
+                message: "y".into(),
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            },
+        ];
+        let changes = diff_changes(&prior, &next);
+        let keys: Vec<&str> = changes.iter().map(|c| c.key.as_str()).collect();
+        assert!(keys.contains(&"schedules.keep"), "got {keys:?}");
+        assert!(keys.contains(&"schedules.drop"), "got {keys:?}");
+        assert!(keys.contains(&"schedules.add"), "got {keys:?}");
     }
 }
