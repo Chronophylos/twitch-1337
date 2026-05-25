@@ -210,7 +210,10 @@ pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::Set
             let v = toml::Value::Table(t.clone());
             let name = v.get("name").and_then(toml::Value::as_str).map(str::trim);
             let message = v.get("message").and_then(toml::Value::as_str);
-            let interval = v.get("interval").and_then(toml::Value::as_str).map(str::trim);
+            let interval = v
+                .get("interval")
+                .and_then(toml::Value::as_str)
+                .map(str::trim);
             let (Some(name), Some(message), Some(interval)) = (name, message, interval) else {
                 tracing::warn!(
                     schedule_index = idx,

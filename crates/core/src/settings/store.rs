@@ -136,11 +136,7 @@ impl SettingsStore {
     /// exactly as `apply` does — but the snapshot the closure sees cannot be
     /// stale (PR #227 review F4: prevents lost-update races on concurrent
     /// /schedules CRUD POSTs).
-    pub async fn apply_with<F>(
-        &self,
-        mutate: F,
-        actor: Actor,
-    ) -> Result<Settings, SettingsError>
+    pub async fn apply_with<F>(&self, mutate: F, actor: Actor) -> Result<Settings, SettingsError>
     where
         F: FnOnce(&mut SettingsOverrides),
     {
@@ -1181,7 +1177,10 @@ mod tests {
                         });
                         o.schedules = Some(next);
                     },
-                    Actor { user_id: "1".into(), user_login: "a".into() },
+                    Actor {
+                        user_id: "1".into(),
+                        user_login: "a".into(),
+                    },
                 )
                 .await
                 .expect("apply_with a");
@@ -1200,7 +1199,10 @@ mod tests {
                         });
                         o.schedules = Some(next);
                     },
-                    Actor { user_id: "2".into(), user_login: "b".into() },
+                    Actor {
+                        user_id: "2".into(),
+                        user_login: "b".into(),
+                    },
                 )
                 .await
                 .expect("apply_with b");
@@ -1208,8 +1210,11 @@ mod tests {
         let _ = tokio::join!(task_a, task_b);
 
         let final_resolved = store.handle().load();
-        let names: std::collections::BTreeSet<&str> =
-            final_resolved.schedules.iter().map(|s| s.name.as_str()).collect();
+        let names: std::collections::BTreeSet<&str> = final_resolved
+            .schedules
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
         assert_eq!(
             names,
             std::collections::BTreeSet::from(["alpha", "bravo"]),

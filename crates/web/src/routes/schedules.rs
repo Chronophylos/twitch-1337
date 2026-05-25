@@ -260,10 +260,7 @@ fn render_validation(
         {
             let idx_str = &rest[..end];
             if let Ok(idx) = idx_str.parse::<usize>() {
-                let row_name = rows
-                    .get(idx)
-                    .map(|r| r.name.clone())
-                    .unwrap_or_default();
+                let row_name = rows.get(idx).map(|r| r.name.clone()).unwrap_or_default();
                 let field_name = rest.get(end + 2..).unwrap_or("").to_owned();
                 row_errors.push(RowError {
                     row_index: idx,
