@@ -136,13 +136,31 @@ pub async fn main() -> Result<()> {
                 user_id: "migrate".into(),
                 user_login: "schedules-v3-migration".into(),
             };
-            settings_store
-                .apply(slim, actor)
-                .await
-                .wrap_err("schedules v3 migration apply")?;
-            info!("migrated legacy [[schedules]] into settings.ron");
+            // Best-effort: a legacy row that was valid under the old loose
+            // validator can fail the new stricter Settings::validate (PR #227
+            // review F2). Log + carry on so the bot boots; operators can
+            // hand-edit config.toml or settings.ron.
+            match settings_store.apply(slim, actor).await {
+                Ok(_) => info!("migrated legacy [[schedules]] into settings.ron"),
+                Err(e) => tracing::error!(
+                    error = ?e,
+                    "schedules v3 migration apply failed; legacy [[schedules]] \
+                     skipped — bot will boot with no migrated schedules. \
+                     Fix the offending row in config.toml or manage schedules via /schedules."
+                ),
+            }
         }
-        std::fs::write(&schedules_marker, "").wrap_err("write .schedules_migrated_v3 marker")?;
+        // Write the sentinel regardless of apply outcome: if apply failed, the
+        // operator must fix config.toml manually; re-running the migration on
+        // every boot wouldn't help and risks overwriting dashboard edits made
+        // in the meantime (PR #227 review F5).
+        if let Err(e) = std::fs::write(&schedules_marker, "") {
+            tracing::error!(
+                error = ?e,
+                marker = ?schedules_marker,
+                "failed to write .schedules_migrated_v3 marker; next boot will re-run the migration"
+            );
+        }
     }
 
     let local = Utc::now().with_timezone(&chrono_tz::Europe::Berlin);
