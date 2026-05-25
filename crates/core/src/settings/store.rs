@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use chrono::Utc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tracing::{error, info, warn};
 
 use super::audit::{AuditChange, AuditEntry, AuditLog, berlin_now};
@@ -27,6 +27,7 @@ pub struct SettingsStore {
     handle: SettingsHandle,
     audit: Arc<dyn AuditLog>,
     write_lock: Mutex<()>,
+    change_notify: Arc<Notify>,
     boot_channel: String,
 }
 
@@ -61,6 +62,7 @@ impl SettingsStore {
                 handle: handle.clone(),
                 audit,
                 write_lock: Mutex::new(()),
+                change_notify: Arc::new(Notify::new()),
                 boot_channel: boot_channel.to_owned(),
             });
             return Ok((store, handle));
@@ -72,6 +74,7 @@ impl SettingsStore {
             handle: handle.clone(),
             audit,
             write_lock: Mutex::new(()),
+            change_notify: Arc::new(Notify::new()),
             boot_channel: boot_channel.to_owned(),
         });
         info!("settings store opened");
@@ -80,6 +83,10 @@ impl SettingsStore {
 
     pub fn handle(&self) -> &SettingsHandle {
         &self.handle
+    }
+
+    pub fn change_notify(&self) -> Arc<Notify> {
+        self.change_notify.clone()
     }
 
     pub fn defaults(&self) -> &Settings {
@@ -116,6 +123,7 @@ impl SettingsStore {
                 error!(error = ?e, "audit append failed");
             }
         }
+        self.change_notify.notify_waiters();
         Ok(resolved)
     }
 
@@ -170,6 +178,7 @@ impl SettingsStore {
                 error!(error = ?e, "audit append failed");
             }
         }
+        self.change_notify.notify_waiters();
         Ok(resolved)
     }
 }
@@ -1028,6 +1037,39 @@ mod tests {
             .await
             .expect("reset");
         assert!(s.schedules.is_empty());
+    }
+
+    #[tokio::test]
+    async fn apply_signals_change_notify() {
+        let (_dir, store, _handle, _log) = fixture();
+        let notify = store.change_notify();
+        let waiter = {
+            let n = notify.clone();
+            tokio::spawn(async move {
+                n.notified().await;
+            })
+        };
+        let patch = SettingsOverrides {
+            cooldowns: CooldownsOverrides {
+                ai: Some(15),
+                ..Default::default()
+            },
+            ..SettingsOverrides::default()
+        };
+        store
+            .apply(
+                patch,
+                Actor {
+                    user_id: "1".into(),
+                    user_login: "tester".into(),
+                },
+            )
+            .await
+            .expect("apply");
+        tokio::time::timeout(std::time::Duration::from_millis(500), waiter)
+            .await
+            .expect("apply must notify change waiters within 500ms")
+            .expect("waiter task ok");
     }
 
     #[test]
