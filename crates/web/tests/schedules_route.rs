@@ -225,3 +225,55 @@ async fn edit_query_param_renders_inline_form() {
         "edit form action must be present for the matching row; body was: {body}"
     );
 }
+
+#[tokio::test]
+async fn edit_validation_failure_reopens_form_with_new_name() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_schedules(
+        &state,
+        vec![
+            ScheduleSettings {
+                name: "keep".into(),
+                message: "hi".into(),
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            },
+            ScheduleSettings {
+                name: "b".into(),
+                message: "hi".into(),
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            },
+        ],
+    )
+    .await;
+    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let app = build_router(state.clone());
+
+    // Try to rename "b" to "keep" — duplicate name, validation fails.
+    let body = format!(
+        "_csrf={csrf}&name=keep&message=hi&interval=01%3A00&start_date=&end_date=&active_time_start=&active_time_end=&enabled=true",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/schedules/b/edit")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let body = body_string(res).await;
+    // The inline edit form should reopen for the NEW name ("keep"), not the
+    // URL path's old name ("b"). The rendered template iterates the in-memory
+    // `next` vec — `b` has been replaced with `keep` (validation failure does
+    // not roll the vec back since it's a local).
+    assert!(
+        body.contains("/schedules/keep/edit"),
+        "edit form for new name 'keep' must reopen on validation failure"
+    );
+}

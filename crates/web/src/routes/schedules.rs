@@ -151,13 +151,14 @@ async fn update(
         return Err(WebError::CsrfMismatch);
     }
     let new_row = form.into_settings();
+    let new_name = new_row.name.clone();
     let mut next = state.settings.load().schedules.clone();
     if let Some(idx) = next.iter().position(|s| s.name == name) {
         next[idx] = new_row;
     } else {
         return Ok(Redirect::to("/schedules").into_response());
     }
-    apply_or_rerender(&state, &session, cookies, next, Some(name)).await
+    apply_or_rerender(&state, &session, cookies, next, Some(new_name)).await
 }
 
 async fn delete(
