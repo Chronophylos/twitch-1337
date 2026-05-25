@@ -153,6 +153,7 @@ impl SettingsStore {
             SettingsSection::Aviationstack => current.aviationstack = Default::default(),
             SettingsSection::Suspend => current.suspend = Default::default(),
             SettingsSection::WebRuntime => current.web = Default::default(),
+            SettingsSection::Schedules => current.schedules = None,
         }
         let resolved = Settings::resolve(&self.defaults, &current);
         crate::util::persist::atomic_save_ron_async(&current, &self.path).await?;
@@ -422,6 +423,10 @@ fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides) {
     }
     if let Some(v) = patch.web.mod_check_refresh_secs {
         into.web.mod_check_refresh_secs = Some(v);
+    }
+    // Schedules — wholesale replace
+    if patch.schedules.is_some() {
+        into.schedules = patch.schedules.clone();
     }
 }
 
@@ -758,6 +763,40 @@ fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
         prior.web.mod_check_refresh_secs,
         next.web.mod_check_refresh_secs
     );
+    // Schedules — diff by name across vec
+    {
+        use std::collections::{BTreeMap, BTreeSet};
+        let prior_map: BTreeMap<&str, &crate::settings::ScheduleSettings> = prior
+            .schedules
+            .iter()
+            .map(|s| (s.name.as_str(), s))
+            .collect();
+        let next_map: BTreeMap<&str, &crate::settings::ScheduleSettings> = next
+            .schedules
+            .iter()
+            .map(|s| (s.name.as_str(), s))
+            .collect();
+        let all_names: BTreeSet<&str> = prior_map
+            .keys()
+            .copied()
+            .chain(next_map.keys().copied())
+            .collect();
+        for name in all_names {
+            let p = prior_map.get(name).copied();
+            let n = next_map.get(name).copied();
+            if p != n {
+                out.push(AuditChange {
+                    key: format!("schedules.{name}"),
+                    old: p
+                        .map(|s| serde_json::to_value(s).expect("serialize prior schedule"))
+                        .unwrap_or(serde_json::Value::Null),
+                    new: n
+                        .map(|s| serde_json::to_value(s).expect("serialize next schedule"))
+                        .unwrap_or(serde_json::Value::Null),
+                });
+            }
+        }
+    }
     out
 }
 
@@ -951,6 +990,133 @@ mod tests {
         let keys: Vec<&str> = changes.iter().map(|c| c.key.as_str()).collect();
         assert!(keys.contains(&"ai.connection.service_tier"), "got {keys:?}");
         assert!(keys.contains(&"ai.dreamer.service_tier"), "got {keys:?}");
+    }
+
+    #[test]
+    fn merge_replaces_schedules_wholesale() {
+        use crate::settings::ScheduleSettings;
+        let mut into = SettingsOverrides::default();
+        into.schedules = Some(vec![ScheduleSettings {
+            name: "old".into(),
+            ..Default::default()
+        }]);
+        let patch = SettingsOverrides {
+            schedules: Some(vec![
+                ScheduleSettings {
+                    name: "new1".into(),
+                    ..Default::default()
+                },
+                ScheduleSettings {
+                    name: "new2".into(),
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        };
+        merge_into(&mut into, &patch);
+        let v = into.schedules.expect("Some");
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].name, "new1");
+        assert_eq!(v[1].name, "new2");
+    }
+
+    #[test]
+    fn merge_skips_schedules_when_patch_is_none() {
+        use crate::settings::ScheduleSettings;
+        let mut into = SettingsOverrides {
+            schedules: Some(vec![ScheduleSettings {
+                name: "keep".into(),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let patch = SettingsOverrides::default();
+        merge_into(&mut into, &patch);
+        let v = into.schedules.expect("Some");
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "keep");
+    }
+
+    #[test]
+    fn diff_emits_schedule_added_removed_modified() {
+        use crate::settings::ScheduleSettings;
+        let mut prior = Settings::compiled_defaults();
+        let mut next = Settings::compiled_defaults();
+        prior.schedules = vec![
+            ScheduleSettings {
+                name: "keep".into(),
+                message: "old".into(),
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            },
+            ScheduleSettings {
+                name: "drop".into(),
+                message: "x".into(),
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            },
+        ];
+        next.schedules = vec![
+            ScheduleSettings {
+                name: "keep".into(),
+                message: "new".into(), // modified
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            },
+            ScheduleSettings {
+                name: "add".into(),
+                message: "y".into(),
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            },
+        ];
+        let changes = diff_changes(&prior, &next);
+        let keys: Vec<&str> = changes.iter().map(|c| c.key.as_str()).collect();
+        assert!(keys.contains(&"schedules.keep"), "got {keys:?}");
+        assert!(keys.contains(&"schedules.drop"), "got {keys:?}");
+        assert!(keys.contains(&"schedules.add"), "got {keys:?}");
+    }
+
+    #[tokio::test]
+    async fn reset_schedules_clears_override() {
+        use crate::settings::ScheduleSettings;
+        let dir = tempfile::tempdir().expect("tmp");
+        let audit = std::sync::Arc::new(crate::settings::audit::MemoryAuditLog::default());
+        let (store, _h) = SettingsStore::open(dir.path(), audit, "main").expect("open");
+        store
+            .apply(
+                SettingsOverrides {
+                    schedules: Some(vec![ScheduleSettings {
+                        name: "x".into(),
+                        message: "hi".into(),
+                        interval: "01:00".into(),
+                        enabled: true,
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                },
+                Actor {
+                    user_id: "owner".into(),
+                    user_login: "owner".into(),
+                },
+            )
+            .await
+            .expect("apply");
+        let s = store
+            .reset(
+                SettingsSection::Schedules,
+                Actor {
+                    user_id: "owner".into(),
+                    user_login: "owner".into(),
+                },
+            )
+            .await
+            .expect("reset");
+        assert!(s.schedules.is_empty());
     }
 
     #[test]

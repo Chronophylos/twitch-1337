@@ -91,6 +91,7 @@ pub enum SettingsSection {
     Aviationstack,
     Suspend,
     WebRuntime,
+    Schedules,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
