@@ -6,8 +6,8 @@
   </div>
   <p class="schedule-message">{{ row.message }}</p>
   <div class="schedule-actions">
-    <a class="btn" href="/schedules?edit={{ row.name }}">Edit</a>
-    <form method="post" action="/schedules/{{ row.name }}/delete" onsubmit="return confirm('Delete schedule {{ row.name }}?');" style="display: inline">
+    <a class="btn" href="/schedules?edit={{ row.name|urlencode }}">Edit</a>
+    <form method="post" action="/schedules/{{ row.name|urlencode }}/delete" class="js-delete-schedule" data-name="{{ row.name }}" style="display: inline">
       <input type="hidden" name="_csrf" value="{{ csrf }}">
       <button type="submit" class="btn danger">Delete</button>
     </form>

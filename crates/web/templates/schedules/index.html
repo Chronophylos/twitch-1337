@@ -55,7 +55,7 @@
     {% for row in rows %}
       <li class="schedule-row">
         {% if let Some(name) = edit_name %}{% if name.as_str() == row.name.as_str() %}
-        <form method="post" action="/schedules/{{ row.name }}/edit" class="settings-rows">
+        <form method="post" action="/schedules/{{ row.name|urlencode }}/edit" class="settings-rows">
           <input type="hidden" name="_csrf" value="{{ csrf }}">
           <div class="row"><label>Name <input type="text" name="name" value="{{ row.name }}" required></label></div>
           <div class="row"><label>Message <input type="text" name="message" value="{{ row.message }}" required></label></div>
@@ -78,4 +78,17 @@
     </ul>
   {% endif %}
 </section>
+<script>
+  // Bind delete-confirm via JS so the schedule name lives in a textContent /
+  // dataset context (no HTML-attribute → JS-string parser decoding pitfall).
+  // PR #227 review F3.
+  document.querySelectorAll('form.js-delete-schedule').forEach(function (form) {
+    form.addEventListener('submit', function (event) {
+      var name = form.dataset.name || '';
+      if (!window.confirm('Delete schedule ' + name + '?')) {
+        event.preventDefault();
+      }
+    });
+  });
+</script>
 {% endblock %}
