@@ -143,13 +143,17 @@ async fn create(
         return Err(WebError::CsrfMismatch);
     }
     let new_row = form.into_settings();
+    let mut intended_rows = state.settings.load().schedules.clone();
+    intended_rows.push(new_row.clone());
+    let new_row_for_mutate = new_row.clone();
     apply_or_rerender(
         &state,
         &session,
         cookies,
+        intended_rows,
         Box::new(move |o| {
             let mut next = o.schedules.clone().unwrap_or_default();
-            next.push(new_row.clone());
+            next.push(new_row_for_mutate);
             o.schedules = Some(next);
         }),
         None,
@@ -169,14 +173,21 @@ async fn update(
     }
     let new_row = form.into_settings();
     let new_name = new_row.name.clone();
+    let mut intended_rows = state.settings.load().schedules.clone();
+    if let Some(idx) = intended_rows.iter().position(|s| s.name == name) {
+        intended_rows[idx] = new_row.clone();
+    }
+    let name_for_mutate = name.clone();
+    let new_row_for_mutate = new_row.clone();
     apply_or_rerender(
         &state,
         &session,
         cookies,
+        intended_rows,
         Box::new(move |o| {
             let mut next = o.schedules.clone().unwrap_or_default();
-            if let Some(idx) = next.iter().position(|s| s.name == name) {
-                next[idx] = new_row.clone();
+            if let Some(idx) = next.iter().position(|s| s.name == name_for_mutate) {
+                next[idx] = new_row_for_mutate;
             }
             o.schedules = Some(next);
         }),
@@ -195,17 +206,27 @@ async fn delete(
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
+    let intended_rows: Vec<ScheduleSettings> = state
+        .settings
+        .load()
+        .schedules
+        .iter()
+        .filter(|s| s.name != name)
+        .cloned()
+        .collect();
+    let name_for_mutate = name.clone();
     apply_or_rerender(
         &state,
         &session,
         cookies,
+        intended_rows,
         Box::new(move |o| {
             let next: Vec<ScheduleSettings> = o
                 .schedules
                 .clone()
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|s| s.name != name)
+                .filter(|s| s.name != name_for_mutate)
                 .collect();
             o.schedules = Some(next);
         }),
@@ -221,6 +242,7 @@ async fn apply_or_rerender(
     state: &WebState,
     session: &Session,
     cookies: Cookies,
+    intended_rows: Vec<ScheduleSettings>,
     mutate: Mutator,
     edit_on_error: Option<String>,
 ) -> Result<Response, WebError> {
@@ -234,13 +256,10 @@ async fn apply_or_rerender(
             Ok(Redirect::to("/schedules").into_response())
         }
         Err(SettingsError::Validation(errs)) => {
-            // The mutator was consumed by apply_with on failure; settings
-            // still reflect pre-submit state. Re-render using the live
-            // store snapshot so the user sees what's actually persisted,
-            // with per-row error attribution by index parsed from field
-            // paths (Task 7 restructures this further).
-            let rows = state.settings.load().schedules.clone();
-            render_validation(session, rows, errs, edit_on_error)
+            // intended_rows is the user's attempted submission; renders the
+            // failed attempt rather than the persisted pre-submit state so
+            // error attribution by index resolves correctly.
+            render_validation(session, intended_rows, errs, edit_on_error)
         }
         Err(e) => Err(WebError::Internal(eyre::eyre!("settings apply: {e}"))),
     }
