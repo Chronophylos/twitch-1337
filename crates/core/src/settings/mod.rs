@@ -288,6 +288,21 @@ impl Settings {
                     message: format!("duplicate name {:?}", sc.name.trim()),
                 });
             }
+            if !sc.name.trim().is_empty() {
+                let bad: Vec<char> = sc
+                    .name
+                    .chars()
+                    .filter(|c| matches!(c, '/' | '?' | '#' | '%'))
+                    .collect();
+                if !bad.is_empty() {
+                    errs.push(FieldError {
+                        field: format!("{prefix}.name"),
+                        message: format!(
+                            "must not contain URL-reserved characters {bad:?} (used in dashboard route paths)"
+                        ),
+                    });
+                }
+            }
             if sc.message.trim().is_empty() {
                 errs.push(FieldError {
                     field: format!("{prefix}.message"),
@@ -346,6 +361,18 @@ impl Settings {
                     message: "must be set when active_time_end is set".into(),
                 }),
                 _ => {}
+            }
+            if let (Some(sd), Some(ed)) = (sc.start_date.as_deref(), sc.end_date.as_deref())
+                && let (Ok(s), Ok(e)) = (
+                    chrono::NaiveDateTime::parse_from_str(sd, "%Y-%m-%dT%H:%M:%S"),
+                    chrono::NaiveDateTime::parse_from_str(ed, "%Y-%m-%dT%H:%M:%S"),
+                )
+                && e <= s
+            {
+                errs.push(FieldError {
+                    field: format!("{prefix}.end_date"),
+                    message: format!("must be after start_date (start={sd}, end={ed})"),
+                });
             }
         }
         if errs.is_empty() { Ok(()) } else { Err(errs) }
@@ -1325,5 +1352,45 @@ mod resolve_tests {
             channel: "test".into(),
         })
         .expect("empty schedules must pass");
+    }
+
+    #[test]
+    fn validate_rejects_end_date_before_start_date() {
+        use crate::settings::ScheduleSettings;
+        let mut s = Settings::compiled_defaults();
+        s.schedules = vec![ScheduleSettings {
+            name: "x".into(),
+            message: "hi".into(),
+            interval: "01:00".into(),
+            start_date: Some("2027-01-01T00:00:00".into()),
+            end_date: Some("2026-01-01T00:00:00".into()),
+            enabled: true,
+            ..Default::default()
+        }];
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("inverted date range must fail");
+        assert!(errs.iter().any(|e| e.field == "schedules[0].end_date"));
+    }
+
+    #[test]
+    fn validate_rejects_schedule_name_with_slash() {
+        use crate::settings::ScheduleSettings;
+        let mut s = Settings::compiled_defaults();
+        s.schedules = vec![ScheduleSettings {
+            name: "morning/evening".into(),
+            message: "hi".into(),
+            interval: "01:00".into(),
+            enabled: true,
+            ..Default::default()
+        }];
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("slash in name must fail");
+        assert!(errs.iter().any(|e| e.field == "schedules[0].name"));
     }
 }
