@@ -3,7 +3,11 @@
 //! `Settings::validate`; conversion to the runtime `database::Schedule`
 //! lives in `build_schedules`.
 
+use eyre::{Result, WrapErr as _};
 use serde::{Deserialize, Serialize};
+use tracing::error;
+
+use crate::database;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ScheduleSettings {
@@ -24,39 +28,39 @@ pub struct ScheduleSettings {
     pub enabled: bool,
 }
 
-use crate::database;
-use eyre::{Result, WrapErr as _};
-use tracing::error;
-
 /// Convert a persisted `ScheduleSettings` into the runtime `database::Schedule`.
 /// Parses interval, optional dates, optional times; runs `Schedule::validate`.
 pub fn parse_to_schedule(s: &ScheduleSettings) -> Result<database::Schedule> {
     let interval = database::Schedule::parse_interval(&s.interval)
         .wrap_err_with(|| format!("interval {:?}", s.interval))?;
-    let start_date = s
-        .start_date
-        .as_deref()
-        .map(|v| chrono::NaiveDateTime::parse_from_str(v, "%Y-%m-%dT%H:%M:%S"))
-        .transpose()
-        .wrap_err("start_date")?;
-    let end_date = s
-        .end_date
-        .as_deref()
-        .map(|v| chrono::NaiveDateTime::parse_from_str(v, "%Y-%m-%dT%H:%M:%S"))
-        .transpose()
-        .wrap_err("end_date")?;
-    let active_time_start = s
-        .active_time_start
-        .as_deref()
-        .map(|v| chrono::NaiveTime::parse_from_str(v, "%H:%M"))
-        .transpose()
-        .wrap_err("active_time_start")?;
-    let active_time_end = s
-        .active_time_end
-        .as_deref()
-        .map(|v| chrono::NaiveTime::parse_from_str(v, "%H:%M"))
-        .transpose()
-        .wrap_err("active_time_end")?;
+    let start_date = match s.start_date.as_deref() {
+        Some(v) => Some(
+            chrono::NaiveDateTime::parse_from_str(v, "%Y-%m-%dT%H:%M:%S")
+                .wrap_err_with(|| format!("start_date {v:?}"))?,
+        ),
+        None => None,
+    };
+    let end_date = match s.end_date.as_deref() {
+        Some(v) => Some(
+            chrono::NaiveDateTime::parse_from_str(v, "%Y-%m-%dT%H:%M:%S")
+                .wrap_err_with(|| format!("end_date {v:?}"))?,
+        ),
+        None => None,
+    };
+    let active_time_start = match s.active_time_start.as_deref() {
+        Some(v) => Some(
+            chrono::NaiveTime::parse_from_str(v, "%H:%M")
+                .wrap_err_with(|| format!("active_time_start {v:?}"))?,
+        ),
+        None => None,
+    };
+    let active_time_end = match s.active_time_end.as_deref() {
+        Some(v) => Some(
+            chrono::NaiveTime::parse_from_str(v, "%H:%M")
+                .wrap_err_with(|| format!("active_time_end {v:?}"))?,
+        ),
+        None => None,
+    };
     let out = database::Schedule {
         name: s.name.clone(),
         start_date,
