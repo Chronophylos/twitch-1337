@@ -272,6 +272,81 @@ impl Settings {
                 ),
             });
         }
+        // Schedules
+        let mut seen_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (idx, sc) in self.schedules.iter().enumerate() {
+            let prefix = format!("schedules[{idx}]");
+            if sc.name.trim().is_empty() {
+                errs.push(FieldError {
+                    field: format!("{prefix}.name"),
+                    message: "must not be blank".into(),
+                });
+            } else if !seen_names.insert(sc.name.trim()) {
+                errs.push(FieldError {
+                    field: format!("{prefix}.name"),
+                    message: format!("duplicate name {:?}", sc.name.trim()),
+                });
+            }
+            if sc.message.trim().is_empty() {
+                errs.push(FieldError {
+                    field: format!("{prefix}.message"),
+                    message: "must not be blank".into(),
+                });
+            }
+            match crate::database::Schedule::parse_interval(&sc.interval) {
+                Ok(d) if d.num_seconds() <= 0 => {
+                    errs.push(FieldError {
+                        field: format!("{prefix}.interval"),
+                        message: format!("must be > 0 (got {:?})", sc.interval),
+                    });
+                }
+                Ok(_) => {}
+                Err(e) => errs.push(FieldError {
+                    field: format!("{prefix}.interval"),
+                    message: format!("invalid: {e}"),
+                }),
+            }
+            for (field, val) in [
+                ("start_date", sc.start_date.as_deref()),
+                ("end_date", sc.end_date.as_deref()),
+            ] {
+                if let Some(v) = val
+                    && chrono::NaiveDateTime::parse_from_str(v, "%Y-%m-%dT%H:%M:%S").is_err()
+                {
+                    errs.push(FieldError {
+                        field: format!("{prefix}.{field}"),
+                        message: format!("must be YYYY-MM-DDTHH:MM:SS (got {v:?})"),
+                    });
+                }
+            }
+            for (field, val) in [
+                ("active_time_start", sc.active_time_start.as_deref()),
+                ("active_time_end", sc.active_time_end.as_deref()),
+            ] {
+                if let Some(v) = val
+                    && chrono::NaiveTime::parse_from_str(v, "%H:%M").is_err()
+                {
+                    errs.push(FieldError {
+                        field: format!("{prefix}.{field}"),
+                        message: format!("must be HH:MM (got {v:?})"),
+                    });
+                }
+            }
+            match (
+                sc.active_time_start.as_deref(),
+                sc.active_time_end.as_deref(),
+            ) {
+                (Some(_), None) => errs.push(FieldError {
+                    field: format!("{prefix}.active_time_end"),
+                    message: "must be set when active_time_start is set".into(),
+                }),
+                (None, Some(_)) => errs.push(FieldError {
+                    field: format!("{prefix}.active_time_start"),
+                    message: "must be set when active_time_end is set".into(),
+                }),
+                _ => {}
+            }
+        }
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
 
@@ -1149,5 +1224,105 @@ mod resolve_tests {
         let overrides = overrides::SettingsOverrides::default();
         let r = Settings::resolve(&defaults, &overrides);
         assert!(r.schedules.is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_schedule_name() {
+        use crate::settings::ScheduleSettings;
+        let mut s = Settings::compiled_defaults();
+        s.schedules = vec![
+            ScheduleSettings {
+                name: "a".into(),
+                message: "hi".into(),
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            },
+            ScheduleSettings {
+                name: "a".into(),
+                message: "hi".into(),
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            },
+        ];
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("duplicate name must fail");
+        assert!(errs.iter().any(|e| e.field.starts_with("schedules[")));
+    }
+
+    #[test]
+    fn validate_rejects_bad_interval() {
+        use crate::settings::ScheduleSettings;
+        let mut s = Settings::compiled_defaults();
+        s.schedules = vec![ScheduleSettings {
+            name: "x".into(),
+            message: "hi".into(),
+            interval: "not-a-duration".into(),
+            enabled: true,
+            ..Default::default()
+        }];
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("bad interval must fail");
+        assert!(errs.iter().any(|e| e.field == "schedules[0].interval"));
+    }
+
+    #[test]
+    fn validate_rejects_single_active_time_field() {
+        use crate::settings::ScheduleSettings;
+        let mut s = Settings::compiled_defaults();
+        s.schedules = vec![ScheduleSettings {
+            name: "x".into(),
+            message: "hi".into(),
+            interval: "01:00".into(),
+            active_time_start: Some("09:00".into()),
+            active_time_end: None,
+            enabled: true,
+            ..Default::default()
+        }];
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("orphan active_time_start must fail");
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "schedules[0].active_time_end")
+        );
+    }
+
+    #[test]
+    fn validate_accepts_disabled_schedule_even_if_malformed_dates() {
+        // Disabled rows still need a parseable interval (cheapest invariant
+        // to keep the dashboard's add-form honest), but optional date strings
+        // are not validated.
+        use crate::settings::ScheduleSettings;
+        let mut s = Settings::compiled_defaults();
+        s.schedules = vec![ScheduleSettings {
+            name: "x".into(),
+            message: "hi".into(),
+            interval: "01:00".into(),
+            enabled: false,
+            ..Default::default()
+        }];
+        s.validate(&ValidationContext {
+            channel: "test".into(),
+        })
+        .expect("disabled schedule with valid required fields must pass");
+    }
+
+    #[test]
+    fn validate_empty_schedules_is_ok() {
+        let s = Settings::compiled_defaults();
+        s.validate(&ValidationContext {
+            channel: "test".into(),
+        })
+        .expect("empty schedules must pass");
     }
 }
