@@ -24,6 +24,74 @@ pub struct ScheduleSettings {
     pub enabled: bool,
 }
 
+use crate::database;
+use eyre::{Result, WrapErr as _};
+use tracing::error;
+
+/// Convert a persisted `ScheduleSettings` into the runtime `database::Schedule`.
+/// Parses interval, optional dates, optional times; runs `Schedule::validate`.
+pub fn parse_to_schedule(s: &ScheduleSettings) -> Result<database::Schedule> {
+    let interval = database::Schedule::parse_interval(&s.interval)
+        .wrap_err_with(|| format!("interval {:?}", s.interval))?;
+    let start_date = s
+        .start_date
+        .as_deref()
+        .map(|v| chrono::NaiveDateTime::parse_from_str(v, "%Y-%m-%dT%H:%M:%S"))
+        .transpose()
+        .wrap_err("start_date")?;
+    let end_date = s
+        .end_date
+        .as_deref()
+        .map(|v| chrono::NaiveDateTime::parse_from_str(v, "%Y-%m-%dT%H:%M:%S"))
+        .transpose()
+        .wrap_err("end_date")?;
+    let active_time_start = s
+        .active_time_start
+        .as_deref()
+        .map(|v| chrono::NaiveTime::parse_from_str(v, "%H:%M"))
+        .transpose()
+        .wrap_err("active_time_start")?;
+    let active_time_end = s
+        .active_time_end
+        .as_deref()
+        .map(|v| chrono::NaiveTime::parse_from_str(v, "%H:%M"))
+        .transpose()
+        .wrap_err("active_time_end")?;
+    let out = database::Schedule {
+        name: s.name.clone(),
+        start_date,
+        end_date,
+        active_time_start,
+        active_time_end,
+        interval,
+        message: s.message.clone(),
+    };
+    out.validate()?;
+    Ok(out)
+}
+
+/// Build a `Vec<database::Schedule>` from settings entries, filtering disabled
+/// rows and logging (then skipping) any that fail `parse_to_schedule`. The
+/// settings validator should reject the latter at save time; this is a
+/// defence-in-depth net for hand-edited `settings.ron`.
+pub fn build_schedules(entries: &[ScheduleSettings]) -> Vec<database::Schedule> {
+    let mut out = Vec::new();
+    for s in entries {
+        if !s.enabled {
+            continue;
+        }
+        match parse_to_schedule(s) {
+            Ok(sched) => out.push(sched),
+            Err(e) => error!(
+                schedule = %s.name,
+                error = ?e,
+                "Failed to parse schedule entry, skipping"
+            ),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -36,5 +104,67 @@ mod tests {
         assert!(s.message.is_empty());
         assert!(s.interval.is_empty());
         assert!(s.start_date.is_none());
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    fn ok_entry() -> ScheduleSettings {
+        ScheduleSettings {
+            name: "noon".into(),
+            message: "hi".into(),
+            interval: "01:00".into(),
+            enabled: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn parse_minimal_schedule() {
+        let s = parse_to_schedule(&ok_entry()).expect("parse");
+        assert_eq!(s.name, "noon");
+        assert_eq!(s.interval.num_seconds(), 3600);
+    }
+
+    #[test]
+    fn parse_with_dates_and_times() {
+        let mut e = ok_entry();
+        e.start_date = Some("2026-01-01T00:00:00".into());
+        e.end_date = Some("2026-12-31T23:59:59".into());
+        e.active_time_start = Some("09:00".into());
+        e.active_time_end = Some("17:00".into());
+        let s = parse_to_schedule(&e).expect("parse");
+        assert!(s.start_date.is_some());
+        assert!(s.active_time_start.is_some());
+    }
+
+    #[test]
+    fn build_filters_disabled() {
+        let entries = vec![
+            ScheduleSettings {
+                enabled: false,
+                ..ok_entry()
+            },
+            ScheduleSettings {
+                name: "kept".into(),
+                ..ok_entry()
+            },
+        ];
+        let v = build_schedules(&entries);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "kept");
+    }
+
+    #[test]
+    fn build_skips_malformed_with_log() {
+        // Intentionally bad interval; build_schedules must not panic.
+        let entries = vec![ScheduleSettings {
+            interval: "garbage".into(),
+            ..ok_entry()
+        }];
+        let v = build_schedules(&entries);
+        assert!(v.is_empty());
     }
 }
