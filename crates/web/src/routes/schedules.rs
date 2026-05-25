@@ -93,7 +93,7 @@ impl ScheduleForm {
     fn into_settings(self) -> ScheduleSettings {
         ScheduleSettings {
             name: self.name.trim().to_owned(),
-            message: self.message,
+            message: self.message.trim().to_owned(),
             interval: self.interval.trim().to_owned(),
             start_date: opt(self.start_date),
             end_date: opt(self.end_date),
@@ -291,4 +291,28 @@ fn render_validation(
         is_owner: matches!(session.role, crate::auth::Role::Owner),
     };
     render(&resp)
+}
+
+#[cfg(test)]
+mod into_settings_tests {
+    use super::ScheduleForm;
+
+    #[test]
+    fn trims_all_text_fields() {
+        let form = ScheduleForm {
+            _csrf: "x".into(),
+            name: "  noon  ".into(),
+            message: "  hello world  ".into(),
+            interval: "  01:00  ".into(),
+            start_date: "".into(),
+            end_date: "".into(),
+            active_time_start: "".into(),
+            active_time_end: "".into(),
+            enabled: Some("true".into()),
+        };
+        let s = form.into_settings();
+        assert_eq!(s.name, "noon");
+        assert_eq!(s.message, "hello world");
+        assert_eq!(s.interval, "01:00");
+    }
 }
