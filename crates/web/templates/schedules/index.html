@@ -12,14 +12,18 @@
 
 {% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
 
-{% if !errors_for.is_empty() %}
+{% if !row_errors.is_empty() || !global_errors.is_empty() %}
   <div class="flash error">
     <strong>Validation failed.</strong>
     <ul>
-      {% for (name, errs) in errors_for %}
-        {% for (field, msg) in errs %}
-          <li><code>{% if !name.is_empty() %}{{ name }}.{% endif %}{{ field }}</code>: {{ msg }}</li>
-        {% endfor %}
+      {% for err in row_errors %}
+        <li>
+          <code>row {{ err.row_index }}{% if !err.row_name.is_empty() %} ({{ err.row_name }}){% endif %}.{{ err.field }}</code>:
+          {{ err.message }}
+        </li>
+      {% endfor %}
+      {% for (field, msg) in global_errors %}
+        <li><code>{{ field }}</code>: {{ msg }}</li>
       {% endfor %}
     </ul>
   </div>

@@ -20,6 +20,14 @@ use crate::flash;
 use crate::routes::render;
 use crate::state::WebState;
 
+#[derive(Debug, Clone)]
+pub(crate) struct RowError {
+    pub row_index: usize,
+    pub row_name: String,
+    pub field: String,
+    pub message: String,
+}
+
 pub fn router() -> Router<WebState> {
     Router::new()
         .route("/schedules", get(list))
@@ -39,10 +47,11 @@ struct ListQuery {
 struct ListTpl {
     rows: Vec<ScheduleSettings>,
     edit_name: Option<String>,
-    /// Per-row validation errors. Populated by add/edit POST handlers when
-    /// they re-render the list after a failed mutation. Key is the row
-    /// `name` (or empty string for non-row errors).
-    errors_for: std::collections::HashMap<String, Vec<(String, String)>>,
+    /// Per-row validation errors. Indexed by row position in `rows` so blank-
+    /// name rows attribute correctly (PR #227 review F7).
+    row_errors: Vec<RowError>,
+    /// Non-row-attributable validation errors (raw field path + message).
+    global_errors: Vec<(String, String)>,
     flash: Option<String>,
     csrf: String,
     user_login: String,
@@ -111,7 +120,8 @@ async fn list(
     render(&ListTpl {
         rows,
         edit_name: q.edit,
-        errors_for: Default::default(),
+        row_errors: Vec::new(),
+        global_errors: Vec::new(),
         flash: flash_msg,
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
@@ -242,33 +252,35 @@ fn render_validation(
     errs: Vec<twitch_1337_core::settings::FieldError>,
     edit_on_error: Option<String>,
 ) -> Result<Response, WebError> {
-    let mut errors_for: std::collections::HashMap<String, Vec<(String, String)>> =
-        Default::default();
+    let mut row_errors: Vec<RowError> = Vec::new();
+    let mut global_errors: Vec<(String, String)> = Vec::new();
     for e in errs {
         if let Some(rest) = e.field.strip_prefix("schedules[")
             && let Some(end) = rest.find(']')
         {
             let idx_str = &rest[..end];
-            if let Ok(idx) = idx_str.parse::<usize>()
-                && let Some(row) = rows.get(idx)
-            {
+            if let Ok(idx) = idx_str.parse::<usize>() {
+                let row_name = rows
+                    .get(idx)
+                    .map(|r| r.name.clone())
+                    .unwrap_or_default();
                 let field_name = rest.get(end + 2..).unwrap_or("").to_owned();
-                errors_for
-                    .entry(row.name.clone())
-                    .or_default()
-                    .push((field_name, e.message));
+                row_errors.push(RowError {
+                    row_index: idx,
+                    row_name,
+                    field: field_name,
+                    message: e.message,
+                });
                 continue;
             }
         }
-        errors_for
-            .entry(String::new())
-            .or_default()
-            .push((e.field, e.message));
+        global_errors.push((e.field, e.message));
     }
     let resp = ListTpl {
         rows,
         edit_name: edit_on_error,
-        errors_for,
+        row_errors,
+        global_errors,
         flash: None,
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
