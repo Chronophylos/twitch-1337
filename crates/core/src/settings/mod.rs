@@ -55,6 +55,7 @@ pub struct Settings {
     pub aviationstack: AviationstackSettings,
     pub suspend: SuspendSettings,
     pub web: WebRuntime,
+    pub schedules: Vec<ScheduleSettings>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -144,6 +145,7 @@ impl Settings {
             aviationstack: AviationstackSettings::default(),
             suspend: SuspendSettings::default(),
             web: WebRuntime::default(),
+            schedules: Vec::new(),
         }
     }
 
@@ -349,6 +351,10 @@ impl Settings {
                     .mod_check_refresh_secs
                     .unwrap_or(defaults.web.mod_check_refresh_secs),
             },
+            schedules: overrides
+                .schedules
+                .clone()
+                .unwrap_or_else(|| defaults.schedules.clone()),
         }
     }
 }
@@ -812,6 +818,7 @@ mod resolve_tests {
         assert_eq!(s.aviationstack, AviationstackSettings::default());
         assert_eq!(s.suspend, SuspendSettings::default());
         assert_eq!(s.web, WebRuntime::default());
+        assert!(s.schedules.is_empty());
     }
 
     #[test]
@@ -1109,5 +1116,38 @@ mod resolve_tests {
             })
             .expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "web.session_ttl_secs"));
+    }
+
+    #[test]
+    fn schedules_default_is_empty_vec() {
+        let s = Settings::compiled_defaults();
+        assert!(s.schedules.is_empty());
+    }
+
+    #[test]
+    fn schedules_override_wholesale_replaces() {
+        use crate::settings::ScheduleSettings;
+        let defaults = Settings::compiled_defaults();
+        let overrides = overrides::SettingsOverrides {
+            schedules: Some(vec![ScheduleSettings {
+                name: "noon".into(),
+                message: "hi".into(),
+                interval: "01:00".into(),
+                enabled: true,
+                ..Default::default()
+            }]),
+            ..overrides::SettingsOverrides::default()
+        };
+        let r = Settings::resolve(&defaults, &overrides);
+        assert_eq!(r.schedules.len(), 1);
+        assert_eq!(r.schedules[0].name, "noon");
+    }
+
+    #[test]
+    fn schedules_none_override_resolves_to_defaults() {
+        let defaults = Settings::compiled_defaults();
+        let overrides = overrides::SettingsOverrides::default();
+        let r = Settings::resolve(&defaults, &overrides);
+        assert!(r.schedules.is_empty());
     }
 }
