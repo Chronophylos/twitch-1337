@@ -1049,12 +1049,10 @@ mod tests {
     async fn apply_signals_change_notify() {
         let (_dir, store, _handle, _log) = fixture();
         let notify = store.change_notify();
-        let waiter = {
-            let n = notify.clone();
-            tokio::spawn(async move {
-                n.notified().await;
-            })
-        };
+        let mut notified = Box::pin(notify.notified());
+        // `enable()` registers the waker before the trigger so the wake-up
+        // cannot be lost to a race with notify_waiters().
+        notified.as_mut().enable();
         let patch = SettingsOverrides {
             cooldowns: CooldownsOverrides {
                 ai: Some(15),
@@ -1072,10 +1070,9 @@ mod tests {
             )
             .await
             .expect("apply");
-        tokio::time::timeout(std::time::Duration::from_millis(500), waiter)
+        tokio::time::timeout(std::time::Duration::from_millis(500), notified)
             .await
-            .expect("apply must notify change waiters within 500ms")
-            .expect("waiter task ok");
+            .expect("apply must notify change waiters within 500ms");
     }
 
     #[tokio::test]
@@ -1099,12 +1096,8 @@ mod tests {
             .await
             .expect("apply");
         let notify = store.change_notify();
-        let waiter = {
-            let n = notify.clone();
-            tokio::spawn(async move {
-                n.notified().await;
-            })
-        };
+        let mut notified = Box::pin(notify.notified());
+        notified.as_mut().enable();
         store
             .reset(
                 SettingsSection::Cooldowns,
@@ -1115,10 +1108,9 @@ mod tests {
             )
             .await
             .expect("reset");
-        tokio::time::timeout(std::time::Duration::from_millis(500), waiter)
+        tokio::time::timeout(std::time::Duration::from_millis(500), notified)
             .await
-            .expect("reset must notify change waiters within 500ms")
-            .expect("waiter task ok");
+            .expect("reset must notify change waiters within 500ms");
     }
 
     #[test]
