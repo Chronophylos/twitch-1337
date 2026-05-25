@@ -205,24 +205,27 @@ pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::Set
 
     if let Some(arr) = root.get("schedules").and_then(toml::Value::as_array) {
         let mut out_vec: Vec<crate::settings::ScheduleSettings> = Vec::new();
-        for entry in arr {
+        for (idx, entry) in arr.iter().enumerate() {
             let Some(t) = entry.as_table() else { continue };
             let v = toml::Value::Table(t.clone());
-            let name = v
-                .get("name")
-                .and_then(toml::Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            let message = v
-                .get("message")
-                .and_then(toml::Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            let interval = v
-                .get("interval")
-                .and_then(toml::Value::as_str)
-                .unwrap_or("")
-                .to_owned();
+            let name = v.get("name").and_then(toml::Value::as_str).map(str::trim);
+            let message = v.get("message").and_then(toml::Value::as_str);
+            let interval = v.get("interval").and_then(toml::Value::as_str).map(str::trim);
+            let (Some(name), Some(message), Some(interval)) = (name, message, interval) else {
+                tracing::warn!(
+                    schedule_index = idx,
+                    "legacy [[schedules]] entry missing name/message/interval; skipped during migration"
+                );
+                continue;
+            };
+            if name.is_empty() || message.trim().is_empty() || interval.is_empty() {
+                tracing::warn!(
+                    schedule_index = idx,
+                    name = %name,
+                    "legacy [[schedules]] entry has blank required field; skipped during migration"
+                );
+                continue;
+            }
             let enabled = v
                 .get("enabled")
                 .and_then(toml::Value::as_bool)
@@ -231,9 +234,9 @@ pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::Set
                 v.get(k).and_then(toml::Value::as_str).map(str::to_owned)
             };
             out_vec.push(crate::settings::ScheduleSettings {
-                name,
-                message,
-                interval,
+                name: name.to_owned(),
+                message: message.to_owned(),
+                interval: interval.to_owned(),
                 start_date: opt_str("start_date"),
                 end_date: opt_str("end_date"),
                 active_time_start: opt_str("active_time_start"),
@@ -473,6 +476,38 @@ mod tests {
         assert!(!v[1].enabled);
         assert_eq!(v[1].start_date.as_deref(), Some("2026-12-01T00:00:00"));
         assert_eq!(v[1].active_time_start.as_deref(), Some("08:00"));
+    }
+
+    #[test]
+    fn legacy_schedule_missing_required_keys_is_skipped() {
+        let toml_str = r#"
+            [twitch]
+            channel = "main"
+            username = "bot"
+            client_id = "x"
+            client_secret = "y"
+            refresh_token = "z"
+
+            [[schedules]]
+            # missing name + interval
+            message = "hi"
+
+            [[schedules]]
+            name = "good"
+            message = "morning"
+            interval = "01:00"
+
+            [[schedules]]
+            name = "blank_msg"
+            message = ""
+            interval = "01:00"
+        "#;
+        let value: toml::Value = toml::from_str(toml_str).expect("parse");
+        let overrides = migrate_legacy_config(&value).expect("migrate");
+        let v = overrides.schedules.expect("Some");
+        // Only the row with all required fields populated survives.
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "good");
     }
 
     #[test]
