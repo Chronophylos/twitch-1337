@@ -12,6 +12,19 @@
 
 {% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
 
+{% if !errors_for.is_empty() %}
+  <div class="flash error">
+    <strong>Validation failed.</strong>
+    <ul>
+      {% for (name, errs) in errors_for %}
+        {% for (field, msg) in errs %}
+          <li><code>{% if !name.is_empty() %}{{ name }}.{% endif %}{{ field }}</code>: {{ msg }}</li>
+        {% endfor %}
+      {% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
 <section class="settings-card">
   <header class="settings-card-head">
     <div>
