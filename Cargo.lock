@@ -3349,6 +3349,7 @@ dependencies = [
  "reqwest 0.13.3",
  "secrecy",
  "tokio",
+ "toml 1.1.2+spec-1.1.0",
  "tower-cookies",
  "tracing",
  "twitch-1337-core",

@@ -59,6 +59,52 @@ fn build_aviation_client(
     }
 }
 
+fn legacy_v3_runtime_patch(
+    raw_toml: &toml::Value,
+) -> Result<twitch_1337::settings::overrides::SettingsOverrides> {
+    let mut patch = twitch_1337::settings::migrate::migrate_legacy_config(raw_toml)?;
+    patch.schedules = None;
+    Ok(patch)
+}
+
+async fn apply_legacy_schedules_migration(
+    settings_store: &twitch_1337::settings::SettingsStore,
+    raw_toml: &toml::Value,
+) -> Result<bool> {
+    let patch = twitch_1337::settings::migrate::migrate_legacy_config(raw_toml)
+        .wrap_err("schedules v3 migration")?;
+    if let Some(schedules) = patch.schedules {
+        // Build a slim patch that only carries the schedules section so we
+        // don't re-apply other migrated fields a second time.
+        let slim = twitch_1337::settings::overrides::SettingsOverrides {
+            schedules: Some(schedules),
+            ..twitch_1337::settings::overrides::SettingsOverrides::default()
+        };
+        let actor = twitch_1337::settings::Actor {
+            user_id: "migrate".into(),
+            user_login: "schedules-v3-migration".into(),
+        };
+        // Best-effort: a legacy row that was valid under the old loose
+        // validator can fail the new stricter Settings::validate (PR #227
+        // review F2). Log + carry on so the bot boots; operators can
+        // hand-edit config.toml or settings.ron. Leave the sentinel unwritten
+        // on failure so a corrected config.toml can migrate on a later boot.
+        match settings_store.apply(slim, actor).await {
+            Ok(_) => info!("migrated legacy [[schedules]] into settings.ron"),
+            Err(e) => {
+                tracing::error!(
+                    error = ?e,
+                    "schedules v3 migration apply failed; legacy [[schedules]] \
+                     skipped for this boot. Fix the offending row in config.toml \
+                     or manage schedules via /schedules."
+                );
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 #[tokio::main]
 pub async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
@@ -128,8 +174,7 @@ pub async fn main() -> Result<()> {
     let v3_marker = get_data_dir().join(".config_migrated_v3");
     let was_first_v3_boot = !v3_marker.exists();
     if was_first_v3_boot {
-        let patch = twitch_1337::settings::migrate::migrate_legacy_config(&raw_toml)
-            .wrap_err("v3 migration")?;
+        let patch = legacy_v3_runtime_patch(&raw_toml).wrap_err("v3 migration")?;
         let twitch_empty =
             patch.twitch == twitch_1337::settings::overrides::TwitchOverrides::default();
         let aviation_empty = patch.aviationstack
@@ -158,38 +203,12 @@ pub async fn main() -> Result<()> {
     let schedules_marker = get_data_dir().join(".schedules_migrated_v3");
     let was_first_schedules_boot = !schedules_marker.exists();
     if was_first_schedules_boot {
-        let patch = twitch_1337::settings::migrate::migrate_legacy_config(&raw_toml)
-            .wrap_err("schedules v3 migration")?;
-        if patch.schedules.is_some() {
-            // Build a slim patch that only carries the schedules section so we
-            // don't re-apply other migrated fields a second time.
-            let slim = twitch_1337::settings::overrides::SettingsOverrides {
-                schedules: patch.schedules,
-                ..twitch_1337::settings::overrides::SettingsOverrides::default()
-            };
-            let actor = twitch_1337::settings::Actor {
-                user_id: "migrate".into(),
-                user_login: "schedules-v3-migration".into(),
-            };
-            // Best-effort: a legacy row that was valid under the old loose
-            // validator can fail the new stricter Settings::validate (PR #227
-            // review F2). Log + carry on so the bot boots; operators can
-            // hand-edit config.toml or settings.ron.
-            match settings_store.apply(slim, actor).await {
-                Ok(_) => info!("migrated legacy [[schedules]] into settings.ron"),
-                Err(e) => tracing::error!(
-                    error = ?e,
-                    "schedules v3 migration apply failed; legacy [[schedules]] \
-                     skipped — bot will boot with no migrated schedules. \
-                     Fix the offending row in config.toml or manage schedules via /schedules."
-                ),
-            }
-        }
-        // Write the sentinel regardless of apply outcome: if apply failed, the
-        // operator must fix config.toml manually; re-running the migration on
-        // every boot wouldn't help and risks overwriting dashboard edits made
-        // in the meantime (PR #227 review F5).
-        if let Err(e) = std::fs::write(&schedules_marker, "") {
+        let should_write_marker =
+            apply_legacy_schedules_migration(&settings_store, &raw_toml).await?;
+        // Only mark the one-shot migration complete if there were no legacy
+        // schedules or the apply succeeded. Failed validation should remain
+        // retryable after the operator fixes config.toml.
+        if should_write_marker && let Err(e) = std::fs::write(&schedules_marker, "") {
             tracing::error!(
                 error = ?e,
                 marker = ?schedules_marker,
@@ -521,10 +540,48 @@ async fn run_healthcheck() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_aviation_client;
+    use std::{
+        path::PathBuf,
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::{apply_legacy_schedules_migration, build_aviation_client, legacy_v3_runtime_patch};
     use secrecy::SecretString;
     use twitch_1337_core::config::AviationstackBootstrap;
     use twitch_1337_core::settings::Settings;
+    use twitch_1337_core::settings::{Actor, AuditEntry, AuditError, AuditLog, SettingsStore};
+
+    struct NoopAuditLog;
+
+    impl AuditLog for NoopAuditLog {
+        fn append(&self, _entry: &AuditEntry) -> Result<(), AuditError> {
+            Ok(())
+        }
+    }
+
+    struct TestDataDir(PathBuf);
+
+    impl TestDataDir {
+        fn new(test_name: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "twitch-1337-{test_name}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("create test data dir");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDataDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn test_prefill_threshold_validation() {
@@ -557,5 +614,77 @@ mod tests {
         let client = build_aviation_client(Some(&bootstrap), &settings).expect("aviation client");
 
         assert!(client.aviationstack_enabled());
+    }
+
+    #[tokio::test]
+    async fn v3_runtime_migration_ignores_invalid_legacy_schedules() {
+        let data_dir = TestDataDir::new("v3-runtime-migration");
+        let (store, _handle) = SettingsStore::open(&data_dir.0, Arc::new(NoopAuditLog), "main")
+            .expect("open settings store");
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [twitch]
+            channel = "main"
+            username = "bot"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+            expected_latency = 250
+
+            [[schedules]]
+            name = "daily ping"
+            message = "hello"
+            interval = "01:00"
+            "#,
+        )
+        .expect("parse raw toml");
+
+        let patch = legacy_v3_runtime_patch(&raw).expect("runtime patch");
+        assert!(patch.schedules.is_none());
+
+        store
+            .apply(
+                patch,
+                Actor {
+                    user_id: "system".into(),
+                    user_login: "v3-migration".into(),
+                },
+            )
+            .await
+            .expect("v3 runtime migration should not validate legacy schedules");
+        assert_eq!(store.handle().load().twitch.expected_latency, 250);
+    }
+
+    #[tokio::test]
+    async fn failed_schedule_migration_does_not_mark_complete() {
+        let data_dir = TestDataDir::new("schedule-migration");
+        let (store, _handle) = SettingsStore::open(&data_dir.0, Arc::new(NoopAuditLog), "main")
+            .expect("open settings store");
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [twitch]
+            channel = "main"
+            username = "bot"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+
+            [[schedules]]
+            name = "daily ping"
+            message = "hello"
+            interval = "01:00"
+            "#,
+        )
+        .expect("parse raw toml");
+
+        let should_write_marker = apply_legacy_schedules_migration(&store, &raw)
+            .await
+            .expect("schedule migration");
+
+        assert!(
+            !should_write_marker,
+            "failed schedule migration must be retried on a later boot"
+        );
+        assert!(store.handle().load().schedules.is_empty());
     }
 }
