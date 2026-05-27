@@ -128,6 +128,10 @@ pub fn migrate_legacy_ai(root: &toml::Value) -> Result<AiOverrides> {
 /// `SettingsStore::apply`. Pairs with `migrate_legacy_ai` for the `[ai]`
 /// section; this helper covers the v3 migration of `[twitch]`, `[suspend]`,
 /// `[aviationstack]` (non-secret), and `[web]` (non-bootstrap) keys.
+///
+/// Legacy `[[schedules]]` are intentionally migrated separately by
+/// `migrate_legacy_schedules` so a stricter schedule validation failure cannot
+/// block unrelated runtime settings from being imported.
 pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::SettingsOverrides> {
     let mut out = super::overrides::SettingsOverrides::default();
 
@@ -203,6 +207,17 @@ pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::Set
             .map(|d| d.as_secs());
     }
 
+    Ok(out)
+}
+
+/// Extract legacy `[[schedules]]` rows from raw config.toml.
+///
+/// The returned vector is still validated by `SettingsStore::apply`; this
+/// function only drops rows that are too incomplete to represent as schedule
+/// settings at all.
+pub fn migrate_legacy_schedules(
+    root: &toml::Value,
+) -> Result<Option<Vec<crate::settings::ScheduleSettings>>> {
     if let Some(arr) = root.get("schedules").and_then(toml::Value::as_array) {
         let mut out_vec: Vec<crate::settings::ScheduleSettings> = Vec::new();
         for (idx, entry) in arr.iter().enumerate() {
@@ -247,12 +262,10 @@ pub fn migrate_legacy_config(root: &toml::Value) -> Result<super::overrides::Set
                 enabled,
             });
         }
-        if !out_vec.is_empty() {
-            out.schedules = Some(out_vec);
-        }
+        return Ok(Some(out_vec));
     }
 
-    Ok(out)
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -444,6 +457,28 @@ mod tests {
     }
 
     #[test]
+    fn legacy_config_migration_excludes_schedules() {
+        let raw = r#"
+            [twitch]
+            channel = "main"
+            username = "bot"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+            expected_latency = 250
+
+            [[schedules]]
+            name = "noon"
+            message = "midday"
+            interval = "01:00"
+        "#;
+        let value: toml::Value = toml::from_str(raw).expect("parse");
+        let overrides = migrate_legacy_config(&value).expect("migrate");
+        assert_eq!(overrides.twitch.expected_latency, Some(250));
+        assert!(overrides.schedules.is_none());
+    }
+
+    #[test]
     fn legacy_schedules_array_migrates_into_overrides() {
         let raw = r#"
             [twitch]
@@ -470,8 +505,9 @@ mod tests {
             enabled = false
         "#;
         let value: toml::Value = toml::from_str(raw).expect("parse");
-        let overrides = migrate_legacy_config(&value).expect("migrate");
-        let v = overrides.schedules.expect("Some");
+        let v = migrate_legacy_schedules(&value)
+            .expect("migrate")
+            .expect("Some");
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].name, "noon");
         assert!(v[0].enabled);
@@ -506,11 +542,38 @@ mod tests {
             interval = "01:00"
         "#;
         let value: toml::Value = toml::from_str(toml_str).expect("parse");
-        let overrides = migrate_legacy_config(&value).expect("migrate");
-        let v = overrides.schedules.expect("Some");
+        let v = migrate_legacy_schedules(&value)
+            .expect("migrate")
+            .expect("Some");
         // Only the row with all required fields populated survives.
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].name, "good");
+    }
+
+    #[test]
+    fn legacy_schedule_section_with_only_skipped_rows_returns_empty_vec() {
+        let raw = r#"
+            [twitch]
+            channel = "main"
+            username = "bot"
+            client_id = "x"
+            client_secret = "y"
+            refresh_token = "z"
+
+            [[schedules]]
+            # missing name + interval
+            message = "hi"
+
+            [[schedules]]
+            name = "blank_msg"
+            message = ""
+            interval = "01:00"
+        "#;
+        let value: toml::Value = toml::from_str(raw).expect("parse");
+        let v = migrate_legacy_schedules(&value)
+            .expect("migrate")
+            .expect("schedule section is present");
+        assert!(v.is_empty());
     }
 
     #[test]
@@ -524,8 +587,8 @@ mod tests {
             client_secret = "s"
         "#;
         let value: toml::Value = toml::from_str(raw).expect("parse");
-        let overrides = migrate_legacy_config(&value).expect("migrate");
-        assert!(overrides.schedules.is_none());
+        let schedules = migrate_legacy_schedules(&value).expect("migrate");
+        assert!(schedules.is_none());
     }
 
     #[test]
@@ -544,8 +607,9 @@ mod tests {
             interval = "01:00"
         "#;
         let value: toml::Value = toml::from_str(raw).expect("parse");
-        let overrides = migrate_legacy_config(&value).expect("migrate");
-        let v = overrides.schedules.expect("Some");
+        let v = migrate_legacy_schedules(&value)
+            .expect("migrate")
+            .expect("Some");
         assert!(v[0].enabled);
     }
 

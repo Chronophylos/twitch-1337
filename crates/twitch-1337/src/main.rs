@@ -158,38 +158,48 @@ pub async fn main() -> Result<()> {
     let schedules_marker = get_data_dir().join(".schedules_migrated_v3");
     let was_first_schedules_boot = !schedules_marker.exists();
     if was_first_schedules_boot {
-        let patch = twitch_1337::settings::migrate::migrate_legacy_config(&raw_toml)
+        let schedules = twitch_1337::settings::migrate::migrate_legacy_schedules(&raw_toml)
             .wrap_err("schedules v3 migration")?;
-        if patch.schedules.is_some() {
-            // Build a slim patch that only carries the schedules section so we
-            // don't re-apply other migrated fields a second time.
-            let slim = twitch_1337::settings::overrides::SettingsOverrides {
-                schedules: patch.schedules,
-                ..twitch_1337::settings::overrides::SettingsOverrides::default()
-            };
-            let actor = twitch_1337::settings::Actor {
-                user_id: "migrate".into(),
-                user_login: "schedules-v3-migration".into(),
-            };
-            // Best-effort: a legacy row that was valid under the old loose
-            // validator can fail the new stricter Settings::validate (PR #227
-            // review F2). Log + carry on so the bot boots; operators can
-            // hand-edit config.toml or settings.ron.
-            match settings_store.apply(slim, actor).await {
-                Ok(_) => info!("migrated legacy [[schedules]] into settings.ron"),
-                Err(e) => tracing::error!(
-                    error = ?e,
-                    "schedules v3 migration apply failed; legacy [[schedules]] \
-                     skipped — bot will boot with no migrated schedules. \
-                     Fix the offending row in config.toml or manage schedules via /schedules."
-                ),
+        let should_write_schedules_marker = if let Some(schedules) = schedules {
+            if schedules.is_empty() {
+                tracing::error!(
+                    "legacy [[schedules]] section was present, but no rows were complete enough \
+                     to migrate. Fix config.toml or manage schedules via /schedules; migration \
+                     will retry on next boot."
+                );
+                false
+            } else {
+                // Build a slim patch that only carries the schedules section so we
+                // don't re-apply other migrated fields a second time.
+                let slim = twitch_1337::settings::overrides::SettingsOverrides {
+                    schedules: Some(schedules),
+                    ..twitch_1337::settings::overrides::SettingsOverrides::default()
+                };
+                let actor = twitch_1337::settings::Actor {
+                    user_id: "migrate".into(),
+                    user_login: "schedules-v3-migration".into(),
+                };
+                match settings_store.apply(slim, actor).await {
+                    Ok(_) => {
+                        info!("migrated legacy [[schedules]] into settings.ron");
+                        true
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = ?e,
+                            "schedules v3 migration apply failed; legacy [[schedules]] \
+                             were not imported. Fix the offending row in config.toml \
+                             or manage schedules via /schedules; migration will retry \
+                             on next boot."
+                        );
+                        false
+                    }
+                }
             }
-        }
-        // Write the sentinel regardless of apply outcome: if apply failed, the
-        // operator must fix config.toml manually; re-running the migration on
-        // every boot wouldn't help and risks overwriting dashboard edits made
-        // in the meantime (PR #227 review F5).
-        if let Err(e) = std::fs::write(&schedules_marker, "") {
+        } else {
+            true
+        };
+        if should_write_schedules_marker && let Err(e) = std::fs::write(&schedules_marker, "") {
             tracing::error!(
                 error = ?e,
                 marker = ?schedules_marker,
