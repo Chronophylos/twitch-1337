@@ -240,12 +240,28 @@ fn load_or_quarantine(path: &Path) -> Result<SettingsOverrides, SettingsError> {
     }
 }
 
+fn migrate_then_parse(body: &str) -> Result<SettingsOverrides, ron::error::SpannedError> {
+    let mut raw: ron::Value = ron::from_str(body)?;
+    if super::migrate::migrate_schedules_v3_to_v4(&mut raw) {
+        tracing::info!("migrated schedules v3 → v4 in-memory");
+    }
+    // Re-serialize the (possibly mutated) Value then deserialize into the
+    // typed struct. round-trip via String is robust and runs once at startup.
+    // ron::ser::to_string on a ron::Value we just deserialized will not fail
+    // in practice, so unwrap the serialize step.
+    let intermediate = ron::ser::to_string(&raw).unwrap_or_else(|e| {
+        tracing::warn!(error = ?e, "ron re-serialize failed; falling back to original body");
+        body.to_owned()
+    });
+    ron::from_str(&intermediate)
+}
+
 fn load_overrides(path: &Path) -> Result<Option<SettingsOverrides>, SettingsError> {
     if !path.exists() {
         return Ok(None);
     }
     let body = std::fs::read_to_string(path)?;
-    let parsed: SettingsOverrides = ron::from_str(&body)?;
+    let parsed: SettingsOverrides = migrate_then_parse(&body)?;
     Ok(Some(parsed))
 }
 
@@ -254,7 +270,7 @@ async fn load_overrides_async(path: &Path) -> Result<Option<SettingsOverrides>, 
         return Ok(None);
     }
     let body = tokio::fs::read_to_string(path).await?;
-    let parsed: SettingsOverrides = ron::from_str(&body)?;
+    let parsed: SettingsOverrides = migrate_then_parse(&body)?;
     Ok(Some(parsed))
 }
 
@@ -1238,6 +1254,41 @@ mod tests {
             std::collections::BTreeSet::from(["alpha", "bravo"]),
             "both concurrent adds must survive — neither clobbers the other"
         );
+    }
+
+    #[tokio::test]
+    async fn v3_settings_file_migrates_to_v4_on_open() {
+        // A v3-shaped settings.ron with a legacy schedule row (interval string,
+        // no trigger field). SettingsOverrides allows all fields to be absent
+        // via #[serde(default)], so only the schedules key is needed.
+        let v3 = r#"(
+            schedules: Some([
+                (
+                    name: "noon",
+                    message: "hi",
+                    interval: "01:00",
+                    start_date: None,
+                    end_date: None,
+                    active_time_start: None,
+                    active_time_end: None,
+                    enabled: true,
+                ),
+            ]),
+        )"#;
+        let dir = tempfile::tempdir().expect("tmp");
+        std::fs::write(dir.path().join(FILE_NAME), v3).expect("write");
+        let audit = Arc::new(MemoryAuditLog::new());
+        let (_, handle) =
+            SettingsStore::open(dir.path(), audit, "main").expect("open v3 file");
+        let s = handle.load();
+        assert_eq!(s.schedules.len(), 1, "schedule row must survive migration");
+        assert_eq!(s.schedules[0].name, "noon");
+        match &s.schedules[0].trigger {
+            crate::schedule::Trigger::Interval { every, .. } => {
+                assert_eq!(every.as_secs(), 3600, "01:00 → 3600s");
+            }
+            other => panic!("expected Trigger::Interval, got {other:?}"),
+        }
     }
 
     #[test]
