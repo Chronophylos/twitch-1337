@@ -242,18 +242,31 @@ fn load_or_quarantine(path: &Path) -> Result<SettingsOverrides, SettingsError> {
 
 fn migrate_then_parse(body: &str) -> Result<SettingsOverrides, ron::error::SpannedError> {
     let mut raw: ron::Value = ron::from_str(body)?;
-    if super::migrate::migrate_schedules_v3_to_v4(&mut raw) {
-        tracing::info!("migrated schedules v3 → v4 in-memory");
+    if !super::migrate::migrate_schedules_v3_to_v4(&mut raw) {
+        // No v3→v4 migration was needed. Parse the original body directly —
+        // avoiding the Value→string→typed round-trip that breaks in RON 0.12
+        // because `ron::Value::Map` re-serializes as `{...}` map syntax while
+        // `SettingsOverrides` is a named struct that requires `(...)` or
+        // `StructName(...)` syntax.
+        return ron::from_str(body);
     }
-    // Re-serialize the (possibly mutated) Value then deserialize into the
-    // typed struct. round-trip via String is robust and runs once at startup.
-    // ron::ser::to_string on a ron::Value we just deserialized will not fail
-    // in practice, so unwrap the serialize step.
-    let intermediate = ron::ser::to_string(&raw).unwrap_or_else(|e| {
-        tracing::warn!(error = ?e, "ron re-serialize failed; falling back to original body");
-        body.to_owned()
-    });
-    ron::from_str(&intermediate)
+    tracing::info!("migrated schedules v3 → v4 in-memory");
+    // Migration was applied. Deserialize directly from the mutated ron::Value
+    // (which acts as a serde source) rather than re-serializing to a string.
+    // ron::Value uses `forward_to_deserialize_any` so serde struct/map visitors
+    // work correctly, including internally-tagged Trigger enums.
+    raw.into_rust::<SettingsOverrides>().map_err(|e| {
+        // ron::Error → ron::error::SpannedError: attach a dummy span so the
+        // call-site error type is satisfied. Migration failures are fatal at
+        // startup, so the exact span is informational only.
+        ron::error::SpannedError {
+            code: e,
+            span: ron::error::Span {
+                start: ron::error::Position { line: 0, col: 0 },
+                end: ron::error::Position { line: 0, col: 0 },
+            },
+        }
+    })
 }
 
 fn load_overrides(path: &Path) -> Result<Option<SettingsOverrides>, SettingsError> {

@@ -282,6 +282,8 @@ fn migrate_one_row(row: &mut ron::Value) -> bool {
 
     map_insert(row, "trigger", ron::Value::Map(t_map));
     map_remove(row, "interval");
+    map_remove(row, "active_time_start");
+    map_remove(row, "active_time_end");
     true
 }
 
