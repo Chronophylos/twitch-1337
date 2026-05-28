@@ -258,3 +258,245 @@ mod interval_basic_tests {
         assert!(!super::in_window(t(10, 0), Some(t(22, 0)), Some(t(2, 0))));
     }
 }
+
+#[cfg(test)]
+mod interval_filter_tests {
+    use super::*;
+    use chrono::{Datelike, Timelike, Weekday};
+
+    fn now_berlin(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Tz> {
+        Berlin
+            .with_ymd_and_hms(y, mo, d, h, mi, 0)
+            .single()
+            .expect("valid")
+    }
+
+    #[test]
+    fn advances_past_inactive_window() {
+        // every 60m, window 08:00-18:00, now 06:30 -> first slot 08:00.
+        let now = now_berlin(2026, 5, 28, 6, 30);
+        let trig = Trigger::Interval {
+            every: Duration::from_secs(3600),
+            days: WeekdaySet::default(),
+            active_from: Some(NaiveTime::from_hms_opt(8, 0, 0).unwrap()),
+            active_to: Some(NaiveTime::from_hms_opt(18, 0, 0).unwrap()),
+        };
+        let next = trig.next_fire_after(now);
+        assert_eq!(next.hour(), 8);
+        assert_eq!(next.minute(), 0);
+    }
+
+    #[test]
+    fn rolls_to_next_day_when_after_window() {
+        // every 60m, window 08:00-18:00, now 19:30 -> next day 08:00.
+        let now = now_berlin(2026, 5, 28, 19, 30);
+        let trig = Trigger::Interval {
+            every: Duration::from_secs(3600),
+            days: WeekdaySet::default(),
+            active_from: Some(NaiveTime::from_hms_opt(8, 0, 0).unwrap()),
+            active_to: Some(NaiveTime::from_hms_opt(18, 0, 0).unwrap()),
+        };
+        let next = trig.next_fire_after(now);
+        assert_eq!(next.day(), 29);
+        assert_eq!(next.hour(), 8);
+        assert_eq!(next.minute(), 0);
+    }
+
+    #[test]
+    fn midnight_spanning_window_keeps_firing() {
+        // every 60m, window 22:00-02:00, now 23:30 -> 00:00 next day.
+        let now = now_berlin(2026, 5, 28, 23, 30);
+        let trig = Trigger::Interval {
+            every: Duration::from_secs(3600),
+            days: WeekdaySet::default(),
+            active_from: Some(NaiveTime::from_hms_opt(22, 0, 0).unwrap()),
+            active_to: Some(NaiveTime::from_hms_opt(2, 0, 0).unwrap()),
+        };
+        let next = trig.next_fire_after(now);
+        assert_eq!(next.day(), 29);
+        assert_eq!(next.hour(), 0);
+        assert_eq!(next.minute(), 0);
+    }
+
+    #[test]
+    fn days_filter_skips_non_eligible_weekdays() {
+        // 2026-05-28 is a Thursday. Restrict to Tue/Thu only;
+        // now 17:30 -> 18:00 should still fire today (Thu).
+        let now = now_berlin(2026, 5, 28, 17, 30);
+        let mut days = WeekdaySet::default();
+        days.0.insert(Weekday::Tue);
+        days.0.insert(Weekday::Thu);
+        let trig = Trigger::Interval {
+            every: Duration::from_secs(3600),
+            days,
+            active_from: None,
+            active_to: None,
+        };
+        let next = trig.next_fire_after(now);
+        assert_eq!(next.weekday(), Weekday::Thu);
+        assert_eq!(next.day(), 28);
+        assert_eq!(next.hour(), 18);
+    }
+
+    #[test]
+    fn days_filter_rolls_to_next_eligible_day() {
+        // 2026-05-29 is a Friday; days = {Tue, Thu}; should roll to Tue.
+        let now = now_berlin(2026, 5, 29, 9, 0);
+        let mut days = WeekdaySet::default();
+        days.0.insert(Weekday::Tue);
+        days.0.insert(Weekday::Thu);
+        let trig = Trigger::Interval {
+            every: Duration::from_secs(3600),
+            days,
+            active_from: None,
+            active_to: None,
+        };
+        let next = trig.next_fire_after(now);
+        assert_eq!(next.weekday(), Weekday::Tue);
+    }
+
+    #[test]
+    fn days_plus_window_combined() {
+        // Tue/Thu, 18:00–23:00, every 30m, now Fri 10:00 -> Tue 18:00.
+        let now = now_berlin(2026, 5, 29, 10, 0);
+        let mut days = WeekdaySet::default();
+        days.0.insert(Weekday::Tue);
+        days.0.insert(Weekday::Thu);
+        let trig = Trigger::Interval {
+            every: Duration::from_secs(1800),
+            days,
+            active_from: Some(NaiveTime::from_hms_opt(18, 0, 0).unwrap()),
+            active_to: Some(NaiveTime::from_hms_opt(23, 0, 0).unwrap()),
+        };
+        let next = trig.next_fire_after(now);
+        assert_eq!(next.weekday(), Weekday::Tue);
+        assert_eq!(next.hour(), 18);
+        assert_eq!(next.minute(), 0);
+    }
+}
+
+#[cfg(test)]
+mod calendar_tests {
+    use super::*;
+    use chrono::{Datelike, Timelike, Weekday};
+
+    fn now_berlin(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Tz> {
+        Berlin
+            .with_ymd_and_hms(y, mo, d, h, mi, 0)
+            .single()
+            .expect("valid")
+    }
+
+    #[test]
+    fn daily_today_at_in_future() {
+        // empty days = every day; at 20:00; now 09:00 -> today 20:00.
+        let now = now_berlin(2026, 5, 28, 9, 0);
+        let trig = Trigger::Calendar {
+            days: WeekdaySet::default(),
+            at: NaiveTime::from_hms_opt(20, 0, 0).unwrap(),
+        };
+        let next = trig.next_fire_after(now);
+        assert_eq!(next.day(), 28);
+        assert_eq!(next.hour(), 20);
+    }
+
+    #[test]
+    fn daily_today_at_in_past() {
+        // now 21:00, at 20:00 -> tomorrow 20:00.
+        let now = now_berlin(2026, 5, 28, 21, 0);
+        let trig = Trigger::Calendar {
+            days: WeekdaySet::default(),
+            at: NaiveTime::from_hms_opt(20, 0, 0).unwrap(),
+        };
+        let next = trig.next_fire_after(now);
+        assert_eq!(next.day(), 29);
+        assert_eq!(next.hour(), 20);
+    }
+
+    #[test]
+    fn weekly_picks_today_if_eligible_and_future() {
+        // Thu 19:00, days={Thu}, at 20:00 -> today 20:00.
+        let now = now_berlin(2026, 5, 28, 19, 0);
+        let mut days = WeekdaySet::default();
+        days.0.insert(Weekday::Thu);
+        let trig = Trigger::Calendar {
+            days,
+            at: NaiveTime::from_hms_opt(20, 0, 0).unwrap(),
+        };
+        let next = trig.next_fire_after(now);
+        assert_eq!(next.weekday(), Weekday::Thu);
+        assert_eq!(next.day(), 28);
+    }
+
+    #[test]
+    fn weekly_skips_to_next_week_if_today_already_past() {
+        // Thu 21:00, days={Thu}, at 20:00 -> next Thu 4 June 2026.
+        let now = now_berlin(2026, 5, 28, 21, 0);
+        let mut days = WeekdaySet::default();
+        days.0.insert(Weekday::Thu);
+        let trig = Trigger::Calendar {
+            days,
+            at: NaiveTime::from_hms_opt(20, 0, 0).unwrap(),
+        };
+        let next = trig.next_fire_after(now);
+        assert_eq!(next.weekday(), Weekday::Thu);
+        assert_eq!(next.day(), 4);
+        assert_eq!(next.month(), 6);
+    }
+
+    #[test]
+    fn weekly_multi_day() {
+        // days={Mon, Wed, Fri}, at 09:00, now Tue 10:00 -> Wed 09:00.
+        let now = now_berlin(2026, 5, 26, 10, 0); // Tue 2026-05-26
+        let mut days = WeekdaySet::default();
+        days.0.insert(Weekday::Mon);
+        days.0.insert(Weekday::Wed);
+        days.0.insert(Weekday::Fri);
+        let trig = Trigger::Calendar {
+            days,
+            at: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+        };
+        let next = trig.next_fire_after(now);
+        assert_eq!(next.weekday(), Weekday::Wed);
+    }
+}
+
+#[cfg(test)]
+mod dst_tests {
+    use super::*;
+
+    fn now_berlin(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Tz> {
+        Berlin
+            .with_ymd_and_hms(y, mo, d, h, mi, 0)
+            .single()
+            .expect("valid")
+    }
+
+    #[test]
+    fn spring_forward_gap_picks_post_gap() {
+        // 2026-03-29 02:00-03:00 Berlin is the spring forward gap.
+        let now = now_berlin(2026, 3, 28, 23, 0);
+        let trig = Trigger::Calendar {
+            days: WeekdaySet::default(),
+            at: NaiveTime::from_hms_opt(2, 30, 0).unwrap(),
+        };
+        let next = trig.next_fire_after(now);
+        assert!(next > now);
+        use chrono::Datelike;
+        assert_eq!(next.day(), 29);
+    }
+
+    #[test]
+    fn fall_back_picks_first_occurrence() {
+        // 2026-10-25 02:00-03:00 Berlin is the fall-back fold.
+        let now = now_berlin(2026, 10, 24, 23, 0);
+        let trig = Trigger::Calendar {
+            days: WeekdaySet::default(),
+            at: NaiveTime::from_hms_opt(2, 30, 0).unwrap(),
+        };
+        let next = trig.next_fire_after(now);
+        assert!(next > now);
+        use chrono::Datelike;
+        assert_eq!(next.day(), 25);
+    }
+}
