@@ -11,7 +11,7 @@ use tracing::{error, info, warn};
 
 use super::audit::{AuditChange, AuditEntry, AuditLog, berlin_now};
 use super::overrides::SettingsOverrides;
-use super::{ScheduleSettings, Settings, SettingsError, SettingsHandle, SettingsSection};
+use super::{Schedule, Settings, SettingsError, SettingsHandle, SettingsSection};
 
 const FILE_NAME: &str = "settings.ron";
 
@@ -820,12 +820,12 @@ fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
     // Schedules — diff by name across vec
     {
         use std::collections::{BTreeMap, BTreeSet};
-        let prior_map: BTreeMap<&str, &ScheduleSettings> = prior
+        let prior_map: BTreeMap<&str, &Schedule> = prior
             .schedules
             .iter()
             .map(|s| (s.name.as_str(), s))
             .collect();
-        let next_map: BTreeMap<&str, &ScheduleSettings> = next
+        let next_map: BTreeMap<&str, &Schedule> = next
             .schedules
             .iter()
             .map(|s| (s.name.as_str(), s))
@@ -1048,19 +1048,25 @@ mod tests {
 
     #[tokio::test]
     async fn reset_schedules_clears_override() {
-        use crate::settings::ScheduleSettings;
+        use crate::schedule::{Schedule, Trigger, WeekdaySet};
         let dir = tempfile::tempdir().expect("tmp");
         let audit = std::sync::Arc::new(crate::settings::audit::MemoryAuditLog::default());
         let (store, _h) = SettingsStore::open(dir.path(), audit, "main").expect("open");
         store
             .apply(
                 SettingsOverrides {
-                    schedules: Some(vec![ScheduleSettings {
+                    schedules: Some(vec![Schedule {
                         name: "x".into(),
                         message: "hi".into(),
-                        interval: "01:00".into(),
+                        trigger: Trigger::Interval {
+                            every: std::time::Duration::from_secs(3600),
+                            days: WeekdaySet::default(),
+                            active_from: None,
+                            active_to: None,
+                        },
+                        start_date: None,
+                        end_date: None,
                         enabled: true,
-                        ..Default::default()
                     }]),
                     ..Default::default()
                 },
@@ -1168,12 +1174,18 @@ mod tests {
                 .apply_with(
                     |o| {
                         let mut next = o.schedules.clone().unwrap_or_default();
-                        next.push(crate::settings::ScheduleSettings {
+                        next.push(crate::schedule::Schedule {
                             name: "alpha".into(),
                             message: "a".into(),
-                            interval: "01:00".into(),
+                            trigger: crate::schedule::Trigger::Interval {
+                                every: std::time::Duration::from_secs(3600),
+                                days: crate::schedule::WeekdaySet::default(),
+                                active_from: None,
+                                active_to: None,
+                            },
+                            start_date: None,
+                            end_date: None,
                             enabled: true,
-                            ..Default::default()
                         });
                         o.schedules = Some(next);
                     },
@@ -1190,12 +1202,18 @@ mod tests {
                 .apply_with(
                     |o| {
                         let mut next = o.schedules.clone().unwrap_or_default();
-                        next.push(crate::settings::ScheduleSettings {
+                        next.push(crate::schedule::Schedule {
                             name: "bravo".into(),
                             message: "b".into(),
-                            interval: "01:00".into(),
+                            trigger: crate::schedule::Trigger::Interval {
+                                every: std::time::Duration::from_secs(3600),
+                                days: crate::schedule::WeekdaySet::default(),
+                                active_from: None,
+                                active_to: None,
+                            },
+                            start_date: None,
+                            end_date: None,
                             enabled: true,
-                            ..Default::default()
                         });
                         o.schedules = Some(next);
                     },
@@ -1244,7 +1262,7 @@ mod tests {
 #[cfg(test)]
 mod merge_tests {
     use super::*;
-    use crate::settings::ScheduleSettings;
+    use crate::schedule::{Schedule, Trigger, WeekdaySet};
     use crate::settings::overrides::{
         AviationstackOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
     };
@@ -1369,24 +1387,28 @@ mod merge_tests {
         );
     }
 
+    fn make_schedule(name: &str, message: &str) -> Schedule {
+        Schedule {
+            name: name.into(),
+            message: message.into(),
+            trigger: Trigger::Interval {
+                every: std::time::Duration::from_secs(3600),
+                days: WeekdaySet::default(),
+                active_from: None,
+                active_to: None,
+            },
+            start_date: None,
+            end_date: None,
+            enabled: true,
+        }
+    }
+
     #[test]
     fn merge_replaces_schedules_wholesale() {
         let mut into = SettingsOverrides::default();
-        into.schedules = Some(vec![ScheduleSettings {
-            name: "old".into(),
-            ..Default::default()
-        }]);
+        into.schedules = Some(vec![make_schedule("old", "m")]);
         let patch = SettingsOverrides {
-            schedules: Some(vec![
-                ScheduleSettings {
-                    name: "new1".into(),
-                    ..Default::default()
-                },
-                ScheduleSettings {
-                    name: "new2".into(),
-                    ..Default::default()
-                },
-            ]),
+            schedules: Some(vec![make_schedule("new1", "a"), make_schedule("new2", "b")]),
             ..Default::default()
         };
         merge_into(&mut into, &patch);
@@ -1399,10 +1421,7 @@ mod merge_tests {
     #[test]
     fn merge_skips_schedules_when_patch_is_none() {
         let mut into = SettingsOverrides {
-            schedules: Some(vec![ScheduleSettings {
-                name: "keep".into(),
-                ..Default::default()
-            }]),
+            schedules: Some(vec![make_schedule("keep", "m")]),
             ..Default::default()
         };
         let patch = SettingsOverrides::default();
@@ -1417,36 +1436,12 @@ mod merge_tests {
         let mut prior = Settings::compiled_defaults();
         let mut next = Settings::compiled_defaults();
         prior.schedules = vec![
-            ScheduleSettings {
-                name: "keep".into(),
-                message: "old".into(),
-                interval: "01:00".into(),
-                enabled: true,
-                ..Default::default()
-            },
-            ScheduleSettings {
-                name: "drop".into(),
-                message: "x".into(),
-                interval: "01:00".into(),
-                enabled: true,
-                ..Default::default()
-            },
+            make_schedule("keep", "old"),
+            make_schedule("drop", "x"),
         ];
         next.schedules = vec![
-            ScheduleSettings {
-                name: "keep".into(),
-                message: "new".into(), // modified
-                interval: "01:00".into(),
-                enabled: true,
-                ..Default::default()
-            },
-            ScheduleSettings {
-                name: "add".into(),
-                message: "y".into(),
-                interval: "01:00".into(),
-                enabled: true,
-                ..Default::default()
-            },
+            make_schedule("keep", "new"), // modified
+            make_schedule("add", "y"),
         ];
         let changes = diff_changes(&prior, &next);
         let keys: Vec<&str> = changes.iter().map(|c| c.key.as_str()).collect();
