@@ -326,11 +326,7 @@ fn parse_interval_legacy(s: &str) -> Option<i64> {
                 };
             }
         }
-        if total == 0 {
-            None
-        } else {
-            Some(total)
-        }
+        if total == 0 { None } else { Some(total) }
     }
 }
 

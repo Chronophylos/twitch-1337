@@ -148,8 +148,14 @@ mod tests {
     async fn rollover_resets_fires_today() {
         let dir = tempfile::tempdir().expect("tmp");
         let s = TelemetryStore::open(dir.path());
-        let day1 = Utc.with_ymd_and_hms(2026, 5, 28, 12, 0, 0).single().unwrap();
-        let day2 = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).single().unwrap();
+        let day1 = Utc
+            .with_ymd_and_hms(2026, 5, 28, 12, 0, 0)
+            .single()
+            .unwrap();
+        let day2 = Utc
+            .with_ymd_and_hms(2026, 5, 29, 12, 0, 0)
+            .single()
+            .unwrap();
         s.record_fire("a", day1).await;
         s.record_fire("a", day1).await;
         s.record_fire("a", day2).await;

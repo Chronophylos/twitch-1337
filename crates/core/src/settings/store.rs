@@ -1278,8 +1278,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmp");
         std::fs::write(dir.path().join(FILE_NAME), v3).expect("write");
         let audit = Arc::new(MemoryAuditLog::new());
-        let (_, handle) =
-            SettingsStore::open(dir.path(), audit, "main").expect("open v3 file");
+        let (_, handle) = SettingsStore::open(dir.path(), audit, "main").expect("open v3 file");
         let s = handle.load();
         assert_eq!(s.schedules.len(), 1, "schedule row must survive migration");
         assert_eq!(s.schedules[0].name, "noon");
@@ -1456,8 +1455,10 @@ mod merge_tests {
 
     #[test]
     fn merge_replaces_schedules_wholesale() {
-        let mut into = SettingsOverrides::default();
-        into.schedules = Some(vec![make_schedule("old", "m")]);
+        let mut into = SettingsOverrides {
+            schedules: Some(vec![make_schedule("old", "m")]),
+            ..Default::default()
+        };
         let patch = SettingsOverrides {
             schedules: Some(vec![make_schedule("new1", "a"), make_schedule("new2", "b")]),
             ..Default::default()
@@ -1486,10 +1487,7 @@ mod merge_tests {
     fn diff_emits_schedule_added_removed_modified() {
         let mut prior = Settings::compiled_defaults();
         let mut next = Settings::compiled_defaults();
-        prior.schedules = vec![
-            make_schedule("keep", "old"),
-            make_schedule("drop", "x"),
-        ];
+        prior.schedules = vec![make_schedule("keep", "old"), make_schedule("drop", "x")];
         next.schedules = vec![
             make_schedule("keep", "new"), // modified
             make_schedule("add", "y"),

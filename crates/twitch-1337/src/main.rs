@@ -270,6 +270,9 @@ pub async fn main() -> Result<()> {
         (None, None)
     };
 
+    // Build telemetry once so the IRC orchestrator and WebState share the same Arc.
+    let telemetry = twitch_1337::schedule::TelemetryStore::open(&get_data_dir());
+
     let web_spawner = if config.web.enabled {
         let credentials_for_web = credentials.clone();
         Some(
@@ -283,6 +286,7 @@ pub async fn main() -> Result<()> {
                 aviation_tracker_tx.clone(),
                 settings_handle.clone(),
                 settings_store.clone(),
+                telemetry.clone(),
             )
             .await?,
         )
@@ -313,6 +317,7 @@ pub async fn main() -> Result<()> {
         aviation_tracker_tx,
         aviation_tracker_rx,
         primary_history_tap: None,
+        telemetry,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -341,6 +346,7 @@ async fn build_web_spawner(
     tracker_tx: Option<Arc<tokio::sync::mpsc::Sender<aviation::TrackerCommand>>>,
     settings: twitch_1337::settings::SettingsHandle,
     settings_store: Arc<twitch_1337::settings::SettingsStore>,
+    telemetry: Arc<twitch_1337::schedule::TelemetryStore>,
 ) -> Result<twitch_1337::WebSpawner> {
     let bind_addr: std::net::SocketAddr = config
         .web
@@ -417,6 +423,7 @@ async fn build_web_spawner(
         ai_bootstrap: config.ai.clone().map(Arc::new),
         model_cache: Arc::new(twitch_1337_web::routes::ai_models::ModelListCache::default()),
         http: reqwest::Client::new(),
+        telemetry,
     };
 
     Ok(Box::new(move |shutdown| {

@@ -286,6 +286,7 @@ impl TestBotBuilder {
                 memory_store.clone(),
                 settings_handle.clone(),
                 settings_store.clone(),
+                twitch_1337::schedule::TelemetryStore::open(data_dir.path()),
             );
             let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
                 let deps = twitch_1337_web::WebDeps { bind_addr, state };
@@ -342,6 +343,7 @@ impl TestBotBuilder {
             aviation_tracker_tx,
             aviation_tracker_rx,
             primary_history_tap: Some(primary_history_tap.clone()),
+            telemetry: twitch_1337::schedule::TelemetryStore::open(data_dir.path()),
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -683,6 +685,7 @@ fn build_test_web_state(
     memory_store: twitch_1337::ai::memory::store::MemoryStore,
     settings: twitch_1337::settings::SettingsHandle,
     settings_store: Arc<twitch_1337::settings::SettingsStore>,
+    telemetry: Arc<twitch_1337::schedule::TelemetryStore>,
 ) -> twitch_1337_web::WebState {
     use twitch_1337_web::auth::OAuthCtx;
     use twitch_1337_web::auth::session::SessionTable;
@@ -744,5 +747,6 @@ fn build_test_web_state(
         ai_bootstrap: None,
         model_cache: Arc::new(twitch_1337_web::routes::ai_models::ModelListCache::default()),
         http: reqwest::Client::new(),
+        telemetry,
     }
 }

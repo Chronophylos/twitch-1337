@@ -71,9 +71,7 @@ fn next_interval(
 
     // Safety bound: scan at most 14 days of slots before giving up.
     for _ in 0..(14 * 1440) {
-        if in_window(candidate.time(), active_from, active_to)
-            && days.allows(candidate.weekday())
-        {
+        if in_window(candidate.time(), active_from, active_to) && days.allows(candidate.weekday()) {
             return candidate;
         }
         slot += every_secs;
@@ -97,10 +95,7 @@ fn next_calendar(now: DateTime<Tz>, days: &WeekdaySet, at: NaiveTime) -> DateTim
             LocalResult::None => {
                 // Spring-forward gap: pick post-gap by adding 1h.
                 let bumped = naive + ChronoDuration::hours(1);
-                Berlin
-                    .from_local_datetime(&bumped)
-                    .single()
-                    .unwrap_or(now)
+                Berlin.from_local_datetime(&bumped).single().unwrap_or(now)
             }
         };
         if candidate > now {

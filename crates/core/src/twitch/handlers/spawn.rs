@@ -113,6 +113,10 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     /// peek at chat-history entries. Production wires `None`.
     pub primary_history_tap:
         Option<Arc<tokio::sync::Mutex<Option<crate::ai::chat_history::ChatHistory>>>>,
+
+    /// Per-schedule runtime telemetry. Shared with the dashboard so card
+    /// chips ("12 today", "12m ago") read live data.
+    pub telemetry: Arc<crate::schedule::TelemetryStore>,
 }
 
 /// Spawn every long-running handler task in the order they currently
@@ -150,6 +154,7 @@ where
         settings,
         settings_store,
         primary_history_tap,
+        telemetry,
     } = deps;
 
     let ping_actor = tokio::spawn(run_ping_actor(ping_actor_rx, ping_manager, ping_names_tx));
@@ -187,7 +192,8 @@ where
 
     // Schedules orchestrator: subscribes to SettingsStore::change_notify
     // and reconciles per-schedule tasks. No cache, no 30s poll.
-    let telemetry = crate::schedule::TelemetryStore::open(&data_dir);
+    // `telemetry` comes from the caller (constructed in run_bot so WebState
+    // and the orchestrator share the same Arc).
     let scheduled_messages = tokio::spawn({
         let sender = chat_sender.clone();
         let settings = settings.clone();
@@ -197,7 +203,16 @@ where
         let notify = shutdown_notify.clone();
         let clk = clock.clone();
         async move {
-            run_orchestrator(sender, settings, change_notify, telemetry, channel, notify, clk).await;
+            run_orchestrator(
+                sender,
+                settings,
+                change_notify,
+                telemetry,
+                channel,
+                notify,
+                clk,
+            )
+            .await;
         }
     });
 

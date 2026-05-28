@@ -1,3 +1,82 @@
 {% extends "base.html" %}
 {% block title %}Schedules — twitch-1337{% endblock %}
-{% block content %}<p>schedules (T16 in progress)</p>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Schedules <span class="muted">({{ total }})</span></h1>
+    <p class="page-sub">Recurring announcements fired by the bot. Changes apply within seconds — no restart needed.</p>
+  </div>
+  <a class="btn primary" href="/schedules?new=true">+ New schedule</a>
+</div>
+
+<div class="stats-strip">
+  <div class="stat-tile"><div class="stat-label">TOTAL</div><div class="stat-value">{{ total }}</div></div>
+  <div class="stat-tile"><div class="stat-label">ACTIVE</div><div class="stat-value">{{ active_count }} / {{ total }}</div></div>
+  <div class="stat-tile"><div class="stat-label">FIRED TODAY</div><div class="stat-value">{{ fired_today }}</div></div>
+  <div class="stat-tile">
+    <div class="stat-label">NEXT FIRE</div>
+    {% if let Some(nf) = next_fire %}
+      <div class="stat-value">{{ nf.time }} <span class="muted">· {{ nf.name }}</span></div>
+    {% else %}
+      <div class="stat-value muted">—</div>
+    {% endif %}
+  </div>
+</div>
+
+{% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
+
+{% if !row_errors.is_empty() || !global_errors.is_empty() %}
+  <div class="flash error">
+    <strong>Validation failed.</strong>
+    <ul>
+      {% for err in row_errors %}
+        <li><code>row {{ err.row_index }}{% if !err.row_name.is_empty() %} ({{ err.row_name }}){% endif %}.{{ err.field }}</code>: {{ err.message }}</li>
+      {% endfor %}
+      {% for (field, msg) in global_errors %}
+        <li><code>{{ field }}</code>: {{ msg }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+{% if let Some(form) = new_form %}
+  <section class="settings-card">
+    <header class="settings-card-head"><div><h2>New schedule</h2></div></header>
+    {% let action = "/schedules/add" %}
+    {% let cancel_href = Some("/schedules") %}
+    {% include "schedules/_form.html" %}
+  </section>
+{% endif %}
+
+{% if let Some(form) = edit_form %}
+  <section class="settings-card">
+    <header class="settings-card-head"><div><h2>Edit {{ form.name }}</h2></div></header>
+    {% let action_owned = format!("/schedules/{}/edit", form.name) %}
+    {% let action = action_owned.as_str() %}
+    {% let cancel_href = Some("/schedules") %}
+    {% include "schedules/_form.html" %}
+  </section>
+{% endif %}
+
+<section class="schedule-grid">
+  {% if rows.is_empty() %}
+    <p class="empty">No schedules configured yet. Click <strong>+ New schedule</strong> to add one.</p>
+  {% else %}
+    {% for card in rows %}
+      {% include "schedules/_card.html" %}
+    {% endfor %}
+  {% endif %}
+</section>
+
+<script>
+  document.querySelectorAll('form.js-delete-schedule').forEach(function (form) {
+    form.addEventListener('submit', function (event) {
+      var name = form.dataset.name || '';
+      if (!window.confirm('Delete schedule “' + name + '”?')) {
+        event.preventDefault();
+      }
+    });
+  });
+</script>
+{% endblock %}

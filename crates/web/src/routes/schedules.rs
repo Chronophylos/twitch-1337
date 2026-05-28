@@ -1,9 +1,10 @@
 //! `/schedules` CRUD handlers (mod-gated).
 //!
-//! The list page renders all schedules + an add form. Each row has its
-//! own inline edit form, toggled via `?edit=<name>`. Validation errors
-//! re-render the list with per-row error attribution.
+//! The list page renders a card-grid of all schedules plus an add/edit form.
+//! Add: `?new=true`. Edit: `?edit=<name>`. Validation errors re-render the
+//! list with per-row error attribution.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use askama::Template;
@@ -24,8 +25,6 @@ use crate::flash;
 use crate::routes::render;
 use crate::state::WebState;
 
-// Fields will be referenced by the T16 template; allow dead-code until then.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct RowError {
     pub row_index: usize,
@@ -47,19 +46,51 @@ pub fn router() -> Router<WebState> {
 struct ListQuery {
     /// When `Some(name)`, the matching row renders in edit mode.
     edit: Option<String>,
+    /// When `Some(true)`, the "new schedule" form is shown.
+    new: Option<bool>,
 }
 
-// Fields will be referenced by the T16 template; allow dead-code until then.
-#[allow(dead_code)]
+struct CardView {
+    name: String,
+    message: String,
+    enabled: bool,
+    trigger_label: String,
+    /// Human-rendered active-window label, e.g. "09:00–17:00".
+    schedule_window_label: Option<String>,
+    last_fired_human: Option<String>,
+    fires_today: u32,
+    next_fire_human: Option<String>,
+}
+
+struct NextFire {
+    name: String,
+    time: String,
+}
+
+#[derive(Default, Debug, Clone)]
+struct FormState {
+    name: String,
+    message: String,
+    /// "interval" | "calendar"
+    kind: String,
+    interval_every: String,
+    interval_active_from: String,
+    interval_active_to: String,
+    interval_days: BTreeSet<String>,
+    calendar_at: String,
+    calendar_days: BTreeSet<String>,
+    start_date: String,
+    end_date: String,
+    enabled: bool,
+}
+
 #[derive(Template)]
 #[template(path = "schedules/index.html")]
 struct ListTpl {
-    rows: Vec<Schedule>,
-    edit_name: Option<String>,
-    /// Per-row validation errors. Indexed by row position in `rows` so blank-
-    /// name rows attribute correctly (PR #227 review F7).
+    rows: Vec<CardView>,
+    edit_form: Option<FormState>,
+    new_form: Option<FormState>,
     row_errors: Vec<RowError>,
-    /// Non-row-attributable validation errors (raw field path + message).
     global_errors: Vec<(String, String)>,
     flash: Option<String>,
     csrf: String,
@@ -69,6 +100,10 @@ struct ListTpl {
     is_mod: bool,
     is_broadcaster: bool,
     is_owner: bool,
+    total: usize,
+    active_count: usize,
+    fired_today: u32,
+    next_fire: Option<NextFire>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -203,13 +238,42 @@ async fn list(
     cookies: Cookies,
 ) -> Result<Response, WebError> {
     let rows = state.settings.load().schedules.clone();
-    let flash_msg = flash::take(&cookies);
+    let active_count = rows.iter().filter(|r| r.enabled).count();
+    let telemetry = state.telemetry.snapshot().await;
+    let fired_today: u32 = telemetry.values().map(|r| r.fires_today).sum();
+    let now_utc = chrono::Utc::now();
+    let now_berlin = now_utc.with_timezone(&chrono_tz::Europe::Berlin);
+    let next_fire = rows
+        .iter()
+        .filter(|r| r.enabled)
+        .filter_map(|r| r.next_active_fire(now_berlin).map(|t| (r.name.clone(), t)))
+        .min_by_key(|(_, t)| *t)
+        .map(|(name, t)| NextFire {
+            name,
+            time: t.format("%H:%M").to_string(),
+        });
+    let edit_form = q.edit.as_ref().and_then(|name| {
+        rows.iter()
+            .find(|r| r.name == *name)
+            .map(form_state_from_schedule)
+    });
+    let new_form = if q.new.unwrap_or(false) {
+        Some(FormState::default())
+    } else {
+        None
+    };
+    let cards: Vec<CardView> = rows
+        .iter()
+        .map(|s| card_view(s, telemetry.get(&s.name), now_utc, now_berlin))
+        .collect();
+    let total = cards.len();
     render(&ListTpl {
-        rows,
-        edit_name: q.edit,
+        rows: cards,
+        edit_form,
+        new_form,
         row_errors: Vec::new(),
         global_errors: Vec::new(),
-        flash: flash_msg,
+        flash: flash::take(&cookies),
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
         user_avatar_url: session.avatar_url.clone(),
@@ -217,7 +281,158 @@ async fn list(
         is_mod: session.is_mod(),
         is_broadcaster: session.is_broadcaster,
         is_owner: matches!(session.role, crate::auth::Role::Owner),
+        total,
+        active_count,
+        fired_today,
+        next_fire,
     })
+}
+
+fn card_view(
+    s: &Schedule,
+    tele: Option<&twitch_1337_core::schedule::ScheduleRuntime>,
+    now_utc: chrono::DateTime<chrono::Utc>,
+    now_berlin: chrono::DateTime<chrono_tz::Tz>,
+) -> CardView {
+    let (trigger_label, window_label) = trigger_human(&s.trigger);
+    let last_fired_human = tele.and_then(|r| r.last_fired_at).map(|t| {
+        let delta = now_utc.signed_duration_since(t);
+        humanize_delta(delta)
+    });
+    let next_fire_human = if s.enabled {
+        s.next_active_fire(now_berlin)
+            .map(|t| t.format("%a %H:%M").to_string())
+    } else {
+        None
+    };
+    CardView {
+        name: s.name.clone(),
+        message: s.message.clone(),
+        enabled: s.enabled,
+        trigger_label,
+        schedule_window_label: window_label,
+        last_fired_human,
+        fires_today: tele.map(|r| r.fires_today).unwrap_or(0),
+        next_fire_human,
+    }
+}
+
+fn trigger_human(t: &Trigger) -> (String, Option<String>) {
+    match t {
+        Trigger::Interval {
+            every,
+            days,
+            active_from,
+            active_to,
+        } => {
+            let secs = every.as_secs();
+            let mut main = if secs % 3600 == 0 {
+                format!("every {} h", secs / 3600)
+            } else if secs >= 3600 {
+                format!("every {}h{}m", secs / 3600, (secs / 60) % 60)
+            } else {
+                format!("every {} min", secs / 60)
+            };
+            if !days.is_empty() {
+                main.push_str(&format!(" · {}", weekdays_short(days)));
+            }
+            let window = match (active_from, active_to) {
+                (Some(f), Some(t2)) => {
+                    Some(format!("{}–{}", f.format("%H:%M"), t2.format("%H:%M")))
+                }
+                _ => None,
+            };
+            (main, window)
+        }
+        Trigger::Calendar { days, at } => {
+            let main = if days.is_empty() {
+                format!("daily at {}", at.format("%H:%M"))
+            } else {
+                format!("{} at {}", weekdays_short(days), at.format("%H:%M"))
+            };
+            (main, None)
+        }
+    }
+}
+
+fn weekdays_short(days: &WeekdaySet) -> String {
+    let mut wds: Vec<Weekday> = days.0.iter().copied().collect();
+    wds.sort_by_key(Weekday::num_days_from_monday);
+    wds.iter()
+        .map(|d| match d {
+            Weekday::Mon => "Mon",
+            Weekday::Tue => "Tue",
+            Weekday::Wed => "Wed",
+            Weekday::Thu => "Thu",
+            Weekday::Fri => "Fri",
+            Weekday::Sat => "Sat",
+            Weekday::Sun => "Sun",
+        })
+        .collect::<Vec<_>>()
+        .join("·")
+}
+
+fn humanize_delta(d: chrono::Duration) -> String {
+    let secs = d.num_seconds();
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86_400)
+    }
+}
+
+fn form_state_from_schedule(s: &Schedule) -> FormState {
+    let mut fs = FormState {
+        name: s.name.clone(),
+        message: s.message.clone(),
+        enabled: s.enabled,
+        start_date: s
+            .start_date
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_default(),
+        end_date: s
+            .end_date
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_default(),
+        ..FormState::default()
+    };
+    match &s.trigger {
+        Trigger::Interval {
+            every,
+            days,
+            active_from,
+            active_to,
+        } => {
+            fs.kind = "interval".into();
+            let total = every.as_secs();
+            fs.interval_every = format!("{:02}:{:02}", total / 3600, (total / 60) % 60);
+            fs.interval_active_from = active_from
+                .map(|t| t.format("%H:%M").to_string())
+                .unwrap_or_default();
+            fs.interval_active_to = active_to
+                .map(|t| t.format("%H:%M").to_string())
+                .unwrap_or_default();
+            fs.interval_days = days
+                .0
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect();
+        }
+        Trigger::Calendar { days, at } => {
+            fs.kind = "calendar".into();
+            fs.calendar_at = at.format("%H:%M").to_string();
+            fs.calendar_days = days
+                .0
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect();
+        }
+    }
+    fs
 }
 
 async fn create(
@@ -414,7 +629,7 @@ async fn apply_or_rerender(
 
 fn render_validation(
     session: &Session,
-    rows: Vec<Schedule>,
+    _rows: Vec<Schedule>,
     errs: Vec<twitch_1337_core::settings::FieldError>,
     edit_on_error: Option<String>,
 ) -> Result<Response, WebError> {
@@ -426,11 +641,10 @@ fn render_validation(
         {
             let idx_str = &rest[..end];
             if let Ok(idx) = idx_str.parse::<usize>() {
-                let row_name = rows.get(idx).map(|r| r.name.clone()).unwrap_or_default();
                 let field_name = rest.get(end + 2..).unwrap_or("").to_owned();
                 row_errors.push(RowError {
                     row_index: idx,
-                    row_name,
+                    row_name: String::new(),
                     field: field_name,
                     message: e.message,
                 });
@@ -439,9 +653,17 @@ fn render_validation(
         }
         global_errors.push((e.field, e.message));
     }
+    // When re-rendering on validation failure, open the edit form for the
+    // failed row (if applicable), but show an empty card grid so the user
+    // focuses on the error.
+    let edit_form = edit_on_error.map(|name| FormState {
+        name,
+        ..FormState::default()
+    });
     let resp = ListTpl {
-        rows,
-        edit_name: edit_on_error,
+        rows: Vec::new(),
+        edit_form,
+        new_form: None,
         row_errors,
         global_errors,
         flash: None,
@@ -452,6 +674,10 @@ fn render_validation(
         is_mod: session.is_mod(),
         is_broadcaster: session.is_broadcaster,
         is_owner: matches!(session.role, crate::auth::Role::Owner),
+        total: 0,
+        active_count: 0,
+        fired_today: 0,
+        next_fire: None,
     };
     render(&resp)
 }
@@ -593,8 +819,7 @@ mod field_path_parse_tests {
     // We can't call render_validation directly without a WebState; instead
     // test the parsing logic by reproducing the slice arithmetic. This pins
     // the bounds-safe `.get(end + 2..).unwrap_or("")` behavior so a future
-    // refactor doesn't reintroduce a panicking unchecked slice (PR #227
-    // review F11).
+    // refactor doesn't reintroduce a panicking unchecked slice.
     fn extract_field_name(field: &str) -> Option<(usize, String)> {
         let rest = field.strip_prefix("schedules[")?;
         let end = rest.find(']')?;
@@ -611,8 +836,6 @@ mod field_path_parse_tests {
 
     #[test]
     fn bare_indexed_path_does_not_panic() {
-        // No .field suffix — pre-fix this panicked on the slice. With
-        // .get().unwrap_or("") it produces an empty field name.
         let got = extract_field_name("schedules[0]");
         assert_eq!(got, Some((0, "".to_owned())));
     }
