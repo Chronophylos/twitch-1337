@@ -4,14 +4,18 @@
 //! own inline edit form, toggled via `?edit=<name>`. Validation errors
 //! re-render the list with per-row error attribution.
 
+use std::time::Duration;
+
 use askama::Template;
 use axum::Router;
 use axum::extract::{Extension, Path, Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
+use chrono::{NaiveDate, NaiveTime, Weekday};
 use serde::Deserialize;
 use tower_cookies::Cookies;
-use twitch_1337_core::settings::{Actor, ScheduleSettings, SettingsError};
+use twitch_1337_core::schedule::{Schedule, Trigger, WeekdaySet};
+use twitch_1337_core::settings::{Actor, SettingsError};
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
@@ -20,6 +24,8 @@ use crate::flash;
 use crate::routes::render;
 use crate::state::WebState;
 
+// Fields will be referenced by the T16 template; allow dead-code until then.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct RowError {
     pub row_index: usize,
@@ -34,6 +40,7 @@ pub fn router() -> Router<WebState> {
         .route("/schedules/add", post(create))
         .route("/schedules/{name}/edit", post(update))
         .route("/schedules/{name}/delete", post(delete))
+        .route("/schedules/{name}/toggle", post(toggle))
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -42,10 +49,12 @@ struct ListQuery {
     edit: Option<String>,
 }
 
+// Fields will be referenced by the T16 template; allow dead-code until then.
+#[allow(dead_code)]
 #[derive(Template)]
 #[template(path = "schedules/index.html")]
 struct ListTpl {
-    rows: Vec<ScheduleSettings>,
+    rows: Vec<Schedule>,
     edit_name: Option<String>,
     /// Per-row validation errors. Indexed by row position in `rows` so blank-
     /// name rows attribute correctly (PR #227 review F7).
@@ -67,41 +76,119 @@ struct ScheduleForm {
     _csrf: String,
     name: String,
     message: String,
-    interval: String,
+    /// "interval" or "calendar"
+    kind: String,
+    // Interval fields
     #[serde(default)]
-    start_date: String,
+    interval_every: String, // "hh:mm"
+    #[serde(default)]
+    interval_active_from: String,
+    #[serde(default)]
+    interval_active_to: String,
+    #[serde(default)]
+    interval_days: Vec<String>, // "Mon".."Sun"
+    // Calendar fields
+    #[serde(default)]
+    calendar_at: String,
+    #[serde(default)]
+    calendar_days: Vec<String>,
+    // Common date range
+    #[serde(default)]
+    start_date: String, // YYYY-MM-DD
     #[serde(default)]
     end_date: String,
     #[serde(default)]
-    active_time_start: String,
-    #[serde(default)]
-    active_time_end: String,
-    #[serde(default)]
-    enabled: Option<String>, // checkbox: "true" or absent
-}
-
-fn opt(s: String) -> Option<String> {
-    let t = s.trim();
-    if t.is_empty() {
-        None
-    } else {
-        Some(t.to_owned())
-    }
+    enabled: Option<String>,
 }
 
 impl ScheduleForm {
-    fn into_settings(self) -> ScheduleSettings {
-        ScheduleSettings {
+    fn try_into_schedule(self) -> Result<Schedule, Vec<twitch_1337_core::settings::FieldError>> {
+        let mut errs = Vec::new();
+        let prefix = "form";
+        let trigger = match self.kind.as_str() {
+            "interval" => {
+                let secs = parse_hhmm_to_secs(&self.interval_every).unwrap_or(0);
+                let days = parse_weekdays(&self.interval_days);
+                let active_from = parse_hhmm(&self.interval_active_from);
+                let active_to = parse_hhmm(&self.interval_active_to);
+                Trigger::Interval {
+                    every: Duration::from_secs(secs.max(60)),
+                    days,
+                    active_from,
+                    active_to,
+                }
+            }
+            "calendar" => {
+                let at = match parse_hhmm(&self.calendar_at) {
+                    Some(v) => v,
+                    None => {
+                        errs.push(twitch_1337_core::settings::FieldError {
+                            field: format!("{prefix}.calendar_at"),
+                            message: format!("must be HH:MM (got {:?})", self.calendar_at),
+                        });
+                        NaiveTime::from_hms_opt(0, 0, 0).unwrap()
+                    }
+                };
+                let days = parse_weekdays(&self.calendar_days);
+                Trigger::Calendar { days, at }
+            }
+            other => {
+                errs.push(twitch_1337_core::settings::FieldError {
+                    field: format!("{prefix}.kind"),
+                    message: format!("unknown trigger kind {other:?}"),
+                });
+                Trigger::Calendar {
+                    days: WeekdaySet::default(),
+                    at: NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                }
+            }
+        };
+        if !errs.is_empty() {
+            return Err(errs);
+        }
+        Ok(Schedule {
             name: self.name.trim().to_owned(),
             message: self.message.trim().to_owned(),
-            interval: self.interval.trim().to_owned(),
-            start_date: opt(self.start_date),
-            end_date: opt(self.end_date),
-            active_time_start: opt(self.active_time_start),
-            active_time_end: opt(self.active_time_end),
+            trigger,
+            start_date: parse_date(&self.start_date),
+            end_date: parse_date(&self.end_date),
             enabled: self.enabled.is_some(),
+        })
+    }
+}
+
+fn parse_hhmm(s: &str) -> Option<NaiveTime> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    NaiveTime::parse_from_str(s, "%H:%M").ok()
+}
+
+fn parse_hhmm_to_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (h, m) = s.split_once(':')?;
+    let h: u64 = h.parse().ok()?;
+    let m: u64 = m.parse().ok()?;
+    Some(h * 3600 + m * 60)
+}
+
+fn parse_date(s: &str) -> Option<NaiveDate> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+}
+
+fn parse_weekdays(values: &[String]) -> WeekdaySet {
+    let mut out = WeekdaySet::default();
+    for v in values {
+        if let Ok(d) = v.parse::<Weekday>() {
+            out.0.insert(d);
         }
     }
+    out
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,7 +229,17 @@ async fn create(
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    let new_row = form.into_settings();
+    let new_row = match form.try_into_schedule() {
+        Ok(r) => r,
+        Err(errs) => {
+            return render_validation(
+                &session,
+                state.settings.load().schedules.clone(),
+                errs,
+                None,
+            );
+        }
+    };
     let mut intended_rows = state.settings.load().schedules.clone();
     intended_rows.push(new_row.clone());
     let new_row_for_mutate = new_row.clone();
@@ -171,7 +268,17 @@ async fn update(
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    let new_row = form.into_settings();
+    let new_row = match form.try_into_schedule() {
+        Ok(r) => r,
+        Err(errs) => {
+            return render_validation(
+                &session,
+                state.settings.load().schedules.clone(),
+                errs,
+                Some(name),
+            );
+        }
+    };
     let new_name = new_row.name.clone();
     let mut intended_rows = state.settings.load().schedules.clone();
     if let Some(idx) = intended_rows.iter().position(|s| s.name == name) {
@@ -206,7 +313,7 @@ async fn delete(
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    let intended_rows: Vec<ScheduleSettings> = state
+    let intended_rows: Vec<Schedule> = state
         .settings
         .load()
         .schedules
@@ -221,7 +328,7 @@ async fn delete(
         cookies,
         intended_rows,
         Box::new(move |o| {
-            let next: Vec<ScheduleSettings> = o
+            let next: Vec<Schedule> = o
                 .schedules
                 .clone()
                 .unwrap_or_default()
@@ -235,6 +342,46 @@ async fn delete(
     .await
 }
 
+#[derive(Debug, Deserialize)]
+struct ToggleForm {
+    _csrf: String,
+}
+
+async fn toggle(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    Path(name): Path<String>,
+    cookies: Cookies,
+    axum::Form(form): axum::Form<ToggleForm>,
+) -> Result<Response, WebError> {
+    if !csrf::verify(&form._csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    let actor = Actor {
+        user_id: session.user_id.clone(),
+        user_login: session.user_login.clone(),
+    };
+    let name_for = name.clone();
+    state
+        .settings_store
+        .apply_with(
+            Box::new(
+                move |o: &mut twitch_1337_core::settings::overrides::SettingsOverrides| {
+                    let mut next = o.schedules.clone().unwrap_or_default();
+                    if let Some(s) = next.iter_mut().find(|s| s.name == name_for) {
+                        s.enabled = !s.enabled;
+                    }
+                    o.schedules = Some(next);
+                },
+            ),
+            actor,
+        )
+        .await
+        .map_err(|e| WebError::Internal(eyre::eyre!("settings apply: {e}")))?;
+    flash::set(&cookies, &format!("Toggled {name}."));
+    Ok(Redirect::to("/schedules").into_response())
+}
+
 type Mutator =
     Box<dyn FnOnce(&mut twitch_1337_core::settings::overrides::SettingsOverrides) + Send>;
 
@@ -242,7 +389,7 @@ async fn apply_or_rerender(
     state: &WebState,
     session: &Session,
     cookies: Cookies,
-    intended_rows: Vec<ScheduleSettings>,
+    intended_rows: Vec<Schedule>,
     mutate: Mutator,
     edit_on_error: Option<String>,
 ) -> Result<Response, WebError> {
@@ -267,7 +414,7 @@ async fn apply_or_rerender(
 
 fn render_validation(
     session: &Session,
-    rows: Vec<ScheduleSettings>,
+    rows: Vec<Schedule>,
     errs: Vec<twitch_1337_core::settings::FieldError>,
     edit_on_error: Option<String>,
 ) -> Result<Response, WebError> {
@@ -310,26 +457,134 @@ fn render_validation(
 }
 
 #[cfg(test)]
-mod into_settings_tests {
-    use super::ScheduleForm;
+mod try_into_schedule_tests {
+    use super::{ScheduleForm, parse_date, parse_hhmm, parse_hhmm_to_secs, parse_weekdays};
+    use twitch_1337_core::schedule::Trigger;
 
-    #[test]
-    fn trims_all_text_fields() {
-        let form = ScheduleForm {
+    fn base_interval_form() -> ScheduleForm {
+        ScheduleForm {
             _csrf: "x".into(),
             name: "  noon  ".into(),
             message: "  hello world  ".into(),
-            interval: "  01:00  ".into(),
+            kind: "interval".into(),
+            interval_every: "01:00".into(),
+            interval_active_from: "".into(),
+            interval_active_to: "".into(),
+            interval_days: vec![],
+            calendar_at: "".into(),
+            calendar_days: vec![],
             start_date: "".into(),
             end_date: "".into(),
-            active_time_start: "".into(),
-            active_time_end: "".into(),
             enabled: Some("true".into()),
-        };
-        let s = form.into_settings();
+        }
+    }
+
+    #[test]
+    fn trims_text_fields() {
+        let s = base_interval_form().try_into_schedule().unwrap();
         assert_eq!(s.name, "noon");
         assert_eq!(s.message, "hello world");
-        assert_eq!(s.interval, "01:00");
+    }
+
+    #[test]
+    fn interval_every_parsed_from_hhmm() {
+        let s = base_interval_form().try_into_schedule().unwrap();
+        if let Trigger::Interval { every, .. } = s.trigger {
+            assert_eq!(every.as_secs(), 3600);
+        } else {
+            panic!("expected Interval");
+        }
+    }
+
+    #[test]
+    fn interval_below_min_clamped_to_60s() {
+        let mut form = base_interval_form();
+        form.interval_every = "00:00".into(); // 0 secs -> clamped to 60
+        let s = form.try_into_schedule().unwrap();
+        if let Trigger::Interval { every, .. } = s.trigger {
+            assert_eq!(every.as_secs(), 60);
+        } else {
+            panic!("expected Interval");
+        }
+    }
+
+    #[test]
+    fn calendar_at_required() {
+        let form = ScheduleForm {
+            _csrf: "x".into(),
+            name: "test".into(),
+            message: "hi".into(),
+            kind: "calendar".into(),
+            interval_every: "".into(),
+            interval_active_from: "".into(),
+            interval_active_to: "".into(),
+            interval_days: vec![],
+            calendar_at: "".into(), // missing
+            calendar_days: vec![],
+            start_date: "".into(),
+            end_date: "".into(),
+            enabled: None,
+        };
+        let errs = form.try_into_schedule().unwrap_err();
+        assert!(errs.iter().any(|e| e.field.contains("calendar_at")));
+    }
+
+    #[test]
+    fn unknown_kind_returns_error() {
+        let form = ScheduleForm {
+            _csrf: "x".into(),
+            name: "test".into(),
+            message: "hi".into(),
+            kind: "bogus".into(),
+            interval_every: "".into(),
+            interval_active_from: "".into(),
+            interval_active_to: "".into(),
+            interval_days: vec![],
+            calendar_at: "".into(),
+            calendar_days: vec![],
+            start_date: "".into(),
+            end_date: "".into(),
+            enabled: None,
+        };
+        let errs = form.try_into_schedule().unwrap_err();
+        assert!(errs.iter().any(|e| e.field.contains("kind")));
+    }
+
+    #[test]
+    fn parse_hhmm_helper() {
+        use chrono::NaiveTime;
+        assert_eq!(
+            parse_hhmm("08:30"),
+            Some(NaiveTime::from_hms_opt(8, 30, 0).unwrap())
+        );
+        assert_eq!(parse_hhmm(""), None);
+        assert_eq!(parse_hhmm("  "), None);
+        assert_eq!(parse_hhmm("invalid"), None);
+    }
+
+    #[test]
+    fn parse_hhmm_to_secs_helper() {
+        assert_eq!(parse_hhmm_to_secs("01:30"), Some(5400));
+        assert_eq!(parse_hhmm_to_secs(""), None);
+    }
+
+    #[test]
+    fn parse_date_helper() {
+        use chrono::NaiveDate;
+        assert_eq!(
+            parse_date("2026-06-01"),
+            Some(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap())
+        );
+        assert_eq!(parse_date(""), None);
+    }
+
+    #[test]
+    fn parse_weekdays_helper() {
+        let days = parse_weekdays(&["Mon".to_owned(), "Wed".to_owned()]);
+        use chrono::Weekday;
+        assert!(days.0.contains(&Weekday::Mon));
+        assert!(days.0.contains(&Weekday::Wed));
+        assert!(!days.0.contains(&Weekday::Fri));
     }
 }
 
