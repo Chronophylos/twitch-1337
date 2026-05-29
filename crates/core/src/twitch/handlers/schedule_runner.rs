@@ -154,6 +154,12 @@ async fn run_schedule_task<T, L>(
                 return;
             }
         }
+        // Re-check cancellation after wakeup: tokio::select! may pick the
+        // sleep branch even if cancel was signaled concurrently.
+        if cancel.is_cancelled() {
+            info!("cancelled after wakeup, exiting");
+            return;
+        }
         // Fire.
         sender.say(channel.clone(), schedule.message.clone()).await;
         telemetry.record_fire(&schedule.name, clock.now_utc()).await;
