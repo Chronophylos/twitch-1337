@@ -5,16 +5,16 @@
 <div class="page-head">
   <div>
     <h1>Schedules <span class="muted">({{ total }})</span></h1>
-    <p class="page-sub">Recurring announcements fired by the bot. Changes apply within seconds — no restart needed.</p>
+    <p class="page-sub">Recurring announcements fired by the bot.</p>
   </div>
   <a class="btn primary" href="/schedules?new=true">+ New schedule</a>
 </div>
 
-<div class="stats-strip">
-  <div class="stat-tile"><div class="stat-label">TOTAL</div><div class="stat-value">{{ total }}</div></div>
-  <div class="stat-tile"><div class="stat-label">ACTIVE</div><div class="stat-value">{{ active_count }} / {{ total }}</div></div>
-  <div class="stat-tile"><div class="stat-label">FIRED TODAY</div><div class="stat-value">{{ fired_today }}</div></div>
-  <div class="stat-tile">
+<div class="stat-strip">
+  <div class="stat"><div class="stat-label">TOTAL</div><div class="stat-value">{{ total }}</div></div>
+  <div class="stat"><div class="stat-label">ACTIVE</div><div class="stat-value">{{ active_count }} / {{ total }}</div></div>
+  <div class="stat"><div class="stat-label">FIRED TODAY</div><div class="stat-value">{{ fired_today }}</div></div>
+  <div class="stat">
     <div class="stat-label">NEXT FIRE</div>
     {% if let Some(nf) = next_fire %}
       <div class="stat-value">{{ nf.time }} <span class="muted">· {{ nf.name }}</span></div>
@@ -59,15 +59,15 @@
   </section>
 {% endif %}
 
+{% if !rows.is_empty() %}
 <section class="schedule-grid">
-  {% if rows.is_empty() %}
-    <p class="empty">No schedules configured yet. Click <strong>+ New schedule</strong> to add one.</p>
-  {% else %}
-    {% for card in rows %}
-      {% include "schedules/_card.html" %}
-    {% endfor %}
-  {% endif %}
+  {% for card in rows %}
+    {% include "schedules/_card.html" %}
+  {% endfor %}
 </section>
+{% else if new_form.is_none() && edit_form.is_none() %}
+<p class="empty">No schedules configured yet. Click <strong>+ New schedule</strong> to add one.</p>
+{% endif %}
 
 <script>
   document.querySelectorAll('form.js-delete-schedule').forEach(function (form) {
