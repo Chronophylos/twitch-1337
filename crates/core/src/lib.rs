@@ -213,6 +213,13 @@ where
     // Aviation is consumed by the flight tracker; clone first so commands (!up/!fl) also get it.
     let aviation_for_commands = aviation.clone();
 
+    // Process start for `!v` uptime + the value passed to SpawnDeps below.
+    let started_at = std::time::Instant::now();
+    // Cloned Arc + admin channel retained for the startup/shutdown announces;
+    // `client` itself is moved into spawn_handlers.
+    let client_for_announce = client.clone();
+    let admin_channel = settings.load().twitch.admin_channel.clone();
+
     let ai_memory_v2 = crate::ai::command::build_ai_memory_v2(
         config.ai.is_some(),
         &settings.load_full(),
@@ -280,6 +287,7 @@ where
         settings_store,
         primary_history_tap,
         telemetry: telemetry.clone(),
+        started_at,
     });
 
     let shutdown_notify = handlers.shutdown_notify.clone();
@@ -304,6 +312,9 @@ where
         tracing::info!("Daily AI memory dreamer ritual spawned (live settings)");
     }
 
+    crate::twitch::announce::announce_startup(&client_for_announce, admin_channel.as_deref())
+        .await;
+
     info!(
         "Bot running with continuous connection. Handlers: 1337 tracker, \
          Generic commands, Scheduled messages, Latency monitor, Flight tracker"
@@ -315,6 +326,10 @@ where
     );
     let ping_actor_handle =
         crate::twitch::handlers::spawn::await_shutdown(handlers, shutdown).await;
+
+    // Shutdown initiated; best-effort offline line before draining web/ping actor.
+    crate::twitch::announce::announce_shutdown(&client_for_announce, admin_channel.as_deref())
+        .await;
 
     // Drop the Arc<Sender> clone held in Services so detached tasks are the
     // only remaining senders. The ping actor drains once all senders drop.
