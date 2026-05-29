@@ -89,13 +89,6 @@ fn pick_winner(group: Vec<NearbyAircraft>) -> NearbyAircraft {
 /// hex (case-insensitive key; the stored hex is left untouched) and keeping the
 /// best copy of each. Hex-less aircraft are passed through unmerged. Output
 /// order follows first-seen order across backends.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into production in the parallel fan-out task (Task 5)"
-    )
-)]
 fn merge_aircraft(per_backend: Vec<Vec<NearbyAircraft>>) -> Vec<NearbyAircraft> {
     let mut groups: HashMap<String, Vec<NearbyAircraft>> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
@@ -163,14 +156,6 @@ pub(super) enum AdsbEndpoint<'a> {
 }
 
 impl AdsbEndpoint<'_> {
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Point { .. } => "point",
-            Self::Hex(_) => "hex",
-            Self::Callsign(_) => "callsign",
-        }
-    }
-
     pub(super) fn url(&self, aggregator: &AdsbAggregator) -> String {
         let base = aggregator.base_url.trim_end_matches('/');
         match (aggregator.path_style, self) {
@@ -318,13 +303,6 @@ impl AviationClient {
         self
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "wired into production in the parallel fan-out task (Task 5)"
-        )
-    )]
     fn live_backend_indices(&self) -> Vec<usize> {
         let now = Instant::now();
         let health = self.health.lock().expect("health mutex poisoned");
@@ -336,13 +314,6 @@ impl AviationClient {
             .collect()
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "wired into production in the parallel fan-out task (Task 5)"
-        )
-    )]
     fn park_backend(&self, index: usize) {
         let until = Instant::now() + self.adsb_cooldown;
         let mut health = self.health.lock().expect("health mutex poisoned");
@@ -352,13 +323,6 @@ impl AviationClient {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "wired into production in the parallel fan-out task (Task 5)"
-        )
-    )]
     fn record_success(&self, index: usize) {
         let mut health = self.health.lock().expect("health mutex poisoned");
         if let Some(h) = health.get_mut(index) {
@@ -368,13 +332,6 @@ impl AviationClient {
 
     /// Count a non-timeout retryable error; park the backend on the
     /// `ERROR_STREAK_PARK`-th consecutive one.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "wired into production in the parallel fan-out task (Task 5)"
-        )
-    )]
     fn record_retryable_error(&self, index: usize) {
         let until = Instant::now() + self.adsb_cooldown;
         let mut health = self.health.lock().expect("health mutex poisoned");
@@ -403,53 +360,73 @@ impl AviationClient {
         self.aviationstack.is_some()
     }
 
-    async fn fetch_adsb_response(
-        &self,
-        endpoint: AdsbEndpoint<'_>,
-    ) -> Result<AdsbAircraftResponse> {
-        let mut last_retryable_error = None;
+    async fn fetch_adsb_merged(&self, endpoint: AdsbEndpoint<'_>) -> Result<AdsbAircraftResponse> {
+        if self.adsb_aggregators.is_empty() {
+            return Err(eyre::eyre!("No ADS-B aggregators configured"));
+        }
 
-        for aggregator in &self.adsb_aggregators {
+        let live = self.live_backend_indices();
+        if live.is_empty() {
+            return Err(eyre::eyre!("All ADS-B aggregators parked (rate-limited)"));
+        }
+
+        let futures = live.iter().map(|&idx| {
+            let aggregator = &self.adsb_aggregators[idx];
             let url = endpoint.url(aggregator);
-            debug!(
-                provider = aggregator.name,
-                endpoint = endpoint.label(),
-                url = %url,
-                "Fetching aircraft from ADS-B aggregator"
-            );
+            async move {
+                let result = self.fetch_adsb_response_once(aggregator, &url).await;
+                (idx, aggregator.name, result)
+            }
+        });
+        let results = futures_util::future::join_all(futures).await;
 
-            match self.fetch_adsb_response_once(aggregator, &url).await {
+        let mut per_backend: Vec<Vec<NearbyAircraft>> = Vec::new();
+        let mut last_error: Option<eyre::Report> = None;
+
+        for (idx, name, result) in results {
+            match result {
                 Ok(resp) => {
                     debug!(
-                        provider = aggregator.name,
+                        provider = name,
                         count = resp.aircraft.len(),
                         "Received aircraft from ADS-B aggregator"
                     );
-                    return Ok(resp);
+                    self.record_success(idx);
+                    per_backend.push(resp.aircraft);
                 }
                 Err(AdsbFetchError::RateLimited) => {
                     warn!(
-                        provider = aggregator.name,
-                        "ADS-B aggregator rate-limited; trying fallback"
+                        provider = name,
+                        "ADS-B aggregator rate-limited (429); parking"
                     );
-                    last_retryable_error = Some(eyre::eyre!("{} returned 429", aggregator.name));
+                    self.park_backend(idx);
+                    last_error = Some(eyre::eyre!("{name} returned 429"));
                 }
-                Err(AdsbFetchError::Timeout(error) | AdsbFetchError::Retryable(error)) => {
-                    warn!(
-                        provider = aggregator.name,
-                        error = ?error,
-                        "ADS-B aggregator failed; trying fallback"
-                    );
-                    last_retryable_error = Some(error);
+                Err(AdsbFetchError::Timeout(error)) => {
+                    warn!(provider = name, error = ?error, "ADS-B aggregator timed out");
+                    last_error = Some(error);
                 }
-                Err(AdsbFetchError::Fatal(error)) => return Err(error),
+                Err(AdsbFetchError::Retryable(error)) => {
+                    warn!(provider = name, error = ?error, "ADS-B aggregator failed");
+                    self.record_retryable_error(idx);
+                    last_error = Some(error);
+                }
+                Err(AdsbFetchError::Fatal(error)) => {
+                    warn!(provider = name, error = ?error, "ADS-B aggregator fatal; continuing");
+                    last_error = Some(error);
+                }
             }
         }
 
-        match last_retryable_error {
-            Some(error) => Err(error.wrap_err("All ADS-B aggregators failed")),
-            None => Err(eyre::eyre!("No ADS-B aggregators configured")),
+        if per_backend.is_empty() {
+            return Err(last_error
+                .unwrap_or_else(|| eyre::eyre!("All ADS-B aggregators failed"))
+                .wrap_err("All ADS-B aggregators failed"));
         }
+
+        Ok(AdsbAircraftResponse {
+            aircraft: merge_aircraft(per_backend),
+        })
     }
 
     async fn fetch_adsb_response_once(
@@ -502,7 +479,7 @@ impl AviationClient {
         radius_nm: u16,
     ) -> Result<Vec<NearbyAircraft>> {
         let resp = self
-            .fetch_adsb_response(AdsbEndpoint::Point {
+            .fetch_adsb_merged(AdsbEndpoint::Point {
                 lat,
                 lon,
                 radius_nm,
@@ -514,7 +491,7 @@ impl AviationClient {
     pub async fn get_aircraft_by_hex(&self, hex: &str) -> Result<Option<NearbyAircraft>> {
         debug!(hex = %hex, "Fetching aircraft by hex from ADS-B aggregators");
 
-        let resp = self.fetch_adsb_response(AdsbEndpoint::Hex(hex)).await?;
+        let resp = self.fetch_adsb_merged(AdsbEndpoint::Hex(hex)).await?;
 
         Ok(resp.aircraft.into_iter().next())
     }
@@ -523,7 +500,7 @@ impl AviationClient {
         debug!(callsign = %callsign, "Fetching aircraft by callsign from ADS-B aggregators");
 
         let resp = self
-            .fetch_adsb_response(AdsbEndpoint::Callsign(callsign))
+            .fetch_adsb_merged(AdsbEndpoint::Callsign(callsign))
             .await?;
 
         Ok(resp.aircraft.into_iter().next())
@@ -761,13 +738,23 @@ mod tests {
     }
 
     fn aircraft_response(flight: &str) -> serde_json::Value {
+        aircraft_response_full(flight, None, None)
+    }
+
+    fn aircraft_response_full(
+        flight: &str,
+        seen_pos: Option<f64>,
+        rssi: Option<f64>,
+    ) -> serde_json::Value {
         serde_json::json!({
             "ac": [{
                 "hex": "3c6589",
                 "flight": flight,
                 "alt_baro": 35000,
                 "lat": 50.0,
-                "lon": 8.5
+                "lon": 8.5,
+                "seen_pos": seen_pos,
+                "rssi": rssi
             }],
             "ctime": 0,
             "now": 0,
@@ -1099,5 +1086,149 @@ mod tests {
             vec![0],
             "streak reset by success → 2 fresh errors don't park"
         );
+    }
+
+    #[tokio::test]
+    async fn merged_query_unions_two_backends() {
+        let (a, b) = tokio::join!(MockServer::start(), MockServer::start());
+        Mock::given(method("GET"))
+            .and(path("/point/50/8/15"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ac": [{ "hex": "aaa111", "lat": 50.0, "lon": 8.0, "seen_pos": 1.0, "rssi": -10.0 }]
+            })))
+            .mount(&a)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/point/50/8/15"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ac": [{ "hex": "bbb222", "lat": 50.0, "lon": 8.0, "seen_pos": 1.0, "rssi": -10.0 }]
+            })))
+            .mount(&b)
+            .await;
+
+        let client = test_client_with_aggregators(vec![
+            AdsbAggregator::readsb_v2("a", a.uri()),
+            AdsbAggregator::readsb_v2("b", b.uri()),
+        ]);
+
+        let aircraft = client.get_aircraft_nearby(50.0, 8.0, 15).await.unwrap();
+        let hexes: Vec<_> = aircraft.iter().filter_map(|a| a.hex.clone()).collect();
+        assert_eq!(aircraft.len(), 2);
+        assert!(hexes.contains(&"aaa111".to_owned()));
+        assert!(hexes.contains(&"bbb222".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn merged_query_keeps_freshest_duplicate() {
+        let (a, b) = tokio::join!(MockServer::start(), MockServer::start());
+        Mock::given(method("GET"))
+            .and(path("/hex/3c6589"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(aircraft_response_full(
+                    "FRESH",
+                    Some(1.0),
+                    Some(-30.0),
+                )),
+            )
+            .mount(&a)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/hex/3c6589"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(aircraft_response_full(
+                    "STALE",
+                    Some(30.0),
+                    Some(-1.0),
+                )),
+            )
+            .mount(&b)
+            .await;
+
+        let client = test_client_with_aggregators(vec![
+            AdsbAggregator::readsb_v2("a", a.uri()),
+            AdsbAggregator::readsb_v2("b", b.uri()),
+        ]);
+
+        let aircraft = client.get_aircraft_by_hex("3c6589").await.unwrap().unwrap();
+        assert_eq!(aircraft.flight.as_deref(), Some("FRESH"));
+    }
+
+    #[tokio::test]
+    async fn merged_query_parks_backend_on_429() {
+        let (a, b) = tokio::join!(MockServer::start(), MockServer::start());
+        Mock::given(method("GET"))
+            .and(path("/hex/3c6589"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&a)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/hex/3c6589"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(aircraft_response("DLH1")))
+            .mount(&b)
+            .await;
+
+        let client = test_client_with_aggregators(vec![
+            AdsbAggregator::readsb_v2("a", a.uri()),
+            AdsbAggregator::readsb_v2("b", b.uri()),
+        ])
+        .with_adsb_cooldown(Duration::from_secs(60));
+
+        let first = client.get_aircraft_by_hex("3c6589").await.unwrap().unwrap();
+        assert_eq!(first.flight.as_deref(), Some("DLH1"));
+        let _ = client.get_aircraft_by_hex("3c6589").await.unwrap();
+        assert_eq!(a.received_requests().await.unwrap().len(), 1, "A parked");
+        assert_eq!(b.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn merged_query_timeout_does_not_park() {
+        let (slow, fast) = tokio::join!(MockServer::start(), MockServer::start());
+        Mock::given(method("GET"))
+            .and(path("/hex/3c6589"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(500))
+                    .set_body_json(aircraft_response("SLOW")),
+            )
+            .mount(&slow)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/hex/3c6589"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(aircraft_response("FAST")))
+            .mount(&fast)
+            .await;
+
+        let client = test_client_with_aggregators(vec![
+            AdsbAggregator::readsb_v2("slow", slow.uri()),
+            AdsbAggregator::readsb_v2("fast", fast.uri()),
+        ])
+        .with_adsb_aggregator_timeout(Duration::from_millis(50));
+
+        for _ in 0..3 {
+            let _ = client.get_aircraft_by_hex("3c6589").await.unwrap();
+        }
+        let _ = client.get_aircraft_by_hex("3c6589").await.unwrap();
+        assert_eq!(
+            slow.received_requests().await.unwrap().len(),
+            4,
+            "timeouts must not park the backend"
+        );
+    }
+
+    #[tokio::test]
+    async fn merged_query_all_fail_is_error() {
+        let (a, b) = tokio::join!(MockServer::start(), MockServer::start());
+        for server in [&a, &b] {
+            Mock::given(method("GET"))
+                .and(path("/hex/3c6589"))
+                .respond_with(ResponseTemplate::new(503))
+                .mount(server)
+                .await;
+        }
+        let client = test_client_with_aggregators(vec![
+            AdsbAggregator::readsb_v2("a", a.uri()),
+            AdsbAggregator::readsb_v2("b", b.uri()),
+        ]);
+        assert!(client.get_aircraft_by_hex("3c6589").await.is_err());
     }
 }
