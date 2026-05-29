@@ -782,6 +782,8 @@ mod tests {
         assert_eq!(client.resolve_callsign("4CA87D").await, "4CA87D");
     }
 
+    // Under parallel fan-out both backends are queried; the 5xx one is
+    // dropped from the merge and the healthy backend's aircraft is returned.
     #[tokio::test]
     async fn adsb_falls_back_from_5xx_to_next_aggregator() {
         let (primary, backup) = tokio::join!(MockServer::start(), MockServer::start());
@@ -814,6 +816,8 @@ mod tests {
         assert_eq!(backup.received_requests().await.unwrap().len(), 1);
     }
 
+    // Under parallel fan-out both backends are queried concurrently; the
+    // slow one times out (not parked) and the fast backend's data is merged.
     #[tokio::test]
     async fn adsb_falls_back_from_timeout_to_next_aggregator() {
         let (primary, backup) = tokio::join!(MockServer::start(), MockServer::start());
