@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::warn;
 
+use crate::util::persist::atomic_save_ron_async;
+
 const FILE_NAME: &str = "schedule_runtime.ron";
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -82,46 +84,50 @@ impl TelemetryStore {
     /// Record a fire for `name` at `at`. Rolls fires_today on day change.
     pub async fn record_fire(&self, name: &str, at: DateTime<Utc>) {
         let today = at.with_timezone(&Berlin).date_naive();
-        let mut g = self.data.lock().await;
-        let entry = g.map.entry(name.to_owned()).or_default();
-        entry.maybe_rollover(today);
-        entry.last_fired_at = Some(at);
-        entry.fires_today = entry.fires_today.saturating_add(1);
-        g.dirty = true;
-        let should_flush = g.last_flush.elapsed() >= FLUSH_INTERVAL;
-        if should_flush {
-            let snap = g.map.clone();
-            g.dirty = false;
-            g.last_flush = std::time::Instant::now();
-            drop(g);
-            if let Err(e) = self.write_atomic(&snap) {
-                warn!(?e, "telemetry flush failed");
+        let snap_for_flush = {
+            let mut g = self.data.lock().await;
+            let entry = g.map.entry(name.to_owned()).or_default();
+            entry.maybe_rollover(today);
+            entry.last_fired_at = Some(at);
+            entry.fires_today = entry.fires_today.saturating_add(1);
+            g.dirty = true;
+            if g.last_flush.elapsed() >= FLUSH_INTERVAL {
+                Some(g.map.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(snap) = snap_for_flush {
+            match atomic_save_ron_async(&snap, &self.path).await {
+                Ok(()) => {
+                    let mut g = self.data.lock().await;
+                    g.dirty = false;
+                    g.last_flush = std::time::Instant::now();
+                }
+                Err(e) => {
+                    warn!(?e, "telemetry flush failed");
+                }
             }
         }
     }
 
     /// Force-flush any pending writes. Call from graceful shutdown.
     pub async fn flush(&self) {
-        let mut g = self.data.lock().await;
-        if !g.dirty {
-            return;
+        let snap = {
+            let g = self.data.lock().await;
+            if !g.dirty {
+                return;
+            }
+            g.map.clone()
+        };
+        match atomic_save_ron_async(&snap, &self.path).await {
+            Ok(()) => {
+                let mut g = self.data.lock().await;
+                g.dirty = false;
+                g.last_flush = std::time::Instant::now();
+            }
+            Err(e) => warn!(?e, "telemetry final flush failed"),
         }
-        let snap = g.map.clone();
-        g.dirty = false;
-        g.last_flush = std::time::Instant::now();
-        drop(g);
-        if let Err(e) = self.write_atomic(&snap) {
-            warn!(?e, "telemetry final flush failed");
-        }
-    }
-
-    fn write_atomic(&self, map: &HashMap<String, ScheduleRuntime>) -> std::io::Result<()> {
-        let ser = ron::ser::to_string_pretty(map, ron::ser::PrettyConfig::default())
-            .map_err(|e| std::io::Error::other(format!("ron ser: {e}")))?;
-        let tmp = self.path.with_extension("ron.tmp");
-        std::fs::write(&tmp, ser)?;
-        std::fs::rename(&tmp, &self.path)?;
-        Ok(())
     }
 }
 
