@@ -359,15 +359,7 @@ fn weekdays_short(days: &WeekdaySet) -> String {
     let mut wds: Vec<Weekday> = days.0.iter().copied().collect();
     wds.sort_by_key(Weekday::num_days_from_monday);
     wds.iter()
-        .map(|d| match d {
-            Weekday::Mon => "Mon",
-            Weekday::Tue => "Tue",
-            Weekday::Wed => "Wed",
-            Weekday::Thu => "Thu",
-            Weekday::Fri => "Fri",
-            Weekday::Sat => "Sat",
-            Weekday::Sun => "Sun",
-        })
+        .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join("·")
 }
