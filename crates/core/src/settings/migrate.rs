@@ -309,7 +309,11 @@ fn parse_interval_legacy(s: &str) -> Option<i64> {
     if let Some((h, m)) = s.split_once(':') {
         let h: i64 = h.parse().ok()?;
         let m: i64 = m.parse().ok()?;
-        Some(h * 3600 + m * 60)
+        let total = h * 3600 + m * 60;
+        if total <= 0 {
+            return None;
+        }
+        Some(total)
     } else {
         let s = s.to_lowercase();
         let mut total = 0i64;
@@ -437,6 +441,12 @@ mod v4_migration_tests {
         let raw = r#"( cooldowns: () )"#;
         let mut val: ron::Value = ron::from_str(raw).expect("parse");
         assert!(!migrate_schedules_v3_to_v4(&mut val));
+    }
+
+    #[test]
+    fn parse_interval_legacy_rejects_zero() {
+        assert_eq!(parse_interval_legacy("00:00"), None);
+        assert_eq!(parse_interval_legacy("0:0"), None);
     }
 
     #[test]
