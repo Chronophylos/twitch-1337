@@ -119,7 +119,13 @@ impl AdsbEndpoint<'_> {
 }
 
 enum AdsbFetchError {
+    /// HTTP 429 — back off this backend (cooldown park).
+    RateLimited,
+    /// Request timed out. Retryable, but NOT counted toward parking.
+    Timeout(eyre::Report),
+    /// Other retryable failure (5xx, connect-refused, parse error).
     Retryable(eyre::Report),
+    /// Non-retryable send error.
     Fatal(eyre::Report),
 }
 
@@ -248,7 +254,14 @@ impl AviationClient {
                     );
                     return Ok(resp);
                 }
-                Err(AdsbFetchError::Retryable(error)) => {
+                Err(AdsbFetchError::RateLimited) => {
+                    warn!(
+                        provider = aggregator.name,
+                        "ADS-B aggregator rate-limited; trying fallback"
+                    );
+                    last_retryable_error = Some(eyre::eyre!("{} returned 429", aggregator.name));
+                }
+                Err(AdsbFetchError::Timeout(error) | AdsbFetchError::Retryable(error)) => {
                     warn!(
                         provider = aggregator.name,
                         error = ?error,
@@ -279,14 +292,21 @@ impl AviationClient {
             .await
             .map_err(|e| {
                 let error = eyre::eyre!("Failed to send request to {}: {e}", aggregator.name);
-                if e.is_timeout() || e.is_connect() {
+                if e.is_timeout() {
+                    AdsbFetchError::Timeout(error)
+                } else if e.is_connect() {
                     AdsbFetchError::Retryable(error)
                 } else {
+                    // Only known-retryable transport failures (timeout, connect) get
+                    // retried; all other send errors are treated as fatal.
                     AdsbFetchError::Fatal(error)
                 }
             })?;
 
         let status = resp.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(AdsbFetchError::RateLimited);
+        }
         if !status.is_success() {
             return Err(AdsbFetchError::Retryable(eyre::eyre!(
                 "{} returned {status}",
@@ -700,5 +720,26 @@ mod tests {
 
         assert_eq!(response.aircraft.len(), 1);
         assert_eq!(response.aircraft[0].flight.as_deref(), Some("DLH1234"));
+    }
+
+    #[tokio::test]
+    async fn fetch_once_classifies_429_as_rate_limited() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/hex/3c6589"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+
+        let client =
+            test_client_with_aggregators(vec![AdsbAggregator::readsb_v2("primary", server.uri())]);
+        let aggregator = AdsbAggregator::readsb_v2("primary", server.uri());
+        let url = format!("{}/hex/3c6589", server.uri());
+
+        let err = client
+            .fetch_adsb_response_once(&aggregator, &url)
+            .await
+            .expect_err("429 is an error");
+        assert!(matches!(err, AdsbFetchError::RateLimited));
     }
 }
