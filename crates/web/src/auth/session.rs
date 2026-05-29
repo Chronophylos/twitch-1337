@@ -12,12 +12,15 @@
 //! requests without a restart.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use eyre::Result;
 use rand::Rng as _;
+use serde::{Deserialize, Serialize};
+use twitch_1337_core::util::persist::atomic_save_ron_async;
 
 use crate::auth::role::Role;
 use crate::clock::Clock;
@@ -34,7 +37,7 @@ pub struct NewSession {
     pub is_broadcaster: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub user_id: String,
     pub user_login: String,
@@ -63,6 +66,9 @@ impl Session {
 pub struct SessionTable {
     inner: RwLock<HashMap<SessionId, Session>>,
     clock: Arc<dyn Clock>,
+    /// Backing file under `$DATA_DIR`. `None` keeps the table purely
+    /// in-memory (tests, web-dev bin) so they never touch disk.
+    path: Option<PathBuf>,
 }
 
 impl SessionTable {
@@ -70,6 +76,50 @@ impl SessionTable {
         Self {
             inner: RwLock::new(HashMap::new()),
             clock,
+            path: None,
+        }
+    }
+
+    /// Construct a disk-backed table, loading any previously persisted
+    /// sessions so a bot restart (every rolling deploy) does not log everyone
+    /// out — the signed sid cookie still matches a live table entry.
+    ///
+    /// A missing file starts empty; a corrupt/unparseable file is logged and
+    /// also starts empty, so a bad file costs at most one forced re-login
+    /// instead of wedging startup.
+    pub fn load(clock: Arc<dyn Clock>, path: PathBuf) -> Self {
+        let inner = match std::fs::read_to_string(&path) {
+            Ok(data) => match ron::from_str::<HashMap<SessionId, Session>>(&data) {
+                Ok(map) => map,
+                Err(error) => {
+                    tracing::warn!(?error, path = %path.display(), "Failed to parse sessions; starting empty");
+                    HashMap::new()
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+            Err(error) => {
+                tracing::warn!(?error, path = %path.display(), "Failed to read sessions; starting empty");
+                HashMap::new()
+            }
+        };
+        Self {
+            inner: RwLock::new(inner),
+            clock,
+            path: Some(path),
+        }
+    }
+
+    /// Snapshot the table and atomically write it to disk. No-op when the
+    /// table has no backing path. The clone happens under the lock so the
+    /// `await` on disk IO never holds it — request handlers calling this
+    /// after a login/logout don't serialize behind the write.
+    pub async fn persist(&self) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let snapshot = self.inner.read().unwrap().clone();
+        if let Err(error) = atomic_save_ron_async(&snapshot, &path).await {
+            tracing::warn!(?error, "Failed to persist sessions");
         }
     }
 

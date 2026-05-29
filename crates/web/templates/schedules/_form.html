@@ -10,8 +10,9 @@
   </div>
   <div class="row">
     <label>Message
-      <textarea name="message" rows="2" required>{{ form.message }}</textarea>
+      <textarea name="message" rows="2" required maxlength="500" data-char-count>{{ form.message }}</textarea>
     </label>
+    <output class="char-count" data-char-count-for>0 / 500</output>
   </div>
 
   <fieldset class="trigger-picker">
@@ -117,6 +118,19 @@
         r.addEventListener('change', refresh);
       });
       refresh();
+
+      var msg = form.querySelector('textarea[data-char-count]');
+      var counter = form.querySelector('[data-char-count-for]');
+      if (msg && counter) {
+        var max = msg.getAttribute('maxlength') || 500;
+        function count() {
+          var n = msg.value.length;
+          counter.textContent = n + ' / ' + max;
+          counter.classList.toggle('over', n >= max);
+        }
+        msg.addEventListener('input', count);
+        count();
+      }
     });
   })();
 </script>

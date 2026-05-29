@@ -3422,6 +3422,7 @@ dependencies = [
  "oauth2",
  "rand 0.10.1",
  "reqwest 0.13.3",
+ "ron",
  "rust-embed",
  "rustls",
  "secrecy",
