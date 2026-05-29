@@ -201,8 +201,9 @@ async fn build_state_inner_keep_settings(
     let memory_store = MemoryStore::open(memory_dir.path(), settings_handle.clone())
         .await
         .expect("open memory store");
-    let telemetry_dir = TempDir::new().expect("telemetry tempdir");
-    let telemetry = twitch_1337_core::schedule::TelemetryStore::open(telemetry_dir.path());
+    // Reuse pings_dir for telemetry: TelemetryStore only writes on flush, and
+    // pings_dir is returned to callers so it stays alive for the test lifetime.
+    let telemetry = twitch_1337_core::schedule::TelemetryStore::open(pings_dir.path());
     let state = WebState {
         sessions,
         helix,
@@ -229,9 +230,6 @@ async fn build_state_inner_keep_settings(
         http: reqwest::Client::new(),
         telemetry,
     };
-    // telemetry_dir intentionally dropped here; state holds the Arc, dir can
-    // be cleaned up since TelemetryStore only needs the path for flush.
-    drop(telemetry_dir);
     (state, pings_dir, memory_dir, settings_dir)
 }
 
