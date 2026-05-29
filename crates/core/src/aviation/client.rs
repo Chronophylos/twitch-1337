@@ -1,6 +1,7 @@
 //! HTTP client for ADS-B aggregators (adsb.lol + fallbacks), adsbdb,
 //! Nominatim, and Aviationstack.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use eyre::{Result, WrapErr as _};
@@ -37,6 +38,77 @@ const ADSBONE_BASE_URL: &str = "https://api.adsb.one/v2";
 const NOMINATIM_BASE_URL: &str = "https://nominatim.openstreetmap.org";
 const AIRLINE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 const ADSB_AGGREGATOR_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Freshness equivalence window, in seconds. Position fixes whose `seen_pos`
+/// falls in the same bucket are treated as equally fresh, so `rssi` decides.
+const FRESH_WINDOW: f64 = 5.0;
+
+/// Quantize `seen_pos` into a freshness bucket (lower = fresher). Missing,
+/// negative, or non-finite values sort last — a bare `as u64` cast would
+/// saturate negative/NaN to 0 (the freshest bucket) and let garbage win.
+fn freshness_bucket(seen_pos: Option<f64>) -> u64 {
+    match seen_pos {
+        Some(s) if s.is_finite() && s >= 0.0 => (s / FRESH_WINDOW).floor() as u64,
+        _ => u64::MAX,
+    }
+}
+
+/// Pick the most-reliable copy of one aircraft: freshest `seen_pos` bucket,
+/// then highest `rssi`. On a full tie, keeps the first element (callers push
+/// in aggregator priority order, so the highest-priority backend wins).
+fn pick_winner(group: Vec<NearbyAircraft>) -> NearbyAircraft {
+    group
+        .into_iter()
+        .min_by(|a, b| {
+            freshness_bucket(a.seen_pos)
+                .cmp(&freshness_bucket(b.seen_pos))
+                .then_with(|| {
+                    b.rssi
+                        .unwrap_or(f64::MIN)
+                        .total_cmp(&a.rssi.unwrap_or(f64::MIN))
+                })
+        })
+        .expect("group is never empty")
+}
+
+/// Union the per-backend aircraft lists into a coverage superset, deduping by
+/// hex (case-insensitive key; the stored hex is left untouched) and keeping the
+/// best copy of each. Hex-less aircraft are passed through unmerged. Output
+/// order follows first-seen order across backends.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into production in the parallel fan-out task (Task 5)"
+    )
+)]
+fn merge_aircraft(per_backend: Vec<Vec<NearbyAircraft>>) -> Vec<NearbyAircraft> {
+    let mut groups: HashMap<String, Vec<NearbyAircraft>> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    let mut hexless: Vec<NearbyAircraft> = Vec::new();
+
+    for backend in per_backend {
+        for aircraft in backend {
+            match aircraft.hex.as_deref() {
+                Some(hex) if !hex.is_empty() => {
+                    let key = hex.to_ascii_lowercase();
+                    if !groups.contains_key(&key) {
+                        order.push(key.clone());
+                    }
+                    groups.entry(key).or_default().push(aircraft);
+                }
+                _ => hexless.push(aircraft),
+            }
+        }
+    }
+
+    let mut merged: Vec<NearbyAircraft> = order
+        .into_iter()
+        .map(|key| pick_winner(groups.remove(&key).expect("key came from groups")))
+        .collect();
+    merged.extend(hexless);
+    merged
+}
 
 #[derive(Clone)]
 pub(super) struct AdsbAggregator {
@@ -720,6 +792,127 @@ mod tests {
 
         assert_eq!(response.aircraft.len(), 1);
         assert_eq!(response.aircraft[0].flight.as_deref(), Some("DLH1234"));
+    }
+
+    fn ac(hex: Option<&str>, seen_pos: Option<f64>, rssi: Option<f64>) -> NearbyAircraft {
+        NearbyAircraft {
+            hex: hex.map(str::to_owned),
+            flight: None,
+            r: None,
+            t: None,
+            alt_baro: None,
+            lat: None,
+            lon: None,
+            gs: None,
+            baro_rate: None,
+            geom_rate: None,
+            squawk: None,
+            nav_modes: None,
+            rssi,
+            seen_pos,
+        }
+    }
+
+    #[test]
+    fn merge_unions_distinct_aircraft() {
+        let merged = merge_aircraft(vec![
+            vec![ac(Some("aaa111"), Some(1.0), Some(-10.0))],
+            vec![ac(Some("bbb222"), Some(1.0), Some(-10.0))],
+        ]);
+        let hexes: Vec<_> = merged.iter().filter_map(|a| a.hex.clone()).collect();
+        assert_eq!(merged.len(), 2);
+        assert!(hexes.contains(&"aaa111".to_owned()));
+        assert!(hexes.contains(&"bbb222".to_owned()));
+    }
+
+    #[test]
+    fn merge_keeps_fresher_copy() {
+        let merged = merge_aircraft(vec![
+            vec![ac(Some("aaa111"), Some(1.0), Some(-30.0))],
+            vec![ac(Some("aaa111"), Some(30.0), Some(-5.0))],
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].seen_pos, Some(1.0));
+    }
+
+    #[test]
+    fn merge_breaks_freshness_tie_by_rssi() {
+        let merged = merge_aircraft(vec![
+            vec![ac(Some("aaa111"), Some(1.0), Some(-30.0))],
+            vec![ac(Some("aaa111"), Some(2.0), Some(-5.0))],
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].rssi, Some(-5.0));
+    }
+
+    #[test]
+    fn merge_bucket_beats_rssi() {
+        let merged = merge_aircraft(vec![
+            vec![ac(Some("aaa111"), Some(1.0), Some(-30.0))],
+            vec![ac(Some("aaa111"), Some(20.0), Some(-1.0))],
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].seen_pos, Some(1.0));
+    }
+
+    #[test]
+    fn merge_missing_seen_pos_loses() {
+        let merged = merge_aircraft(vec![
+            vec![ac(Some("aaa111"), None, Some(-1.0))],
+            vec![ac(Some("aaa111"), Some(10.0), Some(-30.0))],
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].seen_pos, Some(10.0));
+    }
+
+    #[test]
+    fn merge_garbage_seen_pos_loses() {
+        for garbage in [-1.0_f64, f64::NAN, f64::INFINITY] {
+            let merged = merge_aircraft(vec![
+                vec![ac(Some("aaa111"), Some(garbage), Some(-1.0))],
+                vec![ac(Some("aaa111"), Some(10.0), Some(-30.0))],
+            ]);
+            assert_eq!(merged.len(), 1);
+            assert_eq!(
+                merged[0].seen_pos,
+                Some(10.0),
+                "garbage {garbage} must lose"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_tie_keeps_first_backend() {
+        let mut first = ac(Some("aaa111"), Some(1.0), Some(-10.0));
+        first.flight = Some("FIRST".to_owned());
+        let mut second = ac(Some("aaa111"), Some(1.0), Some(-10.0));
+        second.flight = Some("SECOND".to_owned());
+        let merged = merge_aircraft(vec![vec![first], vec![second]]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].flight.as_deref(), Some("FIRST"));
+    }
+
+    #[test]
+    fn merge_dedups_case_insensitively_but_keeps_original_case() {
+        let merged = merge_aircraft(vec![
+            vec![ac(Some("3C6589"), Some(1.0), Some(-5.0))],
+            vec![ac(Some("3c6589"), Some(30.0), Some(-50.0))],
+        ]);
+        assert_eq!(merged.len(), 1, "different-case hex must dedup");
+        assert_eq!(
+            merged[0].hex.as_deref(),
+            Some("3C6589"),
+            "stored hex unchanged"
+        );
+    }
+
+    #[test]
+    fn merge_keeps_hexless_aircraft() {
+        let merged = merge_aircraft(vec![vec![
+            ac(Some("aaa111"), Some(1.0), Some(-10.0)),
+            ac(None, Some(1.0), Some(-10.0)),
+        ]]);
+        assert_eq!(merged.len(), 2);
     }
 
     #[tokio::test]
