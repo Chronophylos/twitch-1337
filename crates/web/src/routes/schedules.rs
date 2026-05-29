@@ -651,13 +651,20 @@ fn render_validation(
             let idx_str = &rest[..end];
             if let Ok(idx) = idx_str.parse::<usize>() {
                 let field_name = rest.get(end + 2..).unwrap_or("").to_owned();
-                let row_name = rows.get(idx).map(|r| r.name.clone()).unwrap_or_default();
-                row_errors.push(RowError {
-                    row_index: idx,
-                    row_name,
-                    field: field_name,
-                    message: e.message,
-                });
+                if let Some(row) = rows.get(idx) {
+                    row_errors.push(RowError {
+                        row_index: idx,
+                        row_name: row.name.clone(),
+                        field: field_name,
+                        message: e.message,
+                    });
+                    continue;
+                }
+                // Index past the persisted rows = the just-submitted row that
+                // failed store validation and was never saved (e.g. a
+                // duplicate name on create). It has no card, so attribute it to
+                // the form rather than a phantom row that doesn't exist.
+                global_errors.push((field_name, e.message));
                 continue;
             }
         }

@@ -235,6 +235,13 @@ async fn create_duplicate_name_restores_form_without_phantom_card() {
         1,
         "no phantom card for the unsaved row"
     );
+    // The error still surfaces, but attributed to the form (global), not a
+    // phantom "row 1" that exceeds the single persisted card.
+    assert!(html.contains("Validation failed"), "error must be shown");
+    assert!(
+        !html.contains("row 1"),
+        "no phantom row reference for the unsaved attempt"
+    );
 }
 
 #[tokio::test]

@@ -124,6 +124,14 @@ async fn sessions_survive_reload() {
         .expect("session survives reload");
     assert_eq!(got.user_login, "alice");
     assert_eq!(got.role, Role::Mod);
+    // last_role_check is reset on load so the gate re-verifies the helix mod
+    // list on the first post-restart request (a mod demoted while the bot was
+    // down must not keep access on stale state).
+    assert_eq!(
+        got.last_role_check,
+        DateTime::<Utc>::MIN_UTC,
+        "restored session must force a fresh role check"
+    );
 }
 
 #[test]
