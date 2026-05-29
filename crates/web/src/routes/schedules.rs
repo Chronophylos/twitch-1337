@@ -540,18 +540,16 @@ async fn delete(
         &state,
         &session,
         cookies,
-        Box::new(
-            move |o: &mut twitch_1337_core::settings::overrides::SettingsOverrides| {
-                let next: Vec<Schedule> = o
-                    .schedules
-                    .clone()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|s| s.name != name_for_mutate)
-                    .collect();
-                o.schedules = Some(next);
-            },
-        ),
+        Box::new(move |o| {
+            let next: Vec<Schedule> = o
+                .schedules
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|s| s.name != name_for_mutate)
+                .collect();
+            o.schedules = Some(next);
+        }),
         None,
         None,
     )

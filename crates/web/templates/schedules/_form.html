@@ -118,19 +118,6 @@
         r.addEventListener('change', refresh);
       });
       refresh();
-
-      var msg = form.querySelector('textarea[data-char-count]');
-      var counter = form.querySelector('[data-char-count-for]');
-      if (msg && counter) {
-        var max = msg.getAttribute('maxlength') || 500;
-        function count() {
-          var n = msg.value.length;
-          counter.textContent = n + ' / ' + max;
-          counter.classList.toggle('over', n >= max);
-        }
-        msg.addEventListener('input', count);
-        count();
-      }
     });
   })();
 </script>
