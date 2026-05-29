@@ -664,9 +664,10 @@ fn render_validation(
             let idx_str = &rest[..end];
             if let Ok(idx) = idx_str.parse::<usize>() {
                 let field_name = rest.get(end + 2..).unwrap_or("").to_owned();
+                let row_name = rows.get(idx).map(|r| r.name.clone()).unwrap_or_default();
                 row_errors.push(RowError {
                     row_index: idx,
-                    row_name: String::new(),
+                    row_name,
                     field: field_name,
                     message: e.message,
                 });
