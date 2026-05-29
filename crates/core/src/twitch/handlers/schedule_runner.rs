@@ -35,7 +35,12 @@ pub async fn run_orchestrator<T, L>(
     info!("Schedules orchestrator started");
     let mut running: HashMap<String, (CancellationToken, Schedule)> = HashMap::new();
 
-    // Initial reconcile.
+    // Enable the notification future BEFORE the initial reconcile so that any
+    // `notify_waiters()` fired between reconcile returning and the first loop
+    // iteration is not lost.
+    let mut notified = Box::pin(change_notify.notified());
+    notified.as_mut().enable();
+
     reconcile(
         &sender,
         &settings,
@@ -46,11 +51,11 @@ pub async fn run_orchestrator<T, L>(
     );
 
     loop {
-        let mut notified = Box::pin(change_notify.notified());
-        notified.as_mut().enable();
         tokio::select! {
             () = &mut notified => {
                 reconcile(&sender, &settings, &telemetry, &channel, &clock, &mut running);
+                notified = Box::pin(change_notify.notified());
+                notified.as_mut().enable();
             }
             () = shutdown.notified() => {
                 info!("Schedules orchestrator: shutdown");

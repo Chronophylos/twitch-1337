@@ -147,7 +147,7 @@ impl ScheduleForm {
                 let active_from = parse_hhmm(&self.interval_active_from);
                 let active_to = parse_hhmm(&self.interval_active_to);
                 Trigger::Interval {
-                    every: Duration::from_secs(secs.max(60)),
+                    every: Duration::from_secs(secs),
                     days,
                     active_from,
                     active_to,
@@ -435,6 +435,23 @@ fn form_state_from_schedule(s: &Schedule) -> FormState {
     fs
 }
 
+fn form_state_from_form(form: &ScheduleForm) -> FormState {
+    FormState {
+        name: form.name.trim().to_owned(),
+        message: form.message.trim().to_owned(),
+        kind: form.kind.clone(),
+        interval_every: form.interval_every.clone(),
+        interval_active_from: form.interval_active_from.clone(),
+        interval_active_to: form.interval_active_to.clone(),
+        interval_days: form.interval_days.iter().cloned().collect(),
+        calendar_at: form.calendar_at.clone(),
+        calendar_days: form.calendar_days.iter().cloned().collect(),
+        start_date: form.start_date.clone(),
+        end_date: form.end_date.clone(),
+        enabled: form.enabled.is_some(),
+    }
+}
+
 async fn create(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
@@ -444,6 +461,7 @@ async fn create(
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
+    let submitted = form_state_from_form(&form);
     let new_row = match form.try_into_schedule() {
         Ok(r) => r,
         Err(errs) => {
@@ -452,6 +470,7 @@ async fn create(
                 state.settings.load().schedules.clone(),
                 errs,
                 None,
+                Some(submitted),
             );
         }
     };
@@ -483,6 +502,7 @@ async fn update(
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
+    let submitted = form_state_from_form(&form);
     let new_row = match form.try_into_schedule() {
         Ok(r) => r,
         Err(errs) => {
@@ -491,6 +511,7 @@ async fn update(
                 state.settings.load().schedules.clone(),
                 errs,
                 Some(name),
+                Some(submitted),
             );
         }
     };
@@ -621,7 +642,7 @@ async fn apply_or_rerender(
             // intended_rows is the user's attempted submission; renders the
             // failed attempt rather than the persisted pre-submit state so
             // error attribution by index resolves correctly.
-            render_validation(session, intended_rows, errs, edit_on_error)
+            render_validation(session, intended_rows, errs, edit_on_error, None)
         }
         Err(e) => Err(WebError::Internal(eyre::eyre!("settings apply: {e}"))),
     }
@@ -629,9 +650,10 @@ async fn apply_or_rerender(
 
 fn render_validation(
     session: &Session,
-    _rows: Vec<Schedule>,
+    rows: Vec<Schedule>,
     errs: Vec<twitch_1337_core::settings::FieldError>,
     edit_on_error: Option<String>,
+    submitted: Option<FormState>,
 ) -> Result<Response, WebError> {
     let mut row_errors: Vec<RowError> = Vec::new();
     let mut global_errors: Vec<(String, String)> = Vec::new();
@@ -653,17 +675,37 @@ fn render_validation(
         }
         global_errors.push((e.field, e.message));
     }
-    // When re-rendering on validation failure, open the edit form for the
-    // failed row (if applicable), but show an empty card grid so the user
-    // focuses on the error.
-    let edit_form = edit_on_error.map(|name| FormState {
-        name,
-        ..FormState::default()
-    });
+    // Rebuild card grid from the passed-in rows so the user can see existing
+    // schedules alongside the error.
+    let now_utc = chrono::Utc::now();
+    let now_berlin = now_utc.with_timezone(&chrono_tz::Europe::Berlin);
+    let active_count = rows.iter().filter(|r| r.enabled).count();
+    let total = rows.len();
+    let cards: Vec<CardView> = rows
+        .iter()
+        .map(|s| card_view(s, None, now_utc, now_berlin))
+        .collect();
+
+    // When re-rendering on validation failure, restore the user's submitted
+    // form state (if available) for the edit or new form so they don't lose
+    // their input.
+    let (edit_form, new_form) = match (edit_on_error, submitted) {
+        (Some(_), Some(fs)) => (Some(fs), None),
+        (Some(name), None) => (
+            Some(FormState {
+                name,
+                ..FormState::default()
+            }),
+            None,
+        ),
+        (None, Some(fs)) => (None, Some(fs)),
+        (None, None) => (None, None),
+    };
+
     let resp = ListTpl {
-        rows: Vec::new(),
+        rows: cards,
         edit_form,
-        new_form: None,
+        new_form,
         row_errors,
         global_errors,
         flash: None,
@@ -674,8 +716,8 @@ fn render_validation(
         is_mod: session.is_mod(),
         is_broadcaster: session.is_broadcaster,
         is_owner: matches!(session.role, crate::auth::Role::Owner),
-        total: 0,
-        active_count: 0,
+        total,
+        active_count,
         fired_today: 0,
         next_fire: None,
     };
@@ -723,12 +765,19 @@ mod try_into_schedule_tests {
     }
 
     #[test]
-    fn interval_below_min_clamped_to_60s() {
+    fn interval_zero_passes_through_for_downstream_validation() {
+        // The form parser must NOT clamp; Schedule::validate is responsible
+        // for rejecting intervals below 60s. Posting "00:00" should produce
+        // a Duration of 0 without any silent correction by the form layer.
         let mut form = base_interval_form();
-        form.interval_every = "00:00".into(); // 0 secs -> clamped to 60
+        form.interval_every = "00:00".into(); // 0 secs — must not be silently clamped
         let s = form.try_into_schedule().unwrap();
         if let Trigger::Interval { every, .. } = s.trigger {
-            assert_eq!(every.as_secs(), 60);
+            assert_eq!(
+                every.as_secs(),
+                0,
+                "form parser must not clamp; validate() handles this"
+            );
         } else {
             panic!("expected Interval");
         }
@@ -811,6 +860,31 @@ mod try_into_schedule_tests {
         assert!(days.0.contains(&Weekday::Mon));
         assert!(days.0.contains(&Weekday::Wed));
         assert!(!days.0.contains(&Weekday::Fri));
+    }
+}
+
+#[cfg(test)]
+mod weekday_roundtrip_tests {
+    #[test]
+    fn weekday_string_roundtrip_matches_template() {
+        // `form_state_from_schedule` serialises weekdays via `.to_string()`.
+        // The form parser deserialises them via `.parse::<Weekday>()`.
+        // Both ends must agree on the short-form strings the template renders.
+        let cases = [
+            (chrono::Weekday::Mon, "Mon"),
+            (chrono::Weekday::Tue, "Tue"),
+            (chrono::Weekday::Wed, "Wed"),
+            (chrono::Weekday::Thu, "Thu"),
+            (chrono::Weekday::Fri, "Fri"),
+            (chrono::Weekday::Sat, "Sat"),
+            (chrono::Weekday::Sun, "Sun"),
+        ];
+        for (day, expected) in cases {
+            let s = day.to_string();
+            assert_eq!(s, expected, "Display for {day:?} should be short form");
+            let back: chrono::Weekday = s.parse().expect("must round-trip");
+            assert_eq!(back, day, "parse should recover the same weekday");
+        }
     }
 }
 
