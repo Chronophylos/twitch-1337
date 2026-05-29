@@ -6,8 +6,14 @@
 
 use std::time::Duration;
 
+use tokio::time::timeout;
 use tracing::{debug, warn};
 use twitch_irc::{TwitchIRCClient, login::LoginCredentials, transport::Transport};
+
+/// Upper bound on a single announce `say`. The shutdown sequence is otherwise
+/// bounded (web drain 5s, ping-actor drain 500ms); without this a saturated
+/// outgoing buffer could stall the graceful-exit path on an unbounded send.
+const ANNOUNCE_SEND_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// `b{BUILD_NUM} · {GIT_SHA_SHORT}` — baked at compile time by `build.rs`.
 pub fn version_line() -> String {
@@ -47,6 +53,12 @@ pub fn shutdown_message() -> &'static str {
     "Bravo 6 going dark RatgeNV"
 }
 
+/// Crash/fault announce body (static) — used when a handler exited unexpectedly,
+/// so operators don't read the graceful [`shutdown_message`] as an intentional stop.
+pub fn crash_message() -> &'static str {
+    "Mayday — Bravo 6 is down PANIC"
+}
+
 /// `!v` reply body.
 pub fn version_reply_message(uptime: Duration) -> String {
     format!(
@@ -72,8 +84,10 @@ async fn announce<T, L>(
         debug!("No admin_channel configured; skipping {context} announce");
         return;
     };
-    if let Err(error) = client.say(channel.to_owned(), body).await {
-        warn!(?error, "{context} announce failed");
+    match timeout(ANNOUNCE_SEND_TIMEOUT, client.say(channel.to_owned(), body)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!(?error, "{context} announce failed"),
+        Err(_) => warn!("{context} announce timed out"),
     }
 }
 
@@ -99,6 +113,16 @@ where
         "shutdown",
     )
     .await;
+}
+
+/// Post the crash/fault line to `admin_channel` (a handler exited unexpectedly).
+/// Empty/None channel → skip + debug log.
+pub async fn announce_crash<T, L>(client: &TwitchIRCClient<T, L>, admin_channel: Option<&str>)
+where
+    T: Transport,
+    L: LoginCredentials,
+{
+    announce(client, admin_channel, crash_message().to_owned(), "crash").await;
 }
 
 #[cfg(test)]
@@ -147,6 +171,12 @@ mod tests {
     #[test]
     fn shutdown_message_is_static() {
         assert_eq!(shutdown_message(), "Bravo 6 going dark RatgeNV");
+    }
+
+    #[test]
+    fn crash_message_is_distinct_from_shutdown() {
+        assert_eq!(crash_message(), "Mayday — Bravo 6 is down PANIC");
+        assert_ne!(crash_message(), shutdown_message());
     }
 
     #[test]

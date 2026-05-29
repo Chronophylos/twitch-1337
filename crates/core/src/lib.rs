@@ -327,12 +327,25 @@ where
         TARGET_HOUR,
         TARGET_MINUTE - 1
     );
-    let ping_actor_handle =
+    let (ping_actor_handle, shutdown_outcome) =
         crate::twitch::handlers::spawn::await_shutdown(handlers, shutdown).await;
 
-    // Shutdown initiated; best-effort offline line before draining web/ping actor.
-    crate::twitch::announce::announce_shutdown(&client_for_announce, admin_channel.as_deref())
-        .await;
+    // Shutdown initiated; best-effort line before draining web/ping actor. A
+    // handler fault posts a distinct message so operators don't read it as a
+    // graceful, intentional stop. Both are timeout-bounded internally.
+    match shutdown_outcome {
+        crate::twitch::handlers::spawn::ShutdownOutcome::Graceful => {
+            crate::twitch::announce::announce_shutdown(
+                &client_for_announce,
+                admin_channel.as_deref(),
+            )
+            .await;
+        }
+        crate::twitch::handlers::spawn::ShutdownOutcome::HandlerExited => {
+            crate::twitch::announce::announce_crash(&client_for_announce, admin_channel.as_deref())
+                .await;
+        }
+    }
 
     // Drop the Arc<Sender> clone held in Services so detached tasks are the
     // only remaining senders. The ping actor drains once all senders drop.
