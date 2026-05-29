@@ -56,19 +56,34 @@ pub fn version_reply_message(uptime: Duration) -> String {
     )
 }
 
+/// Post `body` to `admin_channel`. Empty/None channel → skip + debug log; send
+/// errors are logged, never propagated (announces are best-effort). `context`
+/// (e.g. "startup"/"shutdown") labels the log lines.
+async fn announce<T, L>(
+    client: &TwitchIRCClient<T, L>,
+    admin_channel: Option<&str>,
+    body: String,
+    context: &str,
+) where
+    T: Transport,
+    L: LoginCredentials,
+{
+    let Some(channel) = admin_channel.map(str::trim).filter(|c| !c.is_empty()) else {
+        debug!("No admin_channel configured; skipping {context} announce");
+        return;
+    };
+    if let Err(error) = client.say(channel.to_owned(), body).await {
+        warn!(?error, "{context} announce failed");
+    }
+}
+
 /// Post the startup line to `admin_channel`. Empty/None channel → skip + debug log.
 pub async fn announce_startup<T, L>(client: &TwitchIRCClient<T, L>, admin_channel: Option<&str>)
 where
     T: Transport,
     L: LoginCredentials,
 {
-    let Some(channel) = admin_channel.map(str::trim).filter(|c| !c.is_empty()) else {
-        debug!("No admin_channel configured; skipping startup announce");
-        return;
-    };
-    if let Err(error) = client.say(channel.to_owned(), startup_message()).await {
-        warn!(?error, "startup announce failed");
-    }
+    announce(client, admin_channel, startup_message(), "startup").await;
 }
 
 /// Post the shutdown line to `admin_channel`. Empty/None channel → skip + debug log.
@@ -77,16 +92,13 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    let Some(channel) = admin_channel.map(str::trim).filter(|c| !c.is_empty()) else {
-        debug!("No admin_channel configured; skipping shutdown announce");
-        return;
-    };
-    if let Err(error) = client
-        .say(channel.to_owned(), shutdown_message().to_owned())
-        .await
-    {
-        warn!(?error, "shutdown announce failed");
-    }
+    announce(
+        client,
+        admin_channel,
+        shutdown_message().to_owned(),
+        "shutdown",
+    )
+    .await;
 }
 
 #[cfg(test)]

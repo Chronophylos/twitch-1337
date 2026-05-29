@@ -215,14 +215,18 @@ where
 
     // Process start for `!v` uptime + the value passed to SpawnDeps below.
     let started_at = std::time::Instant::now();
-    // Cloned Arc + admin channel retained for the startup/shutdown announces;
-    // `client` itself is moved into spawn_handlers.
+    // Cloned Arc retained for the startup/shutdown announces; `client` itself is
+    // moved into spawn_handlers below.
     let client_for_announce = client.clone();
-    let admin_channel = settings.load().twitch.admin_channel.clone();
+
+    // One settings snapshot reused for the admin-channel announces and the AI
+    // memory build, instead of two separate ArcSwap reads.
+    let settings_snapshot = settings.load_full();
+    let admin_channel = settings_snapshot.twitch.admin_channel.clone();
 
     let ai_memory_v2 = crate::ai::command::build_ai_memory_v2(
         config.ai.is_some(),
-        &settings.load_full(),
+        &settings_snapshot,
         memory_store,
     )
     .await?;
