@@ -448,7 +448,7 @@ async fn create(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
     cookies: Cookies,
-    axum::Form(form): axum::Form<ScheduleForm>,
+    axum_extra::extract::Form(form): axum_extra::extract::Form<ScheduleForm>,
 ) -> Result<Response, WebError> {
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
@@ -489,7 +489,7 @@ async fn update(
     Extension(session): Extension<Session>,
     Path(name): Path<String>,
     cookies: Cookies,
-    axum::Form(form): axum::Form<ScheduleForm>,
+    axum_extra::extract::Form(form): axum_extra::extract::Form<ScheduleForm>,
 ) -> Result<Response, WebError> {
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
