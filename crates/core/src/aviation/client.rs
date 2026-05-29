@@ -2,7 +2,8 @@
 //! Nominatim, and Aviationstack.
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use eyre::{Result, WrapErr as _};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -42,6 +43,19 @@ const ADSB_AGGREGATOR_TIMEOUT: Duration = Duration::from_secs(2);
 /// Freshness equivalence window, in seconds. Position fixes whose `seen_pos`
 /// falls in the same bucket are treated as equally fresh, so `rssi` decides.
 const FRESH_WINDOW: f64 = 5.0;
+
+/// Cooldown duration a backend is parked for after a 429 or error streak.
+const ADSB_COOLDOWN: Duration = Duration::from_secs(60);
+/// Consecutive non-timeout retryable errors that trigger a cooldown park.
+const ERROR_STREAK_PARK: u8 = 3;
+
+/// Per-backend health, index-aligned with `AviationClient::adsb_aggregators`.
+struct BackendHealth {
+    /// Backend is available when `parked_until <= now`.
+    parked_until: Instant,
+    /// Consecutive non-timeout retryable errors.
+    error_streak: u8,
+}
 
 /// Quantize `seen_pos` into a freshness bucket (lower = fresher). Missing,
 /// negative, or non-finite values sort last — a bare `as u64` cast would
@@ -216,6 +230,8 @@ pub struct AviationClient {
     adsbdb_base_url: String,
     nominatim_base_url: String,
     aviationstack: Option<AviationstackConfig>,
+    adsb_cooldown: Duration,
+    health: Arc<Mutex<Vec<BackendHealth>>>,
 }
 
 impl AviationClient {
@@ -254,6 +270,14 @@ impl AviationClient {
         nominatim_base_url: String,
         http_client: reqwest::Client,
     ) -> Self {
+        let now = Instant::now();
+        let health = adsb_aggregators
+            .iter()
+            .map(|_| BackendHealth {
+                parked_until: now,
+                error_streak: 0,
+            })
+            .collect();
         Self {
             http: http_client,
             adsb_aggregators,
@@ -261,6 +285,8 @@ impl AviationClient {
             adsbdb_base_url,
             nominatim_base_url,
             aviationstack: None,
+            adsb_cooldown: ADSB_COOLDOWN,
+            health: Arc::new(Mutex::new(health)),
         }
     }
 
@@ -292,9 +318,84 @@ impl AviationClient {
         self
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "wired into production in the parallel fan-out task (Task 5)"
+        )
+    )]
+    fn live_backend_indices(&self) -> Vec<usize> {
+        let now = Instant::now();
+        let health = self.health.lock().expect("health mutex poisoned");
+        health
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| h.parked_until <= now)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "wired into production in the parallel fan-out task (Task 5)"
+        )
+    )]
+    fn park_backend(&self, index: usize) {
+        let until = Instant::now() + self.adsb_cooldown;
+        let mut health = self.health.lock().expect("health mutex poisoned");
+        if let Some(h) = health.get_mut(index) {
+            h.parked_until = until;
+            h.error_streak = 0;
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "wired into production in the parallel fan-out task (Task 5)"
+        )
+    )]
+    fn record_success(&self, index: usize) {
+        let mut health = self.health.lock().expect("health mutex poisoned");
+        if let Some(h) = health.get_mut(index) {
+            h.error_streak = 0;
+        }
+    }
+
+    /// Count a non-timeout retryable error; park the backend on the
+    /// `ERROR_STREAK_PARK`-th consecutive one.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "wired into production in the parallel fan-out task (Task 5)"
+        )
+    )]
+    fn record_retryable_error(&self, index: usize) {
+        let until = Instant::now() + self.adsb_cooldown;
+        let mut health = self.health.lock().expect("health mutex poisoned");
+        if let Some(h) = health.get_mut(index) {
+            h.error_streak = h.error_streak.saturating_add(1);
+            if h.error_streak >= ERROR_STREAK_PARK {
+                h.parked_until = until;
+                h.error_streak = 0;
+            }
+        }
+    }
+
     #[cfg(test)]
     fn with_adsb_aggregator_timeout(mut self, timeout: Duration) -> Self {
         self.adsb_aggregator_timeout = timeout;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_adsb_cooldown(mut self, cooldown: Duration) -> Self {
+        self.adsb_cooldown = cooldown;
         self
     }
 
@@ -934,5 +1035,69 @@ mod tests {
             .await
             .expect_err("429 is an error");
         assert!(matches!(err, AdsbFetchError::RateLimited));
+    }
+
+    #[test]
+    fn health_all_available_on_construction() {
+        let client = test_client_with_aggregators(vec![
+            AdsbAggregator::readsb_v2("a", "http://a.test".to_owned()),
+            AdsbAggregator::readsb_v2("b", "http://b.test".to_owned()),
+        ]);
+        assert_eq!(client.live_backend_indices().len(), 2);
+    }
+
+    #[test]
+    fn health_parks_and_restores() {
+        let client = test_client_with_aggregators(vec![
+            AdsbAggregator::readsb_v2("a", "http://a.test".to_owned()),
+            AdsbAggregator::readsb_v2("b", "http://b.test".to_owned()),
+        ])
+        .with_adsb_cooldown(Duration::from_millis(50));
+
+        client.park_backend(0);
+        assert_eq!(client.live_backend_indices(), vec![1]);
+
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(client.live_backend_indices(), vec![0, 1]);
+    }
+
+    #[test]
+    fn health_error_streak_parks_on_third() {
+        let client = test_client_with_aggregators(vec![AdsbAggregator::readsb_v2(
+            "a",
+            "http://a.test".to_owned(),
+        )])
+        .with_adsb_cooldown(Duration::from_secs(60));
+
+        client.record_retryable_error(0);
+        client.record_retryable_error(0);
+        assert_eq!(
+            client.live_backend_indices(),
+            vec![0],
+            "2 errors: still live"
+        );
+        client.record_retryable_error(0);
+        assert!(
+            client.live_backend_indices().is_empty(),
+            "3rd error parks the backend"
+        );
+    }
+
+    #[test]
+    fn health_success_resets_error_streak() {
+        let client = test_client_with_aggregators(vec![AdsbAggregator::readsb_v2(
+            "a",
+            "http://a.test".to_owned(),
+        )]);
+        client.record_retryable_error(0);
+        client.record_retryable_error(0);
+        client.record_success(0);
+        client.record_retryable_error(0);
+        client.record_retryable_error(0);
+        assert_eq!(
+            client.live_backend_indices(),
+            vec![0],
+            "streak reset by success → 2 fresh errors don't park"
+        );
     }
 }
