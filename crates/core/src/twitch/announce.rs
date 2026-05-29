@@ -49,7 +49,11 @@ pub fn shutdown_message() -> &'static str {
 
 /// `!v` reply body.
 pub fn version_reply_message(uptime: Duration) -> String {
-    format!("billyReady · {} · up {}", version_line(), format_uptime(uptime))
+    format!(
+        "billyReady · {} · up {}",
+        version_line(),
+        format_uptime(uptime)
+    )
 }
 
 /// Post the startup line to `admin_channel`. Empty/None channel → skip + debug log.

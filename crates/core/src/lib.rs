@@ -312,8 +312,7 @@ where
         tracing::info!("Daily AI memory dreamer ritual spawned (live settings)");
     }
 
-    crate::twitch::announce::announce_startup(&client_for_announce, admin_channel.as_deref())
-        .await;
+    crate::twitch::announce::announce_startup(&client_for_announce, admin_channel.as_deref()).await;
 
     info!(
         "Bot running with continuous connection. Handlers: 1337 tracker, \

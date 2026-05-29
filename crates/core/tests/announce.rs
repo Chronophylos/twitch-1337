@@ -14,7 +14,10 @@ async fn startup_announce_posts_to_admin_channel() {
         .await;
 
     let (channel, body) = bot.expect_say_full(TIMEOUT).await;
-    assert_eq!(channel, "adminchan", "startup announce went to wrong channel");
+    assert_eq!(
+        channel, "adminchan",
+        "startup announce went to wrong channel"
+    );
     // TwitchIRCClient::say() prepends ". " to defeat command injection.
     let stripped = body.strip_prefix(". ").unwrap_or(&body);
     assert!(
