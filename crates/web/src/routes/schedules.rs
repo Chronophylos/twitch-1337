@@ -466,20 +466,18 @@ async fn create(
             );
         }
     };
-    let mut intended_rows = state.settings.load().schedules.clone();
-    intended_rows.push(new_row.clone());
     let new_row_for_mutate = new_row.clone();
     apply_or_rerender(
         &state,
         &session,
         cookies,
-        intended_rows,
         Box::new(move |o| {
             let mut next = o.schedules.clone().unwrap_or_default();
             next.push(new_row_for_mutate);
             o.schedules = Some(next);
         }),
         None,
+        Some(submitted),
     )
     .await
 }
@@ -508,17 +506,12 @@ async fn update(
         }
     };
     let new_name = new_row.name.clone();
-    let mut intended_rows = state.settings.load().schedules.clone();
-    if let Some(idx) = intended_rows.iter().position(|s| s.name == name) {
-        intended_rows[idx] = new_row.clone();
-    }
     let name_for_mutate = name.clone();
     let new_row_for_mutate = new_row.clone();
     apply_or_rerender(
         &state,
         &session,
         cookies,
-        intended_rows,
         Box::new(move |o| {
             let mut next = o.schedules.clone().unwrap_or_default();
             if let Some(idx) = next.iter().position(|s| s.name == name_for_mutate) {
@@ -527,6 +520,7 @@ async fn update(
             o.schedules = Some(next);
         }),
         Some(new_name),
+        Some(submitted),
     )
     .await
 }
@@ -541,30 +535,24 @@ async fn delete(
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    let intended_rows: Vec<Schedule> = state
-        .settings
-        .load()
-        .schedules
-        .iter()
-        .filter(|s| s.name != name)
-        .cloned()
-        .collect();
     let name_for_mutate = name.clone();
     apply_or_rerender(
         &state,
         &session,
         cookies,
-        intended_rows,
-        Box::new(move |o| {
-            let next: Vec<Schedule> = o
-                .schedules
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|s| s.name != name_for_mutate)
-                .collect();
-            o.schedules = Some(next);
-        }),
+        Box::new(
+            move |o: &mut twitch_1337_core::settings::overrides::SettingsOverrides| {
+                let next: Vec<Schedule> = o
+                    .schedules
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|s| s.name != name_for_mutate)
+                    .collect();
+                o.schedules = Some(next);
+            },
+        ),
+        None,
         None,
     )
     .await
@@ -617,9 +605,9 @@ async fn apply_or_rerender(
     state: &WebState,
     session: &Session,
     cookies: Cookies,
-    intended_rows: Vec<Schedule>,
     mutate: Mutator,
     edit_on_error: Option<String>,
+    submitted: Option<FormState>,
 ) -> Result<Response, WebError> {
     let actor = Actor {
         user_id: session.user_id.clone(),
@@ -631,10 +619,19 @@ async fn apply_or_rerender(
             Ok(Redirect::to("/schedules").into_response())
         }
         Err(SettingsError::Validation(errs)) => {
-            // intended_rows is the user's attempted submission; renders the
-            // failed attempt rather than the persisted pre-submit state so
-            // error attribution by index resolves correctly.
-            render_validation(session, intended_rows, errs, edit_on_error, None)
+            // Render the *persisted* rows as cards — never the rejected
+            // attempt. A card for a row that was never saved vanishes the
+            // moment the user clicks edit/toggle/delete on it (no such
+            // schedule exists), trapping them. The attempt is instead
+            // restored into the editable form via `submitted` so they can
+            // fix and resubmit.
+            render_validation(
+                session,
+                state.settings.load().schedules.clone(),
+                errs,
+                edit_on_error,
+                submitted,
+            )
         }
         Err(e) => Err(WebError::Internal(eyre::eyre!("settings apply: {e}"))),
     }

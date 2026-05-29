@@ -191,6 +191,52 @@ async fn edit_duplicate_name_returns_error_without_persisting() {
     assert!(v.iter().any(|s| s.name == "b"));
 }
 
+/// A create that fails store-level validation (duplicate name) must restore
+/// the editable form with the user's input — NOT render an interactive card
+/// for the rejected, never-persisted row (clicking such a card targeted a
+/// nonexistent schedule and made the whole thing vanish).
+#[tokio::test]
+async fn create_duplicate_name_restores_form_without_phantom_card() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_schedules(&state, vec![interval_schedule("dup", "original")]).await;
+    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let app = build_router(state.clone());
+
+    let body = interval_form(&bare_csrf, "dup", "keepme");
+    let req = Request::builder()
+        .method("POST")
+        .uri("/schedules/add")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status().as_u16(),
+        200,
+        "validation error re-renders, not 303"
+    );
+
+    let v = state.settings.load().schedules.clone();
+    assert_eq!(v.len(), 1, "rejected row must not persist");
+
+    let html = body_string(res).await;
+    // Form restored with the submitted message so the user can fix the name.
+    assert!(
+        html.contains("action=\"/schedules/add\""),
+        "new-schedule form must be restored"
+    );
+    assert!(html.contains("keepme"), "submitted input must be preserved");
+    // Exactly one card for "dup" — the persisted one. A phantom card for the
+    // rejected attempt would push this to two.
+    assert_eq!(
+        html.matches("/schedules/dup/toggle").count(),
+        1,
+        "no phantom card for the unsaved row"
+    );
+}
+
 #[tokio::test]
 async fn delete_schedule_removes_row() {
     install_crypto();
