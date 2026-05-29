@@ -117,6 +117,8 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     /// Per-schedule runtime telemetry. Shared with the dashboard so card
     /// chips ("12 today", "12m ago") read live data.
     pub telemetry: Arc<crate::schedule::TelemetryStore>,
+    /// Process start instant, captured in `run_bot`; forwarded to `!v`.
+    pub started_at: std::time::Instant,
 }
 
 /// Spawn every long-running handler task in the order they currently
@@ -155,6 +157,7 @@ where
         settings_store,
         primary_history_tap,
         telemetry,
+        started_at,
     } = deps;
 
     let ping_actor = tokio::spawn(run_ping_actor(ping_actor_rx, ping_manager, ping_names_tx));
@@ -282,6 +285,7 @@ where
                 suspension_manager: suspension_manager.clone(),
                 emote_provider,
                 primary_history_tap,
+                started_at,
             })
             .await;
         }
