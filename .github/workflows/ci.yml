@@ -133,6 +133,7 @@ jobs:
             curl -sf http://localhost:9515/status >/dev/null && break
             sleep 0.3
           done
+          curl -sf http://localhost:9515/status >/dev/null || { echo "chromedriver did not start"; exit 1; }
 
       - name: cargo nextest (e2e)
         env:

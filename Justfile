@@ -80,7 +80,7 @@ e2e:
   @if ! curl -sf http://localhost:9515/status >/dev/null 2>&1; then \
       echo "starting chromedriver on :9515"; \
       chromedriver --port=9515 & \
-      sleep 1; \
+      for _ in $(seq 1 30); do curl -sf http://localhost:9515/status >/dev/null && break; sleep 0.3; done; \
   fi
   WEBDRIVER_URL=http://localhost:9515 cargo nextest run -p twitch-1337-web --features e2e
 

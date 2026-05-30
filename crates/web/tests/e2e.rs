@@ -7,6 +7,18 @@ mod harness;
 
 use harness::E2eSession;
 
+/// Wait for an element, then return its trimmed, lowercased visible text.
+/// (CSS `text-transform` can uppercase the rendered text vs the template.)
+async fn button_text(s: &E2eSession, css: &str) -> String {
+    s.wait_for(css)
+        .await
+        .text()
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase()
+}
+
 #[tokio::test]
 async fn harness_boots_and_authenticates() {
     let s = E2eSession::start().await;
@@ -63,20 +75,16 @@ async fn pings_create_add_member_delete() {
 
     // Create.
     s.goto("/pings/new").await;
-    s.wait_for("#ping-name").await;
-    s.fill("#ping-name", "squad").await;
+    s.wait_and_fill("#ping-name", "squad").await;
     s.fill("#ping-template", "yo {mentions}").await;
     s.click("button[type=\"submit\"].btn.primary").await;
 
     // Back on the list, the row exists.
     s.wait_for("a.ping-name").await;
-    let names: Vec<String> = {
-        let mut out = Vec::new();
-        for el in s.find_all("a.ping-name").await {
-            out.push(el.text().await.unwrap_or_default());
-        }
-        out
-    };
+    let mut names = Vec::new();
+    for el in s.find_all("a.ping-name").await {
+        names.push(el.text().await.unwrap_or_default());
+    }
     assert!(
         names.iter().any(|n| n == "squad"),
         "ping row missing: {names:?}"
@@ -84,8 +92,7 @@ async fn pings_create_add_member_delete() {
 
     // Add a member from the edit page.
     s.goto("/pings/squad").await;
-    s.wait_for("#ping-add-member").await;
-    s.fill("#ping-add-member", "alice").await;
+    s.wait_and_fill("#ping-add-member", "alice").await;
     s.click("form[action=\"/pings/squad/members\"] button[type=\"submit\"]")
         .await;
     s.wait_for(".ping-name").await;
@@ -96,12 +103,9 @@ async fn pings_create_add_member_delete() {
 
     // Delete from the list via htmx outerHTML swap (confirm auto-accepted).
     s.goto("/pings").await;
-    s.wait_for("button.row-act.danger[hx-post=\"/pings/squad/delete\"]")
-        .await;
-    s.click("button.row-act.danger[hx-post=\"/pings/squad/delete\"]")
-        .await;
-    s.wait_gone("button.row-act.danger[hx-post=\"/pings/squad/delete\"]")
-        .await;
+    let del_btn = "button.row-act.danger[hx-post=\"/pings/squad/delete\"]";
+    s.wait_and_click(del_btn).await;
+    s.wait_gone(del_btn).await;
 
     s.close().await;
 }
@@ -113,8 +117,7 @@ async fn schedules_create_toggle_delete() {
 
     // Create (interval kind is the default checked radio).
     s.goto("/schedules?new=true").await;
-    s.wait_for("input[name=\"name\"]").await;
-    s.fill("input[name=\"name\"]", "standup").await;
+    s.wait_and_fill("input[name=\"name\"]", "standup").await;
     s.fill("textarea[name=\"message\"]", "daily standup time")
         .await;
     s.fill("input[name=\"interval_every\"]", "01:00").await;
@@ -122,17 +125,8 @@ async fn schedules_create_toggle_delete() {
     s.click("button[type=\"submit\"].btn.primary").await;
 
     // Card appears, paused (button reads "off" — CSS may uppercase the text).
-    let card = "article.schedule-card";
-    s.wait_for(card).await;
     let toggle_btn = "article.schedule-card form.card-toggle button.toggle-switch";
-    let before = s
-        .find(toggle_btn)
-        .await
-        .text()
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_lowercase();
+    let before = button_text(&s, toggle_btn).await;
     assert_eq!(before, "off", "new schedule should start disabled");
 
     // Toggle on (full form POST + redirect to /schedules).
@@ -140,17 +134,7 @@ async fn schedules_create_toggle_delete() {
     // Wait for the paused card to disappear — confirms the page has reloaded
     // after the POST and the schedule is now enabled.
     s.wait_gone("article.schedule-card.paused").await;
-    // Now wait for the toggle button in the fresh (enabled) card.
-    s.wait_for(toggle_btn).await;
-    // CSS may uppercase the text; normalise to lowercase.
-    let after = s
-        .find(toggle_btn)
-        .await
-        .text()
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_lowercase();
+    let after = button_text(&s, toggle_btn).await;
     assert_eq!(after, "on", "toggle did not enable the schedule");
 
     // Delete (JS confirm auto-accepted).
@@ -167,10 +151,9 @@ async fn schedules_create_toggle_delete() {
 async fn settings_save_cooldown() {
     let s = E2eSession::start_as_owner().await;
     s.goto("/settings").await;
-    s.wait_for("input[name=\"cooldown_ai\"]").await;
 
     // Pick a value inside [1, 3600] unlikely to be the default.
-    s.fill("input[name=\"cooldown_ai\"]", "47").await;
+    s.wait_and_fill("input[name=\"cooldown_ai\"]", "47").await;
     s.click("button[type=\"submit\"].btn.primary[form=\"settings-form\"]")
         .await;
 

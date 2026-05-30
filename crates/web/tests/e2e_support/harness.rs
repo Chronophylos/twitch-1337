@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fantoccini::{Client, ClientBuilder, Locator};
-use serde_json::{Map, Value, json};
+use serde_json::json;
 use tokio::sync::Notify;
 use twitch_1337_web::{bind, build_router, serve_app};
 
@@ -40,8 +40,8 @@ enum SessionKind {
 /// driver is ephemeral (fantoccini's async `close` consumes `self`, so it
 /// can't run from `Drop`).
 pub struct E2eSession {
-    pub client: Client,
-    pub base_url: String,
+    client: Client,
+    base_url: String,
     shutdown: Arc<Notify>,
     // Kept alive so the server's data dirs are not removed mid-test.
     _dirs: (tempfile::TempDir, tempfile::TempDir, tempfile::TempDir),
@@ -96,16 +96,12 @@ impl E2eSession {
 
         // Headless Chrome capabilities; auto-accept confirm() dialogs so
         // htmx hx-confirm and the JS delete-confirm proceed.
-        let mut chrome_opts = Map::new();
-        chrome_opts.insert(
-            "args".to_owned(),
-            json!([
-                "--headless=new",
-                "--no-sandbox",
-                "--disable-gpu",
-                "--window-size=1400,900",
-            ]),
-        );
+        let mut caps = json!({
+            "goog:chromeOptions": {
+                "args": ["--headless=new", "--no-sandbox", "--disable-gpu", "--window-size=1400,900"],
+            },
+            "unhandledPromptBehavior": "accept",
+        });
         // Pin the Chrome binary when given (CI sets this to the
         // setup-chrome-installed browser). Without it, chromedriver launches
         // whatever chrome it finds by default — on GitHub runners that's a
@@ -114,11 +110,9 @@ impl E2eSession {
         if let Ok(bin) = std::env::var("E2E_CHROME_BINARY")
             && !bin.is_empty()
         {
-            chrome_opts.insert("binary".to_owned(), json!(bin));
+            caps["goog:chromeOptions"]["binary"] = json!(bin);
         }
-        let mut caps: Map<String, Value> = Map::new();
-        caps.insert("goog:chromeOptions".to_owned(), Value::Object(chrome_opts));
-        caps.insert("unhandledPromptBehavior".to_owned(), json!("accept"));
+        let caps = caps.as_object().expect("caps is a json object").clone();
 
         let mut builder = ClientBuilder::rustls().expect("rustls builder");
         builder.capabilities(caps);
@@ -222,6 +216,19 @@ impl E2eSession {
         self.find(css).await.click().await.expect("click");
     }
 
+    /// Wait for an input to appear, then fill it (clearing first). Reuses the
+    /// waited element — no second `find` round-trip.
+    pub async fn wait_and_fill(&self, css: &str, text: &str) {
+        let el = self.wait_for(css).await;
+        el.clear().await.expect("clear");
+        el.send_keys(text).await.expect("send_keys");
+    }
+
+    /// Wait for an element to appear, then click it (reusing the waited element).
+    pub async fn wait_and_click(&self, css: &str) {
+        self.wait_for(css).await.click().await.expect("click");
+    }
+
     /// Close the browser and stop the server.
     pub async fn close(self) {
         let _ = self.client.close().await;
@@ -232,18 +239,9 @@ impl E2eSession {
 /// Set a session cookie via `document.cookie`. Bypasses WebDriver's
 /// `AddCookie` command which Chrome rejects for loopback origins.
 async fn set_cookie_js(client: &Client, name: &str, value: &str) {
-    // URL-encode the value so `=` and `;` inside signed cookie strings
-    // don't corrupt the Set-Cookie header parsed by the browser.
-    let encoded_value: String = value
-        .bytes()
-        .flat_map(|b| {
-            if b.is_ascii_alphanumeric() || b"!#$&'()*+,-./:?@_~".contains(&b) {
-                vec![b as char]
-            } else {
-                format!("%{b:02X}").chars().collect()
-            }
-        })
-        .collect();
+    // Percent-encode so `=`/`;`/space in the signed cookie string don't corrupt
+    // the cookie; the server's `parse_encoded` percent-decodes it back.
+    let encoded_value = urlencoding::encode(value);
     let script = format!("document.cookie = \"{name}={encoded_value}; path=/\";");
     client
         .execute(&script, vec![])
