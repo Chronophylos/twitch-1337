@@ -125,7 +125,7 @@ jobs:
       - name: Start chromedriver
         run: |
           "${{ steps.chrome.outputs.chromedriver-path }}" --port=9515 &
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             curl -sf http://localhost:9515/status >/dev/null && break
             sleep 0.3
           done
