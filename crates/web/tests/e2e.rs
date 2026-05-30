@@ -7,18 +7,6 @@ mod harness;
 
 use harness::E2eSession;
 
-/// Wait for an element, then return its trimmed, lowercased visible text.
-/// (CSS `text-transform` can uppercase the rendered text vs the template.)
-async fn button_text(s: &E2eSession, css: &str) -> String {
-    s.wait_for(css)
-        .await
-        .text()
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_lowercase()
-}
-
 #[tokio::test]
 async fn harness_boots_and_authenticates() {
     let s = E2eSession::start().await;
@@ -124,9 +112,10 @@ async fn schedules_create_toggle_delete() {
     // `enabled` left unchecked => created paused.
     s.click("button[type=\"submit\"].btn.primary").await;
 
-    // Card appears, paused (button reads "off" — CSS may uppercase the text).
+    // Card appears, paused. CSS `text-transform` may uppercase the rendered
+    // "off"/"on", so normalise to lowercase before comparing.
     let toggle_btn = "article.schedule-card form.card-toggle button.toggle-switch";
-    let before = button_text(&s, toggle_btn).await;
+    let before = s.wait_text(toggle_btn).await.to_lowercase();
     assert_eq!(before, "off", "new schedule should start disabled");
 
     // Toggle on (full form POST + redirect to /schedules).
@@ -134,7 +123,7 @@ async fn schedules_create_toggle_delete() {
     // Wait for the paused card to disappear — confirms the page has reloaded
     // after the POST and the schedule is now enabled.
     s.wait_gone("article.schedule-card.paused").await;
-    let after = button_text(&s, toggle_btn).await;
+    let after = s.wait_text(toggle_btn).await.to_lowercase();
     assert_eq!(after, "on", "toggle did not enable the schedule");
 
     // Delete (JS confirm auto-accepted).

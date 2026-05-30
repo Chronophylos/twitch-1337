@@ -81,6 +81,7 @@ e2e:
       echo "starting chromedriver on :9515"; \
       chromedriver --port=9515 & \
       for _ in $(seq 1 30); do curl -sf http://localhost:9515/status >/dev/null && break; sleep 0.3; done; \
+      curl -sf http://localhost:9515/status >/dev/null || { echo "chromedriver did not start (is it installed?)"; exit 1; }; \
   fi
   WEBDRIVER_URL=http://localhost:9515 cargo nextest run -p twitch-1337-web --features e2e
 

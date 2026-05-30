@@ -229,6 +229,17 @@ impl E2eSession {
         self.wait_for(css).await.click().await.expect("click");
     }
 
+    /// Wait for an element, then return its trimmed visible text.
+    pub async fn wait_text(&self, css: &str) -> String {
+        self.wait_for(css)
+            .await
+            .text()
+            .await
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    }
+
     /// Close the browser and stop the server.
     pub async fn close(self) {
         let _ = self.client.close().await;
