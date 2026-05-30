@@ -105,3 +105,59 @@ async fn pings_create_add_member_delete() {
 
     s.close().await;
 }
+
+/// Create a disabled interval schedule, toggle it on, then delete it.
+#[tokio::test]
+async fn schedules_create_toggle_delete() {
+    let s = E2eSession::start().await;
+
+    // Create (interval kind is the default checked radio).
+    s.goto("/schedules?new=true").await;
+    s.wait_for("input[name=\"name\"]").await;
+    s.fill("input[name=\"name\"]", "standup").await;
+    s.fill("textarea[name=\"message\"]", "daily standup time")
+        .await;
+    s.fill("input[name=\"interval_every\"]", "01:00").await;
+    // `enabled` left unchecked => created paused.
+    s.click("button[type=\"submit\"].btn.primary").await;
+
+    // Card appears, paused (button reads "off" — CSS may uppercase the text).
+    let card = "article.schedule-card";
+    s.wait_for(card).await;
+    let toggle_btn = "article.schedule-card form.card-toggle button.toggle-switch";
+    let before = s
+        .find(toggle_btn)
+        .await
+        .text()
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    assert_eq!(before, "off", "new schedule should start disabled");
+
+    // Toggle on (full form POST + redirect to /schedules).
+    s.click(toggle_btn).await;
+    // Wait for the paused card to disappear — confirms the page has reloaded
+    // after the POST and the schedule is now enabled.
+    s.wait_gone("article.schedule-card.paused").await;
+    // Now wait for the toggle button in the fresh (enabled) card.
+    s.wait_for(toggle_btn).await;
+    // CSS may uppercase the text; normalise to lowercase.
+    let after = s
+        .find(toggle_btn)
+        .await
+        .text()
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    assert_eq!(after, "on", "toggle did not enable the schedule");
+
+    // Delete (JS confirm auto-accepted).
+    s.click("form.js-delete-schedule[data-name=\"standup\"] button.chip.danger")
+        .await;
+    s.wait_gone("form.js-delete-schedule[data-name=\"standup\"]")
+        .await;
+
+    s.close().await;
+}
