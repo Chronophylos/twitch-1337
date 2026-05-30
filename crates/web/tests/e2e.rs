@@ -4,10 +4,19 @@
 
 #[path = "e2e_support/harness.rs"]
 mod harness;
-mod helpers;
+
+use harness::E2eSession;
 
 #[tokio::test]
-async fn placeholder_compiles() {
-    // Replaced in later tasks. Asserts the target builds under the feature.
-    assert_eq!(2 + 2, 4);
+async fn harness_boots_and_authenticates() {
+    let s = E2eSession::start().await;
+    s.goto("/pings").await;
+    // Authenticated mod session lands on the pings page with the sidebar.
+    s.wait_for("aside.sidebar").await;
+    let html = s.source().await;
+    assert!(
+        html.contains("Pings"),
+        "sidebar/page did not render: {html:.0}"
+    );
+    s.close().await;
 }
