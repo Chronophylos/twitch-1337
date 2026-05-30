@@ -16,7 +16,7 @@ async fn harness_boots_and_authenticates() {
     let html = s.source().await;
     assert!(
         html.contains("Pings"),
-        "sidebar/page did not render: {html:.0}"
+        "sidebar/page did not render; first 200 chars: {html:.200}"
     );
     s.close().await;
 }
