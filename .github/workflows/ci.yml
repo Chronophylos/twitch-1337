@@ -123,8 +123,12 @@ jobs:
           install-dependencies: true
 
       - name: Start chromedriver
+        env:
+          # Pass the output via env (not inline ${{ }}) so the value can't be
+          # expanded into the shell script — zizmor template-injection rule.
+          CHROMEDRIVER_PATH: ${{ steps.chrome.outputs.chromedriver-path }}
         run: |
-          "${{ steps.chrome.outputs.chromedriver-path }}" --port=9515 &
+          "$CHROMEDRIVER_PATH" --port=9515 &
           for _ in $(seq 1 30); do
             curl -sf http://localhost:9515/status >/dev/null && break
             sleep 0.3
@@ -133,6 +137,10 @@ jobs:
       - name: cargo nextest (e2e)
         env:
           WEBDRIVER_URL: http://localhost:9515
+          # Point chromedriver at the setup-chrome-installed browser so its
+          # version matches the installed chromedriver (the runner's
+          # preinstalled Chrome may differ).
+          E2E_CHROME_BINARY: ${{ steps.chrome.outputs.chrome-path }}
         run: cargo nextest run -p twitch-1337-web --features e2e
 
   audit:

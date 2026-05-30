@@ -106,6 +106,16 @@ impl E2eSession {
                 "--window-size=1400,900",
             ]),
         );
+        // Pin the Chrome binary when given (CI sets this to the
+        // setup-chrome-installed browser). Without it, chromedriver launches
+        // whatever chrome it finds by default — on GitHub runners that's a
+        // preinstalled Chrome whose version may not match the installed
+        // chromedriver, yielding "session not created: only supports Chrome N".
+        if let Ok(bin) = std::env::var("E2E_CHROME_BINARY")
+            && !bin.is_empty()
+        {
+            chrome_opts.insert("binary".to_owned(), json!(bin));
+        }
         let mut caps: Map<String, Value> = Map::new();
         caps.insert("goog:chromeOptions".to_owned(), Value::Object(chrome_opts));
         caps.insert("unhandledPromptBehavior".to_owned(), json!("accept"));
