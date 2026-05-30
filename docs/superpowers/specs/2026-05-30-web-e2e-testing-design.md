@@ -153,6 +153,20 @@ helper builder ──► WebState {StubHelix, TempDir, signed_key=[0x42;64]}
    teardown: client.close() + shutdown.notify()
 ```
 
+### Mechanism note (from template audit)
+
+Most dashboard mutations are **plain `<form method="post">` → redirect**, not
+htmx swaps. Only **ping delete** and **member remove** are htmx
+(`hx-post` + `hx-swap="outerHTML"`, gated by `hx-confirm` → `window.confirm`).
+Schedule add/toggle/delete and settings save are full form POSTs. The e2e
+value still holds — a real browser exercises form submit → redirect →
+re-render, the JS layer (`app.js`, htmx), and the two htmx swaps — but tests
+are written as form-nav + dialog handling, not swap-watching everywhere. The
+browser carries CSRF automatically: the server renders the `_csrf` token (and
+htmx `X-Csrf-Token` header) into each page, so the harness injects only the
+two session cookies. `unhandledPromptBehavior: "accept"` in the WebDriver
+caps auto-accepts the confirm dialogs.
+
 ## Flows (4)
 
 1. **Auth + nav smoke.** Inject cookies → load `/` (or `/pings`) →
