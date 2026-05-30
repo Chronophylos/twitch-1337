@@ -24,6 +24,15 @@ fn webdriver_url() -> String {
 const WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 const WAIT_POLL: Duration = Duration::from_millis(100);
 
+/// Selects which session role the harness injects.
+enum SessionKind {
+    /// Authenticated mod (no owner configured). Default for `start()`.
+    Mod,
+    /// Authenticated owner (user marked as the configured owner).
+    /// Required for owner-gated pages like /settings.
+    Owner,
+}
+
 /// A running dashboard + browser session, authenticated as a mod.
 /// Holds tempdirs alive for the server's lifetime and tears everything
 /// down on `close()`. On a panic before `close()`, the browser session
@@ -42,11 +51,32 @@ impl E2eSession {
     /// Build state + router, serve on an ephemeral port, connect a headless
     /// Chrome, and inject signed session cookies for a mod user.
     pub async fn start() -> Self {
+        Self::start_inner(SessionKind::Mod).await
+    }
+
+    /// Like [`start`] but configures an owner session.
+    /// Required for owner-gated pages like `/settings`.
+    pub async fn start_as_owner() -> Self {
+        Self::start_inner(SessionKind::Owner).await
+    }
+
+    async fn start_inner(kind: SessionKind) -> Self {
         helpers::install_crypto();
         let user_id = "9001";
         let helix = helpers::admin_helix(user_id);
         let (state, d1, d2, d3) = helpers::build_state_with_all_dirs(helix).await;
-        let (signed_sid, signed_csrf, _bare) = helpers::insert_session(&state, user_id, "admin");
+        let (signed_sid, signed_csrf, _bare) = match kind {
+            SessionKind::Mod => helpers::insert_session(&state, user_id, "admin"),
+            SessionKind::Owner => {
+                helpers::set_owner(&state, Some(user_id));
+                helpers::insert_session_as(
+                    &state,
+                    user_id,
+                    "owner",
+                    twitch_1337_web::auth::Role::Owner,
+                )
+            }
+        };
 
         // Serve on an ephemeral loopback port.
         let listener = bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))

@@ -161,3 +161,28 @@ async fn schedules_create_toggle_delete() {
 
     s.close().await;
 }
+
+/// Change a numeric setting, save (full form POST), reload, assert persisted.
+#[tokio::test]
+async fn settings_save_cooldown() {
+    let s = E2eSession::start_as_owner().await;
+    s.goto("/settings").await;
+    s.wait_for("input[name=\"cooldown_ai\"]").await;
+
+    // Pick a value inside [1, 3600] unlikely to be the default.
+    s.fill("input[name=\"cooldown_ai\"]", "47").await;
+    s.click("button[type=\"submit\"].btn.primary[form=\"settings-form\"]")
+        .await;
+
+    // Reload settings and confirm the saved value renders back.
+    s.goto("/settings").await;
+    let el = s.wait_for("input[name=\"cooldown_ai\"]").await;
+    let val = el
+        .prop("value")
+        .await
+        .unwrap_or_default()
+        .unwrap_or_default();
+    assert_eq!(val, "47", "cooldown_ai did not persist");
+
+    s.close().await;
+}
