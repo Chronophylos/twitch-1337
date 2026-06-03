@@ -3,7 +3,7 @@ use std::path::Path;
 use tokio::fs;
 use tracing::{info, warn};
 
-use super::{FlightIdentifier, FlightTrackerState, HexSource};
+use super::{FlightIdentifier, FlightTrackerState, HexSource, TargetConfirmation};
 
 const FLIGHTS_FILENAME: &str = "flights.ron";
 
@@ -23,15 +23,37 @@ pub(crate) fn clear_pending_callsign_hexes(state: &mut FlightTrackerState) -> us
     cleared
 }
 
+fn migrate_target_confirmations(state: &mut FlightTrackerState) -> usize {
+    let mut migrated = 0;
+    for flight in &mut state.flights {
+        if flight.target_confirmation == TargetConfirmation::Pending && flight.last_seen.is_some() {
+            flight.target_confirmation = match flight.identifier {
+                FlightIdentifier::Hex(_) => TargetConfirmation::InferredByAssignedHex,
+                FlightIdentifier::Callsign(_) => TargetConfirmation::ConfirmedByCallsign,
+            };
+            migrated += 1;
+        }
+        if flight.target_confirmation == TargetConfirmation::AircraftVisible
+            && flight.last_seen.is_some()
+        {
+            flight.last_seen = None;
+            migrated += 1;
+        }
+    }
+    migrated
+}
+
 pub(crate) async fn load_tracker_state(data_dir: &Path) -> FlightTrackerState {
     let path = data_dir.join(FLIGHTS_FILENAME);
     match fs::read_to_string(&path).await {
         Ok(contents) => match ron::from_str::<FlightTrackerState>(&contents) {
             Ok(mut state) => {
                 let cleared_pending_hexes = clear_pending_callsign_hexes(&mut state);
+                let migrated_target_confirmations = migrate_target_confirmations(&mut state);
                 info!(
                     flights = state.flights.len(),
                     cleared_pending_hexes,
+                    migrated_target_confirmations,
                     "Loaded flight tracker state from {}",
                     path.display()
                 );

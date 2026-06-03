@@ -181,6 +181,66 @@ async fn track_command_enriches_flight_from_aviationstack_once() {
 }
 
 #[tokio::test]
+async fn track_command_by_hex_promotes_observed_callsign_and_route() {
+    let bot = TestBotBuilder::new().spawn().await;
+
+    Mock::given(method("GET"))
+        .and(path("/hex/3C6589"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ac": [{
+                "hex": "3C6589",
+                "flight": "DLH1234",
+                "alt_baro": 35000,
+                "gs": 450.0,
+                "baro_rate": 0,
+                "lat": 50.0,
+                "lon": 8.5,
+                "squawk": "1000"
+            }],
+            "ctime": 0,
+            "now": 0,
+            "total": 1
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/callsign/DLH1234"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "response": {
+                "flightroute": {
+                    "origin": { "iata_code": "FRA" },
+                    "destination": { "iata_code": "MUC" }
+                }
+            }
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    let mut bot = bot;
+    bot.send("alice", "!track 3C6589").await;
+    let ack = bot.expect_say(Duration::from_secs(5)).await;
+    assert!(ack.contains("DLH1234"), "got: {ack}");
+    assert!(ack.contains("FRA") && ack.contains("MUC"), "got: {ack}");
+
+    let state_path = bot.data_dir.path().join("flights.ron");
+    let persisted = tokio::fs::read_to_string(state_path).await.unwrap();
+    let state: twitch_1337::aviation::tracker::FlightTrackerState =
+        ron::from_str(&persisted).unwrap();
+    let flight = state.flights.first().expect("persisted flight");
+    assert_eq!(flight.callsign.as_deref(), Some("DLH1234"));
+    assert_eq!(flight.route, Some(("FRA".to_string(), "MUC".to_string())));
+    assert_eq!(flight.hex.as_deref(), Some("3C6589"));
+    assert_eq!(flight.hex_source, Some(HexSource::UserInput));
+    assert_eq!(
+        flight.target_confirmation,
+        TargetConfirmation::InferredByAssignedHex
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
 async fn aviationstack_resolved_future_flight_strict_chills_without_adsb_lookup() {
     let bot = TestBotBuilder::new()
         .with_config(enable_aviationstack)
@@ -315,7 +375,7 @@ async fn aviationstack_mismatched_adsb_callsign_observes_aircraft_without_confir
     let state: twitch_1337::aviation::tracker::FlightTrackerState =
         ron::from_str(&persisted).unwrap();
     let flight = state.flights.first().expect("persisted flight");
-    assert!(flight.last_seen.is_some());
+    assert_eq!(flight.last_seen, None);
     assert_eq!(
         flight.target_confirmation,
         TargetConfirmation::AircraftVisible
@@ -419,7 +479,7 @@ async fn confirmed_aviationstack_hex_with_later_mismatched_callsign_suppresses_t
     let flight = state.flights.first().expect("persisted flight");
     assert_eq!(
         flight.target_confirmation,
-        TargetConfirmation::AircraftVisible
+        TargetConfirmation::ConfirmedByCallsign
     );
     assert_eq!(flight.observed_callsign.as_deref(), Some("DLH9999"));
     assert_eq!(flight.callsign.as_deref(), Some("DLH1929"));
@@ -498,6 +558,82 @@ async fn aviationstack_hex_without_adsb_callsign_is_inferred_in_departure_window
     );
     assert_eq!(flight.observed_callsign, None);
     assert_eq!(flight.hex_source, Some(HexSource::Adsb));
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn aviationstack_hex_without_adsb_callsign_is_not_inferred_after_window() {
+    let bot = TestBotBuilder::new()
+        .with_config(enable_aviationstack)
+        .with_settings(set_aviationstack_enabled)
+        .spawn()
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/flights"))
+        .and(query_param("access_key", "test-key"))
+        .and(query_param("flight_icao", "DLH1929"))
+        .and(query_param("limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{
+                "flight": { "iata": "LH1929", "icao": "DLH1929", "number": "1929" },
+                "airline": { "iata": "LH", "icao": "DLH", "name": "Lufthansa" },
+                "departure": {
+                    "iata": "BER",
+                    "icao": "EDDB",
+                    "scheduled": "2026-04-18T07:30:00+00:00",
+                    "actual": null,
+                    "actual_runway": null
+                },
+                "arrival": {
+                    "iata": "MUC",
+                    "icao": "EDDM",
+                    "estimated": "2026-04-18T08:40:00+00:00",
+                    "actual": null
+                },
+                "aircraft": { "icao24": "3c6497", "icao": "A320" }
+            }]
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/hex/3C6497"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ac": [{
+                "hex": "3C6497",
+                "alt_baro": 12000,
+                "gs": 280.0,
+                "baro_rate": 0,
+                "lat": 52.3,
+                "lon": 13.4,
+                "squawk": "1000"
+            }],
+            "ctime": 0,
+            "now": 0,
+            "total": 1
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    let mut bot = bot;
+    bot.send("alice", "!track DLH1929").await;
+    let ack = bot.expect_say(Duration::from_secs(5)).await;
+    assert!(ack.contains("DLH1929"), "got: {ack}");
+
+    let state_path = bot.data_dir.path().join("flights.ron");
+    let persisted = tokio::fs::read_to_string(state_path).await.unwrap();
+    let state: twitch_1337::aviation::tracker::FlightTrackerState =
+        ron::from_str(&persisted).unwrap();
+    let flight = state.flights.first().expect("persisted flight");
+    assert_eq!(
+        flight.target_confirmation,
+        TargetConfirmation::AircraftVisible
+    );
+    assert_eq!(flight.observed_callsign, None);
+    assert_eq!(flight.last_seen, None);
+    assert_eq!(flight.hex_source, Some(HexSource::AviationStack));
 
     bot.shutdown().await;
 }

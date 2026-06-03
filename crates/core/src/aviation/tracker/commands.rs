@@ -5,7 +5,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use tracing::{debug, error, info, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
-use crate::aviation::{AviationClient, NearbyAircraft, iata_to_coords};
+use crate::aviation::{AviationClient, NearbyAircraft};
 use crate::twitch::ChatSender;
 use crate::util::clock::Clock;
 
@@ -18,8 +18,8 @@ use super::{
         msg_squawk_emergency, msg_takeoff, msg_track_started, msg_tracking_lost,
     },
     metadata::{
-        apply_aviationstack_metadata, fetch_aviationstack_metadata_for_tracking, normalize_icao24,
-        set_route_from_iata,
+        apply_aviationstack_metadata, fetch_aviationstack_metadata_for_tracking,
+        set_hex_if_consistent, set_route_from_iata,
     },
     phase::{
         altitude_ft, detect_phase, emergency_squawk_meaning, is_airborne_phase,
@@ -94,6 +94,25 @@ fn inferred_by_hex_window(flight: &TrackedFlight, now: DateTime<Utc>) -> bool {
         return false;
     };
     now >= scheduled_departure_at - TimeDelta::minutes(30)
+        && now <= scheduled_departure_at + TimeDelta::hours(3)
+}
+
+fn tracking_lost_threshold_delta() -> TimeDelta {
+    TimeDelta::from_std(TRACKING_LOST_THRESHOLD).unwrap_or_else(|_| TimeDelta::zero())
+}
+
+fn should_keep_prior_confirmation(
+    flight: &TrackedFlight,
+    confirmation: TargetConfirmation,
+    used_hex: bool,
+    now: DateTime<Utc>,
+) -> bool {
+    used_hex
+        && flight.target_confirmation.is_target_confirmed()
+        && confirmation == TargetConfirmation::AircraftVisible
+        && flight.last_seen.is_some_and(|last_seen| {
+            now.signed_duration_since(last_seen) <= tracking_lost_threshold_delta()
+        })
 }
 
 fn target_confirmation_for_aircraft(
@@ -287,13 +306,12 @@ async fn handle_track<T, L>(
 
     if let Some(resolved) = &resolved_callsign
         && !resolved.eq_ignore_ascii_case(identifier.as_str())
+        && duplicate_tracking_exists(state, &identifier, Some(resolved), None)
     {
-        if duplicate_tracking_exists(state, &identifier, Some(resolved), None) {
-            sender
-                .reply(reply_to, format!("{identifier} wird schon getrackt FDM"))
-                .await;
-            return;
-        }
+        sender
+            .reply(reply_to, format!("{identifier} wird schon getrackt FDM"))
+            .await;
+        return;
     }
 
     let mut aviationstack_checked = false;
@@ -453,28 +471,19 @@ async fn handle_track<T, L>(
                         return;
                     };
 
+                    let target_confirmed = confirmation.is_target_confirmed();
                     flight.target_confirmation = confirmation;
                     flight.observed_callsign =
                         aircraft_callsign(&ac).map(std::string::ToString::to_string);
-                    if confirmation == TargetConfirmation::ConfirmedByCallsign
+                    if (confirmation == TargetConfirmation::ConfirmedByCallsign
+                        || matches!(&flight.identifier, FlightIdentifier::Hex(_)))
                         && flight.callsign.is_none()
+                        && flight.observed_callsign.is_some()
                     {
                         flight.callsign.clone_from(&flight.observed_callsign);
                     }
-                    if let Some(hex) = ac.hex.as_deref().and_then(normalize_icao24)
-                        && (flight.hex.is_none()
-                            || flight
-                                .hex
-                                .as_deref()
-                                .is_some_and(|current| current.eq_ignore_ascii_case(&hex)))
-                    {
-                        flight.hex = Some(hex);
-                        if flight.hex_source.is_none()
-                            || confirmation.is_target_confirmed()
-                                && flight.hex_source == Some(HexSource::AviationStack)
-                        {
-                            flight.hex_source = Some(HexSource::Adsb);
-                        }
+                    if let Some(hex) = ac.hex.as_deref() {
+                        set_hex_if_consistent(&mut flight, hex, HexSource::Adsb, target_confirmed);
                     }
                     flight.aircraft_type = ac.t.clone();
                     flight.altitude_ft = altitude_ft(&ac);
@@ -483,8 +492,10 @@ async fn handle_track<T, L>(
                     flight.lat = ac.lat;
                     flight.lon = ac.lon;
                     flight.squawk = ac.squawk.clone();
-                    flight.last_seen = Some(now);
-                    flight.phase = detect_phase(&flight, &ac);
+                    if target_confirmed {
+                        flight.last_seen = Some(now);
+                        flight.phase = detect_phase(&flight, &ac);
+                    }
                 }
                 Ok(Ok(None)) => {
                     if !keep_pending_on_adsb_absence {
@@ -518,6 +529,34 @@ async fn handle_track<T, L>(
                 }
             }
         }
+    }
+
+    if aviation_client.aviationstack_enabled()
+        && !flight.aviationstack_checked
+        && flight.callsign.is_some()
+    {
+        flight.aviationstack_checked = true;
+        if let Some(metadata) = fetch_aviationstack_metadata_for_tracking(
+            aviation_client,
+            &identifier,
+            flight.callsign.as_deref(),
+        )
+        .await
+        {
+            apply_aviationstack_metadata(&mut flight, metadata);
+        }
+    }
+
+    if duplicate_tracking_exists(
+        state,
+        &identifier,
+        flight.callsign.as_deref(),
+        flight.hex.as_deref(),
+    ) {
+        sender
+            .reply(reply_to, format!("{identifier} wird schon getrackt FDM"))
+            .await;
+        return;
     }
 
     let route_callsign = flight.callsign.clone();
@@ -738,7 +777,7 @@ pub(crate) async fn poll_all_flights<T, L>(
             }
         };
 
-        let Some(mut confirmation) = target_confirmation_for_aircraft(flight, &ac, used_hex, now)
+        let Some(raw_confirmation) = target_confirmation_for_aircraft(flight, &ac, used_hex, now)
         else {
             debug!(
                 identifier = %flight.identifier,
@@ -748,20 +787,46 @@ pub(crate) async fn poll_all_flights<T, L>(
             continue;
         };
 
-        if was_target_confirmed
-            && confirmation == TargetConfirmation::AircraftVisible
-            && aircraft_callsign(&ac).is_none()
-        {
-            confirmation = flight.target_confirmation;
+        let direct_target_confirmed = raw_confirmation.is_target_confirmed();
+        let sticky_confirmation =
+            should_keep_prior_confirmation(flight, raw_confirmation, used_hex, now);
+        let confirmation = if sticky_confirmation {
+            flight.target_confirmation
+        } else {
+            raw_confirmation
+        };
+        let phase_sample_confirmed =
+            direct_target_confirmed || (sticky_confirmation && aircraft_callsign(&ac).is_none());
+        let became_target_confirmed = !was_target_confirmed && direct_target_confirmed;
+
+        if !direct_target_confirmed && let Some(last_seen) = flight.last_seen {
+            let lost_duration = now.signed_duration_since(last_seen);
+            if lost_duration >= removal_threshold {
+                info!(
+                    identifier = %flight.identifier,
+                    "Removing flight: tracking lost for {}s",
+                    lost_duration.num_seconds()
+                );
+                messages.push(msg_tracking_lost(flight));
+                removals.push(idx);
+                continue;
+            } else if lost_duration >= lost_threshold {
+                debug!(
+                    identifier = %flight.identifier,
+                    last_seen_secs_ago = lost_duration.num_seconds(),
+                    "Flight not confirmed via ADS-B"
+                );
+            }
         }
 
-        let became_target_confirmed = !was_target_confirmed && confirmation.is_target_confirmed();
-
-        flight.last_seen = Some(now);
+        if direct_target_confirmed {
+            flight.last_seen = Some(now);
+        }
         flight.target_confirmation = confirmation;
         flight.observed_callsign = aircraft_callsign(&ac).map(std::string::ToString::to_string);
 
-        if confirmation == TargetConfirmation::ConfirmedByCallsign
+        if (confirmation == TargetConfirmation::ConfirmedByCallsign
+            || matches!(&flight.identifier, FlightIdentifier::Hex(_)))
             && flight.callsign.is_none()
             && let Some(cs) = flight.observed_callsign.clone()
         {
@@ -776,27 +841,13 @@ pub(crate) async fn poll_all_flights<T, L>(
             {
                 let origin = route.origin.iata_code.clone();
                 let dest = route.destination.iata_code.clone();
-                if let Some((lat, lon, _)) = iata_to_coords(&dest) {
-                    flight.dest_lat = Some(lat);
-                    flight.dest_lon = Some(lon);
-                }
-                flight.route = Some((origin, dest));
+                set_route_from_iata(flight, &origin, &dest);
             }
         }
-        if (flight.hex.is_none()
-            || was_pending
-            || confirmation.is_target_confirmed()
-                && flight.hex_source == Some(HexSource::AviationStack))
-            && let Some(hex) = ac.hex.as_deref().and_then(normalize_icao24)
+        if let Some(hex) = ac.hex.as_deref()
+            && set_hex_if_consistent(flight, hex, HexSource::Adsb, direct_target_confirmed)
         {
             debug!(identifier = %flight.identifier, hex = %hex, "Resolved hex");
-            flight.hex = Some(hex);
-            if flight.hex_source.is_none()
-                || confirmation.is_target_confirmed()
-                    && flight.hex_source == Some(HexSource::AviationStack)
-            {
-                flight.hex_source = Some(HexSource::Adsb);
-            }
         }
         if flight.aircraft_type.is_none()
             && let Some(t) = &ac.t
@@ -806,7 +857,7 @@ pub(crate) async fn poll_all_flights<T, L>(
 
         if let Some(new_squawk) = &ac.squawk {
             let squawk_changed = flight.squawk.as_ref() != Some(new_squawk);
-            if confirmation.is_target_confirmed()
+            if phase_sample_confirmed
                 && squawk_changed
                 && let Some(meaning) = emergency_squawk_meaning(new_squawk)
             {
@@ -826,25 +877,30 @@ pub(crate) async fn poll_all_flights<T, L>(
 
         if became_target_confirmed {
             messages.push(msg_adsb_visible(flight));
+            if was_pending {
+                flight.phase = FlightPhase::Unknown;
+                flight.last_phase_change = None;
+                flight.polls_since_change = 0;
+            }
         }
 
-        let new_phase = detect_phase(flight, &ac);
-        let old_phase = flight.phase;
+        if phase_sample_confirmed {
+            let new_phase = detect_phase(flight, &ac);
+            let old_phase = flight.phase;
 
-        if new_phase != old_phase {
-            flight.phase = new_phase;
-            flight.last_phase_change = Some(now);
-            flight.polls_since_change = 0;
-            changed = true;
+            if new_phase != old_phase {
+                flight.phase = new_phase;
+                flight.last_phase_change = Some(now);
+                flight.polls_since_change = 0;
+                changed = true;
 
-            if old_phase == FlightPhase::Ground
-                && is_airborne_phase(new_phase)
-                && flight.takeoff_at.is_none()
-            {
-                flight.takeoff_at = Some(now);
-            }
+                if old_phase == FlightPhase::Ground
+                    && is_airborne_phase(new_phase)
+                    && flight.takeoff_at.is_none()
+                {
+                    flight.takeoff_at = Some(now);
+                }
 
-            if was_target_confirmed && confirmation.is_target_confirmed() {
                 match new_phase {
                     FlightPhase::Takeoff => messages.push(msg_takeoff(flight)),
                     FlightPhase::Cruise => messages.push(msg_cruise(flight)),
@@ -853,17 +909,17 @@ pub(crate) async fn poll_all_flights<T, L>(
                     FlightPhase::Landing => messages.push(msg_landing(flight, now)),
                     _ => {}
                 }
-            }
 
-            if new_phase == FlightPhase::Landing {
-                flight.phase = FlightPhase::Ground;
-                flight.takeoff_at = None;
+                if new_phase == FlightPhase::Landing {
+                    flight.phase = FlightPhase::Ground;
+                    flight.takeoff_at = None;
+                }
+            } else {
+                flight.polls_since_change += 1;
             }
-        } else {
-            flight.polls_since_change += 1;
         }
 
-        if confirmation.is_target_confirmed()
+        if phase_sample_confirmed
             && matches!(flight.phase, FlightPhase::Descent | FlightPhase::Approach)
         {
             if let (

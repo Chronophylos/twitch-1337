@@ -503,6 +503,32 @@ mod tests {
     }
 
     #[test]
+    fn aviationstack_metadata_keeps_existing_resolved_callsign() {
+        let mut flight = tracked_flight();
+        flight.callsign = Some("EZY123".to_string());
+        let mut m = metadata();
+        m.flight_iata = Some("U2123".to_string());
+        m.flight_icao = Some("EJU123".to_string());
+
+        apply_aviationstack_metadata(&mut flight, m);
+
+        assert_eq!(flight.callsign.as_deref(), Some("EZY123"));
+    }
+
+    #[test]
+    fn aviationstack_metadata_can_upgrade_iata_callsign_to_icao() {
+        let mut flight = tracked_flight();
+        flight.callsign = Some("LH1929".to_string());
+        let mut m = metadata();
+        m.flight_iata = Some("LH1929".to_string());
+        m.flight_icao = Some("DLH1929".to_string());
+
+        apply_aviationstack_metadata(&mut flight, m);
+
+        assert_eq!(flight.callsign.as_deref(), Some("DLH1929"));
+    }
+
+    #[test]
     fn pending_poll_schedule_uses_sparse_interval_far_before_departure() {
         let mut flight = tracked_flight();
         flight.scheduled_departure_at = Some(dt("2026-04-18T12:00:00Z"));
