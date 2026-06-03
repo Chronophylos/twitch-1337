@@ -3,18 +3,20 @@ use std::path::Path;
 use tokio::fs;
 use tracing::{info, warn};
 
-use super::{FlightIdentifier, FlightTrackerState};
+use super::{FlightIdentifier, FlightTrackerState, HexSource};
 
 const FLIGHTS_FILENAME: &str = "flights.ron";
 
 pub(crate) fn clear_pending_callsign_hexes(state: &mut FlightTrackerState) -> usize {
     let mut cleared = 0;
     for flight in &mut state.flights {
-        if matches!(flight.identifier, FlightIdentifier::Callsign(_))
+        if matches!(&flight.identifier, FlightIdentifier::Callsign(_))
             && flight.last_seen.is_none()
             && flight.hex.is_some()
+            && flight.hex_source != Some(HexSource::AviationStack)
         {
             flight.hex = None;
+            flight.hex_source = None;
             cleared += 1;
         }
     }
