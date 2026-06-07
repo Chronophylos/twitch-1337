@@ -799,26 +799,6 @@ pub(crate) async fn poll_all_flights<T, L>(
             direct_target_confirmed || (sticky_confirmation && aircraft_callsign(&ac).is_none());
         let became_target_confirmed = !was_target_confirmed && direct_target_confirmed;
 
-        if !direct_target_confirmed && let Some(last_seen) = flight.last_seen {
-            let lost_duration = now.signed_duration_since(last_seen);
-            if lost_duration >= removal_threshold {
-                info!(
-                    identifier = %flight.identifier,
-                    "Removing flight: tracking lost for {}s",
-                    lost_duration.num_seconds()
-                );
-                messages.push(msg_tracking_lost(flight));
-                removals.push(idx);
-                continue;
-            } else if lost_duration >= lost_threshold {
-                debug!(
-                    identifier = %flight.identifier,
-                    last_seen_secs_ago = lost_duration.num_seconds(),
-                    "Flight not confirmed via ADS-B"
-                );
-            }
-        }
-
         if direct_target_confirmed {
             flight.last_seen = Some(now);
         }

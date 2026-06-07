@@ -473,7 +473,7 @@ async fn confirmed_aviationstack_hex_with_later_mismatched_callsign_suppresses_t
     bot.expect_silent(Duration::from_millis(300)).await;
 
     let state_path = bot.data_dir.path().join("flights.ron");
-    let persisted = tokio::fs::read_to_string(state_path).await.unwrap();
+    let persisted = tokio::fs::read_to_string(&state_path).await.unwrap();
     let state: twitch_1337::aviation::tracker::FlightTrackerState =
         ron::from_str(&persisted).unwrap();
     let flight = state.flights.first().expect("persisted flight");
@@ -484,6 +484,23 @@ async fn confirmed_aviationstack_hex_with_later_mismatched_callsign_suppresses_t
     assert_eq!(flight.observed_callsign.as_deref(), Some("DLH9999"));
     assert_eq!(flight.callsign.as_deref(), Some("DLH1929"));
     assert_eq!(flight.hex_source, Some(HexSource::Adsb));
+
+    bot.clock.advance(ChronoDuration::minutes(31));
+    bot.expect_silent(Duration::from_millis(300)).await;
+
+    let persisted = tokio::fs::read_to_string(&state_path).await.unwrap();
+    let state: twitch_1337::aviation::tracker::FlightTrackerState =
+        ron::from_str(&persisted).unwrap();
+    let flight = state
+        .flights
+        .first()
+        .expect("visible assigned hex should remain tracked");
+    assert_eq!(flight.observed_callsign.as_deref(), Some("DLH9999"));
+    assert_eq!(flight.callsign.as_deref(), Some("DLH1929"));
+    assert_eq!(
+        flight.target_confirmation,
+        TargetConfirmation::AircraftVisible
+    );
 
     bot.shutdown().await;
 }
