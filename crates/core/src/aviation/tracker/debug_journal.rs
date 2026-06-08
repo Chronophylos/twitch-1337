@@ -11,6 +11,9 @@ use crate::aviation::{AviationstackFlightMetadata, NearbyAircraft};
 
 use super::{FlightIdentifier, TrackedFlight};
 
+/// Daily journal files retained on disk; older ones are pruned. ~one month.
+pub(crate) const DEBUG_JOURNAL_KEEP_FILES: usize = 30;
+
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct DebugHttpOutcome {
     pub provider: String,
@@ -295,6 +298,49 @@ pub(crate) fn debug_journal_path(data_dir: &Path, now: DateTime<Utc>) -> PathBuf
         .join(format!("{}.jsonl", now.format("%Y-%m-%d")))
 }
 
+/// Delete all but the newest `keep` daily journal files (best-effort).
+///
+/// File names are `YYYY-MM-DD.jsonl`, so a lexicographic sort is chronological.
+/// Errors are logged and swallowed, matching [`append_debug_event`].
+pub(crate) async fn prune_debug_journals(data_dir: &Path, keep: usize) {
+    let dir = data_dir.join("flight-tracker-debug");
+    let mut read_dir = match tokio::fs::read_dir(&dir).await {
+        Ok(read_dir) => read_dir,
+        // A missing directory just means nothing has been written yet.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            warn!(error = ?error, path = %dir.display(), "Failed to read flight tracker debug journal directory");
+            return;
+        }
+    };
+    let mut files: Vec<PathBuf> = Vec::new();
+    loop {
+        match read_dir.next_entry().await {
+            Ok(Some(entry)) => {
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "jsonl") {
+                    files.push(path);
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                warn!(error = ?error, path = %dir.display(), "Failed to enumerate flight tracker debug journals");
+                return;
+            }
+        }
+    }
+    if files.len() <= keep {
+        return;
+    }
+    files.sort();
+    let remove_count = files.len() - keep;
+    for path in files.into_iter().take(remove_count) {
+        if let Err(error) = tokio::fs::remove_file(&path).await {
+            warn!(error = ?error, path = %path.display(), "Failed to prune flight tracker debug journal");
+        }
+    }
+}
+
 pub(crate) async fn append_debug_event<E>(data_dir: &Path, now: DateTime<Utc>, event: E)
 where
     E: Borrow<FlightTrackerDebugEvent>,
@@ -451,6 +497,38 @@ mod tests {
     use super::{FlightTrackerDebugEvent, append_debug_event};
     use crate::aviation::tracker::test_support::dt;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn prune_debug_journals_keeps_newest_n_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("flight-tracker-debug");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        for date in [
+            "2026-01-01",
+            "2026-01-02",
+            "2026-01-03",
+            "2026-01-04",
+            "2026-01-05",
+        ] {
+            tokio::fs::write(dir.join(format!("{date}.jsonl")), b"{}\n")
+                .await
+                .unwrap();
+        }
+        // A non-journal file must be left untouched.
+        tokio::fs::write(dir.join("notes.txt"), b"keep me")
+            .await
+            .unwrap();
+
+        super::prune_debug_journals(temp.path(), 2).await;
+
+        let mut names = Vec::new();
+        let mut entries = tokio::fs::read_dir(&dir).await.unwrap();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        names.sort();
+        assert_eq!(names, ["2026-01-04.jsonl", "2026-01-05.jsonl", "notes.txt"]);
+    }
 
     #[tokio::test]
     async fn append_debug_event_writes_jsonl_partitioned_by_date() {
