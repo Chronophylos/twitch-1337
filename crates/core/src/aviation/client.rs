@@ -925,6 +925,7 @@ mod tests {
 
     #[tokio::test]
     async fn adsbdb_route_4xx_is_quiet_miss() {
+        crate::install_crypto_provider();
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/callsign/DLH1234"))
