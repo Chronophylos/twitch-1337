@@ -14,17 +14,25 @@ use tracing::warn;
 
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 const CACHE_TTL: Duration = Duration::from_secs(300);
+/// After a failed fetch with no stale catalog, suppress retries for this long.
+const FAILURE_BACKOFF: Duration = Duration::from_secs(60);
 
 struct CachedCatalog {
     fetched_at: Instant,
     by_id: HashMap<String, String>,
 }
 
+struct CatalogCache {
+    entry: Option<CachedCatalog>,
+    /// Suppresses refetch attempts until this instant after a failed refresh.
+    fetch_failed_until: Option<Instant>,
+}
+
 /// Shared OpenRouter model catalog with TTL caching.
 pub struct ModelCatalog {
     http: Client,
     models_url: String,
-    cache: Mutex<Option<CachedCatalog>>,
+    cache: Mutex<CatalogCache>,
 }
 
 impl ModelCatalog {
@@ -32,7 +40,10 @@ impl ModelCatalog {
         Self {
             http,
             models_url: OPENROUTER_MODELS_URL.into(),
-            cache: Mutex::new(None),
+            cache: Mutex::new(CatalogCache {
+                entry: None,
+                fetch_failed_until: None,
+            }),
         }
     }
 
@@ -41,7 +52,10 @@ impl ModelCatalog {
         Self {
             http,
             models_url,
-            cache: Mutex::new(None),
+            cache: Mutex::new(CatalogCache {
+                entry: None,
+                fetch_failed_until: None,
+            }),
         }
     }
 
@@ -72,10 +86,7 @@ impl ModelCatalog {
                 .get(model_id)
                 .map(|name| Self::normalize_name(name))
                 .unwrap_or_else(|| model_id.to_owned()),
-            Err(e) => {
-                warn!(error = ?e, model_id, "OpenRouter catalog fetch failed");
-                model_id.to_owned()
-            }
+            Err(_) => model_id.to_owned(),
         }
     }
 
@@ -91,25 +102,63 @@ impl ModelCatalog {
     }
 
     async fn load_openrouter_catalog(&self) -> Result<HashMap<String, String>> {
-        if let Some(map) = self.cached_catalog() {
+        if let Some(map) = self.fresh_catalog() {
             return Ok(map);
         }
-        let map = self.fetch_openrouter_catalog().await?;
-        let mut guard = self.cache.lock().expect("model catalog cache poisoned");
-        *guard = Some(CachedCatalog {
-            fetched_at: Instant::now(),
-            by_id: map.clone(),
-        });
-        Ok(map)
+
+        if self.in_fetch_backoff() {
+            if let Some(map) = self.stale_catalog() {
+                return Ok(map);
+            }
+            return Err(eyre::eyre!("openrouter catalog fetch backed off"));
+        }
+
+        match self.fetch_openrouter_catalog().await {
+            Ok(map) => {
+                let mut guard = self.cache.lock().expect("model catalog cache poisoned");
+                guard.fetch_failed_until = None;
+                guard.entry = Some(CachedCatalog {
+                    fetched_at: Instant::now(),
+                    by_id: map.clone(),
+                });
+                Ok(map)
+            }
+            Err(e) => {
+                let mut guard = self.cache.lock().expect("model catalog cache poisoned");
+                guard.fetch_failed_until = Some(Instant::now() + FAILURE_BACKOFF);
+                if let Some(stale) = guard.entry.as_ref() {
+                    warn!(
+                        error = ?e,
+                        stale_age_secs = stale.fetched_at.elapsed().as_secs(),
+                        "OpenRouter catalog refresh failed; using stale cache"
+                    );
+                    return Ok(stale.by_id.clone());
+                }
+                warn!(error = ?e, "OpenRouter catalog fetch failed");
+                Err(e)
+            }
+        }
     }
 
-    fn cached_catalog(&self) -> Option<HashMap<String, String>> {
+    fn fresh_catalog(&self) -> Option<HashMap<String, String>> {
         let guard = self.cache.lock().expect("model catalog cache poisoned");
-        let entry = guard.as_ref()?;
+        let entry = guard.entry.as_ref()?;
         if entry.fetched_at.elapsed() > CACHE_TTL {
             return None;
         }
         Some(entry.by_id.clone())
+    }
+
+    fn stale_catalog(&self) -> Option<HashMap<String, String>> {
+        let guard = self.cache.lock().expect("model catalog cache poisoned");
+        guard.entry.as_ref().map(|entry| entry.by_id.clone())
+    }
+
+    fn in_fetch_backoff(&self) -> bool {
+        let guard = self.cache.lock().expect("model catalog cache poisoned");
+        guard
+            .fetch_failed_until
+            .is_some_and(|until| Instant::now() < until)
     }
 
     async fn fetch_openrouter_catalog(&self) -> Result<HashMap<String, String>> {
@@ -125,6 +174,19 @@ impl ModelCatalog {
             .await
             .wrap_err("openrouter models response is not JSON")?;
         parse_openrouter_models(&resp)
+    }
+
+    #[cfg(test)]
+    fn test_expire_cache(&self) {
+        let mut guard = self.cache.lock().expect("model catalog cache poisoned");
+        if let Some(entry) = guard.entry.as_mut() {
+            entry.fetched_at = Instant::now() - CACHE_TTL - Duration::from_secs(1);
+        }
+    }
+
+    #[cfg(test)]
+    fn test_set_models_url(&mut self, url: String) {
+        self.models_url = url;
     }
 }
 
@@ -242,6 +304,46 @@ mod tests {
             .display_name(&openrouter_conn(), "google/gemma-3-4b-it")
             .await;
         assert_eq!(name, "google/gemma-3-4b-it");
+    }
+
+    #[tokio::test]
+    async fn display_name_fetch_failure_is_not_retried_during_backoff() {
+        let catalog = test_catalog("http://127.0.0.1:1/unreachable".into());
+        let conn = openrouter_conn();
+
+        let first = catalog.display_name(&conn, "google/gemma-3-4b-it").await;
+        assert_eq!(first, "google/gemma-3-4b-it");
+
+        // Second call within the backoff window must not hit the network again.
+        let second = catalog.display_name(&conn, "google/gemma-3-4b-it").await;
+        assert_eq!(second, "google/gemma-3-4b-it");
+        assert!(catalog.in_fetch_backoff());
+    }
+
+    #[tokio::test]
+    async fn display_name_uses_stale_cache_when_refresh_fails() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    {"id": "google/gemma-3-4b-it", "name": "Google: Gemma 3 4B"},
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut catalog = test_catalog(format!("{}/api/v1/models", server.uri()));
+        let conn = openrouter_conn();
+
+        let name = catalog.display_name(&conn, "google/gemma-3-4b-it").await;
+        assert_eq!(name, "Google Gemma 3 4B");
+
+        catalog.test_expire_cache();
+        catalog.test_set_models_url("http://127.0.0.1:1/unreachable".into());
+        let name = catalog.display_name(&conn, "google/gemma-3-4b-it").await;
+        assert_eq!(name, "Google Gemma 3 4B");
     }
 
     #[tokio::test]

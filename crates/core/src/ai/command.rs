@@ -337,6 +337,10 @@ where
 
         debug!(user = %user, instruction = %instruction, "Processing AI command");
 
+        // Record before any outbound I/O so a slow catalog fetch cannot widen
+        // the window between cooldown.check and cooldown.record.
+        self.cooldown.record(user).await;
+
         // Snapshot connection knobs once per turn so dashboard edits take
         // effect on the next invocation without a bot restart.
         let snap = self.settings.load();
@@ -348,8 +352,6 @@ where
         drop(snap);
 
         let model_display = self.model_catalog.display_name(&connection, &model).await;
-
-        self.cooldown.record(user).await;
 
         let mem = &self.memory;
         let cc = self.chat_ctx.as_ref();
