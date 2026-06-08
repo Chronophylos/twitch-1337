@@ -144,11 +144,10 @@ async fn delete(
     );
     let msg = match delete_result {
         TrackerResult::Ok(Some(label)) => format!("Untracked `{label}`."),
-        TrackerResult::Ok(None) if state.tracker_tx.is_none() => {
-            "Aviation tracking disabled.".to_owned()
-        }
         TrackerResult::Ok(None) => format!("`{identifier}` not found."),
-        TrackerResult::Timeout => "Flight tracker busy — try again.".to_owned(),
+        TrackerResult::Timeout => {
+            "Flight tracker busy — refresh to check whether the delete applied.".to_owned()
+        }
         TrackerResult::Unavailable => "Aviation tracking disabled.".to_owned(),
     };
     flash::set(&cookies, &msg);

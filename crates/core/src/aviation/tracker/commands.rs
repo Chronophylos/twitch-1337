@@ -40,6 +40,63 @@ use super::{
     ROUTE_FETCH_TIMEOUT, TRACKING_LOST_REMOVAL, TRACKING_LOST_THRESHOLD,
 };
 
+fn find_index_by_identifier(
+    flights: &[TrackedFlight],
+    identifier: &FlightIdentifier,
+) -> Option<usize> {
+    flights
+        .iter()
+        .position(|flight| &flight.identifier == identifier)
+}
+
+fn callsign_poll_candidates(flight: &TrackedFlight) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut push = |value: &str| {
+        let value = value.trim();
+        if value.is_empty() {
+            return;
+        }
+        let value = value.to_uppercase();
+        if candidates
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&value))
+        {
+            return;
+        }
+        candidates.push(value);
+    };
+
+    if let Some(callsign) = flight.callsign.as_deref() {
+        push(callsign);
+    }
+    if let FlightIdentifier::Callsign(identifier) = &flight.identifier {
+        push(identifier);
+    }
+    for alias in &flight.alias_callsigns {
+        push(alias);
+    }
+    candidates
+}
+
+async fn poll_aircraft_by_callsign_aliases(
+    aviation_client: &AviationClient,
+    candidates: &[String],
+) -> Result<Result<Option<NearbyAircraft>, eyre::Report>, tokio::time::error::Elapsed> {
+    let mut last = Ok(Ok(None));
+    for callsign in candidates {
+        let result = tokio::time::timeout(
+            POLL_TIMEOUT,
+            aviation_client.get_aircraft_by_callsign(callsign),
+        )
+        .await;
+        if matches!(&result, Ok(Ok(Some(_)))) {
+            return result;
+        }
+        last = result;
+    }
+    last
+}
+
 pub(crate) fn find_flight_index(flights: &[TrackedFlight], query: &str) -> Option<usize> {
     let upper = query.to_uppercase();
     flights.iter().position(|f| {
@@ -224,6 +281,45 @@ pub(crate) async fn remove_flight_at(
     Some(label)
 }
 
+async fn process_latency_sensitive_command(
+    cmd: TrackerCommand,
+    state: &mut FlightTrackerState,
+    data_dir: &Path,
+    clock: &dyn Clock,
+) -> Option<TrackerCommand> {
+    match cmd {
+        TrackerCommand::Snapshot { reply } => {
+            let now = clock.now_utc();
+            let _ = reply.send(build_flight_view(state, now));
+            None
+        }
+        TrackerCommand::DeleteFromWeb { identifier, reply } => {
+            let removed = remove_flight_at(state, &identifier, data_dir, "web", clock).await;
+            let _ = reply.send(removed);
+            None
+        }
+        other => Some(other),
+    }
+}
+
+async fn drain_latency_sensitive_commands(
+    cmd_rx: &mut Option<&mut mpsc::Receiver<TrackerCommand>>,
+    state: &mut FlightTrackerState,
+    data_dir: &Path,
+    clock: &dyn Clock,
+    deferred_commands: &mut Vec<TrackerCommand>,
+) {
+    let Some(cmd_rx) = cmd_rx.as_mut() else {
+        return;
+    };
+    while let Ok(cmd) = cmd_rx.try_recv() {
+        if let Some(deferred) = process_latency_sensitive_command(cmd, state, data_dir, clock).await
+        {
+            deferred_commands.push(deferred);
+        }
+    }
+}
+
 pub(crate) async fn process_command<T, L>(
     cmd: TrackerCommand,
     state: &mut FlightTrackerState,
@@ -277,13 +373,8 @@ pub(crate) async fn process_command<T, L>(
         } => {
             handle_status(identifier.as_deref(), &reply_to, state, sender, clock).await;
         }
-        TrackerCommand::Snapshot { reply } => {
-            let now = clock.now_utc();
-            let _ = reply.send(build_flight_view(state, now));
-        }
-        TrackerCommand::DeleteFromWeb { identifier, reply } => {
-            let removed = remove_flight_at(state, &identifier, data_dir, "web", clock).await;
-            let _ = reply.send(removed);
+        cmd @ (TrackerCommand::Snapshot { .. } | TrackerCommand::DeleteFromWeb { .. }) => {
+            let _ = process_latency_sensitive_command(cmd, state, data_dir, clock).await;
         }
     }
 }
@@ -445,7 +536,7 @@ async fn handle_track<T, L>(
             Result<Result<Option<NearbyAircraft>, eyre::Report>, tokio::time::error::Elapsed>;
 
         let mut used_hex = should_poll_by_hex(&flight);
-        let ac_result: Option<PollResult> = if used_hex {
+        let mut ac_result: Option<PollResult> = if used_hex {
             if let Some(hex) = flight.hex.clone() {
                 Some(
                     tokio::time::timeout(POLL_TIMEOUT, aviation_client.get_aircraft_by_hex(&hex))
@@ -456,19 +547,26 @@ async fn handle_track<T, L>(
                 None
             }
         } else {
-            let lookup_callsign = flight.callsign.as_deref().or(resolved_callsign.as_deref());
-            if let Some(callsign) = lookup_callsign {
-                Some(
-                    tokio::time::timeout(
-                        POLL_TIMEOUT,
-                        aviation_client.get_aircraft_by_callsign(callsign),
-                    )
-                    .await,
-                )
-            } else {
+            let candidates = callsign_poll_candidates(&flight);
+            if candidates.is_empty() {
                 None
+            } else {
+                Some(poll_aircraft_by_callsign_aliases(aviation_client, &candidates).await)
             }
         };
+
+        if let Some(ref result) = ac_result
+            && matches!(result, Ok(Ok(None)))
+            && !used_hex
+            && let FlightIdentifier::Callsign(input) = &identifier
+            && FlightIdentifier::is_valid_icao24_hex(input)
+        {
+            used_hex = true;
+            ac_result = Some(
+                tokio::time::timeout(POLL_TIMEOUT, aviation_client.get_aircraft_by_hex(input))
+                    .await,
+            );
+        }
 
         if let Some(ac_result) = ac_result {
             flight.last_adsb_poll_at = Some(now);
@@ -860,7 +958,7 @@ where
         let ac = aviation_client.clone();
         let id = flight.identifier.clone();
         let hex = flight.hex.clone();
-        let callsign = flight.callsign.clone();
+        let callsign_candidates = callsign_poll_candidates(flight);
         let poll_by_hex = should_poll_by_hex(flight);
         join_set.spawn(async move {
             let result: PollAttempt = if poll_by_hex {
@@ -870,16 +968,13 @@ where
                     true,
                     tokio::time::timeout(POLL_TIMEOUT, ac.get_aircraft_by_hex(lookup_hex)).await,
                 )
+            } else if callsign_candidates.is_empty() {
+                (id.clone(), false, Ok(Ok(None)))
             } else {
-                let lookup_callsign = callsign.as_deref().unwrap_or_else(|| id.as_str());
                 (
                     id.clone(),
                     false,
-                    tokio::time::timeout(
-                        POLL_TIMEOUT,
-                        ac.get_aircraft_by_callsign(lookup_callsign),
-                    )
-                    .await,
+                    poll_aircraft_by_callsign_aliases(&ac, &callsign_candidates).await,
                 )
             };
             result
@@ -897,15 +992,18 @@ where
                 }
                 cmd = cmd_rx.recv(), if command_channel_open => {
                     match cmd {
-                        Some(TrackerCommand::Snapshot { reply }) => {
-                            let _ = reply.send(build_flight_view(state, now));
+                        Some(cmd) => {
+                            if let Some(deferred) = process_latency_sensitive_command(
+                                cmd,
+                                state,
+                                data_dir,
+                                clock,
+                            )
+                            .await
+                            {
+                                deferred_commands.push(deferred);
+                            }
                         }
-                        Some(TrackerCommand::DeleteFromWeb { identifier, reply }) => {
-                            let removed =
-                                remove_flight_at(state, &identifier, data_dir, "web", clock).await;
-                            let _ = reply.send(removed);
-                        }
-                        Some(cmd) => deferred_commands.push(cmd),
                         None => {
                             command_channel_open = false;
                         }
@@ -927,11 +1025,16 @@ where
         chrono::TimeDelta::from_std(TRACKING_LOST_THRESHOLD).unwrap_or(chrono::TimeDelta::zero());
 
     for (identifier, used_hex, ac_result) in fetch_results {
-        let Some(idx) = state
-            .flights
-            .iter()
-            .position(|flight| flight.identifier == identifier)
-        else {
+        drain_latency_sensitive_commands(
+            &mut cmd_rx,
+            state,
+            data_dir,
+            clock,
+            &mut deferred_commands,
+        )
+        .await;
+
+        let Some(idx) = find_index_by_identifier(&state.flights, &identifier) else {
             continue;
         };
         let flight = &mut state.flights[idx];
@@ -1331,15 +1434,14 @@ where
     }
 
     for identifier in removals {
-        if let Some(idx) = state
-            .flights
-            .iter()
-            .position(|flight| flight.identifier == identifier)
-        {
+        if let Some(idx) = find_index_by_identifier(&state.flights, &identifier) {
             state.flights.remove(idx);
             changed = true;
         }
     }
+
+    drain_latency_sensitive_commands(&mut cmd_rx, state, data_dir, clock, &mut deferred_commands)
+        .await;
 
     for msg in messages {
         sender.say(channel.to_string(), msg).await;

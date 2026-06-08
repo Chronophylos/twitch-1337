@@ -48,7 +48,12 @@ pub enum FlightIdentifier {
 impl FlightIdentifier {
     /// Parse user input into a FlightIdentifier.
     ///
-    /// 6-character all-hex-digit strings are treated as ICAO24 hex codes.
+    /// IATA flight numbers (`LL####`, 3–6 chars) take precedence over the
+    /// six-character ICAO24 hex rule when both apply (e.g. `AF1234`). Such
+    /// inputs are stored as callsigns; ADS-B may fall back to hex lookup when
+    /// a callsign poll misses and the string is also valid hex.
+    ///
+    /// Remaining 6-character all-hex-digit strings are ICAO24 hex codes.
     /// Everything else is treated as a callsign and must be ASCII alphanumeric
     /// with length 1..=8 (ICAO callsigns are at most 8 chars). Rejects path
     /// separators and other characters that would let user input forge URL
@@ -58,16 +63,20 @@ impl FlightIdentifier {
         if input.is_empty() {
             eyre::bail!("Identifier darf nicht leer sein");
         }
-        if is_iata_flight_number(&input) {
+        if crate::aviation::is_iata_flight_number(&input) {
             return Ok(FlightIdentifier::Callsign(input));
         }
-        if input.len() == 6 && input.chars().all(|c| c.is_ascii_hexdigit()) {
+        if Self::is_valid_icao24_hex(&input) {
             return Ok(FlightIdentifier::Hex(input));
         }
         if input.len() > 8 || !input.chars().all(|c| c.is_ascii_alphanumeric()) {
             eyre::bail!("Ungültiges callsign/hex");
         }
         Ok(FlightIdentifier::Callsign(input))
+    }
+
+    pub(crate) fn is_valid_icao24_hex(value: &str) -> bool {
+        value.len() == 6 && value.chars().all(|c| c.is_ascii_hexdigit())
     }
 
     /// Returns the display string (the callsign or hex value).
@@ -84,15 +93,6 @@ impl FlightIdentifier {
             FlightIdentifier::Hex(s) => hex.is_some_and(|h| h.eq_ignore_ascii_case(s)),
         }
     }
-}
-
-fn is_iata_flight_number(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() >= 3
-        && bytes.len() <= 6
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1].is_ascii_alphabetic()
-        && bytes[2..].iter().all(u8::is_ascii_digit)
 }
 
 impl std::fmt::Display for FlightIdentifier {
@@ -765,6 +765,13 @@ mod tests {
 
         let id = FlightIdentifier::parse("BA1234").unwrap();
         assert_eq!(id, FlightIdentifier::Callsign("BA1234".to_string()));
+    }
+
+    #[test]
+    fn parse_prefers_iata_over_valid_icao24_hex() {
+        let id = FlightIdentifier::parse("AB1234").unwrap();
+        assert_eq!(id, FlightIdentifier::Callsign("AB1234".to_string()));
+        assert!(FlightIdentifier::is_valid_icao24_hex("AB1234"));
     }
 
     #[test]

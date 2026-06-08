@@ -123,7 +123,6 @@ pub(crate) fn apply_aviationstack_metadata(
     metadata: AviationstackFlightMetadata,
 ) {
     let takeoff_at = metadata.takeoff_time();
-    seed_flight_aliases(flight);
 
     if flight.scheduled_departure_at.is_none() {
         flight
