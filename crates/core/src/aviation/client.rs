@@ -473,6 +473,9 @@ impl AviationClient {
                         provider = name,
                         status, "ADS-B aggregator returned client response"
                     );
+                    // Non-403 4xx still feeds the error streak so a backend
+                    // persistently refusing requests eventually parks.
+                    self.record_retryable_error(idx);
                     last_provider_outcome = Some(format!("{name}:client_response:{status}"));
                     last_error = Some(eyre::eyre!("{name} returned {status}"));
                 }
@@ -669,13 +672,24 @@ impl AviationClient {
 
         let status = resp.status();
         if status.is_client_error() {
-            debug!(
-                provider = "aviationstack",
-                endpoint_kind = "flight_metadata",
-                status = status.as_u16(),
-                query_key,
-                "aviationstack returned client response"
-            );
+            let code = status.as_u16();
+            if aviationstack_4xx_is_actionable(code) {
+                warn!(
+                    provider = "aviationstack",
+                    endpoint_kind = "flight_metadata",
+                    status = code,
+                    query_key,
+                    "aviationstack refused request (auth/quota); enrichment degraded"
+                );
+            } else {
+                debug!(
+                    provider = "aviationstack",
+                    endpoint_kind = "flight_metadata",
+                    status = code,
+                    query_key,
+                    "aviationstack returned client response"
+                );
+            }
             return Ok(None);
         }
         if !status.is_success() {
@@ -818,6 +832,13 @@ impl AviationClient {
     }
 }
 
+/// Whether an aviationstack 4xx is operationally actionable (bad key, plan
+/// limit, quota) and so warrants a `warn` rather than a quiet `debug`. Other
+/// 4xx (e.g. 404 no-match) are routine and stay quiet.
+fn aviationstack_4xx_is_actionable(status: u16) -> bool {
+    matches!(status, 401 | 403 | 429)
+}
+
 pub(super) fn aviationstack_query(
     identifier: &FlightIdentifier,
     callsign: Option<&str>,
@@ -952,7 +973,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/flights"))
-            .respond_with(ResponseTemplate::new(403).set_body_string("forbidden secret body"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("no matching flights"))
             .mount(&server)
             .await;
 
@@ -1397,6 +1418,45 @@ mod tests {
         let _ = client.get_aircraft_by_hex("3c6589").await.unwrap();
         assert_eq!(a.received_requests().await.unwrap().len(), 1, "A parked");
         assert_eq!(b.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn aviationstack_auth_and_quota_4xx_are_actionable() {
+        // Auth / plan / quota refusals warrant an operator-visible warn.
+        assert!(aviationstack_4xx_is_actionable(401));
+        assert!(aviationstack_4xx_is_actionable(403));
+        assert!(aviationstack_4xx_is_actionable(429));
+        // Routine "no match" / bad-request responses stay quiet.
+        assert!(!aviationstack_4xx_is_actionable(404));
+        assert!(!aviationstack_4xx_is_actionable(400));
+        assert!(!aviationstack_4xx_is_actionable(422));
+    }
+
+    #[tokio::test]
+    async fn merged_query_streak_parks_backend_on_persistent_4xx() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/hex/3c6589"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let client =
+            test_client_with_aggregators(vec![AdsbAggregator::readsb_v2("only", server.uri())])
+                .with_adsb_cooldown(Duration::from_secs(60));
+
+        // A non-403 4xx must feed the error streak like any other failure, so a
+        // backend that keeps returning it parks after ERROR_STREAK_PARK strikes
+        // and is no longer queried.
+        for _ in 0..(ERROR_STREAK_PARK + 1) {
+            let _ = client.get_aircraft_by_hex("3c6589").await;
+        }
+
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            ERROR_STREAK_PARK as usize,
+            "non-403 4xx parks the backend after the streak threshold"
+        );
     }
 
     #[tokio::test]
