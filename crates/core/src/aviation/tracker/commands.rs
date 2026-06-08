@@ -186,8 +186,10 @@ pub(crate) async fn remove_flight_at(
     query: &str,
     data_dir: &Path,
     source: &str,
+    clock: &dyn Clock,
 ) -> Option<String> {
     let idx = find_flight_index(&state.flights, query)?;
+    let now = clock.now_utc();
     let flight = &state.flights[idx];
     let label = flight
         .callsign
@@ -196,12 +198,8 @@ pub(crate) async fn remove_flight_at(
         .to_owned();
     append_debug_event(
         data_dir,
-        Utc::now(),
-        FlightTrackerDebugEvent::tracking_removal(
-            flight,
-            source,
-            last_seen_age_secs(flight, Utc::now()),
-        ),
+        now,
+        FlightTrackerDebugEvent::tracking_removal(flight, source, last_seen_age_secs(flight, now)),
     )
     .await;
     state.flights.remove(idx);
@@ -253,6 +251,7 @@ pub(crate) async fn process_command<T, L>(
                 state,
                 sender,
                 data_dir,
+                clock,
             )
             .await;
         }
@@ -267,7 +266,7 @@ pub(crate) async fn process_command<T, L>(
             let _ = reply.send(build_flight_view(state, now));
         }
         TrackerCommand::DeleteFromWeb { identifier, reply } => {
-            let removed = remove_flight_at(state, &identifier, data_dir, "web").await;
+            let removed = remove_flight_at(state, &identifier, data_dir, "web", clock).await;
             let _ = reply.send(removed);
         }
     }
@@ -724,6 +723,10 @@ async fn handle_track<T, L>(
     sender.reply(reply_to, response).await;
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "command handler threads shared tracker deps + injected clock"
+)]
 async fn handle_untrack<T, L>(
     identifier: &str,
     requested_by: &str,
@@ -732,6 +735,7 @@ async fn handle_untrack<T, L>(
     state: &mut FlightTrackerState,
     sender: &Arc<ChatSender<T, L>>,
     data_dir: &Path,
+    clock: &dyn Clock,
 ) where
     T: Transport,
     L: LoginCredentials,
@@ -754,7 +758,7 @@ async fn handle_untrack<T, L>(
         return;
     }
 
-    let name = remove_flight_at(state, identifier, data_dir, requested_by)
+    let name = remove_flight_at(state, identifier, data_dir, requested_by, clock)
         .await
         .unwrap_or_else(|| identifier.to_owned());
 

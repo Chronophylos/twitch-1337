@@ -20,7 +20,13 @@ pub(crate) struct DebugHttpOutcome {
     pub status: Option<u16>,
 }
 
-#[allow(dead_code)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "client_response/forbidden_parked/rate_limited are exercised by tests, pending ADS-B poll-path wiring of provider-refusal detail"
+    )
+)]
 impl DebugHttpOutcome {
     pub(crate) fn client_response(provider: &str, endpoint_kind: &str, status: u16) -> Self {
         Self {
@@ -98,7 +104,13 @@ pub(crate) struct FlightTrackerDebugEvent {
     payload: Map<String, Value>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "non-_opt callsign/hex builder setters are used only by this module's tests"
+    )
+)]
 impl FlightTrackerDebugEvent {
     pub(crate) fn new(event: &str, identifier: impl Into<String>) -> Self {
         Self {
@@ -126,12 +138,9 @@ impl FlightTrackerDebugEvent {
             }))
     }
     pub(crate) fn track_started(flight: &TrackedFlight) -> Self {
-        Self::for_flight("track_started", flight).payload(json!({
-            "aviationstack_checked": flight.aviationstack_checked,
-            "route": route_summary(flight),
-            "scheduled_departure_at": flight.scheduled_departure_at.map(format_ts),
-            "aircraft_type": flight.aircraft_type,
-        }))
+        // `for_flight` already emits route/scheduled_departure_at/aircraft_type.
+        Self::for_flight("track_started", flight)
+            .payload(json!({ "aviationstack_checked": flight.aviationstack_checked }))
     }
     pub(crate) fn aviationstack_metadata(
         identifier: &FlightIdentifier,
@@ -243,9 +252,10 @@ impl FlightTrackerDebugEvent {
         self
     }
     fn with_timestamp(&self, now: DateTime<Utc>) -> Self {
+        // `payload()` already sanitized every inserted value, so only the
+        // timestamp is left to stamp here.
         let mut event = self.clone();
         event.ts = Some(format_ts(now));
-        event.payload = sanitize_map(event.payload);
         event
     }
 }
@@ -401,44 +411,46 @@ fn sanitize_string(value: &str) -> String {
 }
 
 fn redact_query_value(value: &str, key: &str) -> String {
+    // `key` is lowercase; match the parameter name case-insensitively (e.g.
+    // `Access_Key=`) by searching a lowercased copy. ASCII-lowercasing keeps
+    // byte offsets identical, so the indices still slice the original `value`
+    // and preserve its casing in the output.
     let needle = format!("{key}=");
-    let mut remaining = value;
+    let haystack = value.to_ascii_lowercase();
     let mut out = String::new();
-    while let Some(idx) = remaining.find(&needle) {
-        let (before, after_key) = remaining.split_at(idx + needle.len());
-        out.push_str(before);
+    let mut pos = 0;
+    while let Some(rel) = haystack[pos..].find(&needle) {
+        let key_end = pos + rel + needle.len();
+        out.push_str(&value[pos..key_end]);
         out.push_str("<redacted>");
-        let after_value = after_key
-            .find('&')
-            .map(|amp| &after_key[amp..])
-            .unwrap_or_default();
-        remaining = after_value;
-        if after_value.is_empty() {
-            break;
+        // Drop the value up to the next '&' (kept) or the end of the string.
+        match value[key_end..].find('&') {
+            Some(amp) => pos = key_end + amp,
+            None => return out,
         }
     }
-    out.push_str(remaining);
+    out.push_str(&value[pos..]);
     out
 }
 
 fn is_sensitive_key(key: &str) -> bool {
-    matches!(
-        key.to_ascii_lowercase().as_str(),
-        "access_key" | "api_key" | "authorization" | "token" | "raw_body" | "body"
-    )
+    [
+        "access_key",
+        "api_key",
+        "authorization",
+        "token",
+        "raw_body",
+        "body",
+    ]
+    .iter()
+    .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{FlightTrackerDebugEvent, append_debug_event};
-    use chrono::{DateTime, Utc};
+    use crate::aviation::tracker::test_support::dt;
     use serde_json::json;
-
-    fn dt(value: &str) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(value)
-            .unwrap()
-            .with_timezone(&Utc)
-    }
 
     #[tokio::test]
     async fn append_debug_event_writes_jsonl_partitioned_by_date() {
