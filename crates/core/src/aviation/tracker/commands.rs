@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::{DateTime, TimeDelta, Utc};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
@@ -18,8 +19,9 @@ use super::{
         msg_squawk_emergency, msg_takeoff, msg_track_started, msg_tracking_lost,
     },
     metadata::{
-        apply_aviationstack_metadata, fetch_aviationstack_metadata_for_tracking,
-        set_hex_if_consistent, set_route_from_iata,
+        add_alias_callsign, apply_aviationstack_metadata,
+        fetch_aviationstack_metadata_for_tracking, seed_flight_aliases, set_hex_if_consistent,
+        set_route_from_iata,
     },
     phase::{
         altitude_ft, detect_phase, emergency_squawk_meaning, is_airborne_phase,
@@ -41,6 +43,9 @@ pub(crate) fn find_flight_index(flights: &[TrackedFlight], query: &str) -> Optio
             || f.callsign
                 .as_ref()
                 .is_some_and(|cs| cs.eq_ignore_ascii_case(&upper))
+            || f.alias_callsigns
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(&upper))
             || f.hex
                 .as_ref()
                 .is_some_and(|h| h.eq_ignore_ascii_case(&upper))
@@ -59,24 +64,39 @@ pub(crate) fn aircraft_matches_tracked_callsign(
     ac: &NearbyAircraft,
     flight: &TrackedFlight,
 ) -> bool {
-    let expected = match &flight.identifier {
-        FlightIdentifier::Callsign(identifier_callsign) => flight
-            .callsign
-            .as_deref()
-            .unwrap_or(identifier_callsign.as_str()),
-        FlightIdentifier::Hex(_) => return true,
-    };
-
-    aircraft_callsign(ac).is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+    matches!(&flight.identifier, FlightIdentifier::Hex(_))
+        || aircraft_callsign(ac).is_some_and(|actual| flight_matches_callsign(flight, actual))
 }
 
-fn expected_target_callsign(flight: &TrackedFlight) -> Option<&str> {
-    match &flight.identifier {
-        FlightIdentifier::Callsign(identifier_callsign) => flight
-            .callsign
+fn flight_matches_callsign(flight: &TrackedFlight, actual: &str) -> bool {
+    flight
+        .callsign
+        .as_deref()
+        .is_some_and(|callsign| callsign.eq_ignore_ascii_case(actual))
+        || flight
+            .alias_callsigns
+            .iter()
+            .any(|alias| alias.eq_ignore_ascii_case(actual))
+        || match &flight.identifier {
+            FlightIdentifier::Callsign(identifier_callsign) => {
+                identifier_callsign.eq_ignore_ascii_case(actual)
+            }
+            FlightIdentifier::Hex(_) => false,
+        }
+}
+
+fn candidate_callsign_matches_flight(flight: &TrackedFlight, candidate: &str) -> bool {
+    flight_matches_callsign(flight, candidate)
+        || flight
+            .observed_callsign
             .as_deref()
-            .or(Some(identifier_callsign.as_str())),
-        FlightIdentifier::Hex(_) => flight.callsign.as_deref(),
+            .is_some_and(|observed| observed.eq_ignore_ascii_case(candidate))
+}
+
+fn identifier_callsign(identifier: &FlightIdentifier) -> Option<&str> {
+    match identifier {
+        FlightIdentifier::Callsign(callsign) => Some(callsign.as_str()),
+        FlightIdentifier::Hex(_) => None,
     }
 }
 
@@ -121,9 +141,7 @@ fn target_confirmation_for_aircraft(
     used_hex: bool,
     now: DateTime<Utc>,
 ) -> Option<TargetConfirmation> {
-    if let Some(expected) = expected_target_callsign(flight)
-        && aircraft_callsign(ac).is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
-    {
+    if aircraft_callsign(ac).is_some_and(|actual| flight_matches_callsign(flight, actual)) {
         return Some(TargetConfirmation::ConfirmedByCallsign);
     }
 
@@ -158,11 +176,9 @@ fn duplicate_tracking_exists(
     state.flights.iter().any(|f| {
         &f.identifier == identifier
             || identifier.matches(f.callsign.as_deref(), f.hex.as_deref())
-            || callsign.is_some_and(|callsign| {
-                f.callsign
-                    .as_deref()
-                    .is_some_and(|existing| existing.eq_ignore_ascii_case(callsign))
-            })
+            || identifier_callsign(identifier)
+                .is_some_and(|candidate| candidate_callsign_matches_flight(f, candidate))
+            || callsign.is_some_and(|callsign| candidate_callsign_matches_flight(f, callsign))
             || hex.is_some_and(|hex| {
                 f.hex
                     .as_deref()
@@ -342,6 +358,7 @@ async fn handle_track<T, L>(
     let mut flight = TrackedFlight {
         identifier: identifier.clone(),
         callsign: resolved_callsign.clone(),
+        alias_callsigns: Vec::new(),
         hex: initial_hex,
         hex_source: matches!(&identifier, FlightIdentifier::Hex(_)).then_some(HexSource::UserInput),
         observed_callsign: None,
@@ -368,6 +385,7 @@ async fn handle_track<T, L>(
         dest_lat: None,
         dest_lon: None,
     };
+    seed_flight_aliases(&mut flight);
 
     if let Some(metadata) = metadata {
         apply_aviationstack_metadata(&mut flight, metadata);
@@ -481,6 +499,9 @@ async fn handle_track<T, L>(
                         && flight.observed_callsign.is_some()
                     {
                         flight.callsign.clone_from(&flight.observed_callsign);
+                        if let Some(callsign) = flight.callsign.clone() {
+                            add_alias_callsign(&mut flight, &callsign);
+                        }
                     }
                     if let Some(hex) = ac.hex.as_deref() {
                         set_hex_if_consistent(&mut flight, hex, HexSource::Adsb, target_confirmed);
@@ -653,31 +674,33 @@ async fn handle_status<T, L>(
     sender.reply(reply_to, response).await;
 }
 
-pub(crate) async fn poll_all_flights<T, L>(
+pub(crate) async fn poll_all_flights_with_commands<T, L>(
     state: &mut FlightTrackerState,
     sender: &Arc<ChatSender<T, L>>,
     channel: &str,
     aviation_client: &AviationClient,
     data_dir: &Path,
     clock: &dyn Clock,
-) where
+    mut cmd_rx: Option<&mut mpsc::Receiver<TrackerCommand>>,
+) -> Vec<TrackerCommand>
+where
     T: Transport,
     L: LoginCredentials,
 {
     let now = clock.now_utc();
     let mut changed = false;
-    let mut removals: Vec<usize> = Vec::new();
+    let mut removals: Vec<FlightIdentifier> = Vec::new();
     let mut messages: Vec<String> = Vec::new();
+    let mut deferred_commands = Vec::new();
 
     type PollResult =
         Result<Result<Option<NearbyAircraft>, eyre::Report>, tokio::time::error::Elapsed>;
-    type PollAttempt = (bool, PollResult);
+    type PollAttempt = (FlightIdentifier, bool, PollResult);
 
     let mut join_set = tokio::task::JoinSet::new();
-    let mut fetch_results: Vec<Option<PollAttempt>> =
-        (0..state.flights.len()).map(|_| None).collect();
+    let mut fetch_results: Vec<PollAttempt> = Vec::new();
 
-    for (idx, flight) in state.flights.iter().enumerate() {
+    for flight in state.flights.iter() {
         match poll_readiness(flight, now) {
             PollReadiness::Due => {}
             PollReadiness::NotDue(_) => continue,
@@ -687,7 +710,7 @@ pub(crate) async fn poll_all_flights<T, L>(
                     "Removing pending flight: ADS-B never appeared"
                 );
                 messages.push(msg_pending_expired(flight));
-                removals.push(idx);
+                removals.push(flight.identifier.clone());
                 changed = true;
                 continue;
             }
@@ -699,15 +722,17 @@ pub(crate) async fn poll_all_flights<T, L>(
         let callsign = flight.callsign.clone();
         let poll_by_hex = should_poll_by_hex(flight);
         join_set.spawn(async move {
-            let (used_hex, result): PollAttempt = if poll_by_hex {
+            let result: PollAttempt = if poll_by_hex {
                 let lookup_hex = hex.as_deref().unwrap_or_else(|| id.as_str());
                 (
+                    id.clone(),
                     true,
                     tokio::time::timeout(POLL_TIMEOUT, ac.get_aircraft_by_hex(lookup_hex)).await,
                 )
             } else {
                 let lookup_callsign = callsign.as_deref().unwrap_or_else(|| id.as_str());
                 (
+                    id.clone(),
                     false,
                     tokio::time::timeout(
                         POLL_TIMEOUT,
@@ -716,13 +741,41 @@ pub(crate) async fn poll_all_flights<T, L>(
                     .await,
                 )
             };
-            (idx, used_hex, result)
+            result
         });
     }
 
-    while let Some(res) = join_set.join_next().await {
-        if let Ok((idx, used_hex, poll_result)) = res {
-            fetch_results[idx] = Some((used_hex, poll_result));
+    if let Some(cmd_rx) = cmd_rx.as_mut() {
+        let mut command_channel_open = true;
+        while !join_set.is_empty() {
+            tokio::select! {
+                res = join_set.join_next() => {
+                    if let Some(Ok((identifier, used_hex, poll_result))) = res {
+                        fetch_results.push((identifier, used_hex, poll_result));
+                    }
+                }
+                cmd = cmd_rx.recv(), if command_channel_open => {
+                    match cmd {
+                        Some(TrackerCommand::Snapshot { reply }) => {
+                            let _ = reply.send(build_flight_view(state, now));
+                        }
+                        Some(TrackerCommand::DeleteFromWeb { identifier, reply }) => {
+                            let removed = remove_flight_at(state, &identifier, data_dir, "web").await;
+                            let _ = reply.send(removed);
+                        }
+                        Some(cmd) => deferred_commands.push(cmd),
+                        None => {
+                            command_channel_open = false;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        while let Some(res) = join_set.join_next().await {
+            if let Ok((identifier, used_hex, poll_result)) = res {
+                fetch_results.push((identifier, used_hex, poll_result));
+            }
         }
     }
 
@@ -731,9 +784,12 @@ pub(crate) async fn poll_all_flights<T, L>(
     let lost_threshold =
         chrono::TimeDelta::from_std(TRACKING_LOST_THRESHOLD).unwrap_or(chrono::TimeDelta::zero());
 
-    #[allow(clippy::needless_range_loop)]
-    for idx in 0..state.flights.len() {
-        let Some((used_hex, ac_result)) = fetch_results[idx].take() else {
+    for (identifier, used_hex, ac_result) in fetch_results {
+        let Some(idx) = state
+            .flights
+            .iter()
+            .position(|flight| flight.identifier == identifier)
+        else {
             continue;
         };
         let flight = &mut state.flights[idx];
@@ -756,7 +812,7 @@ pub(crate) async fn poll_all_flights<T, L>(
                             lost_duration.num_seconds()
                         );
                         messages.push(msg_tracking_lost(flight));
-                        removals.push(idx);
+                        removals.push(flight.identifier.clone());
                     } else if lost_duration >= lost_threshold {
                         debug!(
                             identifier = %flight.identifier,
@@ -808,7 +864,7 @@ pub(crate) async fn poll_all_flights<T, L>(
                     lost_duration.num_seconds()
                 );
                 messages.push(msg_tracking_lost(flight));
-                removals.push(idx);
+                removals.push(flight.identifier.clone());
                 continue;
             } else if lost_duration >= lost_threshold {
                 debug!(
@@ -832,6 +888,7 @@ pub(crate) async fn poll_all_flights<T, L>(
         {
             debug!(identifier = %flight.identifier, callsign = %cs, "Resolved callsign");
             flight.callsign = Some(cs.clone());
+            add_alias_callsign(flight, &cs);
             changed = true;
 
             if flight.route.is_none()
@@ -959,9 +1016,15 @@ pub(crate) async fn poll_all_flights<T, L>(
         }
     }
 
-    for idx in removals.into_iter().rev() {
-        state.flights.remove(idx);
-        changed = true;
+    for identifier in removals {
+        if let Some(idx) = state
+            .flights
+            .iter()
+            .position(|flight| flight.identifier == identifier)
+        {
+            state.flights.remove(idx);
+            changed = true;
+        }
     }
 
     for msg in messages {
@@ -971,4 +1034,6 @@ pub(crate) async fn poll_all_flights<T, L>(
     if changed {
         save_tracker_state(data_dir, state).await;
     }
+
+    deferred_commands
 }
