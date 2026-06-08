@@ -7,10 +7,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use crate::settings::ai::{AiBackendKind, AiConnection};
 use eyre::{Result, WrapErr as _};
 use reqwest::Client;
 use tracing::warn;
-use crate::settings::ai::{AiBackendKind, AiConnection};
 
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 const CACHE_TTL: Duration = Duration::from_secs(300);
@@ -52,7 +52,7 @@ impl ModelCatalog {
             && conn
                 .base_url
                 .as_ref()
-                .map_or(true, |u| u.contains("openrouter.ai"))
+                .is_none_or(|u| u.contains("openrouter.ai"))
     }
 
     /// Turn an upstream OpenRouter `name` into a dashboard / prompt display label.

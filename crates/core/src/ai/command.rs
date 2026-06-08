@@ -16,11 +16,11 @@ use llm::{
 use crate::ai::chat_history::ChatHistory;
 use crate::ai::content;
 use crate::ai::memory::inject;
-use crate::ai::model_catalog::ModelCatalog;
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::{ChatTurnExecutor, ChatTurnExecutorOpts, chat_turn_tools};
 use crate::ai::memory::transcript::TranscriptWriter;
 use crate::ai::memory::types::Role;
+use crate::ai::model_catalog::ModelCatalog;
 use crate::commands::{Command, CommandContext};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
@@ -347,10 +347,7 @@ where
         let persona_name = snap.ai.behavior.persona_name.clone();
         drop(snap);
 
-        let model_display = self
-            .model_catalog
-            .display_name(&connection, &model)
-            .await;
+        let model_display = self.model_catalog.display_name(&connection, &model).await;
 
         self.cooldown.record(user).await;
 
