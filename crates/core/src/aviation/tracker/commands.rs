@@ -12,6 +12,10 @@ use crate::util::clock::Clock;
 use super::{
     FlightIdentifier, FlightPhase, FlightTrackerState, HexSource, TargetConfirmation,
     TrackedFlight, TrackerCommand, build_flight_view,
+    debug_journal::{
+        AdsbPollDebugInput, DebugHttpOutcome, DiversionDebugInput, FlightTrackerDebugEvent,
+        append_debug_event,
+    },
     format::{
         msg_adsb_visible, msg_approach, msg_cruise, msg_descent, msg_flight_status,
         msg_flights_list, msg_landing, msg_pending_expired, msg_possible_divert,
@@ -101,6 +105,12 @@ fn tracking_lost_threshold_delta() -> TimeDelta {
     TimeDelta::from_std(TRACKING_LOST_THRESHOLD).unwrap_or_else(|_| TimeDelta::zero())
 }
 
+fn last_seen_age_secs(flight: &TrackedFlight, now: DateTime<Utc>) -> Option<i64> {
+    flight
+        .last_seen
+        .map(|last_seen| now.signed_duration_since(last_seen).num_seconds().max(0))
+}
+
 fn should_keep_prior_confirmation(
     flight: &TrackedFlight,
     confirmation: TargetConfirmation,
@@ -184,6 +194,16 @@ pub(crate) async fn remove_flight_at(
         .as_deref()
         .unwrap_or(flight.identifier.as_str())
         .to_owned();
+    append_debug_event(
+        data_dir,
+        Utc::now(),
+        FlightTrackerDebugEvent::tracking_removal(
+            flight,
+            source,
+            last_seen_age_secs(flight, Utc::now()),
+        ),
+    )
+    .await;
     state.flights.remove(idx);
     save_tracker_state(data_dir, state).await;
     info!(identifier = %query, source = %source, "Flight untracked");
@@ -327,6 +347,22 @@ async fn handle_track<T, L>(
             resolved_callsign.as_deref(),
         )
         .await;
+        let outcome = if metadata.is_some() {
+            DebugHttpOutcome::success("aviationstack", "flight_metadata")
+        } else {
+            DebugHttpOutcome::miss("aviationstack", "flight_metadata")
+        };
+        append_debug_event(
+            data_dir,
+            now,
+            FlightTrackerDebugEvent::aviationstack_metadata(
+                &identifier,
+                resolved_callsign.as_deref(),
+                outcome,
+                metadata.as_ref(),
+            ),
+        )
+        .await;
     }
     let aviationstack_fallback = aviationstack_checked
         && metadata.is_none()
@@ -455,11 +491,30 @@ async fn handle_track<T, L>(
                             let origin = route.origin.iata_code.clone();
                             let dest = route.destination.iata_code.clone();
                             set_route_from_iata(&mut flight, &origin, &dest);
+                            append_debug_event(
+                                data_dir,
+                                now,
+                                FlightTrackerDebugEvent::flight_route_lookup(
+                                    flight.identifier.as_str(),
+                                    Some(cs),
+                                    DebugHttpOutcome::success("adsbdb", "flight_route"),
+                                    Some(&origin),
+                                    Some(&dest),
+                                    flight.dest_lat.is_some() && flight.dest_lon.is_some(),
+                                ),
+                            )
+                            .await;
                         }
                         let mut response = msg_track_started(&flight);
                         if aviationstack_fallback {
                             response.push_str(" | AviationStack nix, ADS-B-only");
                         }
+                        append_debug_event(
+                            data_dir,
+                            now,
+                            FlightTrackerDebugEvent::track_started(&flight),
+                        )
+                        .await;
                         state.flights.push(flight);
                         save_tracker_state(data_dir, state).await;
                         info!(
@@ -536,13 +591,29 @@ async fn handle_track<T, L>(
         && flight.callsign.is_some()
     {
         flight.aviationstack_checked = true;
-        if let Some(metadata) = fetch_aviationstack_metadata_for_tracking(
+        let metadata = fetch_aviationstack_metadata_for_tracking(
             aviation_client,
             &identifier,
             flight.callsign.as_deref(),
         )
-        .await
-        {
+        .await;
+        let outcome = if metadata.is_some() {
+            DebugHttpOutcome::success("aviationstack", "flight_metadata")
+        } else {
+            DebugHttpOutcome::miss("aviationstack", "flight_metadata")
+        };
+        append_debug_event(
+            data_dir,
+            now,
+            FlightTrackerDebugEvent::aviationstack_metadata(
+                &identifier,
+                flight.callsign.as_deref(),
+                outcome,
+                metadata.as_ref(),
+            ),
+        )
+        .await;
+        if let Some(metadata) = metadata {
             apply_aviationstack_metadata(&mut flight, metadata);
         }
     }
@@ -569,15 +640,67 @@ async fn handle_track<T, L>(
                 let origin = route.origin.iata_code.clone();
                 let dest = route.destination.iata_code.clone();
                 set_route_from_iata(&mut flight, &origin, &dest);
+                append_debug_event(
+                    data_dir,
+                    now,
+                    FlightTrackerDebugEvent::flight_route_lookup(
+                        flight.identifier.as_str(),
+                        Some(cs),
+                        DebugHttpOutcome::success("adsbdb", "flight_route"),
+                        Some(&origin),
+                        Some(&dest),
+                        flight.dest_lat.is_some() && flight.dest_lon.is_some(),
+                    ),
+                )
+                .await;
             }
             Ok(Ok(None)) => {
                 debug!(callsign = %cs, "No route found for flight");
+                append_debug_event(
+                    data_dir,
+                    now,
+                    FlightTrackerDebugEvent::flight_route_lookup(
+                        flight.identifier.as_str(),
+                        Some(cs),
+                        DebugHttpOutcome::miss("adsbdb", "flight_route"),
+                        None,
+                        None,
+                        false,
+                    ),
+                )
+                .await;
             }
             Ok(Err(e)) => {
                 warn!(error = ?e, callsign = %cs, "Failed to fetch route");
+                append_debug_event(
+                    data_dir,
+                    now,
+                    FlightTrackerDebugEvent::flight_route_lookup(
+                        flight.identifier.as_str(),
+                        Some(cs),
+                        DebugHttpOutcome::error("adsbdb", "flight_route"),
+                        None,
+                        None,
+                        false,
+                    ),
+                )
+                .await;
             }
             Err(_) => {
                 warn!(callsign = %cs, "Route fetch timed out");
+                append_debug_event(
+                    data_dir,
+                    now,
+                    FlightTrackerDebugEvent::flight_route_lookup(
+                        flight.identifier.as_str(),
+                        Some(cs),
+                        DebugHttpOutcome::timeout("adsbdb", "flight_route"),
+                        None,
+                        None,
+                        false,
+                    ),
+                )
+                .await;
             }
         }
     }
@@ -586,6 +709,12 @@ async fn handle_track<T, L>(
     if aviationstack_fallback {
         response.push_str(" | AviationStack nix, ADS-B-only");
     }
+    append_debug_event(
+        data_dir,
+        now,
+        FlightTrackerDebugEvent::track_started(&flight),
+    )
+    .await;
     state.flights.push(flight);
     save_tracker_state(data_dir, state).await;
 
@@ -686,6 +815,12 @@ pub(crate) async fn poll_all_flights<T, L>(
                     identifier = %flight.identifier,
                     "Removing pending flight: ADS-B never appeared"
                 );
+                append_debug_event(
+                    data_dir,
+                    now,
+                    FlightTrackerDebugEvent::tracking_removal(flight, "pending_expired", None),
+                )
+                .await;
                 messages.push(msg_pending_expired(flight));
                 removals.push(idx);
                 changed = true;
@@ -745,6 +880,23 @@ pub(crate) async fn poll_all_flights<T, L>(
         let ac = match ac_result {
             Ok(Ok(Some(ac))) => ac,
             Ok(Ok(None)) => {
+                append_debug_event(
+                    data_dir,
+                    now,
+                    FlightTrackerDebugEvent::adsb_poll_result(
+                        flight,
+                        AdsbPollDebugInput {
+                            lookup_mode: if used_hex { "hex" } else { "callsign" },
+                            outcome: "miss",
+                            aircraft: None,
+                            direct_target_confirmed: None,
+                            sticky_confirmation: None,
+                            phase_sample_eligible: None,
+                            last_seen_age_secs: last_seen_age_secs(flight, now),
+                        },
+                    ),
+                )
+                .await;
                 if flight.last_seen.is_none() {
                     flight.polls_since_change = flight.polls_since_change.saturating_add(1);
                 } else if let Some(last_seen) = flight.last_seen {
@@ -755,6 +907,16 @@ pub(crate) async fn poll_all_flights<T, L>(
                             "Removing flight: tracking lost for {}s",
                             lost_duration.num_seconds()
                         );
+                        append_debug_event(
+                            data_dir,
+                            now,
+                            FlightTrackerDebugEvent::tracking_removal(
+                                flight,
+                                "tracking_lost",
+                                Some(lost_duration.num_seconds()),
+                            ),
+                        )
+                        .await;
                         messages.push(msg_tracking_lost(flight));
                         removals.push(idx);
                     } else if lost_duration >= lost_threshold {
@@ -769,10 +931,44 @@ pub(crate) async fn poll_all_flights<T, L>(
             }
             Ok(Err(e)) => {
                 warn!(error = ?e, identifier = %flight.identifier, "ADS-B poll failed");
+                append_debug_event(
+                    data_dir,
+                    now,
+                    FlightTrackerDebugEvent::adsb_poll_result(
+                        flight,
+                        AdsbPollDebugInput {
+                            lookup_mode: if used_hex { "hex" } else { "callsign" },
+                            outcome: "error",
+                            aircraft: None,
+                            direct_target_confirmed: None,
+                            sticky_confirmation: None,
+                            phase_sample_eligible: None,
+                            last_seen_age_secs: last_seen_age_secs(flight, now),
+                        },
+                    ),
+                )
+                .await;
                 continue;
             }
             Err(_) => {
                 warn!(identifier = %flight.identifier, "ADS-B poll timed out");
+                append_debug_event(
+                    data_dir,
+                    now,
+                    FlightTrackerDebugEvent::adsb_poll_result(
+                        flight,
+                        AdsbPollDebugInput {
+                            lookup_mode: if used_hex { "hex" } else { "callsign" },
+                            outcome: "timeout",
+                            aircraft: None,
+                            direct_target_confirmed: None,
+                            sticky_confirmation: None,
+                            phase_sample_eligible: None,
+                            last_seen_age_secs: last_seen_age_secs(flight, now),
+                        },
+                    ),
+                )
+                .await;
                 continue;
             }
         };
@@ -798,6 +994,23 @@ pub(crate) async fn poll_all_flights<T, L>(
         let phase_sample_confirmed =
             direct_target_confirmed || (sticky_confirmation && aircraft_callsign(&ac).is_none());
         let became_target_confirmed = !was_target_confirmed && direct_target_confirmed;
+        append_debug_event(
+            data_dir,
+            now,
+            FlightTrackerDebugEvent::adsb_poll_result(
+                flight,
+                AdsbPollDebugInput {
+                    lookup_mode: if used_hex { "hex" } else { "callsign" },
+                    outcome: "hit",
+                    aircraft: Some(&ac),
+                    direct_target_confirmed: Some(direct_target_confirmed),
+                    sticky_confirmation: Some(sticky_confirmation),
+                    phase_sample_eligible: Some(phase_sample_confirmed),
+                    last_seen_age_secs: last_seen_age_secs(flight, now),
+                },
+            ),
+        )
+        .await;
 
         if !direct_target_confirmed && let Some(last_seen) = flight.last_seen {
             let lost_duration = now.signed_duration_since(last_seen);
@@ -807,6 +1020,16 @@ pub(crate) async fn poll_all_flights<T, L>(
                     "Removing flight: tracking lost for {}s",
                     lost_duration.num_seconds()
                 );
+                append_debug_event(
+                    data_dir,
+                    now,
+                    FlightTrackerDebugEvent::tracking_removal(
+                        flight,
+                        "tracking_lost",
+                        Some(lost_duration.num_seconds()),
+                    ),
+                )
+                .await;
                 messages.push(msg_tracking_lost(flight));
                 removals.push(idx);
                 continue;
@@ -834,14 +1057,77 @@ pub(crate) async fn poll_all_flights<T, L>(
             flight.callsign = Some(cs.clone());
             changed = true;
 
-            if flight.route.is_none()
-                && let Ok(Ok(Some(route))) =
-                    tokio::time::timeout(ROUTE_FETCH_TIMEOUT, aviation_client.get_flight_route(&cs))
-                        .await
-            {
-                let origin = route.origin.iata_code.clone();
-                let dest = route.destination.iata_code.clone();
-                set_route_from_iata(flight, &origin, &dest);
+            if flight.route.is_none() {
+                match tokio::time::timeout(
+                    ROUTE_FETCH_TIMEOUT,
+                    aviation_client.get_flight_route(&cs),
+                )
+                .await
+                {
+                    Ok(Ok(Some(route))) => {
+                        let origin = route.origin.iata_code.clone();
+                        let dest = route.destination.iata_code.clone();
+                        set_route_from_iata(flight, &origin, &dest);
+                        append_debug_event(
+                            data_dir,
+                            now,
+                            FlightTrackerDebugEvent::flight_route_lookup(
+                                flight.identifier.as_str(),
+                                Some(&cs),
+                                DebugHttpOutcome::success("adsbdb", "flight_route"),
+                                Some(&origin),
+                                Some(&dest),
+                                flight.dest_lat.is_some() && flight.dest_lon.is_some(),
+                            ),
+                        )
+                        .await;
+                    }
+                    Ok(Ok(None)) => {
+                        append_debug_event(
+                            data_dir,
+                            now,
+                            FlightTrackerDebugEvent::flight_route_lookup(
+                                flight.identifier.as_str(),
+                                Some(&cs),
+                                DebugHttpOutcome::miss("adsbdb", "flight_route"),
+                                None,
+                                None,
+                                false,
+                            ),
+                        )
+                        .await;
+                    }
+                    Ok(Err(_)) => {
+                        append_debug_event(
+                            data_dir,
+                            now,
+                            FlightTrackerDebugEvent::flight_route_lookup(
+                                flight.identifier.as_str(),
+                                Some(&cs),
+                                DebugHttpOutcome::error("adsbdb", "flight_route"),
+                                None,
+                                None,
+                                false,
+                            ),
+                        )
+                        .await;
+                    }
+                    Err(_) => {
+                        append_debug_event(
+                            data_dir,
+                            now,
+                            FlightTrackerDebugEvent::flight_route_lookup(
+                                flight.identifier.as_str(),
+                                Some(&cs),
+                                DebugHttpOutcome::timeout("adsbdb", "flight_route"),
+                                None,
+                                None,
+                                false,
+                            ),
+                        )
+                        .await;
+                    }
+                }
             }
         }
         if let Some(hex) = ac.hex.as_deref()
@@ -914,6 +1200,17 @@ pub(crate) async fn poll_all_flights<T, L>(
                     flight.phase = FlightPhase::Ground;
                     flight.takeoff_at = None;
                 }
+                append_debug_event(
+                    data_dir,
+                    now,
+                    FlightTrackerDebugEvent::phase_transition(
+                        flight,
+                        &format!("{old_phase:?}"),
+                        &format!("{new_phase:?}"),
+                        new_phase == FlightPhase::Landing,
+                    ),
+                )
+                .await;
             } else {
                 flight.polls_since_change += 1;
             }
@@ -947,10 +1244,36 @@ pub(crate) async fn poll_all_flights<T, L>(
                     diff = 360.0 - diff;
                 }
 
-                if update_divert_counter(
+                let counter_before = flight.divert_consecutive_polls;
+                let alert_emitted = update_divert_counter(
                     &mut flight.divert_consecutive_polls,
                     diff > DIVERT_BEARING_THRESHOLD,
-                ) {
+                );
+                append_debug_event(
+                    data_dir,
+                    now,
+                    FlightTrackerDebugEvent::diversion_decision(
+                        flight,
+                        DiversionDebugInput {
+                            previous_lat: p_lat,
+                            previous_lon: p_lon,
+                            current_lat: cur_lat,
+                            current_lon: cur_lon,
+                            destination_lat: dest_lat,
+                            destination_lon: dest_lon,
+                            ground_track,
+                            bearing_to_dest,
+                            diff,
+                            threshold: DIVERT_BEARING_THRESHOLD,
+                            anomalous: diff > DIVERT_BEARING_THRESHOLD,
+                            counter_before,
+                            counter_after: flight.divert_consecutive_polls,
+                            alert_emitted,
+                        },
+                    ),
+                )
+                .await;
+                if alert_emitted {
                     messages.push(msg_possible_divert(flight));
                 }
             }
