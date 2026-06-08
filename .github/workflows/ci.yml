@@ -11,8 +11,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: .github/path-filters.yml
+
   fmt:
     name: fmt
+    needs: changes
+    if: always() && (github.event_name == 'pull_request' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,6 +56,8 @@ jobs:
 
   clippy:
     name: clippy
+    needs: changes
+    if: always() && (github.event_name == 'pull_request' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -63,6 +84,8 @@ jobs:
 
   test:
     name: test
+    needs: changes
+    if: always() && (github.event_name == 'pull_request' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -91,6 +114,8 @@ jobs:
 
   e2e:
     name: e2e
+    needs: changes
+    if: always() && (github.event_name == 'pull_request' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -146,6 +171,8 @@ jobs:
 
   coverage:
     name: coverage
+    needs: changes
+    if: always() && (github.event_name == 'pull_request' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -187,6 +214,8 @@ jobs:
 
   audit:
     name: cargo audit
+    needs: changes
+    if: always() && (github.event_name == 'pull_request' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
