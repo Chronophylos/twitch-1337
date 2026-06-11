@@ -25,9 +25,13 @@ module is deleted.
 
 ## Research facts the design depends on
 
-- mem0 OSS v2.0 (May 2026) ships an official REST server image
-  `mem0/mem0-api-server` (FastAPI, container port 8000) with built-in auth
-  (`X-API-Key`, `ADMIN_API_KEY`, JWT). Apache 2.0.
+- mem0 OSS v2.0 (May 2026) ships an official REST server (FastAPI) with
+  built-in auth (`X-API-Key`, `ADMIN_API_KEY`, JWT). Apache 2.0.
+- There is **no usable prebuilt image**: `mem0/mem0-api-server` on Docker Hub
+  was last pushed 2025-09-10 (pre-2.0: old API, no auth). The supported path
+  per <https://docs.mem0.ai/open-source/setup> is building from the repo's
+  `server/` directory (`server/.env` + `make up`; REST API on port 8888,
+  dashboard on 3000, bundled pgvector Postgres).
 - v2.0 removed graph memory from OSS; entity linking is built in and needs no
   extra infra. The stack is server + `pgvector/pgvector:pg17`. No Neo4j.
 - OSS endpoints have no `/v1/` prefix: `POST /memories`, `POST /search`,
@@ -44,10 +48,19 @@ module is deleted.
 
 ## 1. Infrastructure (docker compose)
 
+**Image build (CI → GHCR).** Since no usable prebuilt image exists, a new
+workflow in this repo (`mem0-image.yml`) checks out `mem0ai/mem0` at a pinned
+release tag, builds the `server/` Dockerfile, and pushes
+`ghcr.io/chronophylos/mem0-server:<mem0-tag>` (plus `:latest`). The pinned
+tag lives in one place in the workflow (or a small pin file) so a version
+bump is a one-line PR. Triggers: `workflow_dispatch` plus pushes touching the
+pin. Not a required status check. Like all third-party supply-chain-critical
+references, the mem0 checkout is pinned to a tag resolved to a commit SHA.
+
 Two services join the homelab stack (compose lives in `stacks/` on
 docker.homelab, not in this repo):
 
-- **`mem0`**: `mem0/mem0-api-server` pinned to a post-v2.0 digest.
+- **`mem0`**: `ghcr.io/chronophylos/mem0-server:<mem0-tag>` (built above).
   Env: `OPENAI_API_KEY`, `ADMIN_API_KEY` (bot auth), `JWT_SECRET`,
   `POSTGRES_PASSWORD`, `MEM0_TELEMETRY=false`. Internal compose network only;
   never published through the reverse proxy.
@@ -102,6 +115,13 @@ disable memory, keep running.
    `agent_id = channel`, metadata `{username, display_name}`. mem0's
    extraction decides what is memorable.
 
+   **Forget suppresses add.** If the model invoked `forget` during the turn,
+   the add-after is skipped entirely. Otherwise the turn that erased a user
+   would immediately mint a fresh memory from the erase request itself
+   ("forget everything about me" / "done, wiped"). The executor records that
+   `forget` fired and the turn flow checks that flag before spawning the
+   add.
+
 **Degradation:** search failure logs a warning and the turn proceeds without
 memories; add failures log and drop. `!ai` never breaks because mem0 is down.
 
@@ -148,8 +168,9 @@ write the sentinel, so the next start retries.
   and deletes), alongside the existing fake LLM.
 - Integration tests: memories injected into the prompt; add fired after the
   reply with correct `user_id`/`agent_id`; `forget` deletes only the speaker;
-  graceful degradation when the fake returns errors; migration runs once and
-  writes the sentinel only on success.
+  a turn where `forget` fired produces **no** add-after; graceful degradation
+  when the fake returns errors; migration runs once and writes the sentinel
+  only on success.
 
 ## Risks
 
@@ -157,8 +178,10 @@ write the sentinel, so the next start retries.
   character sheet per user; afterwards it sees top-k extracted snippets.
   Accepted as part of the full-replacement decision; old files remain on disk
   as fallback.
-- **mem0 v2.0 churn.** A month old with breaking changes just behind it. Pin
-  the digest, target the post-2.0 API only.
+- **mem0 v2.0 churn.** A month old with breaking changes just behind it, and
+  we build the server image ourselves because upstream's prebuilt image is
+  stale. Pin the mem0 source tag in the build workflow, target the post-2.0
+  API only, and expect the `server/` Dockerfile to move under us on bumps.
 - **New ops surface.** A Python service plus Postgres on the homelab, and
   OpenAI spend per `!ai` turn (one extraction call plus embeddings; cents per
   day at nano-class pricing, but nonzero and per-turn).
@@ -166,8 +189,10 @@ write the sentinel, so the next start retries.
 ## Deploy checklist (when implementation lands)
 
 1. Fold current `SOUL.md` content into `prompts/system.md`.
-2. Add `mem0` + `mem0-postgres` to the homelab compose with secrets;
-   verify `GET :8000/docs` responds on the internal network.
+2. Run the `mem0-image.yml` workflow once so
+   `ghcr.io/chronophylos/mem0-server:<mem0-tag>` exists; add `mem0` +
+   `mem0-postgres` to the homelab compose with secrets; verify the OpenAPI
+   explorer (`/docs`) responds on the internal network.
 3. Add `[mem0] api_key` to `config.toml`; set `base_url` + `enabled` via the
    dashboard; restart the bot.
 4. Confirm the one-shot migration ran (sentinel present, memories visible on
