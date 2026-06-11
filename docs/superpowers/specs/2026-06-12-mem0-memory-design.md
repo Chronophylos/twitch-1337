@@ -20,7 +20,7 @@ module is deleted.
 | Scope | Full replacement of the memory module |
 | Ingestion | `!ai` turns only (user message + bot reply); no ambient chat, no nightly batch |
 | Persona (SOUL) | Static, lives in `prompts/system.md`; no self-evolving identity |
-| mem0 backend | OpenAI (nano-class extraction model + `text-embedding-3-small`); requires a real OpenAI key, OpenRouter cannot serve embeddings |
+| mem0 backend | OpenRouter for both extraction and embeddings (nano-class extraction model + `openai/text-embedding-3-small`); one key, one vendor. Verified viable: mem0's OpenAI LLM and embedder classes both honor `openai_base_url` |
 | Integration style | Automatic search-before / add-after, plus one `forget` tool |
 
 ## Research facts the design depends on
@@ -41,6 +41,22 @@ module is deleted.
   per-message `name` as `actor_id` metadata. We attribute explicitly via
   `user_id=<Twitch user ID>` instead, which is more robust (stable IDs,
   display names change).
+- Scoping semantics (verified in `mem0/memory/main.py`): an `add()` with both
+  `user_id` and `agent_id` stores **one** memory carrying both IDs, and
+  search/list filters are a subset-match AND over only the keys provided. A
+  search by `agent_id` alone therefore returns memories that also carry a
+  `user_id` — there is no built-in personal/shared partition.
+- Auth (verified in `server/auth.py`): `ADMIN_API_KEY` is legacy-labeled but
+  accepted as `X-API-Key` on **all** memory endpoints (constant-time compare,
+  treated as admin). Per-user `m0sk_` keys require the Next.js dashboard or a
+  JWT login flow + `POST /api-keys` — ceremony we skip for a single-tenant
+  internal service.
+- Base URL (verified in `mem0/llms/openai.py` + `mem0/embeddings/openai.py`):
+  both classes honor `openai_base_url`, so an OpenAI-compatible proxy
+  (OpenRouter) can serve extraction and embeddings with one key. Caveat:
+  env-var precedence differs between the two classes (`OPENAI_BASE_URL` vs
+  `OPENAI_API_BASE` checked first), so the base URL must be set explicitly in
+  both the `llm` and `embedder` config blocks, never via env.
 - No official Rust SDK. The needed surface is four endpoints; a small
   `reqwest` client matches the existing rustls/musl stack.
 - v2.0 is about a month old with breaking changes behind it. Pin the image
@@ -61,8 +77,13 @@ Two services join the homelab stack (compose lives in `stacks/` on
 docker.homelab, not in this repo):
 
 - **`mem0`**: `ghcr.io/chronophylos/mem0-server:<mem0-tag>` (built above).
-  Env: `OPENAI_API_KEY`, `ADMIN_API_KEY` (bot auth), `JWT_SECRET`,
-  `POSTGRES_PASSWORD`, `MEM0_TELEMETRY=false`. Internal compose network only;
+  Env: `OPENAI_API_KEY` (the OpenRouter key — mem0's OpenAI-compatible
+  classes read it), `ADMIN_API_KEY` (bot auth via `X-API-Key`; legacy-labeled
+  but verified to work on all memory routes), `JWT_SECRET`,
+  `POSTGRES_PASSWORD`, `MEM0_TELEMETRY=false`. The mem0 config sets
+  `openai_base_url` to OpenRouter explicitly in **both** the `llm` and
+  `embedder` blocks (env-var precedence differs between them); embedding
+  model id is `openai/text-embedding-3-small`. Internal compose network only;
   never published through the reverse proxy.
 - **`mem0-postgres`**: `pgvector/pgvector:pg17`, named volume, included in
   the existing `pg_dump` backup cron.
@@ -97,9 +118,14 @@ disable memory, keep running.
 ## 3. Per-turn flow (`!ai`)
 
 1. **Search before.** Two scoped searches with the user's message as the
-   query: `user_id = speaker's Twitch ID` (personal facts) and
-   `agent_id = channel` (shared channel lore). Top-k each (`search_limit`),
-   merged into one "What you remember" context block injected where the old
+   query: `user_id = speaker's Twitch ID` and `agent_id = channel`. Since
+   every memory carries both IDs and filters are subset-match, the channel
+   search is channel-wide — it includes other users' facts — and the speaker
+   search selects a subset of the same pool. The dual search is deliberately
+   a **ranking device**, not a partition: it guarantees the speaker's own
+   facts hold top-k slots even when the channel-wide results would crowd
+   them out. Top-k each (`search_limit`), deduped by memory id, merged into
+   one "What you remember" context block injected where the old
    durable-memory block went. The recent-chat history injection survives
    unchanged; it comes from the in-memory history buffer, not the memory
    store, and its rendering code relocates out of `inject.rs` before that
@@ -183,8 +209,14 @@ write the sentinel, so the next start retries.
   stale. Pin the mem0 source tag in the build workflow, target the post-2.0
   API only, and expect the `server/` Dockerfile to move under us on bumps.
 - **New ops surface.** A Python service plus Postgres on the homelab, and
-  OpenAI spend per `!ai` turn (one extraction call plus embeddings; cents per
-  day at nano-class pricing, but nonzero and per-turn).
+  OpenRouter spend per `!ai` turn (one extraction call plus embeddings; cents
+  per day at nano-class pricing, but nonzero and per-turn). OpenRouter also
+  adds a proxy hop to every turn's search and add — acceptable, since search
+  only embeds the query and add is fire-and-forget.
+- **`ADMIN_API_KEY` is legacy.** Upstream's recommended auth is per-user
+  `m0sk_` keys, which need the dashboard or a JWT flow we don't run. The
+  pinned image tag means the legacy path can't break under us silently;
+  re-verify it on every mem0 version bump.
 
 ## Deploy checklist (when implementation lands)
 
