@@ -692,6 +692,7 @@ mod tests {
     fn next_poll_at_keeps_live_fast_interval_for_recent_changes() {
         let mut flight = tracked_flight_with(FlightPhase::Unknown, 0);
         let now = dt("2026-04-18T10:00:00Z");
+        flight.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
         flight.last_seen = Some(now);
         flight.last_adsb_poll_at = Some(now);
 
