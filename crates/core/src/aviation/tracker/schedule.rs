@@ -54,6 +54,8 @@ fn add_duration(time: DateTime<Utc>, duration: Duration) -> DateTime<Utc> {
 
 pub(crate) fn is_pending_adsb(flight: &TrackedFlight) -> bool {
     flight.target_confirmation == TargetConfirmation::Pending
+        || (flight.target_confirmation == TargetConfirmation::AircraftVisible
+            && flight.last_visible_at.is_none())
 }
 
 pub(crate) fn live_poll_interval(flight: &TrackedFlight) -> Duration {
