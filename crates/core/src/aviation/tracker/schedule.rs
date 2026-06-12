@@ -210,3 +210,26 @@ pub(crate) fn next_poll_at(flights: &[TrackedFlight], now: DateTime<Utc>) -> Opt
         })
         .min()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aviation::tracker::{
+        TargetConfirmation,
+        test_support::{dt, tracked_flight},
+    };
+
+    #[test]
+    fn aircraft_visible_without_target_confirmation_uses_live_polling_after_pending_expiry() {
+        let mut flight = tracked_flight();
+        flight.target_confirmation = TargetConfirmation::AircraftVisible;
+        flight.last_seen = None;
+        flight.last_visible_at = Some(dt("2026-04-18T23:58:00Z"));
+        flight.last_adsb_poll_at = Some(dt("2026-04-18T23:58:00Z"));
+
+        assert_eq!(
+            poll_readiness(&flight, dt("2026-04-19T00:01:00Z")),
+            PollReadiness::Due
+        );
+    }
+}
