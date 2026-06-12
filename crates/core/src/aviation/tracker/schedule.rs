@@ -1,7 +1,7 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use tokio::time::Duration;
 
-use super::TrackedFlight;
+use super::{TargetConfirmation, TrackedFlight};
 
 const PENDING_POLL_60_SEC: Duration = Duration::from_secs(60);
 const PENDING_POLL_2_MIN: Duration = Duration::from_secs(120);
@@ -53,7 +53,7 @@ fn add_duration(time: DateTime<Utc>, duration: Duration) -> DateTime<Utc> {
 }
 
 pub(crate) fn is_pending_adsb(flight: &TrackedFlight) -> bool {
-    flight.last_seen.is_none()
+    flight.target_confirmation == TargetConfirmation::Pending
 }
 
 pub(crate) fn live_poll_interval(flight: &TrackedFlight) -> Duration {
