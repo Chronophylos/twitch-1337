@@ -11,9 +11,9 @@
 //!   - `DATA_DIR`   default `./dev-data`
 //!   - `CHANNEL`    default `devchannel`  (cosmetic, breadcrumb only)
 //!
-//! Caveat: The ping actor and `MemoryStore` use atomic tmp+rename to
-//! persist, so two processes against the same dir will not corrupt each
-//! other's writes — but a last-writer-wins race is real. Don't run this
+//! Caveat: The ping actor uses atomic tmp+rename to persist, so two
+//! processes against the same dir will not corrupt each other's writes —
+//! but a last-writer-wins race is real. Don't run this
 //! against the same dev-data the production bot is actively writing to
 //! unless you're aware of that.
 
@@ -28,7 +28,6 @@ use std::time::Duration;
 use eyre::{Result, WrapErr as _};
 use secrecy::SecretString;
 use tokio::sync::{Notify, RwLock};
-use twitch_1337_core::ai::memory::store::MemoryStore;
 use twitch_1337_core::ping::{PingHandle, PingManager, ping_actor_channel_full, run_ping_actor};
 use twitch_1337_core::{install_crypto_provider, install_tracing};
 use twitch_1337_web::auth::OAuthCtx;
@@ -73,10 +72,6 @@ async fn main() -> Result<()> {
         twitch_1337_core::settings::SettingsStore::open(&data_dir, audit_log, &channel)
             .wrap_err("open settings store")?;
 
-    let memory_store = MemoryStore::open(&data_dir, settings_handle.clone())
-        .await
-        .wrap_err("open memory store")?;
-
     let clock = Arc::new(SystemClock);
     let sessions = Arc::new(SessionTable::new(clock.clone()));
 
@@ -112,7 +107,7 @@ async fn main() -> Result<()> {
         client_id: SecretString::new("dev-client-id".to_owned().into()),
         oauth,
         ping_actor,
-        memory_store,
+        mem0: None,
         telemetry: twitch_1337_core::schedule::TelemetryStore::open(&data_dir),
         signed_key,
         leaderboard: Arc::new(RwLock::new(HashMap::new())),

@@ -122,11 +122,6 @@ pub struct Services {
     pub ping_names_tx: tokio::sync::watch::Sender<HashSet<String>>,
     /// Watch receiver for the live ping name set.
     pub ping_names_rx: tokio::sync::watch::Receiver<HashSet<String>>,
-    /// Shared v2 memory store. Constructed by the bin so the bot's `!ai`
-    /// turn / dreamer ritual and the dashboard memory editor write through
-    /// the *same* per-path mutex map. Two independent stores against the
-    /// same on-disk tree would silently race past each other's locks.
-    pub memory_store: crate::ai::memory::store::MemoryStore,
     /// mem0 client. `None` when `[mem0]` absent / disabled / init failed.
     /// Shared with the `!ai` handler and the dashboard memory page.
     pub mem0: Option<Arc<dyn crate::ai::mem0::MemoryApi>>,
@@ -199,7 +194,6 @@ where
         ping_manager,
         ping_names_tx,
         ping_names_rx,
-        memory_store: _memory_store,
         mem0,
         leaderboard,
         aviation_tracker_tx,

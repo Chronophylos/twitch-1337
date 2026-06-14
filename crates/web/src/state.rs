@@ -14,7 +14,6 @@ use secrecy::ExposeSecret;
 use secrecy::SecretString;
 use tokio::sync::RwLock;
 use tower_cookies::Key;
-use twitch_1337_core::ai::memory::store::MemoryStore;
 use twitch_1337_core::ai::model_catalog::ModelCatalog;
 use twitch_1337_core::aviation::TrackerCommand;
 use twitch_1337_core::commands::leaderboard::PersonalBest;
@@ -48,11 +47,6 @@ pub struct WebState {
     /// delete) persist to disk and must serialize against IRC handler
     /// triggers.
     pub ping_actor: PingHandle,
-    /// Shared v2 memory store (same `Arc`-backed instance the bot's `!ai`
-    /// turn / dreamer ritual writes through). Sharing the store keeps the
-    /// per-path mutex map coherent — two independent stores against the
-    /// same on-disk tree would silently race past each other's locks.
-    pub memory_store: MemoryStore,
     /// mem0 client for the read-only memory page. `None` → page shows disabled.
     pub mem0: Option<Arc<dyn twitch_1337_core::ai::mem0::MemoryApi>>,
     /// HMAC key for signed cookies (sid + csrf). Derived from
@@ -68,7 +62,7 @@ pub struct WebState {
     /// the disabled placeholder instead of awaiting a snapshot.
     pub tracker_tx: Option<Arc<tokio::sync::mpsc::Sender<TrackerCommand>>>,
     /// TTL cache for Twitch helix `profile_image_url` lookups. Shared
-    /// across handlers so repeat `/memory/users` loads don't re-issue
+    /// across handlers so repeat memory-page loads don't re-issue
     /// the same helix batch call.
     pub avatar_cache: Arc<AvatarCache>,
     /// Twitch user ID with full dashboard access (settings page). Loaded from

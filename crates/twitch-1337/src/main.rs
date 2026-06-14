@@ -10,10 +10,9 @@ use secrecy::ExposeSecret as _;
 use tokio::sync::oneshot;
 use tracing::info;
 use twitch_1337_core::{
-    AuthenticatedLoginCredentials, PersonalBest, Services,
-    ai::memory::store::MemoryStore,
-    aviation, doener, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing,
-    llm_factory, load_configuration, load_leaderboard,
+    AuthenticatedLoginCredentials, PersonalBest, Services, aviation, doener, ensure_data_dir,
+    get_data_dir, install_crypto_provider, install_tracing, llm_factory, load_configuration,
+    load_leaderboard,
     ping::{PingHandle, PingManager, ping_actor_channel_full},
     run_bot, setup_and_verify_twitch_client,
     twitch::whisper,
@@ -77,6 +76,12 @@ pub async fn main() -> Result<()> {
     let (config, raw_toml) = load_configuration().await?;
 
     ensure_data_dir().await?;
+
+    // Seed the baked prompt files into `$DATA_DIR/prompts/` on first run. The
+    // `!ai` turn reads `system.md` / `ai_instructions.md` from there each turn.
+    twitch_1337::ai::prompt::seed_prompts(&get_data_dir())
+        .await
+        .wrap_err("seed prompts")?;
 
     // Dashboard-managed runtime settings. Opened before IRC connect so the
     // settings-store values (admin_channel, ai_channel) can be passed to the
@@ -275,13 +280,6 @@ pub async fn main() -> Result<()> {
         }
     };
 
-    // Memory v2 store opens unconditionally so the dashboard editor has a
-    // handle even when `[ai]` is disabled. The same `Arc`-backed store is
-    // shared with the bot's IRC handlers / dreamer ritual via `Services`.
-    let memory_store = MemoryStore::open(&get_data_dir(), settings_handle.clone())
-        .await
-        .wrap_err("open memory store")?;
-
     // Load the leaderboard before building the web spawner so the same Arc
     // can be shared with WebState (dashboard read) and the IRC tracker (writes).
     let leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>> = Arc::new(
@@ -308,7 +306,6 @@ pub async fn main() -> Result<()> {
                 credentials_for_web,
                 irc_connected.clone(),
                 PingHandle::new((*ping_actor_tx).clone()),
-                memory_store.clone(),
                 leaderboard.clone(),
                 aviation_tracker_tx.clone(),
                 settings_handle.clone(),
@@ -340,7 +337,6 @@ pub async fn main() -> Result<()> {
         ping_manager,
         ping_names_tx,
         ping_names_rx,
-        memory_store,
         mem0: mem0.clone(),
         leaderboard,
         aviation_tracker_tx,
@@ -370,7 +366,6 @@ async fn build_web_spawner(
     credentials: AuthenticatedLoginCredentials,
     irc_connected: Arc<AtomicBool>,
     ping_actor: PingHandle,
-    memory_store: MemoryStore,
     leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
     tracker_tx: Option<Arc<tokio::sync::mpsc::Sender<aviation::TrackerCommand>>>,
     settings: twitch_1337::settings::SettingsHandle,
@@ -457,7 +452,6 @@ async fn build_web_spawner(
         client_id: config.twitch.client_id.clone(),
         oauth,
         ping_actor,
-        memory_store,
         mem0,
         signed_key,
         leaderboard,

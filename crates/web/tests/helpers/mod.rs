@@ -18,7 +18,6 @@ use secrecy::SecretString;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 use twitch_1337_core::ai::mem0::{MemoryApi, MemoryHit, Scope, TurnMessage};
-use twitch_1337_core::ai::memory::store::MemoryStore;
 use twitch_1337_core::ping::{PingHandle, PingManager, ping_actor_channel_full, run_ping_actor};
 use twitch_1337_web::WebState;
 use twitch_1337_web::auth::OAuthCtx;
@@ -256,9 +255,6 @@ async fn build_state_inner_keep_settings(
         s.web.session_ttl_secs = 7200;
         settings_handle.store(std::sync::Arc::new(s));
     }
-    let memory_store = MemoryStore::open(memory_dir.path(), settings_handle.clone())
-        .await
-        .expect("open memory store");
     // Reuse pings_dir for telemetry: TelemetryStore only writes on flush, and
     // pings_dir is returned to callers so it stays alive for the test lifetime.
     let telemetry = twitch_1337_core::schedule::TelemetryStore::open(pings_dir.path());
@@ -273,7 +269,6 @@ async fn build_state_inner_keep_settings(
         client_id: SecretString::new("test-client-id".to_owned().into()),
         oauth,
         ping_actor,
-        memory_store,
         mem0,
         signed_key,
         leaderboard: Arc::new(RwLock::new(HashMap::new())),

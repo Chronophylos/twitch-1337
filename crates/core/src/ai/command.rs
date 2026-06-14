@@ -370,7 +370,7 @@ where
             .to_string();
 
         // Re-read each turn so owner edits land without restart. The prompts
-        // dir is still seeded by the memory store at startup during this task.
+        // dir is seeded by `ai::prompt::seed_prompts` at startup.
         let prompts_dir = self.data_dir.join("prompts");
         let (system_template, instructions_template) = tokio::try_join!(
             tokio::fs::read_to_string(prompts_dir.join("system.md")),

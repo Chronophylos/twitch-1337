@@ -266,12 +266,9 @@ impl TestBotBuilder {
         let (ping_actor_tx, ping_actor_rx, ping_names_tx, ping_names_rx) =
             ping_actor_channel_full();
 
-        let memory_store = twitch_1337::ai::memory::store::MemoryStore::open(
-            data_dir.path(),
-            settings_handle.clone(),
-        )
-        .await
-        .expect("open memory store");
+        twitch_1337::ai::prompt::seed_prompts(data_dir.path())
+            .await
+            .expect("seed prompts");
 
         // Build the telemetry store once; share the Arc with Services, web, and TestBot.
         let telemetry_store = twitch_1337::schedule::TelemetryStore::open(data_dir.path());
@@ -288,7 +285,6 @@ impl TestBotBuilder {
                 &self.config,
                 irc_connected.clone(),
                 PingHandle::new((*ping_actor_tx).clone()),
-                memory_store.clone(),
                 settings_handle.clone(),
                 settings_store.clone(),
                 telemetry_store.clone(),
@@ -341,7 +337,6 @@ impl TestBotBuilder {
             ping_manager,
             ping_names_tx,
             ping_names_rx,
-            memory_store,
             mem0: mem0
                 .clone()
                 .map(|m| m as Arc<dyn twitch_1337::ai::mem0::MemoryApi>),
@@ -630,7 +625,6 @@ fn build_test_web_state(
     config: &Configuration,
     irc_connected: Arc<AtomicBool>,
     ping_actor: PingHandle,
-    memory_store: twitch_1337::ai::memory::store::MemoryStore,
     settings: twitch_1337::settings::SettingsHandle,
     settings_store: Arc<twitch_1337::settings::SettingsStore>,
     telemetry: Arc<twitch_1337::schedule::TelemetryStore>,
@@ -682,7 +676,6 @@ fn build_test_web_state(
         client_id: secrecy::SecretString::new("test-client-id".to_owned().into()),
         oauth,
         ping_actor,
-        memory_store,
         mem0: None,
         signed_key,
         leaderboard: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),

@@ -1,13 +1,37 @@
-//! Prompt-file token substitution and recent-chat rendering for the `!ai` turn.
+//! Prompt-file token substitution and recent-chat rendering for the `!ai` turn,
+//! plus first-run seeding of the baked prompt files into `$DATA_DIR/prompts/`.
 //!
 //! Relocated out of the old `ai/memory/inject.rs` when memory moved to mem0.
 //! Only the parts the live turn still needs survive here: prompt-template
-//! substitution and the rolling recent-chat sections. Memory-file injection
-//! lives (for now) in the old module, which the web editor still uses.
+//! substitution and the rolling recent-chat sections.
+
+use std::path::Path;
 
 use chrono_tz::Europe::Berlin;
+use eyre::Result;
 
 use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry, ChatHistorySource};
+
+const PROMPT_SYSTEM: &str = include_str!("../../data/prompts/system.md");
+const PROMPT_INSTRUCTIONS: &str = include_str!("../../data/prompts/ai_instructions.md");
+
+/// Seed the baked prompt files into `$DATA_DIR/prompts/` on first run only.
+/// Owner edits survive (existing files are never overwritten). Replaces the
+/// seeding the old MemoryStore::open used to do. ponytail: two files, no store.
+pub async fn seed_prompts(data_dir: &Path) -> Result<()> {
+    let dir = data_dir.join("prompts");
+    tokio::fs::create_dir_all(&dir).await?;
+    for (name, body) in [
+        ("system.md", PROMPT_SYSTEM),
+        ("ai_instructions.md", PROMPT_INSTRUCTIONS),
+    ] {
+        let p = dir.join(name);
+        if !tokio::fs::try_exists(&p).await? {
+            tokio::fs::write(&p, body).await?;
+        }
+    }
+    Ok(())
+}
 
 /// Per-section byte caps for rolling chat injected into the prompt.
 const RECENT_CHAT_PRIMARY_BYTES: usize = 2048;
