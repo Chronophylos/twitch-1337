@@ -250,13 +250,6 @@ pub async fn migrate_legacy_memories(
     Ok(())
 }
 
-// Suppress unused-import warnings for items that are part of the public API
-// but not yet called from production code. Callers land in later tasks.
-const _: fn() = || {
-    let _: &dyn MemoryApi;
-    let _: fn() -> ToolDefinition = forget_tool;
-};
-
 #[cfg(test)]
 mod tests {
     use super::*;
