@@ -46,6 +46,13 @@ client_secret = "your_client_secret"
 # [ai]
 # api_key = "sk-or-your_api_key"
 
+# Optional: mem0 self-hosted memory. The api_key is the OpenRouter key mem0
+# uses for fact extraction + embeddings (a secret, stays here). enabled,
+# base_url, timeout_secs, and search_limit live in the dashboard
+# (/settings → Memory). If absent or disabled, !ai runs without long-term memory.
+# [mem0]
+# api_key = "sk-or-your_openrouter_key"
+
 # Schedules now live in the dashboard at /schedules.
 # settings.ron stores the canonical list; legacy [[schedules]] in this
 # file are ignored on every boot after the first.

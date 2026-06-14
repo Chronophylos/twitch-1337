@@ -1,0 +1,60 @@
+name: mem0 image
+
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/mem0-image.yml"]
+
+concurrency:
+  group: mem0-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Pin mem0 upstream to the commit SHA for v2.0.6.
+  # Bump = one-line PR: update both MEM0_REF and MEM0_TAG together.
+  MEM0_REF: "b3ede5b7c0ac0e847b03786a603c107ac943b3ee"
+  MEM0_TAG: "v2.0.6"
+
+jobs:
+  build:
+    name: build and push mem0 server
+    # Only publish from main (a dispatch on a branch must not push :latest).
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: mem0ai/mem0
+          ref: ${{ env.MEM0_REF }}
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6
+        with:
+          images: ghcr.io/chronophylos/mem0-server
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ env.MEM0_TAG }}
+
+      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        with:
+          context: ./server
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

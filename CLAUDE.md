@@ -50,6 +50,10 @@ Linear history required, force-push + delete blocked, conversations must resolve
 `Docker` (build + push `ghcr.io/chronophylos/twitch-1337:latest` and
 `:b<run_number>`) triggers on push to `main` with paths-ignore for
 docs. Not a required check.
+`mem0 image` (build + push `ghcr.io/chronophylos/mem0-server`) triggers on
+`workflow_dispatch` or push touching the workflow file. Pins the mem0
+upstream to a commit SHA (`MEM0_REF` env var); bump = one-line PR. Not a
+required check.
 `GHCR retention` runs Sundays 04:00 UTC; prunes old image versions
 keeping the last 30 plus `:latest`. Not a required check.
 `Data refresh` runs Sundays 03:00 UTC; opens a `chore/data-refresh` PR.
@@ -110,17 +114,22 @@ log` on `main` is the release history. The workspace version stays at
 
 ## Config
 
-`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (api_key only, optional), `[aviationstack]` (api_key only, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
+`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (api_key only, optional), `[mem0]` (api_key only, optional), `[aviationstack]` (api_key only, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
 
 `[twitch]` holds OAuth credentials (`refresh_token`, `client_id`, `client_secret`), `channel`, `username`, and `owner` (optional Twitch user ID with full dashboard access). `owner` is bootstrap-only and lives here because it gates the settings page — it must not be editable from the thing it controls. Permission lists (`hidden_admins`, `viewer_allowlist`), channel pointers (`admin_channel`, `ai_channel`), and `expected_latency` live in `settings.ron`, managed via `/settings → Twitch · Permissions` and `Twitch · Channels`. `admin_channel` and `ai_channel` changes require a bot restart. Mods always pass the dashboard auth check; `viewer_allowlist` grants read-only access to non-mods.
 
-`[ai]` carries only the API key. Backend, model, base URL, memory caps,
-dreamer schedule, web/emote/media tool toggles, history caps, and every
-other runtime knob live in the dashboard (`/settings`, owner only) and
-persist to `$DATA_DIR/settings.ron` (schema v2). On first v2 launch any
-legacy hoisted `[ai]` keys in `config.toml` are migrated into
-`settings.ron` once (sentinel: `$DATA_DIR/.ai_migrated_v2`); subsequent
-edits to those legacy keys are ignored.
+`[ai]` carries only the API key. Backend, model, base URL, web/emote/media
+tool toggles, history caps, and every other runtime knob live in the
+dashboard (`/settings`, owner only) and persist to `$DATA_DIR/settings.ron`
+(schema v2). On first v2 launch any legacy hoisted `[ai]` keys in
+`config.toml` are migrated into `settings.ron` once (sentinel:
+`$DATA_DIR/.ai_migrated_v2`); subsequent edits to those legacy keys are
+ignored.
+
+`[mem0]` carries only `api_key` (the OpenRouter key mem0 uses for fact
+extraction + embeddings). `enabled`, `base_url`, `timeout_secs`, and
+`search_limit` live in `settings.ron`, managed via `/settings → Memory`.
+`base_url` changes require a bot restart.
 
 `[aviationstack]` keeps only `api_key` in config.toml. `enabled`, `base_url`,
 and `timeout_secs` live in `settings.ron` (restart-required for connection
@@ -150,16 +159,16 @@ the legacy section are ignored.
 Backend and connection `base_url` changes from the dashboard require a
 bot restart (UI shows a "restart required" badge). Everything else
 applies live via `SettingsHandle` (model, timeout, reasoning_effort,
-behavior limits, history caps, memory byte budgets, dreamer schedule,
-web tools, emotes, media). The `GET /settings/ai/models` endpoint
-proxies upstream `/v1/models` (OpenAI) or `/api/tags` (Ollama) with a
-5-minute TTL cache so the model picker can autocomplete.
+behavior limits, history caps, web tools, emotes, media). The
+`GET /settings/ai/models` endpoint proxies upstream `/v1/models`
+(OpenAI) or `/api/tags` (Ollama) with a 5-minute TTL cache so the model
+picker can autocomplete.
 
 OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config structs are `Deserialize`-only; do NOT add `Serialize` derive (closes credential-leak via debug dump).
 
 ## Data dir
 
-All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `pings.ron`, `leaderboard.ron`, `flights.ron`, `feedback.txt`. Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/state/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt overrides: `prompts/system.md`, `prompts/ai_instructions.md`, `prompts/dreamer.md`.
+All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `pings.ron`, `leaderboard.ron`, `flights.ron`, `feedback.txt`. Prompt overrides: `prompts/system.md`, `prompts/ai_instructions.md`.
 
 Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `flight_tracker.rs`.
 
@@ -177,7 +186,7 @@ Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `fli
 - Aviation client init failure: log + disable `!up`/`!fl`/flight tracker + track commands. Don't abort.
 - Latency monitor: PING/PONG every 5min, EMA alpha=0.2, shared `Arc<AtomicU32>`. Read by 1337 handler for precise wake-up.
 - Flight tracker: `Arc<mpsc::Sender<TrackerCommand>>` from commands to long task. Adaptive poll 30/60/120s based on phase mix. adsb.lol v2; fallback aggregators in memory `reference_adsb_aggregators.md`.
-- AI memory (v2): per-user character sheets + chat LORE + bot SOUL as markdown under $DATA_DIR/memories/. Single-loop !ai turn drives the model with write_file/write_state/delete_state tools (run_agent in the llm crate); the model's final assistant text is sent to chat verbatim. Daily dreamer ritual rewrites files from yesterday's transcript at the dashboard-configured `ai.dreamer.run_at` (Berlin local). Memory bodies are byte-capped (SOUL/user 4 KiB, LORE 12 KiB, state 2 KiB by default; tunable via the dashboard `AI · Memory` card).
+- AI memory (mem0): per-user memories stored in a sidecar mem0 container + Postgres. Each `!ai` turn runs two scoped search queries (speaker + channel) against mem0, dedupes the results into a "What you remember" block prepended to the prompt, then fires a fire-and-forget `add` after the reply. A `forget` tool wipes the speaker's memories and suppresses that turn's `add`. Persona lives in `prompts/system.md`. The bot calls a `MemoryApi` client (`crates/core/src/ai/mem0.rs`); the mem0 server image is built by `mem0-image.yml`.
 - Scheduled messages: list loaded from `settings.ron` into `ScheduleCache`; the `run_schedule_settings_sync` task subscribes to `SettingsStore`'s change-`Notify` and updates the cache when the dashboard saves. The message handler polls the cache every 30s. On Ctrl+C, main notifies `Arc<Notify>`; children finish in-flight `say()` then exit; main awaits handler with 5s timeout.
 
 ## Gotchas
