@@ -280,6 +280,30 @@ pub async fn main() -> Result<()> {
         }
     };
 
+    // One-shot: fold legacy markdown memories into mem0. Sentinel-gated; on any
+    // per-file failure we skip the sentinel so the next boot retries.
+    if let Some(m) = mem0.as_ref() {
+        let marker = get_data_dir().join(".mem0_migrated");
+        if !marker.exists() {
+            match twitch_1337::ai::mem0::migrate_legacy_memories(
+                &**m,
+                &get_data_dir(),
+                &config.twitch.channel,
+            )
+            .await
+            {
+                Ok(()) => {
+                    let _ = std::fs::write(&marker, "");
+                    info!("migrated legacy memories into mem0");
+                }
+                Err(e) => tracing::warn!(
+                    error = ?e,
+                    "mem0 memory migration incomplete; will retry next boot"
+                ),
+            }
+        }
+    }
+
     // Load the leaderboard before building the web spawner so the same Arc
     // can be shared with WebState (dashboard read) and the IRC tracker (writes).
     let leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>> = Arc::new(

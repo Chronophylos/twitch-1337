@@ -4,6 +4,7 @@
 //! `POST /search`, `POST /memories`, `GET /memories?user_id=`,
 //! `DELETE /memories?user_id=`, `DELETE /memories/{id}`.
 
+use std::path::Path;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -187,6 +188,68 @@ pub fn forget_tool() -> ToolDefinition {
     }
 }
 
+/// One-shot migration of legacy markdown memories into mem0. Reads
+/// `memories/users/<id>.md` (→ user-scoped) and `memories/LORE.md`
+/// (→ channel-scoped) off disk, strips frontmatter, and `add`s each body so
+/// mem0 distils it. SOUL.md is intentionally skipped (folded into the system
+/// prompt by hand). Returns `Err` on the first failed `add` so the caller can
+/// skip the sentinel and retry next boot.
+pub async fn migrate_legacy_memories(
+    m: &dyn MemoryApi,
+    data_dir: &Path,
+    channel: &str,
+) -> eyre::Result<()> {
+    fn strip_frontmatter(raw: &str) -> &str {
+        // Files are `---\n<fm>\n---\n<body>`; split on the closing delimiter.
+        raw.split_once("\n---\n").map(|(_, b)| b).unwrap_or(raw)
+    }
+    let one = |body: &str| {
+        vec![TurnMessage {
+            role: "user".into(),
+            content: body.to_owned(),
+        }]
+    };
+
+    // Per-user character sheets → user-scoped memories.
+    let users_dir = data_dir.join("memories/users");
+    if let Ok(mut rd) = tokio::fs::read_dir(&users_dir).await {
+        while let Some(ent) = rd.next_entry().await? {
+            let path = ent.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let raw = tokio::fs::read_to_string(&path).await?;
+            let body = strip_frontmatter(&raw).trim();
+            if body.is_empty() {
+                continue;
+            }
+            m.add(&one(body), id, channel, serde_json::json!({}))
+                .await?;
+        }
+    }
+
+    // Channel LORE → channel-scoped. mem0 requires a user_id on add; use a
+    // synthetic id so the fact stays channel-wide without a personal owner.
+    // ponytail: synthetic "lore-<channel>" id; revisit if mem0 gains agent-only writes.
+    let lore = data_dir.join("memories/LORE.md");
+    if let Ok(raw) = tokio::fs::read_to_string(&lore).await {
+        let body = strip_frontmatter(&raw).trim();
+        if !body.is_empty() {
+            m.add(
+                &one(body),
+                &format!("lore-{channel}"),
+                channel,
+                serde_json::json!({}),
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 // Suppress unused-import warnings for items that are part of the public API
 // but not yet called from production code. Callers land in later tasks.
 const _: fn() = || {
@@ -326,5 +389,143 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "m1");
         assert_eq!(hits[0].memory, "likes dogs");
+    }
+
+    // --- migrate_legacy_memories tests ---
+
+    struct FakeMemory {
+        calls: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl FakeMemory {
+        fn new() -> Self {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn recorded(&self) -> Vec<(String, String)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MemoryApi for FakeMemory {
+        async fn search(&self, _query: &str, _scope: Scope<'_>) -> eyre::Result<Vec<MemoryHit>> {
+            Ok(vec![])
+        }
+
+        async fn add(
+            &self,
+            _messages: &[TurnMessage],
+            user_id: &str,
+            agent_id: &str,
+            _metadata: serde_json::Value,
+        ) -> eyre::Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((user_id.to_owned(), agent_id.to_owned()));
+            Ok(())
+        }
+
+        async fn delete_user(&self, _user_id: &str) -> eyre::Result<()> {
+            Ok(())
+        }
+
+        async fn delete_one(&self, _memory_id: &str) -> eyre::Result<()> {
+            Ok(())
+        }
+
+        async fn list_user(&self, _user_id: &str) -> eyre::Result<Vec<MemoryHit>> {
+            Ok(vec![])
+        }
+    }
+
+    #[tokio::test]
+    async fn migrate_legacy_memories_adds_user_and_lore_skips_soul() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Create memories/users/7.md with frontmatter + body.
+        let users_dir = root.join("memories/users");
+        std::fs::create_dir_all(&users_dir).unwrap();
+        std::fs::write(
+            users_dir.join("7.md"),
+            "---\ncreated: 2025-01-01\n---\nUser 7 loves cats.",
+        )
+        .unwrap();
+
+        // Create memories/LORE.md with frontmatter + body.
+        let mem_dir = root.join("memories");
+        std::fs::write(
+            mem_dir.join("LORE.md"),
+            "---\nversion: 1\n---\nChannel lore goes here.",
+        )
+        .unwrap();
+
+        // Create memories/SOUL.md — must NOT be migrated.
+        std::fs::write(mem_dir.join("SOUL.md"), "---\n---\nBot persona.").unwrap();
+
+        let fake = FakeMemory::new();
+        super::migrate_legacy_memories(&fake, root, "chan")
+            .await
+            .unwrap();
+
+        let calls = fake.recorded();
+        assert_eq!(
+            calls.len(),
+            2,
+            "expected exactly two add() calls, got {calls:?}"
+        );
+
+        let user_call = calls.iter().find(|(uid, _)| uid == "7");
+        assert!(user_call.is_some(), "missing add for user_id='7'");
+        assert_eq!(
+            user_call.unwrap().1,
+            "chan",
+            "user call agent_id must be channel"
+        );
+
+        let lore_call = calls.iter().find(|(uid, _)| uid == "lore-chan");
+        assert!(lore_call.is_some(), "missing add for user_id='lore-chan'");
+        assert_eq!(
+            lore_call.unwrap().1,
+            "chan",
+            "lore call agent_id must be channel"
+        );
+
+        // Confirm SOUL.md not added.
+        assert!(
+            calls.iter().all(|(uid, _)| uid != "SOUL"),
+            "SOUL.md must not be migrated"
+        );
+    }
+
+    #[tokio::test]
+    async fn migrate_legacy_memories_missing_dirs_are_silent() {
+        // No memories directories at all — should succeed with zero adds.
+        let dir = tempfile::TempDir::new().unwrap();
+        let fake = FakeMemory::new();
+        super::migrate_legacy_memories(&fake, dir.path(), "chan")
+            .await
+            .unwrap();
+        assert!(fake.recorded().is_empty());
+    }
+
+    #[tokio::test]
+    async fn migrate_legacy_memories_skips_empty_bodies() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        let users_dir = root.join("memories/users");
+        std::fs::create_dir_all(&users_dir).unwrap();
+        // File with frontmatter but empty body (only whitespace after `---`).
+        std::fs::write(users_dir.join("9.md"), "---\ntitle: empty\n---\n   ").unwrap();
+
+        let fake = FakeMemory::new();
+        super::migrate_legacy_memories(&fake, root, "chan")
+            .await
+            .unwrap();
+        assert!(fake.recorded().is_empty(), "empty bodies must not be added");
     }
 }
