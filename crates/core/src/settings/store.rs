@@ -201,6 +201,7 @@ impl SettingsStore {
                 // Users can clear it by setting the field to the default value.
             }
             SettingsSection::Aviationstack => current.aviationstack = Default::default(),
+            SettingsSection::Mem0 => current.mem0 = Default::default(),
             SettingsSection::Suspend => current.suspend = Default::default(),
             SettingsSection::WebRuntime => current.web = Default::default(),
             SettingsSection::Schedules => current.schedules = None,
@@ -495,6 +496,19 @@ fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides) {
     }
     if let Some(v) = patch.aviationstack.timeout_secs {
         into.aviationstack.timeout_secs = Some(v);
+    }
+    // mem0
+    if let Some(v) = patch.mem0.enabled {
+        into.mem0.enabled = Some(v);
+    }
+    if let Some(v) = patch.mem0.base_url.as_ref() {
+        into.mem0.base_url = Some(v.clone());
+    }
+    if let Some(v) = patch.mem0.timeout_secs {
+        into.mem0.timeout_secs = Some(v);
+    }
+    if let Some(v) = patch.mem0.search_limit {
+        into.mem0.search_limit = Some(v);
     }
     // Suspend
     if let Some(v) = patch.suspend.default_duration_secs {
@@ -828,6 +842,23 @@ fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
         "aviationstack.timeout_secs",
         prior.aviationstack.timeout_secs,
         next.aviationstack.timeout_secs
+    );
+    // mem0
+    cmp!("mem0.enabled", prior.mem0.enabled, next.mem0.enabled);
+    cmp!(
+        "mem0.base_url",
+        prior.mem0.base_url.as_str(),
+        next.mem0.base_url.as_str()
+    );
+    cmp!(
+        "mem0.timeout_secs",
+        prior.mem0.timeout_secs,
+        next.mem0.timeout_secs
+    );
+    cmp!(
+        "mem0.search_limit",
+        prior.mem0.search_limit,
+        next.mem0.search_limit
     );
     // Suspend
     cmp!(

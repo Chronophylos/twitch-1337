@@ -25,6 +25,8 @@ pub struct SettingsOverrides {
     #[serde(default)]
     pub aviationstack: AviationstackOverrides,
     #[serde(default)]
+    pub mem0: Mem0Overrides,
+    #[serde(default)]
     pub suspend: SuspendOverrides,
     #[serde(default)]
     pub web: WebRuntimeOverrides,
@@ -45,6 +47,7 @@ impl Default for SettingsOverrides {
             ai: AiOverrides::default(),
             twitch: TwitchOverrides::default(),
             aviationstack: AviationstackOverrides::default(),
+            mem0: Mem0Overrides::default(),
             suspend: SuspendOverrides::default(),
             web: WebRuntimeOverrides::default(),
             schedules: None,
@@ -265,6 +268,18 @@ pub struct AviationstackOverrides {
     pub base_url: Option<String>,
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Mem0Overrides {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub search_limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

@@ -42,6 +42,13 @@ pub struct AiBootstrap {
     pub api_key: SecretString,
 }
 
+/// Bootstrap-only mem0 config. Only the secret `api_key` belongs here; the
+/// rest lives in the dashboard settings store under `mem0.*`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Mem0Bootstrap {
+    pub api_key: SecretString,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct WebConfig {
     #[serde(default)]
@@ -81,6 +88,8 @@ pub struct Configuration {
     #[serde(default)]
     pub ai: Option<AiBootstrap>,
     #[serde(default)]
+    pub mem0: Option<Mem0Bootstrap>,
+    #[serde(default)]
     pub web: WebConfig,
 }
 
@@ -101,6 +110,7 @@ impl Configuration {
             },
             aviationstack: None,
             ai: None,
+            mem0: None,
             web: WebConfig::default(),
         }
     }
@@ -161,6 +171,14 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         bail!("ai.api_key cannot be empty");
     }
 
+    if config
+        .mem0
+        .as_ref()
+        .is_some_and(|m| m.api_key.expose_secret().trim().is_empty())
+    {
+        bail!("mem0.api_key cannot be empty when mem0 is configured");
+    }
+
     if config.web.enabled {
         let secret = config.web.session_secret.expose_secret();
         let secret_bytes_len = hex::decode(secret).map(|b| b.len()).unwrap_or(0);
@@ -219,6 +237,26 @@ mod tests {
         )
         .expect("parse");
         let boot = cfg.aviationstack.as_ref().expect("aviationstack present");
+        assert!(!boot.api_key.expose_secret().is_empty());
+    }
+
+    #[test]
+    fn mem0_bootstrap_parses_api_key_only() {
+        let cfg: Configuration = toml::from_str(
+            r#"
+            [twitch]
+            channel = "c"
+            username = "u"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+
+            [mem0]
+            api_key = "mem0-key"
+        "#,
+        )
+        .expect("parse");
+        let boot = cfg.mem0.as_ref().expect("mem0 present");
         assert!(!boot.api_key.expose_secret().is_empty());
     }
 

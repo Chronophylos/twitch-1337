@@ -12,6 +12,7 @@
 pub mod ai;
 pub mod audit;
 pub mod aviationstack;
+pub mod mem0;
 pub mod migrate;
 pub mod overrides;
 pub mod schedules;
@@ -28,6 +29,7 @@ pub use ai::{
 pub use audit::MemoryAuditLog;
 pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
 pub use aviationstack::AviationstackSettings;
+pub use mem0::Mem0Settings;
 pub use overrides::{AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides};
 pub use schedules::Schedule;
 pub use store::{Actor, SettingsStore};
@@ -53,6 +55,7 @@ pub struct Settings {
     pub ai: AiSettings,
     pub twitch: TwitchRuntime,
     pub aviationstack: AviationstackSettings,
+    pub mem0: Mem0Settings,
     pub suspend: SuspendSettings,
     pub web: WebRuntime,
     pub schedules: Vec<Schedule>,
@@ -89,6 +92,7 @@ pub enum SettingsSection {
     TwitchPermissions,
     TwitchChannels,
     Aviationstack,
+    Mem0,
     Suspend,
     WebRuntime,
     Schedules,
@@ -144,6 +148,7 @@ impl Settings {
             ai: AiSettings::default(),
             twitch: TwitchRuntime::default(),
             aviationstack: AviationstackSettings::default(),
+            mem0: Mem0Settings::default(),
             suspend: SuspendSettings::default(),
             web: WebRuntime::default(),
             schedules: Vec::new(),
@@ -258,6 +263,26 @@ impl Settings {
                 });
             }
         }
+        if self.mem0.enabled {
+            if reqwest::Url::parse(&self.mem0.base_url).is_err() {
+                errs.push(FieldError {
+                    field: "mem0.base_url".into(),
+                    message: format!("must be a valid URL (got {:?})", self.mem0.base_url),
+                });
+            }
+            if self.mem0.timeout_secs == 0 {
+                errs.push(FieldError {
+                    field: "mem0.timeout_secs".into(),
+                    message: "must be > 0".into(),
+                });
+            }
+            if !(1..=50).contains(&self.mem0.search_limit) {
+                errs.push(FieldError {
+                    field: "mem0.search_limit".into(),
+                    message: format!("must be 1..=50 (got {})", self.mem0.search_limit),
+                });
+            }
+        }
         if !(3600..=2_592_000).contains(&self.web.session_ttl_secs) {
             errs.push(FieldError {
                 field: "web.session_ttl_secs".into(),
@@ -349,6 +374,16 @@ impl Settings {
                     .aviationstack
                     .timeout_secs
                     .unwrap_or(defaults.aviationstack.timeout_secs),
+            },
+            mem0: Mem0Settings {
+                enabled: overrides.mem0.enabled.unwrap_or(defaults.mem0.enabled),
+                base_url: overrides
+                    .mem0
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| defaults.mem0.base_url.clone()),
+                timeout_secs: overrides.mem0.timeout_secs.unwrap_or(defaults.mem0.timeout_secs),
+                search_limit: overrides.mem0.search_limit.unwrap_or(defaults.mem0.search_limit),
             },
             suspend: SuspendSettings {
                 default_duration_secs: overrides
@@ -831,6 +866,7 @@ mod resolve_tests {
         assert_eq!(s.ai, AiSettings::default());
         assert_eq!(s.twitch, TwitchRuntime::default());
         assert_eq!(s.aviationstack, AviationstackSettings::default());
+        assert_eq!(s.mem0, Mem0Settings::default());
         assert_eq!(s.suspend, SuspendSettings::default());
         assert_eq!(s.web, WebRuntime::default());
         assert!(s.schedules.is_empty());
@@ -1077,6 +1113,17 @@ mod resolve_tests {
             })
             .expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "aviationstack.base_url"));
+    }
+
+    #[test]
+    fn validate_rejects_invalid_mem0_url_when_enabled() {
+        let mut s = Settings::compiled_defaults();
+        s.mem0.enabled = true;
+        s.mem0.base_url = "not a url".into();
+        let errs = s
+            .validate(&ValidationContext { channel: "test".into() })
+            .expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "mem0.base_url"));
     }
 
     #[test]

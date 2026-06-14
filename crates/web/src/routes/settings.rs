@@ -910,6 +910,8 @@ async fn save(
             aviationstack_timeout_secs: form.aviationstack_timeout_secs,
         }
         .into_overrides(),
+        // mem0 card/form wired in Task 7; preserve existing overrides on every settings save.
+        mem0: Default::default(),
         suspend: SuspendForm {
             suspend_default_duration_secs: form.suspend_default_duration_secs,
         }
