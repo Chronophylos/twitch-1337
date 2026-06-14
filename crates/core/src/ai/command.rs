@@ -1,11 +1,12 @@
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
 use eyre::Result;
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, instrument, warn};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use llm::{
@@ -15,12 +16,9 @@ use llm::{
 
 use crate::ai::chat_history::ChatHistory;
 use crate::ai::content;
-use crate::ai::memory::inject;
-use crate::ai::memory::store::MemoryStore;
-use crate::ai::memory::tools::{ChatTurnExecutor, ChatTurnExecutorOpts, chat_turn_tools};
-use crate::ai::memory::transcript::TranscriptWriter;
-use crate::ai::memory::types::Role;
+use crate::ai::mem0::{FORGET_TOOL_NAME, MemoryApi, Scope, TurnMessage, forget_tool};
 use crate::ai::model_catalog::ModelCatalog;
+use crate::ai::prompt;
 use crate::commands::{Command, CommandContext};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
@@ -53,26 +51,16 @@ impl ChatContext {
     }
 }
 
-/// Memory v2 bundle: store handle, transcript writer, and per-turn knobs.
-#[derive(Clone)]
-pub struct AiMemoryV2 {
-    pub store: MemoryStore,
-    pub transcript: TranscriptWriter,
-    pub inject_byte_budget: usize,
-    pub max_turn_rounds: usize,
-    pub max_writes_per_turn: usize,
-    pub turn_timeout: Duration,
-}
-
-/// Classify the speaker role from Twitch IRC badge list.
-pub fn classify_role(badges: &[twitch_irc::message::Badge]) -> Role {
+/// Classify the speaker role from Twitch IRC badge list into the static label
+/// used for the `{speaker_role}` prompt-template variable.
+fn role_str(badges: &[twitch_irc::message::Badge]) -> &'static str {
     let has = |key: &str| badges.iter().any(|b| b.name == key);
     if has("broadcaster") {
-        Role::Broadcaster
+        "broadcaster"
     } else if has("moderator") {
-        Role::Moderator
+        "moderator"
     } else {
-        Role::Regular
+        "regular"
     }
 }
 
@@ -102,24 +90,27 @@ pub struct AiCommand {
     settings: SettingsHandle,
     cooldown: PerUserCooldown,
     chat_ctx: Option<ChatContext>,
-    memory: AiMemoryV2,
+    mem0: Option<Arc<dyn MemoryApi>>,
     web: Option<AiWeb>,
     emotes: Option<Arc<SevenTvEmoteProvider>>,
     bot_username: String,
     doener: Arc<crate::doener::DoeneratlasClient>,
     model_catalog: Arc<ModelCatalog>,
+    /// Data dir holding `prompts/{system,ai_instructions}.md`, re-read per turn.
+    data_dir: std::path::PathBuf,
 }
 
 pub struct AiCommandDeps {
     pub llm_client: Arc<dyn LlmClient>,
     pub settings: SettingsHandle,
     pub chat_ctx: Option<ChatContext>,
-    pub memory: AiMemoryV2,
+    pub mem0: Option<Arc<dyn MemoryApi>>,
     pub web: Option<AiWeb>,
     pub emotes: Option<Arc<SevenTvEmoteProvider>>,
     pub bot_username: String,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
     pub model_catalog: Arc<ModelCatalog>,
+    pub data_dir: std::path::PathBuf,
 }
 
 pub const GROK_ALIAS_TRIGGER: &str = "@grok";
@@ -156,41 +147,57 @@ impl AiCommand {
             settings: deps.settings,
             cooldown,
             chat_ctx: deps.chat_ctx,
-            memory: deps.memory,
+            mem0: deps.mem0,
             web: deps.web,
             emotes: deps.emotes,
             bot_username: deps.bot_username,
             doener: deps.doener,
             model_catalog: deps.model_catalog,
+            data_dir: deps.data_dir,
         }
     }
 }
 
-/// Memory-v2 path executor that dispatches by tool name to the chat-turn
-/// executor (write_file/write_state/delete_state), the web search executor
-/// (web_search/read_url) when web tools are configured, or the always-on
-/// doener_index tool.
-struct V2Executor<'a> {
-    chat: &'a ChatTurnExecutor,
+/// `!ai` tool executor: handles the single `forget` memory tool (mem0), the
+/// always-on doener_index tool, and the web search/read tools when configured.
+/// Any other tool name is unknown.
+struct AiToolExecutor<'a> {
+    mem0: Option<&'a dyn MemoryApi>,
+    speaker_user_id: &'a str,
+    forget_fired: &'a AtomicBool,
     web: Option<&'a content::ContentToolExecutor>,
     doener: &'a crate::doener::DoeneratlasClient,
     trace: &'a TraceIds,
 }
 
 #[async_trait]
-impl ToolExecutor for V2Executor<'_> {
+impl ToolExecutor for AiToolExecutor<'_> {
     async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
+        if call.name == FORGET_TOOL_NAME {
+            let Some(m) = self.mem0 else {
+                return ToolResultMessage::for_call(call, "memory unavailable");
+            };
+            return match m.delete_user(self.speaker_user_id).await {
+                Ok(()) => {
+                    self.forget_fired.store(true, Ordering::SeqCst);
+                    ToolResultMessage::for_call(call, "ok: forgot everything about this user")
+                }
+                Err(e) => {
+                    tracing::warn!(error = ?e, "mem0 forget failed");
+                    ToolResultMessage::for_call(call, "memory unavailable")
+                }
+            };
+        }
         if call.name == crate::ai::doener_tool::DOENER_TOOL_NAME {
             return crate::ai::doener_tool::execute_doener_index(self.doener, call).await;
         }
         if content::is_web_tool(&call.name) {
-            match self.web {
+            return match self.web {
                 Some(w) => w.execute_tool_call(call, self.trace).await,
                 None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
-            }
-        } else {
-            self.chat.execute(call).await
+            };
         }
+        ToolResultMessage::for_call(call, "unknown_tool".to_string())
     }
 }
 
@@ -341,28 +348,30 @@ where
         // the window between cooldown.check and cooldown.record.
         self.cooldown.record(user).await;
 
-        // Snapshot connection knobs once per turn so dashboard edits take
-        // effect on the next invocation without a bot restart.
+        // Snapshot connection + behavior knobs once per turn so dashboard
+        // edits take effect on the next invocation without a bot restart.
         let snap = self.settings.load();
         let model = snap.ai.connection.model.clone();
         let connection = snap.ai.connection.clone();
         let reasoning_effort = snap.ai.connection.reasoning_effort.clone();
         let service_tier = snap.ai.connection.service_tier.clone();
         let persona_name = snap.ai.behavior.persona_name.clone();
+        let max_turn_rounds = snap.ai.behavior.max_turn_rounds;
+        let turn_timeout = std::time::Duration::from_secs(snap.ai.connection.timeout);
         drop(snap);
 
         let model_display = self.model_catalog.display_name(&connection, &model).await;
 
-        let mem = &self.memory;
         let cc = self.chat_ctx.as_ref();
-        let role = classify_role(&ctx.privmsg.badges);
+        let role = role_str(&ctx.privmsg.badges);
         let now_berlin = Utc::now()
             .with_timezone(&chrono_tz::Europe::Berlin)
             .format("%Y-%m-%d")
             .to_string();
 
-        // Re-read each turn so owner edits land without restart.
-        let prompts_dir = mem.store.prompts_dir();
+        // Re-read each turn so owner edits land without restart. The prompts
+        // dir is still seeded by the memory store at startup during this task.
+        let prompts_dir = self.data_dir.join("prompts");
         let (system_template, instructions_template) = tokio::try_join!(
             tokio::fs::read_to_string(prompts_dir.join("system.md")),
             tokio::fs::read_to_string(prompts_dir.join("ai_instructions.md")),
@@ -373,53 +382,68 @@ where
             ctx.privmsg.sender.name.as_str()
         };
         let sender_user_id = ctx.privmsg.sender.id.as_str();
-        let vars = inject::SubstitutionVars {
+        let vars = prompt::SubstitutionVars {
             speaker_username: &ctx.privmsg.sender.login,
             speaker_display: sender_display,
             speaker_user_id: sender_user_id,
-            speaker_role: role.as_str(),
+            speaker_role: role,
             channel: &ctx.privmsg.channel_login,
             date: &now_berlin,
             model: &model_display,
             model_id: &model,
         };
-        let mut system_prompt_head = inject::substitute(&system_template, vars);
-        let instructions_head = inject::substitute(&instructions_template, vars);
+        let mut system_prompt_head = prompt::substitute(&system_template, vars);
+        let instructions_head = prompt::substitute(&instructions_template, vars);
 
-        let invocation_channel = if cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login))
-        {
-            inject::InvocationChannel::AiChannel
-        } else {
-            inject::InvocationChannel::Primary
-        };
-        // Durable memory (SOUL/LORE/users) goes in the system message so the
-        // prompt cache survives across turns. Volatile state and recent chat
-        // go in the user message: any state write or chat line would otherwise
-        // invalidate the system-message cache every turn.
-        let inject::ChatTurnContext {
-            recent_chat,
-            durable_memory,
-            volatile_state,
-        } = inject::build_chat_turn_context(
-            &mem.store,
-            inject::BuildOpts {
-                inject_byte_budget: mem.inject_byte_budget,
-                nonce: inject::fresh_nonce(),
-                primary_history: cc.map(|c| c.primary_history.clone()),
-                primary_login: cc
-                    .map(|c| c.primary_login.clone())
-                    .unwrap_or_else(|| ctx.privmsg.channel_login.clone()),
-                ai_channel_history: cc.and_then(|c| c.ai_channel_history.clone()),
-                ai_channel_login: cc.and_then(|c| c.ai_channel_login.clone()),
-                invocation_channel,
-                bot_login: self.bot_username.clone(),
-                persona_name: persona_name.clone(),
-                speaker_login: ctx.privmsg.sender.login.clone(),
-            },
-        )
-        .await?;
+        let recent_chat = prompt::render_recent_chat(prompt::RecentChatOpts {
+            primary_history: cc.map(|c| c.primary_history.clone()),
+            primary_login: cc
+                .map(|c| c.primary_login.clone())
+                .unwrap_or_else(|| ctx.privmsg.channel_login.clone()),
+            ai_channel_history: cc.and_then(|c| c.ai_channel_history.clone()),
+            ai_channel_login: cc.and_then(|c| c.ai_channel_login.clone()),
+            invoked_in_ai_channel: cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login)),
+            bot_login: self.bot_username.clone(),
+            persona_name: persona_name.clone(),
+        })
+        .await;
 
         let instruction_for_prompt = instruction_with_reply_context(&instruction, &ctx, grok_alias);
+
+        // Search mem0 for relevant memories about the speaker (user scope) and
+        // the channel (agent scope) before the turn. Failures degrade silently
+        // to no memory rather than blocking the reply.
+        let remembered = if let Some(m) = self.mem0.as_deref() {
+            let chan = ctx.privmsg.channel_login.as_str();
+            let (by_user, by_chan) = tokio::join!(
+                m.search(&instruction, Scope::User(sender_user_id)),
+                m.search(&instruction, Scope::Agent(chan)),
+            );
+            let mut seen = std::collections::HashSet::new();
+            let mut lines = Vec::new();
+            for hits in [by_user, by_chan] {
+                match hits {
+                    Ok(hits) => {
+                        for h in hits {
+                            if seen.insert(h.id) && !h.memory.trim().is_empty() {
+                                lines.push(format!("- {}", h.memory.trim()));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "mem0 search failed; proceeding without memory");
+                    }
+                }
+            }
+            if lines.is_empty() {
+                String::new()
+            } else {
+                format!("## What you remember\n{}", lines.join("\n"))
+            }
+        } else {
+            String::new()
+        };
+
         if let Some(ref emotes) = self.emotes
             && let Some(block) = emotes
                 .prompt_block_for_turn(
@@ -439,13 +463,13 @@ where
         } else if self.web.is_some() {
             system_prompt_head.push_str(WEB_TOOLS_SYSTEM_APPENDIX);
         }
-        let system_prompt = format!("{system_prompt_head}\n\n{durable_memory}");
+        let system_prompt = if remembered.is_empty() {
+            system_prompt_head
+        } else {
+            format!("{system_prompt_head}\n\n{remembered}")
+        };
 
         let mut user_message = String::new();
-        if !volatile_state.is_empty() {
-            user_message.push_str(&volatile_state);
-            user_message.push_str("\n\n");
-        }
         if !recent_chat.is_empty() {
             user_message.push_str(&recent_chat);
             user_message.push_str("\n\n");
@@ -454,16 +478,11 @@ where
         user_message.push_str("\n\n");
         user_message.push_str(&instruction_for_prompt);
 
-        let exec = ChatTurnExecutor::new(ChatTurnExecutorOpts {
-            store: mem.store.clone(),
-            speaker_user_id: ctx.privmsg.sender.id.clone(),
-            speaker_login: ctx.privmsg.sender.login.clone(),
-            speaker_display_name: ctx.privmsg.sender.name.clone(),
-            speaker_role: role,
-            max_writes_per_turn: mem.max_writes_per_turn,
-        });
-
-        let mut tools = chat_turn_tools();
+        let forget_fired = AtomicBool::new(false);
+        let mut tools = Vec::new();
+        if self.mem0.is_some() {
+            tools.push(forget_tool());
+        }
         tools.push(crate::ai::doener_tool::doener_tool());
         if self.web.is_some() {
             tools.extend(content::ai_tools());
@@ -487,12 +506,14 @@ where
             trace: trace.clone(),
         };
         let opts = AgentOpts {
-            max_rounds: mem.max_turn_rounds,
-            per_round_timeout: Some(mem.turn_timeout),
+            max_rounds: max_turn_rounds,
+            per_round_timeout: Some(turn_timeout),
         };
 
-        let combined_exec = V2Executor {
-            chat: &exec,
+        let combined_exec = AiToolExecutor {
+            mem0: self.mem0.as_deref(),
+            speaker_user_id: sender_user_id,
+            forget_fired: &forget_fired,
             web: self.web.as_ref().map(|w| w.executor.as_ref()),
             doener: self.doener.as_ref(),
             trace: &trace,
@@ -516,6 +537,7 @@ where
             }
         };
 
+        let mut sent_line: Option<String> = None;
         if let Some(text) = final_text {
             let line = clean_user_facing_ai_response(&text).to_string();
             if !line.is_empty() {
@@ -532,17 +554,39 @@ where
                             ts,
                         );
                 }
-                let is_primary_source =
-                    !cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));
-                if is_primary_source
-                    && let Err(e) = mem
-                        .transcript
-                        .append_line(ts, &self.bot_username, &line)
-                        .await
-                {
-                    error!(error = ?e, "transcript bot-reply append failed");
-                }
+                sent_line = Some(line);
             }
+        }
+
+        // Fire-and-forget mem0 add of this turn, unless the model just forgot
+        // the user (no point re-learning what was deliberately erased) or no
+        // reply was sent.
+        if let Some(m) = self.mem0.clone()
+            && !forget_fired.load(Ordering::SeqCst)
+            && let Some(reply_line) = sent_line
+        {
+            let user_msg = instruction_for_prompt.clone();
+            let user_id = ctx.privmsg.sender.id.clone();
+            let agent_id = ctx.privmsg.channel_login.clone();
+            let meta = serde_json::json!({
+                "username": ctx.privmsg.sender.login,
+                "display_name": sender_display,
+            });
+            tokio::spawn(async move {
+                let messages = [
+                    TurnMessage {
+                        role: "user".into(),
+                        content: user_msg,
+                    },
+                    TurnMessage {
+                        role: "assistant".into(),
+                        content: reply_line,
+                    },
+                ];
+                if let Err(e) = m.add(&messages, &user_id, &agent_id, meta).await {
+                    tracing::warn!(error = ?e, "mem0 add failed");
+                }
+            });
         }
 
         Ok(())
@@ -565,35 +609,6 @@ fn user_facing_provider_message(err: &LlmError) -> Option<&'static str> {
         },
         _ => None,
     }
-}
-
-/// Construct the AI memory v2 bundle from settings. `None` when `[ai]` is
-/// absent from `config.toml`.
-///
-/// `store` is built once in main.rs (or by tests) and shared with the web
-/// dashboard via [`crate::Services::memory_store`]. Sharing the same `Arc`-
-/// backed store keeps the per-path mutex map coherent across the bot's
-/// IRC handlers, the dreamer ritual, and the dashboard editor — two
-/// distinct stores would silently race past each other's locks and break
-/// byte-cap enforcement.
-pub async fn build_ai_memory_v2(
-    ai_present: bool,
-    settings: &crate::settings::Settings,
-    store: MemoryStore,
-) -> Result<Option<AiMemoryV2>> {
-    if !ai_present {
-        return Ok(None);
-    }
-
-    let transcript = TranscriptWriter::open(store.memories_dir()).await?;
-    Ok(Some(AiMemoryV2 {
-        store,
-        transcript,
-        inject_byte_budget: settings.ai.memory.inject_byte_budget,
-        max_turn_rounds: settings.ai.behavior.max_turn_rounds,
-        max_writes_per_turn: settings.ai.behavior.max_writes_per_turn,
-        turn_timeout: Duration::from_secs(settings.ai.connection.timeout),
-    }))
 }
 
 #[cfg(test)]

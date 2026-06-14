@@ -31,6 +31,7 @@ use twitch_irc::{ClientConfig, TwitchIRCClient};
 
 use super::fake_clock::FakeClock;
 use super::fake_llm::FakeLlm;
+use super::fake_mem0::FakeMem0;
 use super::fake_transport::{self, FakeTransport, TransportHandle};
 use super::irc_line::{
     parse_privmsg_text, privmsg, privmsg_as_broadcaster, privmsg_as_mod, privmsg_at, privmsg_with,
@@ -45,6 +46,8 @@ pub struct TestBot {
     pub nominatim_mock: MockServer,
     pub seventv_mock: MockServer,
     pub llm: Arc<FakeLlm>,
+    /// Fake mem0 client, present only when the builder enabled `with_mem0()`.
+    pub mem0: Option<Arc<FakeMem0>>,
     whisper: Arc<FakeWhisperSender>,
     pub channel: String,
     pub irc_connected: Arc<AtomicBool>,
@@ -66,6 +69,7 @@ pub struct TestBotBuilder {
     emote_glossary_override: Option<String>,
     doener_base_url: Option<String>,
     settings_overrides: Option<twitch_1337::settings::SettingsOverrides>,
+    with_mem0: bool,
 }
 
 impl TestBotBuilder {
@@ -78,7 +82,15 @@ impl TestBotBuilder {
             emote_glossary_override: None,
             doener_base_url: None,
             settings_overrides: None,
+            with_mem0: false,
         }
+    }
+
+    /// Wire a [`FakeMem0`] into `Services.mem0` so the `!ai` turn searches
+    /// before and adds after. Only effective alongside [`Self::with_ai`].
+    pub fn with_mem0(mut self) -> Self {
+        self.with_mem0 = true;
+        self
     }
 
     /// Inject a custom 7TV emote glossary TOML for this test run instead of
@@ -156,22 +168,6 @@ impl TestBotBuilder {
         self
     }
 
-    /// Pre-seed the data dir with `content` at relative path `rel` before the
-    /// bot is spawned. Used by tests that need files to be present at startup
-    /// (e.g. v1 store disposal).
-    pub fn seed_file(self, rel: &str, content: &[u8]) -> Self {
-        // We defer the actual write to spawn() where the TempDir is created.
-        // Stash as a boxed closure to avoid storing &[u8] with a lifetime.
-        let _rel = rel.to_string();
-        let _content = content.to_vec();
-        // NOTE: because TempDir is created inside spawn(), we can't write
-        // here; instead, callers should create their own TempDir and call
-        // spawn_with_data_dir(), or use a pre-spawn hook. For the v1_store
-        // test we use the unit-level test in store::tests which already
-        // covers the rename path. Document in the test file.
-        self
-    }
-
     pub async fn spawn(mut self) -> TestBot {
         let data_dir = TempDir::new().expect("tempdir");
 
@@ -209,6 +205,9 @@ impl TestBotBuilder {
             }
         }
         let llm = Arc::new(FakeLlm::new());
+        // Build the fake mem0 only when AI is enabled too — memory is dead
+        // weight without the `!ai` turn that drives it.
+        let mem0 = (self.with_mem0 && self.config.ai.is_some()).then(|| Arc::new(FakeMem0::new()));
         let whisper = Arc::new(FakeWhisperSender::new(self.whisper_failure));
         let clock = FakeClock::new(self.now);
         let channel = self.config.twitch.channel.clone();
@@ -343,7 +342,9 @@ impl TestBotBuilder {
             ping_names_tx,
             ping_names_rx,
             memory_store,
-            mem0: None,
+            mem0: mem0
+                .clone()
+                .map(|m| m as Arc<dyn twitch_1337::ai::mem0::MemoryApi>),
             leaderboard: Arc::new(tokio::sync::RwLock::new(
                 load_leaderboard(data_dir.path()).await,
             )),
@@ -384,6 +385,7 @@ impl TestBotBuilder {
             nominatim_mock,
             seventv_mock,
             llm,
+            mem0,
             whisper,
             channel,
             irc_connected,
@@ -549,79 +551,6 @@ impl TestBot {
                 Err(_) => panic!("bot shutdown timed out"),
             }
         }
-    }
-
-    // -------------------------------------------------------------------------
-    // T16 helpers: v2 memory filesystem accessors
-    // -------------------------------------------------------------------------
-
-    /// Path to `$DATA_DIR/memories/`.
-    pub fn memories_dir(&self) -> std::path::PathBuf {
-        self.data_dir.path().join("memories")
-    }
-
-    /// Path to `$DATA_DIR/memories/transcripts/`.
-    pub fn transcripts_dir(&self) -> std::path::PathBuf {
-        self.memories_dir().join("transcripts")
-    }
-
-    /// Read a memory file at `$DATA_DIR/memories/<rel>` and strip the
-    /// frontmatter header (`---\n…\n---\n`), returning only the body.
-    /// Panics if the file is unreadable.
-    pub async fn read_memory_file(&self, rel: &str) -> String {
-        let raw = tokio::fs::read_to_string(self.memories_dir().join(rel))
-            .await
-            .unwrap_or_default();
-        raw.split_once("\n---\n")
-            .map(|(_, body)| body.to_string())
-            .unwrap_or(raw)
-    }
-
-    /// Poll `$DATA_DIR/memories/transcripts/today.md` until it contains
-    /// `text` or `timeout` elapses (panics on timeout).
-    pub async fn wait_until_transcript_contains(&self, text: &str, timeout: Duration) {
-        let path = self.transcripts_dir().join("today.md");
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if tokio::fs::read_to_string(&path)
-                .await
-                .is_ok_and(|s| s.contains(text))
-            {
-                return;
-            }
-            if tokio::time::Instant::now() >= deadline {
-                panic!("transcript did not contain {text:?} within {timeout:?}");
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    }
-
-    /// Open fresh v2 memory handles on the same `data_dir` and run the
-    /// dreamer ritual for `yesterday`.
-    pub async fn run_ritual_for(&self, yesterday: chrono::NaiveDate) {
-        use twitch_1337::ai::memory::{
-            run_ritual, store::MemoryStore as StoreV2, transcript::TranscriptWriter,
-        };
-
-        let settings = twitch_1337::settings::test_handle();
-        let store = StoreV2::open(self.data_dir.path(), settings.clone())
-            .await
-            .expect("open store for ritual");
-        let transcript = TranscriptWriter::open(store.memories_dir())
-            .await
-            .expect("open transcript for ritual");
-
-        let llm_ref: &dyn llm::LlmClient = self.llm.as_ref();
-        run_ritual(
-            llm_ref,
-            &store,
-            &transcript,
-            &settings,
-            &self.channel,
-            yesterday,
-        )
-        .await
-        .expect("ritual ok");
     }
 }
 

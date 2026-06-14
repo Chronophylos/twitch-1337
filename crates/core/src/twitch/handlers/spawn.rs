@@ -80,8 +80,7 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     pub ping_names_rx: watch::Receiver<std::collections::HashSet<String>>,
     pub suspension_manager: Arc<SuspensionManager>,
     pub llm: Option<Arc<dyn LlmClient>>,
-    pub ai_memory_v2: Option<ai::command::AiMemoryV2>,
-    pub transcript: Option<crate::ai::memory::transcript::TranscriptWriter>,
+    pub mem0: Option<Arc<dyn ai::mem0::MemoryApi>>,
     pub whisper: Option<Arc<dyn WhisperSender>>,
 
     // Flight tracker.
@@ -144,8 +143,7 @@ where
         ping_names_rx,
         suspension_manager,
         llm,
-        ai_memory_v2,
-        transcript,
+        mem0,
         whisper,
         aviation,
         aviation_for_commands,
@@ -238,17 +236,6 @@ where
         }
     });
 
-    let _transcript_tap = if let Some(t) = transcript {
-        let rx = broadcast_tx.subscribe();
-        let w = Arc::new(t);
-        let ch = config.twitch.channel.clone();
-        Some(tokio::spawn(async move {
-            crate::twitch::handlers::transcript::run_transcript_tap(rx, w, ch).await;
-        }))
-    } else {
-        None
-    };
-
     let tracker_1337 = tokio::spawn({
         let btx = broadcast_tx.clone();
         let sender = chat_sender.clone();
@@ -274,7 +261,7 @@ where
                 client,
                 ai_config: config.ai.clone(),
                 llm,
-                ai_memory_v2,
+                mem0,
                 leaderboard,
                 ping_actor_tx,
                 ping_names_rx,

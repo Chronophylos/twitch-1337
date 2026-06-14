@@ -225,7 +225,10 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let hits = client(&server).search("q", Scope::User("42")).await.unwrap();
+        let hits = client(&server)
+            .search("q", Scope::User("42"))
+            .await
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "m1");
         assert_eq!(hits[0].memory, "likes cats");
@@ -236,10 +239,12 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/search"))
-            .and(body_partial_json(serde_json::json!({ "agent_id": "channel" })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({ "results": [] }),
+            .and(body_partial_json(
+                serde_json::json!({ "agent_id": "channel" }),
             ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "results": [] })),
+            )
             .mount(&server)
             .await;
         let hits = client(&server)
@@ -293,7 +298,10 @@ mod tests {
             .await;
         client(&server)
             .add(
-                &[TurnMessage { role: "user".into(), content: "hello".into() }],
+                &[TurnMessage {
+                    role: "user".into(),
+                    content: "hello".into(),
+                }],
                 "42",
                 "mychannel",
                 serde_json::json!({}),

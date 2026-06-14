@@ -382,8 +382,14 @@ impl Settings {
                     .base_url
                     .clone()
                     .unwrap_or_else(|| defaults.mem0.base_url.clone()),
-                timeout_secs: overrides.mem0.timeout_secs.unwrap_or(defaults.mem0.timeout_secs),
-                search_limit: overrides.mem0.search_limit.unwrap_or(defaults.mem0.search_limit),
+                timeout_secs: overrides
+                    .mem0
+                    .timeout_secs
+                    .unwrap_or(defaults.mem0.timeout_secs),
+                search_limit: overrides
+                    .mem0
+                    .search_limit
+                    .unwrap_or(defaults.mem0.search_limit),
             },
             suspend: SuspendSettings {
                 default_duration_secs: overrides
@@ -1121,7 +1127,9 @@ mod resolve_tests {
         s.mem0.enabled = true;
         s.mem0.base_url = "not a url".into();
         let errs = s
-            .validate(&ValidationContext { channel: "test".into() })
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
             .expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "mem0.base_url"));
     }

@@ -36,8 +36,9 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     /// Pre-built LLM client. When `None`, `!ai` is disabled regardless of `ai_config`.
     /// Injected so tests can supply a fake and production can call [`crate::llm_factory::build_llm_client`].
     pub llm: Option<Arc<dyn LlmClient>>,
-    /// Pre-built memory v2 bundle. `None` disables v2 memory for `!ai`.
-    pub ai_memory_v2: Option<ai::command::AiMemoryV2>,
+    /// mem0 client. `None` disables memory (search/forget/add) for `!ai`; the
+    /// command still works, it just has no memory.
+    pub mem0: Option<Arc<dyn ai::mem0::MemoryApi>>,
     pub leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
     pub ping_actor_tx: tokio::sync::mpsc::Sender<PingCommand>,
     pub ping_names_rx: tokio::sync::watch::Receiver<std::collections::HashSet<String>>,
@@ -75,7 +76,7 @@ where
         client,
         ai_config,
         llm,
-        ai_memory_v2,
+        mem0,
         leaderboard,
         ping_actor_tx,
         ping_names_rx,
@@ -211,7 +212,7 @@ where
         )));
     }
 
-    if let (Some((llm, ai_boot)), Some(ai_memory_v2)) = (llm_client, ai_memory_v2) {
+    if let Some((llm, ai_boot)) = llm_client {
         let ai_conn = &snapshot.ai.connection;
         let ai_media = &snapshot.ai.media;
         let web = if let Some(web_cfg) = snapshot.ai.web.as_ref() {
@@ -289,12 +290,13 @@ where
                 llm_client: llm.clone(),
                 settings: settings.clone(),
                 chat_ctx: chat_ctx.clone(),
-                memory: ai_memory_v2,
+                mem0: mem0.clone(),
                 web: web.clone(),
                 emotes: emote_provider,
                 bot_username: bot_username.clone(),
                 doener: doener.clone(),
                 model_catalog,
+                data_dir: data_dir.clone(),
             },
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(

@@ -6,4 +6,5 @@ pub mod mem0;
 pub mod memory;
 pub mod model_catalog;
 pub mod prefill;
+pub mod prompt;
 pub mod session;

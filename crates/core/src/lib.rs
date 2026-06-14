@@ -199,8 +199,8 @@ where
         ping_manager,
         ping_names_tx,
         ping_names_rx,
-        memory_store,
-        mem0: _mem0,
+        memory_store: _memory_store,
+        mem0,
         leaderboard,
         aviation_tracker_tx,
         aviation_tracker_rx,
@@ -223,18 +223,9 @@ where
     // moved into spawn_handlers below.
     let client_for_announce = client.clone();
 
-    // One settings snapshot reused for the admin-channel announces and the AI
-    // memory build, instead of two separate ArcSwap reads.
+    // One settings snapshot reused for the admin-channel announces.
     let settings_snapshot = settings.load_full();
     let admin_channel = settings_snapshot.twitch.admin_channel.clone();
-
-    let ai_memory_v2 = crate::ai::command::build_ai_memory_v2(
-        config.ai.is_some(),
-        &settings_snapshot,
-        memory_store,
-    )
-    .await?;
-    let transcript = ai_memory_v2.as_ref().map(|m| m.transcript.clone());
 
     // 7TV emote provider: built once at startup so malformed glossary TOML
     // (baked or test-injected) fails fast instead of silently disabling emotes.
@@ -260,13 +251,6 @@ where
         _ => None,
     };
 
-    // Clone before moving into SpawnDeps so the dreamer ritual can also use them.
-    let ai_memory_v2_for_ritual = ai_memory_v2.clone();
-    let llm_for_ritual = llm.clone();
-    let ai_present_for_ritual = config.ai.is_some();
-    let settings_for_ritual = settings.clone();
-    let channel_for_ritual = config.twitch.channel.clone();
-
     let handlers = spawn_handlers(SpawnDeps {
         client,
         incoming,
@@ -282,8 +266,7 @@ where
         ping_names_rx,
         suspension_manager,
         llm,
-        ai_memory_v2,
-        transcript,
+        mem0,
         whisper,
         aviation,
         aviation_for_commands,
@@ -303,22 +286,6 @@ where
     // Optional embedded web dashboard. The bin builds and supplies the
     // spawn closure so this crate stays independent of `twitch_1337_web`.
     let web_handle = web_spawner.map(|spawner| spawner(shutdown_notify.clone()));
-
-    // Daily dreamer ritual. Re-reads settings each loop iteration so dashboard
-    // edits to ai.dreamer.* apply on the next scheduled run without a restart.
-    if let (Some(llm), Some(mem)) = (llm_for_ritual.as_ref(), &ai_memory_v2_for_ritual)
-        && ai_present_for_ritual
-    {
-        crate::ai::memory::ritual::spawn_ritual(
-            llm.clone(),
-            mem.store.clone(),
-            mem.transcript.clone(),
-            settings_for_ritual.clone(),
-            channel_for_ritual,
-            shutdown_notify.clone(),
-        );
-        tracing::info!("Daily AI memory dreamer ritual spawned (live settings)");
-    }
 
     crate::twitch::announce::announce_startup(&client_for_announce, admin_channel.as_deref()).await;
 
