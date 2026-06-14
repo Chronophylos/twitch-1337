@@ -1,0 +1,111 @@
+{# crates/web/templates/settings/cards/mem0.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-mem0" class="settings-card" data-section="mem0">
+  <input type="hidden" name="mem0_card_visible" value="1">
+  <header class="settings-card-head">
+    <div>
+      <h2>Memory (mem0)</h2>
+      <p>Long-term memory backend for the AI. Connection changes require a bot restart.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    <div class="settings-row" data-section="mem0">
+      <div class="row-left">
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">enabled</code><span class="restart-required">restart required</span></div>
+        <div class="row-hint">Enable the mem0 long-term memory backend.</div>
+      </div>
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">{% if current.mem0.enabled %}On{% else %}Off{% endif %}</span>
+        <label class="toggle">
+          <input
+            type="checkbox"
+            name="mem0_enabled"
+            value="1"
+            data-default="{{ defaults.mem0.enabled }}"
+            data-key="enabled"
+            role="switch"
+            aria-label="enabled"
+            {% if current.mem0.enabled %}checked{% endif %}>
+          <span class="toggle-thumb" aria-hidden="true"></span>
+        </label>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("enabled") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{% if defaults.mem0.enabled %}on{% else %}off{% endif %}</span></span>
+      </div>
+    </div>
+    <div class="settings-row" data-section="mem0">
+      <div class="row-left">
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">base_url</code><span class="restart-required">restart required</span></div>
+        <div class="row-hint">mem0 service base URL.</div>
+      </div>
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true">{% if current.mem0.base_url.is_empty() %}<span class="muted">{{ defaults.mem0.base_url }}</span>{% else %}{{ current.mem0.base_url }}{% endif %}</span>
+        <input type="text"
+               class="text-input is-wide"
+               name="mem0_base_url"
+               value="{{ current.mem0.base_url }}"
+               placeholder="{{ defaults.mem0.base_url }}"
+               data-default="{{ defaults.mem0.base_url }}"
+               data-key="base_url">
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("base_url") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{{ defaults.mem0.base_url }}</span></span>
+      </div>
+    </div>
+    <div class="settings-row" data-section="mem0">
+      <div class="row-left">
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">timeout_secs</code><span class="restart-required">restart required</span></div>
+        <div class="row-hint">Request timeout for mem0 API calls.</div>
+      </div>
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true" data-pretty-unit="s">{{ current.mem0.timeout_secs }} s</span>
+        <div class="num-wrap">
+          <input
+            type="number"
+            class="num-input"
+            name="mem0_timeout_secs"
+            min="1"
+            max="120"
+            value="{{ current.mem0.timeout_secs }}"
+            data-default="{{ defaults.mem0.timeout_secs }}"
+            data-key="timeout_secs">
+          <span class="num-unit">s</span>
+        </div>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("timeout_secs") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{{ defaults.mem0.timeout_secs }}s</span></span>
+      </div>
+    </div>
+    <div class="settings-row" data-section="mem0">
+      <div class="row-left">
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">search_limit</code></div>
+        <div class="row-hint">Maximum number of memories returned per search.</div>
+      </div>
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true">{{ current.mem0.search_limit }}</span>
+        <div class="num-wrap">
+          <input
+            type="number"
+            class="num-input"
+            name="mem0_search_limit"
+            min="1"
+            max="50"
+            value="{{ current.mem0.search_limit }}"
+            data-default="{{ defaults.mem0.search_limit }}"
+            data-key="search_limit">
+        </div>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("search_limit") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{{ defaults.mem0.search_limit }}</span></span>
+      </div>
+    </div>
+  </div>
+</section>

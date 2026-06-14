@@ -411,8 +411,7 @@ async fn settings_page_renders_all_ai_cards() {
         "sec-ai-connection",
         "sec-ai-behavior",
         "sec-ai-history",
-        "sec-ai-memory",
-        "sec-ai-dreamer",
+        "sec-mem0",
         "sec-ai-prefill",
         "sec-ai-web",
         "sec-ai-emotes",
@@ -515,10 +514,6 @@ async fn settings_page_shows_openrouter_tiers_for_default_base_url() {
         html.contains("name=\"ai_connection_service_tier\""),
         "connection service_tier control must render for default OpenRouter base URL"
     );
-    assert!(
-        html.contains("name=\"ai_dreamer_service_tier\""),
-        "dreamer service_tier control must render for default OpenRouter base URL"
-    );
 }
 
 #[tokio::test]
@@ -575,18 +570,25 @@ async fn reset_cooldowns_clears_section_overrides() {
 }
 
 #[tokio::test]
-async fn dreamer_checkbox_absent_sets_enabled_false() {
-    // The dreamer card always renders (no *_card_visible pattern), so
-    // omitting ai_dreamer_enabled from the POST means "disabled".
+async fn mem0_save_persists() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     set_owner(&state, Some("123"));
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
 
-    let app = build_router(state.clone());
     let defaults = state.settings_store.defaults().clone();
-    // Send the form without ai_dreamer_enabled.
-    let body = save_form_body(&bare_csrf, &defaults, &[]);
+    let app = build_router(state.clone());
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[
+            ("mem0_card_visible", "1"),
+            ("mem0_enabled", "1"),
+            ("mem0_base_url", "https://mem0.example.com"),
+            ("mem0_timeout_secs", "9"),
+            ("mem0_search_limit", "7"),
+        ],
+    );
     let req = Request::builder()
         .method("POST")
         .uri("/settings")
@@ -595,11 +597,19 @@ async fn dreamer_checkbox_absent_sets_enabled_false() {
         .body(Body::from(body))
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    assert!(
-        !state.settings.load().ai.dreamer.enabled,
-        "missing ai_dreamer_enabled checkbox must set dreamer.enabled = false",
+    assert_eq!(
+        res.status(),
+        StatusCode::SEE_OTHER,
+        "mem0 save must redirect"
     );
+    let s = state.settings.load();
+    assert!(s.mem0.enabled, "enabled must persist");
+    assert_eq!(
+        s.mem0.base_url, "https://mem0.example.com",
+        "base_url must persist",
+    );
+    assert_eq!(s.mem0.timeout_secs, 9, "timeout_secs must persist");
+    assert_eq!(s.mem0.search_limit, 7, "search_limit must persist");
 }
 
 #[tokio::test]

@@ -183,8 +183,6 @@ impl SettingsStore {
             SettingsSection::AiConnection => current.ai.connection = Default::default(),
             SettingsSection::AiBehavior => current.ai.behavior = Default::default(),
             SettingsSection::AiHistory => current.ai.history = Default::default(),
-            SettingsSection::AiMemory => current.ai.memory = Default::default(),
-            SettingsSection::AiDreamer => current.ai.dreamer = Default::default(),
             SettingsSection::AiPrefill => current.ai.prefill = Default::default(),
             SettingsSection::AiWeb => current.ai.web = Default::default(),
             SettingsSection::AiEmotes => current.ai.emotes = Default::default(),
@@ -356,47 +354,6 @@ fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides) {
     }
     if let Some(v) = patch.ai.history.ai_channel_length {
         into.ai.history.ai_channel_length = Some(v);
-    }
-    // AI memory
-    if let Some(v) = patch.ai.memory.soul_bytes {
-        into.ai.memory.soul_bytes = Some(v);
-    }
-    if let Some(v) = patch.ai.memory.lore_bytes {
-        into.ai.memory.lore_bytes = Some(v);
-    }
-    if let Some(v) = patch.ai.memory.user_bytes {
-        into.ai.memory.user_bytes = Some(v);
-    }
-    if let Some(v) = patch.ai.memory.state_bytes {
-        into.ai.memory.state_bytes = Some(v);
-    }
-    if let Some(v) = patch.ai.memory.inject_byte_budget {
-        into.ai.memory.inject_byte_budget = Some(v);
-    }
-    if let Some(v) = patch.ai.memory.max_state_files {
-        into.ai.memory.max_state_files = Some(v);
-    }
-    // AI dreamer
-    if let Some(v) = patch.ai.dreamer.enabled {
-        into.ai.dreamer.enabled = Some(v);
-    }
-    if patch.ai.dreamer.model.is_some() {
-        into.ai.dreamer.model = patch.ai.dreamer.model.clone();
-    }
-    if patch.ai.dreamer.reasoning_effort.is_some() {
-        into.ai.dreamer.reasoning_effort = patch.ai.dreamer.reasoning_effort.clone();
-    }
-    if patch.ai.dreamer.service_tier.is_some() {
-        into.ai.dreamer.service_tier = patch.ai.dreamer.service_tier.clone();
-    }
-    if let Some(v) = patch.ai.dreamer.run_at.as_ref() {
-        into.ai.dreamer.run_at = Some(v.clone());
-    }
-    if let Some(v) = patch.ai.dreamer.timeout_secs {
-        into.ai.dreamer.timeout_secs = Some(v);
-    }
-    if let Some(v) = patch.ai.dreamer.max_rounds {
-        into.ai.dreamer.max_rounds = Some(v);
     }
     // AI prefill
     if let Some(v) = patch.ai.prefill.enabled {
@@ -612,73 +569,6 @@ fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
         "ai.history.ai_channel_length",
         prior.ai.history.ai_channel_length,
         next.ai.history.ai_channel_length
-    );
-    // AI memory
-    cmp!(
-        "ai.memory.soul_bytes",
-        prior.ai.memory.soul_bytes,
-        next.ai.memory.soul_bytes
-    );
-    cmp!(
-        "ai.memory.lore_bytes",
-        prior.ai.memory.lore_bytes,
-        next.ai.memory.lore_bytes
-    );
-    cmp!(
-        "ai.memory.user_bytes",
-        prior.ai.memory.user_bytes,
-        next.ai.memory.user_bytes
-    );
-    cmp!(
-        "ai.memory.state_bytes",
-        prior.ai.memory.state_bytes,
-        next.ai.memory.state_bytes
-    );
-    cmp!(
-        "ai.memory.inject_byte_budget",
-        prior.ai.memory.inject_byte_budget,
-        next.ai.memory.inject_byte_budget
-    );
-    cmp!(
-        "ai.memory.max_state_files",
-        prior.ai.memory.max_state_files,
-        next.ai.memory.max_state_files
-    );
-    // AI dreamer
-    cmp!(
-        "ai.dreamer.enabled",
-        prior.ai.dreamer.enabled,
-        next.ai.dreamer.enabled
-    );
-    cmp!(
-        "ai.dreamer.model",
-        prior.ai.dreamer.model.as_deref(),
-        next.ai.dreamer.model.as_deref()
-    );
-    cmp!(
-        "ai.dreamer.reasoning_effort",
-        prior.ai.dreamer.reasoning_effort.as_deref(),
-        next.ai.dreamer.reasoning_effort.as_deref()
-    );
-    cmp!(
-        "ai.dreamer.service_tier",
-        prior.ai.dreamer.service_tier.as_deref(),
-        next.ai.dreamer.service_tier.as_deref()
-    );
-    cmp!(
-        "ai.dreamer.run_at",
-        prior.ai.dreamer.run_at.as_str(),
-        next.ai.dreamer.run_at.as_str()
-    );
-    cmp!(
-        "ai.dreamer.timeout_secs",
-        prior.ai.dreamer.timeout_secs,
-        next.ai.dreamer.timeout_secs
-    );
-    cmp!(
-        "ai.dreamer.max_rounds",
-        prior.ai.dreamer.max_rounds,
-        next.ai.dreamer.max_rounds
     );
     // AI prefill (toggle-card: diff the whole block as a single key on None<->Some
     // transitions, then leaf-by-leaf when both are Some)
@@ -1070,11 +960,10 @@ mod tests {
     }
 
     #[test]
-    fn patch_round_trips_service_tier_on_connection_and_dreamer() {
+    fn patch_round_trips_service_tier_on_connection() {
         let mut into = SettingsOverrides::default();
         let mut patch = SettingsOverrides::default();
         patch.ai.connection.service_tier = Some(Some("flex".to_string()));
-        patch.ai.dreamer.service_tier = Some(Some("priority".to_string()));
         merge_into(&mut into, &patch);
         assert_eq!(
             into.ai
@@ -1084,14 +973,6 @@ mod tests {
                 .and_then(|v| v.as_deref()),
             Some("flex")
         );
-        assert_eq!(
-            into.ai
-                .dreamer
-                .service_tier
-                .as_ref()
-                .and_then(|v| v.as_deref()),
-            Some("priority")
-        );
     }
 
     #[test]
@@ -1099,11 +980,9 @@ mod tests {
         let prior = Settings::compiled_defaults();
         let mut next = Settings::compiled_defaults();
         next.ai.connection.service_tier = Some("flex".to_string());
-        next.ai.dreamer.service_tier = Some("priority".to_string());
         let changes = diff_changes(&prior, &next);
         let keys: Vec<&str> = changes.iter().map(|c| c.key.as_str()).collect();
         assert!(keys.contains(&"ai.connection.service_tier"), "got {keys:?}");
-        assert!(keys.contains(&"ai.dreamer.service_tier"), "got {keys:?}");
     }
 
     #[tokio::test]

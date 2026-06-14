@@ -12,8 +12,6 @@ pub struct AiSettings {
     pub connection: AiConnection,
     pub behavior: AiBehavior,
     pub history: AiHistory,
-    pub memory: AiMemory,
-    pub dreamer: AiDreamer,
     pub prefill: Option<AiPrefill>,
     pub web: Option<AiWeb>,
     pub emotes: Option<AiEmotes>,
@@ -55,6 +53,7 @@ impl AiBackendKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiBehavior {
     pub max_turn_rounds: usize,
+    // ponytail: inert since memory moved to mem0; kept to avoid churning the behavior card. Remove when the behavior card is next touched.
     pub max_writes_per_turn: usize,
     /// Persona name the bot uses in chat-history identity push and chat-line
     /// rendering. Defaults to `"Aurora"`. Missing in pre-existing settings.ron
@@ -72,30 +71,6 @@ fn default_persona_name() -> String {
 pub struct AiHistory {
     pub length: u64,
     pub ai_channel_length: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AiMemory {
-    pub soul_bytes: usize,
-    pub lore_bytes: usize,
-    pub user_bytes: usize,
-    pub state_bytes: usize,
-    pub inject_byte_budget: usize,
-    pub max_state_files: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AiDreamer {
-    pub enabled: bool,
-    pub model: Option<String>,
-    pub reasoning_effort: Option<String>,
-    /// OpenRouter service tier hint for the dreamer pass. Falls back to
-    /// `connection.service_tier` when `None`. Documented values: `"flex"`,
-    /// `"priority"`.
-    pub service_tier: Option<String>,
-    pub run_at: String,
-    pub timeout_secs: u64,
-    pub max_rounds: usize,
 }
 
 /// Prefill config — `threshold` is `f64` compared as bits to allow `Eq`.
@@ -171,33 +146,6 @@ impl Default for AiHistory {
         Self {
             length: crate::ai::chat_history::DEFAULT_HISTORY_LENGTH,
             ai_channel_length: 50,
-        }
-    }
-}
-
-impl Default for AiMemory {
-    fn default() -> Self {
-        Self {
-            soul_bytes: 4096,
-            lore_bytes: 12_288,
-            user_bytes: 4096,
-            state_bytes: 2048,
-            inject_byte_budget: 24_576,
-            max_state_files: 16,
-        }
-    }
-}
-
-impl Default for AiDreamer {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            model: None,
-            reasoning_effort: None,
-            service_tier: None,
-            run_at: "04:00".into(),
-            timeout_secs: 120,
-            max_rounds: 20,
         }
     }
 }
@@ -285,16 +233,6 @@ mod tests {
             crate::ai::chat_history::DEFAULT_HISTORY_LENGTH
         );
         assert_eq!(s.history.ai_channel_length, 50);
-        assert_eq!(s.memory.soul_bytes, 4096);
-        assert_eq!(s.memory.lore_bytes, 12_288);
-        assert_eq!(s.memory.user_bytes, 4096);
-        assert_eq!(s.memory.state_bytes, 2048);
-        assert_eq!(s.memory.inject_byte_budget, 24_576);
-        assert_eq!(s.memory.max_state_files, 16);
-        assert!(s.dreamer.enabled);
-        assert_eq!(s.dreamer.run_at, "04:00");
-        assert_eq!(s.dreamer.timeout_secs, 120);
-        assert_eq!(s.dreamer.max_rounds, 20);
         assert!(s.prefill.is_none());
         assert!(s.web.is_none());
         assert!(s.emotes.is_none());
@@ -302,6 +240,5 @@ mod tests {
         assert_eq!(s.media.timeout, 60);
         assert_eq!(s.media.max_image_size.as_u64(), 10 * 1024 * 1024);
         assert!(s.connection.service_tier.is_none());
-        assert!(s.dreamer.service_tier.is_none());
     }
 }

@@ -15,9 +15,9 @@ use axum::routing::{get, post};
 use serde::Deserialize;
 use tower_cookies::Cookies;
 use twitch_1337_core::settings::overrides::{
-    AiBehaviorOverrides, AiConnectionOverrides, AiDreamerOverrides, AiEmotesOverrides,
-    AiHistoryOverrides, AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides, AiWebOverrides,
-    AviationstackOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
+    AiBehaviorOverrides, AiConnectionOverrides, AiEmotesOverrides, AiHistoryOverrides,
+    AiMediaOverrides, AiPrefillOverrides, AiWebOverrides, AviationstackOverrides, Mem0Overrides,
+    SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
 };
 use twitch_1337_core::settings::{
     Actor, AiBackendKind, AiOverrides, AiSettings, Cooldowns, CooldownsOverrides, FieldError,
@@ -240,66 +240,29 @@ impl AiHistoryForm {
 }
 
 #[derive(Default, Deserialize)]
-struct AiMemoryForm {
+struct Mem0Form {
+    /// Hidden sentinel emitted by the rendered card so the handler can tell
+    /// "card visible but checkbox unchecked" from "card absent (don't touch)".
     #[serde(default)]
-    ai_memory_soul_bytes: Option<usize>,
+    mem0_card_visible: Option<String>,
+    /// Checkbox: `"1"` when checked, absent when unchecked.
     #[serde(default)]
-    ai_memory_lore_bytes: Option<usize>,
+    mem0_enabled: Option<String>,
     #[serde(default)]
-    ai_memory_user_bytes: Option<usize>,
+    mem0_base_url: Option<String>,
     #[serde(default)]
-    ai_memory_state_bytes: Option<usize>,
+    mem0_timeout_secs: Option<u64>,
     #[serde(default)]
-    ai_memory_inject_byte_budget: Option<usize>,
-    #[serde(default)]
-    ai_memory_max_state_files: Option<usize>,
+    mem0_search_limit: Option<usize>,
 }
 
-impl AiMemoryForm {
-    fn into_overrides(self) -> AiMemoryOverrides {
-        AiMemoryOverrides {
-            soul_bytes: self.ai_memory_soul_bytes,
-            lore_bytes: self.ai_memory_lore_bytes,
-            user_bytes: self.ai_memory_user_bytes,
-            state_bytes: self.ai_memory_state_bytes,
-            inject_byte_budget: self.ai_memory_inject_byte_budget,
-            max_state_files: self.ai_memory_max_state_files,
-        }
-    }
-}
-
-#[derive(Default, Deserialize)]
-struct AiDreamerForm {
-    #[serde(default)]
-    ai_dreamer_enabled: Option<String>,
-    #[serde(default)]
-    ai_dreamer_model: Option<String>,
-    #[serde(default)]
-    ai_dreamer_reasoning_effort: Option<String>,
-    #[serde(default)]
-    ai_dreamer_service_tier: Option<String>,
-    #[serde(default)]
-    ai_dreamer_run_at: Option<String>,
-    #[serde(default)]
-    ai_dreamer_timeout_secs: Option<u64>,
-    #[serde(default)]
-    ai_dreamer_max_rounds: Option<usize>,
-}
-
-impl AiDreamerForm {
-    fn into_overrides(self) -> AiDreamerOverrides {
-        AiDreamerOverrides {
-            // Dreamer card always renders, so checkbox semantics mirror
-            // `ping_public`: missing key = false, present = true.
-            enabled: Some(self.ai_dreamer_enabled.is_some()),
-            model: self
-                .ai_dreamer_model
-                .map(|v| if v.is_empty() { None } else { Some(v) }),
-            reasoning_effort: segmented_tri_state(self.ai_dreamer_reasoning_effort),
-            service_tier: segmented_tri_state(self.ai_dreamer_service_tier),
-            run_at: self.ai_dreamer_run_at,
-            timeout_secs: self.ai_dreamer_timeout_secs,
-            max_rounds: self.ai_dreamer_max_rounds,
+impl Mem0Form {
+    fn into_overrides(self) -> Mem0Overrides {
+        Mem0Overrides {
+            enabled: enabled_from_card(&self.mem0_card_visible, &self.mem0_enabled),
+            base_url: self.mem0_base_url,
+            timeout_secs: self.mem0_timeout_secs,
+            search_limit: self.mem0_search_limit,
         }
     }
 }
@@ -610,35 +573,17 @@ struct SaveForm {
     #[serde(default)]
     ai_history_ai_channel_length: Option<u64>,
 
-    // ---- AI memory card ----
+    // ---- Memory (mem0) card ----
     #[serde(default)]
-    ai_memory_soul_bytes: Option<usize>,
+    mem0_card_visible: Option<String>,
     #[serde(default)]
-    ai_memory_lore_bytes: Option<usize>,
+    mem0_enabled: Option<String>,
     #[serde(default)]
-    ai_memory_user_bytes: Option<usize>,
+    mem0_base_url: Option<String>,
     #[serde(default)]
-    ai_memory_state_bytes: Option<usize>,
+    mem0_timeout_secs: Option<u64>,
     #[serde(default)]
-    ai_memory_inject_byte_budget: Option<usize>,
-    #[serde(default)]
-    ai_memory_max_state_files: Option<usize>,
-
-    // ---- AI dreamer card ----
-    #[serde(default)]
-    ai_dreamer_enabled: Option<String>,
-    #[serde(default)]
-    ai_dreamer_model: Option<String>,
-    #[serde(default)]
-    ai_dreamer_reasoning_effort: Option<String>,
-    #[serde(default)]
-    ai_dreamer_service_tier: Option<String>,
-    #[serde(default)]
-    ai_dreamer_run_at: Option<String>,
-    #[serde(default)]
-    ai_dreamer_timeout_secs: Option<u64>,
-    #[serde(default)]
-    ai_dreamer_max_rounds: Option<usize>,
+    mem0_search_limit: Option<usize>,
 
     // ---- AI prefill toggle card ----
     /// Hidden marker so the handler can tell "card visible but unchecked"
@@ -828,25 +773,6 @@ async fn save(
                 ai_history_ai_channel_length: form.ai_history_ai_channel_length,
             }
             .into_overrides(),
-            memory: AiMemoryForm {
-                ai_memory_soul_bytes: form.ai_memory_soul_bytes,
-                ai_memory_lore_bytes: form.ai_memory_lore_bytes,
-                ai_memory_user_bytes: form.ai_memory_user_bytes,
-                ai_memory_state_bytes: form.ai_memory_state_bytes,
-                ai_memory_inject_byte_budget: form.ai_memory_inject_byte_budget,
-                ai_memory_max_state_files: form.ai_memory_max_state_files,
-            }
-            .into_overrides(),
-            dreamer: AiDreamerForm {
-                ai_dreamer_enabled: form.ai_dreamer_enabled,
-                ai_dreamer_model: form.ai_dreamer_model,
-                ai_dreamer_reasoning_effort: form.ai_dreamer_reasoning_effort,
-                ai_dreamer_service_tier: form.ai_dreamer_service_tier,
-                ai_dreamer_run_at: form.ai_dreamer_run_at,
-                ai_dreamer_timeout_secs: form.ai_dreamer_timeout_secs,
-                ai_dreamer_max_rounds: form.ai_dreamer_max_rounds,
-            }
-            .into_overrides(),
             prefill: AiPrefillForm {
                 ai_prefill_card_visible: form.ai_prefill_card_visible,
                 ai_prefill_enabled: form.ai_prefill_enabled,
@@ -910,8 +836,14 @@ async fn save(
             aviationstack_timeout_secs: form.aviationstack_timeout_secs,
         }
         .into_overrides(),
-        // mem0 card/form wired in Task 7; preserve existing overrides on every settings save.
-        mem0: Default::default(),
+        mem0: Mem0Form {
+            mem0_card_visible: form.mem0_card_visible,
+            mem0_enabled: form.mem0_enabled,
+            mem0_base_url: form.mem0_base_url,
+            mem0_timeout_secs: form.mem0_timeout_secs,
+            mem0_search_limit: form.mem0_search_limit,
+        }
+        .into_overrides(),
         suspend: SuspendForm {
             suspend_default_duration_secs: form.suspend_default_duration_secs,
         }
@@ -1018,6 +950,7 @@ async fn reset(
         "twitch_permissions" => SettingsSection::TwitchPermissions,
         "twitch_channels" => SettingsSection::TwitchChannels,
         "aviationstack" => SettingsSection::Aviationstack,
+        "mem0" => SettingsSection::Mem0,
         "suspend" => SettingsSection::Suspend,
         "web_runtime" => SettingsSection::WebRuntime,
         other => {
@@ -1103,18 +1036,9 @@ mod tests {
             ..Default::default()
         }
         .into_overrides();
-        let dream_ov = AiDreamerForm {
-            ai_dreamer_service_tier: Some("priority".to_string()),
-            ..Default::default()
-        }
-        .into_overrides();
         assert_eq!(
             conn_ov.service_tier.as_ref().and_then(|v| v.as_deref()),
             Some("flex")
-        );
-        assert_eq!(
-            dream_ov.service_tier.as_ref().and_then(|v| v.as_deref()),
-            Some("priority")
         );
 
         let conn_ov2 = AiConnectionForm {
@@ -1122,12 +1046,6 @@ mod tests {
             ..Default::default()
         }
         .into_overrides();
-        let dream_ov2 = AiDreamerForm {
-            ai_dreamer_service_tier: Some(String::new()),
-            ..Default::default()
-        }
-        .into_overrides();
         assert!(matches!(conn_ov2.service_tier, Some(None)));
-        assert!(matches!(dream_ov2.service_tier, Some(None)));
     }
 }

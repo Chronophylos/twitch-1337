@@ -268,8 +268,8 @@
 {# `bytes` and `default_bytes` are raw u64. The hidden input posts the
    canonical integer — `ByteSize::from_str` (server side) accepts it, and
    `Deserialize<Option<usize>>` does too — so this macro covers both
-   ByteSize-typed (ai.media) and usize-typed (ai.memory) fields. Pretty
-   text + default label are rendered from JS on init via formatBytesIec. #}
+   ByteSize-typed (ai.media) and usize-typed fields. Pretty text +
+   default label are rendered from JS on init via formatBytesIec. #}
 {% macro bytesize_row(section, field, key, hint, bytes, default_bytes) %}
 <div class="settings-row" data-section="{{ section }}" data-bytes-row>
   {% call row_head(key, hint) %}{% endcall %}

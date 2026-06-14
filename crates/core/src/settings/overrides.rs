@@ -86,10 +86,6 @@ pub struct AiOverrides {
     #[serde(default)]
     pub history: AiHistoryOverrides,
     #[serde(default)]
-    pub memory: AiMemoryOverrides,
-    #[serde(default)]
-    pub dreamer: AiDreamerOverrides,
-    #[serde(default)]
     pub prefill: AiPrefillOverrides,
     #[serde(default)]
     pub web: AiWebOverrides,
@@ -133,40 +129,6 @@ pub struct AiHistoryOverrides {
     pub length: Option<u64>,
     #[serde(default)]
     pub ai_channel_length: Option<u64>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AiMemoryOverrides {
-    #[serde(default)]
-    pub soul_bytes: Option<usize>,
-    #[serde(default)]
-    pub lore_bytes: Option<usize>,
-    #[serde(default)]
-    pub user_bytes: Option<usize>,
-    #[serde(default)]
-    pub state_bytes: Option<usize>,
-    #[serde(default)]
-    pub inject_byte_budget: Option<usize>,
-    #[serde(default)]
-    pub max_state_files: Option<usize>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AiDreamerOverrides {
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub model: Option<Option<String>>,
-    #[serde(default)]
-    pub reasoning_effort: Option<Option<String>>,
-    #[serde(default)]
-    pub service_tier: Option<Option<String>>,
-    #[serde(default)]
-    pub run_at: Option<String>,
-    #[serde(default)]
-    pub timeout_secs: Option<u64>,
-    #[serde(default)]
-    pub max_rounds: Option<usize>,
 }
 
 /// `threshold` is `f64`; manual `PartialEq`/`Eq` use bit comparison.

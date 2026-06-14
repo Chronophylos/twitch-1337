@@ -22,8 +22,8 @@ pub mod twitch;
 pub mod web;
 
 pub use ai::{
-    AiBackendKind, AiBehavior, AiConnection, AiDreamer, AiEmotes, AiHistory, AiMedia, AiMemory,
-    AiPrefill, AiSettings, AiWeb,
+    AiBackendKind, AiBehavior, AiConnection, AiEmotes, AiHistory, AiMedia, AiPrefill, AiSettings,
+    AiWeb,
 };
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
@@ -83,8 +83,6 @@ pub enum SettingsSection {
     AiConnection,
     AiBehavior,
     AiHistory,
-    AiMemory,
-    AiDreamer,
     AiPrefill,
     AiWeb,
     AiEmotes,
@@ -416,7 +414,7 @@ impl Settings {
 }
 
 fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
-    use ai::{AiBehavior, AiConnection, AiDreamer, AiHistory, AiMedia, AiMemory};
+    use ai::{AiBehavior, AiConnection, AiHistory, AiMedia};
     AiSettings {
         connection: AiConnection {
             backend: o.connection.backend.unwrap_or(defaults.connection.backend),
@@ -460,45 +458,6 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .history
                 .ai_channel_length
                 .unwrap_or(defaults.history.ai_channel_length),
-        },
-        memory: AiMemory {
-            soul_bytes: o.memory.soul_bytes.unwrap_or(defaults.memory.soul_bytes),
-            lore_bytes: o.memory.lore_bytes.unwrap_or(defaults.memory.lore_bytes),
-            user_bytes: o.memory.user_bytes.unwrap_or(defaults.memory.user_bytes),
-            state_bytes: o.memory.state_bytes.unwrap_or(defaults.memory.state_bytes),
-            inject_byte_budget: o
-                .memory
-                .inject_byte_budget
-                .unwrap_or(defaults.memory.inject_byte_budget),
-            max_state_files: o
-                .memory
-                .max_state_files
-                .unwrap_or(defaults.memory.max_state_files),
-        },
-        dreamer: AiDreamer {
-            enabled: o.dreamer.enabled.unwrap_or(defaults.dreamer.enabled),
-            model: match &o.dreamer.model {
-                Some(v) => v.clone(),
-                None => defaults.dreamer.model.clone(),
-            },
-            reasoning_effort: match &o.dreamer.reasoning_effort {
-                Some(v) => v.clone(),
-                None => defaults.dreamer.reasoning_effort.clone(),
-            },
-            service_tier: match &o.dreamer.service_tier {
-                Some(v) => v.clone(),
-                None => defaults.dreamer.service_tier.clone(),
-            },
-            run_at: o
-                .dreamer
-                .run_at
-                .clone()
-                .unwrap_or_else(|| defaults.dreamer.run_at.clone()),
-            timeout_secs: o
-                .dreamer
-                .timeout_secs
-                .unwrap_or(defaults.dreamer.timeout_secs),
-            max_rounds: o.dreamer.max_rounds.unwrap_or(defaults.dreamer.max_rounds),
         },
         prefill: resolve_prefill(defaults.prefill.as_ref(), &o.prefill),
         web: resolve_web(defaults.web.as_ref(), &o.web),
@@ -624,67 +583,29 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
             format!("must be <= {}", crate::ai::chat_history::MAX_HISTORY_LENGTH),
         );
     }
-    if ai.memory.inject_byte_budget < ai.memory.soul_bytes + ai.memory.lore_bytes {
+    if let Some(v) = ai.connection.reasoning_effort.as_deref()
+        && v.trim().is_empty()
+    {
         err(
             errs,
-            "ai.memory.inject_byte_budget",
-            "must be >= soul_bytes + lore_bytes".into(),
-        );
-    }
-    if !(1..=200).contains(&ai.dreamer.max_rounds) {
-        err(
-            errs,
-            "ai.dreamer.max_rounds",
-            format!("must be 1..=200 (got {})", ai.dreamer.max_rounds),
-        );
-    }
-    if ai.dreamer.timeout_secs == 0 {
-        err(errs, "ai.dreamer.timeout_secs", "must be > 0".into());
-    }
-    if chrono::NaiveTime::parse_from_str(&ai.dreamer.run_at, "%H:%M").is_err() {
-        err(
-            errs,
-            "ai.dreamer.run_at",
-            format!("must be HH:MM (got {:?})", ai.dreamer.run_at),
-        );
-    }
-    for (field, val) in [
-        (
             "ai.connection.reasoning_effort",
-            ai.connection.reasoning_effort.as_deref(),
-        ),
-        (
-            "ai.dreamer.reasoning_effort",
-            ai.dreamer.reasoning_effort.as_deref(),
-        ),
-    ] {
-        if let Some(v) = val
-            && v.trim().is_empty()
-        {
-            err(errs, field, "must be non-empty when set".into());
-        }
+            "must be non-empty when set".into(),
+        );
     }
-    for (field, val) in [
-        (
-            "ai.connection.service_tier",
-            ai.connection.service_tier.as_deref(),
-        ),
-        (
-            "ai.dreamer.service_tier",
-            ai.dreamer.service_tier.as_deref(),
-        ),
-    ] {
-        if let Some(v) = val {
-            let trimmed = v.trim();
-            if trimmed.is_empty() {
-                err(errs, field, "must be non-empty when set".into());
-            } else if !matches!(trimmed, "flex" | "priority") {
-                err(
-                    errs,
-                    field,
-                    format!("must be one of 'flex' | 'priority' (got {v:?})"),
-                );
-            }
+    if let Some(v) = ai.connection.service_tier.as_deref() {
+        let trimmed = v.trim();
+        if trimmed.is_empty() {
+            err(
+                errs,
+                "ai.connection.service_tier",
+                "must be non-empty when set".into(),
+            );
+        } else if !matches!(trimmed, "flex" | "priority") {
+            err(
+                errs,
+                "ai.connection.service_tier",
+                format!("must be one of 'flex' | 'priority' (got {v:?})"),
+            );
         }
     }
     if let Some(url) = ai.connection.base_url.as_deref()
@@ -929,35 +850,6 @@ mod resolve_tests {
     }
 
     #[test]
-    fn validate_rejects_inject_budget_below_soul_plus_lore() {
-        let mut s = Settings::compiled_defaults();
-        s.ai.memory.soul_bytes = 4096;
-        s.ai.memory.lore_bytes = 12288;
-        s.ai.memory.inject_byte_budget = 1024;
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
-        assert!(
-            errs.iter()
-                .any(|e| e.field == "ai.memory.inject_byte_budget")
-        );
-    }
-
-    #[test]
-    fn validate_rejects_malformed_dreamer_run_at() {
-        let mut s = Settings::compiled_defaults();
-        s.ai.dreamer.run_at = "not-a-time".into();
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
-        assert!(errs.iter().any(|e| e.field == "ai.dreamer.run_at"));
-    }
-
-    #[test]
     fn validate_rejects_invalid_connection_base_url() {
         let mut s = Settings::compiled_defaults();
         s.ai.connection.base_url = Some("not a url".into());
@@ -970,13 +862,11 @@ mod resolve_tests {
     }
 
     #[test]
-    fn service_tier_override_resolves_for_connection_and_dreamer() {
+    fn service_tier_override_resolves_for_connection() {
         let mut overrides = overrides::SettingsOverrides::default();
         overrides.ai.connection.service_tier = Some(Some("flex".to_string()));
-        overrides.ai.dreamer.service_tier = Some(Some("priority".to_string()));
         let s = Settings::resolve(&Settings::compiled_defaults(), &overrides);
         assert_eq!(s.ai.connection.service_tier.as_deref(), Some("flex"));
-        assert_eq!(s.ai.dreamer.service_tier.as_deref(), Some("priority"));
     }
 
     #[test]

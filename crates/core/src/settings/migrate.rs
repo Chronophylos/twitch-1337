@@ -61,26 +61,6 @@ pub fn migrate_legacy_ai(root: &toml::Value) -> Result<AiOverrides> {
     out.history.length = u(&ai_val, "history_length");
     out.history.ai_channel_length = u(&ai_val, "ai_channel_history_length");
 
-    if let Some(mem) = ai.get("memory").and_then(|v| v.as_table()) {
-        let v = toml::Value::Table(mem.clone());
-        out.memory.soul_bytes = usz(&v, "soul_bytes");
-        out.memory.lore_bytes = usz(&v, "lore_bytes");
-        out.memory.user_bytes = usz(&v, "user_bytes");
-        out.memory.state_bytes = usz(&v, "state_bytes");
-        out.memory.inject_byte_budget = usz(&v, "inject_byte_budget");
-        out.memory.max_state_files = usz(&v, "max_state_files");
-    }
-
-    if let Some(d) = ai.get("dreamer").and_then(|v| v.as_table()) {
-        let v = toml::Value::Table(d.clone());
-        out.dreamer.enabled = b(&v, "enabled");
-        out.dreamer.model = s(&v, "model").map(Some);
-        out.dreamer.reasoning_effort = s(&v, "reasoning_effort").map(Some);
-        out.dreamer.run_at = s(&v, "run_at");
-        out.dreamer.timeout_secs = u(&v, "timeout_secs");
-        out.dreamer.max_rounds = usz(&v, "max_rounds");
-    }
-
     if let Some(p) = ai.get("history_prefill").and_then(|v| v.as_table()) {
         let v = toml::Value::Table(p.clone());
         out.prefill.enabled = Some(true);
@@ -494,11 +474,6 @@ mod tests {
             timeout = 45
             max_turn_rounds = 5
 
-            [ai.memory]
-            soul_bytes = 8192
-            lore_bytes = 16384
-            inject_byte_budget = 32768
-
             [ai.web]
             enabled = true
             base_url = "https://searxng.test/search"
@@ -507,7 +482,6 @@ mod tests {
         let overrides = migrate_legacy_ai(&value).expect("migrate");
         assert_eq!(overrides.connection.model.as_deref(), Some("gemma3:4b"));
         assert_eq!(overrides.connection.timeout, Some(45));
-        assert_eq!(overrides.memory.soul_bytes, Some(8192));
         assert_eq!(overrides.web.enabled, Some(true));
         assert_eq!(
             overrides.web.base_url.as_deref(),
