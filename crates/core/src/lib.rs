@@ -127,6 +127,9 @@ pub struct Services {
     /// the *same* per-path mutex map. Two independent stores against the
     /// same on-disk tree would silently race past each other's locks.
     pub memory_store: crate::ai::memory::store::MemoryStore,
+    /// mem0 client. `None` when `[mem0]` absent / disabled / init failed.
+    /// Shared with the `!ai` handler and the dashboard memory page.
+    pub mem0: Option<Arc<dyn crate::ai::mem0::MemoryApi>>,
     /// Shared 1337 leaderboard. Created by the bin before the web spawner so
     /// the same `Arc` is handed to both `WebState` and the IRC tracker handler
     /// (via `SpawnDeps`). `run_bot` moves this into `SpawnDeps`; tests pass an
@@ -197,6 +200,7 @@ where
         ping_names_tx,
         ping_names_rx,
         memory_store,
+        mem0: _mem0,
         leaderboard,
         aviation_tracker_tx,
         aviation_tracker_rx,

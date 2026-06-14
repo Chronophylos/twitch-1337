@@ -343,6 +343,7 @@ impl TestBotBuilder {
             ping_names_tx,
             ping_names_rx,
             memory_store,
+            mem0: None,
             leaderboard: Arc::new(tokio::sync::RwLock::new(
                 load_leaderboard(data_dir.path()).await,
             )),
@@ -753,6 +754,7 @@ fn build_test_web_state(
         oauth,
         ping_actor,
         memory_store,
+        mem0: None,
         signed_key,
         leaderboard: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         tracker_tx: None,

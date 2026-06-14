@@ -248,6 +248,33 @@ pub async fn main() -> Result<()> {
 
     let llm_client = llm_factory::build_llm_client(config.ai.as_ref(), &settings_handle.load())?;
 
+    // mem0 memory client. Built once (base_url is restart-required). Init
+    // failure logs + disables memory; the bot keeps running (aviation pattern).
+    let mem0: Option<Arc<dyn twitch_1337::ai::mem0::MemoryApi>> = {
+        let s = settings_handle.load().mem0.clone();
+        match (s.enabled, config.mem0.as_ref()) {
+            (true, Some(boot)) => match twitch_1337::ai::mem0::Mem0Client::new(
+                &s.base_url,
+                boot.api_key.clone(),
+                std::time::Duration::from_secs(s.timeout_secs),
+                s.search_limit,
+            ) {
+                Ok(c) => Some(Arc::new(c) as Arc<dyn twitch_1337::ai::mem0::MemoryApi>),
+                Err(e) => {
+                    tracing::error!(error = ?e, "mem0 client init failed; memory disabled");
+                    None
+                }
+            },
+            (true, None) => {
+                tracing::warn!(
+                    "mem0.enabled=true but no [mem0].api_key in config.toml; memory disabled"
+                );
+                None
+            }
+            (false, _) => None,
+        }
+    };
+
     // Memory v2 store opens unconditionally so the dashboard editor has a
     // handle even when `[ai]` is disabled. The same `Arc`-backed store is
     // shared with the bot's IRC handlers / dreamer ritual via `Services`.
@@ -287,6 +314,7 @@ pub async fn main() -> Result<()> {
                 settings_handle.clone(),
                 settings_store.clone(),
                 telemetry.clone(),
+                mem0.clone(),
             )
             .await?,
         )
@@ -313,6 +341,7 @@ pub async fn main() -> Result<()> {
         ping_names_tx,
         ping_names_rx,
         memory_store,
+        mem0: mem0.clone(),
         leaderboard,
         aviation_tracker_tx,
         aviation_tracker_rx,
@@ -347,6 +376,7 @@ async fn build_web_spawner(
     settings: twitch_1337::settings::SettingsHandle,
     settings_store: Arc<twitch_1337::settings::SettingsStore>,
     telemetry: Arc<twitch_1337::schedule::TelemetryStore>,
+    mem0: Option<Arc<dyn twitch_1337::ai::mem0::MemoryApi>>,
 ) -> Result<twitch_1337::WebSpawner> {
     let bind_addr: std::net::SocketAddr = config
         .web
@@ -428,6 +458,7 @@ async fn build_web_spawner(
         oauth,
         ping_actor,
         memory_store,
+        mem0,
         signed_key,
         leaderboard,
         tracker_tx,

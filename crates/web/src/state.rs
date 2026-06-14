@@ -53,6 +53,8 @@ pub struct WebState {
     /// per-path mutex map coherent — two independent stores against the
     /// same on-disk tree would silently race past each other's locks.
     pub memory_store: MemoryStore,
+    /// mem0 client for the read-only memory page. `None` → page shows disabled.
+    pub mem0: Option<Arc<dyn twitch_1337_core::ai::mem0::MemoryApi>>,
     /// HMAC key for signed cookies (sid + csrf). Derived from
     /// `[web].session_secret` in the bin so tampering with sid is detected
     /// on the next request rather than handled by HashMap miss alone.

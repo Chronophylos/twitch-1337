@@ -216,6 +216,7 @@ async fn build_state_inner_keep_settings(
         oauth,
         ping_actor,
         memory_store,
+        mem0: None,
         signed_key,
         leaderboard: Arc::new(RwLock::new(HashMap::new())),
         tracker_tx: None,
