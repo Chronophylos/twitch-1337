@@ -2,6 +2,7 @@ pub mod chat_history;
 pub mod command;
 pub mod content;
 pub mod doener_tool;
+pub mod mem0;
 pub mod memory;
 pub mod model_catalog;
 pub mod prefill;
