@@ -293,7 +293,9 @@ pub async fn main() -> Result<()> {
             .await
             {
                 Ok(()) => {
-                    let _ = std::fs::write(&marker, "");
+                    // Propagate a sentinel-write failure rather than swallow it:
+                    // a missing marker re-runs the whole migration next boot.
+                    std::fs::write(&marker, "").wrap_err("write mem0 migration sentinel")?;
                     info!("migrated legacy memories into mem0");
                 }
                 Err(e) => tracing::warn!(

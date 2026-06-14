@@ -87,6 +87,24 @@ struct SearchResponse {
     results: Vec<MemoryHit>,
 }
 
+/// `GET /memories` returns either a bare array or a `{"results":[...]}` envelope
+/// depending on the mem0 server version; accept both.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ListResponse {
+    Wrapped { results: Vec<MemoryHit> },
+    Bare(Vec<MemoryHit>),
+}
+
+impl ListResponse {
+    fn into_hits(self) -> Vec<MemoryHit> {
+        match self {
+            ListResponse::Wrapped { results } => results,
+            ListResponse::Bare(v) => v,
+        }
+    }
+}
+
 #[async_trait]
 impl MemoryApi for Mem0Client {
     async fn search(&self, query: &str, scope: Scope<'_>) -> Result<Vec<MemoryHit>> {
@@ -172,8 +190,9 @@ impl MemoryApi for Mem0Client {
         if !resp.status().is_success() {
             return Err(eyre!("mem0 list {}", resp.status()));
         }
-        // OSS returns a bare array for GET /memories.
-        Ok(resp.json::<Vec<MemoryHit>>().await?)
+        // OSS has returned both a bare array and a `{results:[...]}` envelope
+        // for GET /memories across versions; accept either.
+        Ok(resp.json::<ListResponse>().await?.into_hits())
     }
 }
 
@@ -376,6 +395,23 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 { "id": "m1", "memory": "likes dogs" }
             ])))
+            .mount(&server)
+            .await;
+        let hits = client(&server).list_user("42").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "m1");
+        assert_eq!(hits[0].memory, "likes dogs");
+    }
+
+    #[tokio::test]
+    async fn list_user_parses_wrapped_results() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/memories"))
+            .and(query_param("user_id", "42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": [{ "id": "m1", "memory": "likes dogs" }]
+            })))
             .mount(&server)
             .await;
         let hits = client(&server).list_user("42").await.unwrap();

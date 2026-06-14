@@ -2,8 +2,8 @@
 //!
 //! Mods look up a Twitch user's extracted memories (mem0 `list_user`) and can
 //! delete a single memory or wipe a whole user. There is no editor anymore —
-//! memory is written by the bot's `!ai` turn / dreamer ritual via the mem0
-//! client; this page is a window onto that store plus a delete button.
+//! memory is written by the bot's `!ai` turn via the mem0 client; this page is
+//! a window onto that store plus a delete button.
 //!
 //! `user_id` is validated as `^[0-9]{1,32}$` before any mem0 call. mem0 errors
 //! render an inline message instead of 500-ing the whole dashboard.
@@ -70,6 +70,13 @@ struct CsrfOnly {
 /// percent-encoded byte sequences alike.
 fn is_valid_user_id(s: &str) -> bool {
     !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// mem0 memory ids are UUIDs. Accept the UUID alphabet only so a crafted id
+/// can't smuggle `/`, `?`, `#`, or dot-segments into the mem0 DELETE URL
+/// (`delete_one` interpolates it with `format!`, which does not percent-encode).
+fn is_valid_memory_id(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 fn user_id_err() -> WebError {
@@ -152,6 +159,12 @@ async fn delete_memory(
     if !csrf::verify(&form.csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
+    if !is_valid_memory_id(&id) {
+        return Err(WebError::Validation {
+            field: "id".into(),
+            msg: "must be a valid memory id".into(),
+        });
+    }
     let Some(mem0) = state.mem0.as_ref() else {
         return Ok(Redirect::to("/memory").into_response());
     };
@@ -213,5 +226,17 @@ mod tests {
         assert!(!is_valid_user_id("abc"));
         assert!(!is_valid_user_id("../evil"));
         assert!(!is_valid_user_id("4 2"));
+    }
+
+    #[test]
+    fn memory_id_accepts_uuid_rejects_path_chars() {
+        assert!(is_valid_memory_id("550e8400-e29b-41d4-a716-446655440000"));
+        assert!(is_valid_memory_id("m1"));
+        assert!(!is_valid_memory_id(""));
+        assert!(!is_valid_memory_id(&"a".repeat(65)));
+        assert!(!is_valid_memory_id("../../search"));
+        assert!(!is_valid_memory_id("id?user_id=42"));
+        assert!(!is_valid_memory_id("a/b"));
+        assert!(!is_valid_memory_id("a%2Fb"));
     }
 }

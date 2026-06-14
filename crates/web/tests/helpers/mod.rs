@@ -90,6 +90,8 @@ pub struct FakeMemory {
     pub deleted_ids: std::sync::Mutex<Vec<String>>,
     /// User ids passed to `delete_user`, in call order.
     pub deleted_users: std::sync::Mutex<Vec<String>>,
+    /// User ids passed to `list_user`, in call order.
+    pub listed_users: std::sync::Mutex<Vec<String>>,
 }
 
 #[async_trait]
@@ -114,7 +116,8 @@ impl MemoryApi for FakeMemory {
         self.deleted_ids.lock().unwrap().push(memory_id.to_owned());
         Ok(())
     }
-    async fn list_user(&self, _user_id: &str) -> eyre::Result<Vec<MemoryHit>> {
+    async fn list_user(&self, user_id: &str) -> eyre::Result<Vec<MemoryHit>> {
+        self.listed_users.lock().unwrap().push(user_id.to_owned());
         Ok(std::mem::take(&mut *self.list_user_hits.lock().unwrap()))
     }
 }

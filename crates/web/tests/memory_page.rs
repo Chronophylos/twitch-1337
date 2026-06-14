@@ -64,6 +64,7 @@ async fn page_with_user_id_renders_hit_text() {
     let user_id = "9001";
     let fake = Arc::new(FakeMemory::default());
     *fake.list_user_hits.lock().unwrap() = vec![hit("m1", "MARKER-LIKES-CATS")];
+    let probe = fake.clone();
     let mem0: Arc<dyn MemoryApi> = fake;
     let (state, _tdp, _tdm) = build_state_with_mem0(admin_helix(user_id), mem0).await;
     let (sid, csrf, _bare) = insert_session(&state, user_id, "admin");
@@ -78,6 +79,12 @@ async fn page_with_user_id_renders_hit_text() {
     assert!(
         html.contains("MARKER-LIKES-CATS"),
         "memory hit text must render; got {html}"
+    );
+    // The route must forward the looked-up id (not the session id) to mem0.
+    assert_eq!(
+        *probe.listed_users.lock().unwrap(),
+        vec!["42".to_string()],
+        "list_user must be called with the query user_id"
     );
 }
 
