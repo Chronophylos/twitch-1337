@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 use secrecy::SecretString;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
+use twitch_1337_core::ai::mem0::{MemoryApi, MemoryHit, Scope, TurnMessage};
 use twitch_1337_core::ai::memory::store::MemoryStore;
 use twitch_1337_core::ping::{PingHandle, PingManager, ping_actor_channel_full, run_ping_actor};
 use twitch_1337_web::WebState;
@@ -77,6 +78,48 @@ impl HelixClient for FakeHelix {
     }
 }
 
+/// In-memory fake of the mem0 client for the read-only memory page tests.
+///
+/// `list_user` drains the queued hits; `delete_one` / `delete_user` record the
+/// argument they were called with so tests can assert the route reached mem0.
+/// `search` / `add` are no-ops the page never calls.
+#[derive(Default)]
+pub struct FakeMemory {
+    /// Hits returned by the next `list_user` call.
+    pub list_user_hits: std::sync::Mutex<Vec<MemoryHit>>,
+    /// Memory ids passed to `delete_one`, in call order.
+    pub deleted_ids: std::sync::Mutex<Vec<String>>,
+    /// User ids passed to `delete_user`, in call order.
+    pub deleted_users: std::sync::Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl MemoryApi for FakeMemory {
+    async fn search(&self, _query: &str, _scope: Scope<'_>) -> eyre::Result<Vec<MemoryHit>> {
+        Ok(Vec::new())
+    }
+    async fn add(
+        &self,
+        _messages: &[TurnMessage],
+        _user_id: &str,
+        _agent_id: &str,
+        _metadata: serde_json::Value,
+    ) -> eyre::Result<()> {
+        Ok(())
+    }
+    async fn delete_user(&self, user_id: &str) -> eyre::Result<()> {
+        self.deleted_users.lock().unwrap().push(user_id.to_owned());
+        Ok(())
+    }
+    async fn delete_one(&self, memory_id: &str) -> eyre::Result<()> {
+        self.deleted_ids.lock().unwrap().push(memory_id.to_owned());
+        Ok(())
+    }
+    async fn list_user(&self, _user_id: &str) -> eyre::Result<Vec<MemoryHit>> {
+        Ok(std::mem::take(&mut *self.list_user_hits.lock().unwrap()))
+    }
+}
+
 pub fn install_crypto() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
@@ -105,7 +148,20 @@ pub async fn build_state_with_dirs(helix: Arc<dyn HelixClient>) -> (WebState, Te
     let clock: Arc<dyn Clock> = Arc::new(FixedClock(
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 1, 0, 0, 0).unwrap(),
     ));
-    build_state_inner(helix, 300, clock).await
+    build_state_inner(helix, 300, clock, None).await
+}
+
+/// Like [`build_state_with_dirs`] but wires a fake mem0 client into
+/// `WebState.mem0` so the read-only `/memory` page renders against it instead
+/// of the disabled placeholder.
+pub async fn build_state_with_mem0(
+    helix: Arc<dyn HelixClient>,
+    mem0: Arc<dyn MemoryApi>,
+) -> (WebState, TempDir, TempDir) {
+    let clock: Arc<dyn Clock> = Arc::new(FixedClock(
+        chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 1, 0, 0, 0).unwrap(),
+    ));
+    build_state_inner(helix, 300, clock, Some(mem0)).await
 }
 
 /// Like [`build_state_with_dirs`] but lets the caller override the
@@ -122,7 +178,7 @@ pub async fn build_state_with_overrides(
     let clock: Arc<dyn Clock> = Arc::new(StepClock::new(
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 1, 0, 0, 0).unwrap(),
     ));
-    build_state_inner(helix, role_check_refresh.as_secs(), clock).await
+    build_state_inner(helix, role_check_refresh.as_secs(), clock, None).await
 }
 
 /// Variant that returns the ping, memory, and settings tempdirs so callers
@@ -134,16 +190,17 @@ pub async fn build_state_with_all_dirs(
     let clock: Arc<dyn Clock> = Arc::new(FixedClock(
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 1, 0, 0, 0).unwrap(),
     ));
-    build_state_inner_keep_settings(helix, 300, clock).await
+    build_state_inner_keep_settings(helix, 300, clock, None).await
 }
 
 async fn build_state_inner(
     helix: Arc<dyn HelixClient>,
     mod_check_refresh_secs: u64,
     clock: Arc<dyn Clock>,
+    mem0: Option<Arc<dyn MemoryApi>>,
 ) -> (WebState, TempDir, TempDir) {
     let (state, td_p, td_m, td_s) =
-        build_state_inner_keep_settings(helix, mod_check_refresh_secs, clock).await;
+        build_state_inner_keep_settings(helix, mod_check_refresh_secs, clock, mem0).await;
     // Settings tempdir is intentionally dropped here; helper-driven tests
     // that need the on-disk `settings.ron` to survive should use
     // [`build_state_with_all_dirs`] instead.
@@ -155,6 +212,7 @@ async fn build_state_inner_keep_settings(
     helix: Arc<dyn HelixClient>,
     mod_check_refresh_secs: u64,
     clock: Arc<dyn Clock>,
+    mem0: Option<Arc<dyn MemoryApi>>,
 ) -> (WebState, TempDir, TempDir, TempDir) {
     let pings_dir = TempDir::new().expect("pings tempdir");
     let memory_dir = TempDir::new().expect("memory tempdir");
@@ -216,7 +274,7 @@ async fn build_state_inner_keep_settings(
         oauth,
         ping_actor,
         memory_store,
-        mem0: None,
+        mem0,
         signed_key,
         leaderboard: Arc::new(RwLock::new(HashMap::new())),
         tracker_tx: None,

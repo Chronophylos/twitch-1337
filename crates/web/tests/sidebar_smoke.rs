@@ -72,13 +72,13 @@ async fn pings_page_renders_sidebar_with_active_pings() {
 }
 
 #[tokio::test]
-async fn memory_state_page_highlights_state() {
-    let body = fetch_authed("/memory/state").await;
+async fn memory_page_highlights_memory() {
+    let body = fetch_authed("/memory").await;
     let snippet = body
         .split("class=\"active\"")
         .nth(1)
         .expect("active class present");
-    assert!(snippet.contains("/memory/state"));
+    assert!(snippet.contains("/memory"));
 }
 
 #[tokio::test]
@@ -159,7 +159,7 @@ async fn sidebar_hides_memory_and_system_for_viewer() {
     );
     assert!(body.contains("Flights"), "flights nav entry present");
     assert!(
-        !body.contains("/memory/soul"),
+        !body.contains("href=\"/memory\""),
         "memory group hidden for viewer"
     );
     assert!(!body.contains("/logs"), "logs hidden for viewer");

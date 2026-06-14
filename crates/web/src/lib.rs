@@ -9,7 +9,7 @@
 //! - **Viewer** (allowlisted Twitch login): `/`, `/pings` (read), `/leaderboard`, `/flights`.
 //!   Read-only — non-GET/HEAD methods are rejected by `viewer_method_guard`.
 //! - **Mod** (broadcaster / hidden admins / helix moderators): pings mutations,
-//!   `/memory/{soul,lore,users,state}` CRUD, stubs.
+//!   `/memory` (read-only mem0 viewer + delete), stubs.
 
 pub mod auth;
 pub mod clock;

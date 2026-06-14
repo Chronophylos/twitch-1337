@@ -30,12 +30,9 @@
 
     {% if is_mod %}
     <div class="nav-group">
-      <a class="nav-group-label nav-group-link{% if current_page == "memory" %} active{% endif %}" href="/memory">Memory</a>
+      <div class="nav-group-label">Memory</div>
       <ul class="nav-list">
-        {% call nav_item("memory_soul", "/memory/soul", "SOUL") %}{% endcall %}
-        {% call nav_item("memory_lore", "/memory/lore", "LORE") %}{% endcall %}
-        {% call nav_item("memory_users", "/memory/users", "Users") %}{% endcall %}
-        {% call nav_item("memory_state", "/memory/state", "State") %}{% endcall %}
+        {% call nav_item("memory", "/memory", "Memory") %}{% endcall %}
       </ul>
     </div>
 

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Memory — twitch-1337{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Memory</h1>
+    <p class="page-sub">Read-only window onto the bot's mem0 store. Look up a Twitch user's memories.</p>
+  </div>
+</div>
+
+{% if disabled %}
+  <div class="empty">mem0 memory is disabled.</div>
+{% else %}
+  <form method="get" action="/memory" class="page-actions" style="margin-bottom:16px;">
+    <input type="text" name="user_id" placeholder="Twitch user ID" value="{{ user_id }}" inputmode="numeric" autocomplete="off" spellcheck="false">
+    <button type="submit" class="btn primary">Look up</button>
+  </form>
+
+  {% if let Some(msg) = error %}
+    <div class="flash">{{ msg }}</div>
+  {% endif %}
+
+  {% if !user_id.is_empty() %}
+    <div class="page-head">
+      <div>
+        <h1>User {{ user_id }} <span class="count">({{ hits.len() }})</span></h1>
+      </div>
+      <div class="page-actions">
+        <form method="post" action="/memory/delete-user/{{ user_id }}" style="display:inline" onsubmit="return confirm('Delete ALL memories for user {{ user_id }}?')">
+          <input type="hidden" name="_csrf" value="{{ csrf }}">
+          <button type="submit" class="btn danger">Delete all for this user</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="table memory">
+      <div class="thead">
+        <div class="th col-name">Memory</div>
+        <div class="th col-act"></div>
+      </div>
+      {% if hits.is_empty() %}
+        <div class="empty">No memories for this user.</div>
+      {% else %}
+      <div class="tbody">
+        {% for hit in hits %}
+        <div class="tr">
+          <div class="td col-name">{{ hit.memory }}</div>
+          <div class="td col-act">
+            <form method="post" action="/memory/delete/{{ hit.id|urlencode }}" style="display:inline" onsubmit="return confirm('Delete this memory?')">
+              <input type="hidden" name="_csrf" value="{{ csrf }}">
+              <button type="submit" class="row-act danger" title="Delete">✕</button>
+            </form>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

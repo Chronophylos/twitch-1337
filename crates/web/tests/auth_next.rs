@@ -53,7 +53,7 @@ async fn unauth_request_redirects_to_login_with_next() {
     let app = build_router(state);
 
     let req = Request::builder()
-        .uri("/memory/state/notes")
+        .uri("/memory")
         .body(Body::empty())
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
@@ -65,7 +65,7 @@ async fn unauth_request_redirects_to_login_with_next() {
         .to_str()
         .unwrap();
     assert_eq!(
-        location, "/login?next=%2Fmemory%2Fstate%2Fnotes",
+        location, "/login?next=%2Fmemory",
         "expected exact encoded next path, got {location}"
     );
 }

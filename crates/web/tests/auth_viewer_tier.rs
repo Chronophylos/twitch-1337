@@ -58,7 +58,7 @@ async fn viewer_blocked_from_memory_and_mutations() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/memory/soul")
+                .uri("/memory")
                 .method(Method::GET)
                 .header("cookie", cookie.clone())
                 .body(Body::empty())

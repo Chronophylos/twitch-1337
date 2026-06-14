@@ -39,10 +39,7 @@ async fn nav_links_all_load_authenticated() {
         "/leaderboard",
         "/flights",
         "/schedules",
-        "/memory/soul",
-        "/memory/lore",
-        "/memory/users",
-        "/memory/state",
+        "/memory",
     ];
     for path in paths {
         s.goto(path).await;

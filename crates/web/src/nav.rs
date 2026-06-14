@@ -10,11 +10,7 @@
 
 pub const LEADERBOARD: &str = "leaderboard";
 pub const PINGS: &str = "pings";
-pub const MEMORY_TREE: &str = "memory";
-pub const MEMORY_SOUL: &str = "memory_soul";
-pub const MEMORY_LORE: &str = "memory_lore";
-pub const MEMORY_USERS: &str = "memory_users";
-pub const MEMORY_STATE: &str = "memory_state";
+pub const MEMORY: &str = "memory";
 pub const SCHEDULES: &str = "schedules";
 pub const FLIGHTS: &str = "flights";
 pub const LOGS: &str = "logs";
