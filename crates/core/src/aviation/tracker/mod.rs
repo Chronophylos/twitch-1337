@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Duration;
 use twitch_irc::message::PrivmsgMessage;
 
+use crate::aviation::AviationstackFlightMetadata;
+
 pub use loop_run::run_flight_tracker;
 
 /// Maximum number of simultaneously tracked flights.
@@ -187,10 +189,36 @@ pub struct TrackedFlight {
     pub dest_lon: Option<f64>,
 }
 
+/// Persisted AviationStack lookup result shared by `!track` and `!info`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedFlightInfo {
+    pub aliases: Vec<String>,
+    pub flight_date: Option<String>,
+    pub metadata: Option<AviationstackFlightMetadata>,
+    pub cached_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl CachedFlightInfo {
+    pub(crate) fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        self.expires_at <= now
+    }
+
+    pub(crate) fn matches_any_alias(&self, aliases: &[String]) -> bool {
+        aliases.iter().any(|alias| {
+            self.aliases
+                .iter()
+                .any(|cached| cached.eq_ignore_ascii_case(alias))
+        })
+    }
+}
+
 /// Persisted state of all tracked flights.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FlightTrackerState {
     pub flights: Vec<TrackedFlight>,
+    #[serde(default)]
+    pub flight_info_cache: Vec<CachedFlightInfo>,
 }
 
 /// Read projection of [`TrackedFlight`] for the web dashboard.
@@ -247,6 +275,10 @@ pub enum TrackerCommand {
     },
     Status {
         identifier: Option<String>,
+        reply_to: PrivmsgMessage,
+    },
+    Info {
+        identifier: FlightIdentifier,
         reply_to: PrivmsgMessage,
     },
     Snapshot {
@@ -341,6 +373,7 @@ mod tests {
                 live_callsign,
                 pending_hex_identifier,
             ],
+            flight_info_cache: Vec::new(),
         };
 
         assert_eq!(clear_pending_callsign_hexes(&mut state), 1);
@@ -400,25 +433,7 @@ mod tests {
     }
 
     fn metadata() -> AviationstackFlightMetadata {
-        AviationstackFlightMetadata {
-            flight_iata: None,
-            flight_icao: None,
-            flight_number: None,
-            airline_iata: None,
-            airline_icao: None,
-            airline_name: None,
-            departure_iata: None,
-            departure_icao: None,
-            departure_scheduled: None,
-            departure_actual: None,
-            departure_actual_runway: None,
-            arrival_iata: None,
-            arrival_icao: None,
-            arrival_estimated: None,
-            arrival_actual: None,
-            aircraft_icao24: None,
-            aircraft_icao: None,
-        }
+        AviationstackFlightMetadata::default()
     }
 
     fn pending_interval(flight: &TrackedFlight, now: DateTime<Utc>) -> tokio::time::Duration {
@@ -769,6 +784,7 @@ mod tests {
 
         let state = FlightTrackerState {
             flights: vec![flight_a, flight_b],
+            flight_info_cache: Vec::new(),
         };
         let now = dt("2026-05-12T10:00:00Z");
 
@@ -800,6 +816,7 @@ mod tests {
 
         let state = FlightTrackerState {
             flights: vec![flight],
+            flight_info_cache: Vec::new(),
         };
 
         let views = build_flight_view(&state, now);
@@ -818,6 +835,7 @@ mod tests {
 
         let state = FlightTrackerState {
             flights: vec![flight],
+            flight_info_cache: Vec::new(),
         };
         let now = dt("2026-05-12T10:00:00Z");
 

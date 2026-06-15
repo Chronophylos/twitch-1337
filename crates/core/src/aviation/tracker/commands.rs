@@ -5,20 +5,20 @@ use chrono::{DateTime, TimeDelta, Utc};
 use tracing::{debug, error, info, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
-use crate::aviation::{AviationClient, NearbyAircraft};
+use crate::aviation::{AviationClient, AviationstackFlightMetadata, NearbyAircraft};
 use crate::twitch::ChatSender;
 use crate::util::clock::Clock;
 
 use super::{
-    FlightIdentifier, FlightPhase, FlightTrackerState, HexSource, TargetConfirmation,
-    TrackedFlight, TrackerCommand, build_flight_view,
+    CachedFlightInfo, FlightIdentifier, FlightPhase, FlightTrackerState, HexSource,
+    TargetConfirmation, TrackedFlight, TrackerCommand, build_flight_view,
     format::{
-        msg_adsb_visible, msg_approach, msg_cruise, msg_descent, msg_flight_status,
-        msg_flights_list, msg_landing, msg_pending_expired, msg_possible_divert,
+        msg_adsb_visible, msg_approach, msg_aviationstack_info, msg_cruise, msg_descent,
+        msg_flight_status, msg_flights_list, msg_landing, msg_pending_expired, msg_possible_divert,
         msg_squawk_emergency, msg_takeoff, msg_track_started, msg_tracking_lost,
     },
     metadata::{
-        apply_aviationstack_metadata, fetch_aviationstack_metadata_for_tracking,
+        apply_aviationstack_metadata, metadata_callsign, normalize_flight_code,
         set_hex_if_consistent, set_route_from_iata,
     },
     phase::{
@@ -171,6 +171,232 @@ fn duplicate_tracking_exists(
     })
 }
 
+fn track_started_response(
+    flight: &TrackedFlight,
+    aviationstack_info: Option<&str>,
+    aviationstack_fallback: bool,
+) -> String {
+    let mut response = msg_track_started(flight);
+    if let Some(info) = aviationstack_info {
+        response.push_str(" | ");
+        response.push_str(info);
+    }
+    if aviationstack_fallback {
+        response.push_str(" | AviationStack nix, ADS-B-only");
+    }
+    response
+}
+
+struct AviationstackLookup {
+    checked: bool,
+    metadata: Option<AviationstackFlightMetadata>,
+    cache_changed: bool,
+    failed: bool,
+}
+
+fn push_cache_alias(aliases: &mut Vec<String>, value: Option<&str>) {
+    let Some(alias) = value.and_then(normalize_flight_code) else {
+        return;
+    };
+    if !aliases
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(&alias))
+    {
+        aliases.push(alias);
+    }
+}
+
+fn query_cache_aliases(identifier: &FlightIdentifier, callsign: Option<&str>) -> Vec<String> {
+    let mut aliases = Vec::new();
+    if matches!(identifier, FlightIdentifier::Callsign(_)) {
+        push_cache_alias(&mut aliases, Some(identifier.as_str()));
+    }
+    push_cache_alias(&mut aliases, callsign);
+    aliases
+}
+
+fn metadata_cache_aliases(metadata: &AviationstackFlightMetadata) -> Vec<String> {
+    let mut aliases = Vec::new();
+    push_cache_alias(&mut aliases, metadata.flight_iata.as_deref());
+    push_cache_alias(&mut aliases, metadata.flight_icao.as_deref());
+    push_cache_alias(&mut aliases, metadata_callsign(metadata).as_deref());
+    aliases
+}
+
+fn metadata_flight_date(metadata: &AviationstackFlightMetadata) -> Option<String> {
+    metadata
+        .flight_date
+        .as_deref()
+        .map(str::trim)
+        .filter(|date| !date.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            metadata
+                .departure_scheduled
+                .as_ref()
+                .or(metadata.arrival_scheduled.as_ref())
+                .or(metadata.arrival_estimated.as_ref())
+                .map(|dt| dt.date_naive().to_string())
+        })
+}
+
+fn flight_info_cache_expiry(
+    metadata: Option<&AviationstackFlightMetadata>,
+    now: DateTime<Utc>,
+) -> DateTime<Utc> {
+    let Some(metadata) = metadata else {
+        return now + TimeDelta::minutes(10);
+    };
+
+    if metadata
+        .flight_status
+        .as_deref()
+        .is_some_and(|status| status.eq_ignore_ascii_case("landed"))
+    {
+        return now + TimeDelta::hours(24);
+    }
+
+    let arrival = metadata
+        .arrival_actual
+        .as_ref()
+        .cloned()
+        .or_else(|| metadata.arrival_estimated.as_ref().cloned())
+        .or_else(|| metadata.arrival_scheduled.as_ref().cloned());
+    let expires_at = arrival
+        .map(|arrival| arrival + TimeDelta::hours(4))
+        .unwrap_or_else(|| now + TimeDelta::hours(4));
+    if expires_at > now {
+        expires_at
+    } else {
+        now + TimeDelta::hours(4)
+    }
+}
+
+fn prune_flight_info_cache(state: &mut FlightTrackerState, now: DateTime<Utc>) -> bool {
+    let before = state.flight_info_cache.len();
+    state
+        .flight_info_cache
+        .retain(|entry| !entry.is_expired(now));
+    before != state.flight_info_cache.len()
+}
+
+fn cached_flight_info(
+    state: &FlightTrackerState,
+    aliases: &[String],
+    now: DateTime<Utc>,
+) -> Option<Option<AviationstackFlightMetadata>> {
+    state
+        .flight_info_cache
+        .iter()
+        .filter(|entry| !entry.is_expired(now) && entry.matches_any_alias(aliases))
+        .max_by_key(|entry| entry.cached_at)
+        .map(|entry| entry.metadata.clone())
+}
+
+fn upsert_flight_info_cache(
+    state: &mut FlightTrackerState,
+    query_aliases: &[String],
+    metadata: Option<AviationstackFlightMetadata>,
+    now: DateTime<Utc>,
+) {
+    let mut aliases = query_aliases.to_vec();
+    let flight_date = metadata.as_ref().and_then(metadata_flight_date);
+    if let Some(metadata) = metadata.as_ref() {
+        for alias in metadata_cache_aliases(metadata) {
+            push_cache_alias(&mut aliases, Some(&alias));
+        }
+    }
+    if aliases.is_empty() {
+        return;
+    }
+
+    let expires_at = flight_info_cache_expiry(metadata.as_ref(), now);
+    if let Some(entry) = state.flight_info_cache.iter_mut().find(|entry| {
+        entry.matches_any_alias(&aliases)
+            && (entry.flight_date == flight_date
+                || entry.flight_date.is_none()
+                || flight_date.is_none())
+    }) {
+        for alias in aliases {
+            push_cache_alias(&mut entry.aliases, Some(&alias));
+        }
+        entry.flight_date = flight_date;
+        entry.metadata = metadata;
+        entry.cached_at = now;
+        entry.expires_at = expires_at;
+        return;
+    }
+
+    state.flight_info_cache.push(CachedFlightInfo {
+        aliases,
+        flight_date,
+        metadata,
+        cached_at: now,
+        expires_at,
+    });
+}
+
+async fn lookup_aviationstack_metadata(
+    state: &mut FlightTrackerState,
+    aviation_client: &AviationClient,
+    identifier: &FlightIdentifier,
+    callsign: Option<&str>,
+    now: DateTime<Utc>,
+) -> AviationstackLookup {
+    let cache_changed = prune_flight_info_cache(state, now);
+    let query_aliases = query_cache_aliases(identifier, callsign);
+    if query_aliases.is_empty() {
+        return AviationstackLookup {
+            checked: false,
+            metadata: None,
+            cache_changed,
+            failed: false,
+        };
+    }
+
+    if let Some(metadata) = cached_flight_info(state, &query_aliases, now) {
+        return AviationstackLookup {
+            checked: true,
+            metadata,
+            cache_changed,
+            failed: false,
+        };
+    }
+
+    if !aviation_client.aviationstack_enabled() {
+        return AviationstackLookup {
+            checked: false,
+            metadata: None,
+            cache_changed,
+            failed: false,
+        };
+    }
+
+    match aviation_client
+        .get_aviationstack_flight_metadata(identifier, callsign)
+        .await
+    {
+        Ok(metadata) => {
+            upsert_flight_info_cache(state, &query_aliases, metadata.clone(), now);
+            AviationstackLookup {
+                checked: true,
+                metadata,
+                cache_changed: true,
+                failed: false,
+            }
+        }
+        Err(e) => {
+            warn!(error = ?e, identifier = %identifier, "Aviationstack metadata lookup failed");
+            AviationstackLookup {
+                checked: true,
+                metadata: None,
+                cache_changed,
+                failed: true,
+            }
+        }
+    }
+}
+
 pub(crate) async fn remove_flight_at(
     state: &mut FlightTrackerState,
     query: &str,
@@ -241,6 +467,21 @@ pub(crate) async fn process_command<T, L>(
             reply_to,
         } => {
             handle_status(identifier.as_deref(), &reply_to, state, sender, clock).await;
+        }
+        TrackerCommand::Info {
+            identifier,
+            reply_to,
+        } => {
+            handle_info(
+                identifier,
+                &reply_to,
+                state,
+                sender,
+                aviation_client,
+                data_dir,
+                clock,
+            )
+            .await;
         }
         TrackerCommand::Snapshot { reply } => {
             let now = clock.now_utc();
@@ -314,20 +555,28 @@ async fn handle_track<T, L>(
         return;
     }
 
-    let mut aviationstack_checked = false;
-    let mut metadata = None;
     let now = clock.now_utc();
-    if matches!(&identifier, FlightIdentifier::Callsign(_))
-        && aviation_client.aviationstack_enabled()
-    {
-        aviationstack_checked = true;
-        metadata = fetch_aviationstack_metadata_for_tracking(
+    let aviationstack_lookup = if matches!(&identifier, FlightIdentifier::Callsign(_)) {
+        lookup_aviationstack_metadata(
+            state,
             aviation_client,
             &identifier,
             resolved_callsign.as_deref(),
+            now,
         )
-        .await;
-    }
+        .await
+    } else {
+        AviationstackLookup {
+            checked: false,
+            metadata: None,
+            cache_changed: false,
+            failed: false,
+        }
+    };
+    let aviationstack_cache_changed = aviationstack_lookup.cache_changed;
+    let metadata = aviationstack_lookup.metadata;
+    let aviationstack_checked = aviationstack_lookup.checked;
+    let aviationstack_info = metadata.as_ref().map(msg_aviationstack_info);
     let aviationstack_fallback = aviationstack_checked
         && metadata.is_none()
         && matches!(&identifier, FlightIdentifier::Callsign(_));
@@ -369,7 +618,7 @@ async fn handle_track<T, L>(
         dest_lon: None,
     };
 
-    if let Some(metadata) = metadata {
+    if let Some(metadata) = metadata.clone() {
         apply_aviationstack_metadata(&mut flight, metadata);
     }
     if duplicate_tracking_exists(
@@ -378,6 +627,9 @@ async fn handle_track<T, L>(
         flight.callsign.as_deref(),
         flight.hex.as_deref(),
     ) {
+        if aviationstack_cache_changed {
+            save_tracker_state(data_dir, state).await;
+        }
         sender
             .reply(reply_to, format!("{identifier} wird schon getrackt FDM"))
             .await;
@@ -456,10 +708,11 @@ async fn handle_track<T, L>(
                             let dest = route.destination.iata_code.clone();
                             set_route_from_iata(&mut flight, &origin, &dest);
                         }
-                        let mut response = msg_track_started(&flight);
-                        if aviationstack_fallback {
-                            response.push_str(" | AviationStack nix, ADS-B-only");
-                        }
+                        let response = track_started_response(
+                            &flight,
+                            aviationstack_info.as_deref(),
+                            aviationstack_fallback,
+                        );
                         state.flights.push(flight);
                         save_tracker_state(data_dir, state).await;
                         info!(
@@ -536,13 +789,15 @@ async fn handle_track<T, L>(
         && flight.callsign.is_some()
     {
         flight.aviationstack_checked = true;
-        if let Some(metadata) = fetch_aviationstack_metadata_for_tracking(
+        let lookup = lookup_aviationstack_metadata(
+            state,
             aviation_client,
             &identifier,
             flight.callsign.as_deref(),
+            now,
         )
-        .await
-        {
+        .await;
+        if let Some(metadata) = lookup.metadata {
             apply_aviationstack_metadata(&mut flight, metadata);
         }
     }
@@ -582,10 +837,11 @@ async fn handle_track<T, L>(
         }
     }
 
-    let mut response = msg_track_started(&flight);
-    if aviationstack_fallback {
-        response.push_str(" | AviationStack nix, ADS-B-only");
-    }
+    let response = track_started_response(
+        &flight,
+        aviationstack_info.as_deref(),
+        aviationstack_fallback,
+    );
     state.flights.push(flight);
     save_tracker_state(data_dir, state).await;
 
@@ -630,6 +886,56 @@ async fn handle_untrack<T, L>(
     sender
         .reply(reply_to, format!("{name} wird nicht mehr getrackt Okayge"))
         .await;
+}
+
+async fn handle_info<T, L>(
+    identifier: FlightIdentifier,
+    reply_to: &PrivmsgMessage,
+    state: &mut FlightTrackerState,
+    sender: &Arc<ChatSender<T, L>>,
+    aviation_client: &AviationClient,
+    data_dir: &Path,
+    clock: &dyn Clock,
+) where
+    T: Transport,
+    L: LoginCredentials,
+{
+    let tracked_callsign = find_flight_index(state.flights.as_slice(), identifier.as_str())
+        .and_then(|idx| state.flights[idx].callsign.clone());
+    let resolved_callsign = match (&identifier, tracked_callsign.as_deref()) {
+        (_, Some(callsign)) => Some(callsign.to_string()),
+        (FlightIdentifier::Callsign(callsign), None) => {
+            Some(aviation_client.resolve_callsign(callsign).await)
+        }
+        (FlightIdentifier::Hex(_), None) => None,
+    };
+
+    let now = clock.now_utc();
+    let lookup = lookup_aviationstack_metadata(
+        state,
+        aviation_client,
+        &identifier,
+        resolved_callsign.as_deref(),
+        now,
+    )
+    .await;
+    if lookup.cache_changed {
+        save_tracker_state(data_dir, state).await;
+    }
+
+    let response = if let Some(metadata) = lookup.metadata {
+        msg_aviationstack_info(&metadata)
+    } else if lookup.failed {
+        "AviationStack Anfrage fehlgeschlagen FDM".to_string()
+    } else if lookup.checked {
+        format!("{identifier} nicht bei AviationStack gefunden FDM")
+    } else if aviation_client.aviationstack_enabled() {
+        format!("{identifier} nicht bei AviationStack gefunden FDM")
+    } else {
+        "AviationStack nicht konfiguriert FDM".to_string()
+    };
+
+    sender.reply(reply_to, response).await;
 }
 
 async fn handle_status<T, L>(

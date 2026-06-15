@@ -206,8 +206,9 @@ where
             tx.clone(),
         )));
         cmd_list.push(Box::new(aviation::commands::flights::FlightCommand::new(
-            tx,
+            tx.clone(),
         )));
+        cmd_list.push(Box::new(aviation::commands::info::InfoCommand::new(tx)));
     }
 
     if let (Some((llm, ai_boot)), Some(ai_memory_v2)) = (llm_client, ai_memory_v2) {

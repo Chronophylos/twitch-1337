@@ -309,6 +309,119 @@ async fn aviationstack_resolved_future_flight_strict_chills_without_adsb_lookup(
 }
 
 #[tokio::test]
+async fn info_reuses_aviationstack_cache_seeded_by_track() {
+    let bot = TestBotBuilder::new()
+        .with_config(enable_aviationstack)
+        .with_settings(set_aviationstack_enabled)
+        .spawn()
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/flights"))
+        .and(query_param("access_key", "test-key"))
+        .and(query_param("flight_iata", "LH1929"))
+        .and(query_param("limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{
+                "flight_date": "2026-04-18",
+                "flight_status": "scheduled",
+                "flight": { "iata": "LH1929", "icao": "DLH1929", "number": "1929" },
+                "airline": { "iata": "LH", "icao": "DLH", "name": "Lufthansa" },
+                "departure": {
+                    "airport": "Berlin Brandenburg Airport",
+                    "iata": "BER",
+                    "icao": "EDDB",
+                    "terminal": "1",
+                    "gate": "B10",
+                    "scheduled": "2026-04-18T16:00:00+00:00",
+                    "estimated": "2026-04-18T16:05:00+00:00",
+                    "actual": null,
+                    "actual_runway": null,
+                    "delay": 5
+                },
+                "arrival": {
+                    "airport": "Franz Josef Strauss",
+                    "iata": "MUC",
+                    "icao": "EDDM",
+                    "terminal": "2",
+                    "gate": "G28",
+                    "baggage": "17",
+                    "scheduled": "2026-04-18T17:10:00+00:00",
+                    "estimated": "2026-04-18T17:15:00+00:00",
+                    "actual": null
+                },
+                "aircraft": {
+                    "registration": "D-AIDW",
+                    "icao24": "3c6497",
+                    "icao": "A320"
+                }
+            }]
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    let mut bot = bot;
+    bot.send("alice", "!track LH1929").await;
+    let ack = bot.expect_say(Duration::from_secs(5)).await;
+    assert!(ack.contains("Tracke DLH1929"), "got: {ack}");
+    assert!(ack.contains("LH1929 Lufthansa"), "got: {ack}");
+    assert!(
+        ack.contains("BER T1 Gate B10 -> MUC T2 Gate G28"),
+        "got: {ack}"
+    );
+    assert!(ack.contains("Dep: 16:05"), "got: {ack}");
+    assert!(ack.contains("Arr: 17:15"), "got: {ack}");
+    assert!(ack.contains("Baggage: 17"), "got: {ack}");
+    assert!(ack.contains("Aircraft: A320 D-AIDW"), "got: {ack}");
+    assert!(ack.contains("ICAO24: 3C6497"), "got: {ack}");
+
+    bot.send("bob", "!info DLH1929").await;
+    let info = bot.expect_say(Duration::from_secs(5)).await;
+    assert!(info.contains("LH1929 Lufthansa"), "got: {info}");
+    assert!(
+        info.contains("BER T1 Gate B10 -> MUC T2 Gate G28"),
+        "got: {info}"
+    );
+    assert!(info.contains("Baggage: 17"), "got: {info}");
+    assert!(info.contains("Status: scheduled"), "got: {info}");
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let aviationstack_requests = bot
+        .adsb_mock
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.url.path() == "/flights")
+        .count();
+    assert_eq!(
+        aviationstack_requests, 1,
+        "!info should reuse cached AviationStack data from !track"
+    );
+
+    let state_path = bot.data_dir.path().join("flights.ron");
+    let persisted = tokio::fs::read_to_string(state_path).await.unwrap();
+    let state: twitch_1337::aviation::tracker::FlightTrackerState =
+        ron::from_str(&persisted).unwrap();
+    assert_eq!(state.flight_info_cache.len(), 1);
+    assert!(state.flight_info_cache[0].metadata.is_some());
+    assert!(
+        state.flight_info_cache[0]
+            .aliases
+            .iter()
+            .any(|alias| alias == "LH1929")
+    );
+    assert!(
+        state.flight_info_cache[0]
+            .aliases
+            .iter()
+            .any(|alias| alias == "DLH1929")
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
 async fn aviationstack_mismatched_adsb_callsign_observes_aircraft_without_confirming_target() {
     let bot = TestBotBuilder::new()
         .with_config(enable_aviationstack)
