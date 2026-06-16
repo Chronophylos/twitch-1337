@@ -927,9 +927,7 @@ async fn handle_info<T, L>(
         msg_aviationstack_info(&metadata)
     } else if lookup.failed {
         "AviationStack Anfrage fehlgeschlagen FDM".to_string()
-    } else if lookup.checked {
-        format!("{identifier} nicht bei AviationStack gefunden FDM")
-    } else if aviation_client.aviationstack_enabled() {
+    } else if lookup.checked || aviation_client.aviationstack_enabled() {
         format!("{identifier} nicht bei AviationStack gefunden FDM")
     } else {
         "AviationStack nicht konfiguriert FDM".to_string()
