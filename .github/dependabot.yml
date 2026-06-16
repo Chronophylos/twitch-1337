@@ -22,9 +22,10 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "deps:actions"
-      - "topic:no-deploy"
     groups:
       actions-minor-patch:
+        patterns:
+          - "*"
         update-types:
           - minor
           - patch
@@ -38,10 +39,5 @@ updates:
     open-pull-requests-limit: 3
     labels:
       - "deps:docker"
-    groups:
-      docker-minor-patch:
-        update-types:
-          - minor
-          - patch
     cooldown:
       default-days: 7
