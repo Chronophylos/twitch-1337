@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Duration;
 use twitch_irc::message::PrivmsgMessage;
 
+use crate::aviation::AviationstackFlightMetadata;
+
 pub use loop_run::run_flight_tracker;
 
 /// Maximum number of simultaneously tracked flights.
@@ -48,10 +50,11 @@ pub enum FlightIdentifier {
 impl FlightIdentifier {
     /// Parse user input into a FlightIdentifier.
     ///
-    /// IATA flight numbers (`LL####`, 3–6 chars) take precedence over the
-    /// six-character ICAO24 hex rule when both apply (e.g. `AF1234`). Such
-    /// inputs are stored as callsigns; ADS-B may fall back to hex lookup when
-    /// a callsign poll misses and the string is also valid hex.
+    /// IATA flight numbers (`LL####`, e.g. `DE1513`, `AF1234`) take precedence
+    /// over the six-character ICAO24 hex rule when both apply — the user means
+    /// a flight, and `!track` resolves it to the operating ICAO callsign. Such
+    /// inputs are stored as callsigns; ADS-B may fall back to hex lookup when a
+    /// callsign poll misses and the string is also valid hex.
     ///
     /// Remaining 6-character all-hex-digit strings are ICAO24 hex codes.
     /// Everything else is treated as a callsign and must be ASCII alphanumeric
@@ -209,10 +212,36 @@ pub struct TrackedFlight {
     pub dest_lon: Option<f64>,
 }
 
+/// Persisted AviationStack lookup result shared by `!track` and `!info`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedFlightInfo {
+    pub aliases: Vec<String>,
+    pub flight_date: Option<String>,
+    pub metadata: Option<AviationstackFlightMetadata>,
+    pub cached_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl CachedFlightInfo {
+    pub(crate) fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        self.expires_at <= now
+    }
+
+    pub(crate) fn matches_any_alias(&self, aliases: &[String]) -> bool {
+        aliases.iter().any(|alias| {
+            self.aliases
+                .iter()
+                .any(|cached| cached.eq_ignore_ascii_case(alias))
+        })
+    }
+}
+
 /// Persisted state of all tracked flights.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FlightTrackerState {
     pub flights: Vec<TrackedFlight>,
+    #[serde(default)]
+    pub flight_info_cache: Vec<CachedFlightInfo>,
 }
 
 /// Read projection of [`TrackedFlight`] for the web dashboard.
@@ -269,6 +298,10 @@ pub enum TrackerCommand {
     },
     Status {
         identifier: Option<String>,
+        reply_to: PrivmsgMessage,
+    },
+    Info {
+        identifier: FlightIdentifier,
         reply_to: PrivmsgMessage,
     },
     Snapshot {
@@ -364,6 +397,7 @@ mod tests {
                 live_callsign,
                 pending_hex_identifier,
             ],
+            flight_info_cache: Vec::new(),
         };
 
         assert_eq!(clear_pending_callsign_hexes(&mut state), 1);
@@ -423,25 +457,7 @@ mod tests {
     }
 
     fn metadata() -> AviationstackFlightMetadata {
-        AviationstackFlightMetadata {
-            flight_iata: None,
-            flight_icao: None,
-            flight_number: None,
-            airline_iata: None,
-            airline_icao: None,
-            airline_name: None,
-            departure_iata: None,
-            departure_icao: None,
-            departure_scheduled: None,
-            departure_actual: None,
-            departure_actual_runway: None,
-            arrival_iata: None,
-            arrival_icao: None,
-            arrival_estimated: None,
-            arrival_actual: None,
-            aircraft_icao24: None,
-            aircraft_icao: None,
-        }
+        AviationstackFlightMetadata::default()
     }
 
     fn pending_interval(flight: &TrackedFlight, now: DateTime<Utc>) -> tokio::time::Duration {
@@ -692,6 +708,7 @@ mod tests {
     fn next_poll_at_keeps_live_fast_interval_for_recent_changes() {
         let mut flight = tracked_flight_with(FlightPhase::Unknown, 0);
         let now = dt("2026-04-18T10:00:00Z");
+        flight.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
         flight.last_seen = Some(now);
         flight.last_adsb_poll_at = Some(now);
 
@@ -760,6 +777,11 @@ mod tests {
 
     #[test]
     fn parse_treats_six_char_iata_flight_numbers_as_callsigns() {
+        // DE1513 (Condor) is all-hex-digit but must resolve as a flight, not a
+        // raw ICAO24 address — the regression that motivated the IATA-precedence rule.
+        let id = FlightIdentifier::parse("DE1513").unwrap();
+        assert_eq!(id, FlightIdentifier::Callsign("DE1513".to_string()));
+
         let id = FlightIdentifier::parse("AF1234").unwrap();
         assert_eq!(id, FlightIdentifier::Callsign("AF1234".to_string()));
 
@@ -803,6 +825,7 @@ mod tests {
         flight.alias_callsigns = vec!["AF1234".to_string(), "AFR1234".to_string()];
         let state = FlightTrackerState {
             flights: vec![flight],
+            flight_info_cache: Vec::new(),
         };
 
         assert_eq!(
@@ -871,6 +894,7 @@ mod tests {
 
         let state = FlightTrackerState {
             flights: vec![flight_a, flight_b],
+            flight_info_cache: Vec::new(),
         };
         let now = dt("2026-05-12T10:00:00Z");
 
@@ -902,6 +926,7 @@ mod tests {
 
         let state = FlightTrackerState {
             flights: vec![flight],
+            flight_info_cache: Vec::new(),
         };
 
         let views = build_flight_view(&state, now);
@@ -920,6 +945,7 @@ mod tests {
 
         let state = FlightTrackerState {
             flights: vec![flight],
+            flight_info_cache: Vec::new(),
         };
         let now = dt("2026-05-12T10:00:00Z");
 

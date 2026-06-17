@@ -44,21 +44,28 @@ fn seed_missing_aliases(state: &mut FlightTrackerState) {
     }
 }
 
-/// Seed `last_visible_at` (the tracking-lost removal anchor) from `last_seen`
-/// for flights persisted before the field existed. Without this, a restored
-/// `AircraftVisible` flight that then goes empty would never be removed (anchor
-/// stays `None`), while older state would otherwise key removal off the stale
-/// `last_seen`. Returns how many flights were backfilled.
+/// Seed `last_visible_at` (the tracking-lost removal anchor) for flights
+/// persisted before the field existed. Prefer the freshest ADS-B poll timestamp
+/// when present so restored `AircraftVisible` flights do not collapse the grace
+/// window back to a stale target-confirmed `last_seen`. Returns how many flights
+/// were backfilled.
 fn backfill_visible_anchor(state: &mut FlightTrackerState) -> usize {
     let mut backfilled = 0;
     for flight in &mut state.flights {
-        if flight.last_visible_at.is_none() && flight.last_seen.is_some() {
-            flight.last_visible_at = flight.last_seen;
+        if flight.last_visible_at.is_none()
+            && let Some(last_seen) = flight.last_seen
+        {
+            flight.last_visible_at = Some(
+                flight
+                    .last_adsb_poll_at
+                    .map_or(last_seen, |last_poll| last_poll.max(last_seen)),
+            );
             backfilled += 1;
         }
     }
     backfilled
 }
+
 pub(crate) async fn load_tracker_state(data_dir: &Path) -> FlightTrackerState {
     let path = data_dir.join(FLIGHTS_FILENAME);
     match fs::read_to_string(&path).await {
@@ -116,6 +123,7 @@ mod tests {
         let last_seen = dt("2026-04-18T12:01:00Z");
         let mut state = FlightTrackerState {
             flights: vec![tracked_flight()],
+            flight_info_cache: Vec::new(),
         };
 
         assert_eq!(migrate_target_confirmations(&mut state), 0);
@@ -127,10 +135,9 @@ mod tests {
     }
 
     #[test]
-    fn backfill_visible_anchor_seeds_from_last_seen_for_visible_flight() {
-        let last_seen = dt("2026-04-18T12:01:00Z");
+    fn backfill_visible_anchor_prefers_last_adsb_poll_for_visible_flight() {
+        let last_adsb_poll_at = dt("2026-04-18T12:32:00Z");
         let mut flight = tracked_flight();
-        // Simulate state persisted before `last_visible_at` existed.
         flight.last_visible_at = None;
         assert_eq!(
             flight.target_confirmation,
@@ -138,12 +145,27 @@ mod tests {
         );
         let mut state = FlightTrackerState {
             flights: vec![flight],
+            flight_info_cache: Vec::new(),
+        };
+
+        assert_eq!(backfill_visible_anchor(&mut state), 1);
+        assert_eq!(state.flights[0].last_visible_at, Some(last_adsb_poll_at));
+        assert_eq!(backfill_visible_anchor(&mut state), 0);
+    }
+
+    #[test]
+    fn backfill_visible_anchor_falls_back_to_last_seen_without_poll_timestamp() {
+        let last_seen = dt("2026-04-18T12:01:00Z");
+        let mut flight = tracked_flight();
+        flight.last_visible_at = None;
+        flight.last_adsb_poll_at = None;
+        let mut state = FlightTrackerState {
+            flights: vec![flight],
+            flight_info_cache: Vec::new(),
         };
 
         assert_eq!(backfill_visible_anchor(&mut state), 1);
         assert_eq!(state.flights[0].last_visible_at, Some(last_seen));
-        // Idempotent: a second pass touches nothing.
-        assert_eq!(backfill_visible_anchor(&mut state), 0);
     }
 
     #[test]
@@ -153,6 +175,7 @@ mod tests {
         flight.last_visible_at = None;
         let mut state = FlightTrackerState {
             flights: vec![flight],
+            flight_info_cache: Vec::new(),
         };
 
         assert_eq!(backfill_visible_anchor(&mut state), 0);

@@ -25,6 +25,8 @@ updates:
       - "topic:no-deploy"
     groups:
       actions-minor-patch:
+        patterns:
+          - "*"
         update-types:
           - minor
           - patch
