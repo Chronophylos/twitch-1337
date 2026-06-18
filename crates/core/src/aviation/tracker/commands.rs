@@ -1350,7 +1350,6 @@ where
                 RemovalReason::TrackingLost { secs } => {
                     info!(identifier = %identifier, "Removing flight: tracking lost for {secs}s");
                 }
-                RemovalReason::PendingExpired => {}
             }
             removals.push(identifier.clone());
         }

@@ -55,16 +55,7 @@ pub(crate) enum Emit {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RemovalReason {
-    TrackingLost {
-        secs: i64,
-    },
-    // Constructed by the upcoming advance_flight unit tests / future callers (brief Step 7);
-    // pass-1 pending-expiry removal in commands.rs stays inline and never builds this.
-    #[expect(
-        dead_code,
-        reason = "shared vocabulary for Task 2 unit tests; not yet built in prod"
-    )]
-    PendingExpired,
+    TrackingLost { secs: i64 },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -209,7 +200,7 @@ pub(crate) fn advance_flight(
     flight.last_adsb_poll_at = Some(now);
 
     let removal_threshold = TimeDelta::from_std(TRACKING_LOST_REMOVAL).unwrap_or(TimeDelta::zero());
-    let lost_threshold = TimeDelta::from_std(TRACKING_LOST_THRESHOLD).unwrap_or(TimeDelta::zero());
+    let lost_threshold = tracking_lost_threshold_delta();
 
     let ac = match &obs.outcome {
         PollOutcome::Hit(ac) => ac.as_ref(),
@@ -633,7 +624,10 @@ mod tests {
         let mut ac = aircraft();
         ac.flight = Some("DLH9999".to_string());
         let upd = advance_flight(&mut f, &hit(ac, true), dt("2026-04-18T12:02:00Z"));
-        assert_eq!(f.target_confirmation, TargetConfirmation::ConfirmedByCallsign);
+        assert_eq!(
+            f.target_confirmation,
+            TargetConfirmation::ConfirmedByCallsign
+        );
         assert_eq!(f.last_visible_at, Some(dt("2026-04-18T12:02:00Z")));
         // A within-threshold hex hit must never remove or report tracking-lost.
         // (Not asserting `emits.is_empty()`: a phase-change emit is legitimately
@@ -688,8 +682,6 @@ mod tests {
 
     #[test]
     fn ground_to_airborne_sets_takeoff_at() {
-        use crate::aviation::tracker::FlightPhase;
-
         let mut f = tracked_flight();
         // Must be already confirmed so the became_target_confirmed block doesn't
         // fire and reset phase back to Unknown before we can see the transition.
@@ -739,7 +731,9 @@ mod tests {
         assert_eq!(f.callsign.as_deref(), Some("DLH1929"));
         assert_eq!(
             upd.followups,
-            vec![Followup::FetchRoute { callsign: "DLH1929".to_string() }]
+            vec![Followup::FetchRoute {
+                callsign: "DLH1929".to_string()
+            }]
         );
     }
 
@@ -782,13 +776,19 @@ mod tests {
         // alt=8000 ft, baro_rate=-1500 fpm → detect_phase returns Approach
         // (vrate < -500, alt < 10000), keeping the flight in {Descent|Approach}
         // so the divert block runs on every poll.
+        //
+        // f.lat is seeded one step south of poll-0's observation (51.5 vs 52.0)
+        // so the very first poll already has a non-degenerate (non-zero-length)
+        // ground track and all 3+ consecutive anomalous polls count toward the
+        // divert threshold.
         let mut f = tracked_flight();
         f.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
         f.phase = FlightPhase::Descent;
         f.dest_lat = Some(48.35);
         f.dest_lon = Some(11.78);
-        // Initial position north of destination so the first prev_lat is set.
-        f.lat = Some(52.0);
+        // Seed prior position one step south so poll 0's observation (lat=52.0)
+        // gives a northward ground track from the start.
+        f.lat = Some(51.5);
         f.lon = Some(13.0);
 
         let mut emitted = false;
@@ -800,6 +800,7 @@ mod tests {
             ac.alt_baro = Some(AltBaro::Feet(8_000));
             ac.baro_rate = Some(-1_500);
             // Move progressively north (away from the southern destination).
+            // i=0 → 52.0, i=1 → 52.5, …; every poll is genuinely anomalous.
             ac.lat = Some(52.0 + f64::from(i) * 0.5);
             ac.lon = Some(13.0);
             let upd = advance_flight(&mut f, &hit(ac, false), dt("2026-04-18T12:05:00Z"));
@@ -808,6 +809,9 @@ mod tests {
                 break;
             }
         }
-        assert!(emitted, "expected PossibleDivert after sustained off-heading polls");
+        assert!(
+            emitted,
+            "expected PossibleDivert after sustained off-heading polls"
+        );
     }
 }
