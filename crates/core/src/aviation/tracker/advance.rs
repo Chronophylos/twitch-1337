@@ -7,13 +7,14 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use tracing::debug;
 
-use super::commands::aircraft_callsign;
 use super::debug_journal::{AdsbPollDebugInput, DiversionDebugInput, FlightTrackerDebugEvent};
 use super::format::{
     msg_adsb_visible, msg_approach, msg_cruise, msg_descent, msg_landing, msg_pending_expired,
     msg_possible_divert, msg_squawk_emergency, msg_takeoff, msg_tracking_lost,
 };
-use super::metadata::{add_alias_callsign, set_hex_if_consistent, set_route_from_iata};
+use super::metadata::{
+    add_alias_callsign, aircraft_callsign, set_hex_if_consistent, set_route_from_iata,
+};
 use super::phase::{
     altitude_ft, detect_phase, emergency_squawk_meaning, is_airborne_phase, update_divert_counter,
     vertical_rate,
@@ -812,6 +813,170 @@ mod tests {
         assert!(
             emitted,
             "expected PossibleDivert after sustained off-heading polls"
+        );
+    }
+
+    // ── Follow-up tests: untested advance_flight branches ────────────────────
+
+    #[test]
+    fn error_outcome_sets_poll_at_and_records_debug_event_only() {
+        let mut f = tracked_flight();
+        // Capture telemetry before the call; the error branch must not mutate it.
+        let alt_before = f.altitude_ft;
+        let lat_before = f.lat;
+        let lon_before = f.lon;
+        let vrate_before = f.vertical_rate_fpm;
+        let gs_before = f.ground_speed_kts;
+        let squawk_before = f.squawk.clone();
+
+        let now = dt("2026-04-18T12:00:00Z");
+        let obs = Observation {
+            used_hex: true,
+            outcome: PollOutcome::Error,
+        };
+        let upd = advance_flight(&mut f, &obs, now);
+
+        assert_eq!(f.last_adsb_poll_at, Some(now));
+        assert!(upd.emits.is_empty(), "Error must not emit: {:?}", upd.emits);
+        assert!(
+            upd.removal.is_none(),
+            "Error must not remove: {:?}",
+            upd.removal
+        );
+        assert!(
+            upd.followups.is_empty(),
+            "Error must not produce followups: {:?}",
+            upd.followups
+        );
+        assert!(!upd.debug.is_empty(), "Error must record a debug event");
+        // Telemetry must be unchanged.
+        assert_eq!(f.altitude_ft, alt_before);
+        assert_eq!(f.lat, lat_before);
+        assert_eq!(f.lon, lon_before);
+        assert_eq!(f.vertical_rate_fpm, vrate_before);
+        assert_eq!(f.ground_speed_kts, gs_before);
+        assert_eq!(f.squawk, squawk_before);
+    }
+
+    #[test]
+    fn timeout_outcome_sets_poll_at_and_records_debug_event_only() {
+        let mut f = tracked_flight();
+        let alt_before = f.altitude_ft;
+        let lat_before = f.lat;
+        let lon_before = f.lon;
+        let vrate_before = f.vertical_rate_fpm;
+        let gs_before = f.ground_speed_kts;
+        let squawk_before = f.squawk.clone();
+
+        let now = dt("2026-04-18T12:01:00Z");
+        let obs = Observation {
+            used_hex: false,
+            outcome: PollOutcome::Timeout,
+        };
+        let upd = advance_flight(&mut f, &obs, now);
+
+        assert_eq!(f.last_adsb_poll_at, Some(now));
+        assert!(
+            upd.emits.is_empty(),
+            "Timeout must not emit: {:?}",
+            upd.emits
+        );
+        assert!(
+            upd.removal.is_none(),
+            "Timeout must not remove: {:?}",
+            upd.removal
+        );
+        assert!(
+            upd.followups.is_empty(),
+            "Timeout must not produce followups: {:?}",
+            upd.followups
+        );
+        assert!(!upd.debug.is_empty(), "Timeout must record a debug event");
+        // Telemetry must be unchanged.
+        assert_eq!(f.altitude_ft, alt_before);
+        assert_eq!(f.lat, lat_before);
+        assert_eq!(f.lon, lon_before);
+        assert_eq!(f.vertical_rate_fpm, vrate_before);
+        assert_eq!(f.ground_speed_kts, gs_before);
+        assert_eq!(f.squawk, squawk_before);
+    }
+
+    #[test]
+    fn squawk_7700_on_confirmed_flight_emits_squawk_emergency() {
+        let mut f = tracked_flight();
+        f.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
+        f.last_seen = Some(dt("2026-04-18T12:00:00Z"));
+        f.squawk = Some("1000".to_string()); // non-emergency prior squawk
+
+        let mut ac = aircraft_on_ground();
+        // Must match tracked callsign "DLH1234" to get ConfirmedByCallsign →
+        // direct_target_confirmed = true → phase_sample_confirmed = true.
+        ac.flight = Some("DLH1234".to_string());
+        ac.squawk = Some("7700".to_string());
+
+        let now = dt("2026-04-18T12:02:00Z");
+        let upd = advance_flight(&mut f, &hit(ac, false), now);
+
+        let expected_meaning = emergency_squawk_meaning("7700").unwrap();
+        assert!(
+            upd.emits.iter().any(|e| matches!(
+                e,
+                Emit::SquawkEmergency { code, meaning }
+                    if code == "7700" && meaning == expected_meaning
+            )),
+            "expected SquawkEmergency(7700, {expected_meaning:?}), got: {:?}",
+            upd.emits
+        );
+    }
+
+    #[test]
+    fn unconfirmed_aircraft_early_return_does_not_bump_visible_or_polls() {
+        let mut f = tracked_flight();
+        f.target_confirmation = TargetConfirmation::Pending;
+        let known_visible_at = dt("2026-04-18T11:00:00Z");
+        f.last_visible_at = Some(known_visible_at);
+        let known_polls = 5u32;
+        f.polls_since_change = known_polls;
+
+        // ac.flight does NOT match the tracked callsign "DLH1234"; used_hex=false
+        // so only the callsign path runs → target_confirmation_for_aircraft
+        // returns None → early return before last_visible_at is touched.
+        let mut ac = aircraft();
+        ac.flight = Some("DLH9999".to_string());
+
+        let now = dt("2026-04-18T12:00:00Z");
+        let upd = advance_flight(&mut f, &hit(ac, false), now);
+
+        assert_eq!(f.last_adsb_poll_at, Some(now));
+        assert_eq!(
+            f.last_visible_at,
+            Some(known_visible_at),
+            "last_visible_at must not be bumped on unconfirmed early return"
+        );
+        assert_eq!(
+            f.polls_since_change, known_polls,
+            "polls_since_change must not be bumped on unconfirmed early return"
+        );
+        assert!(
+            upd.emits.is_empty(),
+            "unconfirmed early return must not emit: {:?}",
+            upd.emits
+        );
+        assert!(
+            upd.removal.is_none(),
+            "unconfirmed early return must not remove: {:?}",
+            upd.removal
+        );
+        assert!(
+            upd.followups.is_empty(),
+            "unconfirmed early return must not produce followups: {:?}",
+            upd.followups
+        );
+        // The None-return branch in advance_flight does not push a debug event.
+        assert!(
+            upd.debug.is_empty(),
+            "unconfirmed early return must not record debug events: {:?}",
+            upd.debug
         );
     }
 }

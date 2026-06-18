@@ -16,8 +16,8 @@ use super::{
     debug_journal::{DebugHttpOutcome, FlightTrackerDebugEvent, append_debug_event},
     format::{msg_aviationstack_info, msg_flight_status, msg_flights_list, msg_track_started},
     metadata::{
-        add_alias_callsign, apply_aviationstack_metadata, metadata_callsign, normalize_flight_code,
-        seed_flight_aliases, set_hex_if_consistent, set_route_from_iata,
+        add_alias_callsign, aircraft_callsign, apply_aviationstack_metadata, metadata_callsign,
+        normalize_flight_code, seed_flight_aliases, set_hex_if_consistent, set_route_from_iata,
     },
     phase::{altitude_ft, detect_phase, vertical_rate},
     schedule::{PollReadiness, poll_readiness},
@@ -103,13 +103,6 @@ pub(crate) fn find_flight_index(flights: &[TrackedFlight], query: &str) -> Optio
                 .as_ref()
                 .is_some_and(|h| h.eq_ignore_ascii_case(&upper))
     })
-}
-
-pub(crate) fn aircraft_callsign(ac: &NearbyAircraft) -> Option<&str> {
-    ac.flight
-        .as_deref()
-        .map(str::trim)
-        .filter(|callsign| !callsign.is_empty())
 }
 
 #[cfg(test)]
