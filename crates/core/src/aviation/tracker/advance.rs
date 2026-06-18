@@ -569,6 +569,79 @@ mod tests {
         }
     }
 
+    /// Airborne aircraft fixture; callsign intentionally differs from
+    /// `tracked_flight()`'s "DLH1234" so hex-hit tests exercise the
+    /// sticky-confirmation / `AircraftVisible` paths explicitly.
+    fn aircraft() -> NearbyAircraft {
+        NearbyAircraft {
+            hex: Some("3C6497".to_string()),
+            flight: Some("DLH1929".to_string()),
+            r: None,
+            t: None,
+            alt_baro: Some(AltBaro::Feet(12_000)),
+            lat: Some(52.4),
+            lon: Some(13.5),
+            gs: Some(280.0),
+            baro_rate: Some(-1_800),
+            geom_rate: None,
+            squawk: Some("1000".to_string()),
+            nav_modes: None,
+            rssi: None,
+            seen_pos: None,
+        }
+    }
+
+    fn miss(used_hex: bool) -> Observation {
+        Observation {
+            used_hex,
+            outcome: PollOutcome::Miss,
+        }
+    }
+
+    #[test]
+    fn miss_within_grace_window_keeps_flight() {
+        let mut f = tracked_flight();
+        f.last_visible_at = Some(dt("2026-04-18T12:00:00Z"));
+        // 5 min later: past lost-threshold (300 s) but well under removal (1800 s)
+        let upd = advance_flight(&mut f, &miss(true), dt("2026-04-18T12:05:00Z"));
+        assert_eq!(upd.removal, None);
+        assert!(upd.emits.is_empty());
+    }
+
+    #[test]
+    fn miss_past_removal_threshold_removes_and_emits_tracking_lost() {
+        let mut f = tracked_flight();
+        f.last_visible_at = Some(dt("2026-04-18T12:00:00Z"));
+        // 31 min later: past removal (1800 s)
+        let upd = advance_flight(&mut f, &miss(true), dt("2026-04-18T12:31:00Z"));
+        assert_eq!(
+            upd.removal,
+            Some(RemovalReason::TrackingLost { secs: 31 * 60 })
+        );
+        assert_eq!(upd.emits, vec![Emit::TrackingLost]);
+    }
+
+    #[test]
+    fn sticky_confirmation_keeps_prior_when_hex_visible_within_threshold() {
+        let mut f = tracked_flight();
+        f.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
+        f.last_seen = Some(dt("2026-04-18T12:00:00Z"));
+        // Override the observed callsign to "DLH9999", which mismatches the
+        // tracked flight's "DLH1234". Without the sticky guard, this hex hit
+        // would decay the confirmation to AircraftVisible; because we are
+        // within the lost-threshold it must stay ConfirmedByCallsign.
+        let mut ac = aircraft();
+        ac.flight = Some("DLH9999".to_string());
+        let upd = advance_flight(&mut f, &hit(ac, true), dt("2026-04-18T12:02:00Z"));
+        assert_eq!(f.target_confirmation, TargetConfirmation::ConfirmedByCallsign);
+        assert_eq!(f.last_visible_at, Some(dt("2026-04-18T12:02:00Z")));
+        // A within-threshold hex hit must never remove or report tracking-lost.
+        // (Not asserting `emits.is_empty()`: a phase-change emit is legitimately
+        // possible here depending on the fixture's altitude/rate.)
+        assert_eq!(upd.removal, None);
+        assert!(!upd.emits.contains(&Emit::TrackingLost));
+    }
+
     #[test]
     fn format_emit_landing_preserves_flight_time_from_carried_takeoff() {
         let flight = tracked_flight();
