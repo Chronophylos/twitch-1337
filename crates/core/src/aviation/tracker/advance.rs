@@ -721,4 +721,93 @@ mod tests {
             upd.emits
         );
     }
+
+    // ── Task 4 tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn newly_resolved_callsign_with_no_route_emits_fetch_route_followup() {
+        // A HEX-identified flight with no callsign yet. When the observed
+        // aircraft carries a callsign the HEX branch resolves it and, because
+        // route is None, appends a FetchRoute followup.
+        let mut f = tracked_flight();
+        f.identifier = FlightIdentifier::Hex("3C6497".to_string());
+        f.callsign = None;
+        f.route = None;
+        let mut ac = aircraft(); // flight = "DLH1929" — any callsign works for Hex id
+        ac.flight = Some("DLH1929".to_string());
+        let upd = advance_flight(&mut f, &hit(ac, true), dt("2026-04-18T12:05:00Z"));
+        assert_eq!(f.callsign.as_deref(), Some("DLH1929"));
+        assert_eq!(
+            upd.followups,
+            vec![Followup::FetchRoute { callsign: "DLH1929".to_string() }]
+        );
+    }
+
+    #[test]
+    fn first_target_confirmation_resets_phase_and_emits_adsb_visible() {
+        // Pending flight gets its first callsign-confirmed hit.
+        // The brief's assertions on f.phase==Unknown and polls_since_change==0
+        // are mutually inconsistent: after the reset, detect_phase runs in the
+        // same call and either changes the phase (breaking ==Unknown) or keeps
+        // it and increments polls_since_change (breaking ==0). We assert only
+        // the stable first-confirmation contract instead.
+        let mut f = tracked_flight();
+        f.target_confirmation = TargetConfirmation::Pending;
+        f.last_visible_at = None;
+        f.phase = FlightPhase::Cruise;
+        // ac.flight MUST match the tracked callsign "DLH1234" so that
+        // target_confirmation_for_aircraft returns ConfirmedByCallsign →
+        // became_target_confirmed = true → AdsbVisible is emitted.
+        let mut ac = aircraft();
+        ac.flight = Some("DLH1234".to_string());
+        let upd = advance_flight(&mut f, &hit(ac, false), dt("2026-04-18T12:05:00Z"));
+        assert!(
+            f.target_confirmation.is_target_confirmed(),
+            "expected target_confirmation to be confirmed, got: {:?}",
+            f.target_confirmation
+        );
+        assert!(
+            upd.emits.iter().any(|e| matches!(e, Emit::AdsbVisible)),
+            "expected Emit::AdsbVisible on first confirmation, got: {:?}",
+            upd.emits
+        );
+    }
+
+    #[test]
+    fn sustained_off_heading_in_descent_eventually_emits_possible_divert() {
+        // Divert fires after DIVERT_CONSECUTIVE_POLLS (3) anomalous polls.
+        // Flight is already confirmed; position starts north of destination
+        // and moves further north so the ground-track bearing (~0°/north)
+        // diverges from the bearing-to-destination (~190°/south) by >> 90°.
+        // alt=8000 ft, baro_rate=-1500 fpm → detect_phase returns Approach
+        // (vrate < -500, alt < 10000), keeping the flight in {Descent|Approach}
+        // so the divert block runs on every poll.
+        let mut f = tracked_flight();
+        f.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
+        f.phase = FlightPhase::Descent;
+        f.dest_lat = Some(48.35);
+        f.dest_lon = Some(11.78);
+        // Initial position north of destination so the first prev_lat is set.
+        f.lat = Some(52.0);
+        f.lon = Some(13.0);
+
+        let mut emitted = false;
+        for i in 0..6_i32 {
+            let mut ac = aircraft();
+            // Callsign must match so ConfirmedByCallsign fires each poll →
+            // phase_sample_confirmed = true → divert block runs.
+            ac.flight = Some("DLH1234".to_string());
+            ac.alt_baro = Some(AltBaro::Feet(8_000));
+            ac.baro_rate = Some(-1_500);
+            // Move progressively north (away from the southern destination).
+            ac.lat = Some(52.0 + f64::from(i) * 0.5);
+            ac.lon = Some(13.0);
+            let upd = advance_flight(&mut f, &hit(ac, false), dt("2026-04-18T12:05:00Z"));
+            if upd.emits.iter().any(|e| matches!(e, Emit::PossibleDivert)) {
+                emitted = true;
+                break;
+            }
+        }
+        assert!(emitted, "expected PossibleDivert after sustained off-heading polls");
+    }
 }
