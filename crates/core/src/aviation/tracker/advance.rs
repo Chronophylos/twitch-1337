@@ -685,4 +685,40 @@ mod tests {
         assert_eq!(flight.phase, FlightPhase::Ground);
         assert_eq!(flight.takeoff_at, None);
     }
+
+    #[test]
+    fn ground_to_airborne_sets_takeoff_at() {
+        use crate::aviation::tracker::FlightPhase;
+
+        let mut f = tracked_flight();
+        // Must be already confirmed so the became_target_confirmed block doesn't
+        // fire and reset phase back to Unknown before we can see the transition.
+        f.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
+        f.phase = FlightPhase::Ground;
+        f.takeoff_at = None;
+
+        // Aircraft callsign MUST match the tracked callsign ("DLH1234") so
+        // target_confirmation_for_aircraft returns ConfirmedByCallsign →
+        // direct_target_confirmed = true → phase_sample_confirmed = true.
+        // aircraft() defaults to "DLH1929" — override it here.
+        let mut ac = aircraft();
+        ac.flight = Some("DLH1234".to_string());
+        // AltBaro::Feet(1_500): is_on_ground checks ft < 200 → false, so not on
+        // ground. detect_phase sees Ground prior + gs(180) > TAKEOFF_MIN_SPEED(60)
+        // + vrate(2_500) > 0 → FlightPhase::Takeoff.
+        ac.alt_baro = Some(AltBaro::Feet(1_500));
+        ac.baro_rate = Some(2_500);
+        ac.gs = Some(180.0);
+
+        let now = dt("2026-04-18T12:10:00Z");
+        let upd = advance_flight(&mut f, &hit(ac, false), now);
+
+        assert_eq!(f.phase, FlightPhase::Takeoff, "phase = {:?}", f.phase);
+        assert_eq!(f.takeoff_at, Some(now));
+        assert!(
+            upd.emits.iter().any(|e| matches!(e, Emit::Takeoff)),
+            "expected Emit::Takeoff, got: {:?}",
+            upd.emits
+        );
+    }
 }
