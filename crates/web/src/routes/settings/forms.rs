@@ -246,6 +246,7 @@ impl AiDreamerForm {
             run_at: self.ai_dreamer_run_at,
             timeout_secs: self.ai_dreamer_timeout_secs,
             max_rounds: self.ai_dreamer_max_rounds,
+            max_writes_per_turn: None,
         }
     }
 }
