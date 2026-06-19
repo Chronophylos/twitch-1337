@@ -19,6 +19,10 @@ use tokio::sync::Mutex;
 
 use crate::clock::Clock;
 
+/// Production Helix root. Tests override via `[web].helix_base` or
+/// [`ReqwestHelixClient::with_base`].
+pub const DEFAULT_HELIX_BASE: &str = "https://api.twitch.tv";
+
 #[async_trait]
 pub trait HelixClient: Send + Sync {
     async fn fetch_user_by_id(&self, user_id: &str) -> Result<Option<HelixUser>>;
@@ -191,7 +195,7 @@ impl ReqwestHelixClient {
         client_id: SecretString,
         provider: Arc<dyn AccessTokenProvider>,
     ) -> Self {
-        Self::with_base(http, client_id, provider, "https://api.twitch.tv".into())
+        Self::with_base(http, client_id, provider, DEFAULT_HELIX_BASE.into())
     }
 
     pub fn with_base(

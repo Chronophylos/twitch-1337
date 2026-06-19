@@ -97,6 +97,7 @@ async fn main() -> Result<()> {
         bind_addr: bind_addr.to_string(),
         public_url,
         session_secret,
+        helix_base: twitch_1337_web::helix::DEFAULT_HELIX_BASE.to_owned(),
     });
 
     let helix: Arc<dyn HelixClient> = Arc::new(StubHelix);
@@ -106,6 +107,7 @@ async fn main() -> Result<()> {
         helix,
         irc_connected: Arc::new(AtomicBool::new(true)),
         config: web_config,
+        helix_base: Arc::from(twitch_1337_web::helix::DEFAULT_HELIX_BASE),
         clock,
         channel: Arc::from(channel.as_str()),
         broadcaster_id: Arc::from("0"),

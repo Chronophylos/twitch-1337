@@ -24,7 +24,21 @@ use twitch_1337_web::auth::OAuthCtx;
 use twitch_1337_web::auth::session::SessionTable;
 use twitch_1337_web::clock::Clock;
 use twitch_1337_web::config::WebConfig;
-use twitch_1337_web::helix::{HelixClient, HelixUser};
+use twitch_1337_web::helix::{DEFAULT_HELIX_BASE, HelixClient, HelixUser};
+
+pub struct WebStateOverrides {
+    pub helix_base: Option<String>,
+    pub oauth_token_uri: Option<String>,
+}
+
+impl Default for WebStateOverrides {
+    fn default() -> Self {
+        Self {
+            helix_base: None,
+            oauth_token_uri: None,
+        }
+    }
+}
 
 pub struct FixedClock(pub DateTime<Utc>);
 
@@ -119,10 +133,20 @@ pub async fn build_state_with_overrides(
     helix: Arc<dyn HelixClient>,
     role_check_refresh: Duration,
 ) -> (WebState, TempDir, TempDir) {
+    build_state_with_full_overrides(helix, role_check_refresh, WebStateOverrides::default()).await
+}
+
+/// Like [`build_state_with_overrides`] but also accepts helix / OAuth endpoint
+/// overrides for wiremock-backed auth callback tests.
+pub async fn build_state_with_full_overrides(
+    helix: Arc<dyn HelixClient>,
+    role_check_refresh: Duration,
+    overrides: WebStateOverrides,
+) -> (WebState, TempDir, TempDir) {
     let clock: Arc<dyn Clock> = Arc::new(StepClock::new(
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 1, 0, 0, 0).unwrap(),
     ));
-    build_state_inner(helix, role_check_refresh.as_secs(), clock).await
+    build_state_inner_with_overrides(helix, role_check_refresh.as_secs(), clock, overrides).await
 }
 
 /// Variant that returns the ping, memory, and settings tempdirs so callers
@@ -134,7 +158,7 @@ pub async fn build_state_with_all_dirs(
     let clock: Arc<dyn Clock> = Arc::new(FixedClock(
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 1, 0, 0, 0).unwrap(),
     ));
-    build_state_inner_keep_settings(helix, 300, clock).await
+    build_state_inner_keep_settings(helix, 300, clock, WebStateOverrides::default()).await
 }
 
 async fn build_state_inner(
@@ -142,8 +166,23 @@ async fn build_state_inner(
     mod_check_refresh_secs: u64,
     clock: Arc<dyn Clock>,
 ) -> (WebState, TempDir, TempDir) {
+    build_state_inner_with_overrides(
+        helix,
+        mod_check_refresh_secs,
+        clock,
+        WebStateOverrides::default(),
+    )
+    .await
+}
+
+async fn build_state_inner_with_overrides(
+    helix: Arc<dyn HelixClient>,
+    mod_check_refresh_secs: u64,
+    clock: Arc<dyn Clock>,
+    overrides: WebStateOverrides,
+) -> (WebState, TempDir, TempDir) {
     let (state, td_p, td_m, td_s) =
-        build_state_inner_keep_settings(helix, mod_check_refresh_secs, clock).await;
+        build_state_inner_keep_settings(helix, mod_check_refresh_secs, clock, overrides).await;
     // Settings tempdir is intentionally dropped here; helper-driven tests
     // that need the on-disk `settings.ron` to survive should use
     // [`build_state_with_all_dirs`] instead.
@@ -155,6 +194,7 @@ async fn build_state_inner_keep_settings(
     helix: Arc<dyn HelixClient>,
     mod_check_refresh_secs: u64,
     clock: Arc<dyn Clock>,
+    overrides: WebStateOverrides,
 ) -> (WebState, TempDir, TempDir, TempDir) {
     let pings_dir = TempDir::new().expect("pings tempdir");
     let memory_dir = TempDir::new().expect("memory tempdir");
@@ -163,18 +203,28 @@ async fn build_state_inner_keep_settings(
     tokio::spawn(run_ping_actor(ping_actor_rx, pings, ping_names_tx));
     let ping_actor = PingHandle::new((*ping_actor_tx).clone());
     let sessions = Arc::new(SessionTable::new(clock.clone()));
+    let client_secret = SecretString::new("test-secret".to_owned().into());
     let oauth = Arc::new(
-        OAuthCtx::new(
-            "test-client-id",
-            &SecretString::new("test-secret".to_owned().into()),
-            "https://test.invalid",
-        )
+        if let Some(ref token_uri) = overrides.oauth_token_uri {
+            OAuthCtx::with_token_uri(
+                "test-client-id",
+                &client_secret,
+                "https://test.invalid",
+                Some(token_uri),
+            )
+        } else {
+            OAuthCtx::new("test-client-id", &client_secret, "https://test.invalid")
+        }
         .expect("test oauth"),
     );
+    let helix_base = overrides
+        .helix_base
+        .unwrap_or_else(|| DEFAULT_HELIX_BASE.to_owned());
     let config = Arc::new(WebConfig {
         bind_addr: "127.0.0.1:0".into(),
         public_url: "https://test.invalid".into(),
         session_secret: SecretString::new("0".repeat(64).into()),
+        helix_base,
     });
     // Tests don't need a real production secret; a fixed 32-byte key keeps
     // signed-cookie round-trips deterministic across reruns.
@@ -208,7 +258,8 @@ async fn build_state_inner_keep_settings(
         sessions,
         helix,
         irc_connected: Arc::new(AtomicBool::new(true)),
-        config,
+        config: config.clone(),
+        helix_base: Arc::from(config.helix_base.as_str()),
         clock,
         channel: Arc::from("testchannel"),
         broadcaster_id: Arc::from("100"),

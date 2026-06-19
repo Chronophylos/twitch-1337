@@ -52,10 +52,17 @@ pub struct WebConfig {
     pub public_url: String,
     #[serde(default = "default_web_session_secret")]
     pub session_secret: SecretString,
+    /// Twitch Helix API root. Override in tests to point at wiremock.
+    #[serde(default = "default_helix_base")]
+    pub helix_base: String,
 }
 
 fn default_web_bind() -> String {
     "127.0.0.1:8080".to_owned()
+}
+
+fn default_helix_base() -> String {
+    "https://api.twitch.tv".to_owned()
 }
 
 fn default_web_session_secret() -> SecretString {
@@ -69,6 +76,7 @@ impl Default for WebConfig {
             bind_addr: default_web_bind(),
             public_url: String::new(),
             session_secret: default_web_session_secret(),
+            helix_base: default_helix_base(),
         }
     }
 }

@@ -82,7 +82,21 @@ pub struct OAuthCtx {
 
 impl OAuthCtx {
     pub fn new(client_id: &str, client_secret: &SecretString, public_url: &str) -> Result<Self> {
+        Self::with_token_uri(client_id, client_secret, public_url, None)
+    }
+
+    /// Like [`Self::new`], but overrides the OAuth token endpoint. Integration
+    /// tests point this at wiremock while keeping production auth URLs.
+    pub fn with_token_uri(
+        client_id: &str,
+        client_secret: &SecretString,
+        public_url: &str,
+        token_uri: Option<&str>,
+    ) -> Result<Self> {
         let redirect = format!("{}/auth/callback", public_url.trim_end_matches('/'));
+        let token_uri = token_uri
+            .map(str::to_owned)
+            .unwrap_or_else(|| "https://id.twitch.tv/oauth2/token".into());
         // Twitch's token endpoint only reads `client_id` / `client_secret` from
         // the form body and ignores HTTP Basic auth, so override oauth2 v5's
         // BasicAuth default — otherwise Twitch returns
@@ -92,7 +106,7 @@ impl OAuthCtx {
             .set_auth_uri(AuthUrl::new(
                 "https://id.twitch.tv/oauth2/authorize".into(),
             )?)
-            .set_token_uri(TokenUrl::new("https://id.twitch.tv/oauth2/token".into())?)
+            .set_token_uri(TokenUrl::new(token_uri)?)
             .set_redirect_uri(RedirectUrl::new(redirect)?)
             .set_auth_type(AuthType::RequestBody);
         let http = reqwest::Client::builder()
@@ -441,7 +455,7 @@ async fn fetch_caller_user(
     let resp = state
         .oauth
         .http
-        .get("https://api.twitch.tv/helix/users")
+        .get(format!("{}/helix/users", state.helix_base))
         .bearer_auth(access_token)
         .header("Client-Id", state.client_id.expose_secret())
         .send()

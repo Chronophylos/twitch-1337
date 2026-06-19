@@ -359,10 +359,11 @@ async fn build_web_spawner(
     let token_provider: Arc<dyn AccessTokenProvider> = Arc::new(CredsTokenProvider {
         creds: Arc::new(credentials),
     });
-    let helix = Arc::new(ReqwestHelixClient::new(
+    let helix = Arc::new(ReqwestHelixClient::with_base(
         reqwest::Client::new(),
         config.twitch.client_id.clone(),
         token_provider,
+        config.web.helix_base.clone(),
     ));
 
     let broadcaster = helix
@@ -404,6 +405,7 @@ async fn build_web_spawner(
         bind_addr: config.web.bind_addr.clone(),
         public_url: config.web.public_url.clone(),
         session_secret: config.web.session_secret.clone(),
+        helix_base: config.web.helix_base.clone(),
     });
 
     let signed_key = twitch_1337_web::state::derive_session_key(&config.web.session_secret)?;
@@ -420,7 +422,8 @@ async fn build_web_spawner(
         sessions,
         helix: helix as Arc<dyn twitch_1337_web::helix::HelixClient>,
         irc_connected,
-        config: web_config,
+        config: web_config.clone(),
+        helix_base: Arc::from(config.web.helix_base.as_str()),
         clock: web_clock,
         channel: Arc::from(config.twitch.channel.as_str()),
         broadcaster_id: Arc::from(broadcaster.id.as_str()),

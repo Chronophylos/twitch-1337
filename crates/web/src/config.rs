@@ -15,4 +15,6 @@ pub struct WebConfig {
     pub bind_addr: String,
     pub public_url: String,
     pub session_secret: SecretString,
+    /// Twitch Helix API root (`https://api.twitch.tv` in production).
+    pub helix_base: String,
 }

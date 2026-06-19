@@ -757,13 +757,15 @@ fn build_test_web_state(
         bind_addr: config.web.bind_addr.clone(),
         public_url: config.web.public_url.clone(),
         session_secret: config.web.session_secret.clone(),
+        helix_base: config.web.helix_base.clone(),
     });
     let signed_key = tower_cookies::Key::from(&[0x42u8; 64]);
     twitch_1337_web::WebState {
         sessions,
         helix: Arc::new(DenyHelix),
         irc_connected,
-        config: web_config,
+        config: web_config.clone(),
+        helix_base: Arc::from(web_config.helix_base.as_str()),
         clock: web_clock,
         channel: Arc::from(config.twitch.channel.as_str()),
         broadcaster_id: Arc::from("0"),
