@@ -98,7 +98,8 @@ pub struct AiDreamer {
     pub max_rounds: usize,
     /// Per-turn `write_file` quota for the dreamer ritual. Separate from the
     /// chat-turn cap (`AiBehavior::max_writes_per_turn`): the dreamer rewrites
-    /// SOUL + LORE + many user files in one pass, so it needs a higher ceiling.
+    /// SOUL + LORE + many user files in one pass, so it defaults higher (32 vs
+    /// the chat cap's 8). Both are bounded to the same `1..=64` range.
     pub max_writes_per_turn: usize,
 }
 
