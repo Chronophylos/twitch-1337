@@ -18,6 +18,7 @@ pub mod config;
 pub mod dev;
 pub mod error;
 pub mod flash;
+pub mod user_facing;
 pub mod helix;
 pub mod nav;
 pub mod routes;
