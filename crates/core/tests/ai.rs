@@ -145,22 +145,24 @@ meaning = "steht nicht im aktuellen 7TV-Katalog"
 
     let calls = bot.llm.tool_calls();
     assert_eq!(calls.len(), 1, "expected exactly one LLM call");
-    let system_msg = calls[0]
+    // Emote block is volatile (varies per turn), so it lives in the user
+    // message — keeping the system message as a stable cache prefix.
+    let user_msg = calls[0]
         .messages
         .iter()
-        .find(|m| m.role == Role::System)
-        .expect("request has a system message");
-    assert!(system_msg.content.contains("7TV emotes available"));
-    assert!(system_msg.content.contains("KEKW"));
-    assert!(system_msg.content.contains("meaning=lachen"));
-    assert!(system_msg.content.contains("LocalEmote"));
-    assert!(!system_msg.content.contains("MissingEmote"));
-    let local_pos = system_msg.content.find("- LocalEmote:").unwrap();
-    let kekw_pos = system_msg.content.find("- KEKW:").unwrap();
+        .find(|m| m.role == Role::User)
+        .expect("request has a user message");
+    assert!(user_msg.content.contains("7TV emotes available"));
+    assert!(user_msg.content.contains("KEKW"));
+    assert!(user_msg.content.contains("meaning=lachen"));
+    assert!(user_msg.content.contains("LocalEmote"));
+    assert!(!user_msg.content.contains("MissingEmote"));
+    let local_pos = user_msg.content.find("- LocalEmote:").unwrap();
+    let kekw_pos = user_msg.content.find("- KEKW:").unwrap();
     assert!(
         local_pos < kekw_pos,
         "recent chat emote should rank before generic context match:\n{}",
-        system_msg.content
+        user_msg.content
     );
 
     bot.shutdown().await;
