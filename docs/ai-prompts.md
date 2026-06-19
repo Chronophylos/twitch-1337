@@ -21,7 +21,7 @@ The loader runs a simple `str::replace` pass before sending. Available tokens:
 | `{speaker_username}` | Twitch login (lowercase) of the speaker | `system.md`, `ai_instructions.md` |
 | `{speaker_display}` | Display name (falls back to login) | `system.md`, `ai_instructions.md` |
 | `{speaker_user_id}` | Twitch numeric user id of the speaker | `system.md`, `ai_instructions.md` |
-| `{speaker_role}` | `regular`, `moderator`, `broadcaster` | `system.md`, `ai_instructions.md` |
+| `{speaker_role}` | `regular`, `moderator`, `broadcaster` | `ai_instructions.md` |
 | `{channel}` | Channel name (without `#`) | all |
 | `{date}` | Today's Berlin-local date, `YYYY-MM-DD` | all |
 | `{model}` | Display name. OpenRouter: from provider catalog (normalized). Otherwise: same as `{model_id}`. | `system.md` |
@@ -40,6 +40,8 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 **Replies**. The model's final assistant text (returned when it makes no more tool calls) is sent to chat verbatim. Newlines collapse into a single chat line. There is no `say` tool — encourage the model to do memory updates first, then end the turn with the reply text.
 
 **Length nudge**. The final reply is truncated app-side at `MAX_RESPONSE_LENGTH` chars. Asking for "≤3 sentences" in the prompt keeps lines tidy.
+
+**Prefix stability (caching).** The chat-turn system message is built to be a byte-stable cache prefix so Gemini's implicit prompt cache hits (cached tokens bill at 0.25x). `build_chat_turn_messages` in `inject.rs` enforces the split: stable content (substituted `system.md`, the tool appendices, and durable SOUL/LORE/user memory) goes in the system message; everything per-turn (the relevant-emotes block, volatile state, recent chat, the instruction) goes in the user message. Two rules keep the prefix stable: do not interpolate per-speaker tokens into `system.md`, and do not append per-turn content to the system message. Both reintroduce a cache miss every turn.
 
 **Refusal**. The bot refuses by returning empty final text — nothing is sent to chat. Encourage the model to stay silent on harassment, off-topic, or low-signal prompts rather than producing a defensive reply.
 
