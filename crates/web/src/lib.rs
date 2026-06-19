@@ -18,11 +18,11 @@ pub mod config;
 pub mod dev;
 pub mod error;
 pub mod flash;
-pub mod user_facing;
 pub mod helix;
 pub mod nav;
 pub mod routes;
 pub mod state;
+pub mod user_facing;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

@@ -20,9 +20,7 @@ use axum::routing::{get, post};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use tower_cookies::Cookies;
-use twitch_1337_core::ai::memory::store::{
-    FrontmatterOverride, WriteError, WriteOutcome, validate_state_slug,
-};
+use twitch_1337_core::ai::memory::store::{FrontmatterOverride, WriteOutcome, validate_state_slug};
 use twitch_1337_core::ai::memory::types::{FileKind, MemoryFile};
 
 use crate::auth::csrf;

@@ -25,10 +25,10 @@ use twitch_1337_core::ping::PingView;
 use crate::auth::csrf;
 use crate::auth::session::Session;
 use crate::error::WebError;
-use crate::user_facing::UserFacing;
 use crate::flash;
 use crate::routes::{initial_of, render, render_with};
 use crate::state::WebState;
+use crate::user_facing::UserFacing;
 
 /// Viewer-tier surface: GET /pings list. Detail (`/pings/{name}` GET) and
 /// form (`/pings/new` GET) stay on the mod router because they target
