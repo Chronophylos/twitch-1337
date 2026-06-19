@@ -29,7 +29,7 @@ The loader runs a simple `str::replace` pass before sending. Available tokens:
 
 Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no error, no warning. Check spelling.
 
-**Cache prefix constraint.** `{speaker_*}` tokens must not appear in `system.md`: interpolating them would split the stable cache prefix once per speaker role. They belong in `ai_instructions.md` (the user message). `{model}` and `{model_id}` in `system.md` are intentional — model identity changes rarely and is not per-user.
+**Cache prefix constraint.** `{speaker_*}` tokens must not appear in `system.md`: interpolating them would split the stable cache prefix once per speaker role. They belong in `ai_instructions.md` (the user message). `{model}` and `{model_id}` in `system.md` are intentional; model identity changes rarely and is not per-user.
 
 ## Authoring guidelines
 

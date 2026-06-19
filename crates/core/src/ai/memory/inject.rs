@@ -1179,4 +1179,64 @@ mod tests {
         assert!(!sys_a.content.contains("EMOTES_A"));
         assert!(!sys_a.content.contains("STATE A"));
     }
+
+    #[tokio::test]
+    async fn build_chat_turn_context_same_nonce_yields_identical_durable_memory() {
+        // The per-process nonce makes durable memory a stable cache prefix:
+        // with the nonce fixed and the store unchanged, two builds must be
+        // byte-identical. Guards against future per-build variation
+        // (timestamps, reordering, fresh randomness) creeping into the block.
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        store
+            .write(
+                &FileKind::User {
+                    user_id: "42".into(),
+                },
+                "alice body",
+                Some("alice"),
+                Some("Alice"),
+            )
+            .await
+            .unwrap();
+        store
+            .write_state(
+                &FileKind::State {
+                    slug: "quiz".into(),
+                },
+                "score: 3",
+                Some("42"),
+            )
+            .await
+            .unwrap();
+
+        let opts = || BuildOpts {
+            inject_byte_budget: 24576,
+            nonce: "stablenonce000000".into(),
+            primary_history: None,
+            primary_login: "main".into(),
+            ai_channel_history: None,
+            ai_channel_login: None,
+            invocation_channel: InvocationChannel::Primary,
+            bot_login: "bot".into(),
+            persona_name: "Aurora".into(),
+            speaker_login: String::new(),
+        };
+
+        let first = build_chat_turn_context(&store, opts()).await.unwrap();
+        let second = build_chat_turn_context(&store, opts()).await.unwrap();
+
+        assert!(
+            first.durable_memory.contains("kind=soul"),
+            "sanity: durable memory should hold the fenced blocks"
+        );
+        assert_eq!(
+            first.durable_memory, second.durable_memory,
+            "same nonce + unchanged store must yield byte-identical durable memory"
+        );
+        assert_eq!(
+            first.volatile_state, second.volatile_state,
+            "same nonce + unchanged store must yield byte-identical volatile state"
+        );
+    }
 }
