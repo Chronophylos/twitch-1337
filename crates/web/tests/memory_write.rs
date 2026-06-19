@@ -400,6 +400,127 @@ async fn save_state_oversized_renders_editor_with_draft() {
     );
 }
 
+fn read_audit_lines(td_memory: &TempDir) -> Vec<serde_json::Value> {
+    let path = td_memory.path().join("memory_audit.log");
+    let body = std::fs::read_to_string(&path).expect("memory_audit.log exists");
+    body.lines()
+        .map(|l| serde_json::from_str(l).expect("audit line is valid json"))
+        .collect()
+}
+
+#[tokio::test]
+async fn save_writes_audit_line() {
+    let (state, sid, csrf, bare_csrf, _tdp, td_memory) = authed_setup().await;
+    let mtime = state
+        .memory_store
+        .current_mtime(&FileKind::Soul)
+        .await
+        .unwrap();
+    let body = format!(
+        "_csrf={csrf}&mtime={mtime}&body=audited-soul",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(post_form("/memory/soul", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+    let lines = read_audit_lines(&td_memory);
+    assert_eq!(lines.len(), 1);
+    let e = &lines[0];
+    assert_eq!(e["op"], "write");
+    assert_eq!(e["kind"], "soul");
+    assert_eq!(e["result"], "ok");
+    assert_eq!(e["actor_id"], "9001");
+    assert_eq!(e["actor_login"], "admin");
+    assert!(e["ts"].as_str().is_some(), "ts must serialize as a string");
+    assert_eq!(e["bytes_after"], "audited-soul".len());
+}
+
+#[tokio::test]
+async fn conflict_writes_audit_line() {
+    let (state, sid, csrf, bare_csrf, _tdp, td_memory) = authed_setup().await;
+    state
+        .memory_store
+        .write(&FileKind::Soul, "current-on-disk", None, None)
+        .await
+        .unwrap();
+    let body = format!(
+        "_csrf={csrf}&mtime=0&body=loser-draft",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(post_form("/memory/soul", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    let lines = read_audit_lines(&td_memory);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["op"], "write");
+    assert_eq!(lines[0]["result"], "conflict");
+    assert!(
+        lines[0].get("bytes_after").is_none(),
+        "conflict persisted nothing, so bytes_after must be omitted"
+    );
+}
+
+#[tokio::test]
+async fn create_writes_audit_line() {
+    let (state, sid, csrf, bare_csrf, _tdp, td_memory) = authed_setup().await;
+    let body = format!(
+        "_csrf={csrf}&slug=quiz&body=score: 1",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(post_form("/memory/state", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+    let lines = read_audit_lines(&td_memory);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["op"], "create");
+    assert_eq!(lines[0]["kind"], "state");
+    assert_eq!(lines[0]["id"], "quiz");
+    assert_eq!(lines[0]["result"], "ok");
+}
+
+#[tokio::test]
+async fn delete_writes_audit_line() {
+    let (state, sid, csrf, bare_csrf, _tdp, td_memory) = authed_setup().await;
+    // Create then delete; the audit log should hold one create + one delete.
+    state
+        .memory_store
+        .write_state(
+            &FileKind::State {
+                slug: "doomed".into(),
+            },
+            "x",
+            Some("9001"),
+        )
+        .await
+        .unwrap();
+    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf),);
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(post_form("/memory/state/doomed/delete", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+    let lines = read_audit_lines(&td_memory);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["op"], "delete");
+    assert_eq!(lines[0]["kind"], "state");
+    assert_eq!(lines[0]["id"], "doomed");
+    assert_eq!(lines[0]["result"], "ok");
+}
+
 #[tokio::test]
 async fn delete_state_invalid_slug_400() {
     let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
