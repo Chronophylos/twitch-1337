@@ -647,5 +647,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(lines[0]).expect("valid json");
         assert_eq!(v["a"], 1);
         assert_eq!(v["b"], "hi");
+        // Assert the second line too, so the test proves the writer *appends*
+        // (distinct values per call) rather than overwriting.
+        let v2: serde_json::Value = serde_json::from_str(lines[1]).expect("valid json");
+        assert_eq!(v2["a"], 2);
+        assert_eq!(v2["b"], "yo");
     }
 }

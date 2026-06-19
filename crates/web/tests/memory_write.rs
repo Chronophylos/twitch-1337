@@ -437,6 +437,14 @@ async fn save_writes_audit_line() {
     assert_eq!(e["actor_login"], "admin");
     assert!(e["ts"].as_str().is_some(), "ts must serialize as a string");
     assert_eq!(e["bytes_after"], "audited-soul".len());
+    assert_eq!(
+        e["mtime_before"], mtime,
+        "mtime_before must echo the submitted token"
+    );
+    assert!(
+        e["mtime_after"].is_number(),
+        "mtime_after must be the post-write on-disk mtime"
+    );
 }
 
 #[tokio::test]
@@ -466,6 +474,14 @@ async fn conflict_writes_audit_line() {
         lines[0].get("bytes_after").is_none(),
         "conflict persisted nothing, so bytes_after must be omitted"
     );
+    assert_eq!(
+        lines[0]["mtime_before"], 0,
+        "mtime_before echoes the stale token the form submitted"
+    );
+    assert!(
+        lines[0]["mtime_after"].is_number(),
+        "mtime_after must be the current on-disk mtime that triggered the conflict"
+    );
 }
 
 #[tokio::test]
@@ -488,6 +504,10 @@ async fn create_writes_audit_line() {
     assert_eq!(lines[0]["kind"], "state");
     assert_eq!(lines[0]["id"], "quiz");
     assert_eq!(lines[0]["result"], "ok");
+    assert!(
+        lines[0]["bytes_after"].is_number(),
+        "create-ok must record bytes_after; a dropped field would serialize as absent"
+    );
 }
 
 #[tokio::test]
