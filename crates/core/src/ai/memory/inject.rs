@@ -689,6 +689,12 @@ mod tests {
             out.contains("#euterheissgetraenk"),
             "channel did not substitute:\n{out}"
         );
+        // {speaker_role} must not live in system.md — interpolating it splits
+        // the cache prefix three ways (regular/moderator/broadcaster).
+        assert!(
+            !PROMPT_SYSTEM.contains("{speaker_role}"),
+            "system.md must not interpolate {{speaker_role}}"
+        );
         for tok in KNOWN_TOKENS {
             assert!(
                 !out.contains(tok),
