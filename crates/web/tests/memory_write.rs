@@ -436,7 +436,7 @@ async fn save_writes_audit_line() {
     assert_eq!(e["actor_id"], "9001");
     assert_eq!(e["actor_login"], "admin");
     assert!(e["ts"].as_str().is_some(), "ts must serialize as a string");
-    assert_eq!(e["bytes_after"], "audited-soul".len());
+    assert_eq!(e["body_bytes"], "audited-soul".len());
     assert_eq!(
         e["mtime_before"], mtime,
         "mtime_before must echo the submitted token"
@@ -471,8 +471,8 @@ async fn conflict_writes_audit_line() {
     assert_eq!(lines[0]["op"], "write");
     assert_eq!(lines[0]["result"], "conflict");
     assert!(
-        lines[0].get("bytes_after").is_none(),
-        "conflict persisted nothing, so bytes_after must be omitted"
+        lines[0].get("body_bytes").is_none(),
+        "conflict persisted nothing, so body_bytes must be omitted"
     );
     assert_eq!(
         lines[0]["mtime_before"], 0,
@@ -505,8 +505,8 @@ async fn create_writes_audit_line() {
     assert_eq!(lines[0]["id"], "quiz");
     assert_eq!(lines[0]["result"], "ok");
     assert!(
-        lines[0]["bytes_after"].is_number(),
-        "create-ok must record bytes_after; a dropped field would serialize as absent"
+        lines[0]["body_bytes"].is_number(),
+        "create-ok must record body_bytes; a dropped field would serialize as absent"
     );
 }
 
@@ -539,6 +539,65 @@ async fn delete_writes_audit_line() {
     assert_eq!(lines[0]["kind"], "state");
     assert_eq!(lines[0]["id"], "doomed");
     assert_eq!(lines[0]["result"], "ok");
+}
+
+#[tokio::test]
+async fn save_error_writes_audit_line() {
+    let (state, sid, csrf, bare_csrf, _tdp, td_memory) = authed_setup().await;
+    let mtime = state
+        .memory_store
+        .current_mtime(&FileKind::Soul)
+        .await
+        .unwrap();
+    // soul_bytes cap is 4096 (full file incl. frontmatter); 5000 over-caps and
+    // the store returns WriteError::Full, driving save_kind's Err arm.
+    let huge = "x".repeat(5000);
+    let body = format!(
+        "_csrf={csrf}&mtime={mtime}&body={huge}",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(post_form("/memory/soul", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let lines = read_audit_lines(&td_memory);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["op"], "write");
+    assert_eq!(lines[0]["kind"], "soul");
+    // Locks the `error:<WriteError Display>` format the Err arm emits.
+    assert_eq!(lines[0]["result"], "error:file_full");
+    assert!(
+        lines[0].get("body_bytes").is_none(),
+        "errored write persisted nothing, so body_bytes must be omitted"
+    );
+}
+
+#[tokio::test]
+async fn create_error_writes_audit_line() {
+    let (state, sid, csrf, bare_csrf, _tdp, td_memory) = authed_setup().await;
+    // Valid slug (passes validation, so we reach write_state) + an over-cap
+    // body (state_bytes cap is 2048) → WriteError::Full → create_state Err arm.
+    let huge = "x".repeat(3000);
+    let body = format!(
+        "_csrf={csrf}&slug=toobig&body={huge}",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(post_form("/memory/state", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let lines = read_audit_lines(&td_memory);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["op"], "create");
+    assert_eq!(lines[0]["kind"], "state");
+    assert_eq!(lines[0]["id"], "toobig");
+    assert_eq!(lines[0]["result"], "error:file_full");
 }
 
 #[tokio::test]

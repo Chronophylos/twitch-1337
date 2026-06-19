@@ -675,8 +675,11 @@ struct MemoryAuditEntry {
     mtime_before: Option<Mtime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     mtime_after: Option<Mtime>,
+    /// Byte length of the submitted body, NOT the on-disk file size — the
+    /// file also carries frontmatter. Recording the body length is the
+    /// "cheap field, no extra disk read" choice from the spec.
     #[serde(skip_serializing_if = "Option::is_none")]
-    bytes_after: Option<usize>,
+    body_bytes: Option<usize>,
 }
 
 fn kind_tag(kind: &FileKind) -> &'static str {
@@ -703,7 +706,7 @@ fn audit_memory(
     result: String,
     mtime_before: Option<Mtime>,
     mtime_after: Option<Mtime>,
-    bytes_after: Option<usize>,
+    body_bytes: Option<usize>,
 ) {
     let entry = MemoryAuditEntry {
         ts: berlin_now(state.clock.now()),
@@ -715,7 +718,7 @@ fn audit_memory(
         result,
         mtime_before,
         mtime_after,
-        bytes_after,
+        body_bytes,
     };
     if let Err(error) = state.memory_audit.append_serializable(&entry) {
         tracing::error!(

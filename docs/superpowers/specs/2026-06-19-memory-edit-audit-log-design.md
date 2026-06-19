@@ -59,17 +59,17 @@ concern**, emitted in the route, leaving `MemoryStore` a pure FS layer.
 | `result` | `String` | `ok` \| `conflict` \| `error:<WriteError>`; `conflict` only on `op=write` |
 | `mtime_before` | `Option<Mtime>` | write only: `form.mtime`; omit otherwise |
 | `mtime_after` | `Option<Mtime>` | write: `new_mtime` (Written) / `current_mtime` (Conflict); omit otherwise |
-| `bytes_after` | `Option<usize>` | write-ok + create-ok: `form.body.len()`; omit on conflict/error/delete |
+| `body_bytes` | `Option<usize>` | write-ok + create-ok: `form.body.len()` (submitted body length, NOT on-disk file size — file also has frontmatter); omit on conflict/error/delete |
 
 Per-outcome population:
 
 - **edit Written** — `op=write`, `result=ok`, `mtime_before=form.mtime`,
-  `mtime_after=new_mtime`, `bytes_after=form.body.len()`.
+  `mtime_after=new_mtime`, `body_bytes=form.body.len()`.
 - **edit Conflict** — `op=write`, `result=conflict`, `mtime_before=form.mtime`,
-  `mtime_after=current_mtime`, `bytes_after=None` (nothing persisted).
+  `mtime_after=current_mtime`, `body_bytes=None` (nothing persisted).
 - **edit Error** — `op=write`, `result=error:<variant>`, `mtime_before=form.mtime`,
   rest `None`.
-- **create Ok** — `op=create`, `kind=state`, `result=ok`, `bytes_after=body.len()`.
+- **create Ok** — `op=create`, `kind=state`, `result=ok`, `body_bytes=body.len()`.
 - **create Error** — `op=create`, `kind=state`, `result=error:<variant>`.
 - **delete Ok** — `op=delete`, `kind=state`, `result=ok`.
 
