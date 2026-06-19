@@ -107,7 +107,6 @@ async fn main() -> Result<()> {
         helix,
         irc_connected: Arc::new(AtomicBool::new(true)),
         config: web_config,
-        helix_base: Arc::from(twitch_1337_web::helix::DEFAULT_HELIX_BASE),
         clock,
         channel: Arc::from(channel.as_str()),
         broadcaster_id: Arc::from("0"),

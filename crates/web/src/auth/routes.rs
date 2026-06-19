@@ -455,7 +455,7 @@ async fn fetch_caller_user(
     let resp = state
         .oauth
         .http
-        .get(format!("{}/helix/users", state.helix_base))
+        .get(format!("{}/helix/users", state.config.helix_base))
         .bearer_auth(access_token)
         .header("Client-Id", state.client_id.expose_secret())
         .send()

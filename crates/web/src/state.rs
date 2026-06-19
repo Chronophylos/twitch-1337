@@ -34,9 +34,6 @@ pub struct WebState {
     pub helix: Arc<dyn HelixClient>,
     pub irc_connected: Arc<AtomicBool>,
     pub config: Arc<WebConfig>,
-    /// Twitch Helix API root shared by the bot-token client and the
-    /// OAuth-callback user-token mod check.
-    pub helix_base: Arc<str>,
     pub clock: Arc<dyn Clock>,
     /// primary channel login (lowercase Twitch login).
     pub channel: Arc<str>,

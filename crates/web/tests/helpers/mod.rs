@@ -26,18 +26,10 @@ use twitch_1337_web::clock::Clock;
 use twitch_1337_web::config::WebConfig;
 use twitch_1337_web::helix::{DEFAULT_HELIX_BASE, HelixClient, HelixUser};
 
+#[derive(Default)]
 pub struct WebStateOverrides {
     pub helix_base: Option<String>,
     pub oauth_token_uri: Option<String>,
-}
-
-impl Default for WebStateOverrides {
-    fn default() -> Self {
-        Self {
-            helix_base: None,
-            oauth_token_uri: None,
-        }
-    }
 }
 
 pub struct FixedClock(pub DateTime<Utc>);
@@ -258,8 +250,7 @@ async fn build_state_inner_keep_settings(
         sessions,
         helix,
         irc_connected: Arc::new(AtomicBool::new(true)),
-        config: config.clone(),
-        helix_base: Arc::from(config.helix_base.as_str()),
+        config,
         clock,
         channel: Arc::from("testchannel"),
         broadcaster_id: Arc::from("100"),
