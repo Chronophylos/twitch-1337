@@ -155,6 +155,19 @@ pub(crate) fn msg_aviationstack_info(metadata: &AviationstackFlightMetadata) -> 
     parts.join(" | ")
 }
 
+fn adsb_exchange_url(hex: &str) -> String {
+    format!(
+        "https://globe.adsbexchange.com/?icao={}",
+        hex.to_ascii_lowercase()
+    )
+}
+
+fn format_adsb_link_suffix(hex: Option<&str>) -> String {
+    hex.filter(|value| !value.is_empty())
+        .map(|hex| format!(" | {}", adsb_exchange_url(hex)))
+        .unwrap_or_default()
+}
+
 fn format_flight_prefix(flight: &TrackedFlight) -> String {
     let name = flight
         .callsign
@@ -170,7 +183,11 @@ fn format_flight_prefix(flight: &TrackedFlight) -> String {
 }
 
 pub(crate) fn msg_track_started(flight: &TrackedFlight) -> String {
-    format!("Tracke {} Okayge", format_flight_prefix(flight))
+    format!(
+        "Tracke {} Okayge{}",
+        format_flight_prefix(flight),
+        format_adsb_link_suffix(flight.hex.as_deref())
+    )
 }
 
 pub(crate) fn msg_takeoff(flight: &TrackedFlight) -> String {
@@ -251,6 +268,7 @@ pub(crate) fn msg_pending_expired(flight: &TrackedFlight) -> String {
 }
 
 pub(crate) fn msg_flight_status(flight: &TrackedFlight, now: DateTime<Utc>) -> String {
+    let adsb_link = format_adsb_link_suffix(flight.hex.as_deref());
     let prefix = format_flight_prefix(flight);
     if flight.target_confirmation == super::TargetConfirmation::AircraftVisible {
         let observed = flight
@@ -260,7 +278,7 @@ pub(crate) fn msg_flight_status(flight: &TrackedFlight, now: DateTime<Utc>) -> S
             .unwrap_or_default();
         let elapsed = now.signed_duration_since(flight.tracked_at);
         return format!(
-            "{prefix} | Aircraft sichtbar, Zielflug noch nicht bestätigt{observed} | seit {} getrackt",
+            "{prefix} | Aircraft sichtbar, Zielflug noch nicht bestätigt{observed} | seit {} getrackt{adsb_link}",
             format_duration_hm(elapsed)
         );
     }
@@ -278,7 +296,7 @@ pub(crate) fn msg_flight_status(flight: &TrackedFlight, now: DateTime<Utc>) -> S
     let elapsed = now.signed_duration_since(flight.tracked_at);
     let tracking_time = format!("seit {} getrackt", format_duration_hm(elapsed));
     format!(
-        "{prefix} | {} {alt}{speed}{squawk} | {tracking_time}",
+        "{prefix} | {} {alt}{speed}{squawk} | {tracking_time}{adsb_link}",
         flight.phase
     )
 }
@@ -301,4 +319,95 @@ pub(crate) fn msg_flights_list(flights: &[TrackedFlight]) -> String {
         })
         .collect();
     format!("Getrackte Fl\u{00fc}ge: {}", parts.join(" | "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aviation::tracker::{
+        FlightIdentifier, FlightPhase, TargetConfirmation, TrackedFlight, test_support::dt,
+    };
+
+    fn status_flight(hex: Option<&str>) -> TrackedFlight {
+        TrackedFlight {
+            identifier: FlightIdentifier::Callsign("DLH1234".to_string()),
+            callsign: Some("DLH1234".to_string()),
+            alias_callsigns: vec!["DLH1234".to_string()],
+            hex: hex.map(str::to_string),
+            hex_source: None,
+            observed_callsign: None,
+            target_confirmation: TargetConfirmation::ConfirmedByCallsign,
+            phase: FlightPhase::Cruise,
+            route: None,
+            aircraft_type: None,
+            altitude_ft: Some(35_000),
+            vertical_rate_fpm: None,
+            ground_speed_kts: Some(450.0),
+            lat: None,
+            lon: None,
+            squawk: Some("1000".to_string()),
+            tracked_by: "alice".to_string(),
+            tracked_at: dt("2026-04-18T12:00:00Z"),
+            last_seen: None,
+            last_visible_at: None,
+            last_phase_change: None,
+            polls_since_change: 0,
+            takeoff_at: None,
+            aviationstack_checked: false,
+            scheduled_departure_at: None,
+            last_adsb_poll_at: None,
+            divert_consecutive_polls: 0,
+            dest_lat: None,
+            dest_lon: None,
+        }
+    }
+
+    #[test]
+    fn msg_track_started_includes_adsb_link_when_hex_known() {
+        let mut flight = status_flight(Some("3C6589"));
+        flight.target_confirmation = TargetConfirmation::Pending;
+
+        let msg = msg_track_started(&flight);
+
+        assert_eq!(
+            msg,
+            "Tracke DLH1234 Okayge | https://globe.adsbexchange.com/?icao=3c6589"
+        );
+    }
+
+    #[test]
+    fn msg_track_started_omits_adsb_link_without_hex() {
+        let mut flight = status_flight(None);
+        flight.target_confirmation = TargetConfirmation::Pending;
+
+        let msg = msg_track_started(&flight);
+
+        assert_eq!(msg, "Tracke DLH1234 Okayge");
+    }
+
+    #[test]
+    fn msg_flight_status_includes_adsb_link_when_hex_known() {
+        let flight = status_flight(Some("3C6589"));
+        let now = dt("2026-04-18T12:30:00Z");
+
+        let msg = msg_flight_status(&flight, now);
+
+        assert_eq!(
+            msg,
+            "DLH1234 | Cruise FL350 | 450kts | Squawk 1000 | seit 30m getrackt | https://globe.adsbexchange.com/?icao=3c6589"
+        );
+    }
+
+    #[test]
+    fn msg_flight_status_omits_adsb_link_without_hex() {
+        let flight = status_flight(None);
+        let now = dt("2026-04-18T12:30:00Z");
+
+        let msg = msg_flight_status(&flight, now);
+
+        assert_eq!(
+            msg,
+            "DLH1234 | Cruise FL350 | 450kts | Squawk 1000 | seit 30m getrackt"
+        );
+    }
 }
