@@ -682,8 +682,8 @@ mod tests {
 
     #[test]
     fn bundled_system_substitutes_cleanly() {
-        // Mirror the ai_instructions check: the system prompt uses {channel} and
-        // {speaker_role}; both must render and no known token may leak.
+        // The system prompt uses {channel}; {speaker_role} must be absent
+        // (interpolating it would split the stable cache prefix three ways).
         let out = substitute(PROMPT_SYSTEM, sample_vars());
         assert!(
             out.contains("#euterheissgetraenk"),

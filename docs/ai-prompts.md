@@ -7,10 +7,10 @@ The bot's prompts live as Markdown files in the repo at `crates/core/data/prompt
 | File | Used by | Role |
 |---|---|---|
 | `system.md` | `!ai` chat-turn loop | System prompt for the per-turn LLM session. |
-| `ai_instructions.md` | `!ai` chat-turn loop | Preamble prepended to the user message before chat history + the new message. |
+| `ai_instructions.md` | `!ai` chat-turn loop | Preamble prepended to the user message before the relevant-emotes block, volatile state, recent chat, and the new message. |
 | `dreamer.md` | nightly ritual | System prompt for the dreamer LLM. |
 
-The chat turn injects `system.md` as the system prompt, then `ai_instructions.md` + speaker metadata + chat history + the new message as the user message. The ritual injects `dreamer.md` as the system prompt, then memory + transcript as the user message.
+The chat turn injects `system.md` as the system prompt, then `ai_instructions.md` + speaker metadata + relevant-emotes block + volatile state + recent chat + the new message as the user message. The ritual injects `dreamer.md` as the system prompt, then memory + transcript as the user message.
 
 ## Substitution tokens
 
@@ -28,6 +28,8 @@ The loader runs a simple `str::replace` pass before sending. Available tokens:
 | `{model_id}` | Raw model id sent to the API (`ai.connection.model`). | `system.md` |
 
 Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no error, no warning. Check spelling.
+
+**Cache prefix constraint.** `{speaker_*}` tokens must not appear in `system.md`: interpolating them would split the stable cache prefix once per speaker role. They belong in `ai_instructions.md` (the user message). `{model}` and `{model_id}` in `system.md` are intentional — model identity changes rarely and is not per-user.
 
 ## Authoring guidelines
 
