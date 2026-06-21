@@ -102,7 +102,7 @@ document.addEventListener(
 
   const rows = Array.from(form.querySelectorAll('.settings-row'))
     .map((row) => {
-      const inputs = Array.from(row.querySelectorAll('input[name]'));
+      const inputs = Array.from(row.querySelectorAll('input[name], textarea[name]'));
       const isRadio = inputs.length > 1 && inputs.every((i) => i.type === 'radio');
       const primary = inputs[0];
       if (!primary) return null;
