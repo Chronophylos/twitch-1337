@@ -17,7 +17,7 @@ use super::{
     format::{msg_aviationstack_info, msg_flight_status, msg_flights_list, msg_track_started},
     metadata::{
         aircraft_callsign, apply_aviationstack_metadata, metadata_callsign, normalize_flight_code,
-        seed_flight_aliases, set_route_from_iata,
+        seed_flight_aliases,
     },
     phase::detect_phase,
     schedule::{PollReadiness, poll_readiness},
@@ -27,9 +27,9 @@ use super::{
 use super::{MAX_FLIGHTS_PER_USER, MAX_TRACKED_FLIGHTS, POLL_TIMEOUT, ROUTE_FETCH_TIMEOUT};
 
 use super::advance::{
-    Emit, Followup, Observation, PollOutcome, RemovalReason, advance_flight,
-    apply_observed_aircraft, apply_route, candidate_callsign_matches_flight, format_emit,
-    identifier_callsign, last_seen_age_secs, target_confirmation_for_aircraft,
+    Emit, Followup, Observation, PollOutcome, RemovalReason, RouteOutcome, advance_flight,
+    apply_route_outcome, candidate_callsign_matches_flight, format_emit, identifier_callsign,
+    last_seen_age_secs, seed_from_observation,
 };
 
 fn find_index_by_identifier(
@@ -724,84 +724,62 @@ async fn handle_track<T, L>(
                         used_hex = false;
                     }
 
-                    let Some(confirmation) =
-                        target_confirmation_for_aircraft(&flight, &ac, used_hex, now)
-                    else {
-                        if !keep_pending_on_adsb_absence {
-                            sender
-                                .reply(
-                                    reply_to,
-                                    format!("{identifier} nicht gefunden im ADS-B FDM"),
-                                )
+                    match seed_from_observation(&mut flight, &ac, used_hex, now) {
+                        None => {
+                            // Aircraft did not confirm the target.
+                            if !keep_pending_on_adsb_absence {
+                                sender
+                                    .reply(
+                                        reply_to,
+                                        format!("{identifier} nicht gefunden im ADS-B FDM"),
+                                    )
+                                    .await;
+                                return;
+                            }
+                            debug!(
+                                identifier = %identifier,
+                                aircraft_callsign = aircraft_callsign(&ac).unwrap_or("<missing>"),
+                                "Ignoring ADS-B aircraft that does not confirm target"
+                            );
+                            flight.polls_since_change = flight.polls_since_change.saturating_add(1);
+                            resolve_route_if_needed(&mut flight, aviation_client, data_dir, now)
                                 .await;
-                            return;
-                        }
-                        debug!(
-                            identifier = %identifier,
-                            aircraft_callsign = aircraft_callsign(&ac).unwrap_or("<missing>"),
-                            "Ignoring ADS-B aircraft that does not confirm target"
-                        );
-                        flight.polls_since_change = flight.polls_since_change.saturating_add(1);
-                        // Keep the pending track below.
-                        let route_callsign = flight.callsign.clone();
-                        if flight.route.is_none()
-                            && let Some(cs) = route_callsign.as_deref()
-                            && let Ok(Ok(Some(route))) = tokio::time::timeout(
-                                ROUTE_FETCH_TIMEOUT,
-                                aviation_client.get_flight_route(cs),
-                            )
-                            .await
-                        {
-                            let origin = route.origin.iata_code.clone();
-                            let dest = route.destination.iata_code.clone();
-                            set_route_from_iata(&mut flight, &origin, &dest);
+                            let response = track_started_response(
+                                &flight,
+                                aviationstack_info.as_deref(),
+                                aviationstack_fallback,
+                            );
                             append_debug_event(
                                 data_dir,
                                 now,
-                                FlightTrackerDebugEvent::flight_route_lookup(
-                                    flight.identifier.as_str(),
-                                    Some(cs),
-                                    DebugHttpOutcome::success("adsbdb", "flight_route"),
-                                    Some(&origin),
-                                    Some(&dest),
-                                    flight.dest_lat.is_some() && flight.dest_lon.is_some(),
-                                ),
+                                FlightTrackerDebugEvent::track_started(&flight),
                             )
                             .await;
+                            state.flights.push(flight);
+                            save_tracker_state(data_dir, state).await;
+                            info!(
+                                identifier = %identifier,
+                                requested_by = %requested_by,
+                                "Flight tracking started"
+                            );
+                            sender.reply(reply_to, response).await;
+                            return;
                         }
-                        let response = track_started_response(
-                            &flight,
-                            aviationstack_info.as_deref(),
-                            aviationstack_fallback,
-                        );
-                        append_debug_event(
-                            data_dir,
-                            now,
-                            FlightTrackerDebugEvent::track_started(&flight),
-                        )
-                        .await;
-                        state.flights.push(flight);
-                        save_tracker_state(data_dir, state).await;
-                        info!(
-                            identifier = %identifier,
-                            requested_by = %requested_by,
-                            "Flight tracking started"
-                        );
-                        sender.reply(reply_to, response).await;
-                        return;
-                    };
-
-                    let target_confirmed = confirmation.is_target_confirmed();
-                    // Seed identity + telemetry through the shared core, the one
-                    // owner of this mutation (also driven per-cycle by
-                    // `advance_flight`). The initial-track ack does not announce,
-                    // so the newly-resolved callsign it returns is unused here.
-                    let _ =
-                        apply_observed_aircraft(&mut flight, &ac, confirmation, target_confirmed);
-                    if target_confirmed {
-                        flight.last_seen = Some(now);
-                        flight.last_visible_at = Some(now);
-                        flight.phase = detect_phase(&flight, &ac);
+                        Some(seed) => {
+                            // Confirmed/visible: the Seed applied identity +
+                            // telemetry. Drain its journal event, snapshot the
+                            // phase (the ack announces; no Emits), then fall
+                            // through to aviationstack + route below.
+                            for event in seed.debug {
+                                append_debug_event(data_dir, now, event).await;
+                            }
+                            if seed.direct_target_confirmed {
+                                flight.phase = detect_phase(&flight, &ac);
+                            }
+                            // seed.followups intentionally unused; the route
+                            // fetch below (resolve_route_if_needed) keys on the
+                            // now-resolved callsign and covers it.
+                        }
                     }
                 }
                 Ok(Ok(None)) => {
@@ -884,80 +862,7 @@ async fn handle_track<T, L>(
         return;
     }
 
-    let route_callsign = flight.callsign.clone();
-    if flight.route.is_none()
-        && let Some(cs) = route_callsign.as_deref()
-    {
-        match tokio::time::timeout(ROUTE_FETCH_TIMEOUT, aviation_client.get_flight_route(cs)).await
-        {
-            Ok(Ok(Some(route))) => {
-                let origin = route.origin.iata_code.clone();
-                let dest = route.destination.iata_code.clone();
-                set_route_from_iata(&mut flight, &origin, &dest);
-                append_debug_event(
-                    data_dir,
-                    now,
-                    FlightTrackerDebugEvent::flight_route_lookup(
-                        flight.identifier.as_str(),
-                        Some(cs),
-                        DebugHttpOutcome::success("adsbdb", "flight_route"),
-                        Some(&origin),
-                        Some(&dest),
-                        flight.dest_lat.is_some() && flight.dest_lon.is_some(),
-                    ),
-                )
-                .await;
-            }
-            Ok(Ok(None)) => {
-                debug!(callsign = %cs, "No route found for flight");
-                append_debug_event(
-                    data_dir,
-                    now,
-                    FlightTrackerDebugEvent::flight_route_lookup(
-                        flight.identifier.as_str(),
-                        Some(cs),
-                        DebugHttpOutcome::miss("adsbdb", "flight_route"),
-                        None,
-                        None,
-                        false,
-                    ),
-                )
-                .await;
-            }
-            Ok(Err(e)) => {
-                warn!(error = ?e, callsign = %cs, "Failed to fetch route");
-                append_debug_event(
-                    data_dir,
-                    now,
-                    FlightTrackerDebugEvent::flight_route_lookup(
-                        flight.identifier.as_str(),
-                        Some(cs),
-                        DebugHttpOutcome::error("adsbdb", "flight_route"),
-                        None,
-                        None,
-                        false,
-                    ),
-                )
-                .await;
-            }
-            Err(_) => {
-                warn!(callsign = %cs, "Route fetch timed out");
-                append_debug_event(
-                    data_dir,
-                    now,
-                    FlightTrackerDebugEvent::flight_route_lookup(
-                        flight.identifier.as_str(),
-                        Some(cs),
-                        DebugHttpOutcome::timeout("adsbdb", "flight_route"),
-                        None,
-                        None,
-                        false,
-                    ),
-                )
-                .await;
-            }
-        }
-    }
+    resolve_route_if_needed(&mut flight, aviation_client, data_dir, now).await;
 
     let response = track_started_response(
         &flight,
@@ -1088,6 +993,45 @@ async fn handle_status<T, L>(
     };
 
     sender.reply(reply_to, response).await;
+}
+
+/// Thin async shell over the route provider: one `get_flight_route` call with a
+/// timeout, mapped to a pure `RouteOutcome`. The apply + journalling live in
+/// `apply_route_outcome`.
+async fn fetch_route(aviation_client: &AviationClient, callsign: &str) -> RouteOutcome {
+    match tokio::time::timeout(
+        ROUTE_FETCH_TIMEOUT,
+        aviation_client.get_flight_route(callsign),
+    )
+    .await
+    {
+        Ok(Ok(Some(route))) => RouteOutcome::Found {
+            origin: route.origin.iata_code.clone(),
+            dest: route.destination.iata_code.clone(),
+        },
+        Ok(Ok(None)) => RouteOutcome::Miss,
+        Ok(Err(_)) => RouteOutcome::Error,
+        Err(_) => RouteOutcome::Timeout,
+    }
+}
+
+/// On the `!track` initial poll: if the flight has a callsign and no route yet,
+/// resolve it. Keyed on `flight.callsign` so it covers both a callsign the Seed
+/// just resolved (hex track) and one known from the request.
+async fn resolve_route_if_needed(
+    flight: &mut TrackedFlight,
+    aviation_client: &AviationClient,
+    data_dir: &Path,
+    now: DateTime<Utc>,
+) {
+    if flight.route.is_none()
+        && let Some(callsign) = flight.callsign.clone()
+    {
+        let outcome = fetch_route(aviation_client, &callsign).await;
+        for event in apply_route_outcome(flight, &callsign, outcome) {
+            append_debug_event(data_dir, now, event).await;
+        }
+    }
 }
 
 pub(crate) async fn poll_all_flights_with_commands<T, L>(
@@ -1242,77 +1186,10 @@ where
 
         for followup in update.followups {
             let Followup::FetchRoute { callsign } = followup;
-            match tokio::time::timeout(
-                ROUTE_FETCH_TIMEOUT,
-                aviation_client.get_flight_route(&callsign),
-            )
-            .await
-            {
-                Ok(Ok(Some(route))) => {
-                    let origin = route.origin.iata_code.clone();
-                    let dest = route.destination.iata_code.clone();
-                    let flight = &mut state.flights[idx];
-                    apply_route(flight, &origin, &dest);
-                    append_debug_event(
-                        data_dir,
-                        now,
-                        FlightTrackerDebugEvent::flight_route_lookup(
-                            state.flights[idx].identifier.as_str(),
-                            Some(&callsign),
-                            DebugHttpOutcome::success("adsbdb", "flight_route"),
-                            Some(&origin),
-                            Some(&dest),
-                            state.flights[idx].dest_lat.is_some()
-                                && state.flights[idx].dest_lon.is_some(),
-                        ),
-                    )
-                    .await;
-                }
-                Ok(Ok(None)) => {
-                    append_debug_event(
-                        data_dir,
-                        now,
-                        FlightTrackerDebugEvent::flight_route_lookup(
-                            state.flights[idx].identifier.as_str(),
-                            Some(&callsign),
-                            DebugHttpOutcome::miss("adsbdb", "flight_route"),
-                            None,
-                            None,
-                            false,
-                        ),
-                    )
-                    .await;
-                }
-                Ok(Err(_)) => {
-                    append_debug_event(
-                        data_dir,
-                        now,
-                        FlightTrackerDebugEvent::flight_route_lookup(
-                            state.flights[idx].identifier.as_str(),
-                            Some(&callsign),
-                            DebugHttpOutcome::error("adsbdb", "flight_route"),
-                            None,
-                            None,
-                            false,
-                        ),
-                    )
-                    .await;
-                }
-                Err(_) => {
-                    append_debug_event(
-                        data_dir,
-                        now,
-                        FlightTrackerDebugEvent::flight_route_lookup(
-                            state.flights[idx].identifier.as_str(),
-                            Some(&callsign),
-                            DebugHttpOutcome::timeout("adsbdb", "flight_route"),
-                            None,
-                            None,
-                            false,
-                        ),
-                    )
-                    .await;
-                }
+            let outcome = fetch_route(aviation_client, &callsign).await;
+            let flight = &mut state.flights[idx];
+            for event in apply_route_outcome(flight, &callsign, outcome) {
+                append_debug_event(data_dir, now, event).await;
             }
         }
 
