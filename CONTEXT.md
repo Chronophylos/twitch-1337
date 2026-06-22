@@ -22,6 +22,23 @@ flight's state and decides what announcements, removals, and follow-up lookups
 the cycle should perform. Carries no side effects of its own.
 _Avoid_: step, tick, update, process.
 
+**Seed**:
+The shared sub-transition both Advance and the initial `!track` poll apply when
+an Observation confirms the target — it resolves Target Confirmation, applies
+the observed aircraft's identity and telemetry, and queues Route Resolution. It
+neither announces nor detects Flight Phase; those stay with the caller (Advance
+announces and detects transitions, the initial poll announces via its ack and
+snapshots the phase). Pure.
+_Avoid_: init, hydrate, enrich.
+
+**Route Resolution**:
+Looking up a Tracked Flight's origin/destination via the route provider and
+applying it to the flight (also setting destination coordinates). Queued as a
+follow-up when a callsign is known and no route is set yet. Its outcome is
+Found, Miss, Error, or Timeout; only Found mutates the flight, every outcome is
+journalled.
+_Avoid_: route fetch, enrichment.
+
 **Target Confirmation**:
 How confidently the observed aircraft matches the requested flight — Pending (not
 yet seen), AircraftVisible (seen but unverified), ConfirmedByCallsign, or
