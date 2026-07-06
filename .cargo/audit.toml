@@ -1,0 +1,17 @@
+# cargo-audit config. Honored by CI's rustsec/audit-check job.
+#
+# Ignored advisories must carry a written reason (see CLAUDE.md "When cargo
+# audit fails"). Ignore is a last resort — prefer bumping the crate.
+
+[advisories]
+ignore = [
+    # quick-xml 0.37.5 DoS pair. Both require parsing *remote, untrusted* XML
+    # (the advisories cite an RPKI relying party fed a crafted snapshot.xml).
+    # Our only quick-xml user is the random-flight git dep, which parses local
+    # Little Navmap files (profile.rs, import/lnmperf.rs) — never attacker-
+    # controlled network input, so neither DoS is reachable here. The fix
+    # (quick-xml >=0.41) is a breaking 0.x bump locked behind random-flight's
+    # `quick-xml = "0.37"`; drop these once random-flight is bumped upstream.
+    "RUSTSEC-2026-0194", # O(N^2) duplicate-attribute check
+    "RUSTSEC-2026-0195", # unbounded namespace-declaration allocation
+]
