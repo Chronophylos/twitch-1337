@@ -100,19 +100,24 @@ impl ChatTurnExecutor {
         self.opts.speaker_role
     }
 
-    /// Returns `true` if the speaker is allowed to write to `path`.
-    fn permitted_write_path(&self, path: &WritePath) -> bool {
+    /// Returns `None` if the speaker may write `path`, or `Some(reason)`
+    /// naming which rule blocked it (used as the `permission_denied:` clause).
+    fn deny_reason_for_write_path(&self, path: &WritePath) -> Option<&'static str> {
         match (path, self.role()) {
-            // Only Dreamer may write SOUL.md
-            (WritePath::Soul, Role::Dreamer) => true,
-            (WritePath::Soul, _) => false,
-            // Moderator, Broadcaster, Dreamer may write LORE.md; Regular may not
-            (WritePath::Lore, Role::Regular) => false,
-            (WritePath::Lore, _) => true,
-            // Regular may only write their own user file
-            (WritePath::User { user_id }, Role::Regular) => user_id == &self.opts.speaker_user_id,
-            // Higher roles can write any user file
-            (WritePath::User { .. }, _) => true,
+            (WritePath::Soul, Role::Dreamer) => None,
+            (WritePath::Soul, _) => Some("SOUL.md is rewritten only by the daily dreamer ritual"),
+            (WritePath::Lore, Role::Regular) => {
+                Some("editing LORE.md requires moderator or higher")
+            }
+            (WritePath::Lore, _) => None,
+            (WritePath::User { user_id }, Role::Regular) => {
+                if user_id == &self.opts.speaker_user_id {
+                    None
+                } else {
+                    Some("regulars may only edit their own user memory file")
+                }
+            }
+            (WritePath::User { .. }, _) => None,
         }
     }
 
@@ -136,20 +141,23 @@ impl ChatTurnExecutor {
     async fn handle_write_file(&self, call: &ToolCall) -> String {
         let args: WriteFileArgs = match call.parse_args() {
             Ok(a) => a,
-            Err(_) => return "invalid_arguments".into(),
+            Err(_) => return "invalid_arguments: could not parse the tool arguments".into(),
         };
         let path = match parse_write_path(&args.path) {
             Ok(p) => p,
-            Err(PathError) => return "invalid_path".into(),
+            Err(PathError) => {
+                return "invalid_path: path must be SOUL.md, LORE.md, or users/<numeric-id>.md"
+                    .into();
+            }
         };
-        if !self.permitted_write_path(&path) {
-            return "permission_denied".into();
+        if let Some(reason) = self.deny_reason_for_write_path(&path) {
+            return format!("permission_denied: {reason}");
         }
         if check_body(&args.body).is_err() {
-            return "invalid_body".into();
+            return "invalid_body: body contains a reserved marker (frontmatter fence, path header, or carriage return)".into();
         }
         if !self.try_consume_write_quota() {
-            return "write_quota_exhausted".into();
+            return "write_quota_exhausted: the write limit for this turn is used up".into();
         }
 
         let kind = write_path_to_kind(path);
@@ -171,9 +179,13 @@ impl ChatTurnExecutor {
             .await
         {
             Ok(()) => "ok".into(),
-            Err(WriteError::Full) => "file_full".into(),
-            Err(WriteError::StateFull) => "state_full".into(), // unreachable for write()
-            Err(WriteError::InvalidSlug) => "invalid_slug".into(), // unreachable for non-state write
+            Err(WriteError::Full) => "file_full: body exceeds the byte cap for this file".into(),
+            Err(WriteError::StateFull) => {
+                "state_full: the maximum number of state files already exists".into()
+            } // unreachable for write()
+            Err(WriteError::InvalidSlug) => {
+                "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars".into()
+            } // unreachable for non-state write
             Err(WriteError::Io(e)) => format!("io_error: {e}"),
         }
     }
@@ -181,21 +193,24 @@ impl ChatTurnExecutor {
     async fn handle_write_state(&self, call: &ToolCall) -> String {
         let args: WriteStateArgs = match call.parse_args() {
             Ok(a) => a,
-            Err(_) => return "invalid_arguments".into(),
+            Err(_) => return "invalid_arguments: could not parse the tool arguments".into(),
         };
         let slug = match parse_slug(&args.slug) {
             Ok(s) => s,
-            Err(SlugError::Invalid) => return "invalid_slug".into(),
-            Err(SlugError::Reserved) => return "reserved_slug".into(),
+            Err(SlugError::Invalid) => {
+                return "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars"
+                    .into();
+            }
+            Err(SlugError::Reserved) => return "reserved_slug: that slug name is reserved".into(),
         };
         if has_trailing_iso_date(&slug) {
-            return "dated_slug".into();
+            return "dated_slug: state slugs may not end in a -YYYY-MM-DD date suffix".into();
         }
         if check_body(&args.body).is_err() {
-            return "invalid_body".into();
+            return "invalid_body: body contains a reserved marker (frontmatter fence, path header, or carriage return)".into();
         }
         if !self.try_consume_write_quota() {
-            return "write_quota_exhausted".into();
+            return "write_quota_exhausted: the write limit for this turn is used up".into();
         }
 
         match self
@@ -209,9 +224,13 @@ impl ChatTurnExecutor {
             .await
         {
             Ok(()) => "ok".into(),
-            Err(WriteError::Full) => "file_full".into(),
-            Err(WriteError::StateFull) => "state_full".into(),
-            Err(WriteError::InvalidSlug) => "invalid_slug".into(),
+            Err(WriteError::Full) => "file_full: body exceeds the byte cap for this file".into(),
+            Err(WriteError::StateFull) => {
+                "state_full: the maximum number of state files already exists".into()
+            }
+            Err(WriteError::InvalidSlug) => {
+                "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars".into()
+            }
             Err(WriteError::Io(e)) => format!("io_error: {e}"),
         }
     }
@@ -219,12 +238,15 @@ impl ChatTurnExecutor {
     async fn handle_delete_state(&self, call: &ToolCall) -> String {
         let args: DeleteStateArgs = match call.parse_args() {
             Ok(a) => a,
-            Err(_) => return "invalid_arguments".into(),
+            Err(_) => return "invalid_arguments: could not parse the tool arguments".into(),
         };
         let slug = match parse_slug(&args.slug) {
             Ok(s) => s,
-            Err(SlugError::Invalid) => return "invalid_slug".into(),
-            Err(SlugError::Reserved) => return "reserved_slug".into(),
+            Err(SlugError::Invalid) => {
+                return "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars"
+                    .into();
+            }
+            Err(SlugError::Reserved) => return "reserved_slug: that slug name is reserved".into(),
         };
 
         // Check ownership before consuming quota.
@@ -240,11 +262,11 @@ impl ChatTurnExecutor {
             _ => true,
         };
         if !allowed {
-            return "permission_denied".into();
+            return "permission_denied: regulars may only delete state files they created".into();
         }
 
         if !self.try_consume_write_quota() {
-            return "write_quota_exhausted".into();
+            return "write_quota_exhausted: the write limit for this turn is used up".into();
         }
 
         match self.opts.store.delete_state(&slug).await {
@@ -261,7 +283,7 @@ impl ToolExecutor for ChatTurnExecutor {
             "write_file" => self.handle_write_file(call).await,
             "write_state" => self.handle_write_state(call).await,
             "delete_state" => self.handle_delete_state(call).await,
-            _ => "unknown_tool".to_string(),
+            _ => "unknown_tool: no memory tool with that name".to_string(),
         };
         ToolResultMessage::for_call(call, content)
     }
@@ -401,7 +423,46 @@ mod exec_tests {
                 serde_json::json!({"path": "users/99.md", "body": "hi"}),
             ))
             .await;
-        assert_eq!(r.content, "permission_denied");
+        assert!(
+            r.content.starts_with("permission_denied"),
+            "got {}",
+            r.content
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_denials_have_distinct_reasons() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        let exec = make_executor(Role::Regular, store.clone(), 8).await;
+        let soul = exec
+            .execute(&call(
+                "write_file",
+                serde_json::json!({"path": "SOUL.md", "body": "x"}),
+            ))
+            .await
+            .content;
+        let lore = exec
+            .execute(&call(
+                "write_file",
+                serde_json::json!({"path": "LORE.md", "body": "x"}),
+            ))
+            .await
+            .content;
+        let other = exec
+            .execute(&call(
+                "write_file",
+                serde_json::json!({"path": "users/99.md", "body": "x"}),
+            ))
+            .await
+            .content;
+        for r in [&soul, &lore, &other] {
+            assert!(r.starts_with("permission_denied: "), "missing prefix: {r}");
+        }
+        // Each rule yields its own reason.
+        assert_ne!(soul, lore);
+        assert_ne!(lore, other);
+        assert_ne!(soul, other);
     }
 
     #[tokio::test]
@@ -416,7 +477,11 @@ mod exec_tests {
                     serde_json::json!({"path": path, "body": "x"}),
                 ))
                 .await;
-            assert_eq!(r.content, "permission_denied", "regular wrote {path}");
+            assert!(
+                r.content.starts_with("permission_denied"),
+                "regular wrote {path}: {}",
+                r.content
+            );
         }
     }
 
@@ -438,7 +503,11 @@ mod exec_tests {
                 serde_json::json!({"path": "SOUL.md", "body": "x"}),
             ))
             .await;
-        assert_eq!(r.content, "permission_denied");
+        assert!(
+            r.content.starts_with("permission_denied"),
+            "got {}",
+            r.content
+        );
     }
 
     #[tokio::test]
@@ -452,14 +521,14 @@ mod exec_tests {
                 serde_json::json!({"path": "../etc/passwd", "body": "x"}),
             ))
             .await;
-        assert_eq!(r.content, "invalid_path");
+        assert!(r.content.starts_with("invalid_path"), "got {}", r.content);
         let r = exec
             .execute(&call(
                 "write_state",
                 serde_json::json!({"slug": "Foo", "body": "x"}),
             ))
             .await;
-        assert_eq!(r.content, "invalid_slug");
+        assert!(r.content.starts_with("invalid_slug"), "got {}", r.content);
     }
 
     #[tokio::test]
@@ -476,7 +545,7 @@ mod exec_tests {
                 serde_json::json!({"slug": "av-depot-2026-05-08", "body": "x"}),
             ))
             .await;
-        assert_eq!(r.content, "dated_slug");
+        assert!(r.content.starts_with("dated_slug"), "got {}", r.content);
 
         // delete still accepts dated slugs so the dreamer can prune the backlog.
         store
@@ -509,7 +578,7 @@ mod exec_tests {
                 serde_json::json!({"slug": "system", "body": "x"}),
             ))
             .await;
-        assert_eq!(r.content, "reserved_slug");
+        assert!(r.content.starts_with("reserved_slug"), "got {}", r.content);
     }
 
     #[tokio::test]
@@ -538,7 +607,7 @@ mod exec_tests {
                 serde_json::json!({"slug": "second", "body": "x"}),
             ))
             .await;
-        assert_eq!(r.content, "state_full");
+        assert!(r.content.starts_with("state_full"), "got {}", r.content);
     }
 
     #[tokio::test]
@@ -559,7 +628,11 @@ mod exec_tests {
                 serde_json::json!({"path": "users/12345.md", "body": "b"}),
             ))
             .await;
-        assert_eq!(r2.content, "write_quota_exhausted");
+        assert!(
+            r2.content.starts_with("write_quota_exhausted"),
+            "got {}",
+            r2.content
+        );
     }
 
     #[tokio::test]
@@ -579,7 +652,11 @@ mod exec_tests {
         let r = exec
             .execute(&call("delete_state", serde_json::json!({"slug": "qz"})))
             .await;
-        assert_eq!(r.content, "permission_denied");
+        assert!(
+            r.content.starts_with("permission_denied"),
+            "got {}",
+            r.content
+        );
     }
 
     #[tokio::test]
