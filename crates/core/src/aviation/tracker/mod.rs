@@ -17,6 +17,7 @@ use twitch_irc::message::PrivmsgMessage;
 
 use crate::aviation::AviationstackFlightMetadata;
 
+pub use commands::poll_all_flights_with_commands;
 pub use loop_run::run_flight_tracker;
 
 /// Maximum number of simultaneously tracked flights.
