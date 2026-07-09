@@ -19,6 +19,7 @@ mod resolve;
 pub mod schedules;
 pub mod store;
 pub mod suspend;
+mod tree;
 pub mod twitch;
 mod validation;
 pub mod web;
