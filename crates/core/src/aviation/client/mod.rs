@@ -91,6 +91,7 @@ impl AviationClient {
             .map(|_| BackendHealth {
                 parked_until: now,
                 error_streak: 0,
+                last_park_reason: None,
             })
             .collect();
         Self {
