@@ -772,6 +772,42 @@ mod tests {
     }
 
     #[test]
+    fn detect_phase_cruise_step_down_far_from_dest_stays_cruise() {
+        let mut flight = tracked_flight_with(FlightPhase::Cruise, CRUISE_STABLE_POLLS);
+        // Over Berlin; destination near Paris (~400 nm away).
+        flight.lat = Some(52.37);
+        flight.lon = Some(13.50);
+        flight.dest_lat = Some(49.01);
+        flight.dest_lon = Some(2.55);
+        let ac = aircraft_at(34_000, -800);
+
+        assert_eq!(detect_phase(&flight, &ac), FlightPhase::Cruise);
+    }
+
+    #[test]
+    fn detect_phase_cruise_step_down_near_dest_becomes_descent() {
+        let mut flight = tracked_flight_with(FlightPhase::Cruise, CRUISE_STABLE_POLLS);
+        // South of Berlin; destination BER (~80 nm away).
+        flight.lat = Some(51.50);
+        flight.lon = Some(12.50);
+        flight.dest_lat = Some(52.37);
+        flight.dest_lon = Some(13.50);
+        let ac = aircraft_at(34_000, -800);
+
+        assert_eq!(detect_phase(&flight, &ac), FlightPhase::Descent);
+    }
+
+    #[test]
+    fn detect_phase_cruise_step_down_unknown_dest_fallback_descent() {
+        let mut flight = tracked_flight_with(FlightPhase::Cruise, CRUISE_STABLE_POLLS);
+        flight.lat = Some(52.37);
+        flight.lon = Some(13.50);
+        let ac = aircraft_at(34_000, -800);
+
+        assert_eq!(detect_phase(&flight, &ac), FlightPhase::Descent);
+    }
+
+    #[test]
     fn parse_accepts_six_char_hex() {
         let id = FlightIdentifier::parse("4ca87d").unwrap();
         assert_eq!(id, FlightIdentifier::Hex("4CA87D".to_string()));
