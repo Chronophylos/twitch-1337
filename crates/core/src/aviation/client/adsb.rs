@@ -27,6 +27,8 @@ pub(super) struct BackendHealth {
     pub(super) parked_until: Instant,
     /// Consecutive non-timeout retryable errors.
     pub(super) error_streak: u8,
+    /// Last refusal reason that triggered a park; used to dedupe repeated WARN logs.
+    pub(super) last_park_reason: Option<String>,
 }
 
 /// Quantize `seen_pos` into a freshness bucket (lower = fresher). Missing,
@@ -195,19 +197,24 @@ impl AviationClient {
             .collect()
     }
 
-    fn park_backend(&self, index: usize) {
+    fn park_backend(&self, index: usize, reason: &str) -> bool {
         let until = Instant::now() + self.adsb_cooldown;
         let mut health = self.health.lock().expect("health mutex poisoned");
-        if let Some(h) = health.get_mut(index) {
-            h.parked_until = until;
-            h.error_streak = 0;
-        }
+        let Some(h) = health.get_mut(index) else {
+            return false;
+        };
+        let should_warn = h.last_park_reason.as_deref() != Some(reason);
+        h.parked_until = until;
+        h.error_streak = 0;
+        h.last_park_reason = Some(reason.to_owned());
+        should_warn
     }
 
     fn record_success(&self, index: usize) {
         let mut health = self.health.lock().expect("health mutex poisoned");
         if let Some(h) = health.get_mut(index) {
             h.error_streak = 0;
+            h.last_park_reason = None;
         }
     }
 
@@ -313,20 +320,34 @@ impl AviationClient {
                     per_backend.push(resp.aircraft);
                 }
                 Err(AdsbFetchError::RateLimited) => {
-                    warn!(
-                        provider = name,
-                        "ADS-B aggregator rate-limited (429); parking"
-                    );
-                    self.park_backend(idx);
+                    let should_warn = self.park_backend(idx, "rate_limited");
+                    if should_warn {
+                        warn!(
+                            provider = name,
+                            "ADS-B aggregator rate-limited (429); parking"
+                        );
+                    } else {
+                        debug!(
+                            provider = name,
+                            "ADS-B aggregator rate-limited (429); parking"
+                        );
+                    }
                     last_provider_outcome = Some(format!("{name}:rate_limited:429"));
                     last_error = Some(eyre::eyre!("{name} returned 429"));
                 }
                 Err(AdsbFetchError::ProviderRefused { status }) if status == 403 => {
-                    warn!(
-                        provider = name,
-                        status, "ADS-B aggregator refused request; parking"
-                    );
-                    self.park_backend(idx);
+                    let should_warn = self.park_backend(idx, "forbidden_403");
+                    if should_warn {
+                        warn!(
+                            provider = name,
+                            status, "ADS-B aggregator refused request; parking"
+                        );
+                    } else {
+                        debug!(
+                            provider = name,
+                            status, "ADS-B aggregator refused request; parking"
+                        );
+                    }
                     last_provider_outcome = Some(format!("{name}:forbidden_parked:403"));
                     last_error = Some(eyre::eyre!("{name} returned {status}"));
                 }
@@ -793,7 +814,7 @@ mod tests {
         ])
         .with_adsb_cooldown(Duration::from_millis(50));
 
-        client.park_backend(0);
+        client.park_backend(0, "forbidden_403");
         assert_eq!(client.live_backend_indices(), vec![1]);
 
         std::thread::sleep(Duration::from_millis(200));
@@ -820,6 +841,21 @@ mod tests {
             client.live_backend_indices().is_empty(),
             "3rd error parks the backend"
         );
+    }
+
+    #[test]
+    fn health_repeat_refusal_does_not_relog() {
+        let client = test_client_with_aggregators(vec![AdsbAggregator::readsb_v2(
+            "a",
+            "http://a.test".to_owned(),
+        )])
+        .with_adsb_cooldown(Duration::from_secs(60));
+
+        assert!(client.park_backend(0, "forbidden_403"));
+        assert!(!client.park_backend(0, "forbidden_403"));
+        client.record_success(0);
+        assert!(client.park_backend(0, "forbidden_403"));
+        assert!(client.park_backend(0, "rate_limited"));
     }
 
     #[test]
