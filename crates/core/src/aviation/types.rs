@@ -15,7 +15,7 @@ pub(super) struct AdsbAircraftResponse {
     pub(super) aircraft: Vec<NearbyAircraft>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct NearbyAircraft {
     pub hex: Option<String>,
     pub flight: Option<String>,
@@ -71,13 +71,13 @@ pub(super) struct AdsbDbResponseInner {
     pub flightroute: Option<FlightRoute>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct FlightRoute {
     pub origin: Airport,
     pub destination: Airport,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Airport {
     pub iata_code: String,
 }

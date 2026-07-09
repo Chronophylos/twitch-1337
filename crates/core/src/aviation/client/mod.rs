@@ -13,6 +13,9 @@ mod adsb;
 mod adsbdb;
 mod aviationstack;
 mod nominatim;
+mod provider;
+
+pub use provider::AdsbProvider;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
