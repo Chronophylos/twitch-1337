@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
-use crate::aviation::{AviationClient, AviationstackFlightMetadata, NearbyAircraft};
+use crate::aviation::{AdsbProvider, AviationClient, AviationstackFlightMetadata, NearbyAircraft};
 use crate::twitch::ChatSender;
 use crate::util::clock::Clock;
 
@@ -70,8 +70,8 @@ fn callsign_poll_candidates(flight: &TrackedFlight) -> Vec<String> {
     candidates
 }
 
-async fn poll_aircraft_by_callsign_aliases(
-    aviation_client: &AviationClient,
+async fn poll_aircraft_by_callsign_aliases<P: AdsbProvider>(
+    aviation_client: &P,
     candidates: &[String],
 ) -> Result<Result<Option<NearbyAircraft>, eyre::Report>, tokio::time::error::Elapsed> {
     let mut last = Ok(Ok(None));
@@ -998,7 +998,7 @@ async fn handle_status<T, L>(
 /// Thin async shell over the route provider: one `get_flight_route` call with a
 /// timeout, mapped to a pure `RouteOutcome`. The apply + journalling live in
 /// `apply_route_outcome`.
-async fn fetch_route(aviation_client: &AviationClient, callsign: &str) -> RouteOutcome {
+async fn fetch_route<P: AdsbProvider>(aviation_client: &P, callsign: &str) -> RouteOutcome {
     match tokio::time::timeout(
         ROUTE_FETCH_TIMEOUT,
         aviation_client.get_flight_route(callsign),
@@ -1034,11 +1034,11 @@ async fn resolve_route_if_needed(
     }
 }
 
-pub(crate) async fn poll_all_flights_with_commands<T, L>(
+pub async fn poll_all_flights_with_commands<T, L, P>(
     state: &mut FlightTrackerState,
     sender: &Arc<ChatSender<T, L>>,
     channel: &str,
-    aviation_client: &AviationClient,
+    aviation_client: &P,
     data_dir: &Path,
     clock: &dyn Clock,
     mut cmd_rx: Option<&mut mpsc::Receiver<TrackerCommand>>,
@@ -1046,6 +1046,7 @@ pub(crate) async fn poll_all_flights_with_commands<T, L>(
 where
     T: Transport,
     L: LoginCredentials,
+    P: AdsbProvider + Clone + Send + Sync + 'static,
 {
     let now = clock.now_utc();
     let mut changed = false;

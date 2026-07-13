@@ -17,6 +17,7 @@ use twitch_irc::message::PrivmsgMessage;
 
 use crate::aviation::AviationstackFlightMetadata;
 
+pub use commands::poll_all_flights_with_commands;
 pub use loop_run::run_flight_tracker;
 
 /// Maximum number of simultaneously tracked flights.
@@ -768,6 +769,42 @@ mod tests {
         let ac = aircraft_at(34_000, 0);
 
         assert_eq!(detect_phase(&flight, &ac), FlightPhase::Cruise);
+    }
+
+    #[test]
+    fn detect_phase_cruise_step_down_far_from_dest_stays_cruise() {
+        let mut flight = tracked_flight_with(FlightPhase::Cruise, CRUISE_STABLE_POLLS);
+        // Over Berlin; destination near Paris (~400 nm away).
+        flight.lat = Some(52.37);
+        flight.lon = Some(13.50);
+        flight.dest_lat = Some(49.01);
+        flight.dest_lon = Some(2.55);
+        let ac = aircraft_at(34_000, -800);
+
+        assert_eq!(detect_phase(&flight, &ac), FlightPhase::Cruise);
+    }
+
+    #[test]
+    fn detect_phase_cruise_step_down_near_dest_becomes_descent() {
+        let mut flight = tracked_flight_with(FlightPhase::Cruise, CRUISE_STABLE_POLLS);
+        // South of Berlin; destination BER (~80 nm away).
+        flight.lat = Some(51.50);
+        flight.lon = Some(12.50);
+        flight.dest_lat = Some(52.37);
+        flight.dest_lon = Some(13.50);
+        let ac = aircraft_at(34_000, -800);
+
+        assert_eq!(detect_phase(&flight, &ac), FlightPhase::Descent);
+    }
+
+    #[test]
+    fn detect_phase_cruise_step_down_unknown_dest_fallback_descent() {
+        let mut flight = tracked_flight_with(FlightPhase::Cruise, CRUISE_STABLE_POLLS);
+        flight.lat = Some(52.37);
+        flight.lon = Some(13.50);
+        let ac = aircraft_at(34_000, -800);
+
+        assert_eq!(detect_phase(&flight, &ac), FlightPhase::Descent);
     }
 
     #[test]

@@ -16,7 +16,7 @@ mod location;
 pub mod tracker;
 mod types;
 
-pub use client::AviationClient;
+pub use client::{AdsbProvider, AviationClient};
 pub use commands::up::up_command;
 pub use tracker::{FlightIdentifier, TrackerCommand, run_flight_tracker};
 pub use types::{Airport, AltBaro, AviationstackFlightMetadata, FlightRoute, NearbyAircraft};

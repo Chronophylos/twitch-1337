@@ -4,6 +4,7 @@ use super::{DIVERT_CONSECUTIVE_POLLS, FlightPhase, TrackedFlight};
 
 const CLIMB_RATE_THRESHOLD: i64 = 500;
 const DESCENT_RATE_THRESHOLD: i64 = -500;
+const DESCENT_MAX_DISTANCE_NM: f64 = 150.0;
 const CRUISE_RATE_THRESHOLD: i64 = 300;
 const CRUISE_MIN_ALTITUDE: i64 = 10_000;
 const APPROACH_MAX_ALTITUDE: i64 = 10_000;
@@ -97,7 +98,18 @@ pub(crate) fn detect_phase(flight: &TrackedFlight, ac: &NearbyAircraft) -> Fligh
         {
             return FlightPhase::Approach;
         }
-        return FlightPhase::Descent;
+        if let (Some(dest_lat), Some(dest_lon), Some(lat), Some(lon)) =
+            (flight.dest_lat, flight.dest_lon, flight.lat, flight.lon)
+        {
+            let distance_nm =
+                random_flight::geo::haversine_distance_nm(lat, lon, dest_lat, dest_lon);
+            if distance_nm <= DESCENT_MAX_DISTANCE_NM {
+                return FlightPhase::Descent;
+            }
+        } else {
+            // No resolved route or position: keep legacy Descent detection.
+            return FlightPhase::Descent;
+        }
     }
 
     if has_approach_mode && vrate.unwrap_or(0) < 0 {
