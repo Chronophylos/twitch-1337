@@ -10,11 +10,11 @@ alwaysApply: true
 | `crates/core` | Bot logic: IRC handlers, aviation, AI memory, pings, schedules, config/settings types |
 | `crates/llm` | LLM backends, agent loop, tool calling |
 | `crates/web` | Axum dashboard, routes, templates, auth |
-| `crates/twitch-1337` | Binary entrypoint, wires `Services`, spawns handlers |
+| `crates/twitch-1337` | Binary entrypoint (`main.rs`), builds `Services`, calls `run_bot` |
 
 ## Where to put things
 
-- New IRC handler → `crates/core/src/twitch/handlers/`, spawn from `crates/twitch-1337/src/lib.rs::run_bot`
+- New IRC handler → `crates/core/src/twitch/handlers/`, spawn from `crates/core/src/twitch/handlers/spawn.rs::spawn_handlers`
 - New chat command → handler + `commands.rs` registration pattern
 - New dashboard route/page → `crates/web/src/`
 - LLM provider/tool changes → `crates/llm/`
