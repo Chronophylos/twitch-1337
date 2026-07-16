@@ -20,24 +20,24 @@ use crate::util::persist::atomic_write_bytes_async;
 /// lost-update token by the dashboard memory editor.
 pub type Mtime = u64;
 
-/// Slugs the dashboard reserves for literal `/memory/state/...` routes; the
-/// store rejects writes targeting these names so the AI's `write_state` tool
+/// Slugs the dashboard reserves for literal `/memory/scratch/...` routes; the
+/// store rejects writes targeting these names so the AI's `write_scratch` tool
 /// gets the same protection the route layer already applies. See spec
-/// "Routes" — the literal `/memory/state/new` route lives next to the
-/// dynamic `/memory/state/{slug}` capture, so a user-controlled `new` slug
+/// "Routes" — the literal `/memory/scratch/new` route lives next to the
+/// dynamic `/memory/scratch/{slug}` capture, so a user-controlled `new` slug
 /// would shadow the create form.
-pub const RESERVED_STATE_SLUGS: &[&str] = &["new", "delete"];
+pub const RESERVED_SCRATCH_SLUGS: &[&str] = &["new", "delete"];
 
-/// `^[a-zA-Z0-9._-]{1,64}$` and not in `RESERVED_STATE_SLUGS`. Mirrors the
+/// `^[a-zA-Z0-9._-]{1,64}$` and not in `RESERVED_SCRATCH_SLUGS`. Mirrors the
 /// route-layer `is_valid_slug` check so the store is authoritative whether
 /// the call comes from the web dashboard, the AI tool, or the dreamer
 /// ritual. Keeping the rule in the store closes the gap a route-only check
 /// would leave open.
-pub fn validate_state_slug(slug: &str) -> Result<(), WriteError> {
+pub fn validate_scratch_slug(slug: &str) -> Result<(), WriteError> {
     if slug.is_empty() || slug.len() > 64 {
         return Err(WriteError::InvalidSlug);
     }
-    if RESERVED_STATE_SLUGS.contains(&slug) {
+    if RESERVED_SCRATCH_SLUGS.contains(&slug) {
         return Err(WriteError::InvalidSlug);
     }
     if slug.contains("..") {
@@ -91,19 +91,39 @@ struct StoreInner {
     memories_dir: PathBuf, // $DATA_DIR/memories
     settings: SettingsHandle,
     locks: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
-    /// Serialises new state-file creation so the `max_state_files` cap can't
-    /// be smuggled past by two concurrent writes to two distinct new slugs.
-    /// Held only across the count-check + write path inside `write_state`.
-    state_create_lock: Mutex<()>,
+    /// Serialises new scratch-file creation so the `max_scratch_files` cap
+    /// can't be smuggled past by two concurrent writes to two distinct new
+    /// slugs. Held only across the count-check + write path inside
+    /// `write_scratch`.
+    scratch_create_lock: Mutex<()>,
 }
 
 impl MemoryStore {
     pub async fn open(data_dir: &Path, settings: SettingsHandle) -> Result<Self> {
         let memories_dir = data_dir.join("memories");
+
+        // ADR-0003: `state/` was renamed to `scratch/`. This MUST run before
+        // the create_dir_all loop below — that loop would otherwise create an
+        // empty `scratch/`, making the `!exists` guard false, silently skipping
+        // the rename and stranding every existing note in `state/`.
+        // Idempotent and self-clearing, so no sentinel is needed.
+        let legacy_scratch = memories_dir.join("state");
+        let scratch_dir = memories_dir.join("scratch");
+        if tokio::fs::try_exists(&legacy_scratch)
+            .await
+            .unwrap_or(false)
+            && !tokio::fs::try_exists(&scratch_dir).await.unwrap_or(false)
+        {
+            tokio::fs::rename(&legacy_scratch, &scratch_dir)
+                .await
+                .wrap_err("migrate memories/state -> memories/scratch")?;
+            info!("Renamed memories/state -> memories/scratch (ADR-0003)");
+        }
+
         for p in [
             &memories_dir,
             &memories_dir.join("users"),
-            &memories_dir.join("state"),
+            &scratch_dir,
             &memories_dir.join("transcripts"),
         ] {
             tokio::fs::create_dir_all(p)
@@ -153,7 +173,7 @@ impl MemoryStore {
                 memories_dir,
                 settings,
                 locks: Mutex::new(HashMap::new()),
-                state_create_lock: Mutex::new(()),
+                scratch_create_lock: Mutex::new(()),
             }),
         })
     }
@@ -276,35 +296,35 @@ impl MemoryStore {
         Ok(())
     }
 
-    pub async fn write_state(
+    pub async fn write_scratch(
         &self,
         kind: &FileKind,
         body: &str,
         creator_user_id: Option<&str>,
     ) -> Result<(), WriteError> {
-        self.write_state_inner(kind, body, creator_user_id, None)
+        self.write_scratch_inner(kind, body, creator_user_id, None)
             .await
     }
 
     /// `created_by_override`: `Some(non_empty)` replaces the on-disk
     /// `created_by`; `Some("")` and `None` both fall back to preserve-or-init.
-    async fn write_state_inner(
+    async fn write_scratch_inner(
         &self,
         kind: &FileKind,
         body: &str,
         creator_user_id: Option<&str>,
         created_by_override: Option<&str>,
     ) -> Result<(), WriteError> {
-        let FileKind::State { slug } = kind else {
+        let FileKind::Scratch { slug } = kind else {
             return Err(WriteError::Io(eyre!(
-                "write_state called on non-state kind"
+                "write_scratch called on non-scratch kind"
             )));
         };
         // Validate before touching the filesystem — the AI tool, the
         // dashboard, and the dreamer all funnel through this method, so the
         // slug rule lives here rather than at any one call site.
-        validate_state_slug(slug)?;
-        let limit = self.caps().state_bytes;
+        validate_scratch_slug(slug)?;
+        let limit = self.caps().scratch_bytes;
 
         let rel = kind.relative_path();
         let abs = self.inner.memories_dir.join(&rel);
@@ -334,16 +354,16 @@ impl MemoryStore {
         }
 
         // For new files only, serialise the count-check + write through the
-        // global state-create lock so two new-slug writes can't both pass.
+        // global scratch-create lock so two new-slug writes can't both pass.
         let _create_g = if is_new {
-            Some(self.inner.state_create_lock.lock().await)
+            Some(self.inner.scratch_create_lock.lock().await)
         } else {
             None
         };
         if is_new {
-            let count = count_state_files(&self.inner.memories_dir).await?;
-            if count >= self.caps().max_state_files {
-                return Err(WriteError::StateFull);
+            let count = count_scratch_files(&self.inner.memories_dir).await?;
+            if count >= self.caps().max_scratch_files {
+                return Err(WriteError::ScratchFull);
             }
         }
 
@@ -397,7 +417,7 @@ impl MemoryStore {
     /// signature so call sites read fluently.
     ///
     /// TOCTOU note: we drop the outer guard between the mtime check and
-    /// the inner `write` / `write_state` (which take their own per-path
+    /// the inner `write` / `write_scratch` (which take their own per-path
     /// lock). In that gap an unconditional write (AI tool or dreamer
     /// ritual) can land between the dashboard user's check and their
     /// write — the dashboard write then silently overwrites that change
@@ -435,9 +455,9 @@ impl MemoryStore {
 
         drop(g);
         match &kind {
-            FileKind::State { slug } => {
-                self.write_state_inner(
-                    &FileKind::State { slug: slug.clone() },
+            FileKind::Scratch { slug } => {
+                self.write_scratch_inner(
+                    &FileKind::Scratch { slug: slug.clone() },
                     body,
                     None,
                     fm_override.created_by.as_deref(),
@@ -461,10 +481,10 @@ impl MemoryStore {
         Ok(WriteOutcome::Written { new_mtime })
     }
 
-    pub async fn delete_state(&self, slug: &str) -> Result<()> {
-        // Reject reserved/path-traversal slugs symmetrically with `write_state`.
-        validate_state_slug(slug).map_err(|e| eyre!("delete_state: {e}"))?;
-        let rel = PathBuf::from(format!("state/{slug}.md"));
+    pub async fn delete_scratch(&self, slug: &str) -> Result<()> {
+        // Reject reserved/path-traversal slugs symmetrically with `write_scratch`.
+        validate_scratch_slug(slug).map_err(|e| eyre!("delete_scratch: {e}"))?;
+        let rel = PathBuf::from(format!("scratch/{slug}.md"));
         let abs = self.inner.memories_dir.join(&rel);
         let lock = self.lock_for(&rel).await;
         let _g = lock.lock().await;
@@ -482,8 +502,8 @@ impl MemoryStore {
         .await
     }
 
-    pub async fn list_state(&self) -> Result<Vec<MemoryFile>> {
-        self.list_in_subdir("state", |stem| FileKind::State { slug: stem.into() })
+    pub async fn list_scratch(&self) -> Result<Vec<MemoryFile>> {
+        self.list_in_subdir("scratch", |stem| FileKind::Scratch { slug: stem.into() })
             .await
     }
 
@@ -518,21 +538,21 @@ impl MemoryStore {
 pub enum WriteError {
     #[error("file_full")]
     Full,
-    #[error("state_full")]
-    StateFull,
+    #[error("scratch_full")]
+    ScratchFull,
     #[error("invalid_slug")]
     InvalidSlug,
     #[error("io: {0}")]
     Io(#[from] eyre::Report),
 }
 
-/// Count `*.md` entries in `memories/state/`. Used by `write_state` under
-/// the state-create lock to enforce `max_state_files`.
-async fn count_state_files(memories_dir: &Path) -> Result<usize, WriteError> {
-    let dir = memories_dir.join("state");
+/// Count `*.md` entries in `memories/scratch/`. Used by `write_scratch` under
+/// the scratch-create lock to enforce `max_scratch_files`.
+async fn count_scratch_files(memories_dir: &Path) -> Result<usize, WriteError> {
+    let dir = memories_dir.join("scratch");
     let mut entries = tokio::fs::read_dir(&dir)
         .await
-        .map_err(|e| WriteError::Io(eyre!("read_dir state/: {e}")))?;
+        .map_err(|e| WriteError::Io(eyre!("read_dir scratch/: {e}")))?;
     let mut n = 0usize;
     while let Some(e) = entries
         .next_entry()
@@ -565,9 +585,71 @@ mod tests {
         s.ai.memory.soul_bytes = caps.soul_bytes;
         s.ai.memory.lore_bytes = caps.lore_bytes;
         s.ai.memory.user_bytes = caps.user_bytes;
-        s.ai.memory.state_bytes = caps.state_bytes;
-        s.ai.memory.max_state_files = caps.max_state_files;
+        s.ai.memory.scratch_bytes = caps.scratch_bytes;
+        s.ai.memory.max_scratch_files = caps.max_scratch_files;
         Arc::new(ArcSwap::from_pointee(s))
+    }
+
+    /// ADR-0003 migration. This is the regression guard for the ordering trap:
+    /// if the rename is ever moved below the `create_dir_all` loop in `open`,
+    /// that loop creates an empty `scratch/` first, the `!exists` guard goes
+    /// false, the rename is skipped, and every note is stranded in `state/`.
+    /// A fresh-tempdir test cannot catch that — only a pre-seeded `state/` can.
+    #[tokio::test]
+    async fn open_migrates_legacy_state_dir_to_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("memories/state");
+        tokio::fs::create_dir_all(&legacy).await.unwrap();
+        tokio::fs::write(
+            legacy.join("quiz.md"),
+            "---\nupdated_at: 2026-07-16T00:00:00Z\n---\nscore: 7",
+        )
+        .await
+        .unwrap();
+
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+
+        assert!(
+            !dir.path().join("memories/state").exists(),
+            "legacy state/ must be gone after migration"
+        );
+        let migrated = dir.path().join("memories/scratch/quiz.md");
+        assert!(migrated.exists(), "note must land in scratch/");
+        let body = store
+            .read_kind(&FileKind::Scratch {
+                slug: "quiz".into(),
+            })
+            .await
+            .unwrap()
+            .body;
+        assert!(body.contains("score: 7"), "body must survive intact");
+    }
+
+    #[tokio::test]
+    async fn open_migration_is_noop_when_scratch_already_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("memories/state");
+        let scratch = dir.path().join("memories/scratch");
+        tokio::fs::create_dir_all(&legacy).await.unwrap();
+        tokio::fs::create_dir_all(&scratch).await.unwrap();
+        tokio::fs::write(
+            scratch.join("keep.md"),
+            "---\nupdated_at: 2026-07-16T00:00:00Z\n---\nkeep me",
+        )
+        .await
+        .unwrap();
+
+        MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+
+        // Must not clobber an existing scratch/ — the legacy dir is left alone
+        // for an operator to reconcile rather than silently merged or lost.
+        assert!(
+            tokio::fs::read_to_string(scratch.join("keep.md"))
+                .await
+                .unwrap()
+                .contains("keep me")
+        );
+        assert!(dir.path().join("memories/state").exists());
     }
 
     #[tokio::test]
@@ -576,7 +658,7 @@ mod tests {
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         assert!(dir.path().join("memories/SOUL.md").exists());
         assert!(dir.path().join("memories/users").is_dir());
-        assert!(dir.path().join("memories/state").is_dir());
+        assert!(dir.path().join("memories/scratch").is_dir());
         assert!(dir.path().join("memories/transcripts").is_dir());
 
         let soul = store.read_kind(&FileKind::Soul).await.unwrap();
@@ -651,20 +733,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_state_full_enforced_in_store() {
+    async fn write_scratch_full_enforced_in_store() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(
             dir.path(),
             handle_with_caps(Caps {
-                max_state_files: 1,
+                max_scratch_files: 1,
                 ..Caps::default()
             }),
         )
         .await
         .unwrap();
         store
-            .write_state(
-                &FileKind::State {
+            .write_scratch(
+                &FileKind::Scratch {
                     slug: "first".into(),
                 },
                 "x",
@@ -674,8 +756,8 @@ mod tests {
             .unwrap();
         // Overwriting the same slug must still succeed at the cap.
         store
-            .write_state(
-                &FileKind::State {
+            .write_scratch(
+                &FileKind::Scratch {
                     slug: "first".into(),
                 },
                 "y",
@@ -685,8 +767,8 @@ mod tests {
             .unwrap();
         // A second distinct slug must fail.
         let err = store
-            .write_state(
-                &FileKind::State {
+            .write_scratch(
+                &FileKind::Scratch {
                     slug: "second".into(),
                 },
                 "x",
@@ -694,7 +776,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, WriteError::StateFull));
+        assert!(matches!(err, WriteError::ScratchFull));
     }
 
     #[tokio::test]
@@ -738,20 +820,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_state_sets_created_by_on_create_only() {
+    async fn write_scratch_sets_created_by_on_create_only() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        let kind = FileKind::State {
+        let kind = FileKind::Scratch {
             slug: "quiz".into(),
         };
         store
-            .write_state(&kind, "score: 1", Some("12345"))
+            .write_scratch(&kind, "score: 1", Some("12345"))
             .await
             .unwrap();
         let one = store.read_kind(&kind).await.unwrap();
         assert_eq!(one.frontmatter.created_by.as_deref(), Some("12345"));
         store
-            .write_state(&kind, "score: 2", Some("99999"))
+            .write_scratch(&kind, "score: 2", Some("99999"))
             .await
             .unwrap();
         let two = store.read_kind(&kind).await.unwrap();
@@ -783,7 +865,7 @@ mod tests {
             .unwrap();
         assert_eq!(mt, 0, "missing file must report mtime 0");
         let mt = store
-            .current_mtime(&FileKind::State {
+            .current_mtime(&FileKind::Scratch {
                 slug: "missing".into(),
             })
             .await
@@ -792,15 +874,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_state_removes_file() {
+    async fn delete_scratch_removes_file() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        let kind = FileKind::State {
+        let kind = FileKind::Scratch {
             slug: "quiz".into(),
         };
-        store.write_state(&kind, "x", Some("1")).await.unwrap();
-        store.delete_state("quiz").await.unwrap();
-        assert!(!dir.path().join("memories/state/quiz.md").exists());
+        store.write_scratch(&kind, "x", Some("1")).await.unwrap();
+        store.delete_scratch("quiz").await.unwrap();
+        assert!(!dir.path().join("memories/scratch/quiz.md").exists());
     }
 
     #[tokio::test]
@@ -913,10 +995,13 @@ mod tests {
     async fn write_with_guard_override_replaces_state_created_by() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        let kind = FileKind::State {
+        let kind = FileKind::Scratch {
             slug: "quiz".into(),
         };
-        store.write_state(&kind, "x", Some("12345")).await.unwrap();
+        store
+            .write_scratch(&kind, "x", Some("12345"))
+            .await
+            .unwrap();
         let mt = store.current_mtime(&kind).await.unwrap();
         let fm = FrontmatterOverride {
             created_by: Some("99999".into()),
@@ -934,10 +1019,13 @@ mod tests {
     async fn write_with_guard_empty_override_preserves_state_created_by() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        let kind = FileKind::State {
+        let kind = FileKind::Scratch {
             slug: "notes".into(),
         };
-        store.write_state(&kind, "x", Some("12345")).await.unwrap();
+        store
+            .write_scratch(&kind, "x", Some("12345"))
+            .await
+            .unwrap();
         let mt = store.current_mtime(&kind).await.unwrap();
         let fm = FrontmatterOverride {
             created_by: Some(String::new()),
@@ -957,8 +1045,8 @@ mod tests {
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         for reserved in ["new", "delete"] {
             let err = store
-                .write_state(
-                    &FileKind::State {
+                .write_scratch(
+                    &FileKind::Scratch {
                         slug: reserved.into(),
                     },
                     "x",
@@ -981,7 +1069,7 @@ mod tests {
         let cases = [too_long.as_str(), "", "with/slash", "..", "with..dots"];
         for slug in cases {
             let err = store
-                .write_state(&FileKind::State { slug: slug.into() }, "x", Some("1"))
+                .write_scratch(&FileKind::Scratch { slug: slug.into() }, "x", Some("1"))
                 .await
                 .unwrap_err();
             assert!(

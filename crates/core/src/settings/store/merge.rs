@@ -73,14 +73,14 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.ai.memory.user_bytes {
         into.ai.memory.user_bytes = Some(v);
     }
-    if let Some(v) = patch.ai.memory.state_bytes {
-        into.ai.memory.state_bytes = Some(v);
+    if let Some(v) = patch.ai.memory.scratch_bytes {
+        into.ai.memory.scratch_bytes = Some(v);
     }
     if let Some(v) = patch.ai.memory.inject_byte_budget {
         into.ai.memory.inject_byte_budget = Some(v);
     }
-    if let Some(v) = patch.ai.memory.max_state_files {
-        into.ai.memory.max_state_files = Some(v);
+    if let Some(v) = patch.ai.memory.max_scratch_files {
+        into.ai.memory.max_scratch_files = Some(v);
     }
     // AI dreamer
     if let Some(v) = patch.ai.dreamer.enabled {

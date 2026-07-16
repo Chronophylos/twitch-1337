@@ -172,15 +172,15 @@ pub async fn run_ritual(
             model_id: "",
         },
     );
-    // The dreamer wants every memory file in one shot, so glue durable +
-    // volatile blocks back together for its system prompt. The cache-hygiene
+    // The dreamer wants every file in one shot, so glue memory + scratch
+    // blocks back together for its system prompt. The cache-hygiene
     // split only matters for the chat-turn loop.
-    let mut mem_block = mem_ctx.durable_memory;
-    if !mem_ctx.volatile_state.is_empty() {
+    let mut mem_block = mem_ctx.memory;
+    if !mem_ctx.scratch.is_empty() {
         if !mem_block.is_empty() {
             mem_block.push('\n');
         }
-        mem_block.push_str(&mem_ctx.volatile_state);
+        mem_block.push_str(&mem_ctx.scratch);
     }
     let system_prompt = format!("{head}\n\n{mem_block}\n{transcript_block}");
 

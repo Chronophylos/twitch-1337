@@ -85,7 +85,7 @@ async fn tampered_next_cookie_falls_back_to_root() {
     // Same signing + tampering technique as `tampered_sid_redirects_to_login`.
     // Callback reads `tw1337_next` via the signed extractor; a corrupted HMAC
     // must look absent so the post-login redirect falls back to `/`.
-    let signed_next = sign_for_tests(&state, "tw1337_next", "/memory/state/notes");
+    let signed_next = sign_for_tests(&state, "tw1337_next", "/memory/scratch/notes");
     let mut tampered = signed_next.clone();
     // SAFETY: base64 chars are ASCII; flipping A↔B preserves UTF-8.
     let bytes = unsafe { tampered.as_bytes_mut() };
@@ -107,7 +107,7 @@ async fn tampered_next_cookie_falls_back_to_root() {
     // Cross-site injection of an unsigned cookie must likewise fail verification.
     let cookies = Cookies::default();
     cookies.add(
-        Cookie::build(("tw1337_next", "/memory/state/notes"))
+        Cookie::build(("tw1337_next", "/memory/scratch/notes"))
             .path("/")
             .build(),
     );

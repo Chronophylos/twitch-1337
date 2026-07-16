@@ -30,13 +30,13 @@
       <input type="text" class="editor-input" name="fm_display_name" value="{{ fm_display_name }}" placeholder="leave empty to preserve" autocomplete="off" spellcheck="false">
     </label>
     {% endif %}
-    {% if show_state_fm %}
+    {% if show_scratch_fm %}
     <label class="editor-field">
       <span class="editor-field-label">created by</span>
       <input type="text" class="editor-input" name="fm_created_by" value="{{ fm_created_by }}" placeholder="Twitch user id — leave empty to preserve" autocomplete="off" spellcheck="false">
     </label>
     {% endif %}
-    {% if title == "new state note" %}
+    {% if title == "new scratch note" %}
     <label class="editor-field">
       <span class="editor-field-label">slug</span>
       <input type="text" class="editor-input" name="slug" placeholder="1-64 chars: a-z, 0-9, ._-" required autocomplete="off" spellcheck="false">

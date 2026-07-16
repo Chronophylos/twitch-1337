@@ -26,13 +26,13 @@ pub struct WriteFileArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct WriteStateArgs {
+pub struct WriteScratchArgs {
     pub slug: String,
     pub body: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct DeleteStateArgs {
+pub struct DeleteScratchArgs {
     pub slug: String,
 }
 
@@ -46,13 +46,13 @@ pub fn chat_turn_tools() -> Vec<ToolDefinition> {
             "write_file",
             "Overwrite a memory file (SOUL.md, LORE.md, or users/<id>.md). Body is the new full prose body; frontmatter is store-managed. Permission-gated by speaker role.",
         ),
-        ToolDefinition::derived::<WriteStateArgs>(
-            "write_state",
-            "Create or overwrite a state file at state/<slug>.md. slug is lowercase a–z 0–9 dashes, ≤64 chars.",
+        ToolDefinition::derived::<WriteScratchArgs>(
+            "write_scratch",
+            "Create or overwrite a scratch file at scratch/<slug>.md. slug is lowercase a–z 0–9 dashes, ≤64 chars.",
         ),
-        ToolDefinition::derived::<DeleteStateArgs>(
-            "delete_state",
-            "Remove a state file. Regulars may only delete state files they created.",
+        ToolDefinition::derived::<DeleteScratchArgs>(
+            "delete_scratch",
+            "Remove a scratch file. Regulars may only delete scratch files they created.",
         ),
     ]
 }
@@ -63,8 +63,14 @@ pub fn dreamer_tools() -> Vec<ToolDefinition> {
             "write_file",
             "Overwrite SOUL.md / LORE.md / users/<id>.md.",
         ),
-        ToolDefinition::derived::<WriteStateArgs>("write_state", "Overwrite state/<slug>.md."),
-        ToolDefinition::derived::<DeleteStateArgs>("delete_state", "Remove a stale state file."),
+        ToolDefinition::derived::<WriteScratchArgs>(
+            "write_scratch",
+            "Overwrite scratch/<slug>.md.",
+        ),
+        ToolDefinition::derived::<DeleteScratchArgs>(
+            "delete_scratch",
+            "Remove a stale scratch file.",
+        ),
     ]
 }
 
@@ -78,7 +84,7 @@ pub struct ChatTurnExecutorOpts {
     pub speaker_login: String,
     pub speaker_display_name: String,
     pub speaker_role: Role,
-    /// Maximum write-class tool calls (write_file, write_state, delete_state)
+    /// Maximum write-class tool calls (write_file, write_scratch, delete_scratch)
     /// per turn.
     pub max_writes_per_turn: usize,
 }
@@ -180,18 +186,18 @@ impl ChatTurnExecutor {
         {
             Ok(()) => "ok".into(),
             Err(WriteError::Full) => "file_full: body exceeds the byte cap for this file".into(),
-            Err(WriteError::StateFull) => {
-                "state_full: the maximum number of state files already exists".into()
+            Err(WriteError::ScratchFull) => {
+                "scratch_full: the maximum number of scratch files already exists".into()
             } // unreachable for write()
             Err(WriteError::InvalidSlug) => {
                 "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars".into()
-            } // unreachable for non-state write
+            } // unreachable for non-scratch write
             Err(WriteError::Io(e)) => format!("io_error: {e}"),
         }
     }
 
-    async fn handle_write_state(&self, call: &ToolCall) -> String {
-        let args: WriteStateArgs = match call.parse_args() {
+    async fn handle_write_scratch(&self, call: &ToolCall) -> String {
+        let args: WriteScratchArgs = match call.parse_args() {
             Ok(a) => a,
             Err(_) => return "invalid_arguments: could not parse the tool arguments".into(),
         };
@@ -204,7 +210,7 @@ impl ChatTurnExecutor {
             Err(SlugError::Reserved) => return "reserved_slug: that slug name is reserved".into(),
         };
         if has_trailing_iso_date(&slug) {
-            return "dated_slug: state slugs may not end in a -YYYY-MM-DD date suffix".into();
+            return "dated_slug: scratch slugs may not end in a -YYYY-MM-DD date suffix".into();
         }
         if check_body(&args.body).is_err() {
             return "invalid_body: body contains a reserved marker (frontmatter fence, path header, or carriage return)".into();
@@ -216,8 +222,8 @@ impl ChatTurnExecutor {
         match self
             .opts
             .store
-            .write_state(
-                &FileKind::State { slug },
+            .write_scratch(
+                &FileKind::Scratch { slug },
                 &args.body,
                 Some(self.opts.speaker_user_id.as_str()),
             )
@@ -225,8 +231,8 @@ impl ChatTurnExecutor {
         {
             Ok(()) => "ok".into(),
             Err(WriteError::Full) => "file_full: body exceeds the byte cap for this file".into(),
-            Err(WriteError::StateFull) => {
-                "state_full: the maximum number of state files already exists".into()
+            Err(WriteError::ScratchFull) => {
+                "scratch_full: the maximum number of scratch files already exists".into()
             }
             Err(WriteError::InvalidSlug) => {
                 "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars".into()
@@ -235,8 +241,8 @@ impl ChatTurnExecutor {
         }
     }
 
-    async fn handle_delete_state(&self, call: &ToolCall) -> String {
-        let args: DeleteStateArgs = match call.parse_args() {
+    async fn handle_delete_scratch(&self, call: &ToolCall) -> String {
+        let args: DeleteScratchArgs = match call.parse_args() {
             Ok(a) => a,
             Err(_) => return "invalid_arguments: could not parse the tool arguments".into(),
         };
@@ -253,7 +259,7 @@ impl ChatTurnExecutor {
         let owner = self
             .opts
             .store
-            .read_kind(&FileKind::State { slug: slug.clone() })
+            .read_kind(&FileKind::Scratch { slug: slug.clone() })
             .await
             .ok()
             .and_then(|f| f.frontmatter.created_by);
@@ -262,14 +268,14 @@ impl ChatTurnExecutor {
             _ => true,
         };
         if !allowed {
-            return "permission_denied: regulars may only delete state files they created".into();
+            return "permission_denied: regulars may only delete scratch files they created".into();
         }
 
         if !self.try_consume_write_quota() {
             return "write_quota_exhausted: the write limit for this turn is used up".into();
         }
 
-        match self.opts.store.delete_state(&slug).await {
+        match self.opts.store.delete_scratch(&slug).await {
             Ok(()) => "ok".into(),
             Err(e) => format!("io_error: {e}"),
         }
@@ -281,8 +287,8 @@ impl ToolExecutor for ChatTurnExecutor {
     async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
         let content = match call.name.as_str() {
             "write_file" => self.handle_write_file(call).await,
-            "write_state" => self.handle_write_state(call).await,
-            "delete_state" => self.handle_delete_state(call).await,
+            "write_scratch" => self.handle_write_scratch(call).await,
+            "delete_scratch" => self.handle_delete_scratch(call).await,
             _ => "unknown_tool: no memory tool with that name".to_string(),
         };
         ToolResultMessage::for_call(call, content)
@@ -335,13 +341,13 @@ mod schema_tests {
     #[test]
     fn chat_turn_tools_has_three_named_tools() {
         let names: Vec<_> = chat_turn_tools().into_iter().map(|t| t.name).collect();
-        assert_eq!(names, vec!["write_file", "write_state", "delete_state"]);
+        assert_eq!(names, vec!["write_file", "write_scratch", "delete_scratch"]);
     }
 
     #[test]
     fn dreamer_tools_matches_chat_turn_tools() {
         let names: Vec<_> = dreamer_tools().into_iter().map(|t| t.name).collect();
-        assert_eq!(names, vec!["write_file", "write_state", "delete_state"]);
+        assert_eq!(names, vec!["write_file", "write_scratch", "delete_scratch"]);
     }
 
     #[test]
@@ -373,8 +379,8 @@ mod exec_tests {
         s.ai.memory.soul_bytes = caps.soul_bytes;
         s.ai.memory.lore_bytes = caps.lore_bytes;
         s.ai.memory.user_bytes = caps.user_bytes;
-        s.ai.memory.state_bytes = caps.state_bytes;
-        s.ai.memory.max_state_files = caps.max_state_files;
+        s.ai.memory.scratch_bytes = caps.scratch_bytes;
+        s.ai.memory.max_scratch_files = caps.max_scratch_files;
         Arc::new(ArcSwap::from_pointee(s))
     }
 
@@ -524,7 +530,7 @@ mod exec_tests {
         assert!(r.content.starts_with("invalid_path"), "got {}", r.content);
         let r = exec
             .execute(&call(
-                "write_state",
+                "write_scratch",
                 serde_json::json!({"slug": "Foo", "body": "x"}),
             ))
             .await;
@@ -541,7 +547,7 @@ mod exec_tests {
         // cannot recur via fresh writes.
         let r = exec
             .execute(&call(
-                "write_state",
+                "write_scratch",
                 serde_json::json!({"slug": "av-depot-2026-05-08", "body": "x"}),
             ))
             .await;
@@ -549,8 +555,8 @@ mod exec_tests {
 
         // delete still accepts dated slugs so the dreamer can prune the backlog.
         store
-            .write_state(
-                &FileKind::State {
+            .write_scratch(
+                &FileKind::Scratch {
                     slug: "legacy-2026-05-08".into(),
                 },
                 "x",
@@ -560,7 +566,7 @@ mod exec_tests {
             .unwrap();
         let r = exec
             .execute(&call(
-                "delete_state",
+                "delete_scratch",
                 serde_json::json!({"slug": "legacy-2026-05-08"}),
             ))
             .await;
@@ -574,7 +580,7 @@ mod exec_tests {
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
-                "write_state",
+                "write_scratch",
                 serde_json::json!({"slug": "system", "body": "x"}),
             ))
             .await;
@@ -582,12 +588,12 @@ mod exec_tests {
     }
 
     #[tokio::test]
-    async fn state_full_when_over_cap() {
+    async fn scratch_full_when_over_cap() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(
             dir.path(),
             handle_with_caps(Caps {
-                max_state_files: 1,
+                max_scratch_files: 1,
                 ..Caps::default()
             }),
         )
@@ -596,18 +602,18 @@ mod exec_tests {
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
-                "write_state",
+                "write_scratch",
                 serde_json::json!({"slug": "first", "body": "x"}),
             ))
             .await;
         assert_eq!(r.content, "ok");
         let r = exec
             .execute(&call(
-                "write_state",
+                "write_scratch",
                 serde_json::json!({"slug": "second", "body": "x"}),
             ))
             .await;
-        assert!(r.content.starts_with("state_full"), "got {}", r.content);
+        assert!(r.content.starts_with("scratch_full"), "got {}", r.content);
     }
 
     #[tokio::test]
@@ -636,13 +642,13 @@ mod exec_tests {
     }
 
     #[tokio::test]
-    async fn delete_state_blocked_for_non_creator_regular() {
+    async fn delete_scratch_blocked_for_non_creator_regular() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        // Pre-seed state file owned by user 99.
+        // Pre-seed scratch file owned by user 99.
         store
-            .write_state(
-                &crate::ai::memory::types::FileKind::State { slug: "qz".into() },
+            .write_scratch(
+                &crate::ai::memory::types::FileKind::Scratch { slug: "qz".into() },
                 "x",
                 Some("99"),
             )
@@ -650,7 +656,7 @@ mod exec_tests {
             .unwrap();
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
-            .execute(&call("delete_state", serde_json::json!({"slug": "qz"})))
+            .execute(&call("delete_scratch", serde_json::json!({"slug": "qz"})))
             .await;
         assert!(
             r.content.starts_with("permission_denied"),

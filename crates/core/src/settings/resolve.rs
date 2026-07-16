@@ -142,15 +142,18 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
             soul_bytes: o.memory.soul_bytes.unwrap_or(defaults.memory.soul_bytes),
             lore_bytes: o.memory.lore_bytes.unwrap_or(defaults.memory.lore_bytes),
             user_bytes: o.memory.user_bytes.unwrap_or(defaults.memory.user_bytes),
-            state_bytes: o.memory.state_bytes.unwrap_or(defaults.memory.state_bytes),
+            scratch_bytes: o
+                .memory
+                .scratch_bytes
+                .unwrap_or(defaults.memory.scratch_bytes),
             inject_byte_budget: o
                 .memory
                 .inject_byte_budget
                 .unwrap_or(defaults.memory.inject_byte_budget),
-            max_state_files: o
+            max_scratch_files: o
                 .memory
-                .max_state_files
-                .unwrap_or(defaults.memory.max_state_files),
+                .max_scratch_files
+                .unwrap_or(defaults.memory.max_scratch_files),
         },
         dreamer: AiDreamer {
             enabled: o.dreamer.enabled.unwrap_or(defaults.dreamer.enabled),

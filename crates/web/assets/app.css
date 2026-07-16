@@ -508,7 +508,7 @@ kbd {
 .table.pings .thead, .table.pings .tr {
   grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) 100px 200px 80px;
 }
-.table.state .thead, .table.state .tr {
+.table.scratch .thead, .table.scratch .tr {
   grid-template-columns: 1.6fr 1.4fr 1.4fr 1.2fr 80px;
 }
 .table.leaderboard .thead, .table.leaderboard .tr {

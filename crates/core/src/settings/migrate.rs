@@ -66,9 +66,9 @@ pub fn migrate_legacy_ai(root: &toml::Value) -> Result<AiOverrides> {
         out.memory.soul_bytes = usz(&v, "soul_bytes");
         out.memory.lore_bytes = usz(&v, "lore_bytes");
         out.memory.user_bytes = usz(&v, "user_bytes");
-        out.memory.state_bytes = usz(&v, "state_bytes");
+        out.memory.scratch_bytes = usz(&v, "scratch_bytes");
         out.memory.inject_byte_budget = usz(&v, "inject_byte_budget");
-        out.memory.max_state_files = usz(&v, "max_state_files");
+        out.memory.max_scratch_files = usz(&v, "max_scratch_files");
     }
 
     if let Some(d) = ai.get("dreamer").and_then(|v| v.as_table()) {

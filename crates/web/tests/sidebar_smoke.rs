@@ -73,12 +73,12 @@ async fn pings_page_renders_sidebar_with_active_pings() {
 
 #[tokio::test]
 async fn memory_state_page_highlights_state() {
-    let body = fetch_authed("/memory/state").await;
+    let body = fetch_authed("/memory/scratch").await;
     let snippet = body
         .split("class=\"active\"")
         .nth(1)
         .expect("active class present");
-    assert!(snippet.contains("/memory/state"));
+    assert!(snippet.contains("/memory/scratch"));
 }
 
 #[tokio::test]

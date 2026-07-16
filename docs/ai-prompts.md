@@ -37,7 +37,7 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 
 **Voice**. Write to the model in second person ("you are Aurora"). Describe behavior, not rules. Models follow narrative tone better than bullet lists of "MUST" / "DO NOT".
 
-**Memory model**. Files round-trip as opaque bodies after the YAML frontmatter — the store doesn't enforce any internal structure. The system prompt is the only place that teaches the model what to put in `SOUL.md`, `LORE.md`, `user/<id>.md`, and `state/<slug>.md`. Suggest informal section conventions in prose; don't expect them to be policed.
+**Memory model**. Files round-trip as opaque bodies after the YAML frontmatter — the store doesn't enforce any internal structure. The system prompt is the only place that teaches the model what to put in `SOUL.md`, `LORE.md`, `user/<id>.md`, and `scratch/<slug>.md`. Suggest informal section conventions in prose; don't expect them to be policed.
 
 **Replies**. The model's final assistant text (returned when it makes no more tool calls) is sent to chat verbatim. Newlines collapse into a single chat line. There is no `say` tool — encourage the model to do memory updates first, then end the turn with the reply text.
 
@@ -59,7 +59,7 @@ There is no live, no-restart edit: the running binary always reflects whatever w
 
 ## Caps and byte budgets
 
-Memory file caps (SOUL 4 KiB, LORE 12 KiB, user 4 KiB, state 2 KiB) are enforced by the store. The auto-injected context (every memory + state file body) is bounded by `inject_byte_budget` (default 24 KiB ≈ 6k tokens) — oldest user/state files drop first. Prompt files are *additional* on top of that — keep them tight.
+File caps (SOUL 4 KiB, LORE 12 KiB, user 4 KiB, scratch 2 KiB) are enforced by the store. The auto-injected context (every memory + scratch file body) is bounded by `inject_byte_budget` (default 24 KiB ≈ 6k tokens) — oldest user/scratch files drop first. Prompt files are *additional* on top of that — keep them tight.
 
 ## See also
 

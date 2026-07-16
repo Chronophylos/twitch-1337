@@ -19,14 +19,14 @@
     {% call m::bytesize_row("ai_memory", "ai_memory_user_bytes", "user_bytes",
        "Hard cap on each per-user character sheet.",
        current.ai.memory.user_bytes, defaults.ai.memory.user_bytes) %}{% endcall %}
-    {% call m::bytesize_row("ai_memory", "ai_memory_state_bytes", "state_bytes",
-       "Hard cap on each per-state file.",
-       current.ai.memory.state_bytes, defaults.ai.memory.state_bytes) %}{% endcall %}
+    {% call m::bytesize_row("ai_memory", "ai_memory_scratch_bytes", "scratch_bytes",
+       "Hard cap on each per-scratch file.",
+       current.ai.memory.scratch_bytes, defaults.ai.memory.scratch_bytes) %}{% endcall %}
     {% call m::bytesize_row("ai_memory", "ai_memory_inject_byte_budget", "inject_byte_budget",
        "Total memory bytes injected into a single !ai prompt.",
        current.ai.memory.inject_byte_budget, defaults.ai.memory.inject_byte_budget) %}{% endcall %}
-    {% call m::num_row_bounded("ai_memory", "ai_memory_max_state_files", "max_state_files",
-       "Max per-state files kept on disk.",
-       current.ai.memory.max_state_files, defaults.ai.memory.max_state_files, "", 1, 256) %}{% endcall %}
+    {% call m::num_row_bounded("ai_memory", "ai_memory_max_scratch_files", "max_scratch_files",
+       "Max per-scratch files kept on disk.",
+       current.ai.memory.max_scratch_files, defaults.ai.memory.max_scratch_files, "", 1, 256) %}{% endcall %}
   </div>
 </section>
