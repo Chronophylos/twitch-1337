@@ -1,6 +1,6 @@
 # AI · Grok Model Setting — Design
 
-Status: approved
+Status: implemented
 Date: 2026-07-16
 Branch: `spec/ai-grok-model`
 
