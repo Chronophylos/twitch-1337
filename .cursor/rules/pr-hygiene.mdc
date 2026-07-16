@@ -13,7 +13,14 @@ alwaysApply: true
 
 ## gh pr create
 
-Include **Summary** and **Test plan**. Title can be normal prose (squash commit uses PR title unless overridden).
+Include **Summary** and **Test plan**.
+
+**Title** must be a Conventional Commit subject in the same **stupid subject** style as git commits (see `git-commits.mdc`) — squash merge uses the PR title as the squash commit message unless overridden. Do **not** use normal prose titles.
+
+Examples:
+
+- `feat(tracker): hall of shame just unlocked and its giving intentional L`
+- `fix(auth): token refresh was lowkey feral and not in a good way`
 
 Apply labels via `gh pr edit`:
 
