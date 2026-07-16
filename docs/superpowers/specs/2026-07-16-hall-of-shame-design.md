@@ -6,7 +6,7 @@ Branch: `feature/hall-of-shame`
 
 ## Goal
 
-Persist an all-time per-user “personal worst” for the daily 1337 window (holding out until the last seconds), expose it via chat commands that mirror `!lb` / `!pb`, and reframe the daily slowest announce as remaining milliseconds in the minute (`ms übrig`).
+Persist an all-time per-user “personal worst” for the daily 1337 window (holding out until the last seconds), expose it via chat commands that mirror `!lb` / `!pb`, and reframe the daily slowest announce as remaining time in the minute (`… übrig`).
 
 ## Non-goals (v1)
 
@@ -53,13 +53,14 @@ Sub-50s times never touch this file. Sub-1s PB updates remain unchanged and inde
 
 ### Display unit
 
-Chat always shows **remaining** ms in the :37 minute:
+Chat shows **remaining** time in the :37 minute (`remaining = 60_000.saturating_sub(ms)`):
 
-```text
-remaining_ms = 60_000 - ms
-```
+| Remaining | Display |
+|---|---|
+| ≤999ms | `{n}ms` (e.g. `999ms`) |
+| >999ms | seconds with at most one decimal; omit trailing `.0` (e.g. `1209ms` → `1.2s`, `9000ms` → `9s`, `10000ms` → `10s`) |
 
-Invariant: tracker times are within the minute (`ms < 60_000`). Persist elapsed `ms` only; convert at reply/announce time.
+Persist elapsed `ms` only; convert via `format_remaining` at reply/announce time. Saturating subtract so a corrupt on-disk `ms ≥ 60_000` cannot panic the command handler.
 
 ## Wiring
 
@@ -76,7 +77,7 @@ Do **not** add a `WebState` field in v1.
 Keep eligibility and “skip if identical to fastest” guard as today. Change the slowest suffix to:
 
 ```text
- | Am langsamsten war {user} mit {remaining_ms}ms übrig
+ | Am langsamsten war {user} mit {format_remaining} übrig
 ```
 
 No additional shame achievement text.
@@ -85,14 +86,14 @@ No additional shame achievement text.
 
 | Trigger | Behavior |
 |---|---|
-| `!sb` | Global worst: `max_by_key` on stored `ms`. Reply: `Der langsamste 1337 ist {user} mit {remaining_ms}ms übrig am {date}` (`%d.%m.%Y`). Empty: `Noch keine Einträge vorhanden`. |
-| `!pw` | Self (no args) or `!pw <user>` (normalized login). Hit/miss copy mirrors `!pb` with `PW` + `ms übrig` (see below). |
+| `!sb` | Global worst: `max_by_key` on stored `ms`. Reply: `Der langsamste 1337 ist {user} mit {format_remaining} übrig am {date}` (`%d.%m.%Y`). Empty: `Noch keine Einträge vorhanden`. |
+| `!pw` | Self (no args) or `!pw <user>` (normalized login). Hit/miss copy mirrors `!pb` with `PW` + formatted remaining (see below). |
 
 `!pw` copy:
 
 | | Self | Other |
 |---|---|---|
-| Hit | `Dein PW ist {remaining_ms}ms übrig am {date}` | `PW von {user}: {remaining_ms}ms übrig am {date}` |
+| Hit | `Dein PW ist {format_remaining} übrig am {date}` | `PW von {user}: {format_remaining} übrig am {date}` |
 | Miss | `Du hast noch keinen PW` | `{user} hat noch keinen PW` |
 
 Implementation shape (parallel mirror):
@@ -105,15 +106,15 @@ Implementation shape (parallel mirror):
 
 ## Testing
 
-- `!sb`: seeded worst wins; empty state; `übrig` + date formatting.
+- `!sb`: seeded worst wins; empty state; `übrig` + date + `format_remaining` display.
 - `!pw`: self/other hit and miss (mirror `crates/core/tests/pb.rs`).
-- Tracker: existing slowest tests updated for `ms übrig` wording (and not whole seconds).
+- Tracker: existing slowest tests updated for `übrig` wording and `format_remaining`.
 - Tracker persistence: qualifying users (≥50s) upsert shame file; `<50s` ignored; worse overwrites, equal does not; fast leaderboard path unchanged.
 
 ## Docs
 
 - CLAUDE.md / README: mention `!sb` and `!pw`.
-- CONTRIBUTING `system:tracker`: note hall of shame alongside `!lb`.
+- CONTRIBUTING `system:tracker`: note hall of shame (`!sb`, `!pw`) alongside `!lb`.
 
 ## Approach
 
