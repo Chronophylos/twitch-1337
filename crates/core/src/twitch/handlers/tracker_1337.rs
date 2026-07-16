@@ -35,6 +35,9 @@ const SLOWEST_CHATTER_MIN_MS: u64 = 50_000;
 pub(crate) const MAX_USERS: usize = 10_000;
 
 pub(crate) const LEADERBOARD_FILENAME: &str = "leaderboard.ron";
+pub(crate) const HALL_OF_SHAME_FILENAME: &str = "hall_of_shame.ron";
+
+const MINUTE_MS: u64 = 60_000;
 
 /// A user's personal best time for the 1337 challenge.
 ///
@@ -44,6 +47,16 @@ pub struct PersonalBest {
     /// Milliseconds after 13:37:00.000 (0-999)
     pub ms: u64,
     /// The date (Europe/Berlin) when this record was set
+    pub date: chrono::NaiveDate,
+}
+
+/// A user's personal worst (slowest) time for the 1337 challenge.
+///
+/// Tracks the slowest message time within the 13:37 minute and the date it was achieved.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonalWorst {
+    /// Milliseconds after 13:37:00.000 (elapsed; typically >= 50_000 when stored).
+    pub ms: u64,
     pub date: chrono::NaiveDate,
 }
 
@@ -91,6 +104,18 @@ fn beats_own_best(user: &str, ms: u64, leaderboard: &HashMap<String, PersonalBes
         .get(user)
         .map(|pb| pb.ms)
         .is_none_or(|own| ms < own)
+}
+
+pub fn remaining_ms_in_minute(ms: u64) -> u64 {
+    MINUTE_MS - ms
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired in hall-of-shame handler (follow-up task)")
+)]
+fn beats_own_worst(user: &str, ms: u64, map: &HashMap<String, PersonalWorst>) -> bool {
+    map.get(user).map(|pw| pw.ms).is_none_or(|own| ms > own)
 }
 
 /// Calculates the next occurrence of a daily time in Europe/Berlin timezone.
@@ -359,6 +384,56 @@ pub(crate) async fn save_leaderboard(
             path.display()
         ),
         Err(e) => error!(error = ?e, "Failed to save leaderboard"),
+    }
+}
+
+/// Loads the all-time hall of shame from disk.
+///
+/// Returns an empty HashMap if the file doesn't exist or is corrupted.
+pub async fn load_hall_of_shame(data_dir: &std::path::Path) -> HashMap<String, PersonalWorst> {
+    let path = data_dir.join(HALL_OF_SHAME_FILENAME);
+    match fs::read_to_string(&path).await {
+        Ok(contents) => match ron::from_str::<HashMap<String, PersonalWorst>>(&contents) {
+            Ok(hall_of_shame) => {
+                info!(
+                    entries = hall_of_shame.len(),
+                    "Loaded hall of shame from {}",
+                    path.display()
+                );
+                hall_of_shame
+            }
+            Err(e) => {
+                warn!(error = ?e, "Failed to parse hall of shame file, starting fresh");
+                HashMap::new()
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            info!("No hall of shame file found, starting fresh");
+            HashMap::new()
+        }
+        Err(e) => {
+            warn!(error = ?e, "Failed to read hall of shame file, starting fresh");
+            HashMap::new()
+        }
+    }
+}
+
+/// Saves the all-time hall of shame to disk using atomic write+rename.
+///
+/// Logs an error and continues if the write fails.
+#[expect(dead_code, reason = "wired in hall-of-shame handler (follow-up task)")]
+pub(crate) async fn save_hall_of_shame(
+    hall_of_shame: &HashMap<String, PersonalWorst>,
+    data_dir: &std::path::Path,
+) {
+    let path = data_dir.join(HALL_OF_SHAME_FILENAME);
+    match crate::util::persist::atomic_save_ron_async(hall_of_shame, &path).await {
+        Ok(()) => info!(
+            entries = hall_of_shame.len(),
+            "Saved hall of shame to {}",
+            path.display()
+        ),
+        Err(e) => error!(error = ?e, "Failed to save hall of shame"),
     }
 }
 
@@ -660,5 +735,22 @@ mod tests {
             classify_achievement("alice", 100, &board),
             Achievement::PersonalBest
         );
+    }
+
+    #[test]
+    fn remaining_ms_in_minute_subtracts_from_60000() {
+        assert_eq!(remaining_ms_in_minute(58_791), 1_209);
+        assert_eq!(remaining_ms_in_minute(50_000), 10_000);
+    }
+
+    #[test]
+    fn beats_own_worst_when_absent_or_strictly_slower() {
+        let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let mut map = HashMap::new();
+        map.insert("alice".into(), PersonalWorst { ms: 55_000, date });
+        assert!(beats_own_worst("bob", 50_000, &map));
+        assert!(beats_own_worst("alice", 56_000, &map));
+        assert!(!beats_own_worst("alice", 55_000, &map));
+        assert!(!beats_own_worst("alice", 54_000, &map));
     }
 }

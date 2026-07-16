@@ -60,7 +60,7 @@ pub use ai::chat_history::{
 };
 pub use config::{load_configuration, validate_config};
 pub use twitch::{
-    handlers::tracker_1337::{PersonalBest, load_leaderboard},
+    handlers::tracker_1337::{PersonalBest, PersonalWorst, load_hall_of_shame, load_leaderboard},
     setup::{setup_and_verify_twitch_client, setup_twitch_client},
     token_storage::FileBasedTokenStorage,
 };

@@ -42,6 +42,7 @@ token.ron
 schedule_cache.ron
 /config.toml
 leaderboard.ron
+hall_of_shame.ron
 pings.ron
 ai_memory.ron
 
