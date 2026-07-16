@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use super::{Command, CommandContext, normalize_username};
-use crate::twitch::handlers::tracker_1337::{PersonalWorst, remaining_ms_in_minute};
+use crate::twitch::handlers::tracker_1337::{PersonalWorst, format_remaining};
 
 pub struct PwCommand {
     hall_of_shame: Arc<RwLock<HashMap<String, PersonalWorst>>>,
@@ -41,13 +41,13 @@ where
 
         let response = match (pw, is_self) {
             (Some(pw), true) => format!(
-                "Dein PW ist {}ms übrig am {}",
-                remaining_ms_in_minute(pw.ms),
+                "Dein PW ist {} übrig am {}",
+                format_remaining(pw.ms),
                 pw.date.format("%d.%m.%Y")
             ),
             (Some(pw), false) => format!(
-                "PW von {target}: {}ms übrig am {}",
-                remaining_ms_in_minute(pw.ms),
+                "PW von {target}: {} übrig am {}",
+                format_remaining(pw.ms),
                 pw.date.format("%d.%m.%Y")
             ),
             (None, true) => "Du hast noch keinen PW".to_string(),

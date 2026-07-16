@@ -241,12 +241,12 @@ async fn tracker_1337_posts_slowest_only_for_final_ten_seconds() {
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
     assert!(
-        stats.contains("Am langsamsten war charlie mit 1300ms übrig"),
-        "expected slowest remaining ms, got: {stats}"
+        stats.contains("Am langsamsten war charlie mit 1s übrig"),
+        "expected slowest remaining as rounded seconds, got: {stats}"
     );
     assert!(
-        !stats.contains(" mit 58s"),
-        "slowest must not use whole seconds, got: {stats}"
+        !stats.contains("1300ms"),
+        "slowest must not show raw remaining ms when >999, got: {stats}"
     );
 
     bot.shutdown().await;

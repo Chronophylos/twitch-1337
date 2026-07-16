@@ -107,7 +107,21 @@ fn beats_own_best(user: &str, ms: u64, leaderboard: &HashMap<String, PersonalBes
 }
 
 pub fn remaining_ms_in_minute(ms: u64) -> u64 {
-    MINUTE_MS - ms
+    // Saturating: on-disk / hand-edited values can exceed MINUTE_MS; never panic
+    // a command handler (or wrap to a nonsense u64) on chat display paths.
+    MINUTE_MS.saturating_sub(ms)
+}
+
+/// Formats remaining time in the :37 minute for chat: milliseconds when ≤999ms,
+/// otherwise nearest whole seconds (`1s`, `10s`, …).
+pub fn format_remaining(ms: u64) -> String {
+    let remaining = remaining_ms_in_minute(ms);
+    if remaining > 999 {
+        let secs = (remaining + 500) / 1000;
+        format!("{secs}s")
+    } else {
+        format!("{remaining}ms")
+    }
 }
 
 fn beats_own_worst(user: &str, ms: u64, map: &HashMap<String, PersonalWorst>) -> bool {
@@ -604,9 +618,9 @@ pub async fn run_1337_handler<T, L>(
                 slowest_user != *fastest_user || slowest_ms != *fastest_ms
             })
         {
-            let remaining = remaining_ms_in_minute(slowest_ms);
+            let remaining = format_remaining(slowest_ms);
             message.push_str(&format!(
-                " | Am langsamsten war {slowest_user} mit {remaining}ms übrig"
+                " | Am langsamsten war {slowest_user} mit {remaining} übrig"
             ));
         }
 
@@ -758,6 +772,22 @@ mod tests {
     fn remaining_ms_in_minute_subtracts_from_60000() {
         assert_eq!(remaining_ms_in_minute(58_791), 1_209);
         assert_eq!(remaining_ms_in_minute(50_000), 10_000);
+        assert_eq!(remaining_ms_in_minute(60_000), 0);
+        assert_eq!(remaining_ms_in_minute(70_000), 0);
+    }
+
+    #[test]
+    fn format_remaining_uses_ms_under_one_second_else_rounded_seconds() {
+        // remaining 999 → ms
+        assert_eq!(format_remaining(59_001), "999ms");
+        // remaining 1000 → 1s
+        assert_eq!(format_remaining(59_000), "1s");
+        // remaining 1209 → rounds to 1s
+        assert_eq!(format_remaining(58_791), "1s");
+        // remaining 1500 → rounds to 2s
+        assert_eq!(format_remaining(58_500), "2s");
+        // remaining 10_000 → 10s
+        assert_eq!(format_remaining(50_000), "10s");
     }
 
     #[test]

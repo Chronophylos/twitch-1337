@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use super::{Command, CommandContext};
-use crate::twitch::handlers::tracker_1337::{PersonalWorst, remaining_ms_in_minute};
+use crate::twitch::handlers::tracker_1337::{PersonalWorst, format_remaining};
 
 pub struct HallOfShameCommand {
     hall_of_shame: Arc<RwLock<HashMap<String, PersonalWorst>>>,
@@ -36,8 +36,8 @@ where
             if let Some((username, pw)) = hall_of_shame.iter().max_by_key(|(_, pw)| pw.ms) {
                 let date = pw.date.format("%d.%m.%Y");
                 format!(
-                    "Der langsamste 1337 ist {username} mit {}ms übrig am {date}",
-                    remaining_ms_in_minute(pw.ms),
+                    "Der langsamste 1337 ist {username} mit {} übrig am {date}",
+                    format_remaining(pw.ms),
                 )
             } else {
                 "Noch keine Einträge vorhanden".to_string()
