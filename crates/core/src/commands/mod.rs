@@ -18,6 +18,7 @@ pub mod news;
 pub mod pb;
 pub mod ping_admin;
 pub mod ping_trigger;
+pub mod pw;
 pub mod suspend;
 pub mod version;
 

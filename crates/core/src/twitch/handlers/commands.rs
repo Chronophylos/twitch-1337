@@ -186,6 +186,7 @@ where
         Box::new(commands::hall_of_shame::HallOfShameCommand::new(
             hall_of_shame.clone(),
         )),
+        Box::new(commands::pw::PwCommand::new(hall_of_shame)),
         Box::new(commands::pb::PbCommand::new(leaderboard)),
         Box::new(commands::feedback::FeedbackCommand::new(
             data_dir.clone(),
