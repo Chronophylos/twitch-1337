@@ -137,8 +137,8 @@ pub struct Services {
         >,
     >,
     /// Shared 1337 hall of shame. Created by the bin before handlers spawn so
-    /// the same `Arc` is handed to the IRC tracker handler (via `SpawnDeps`).
-    /// Commands wiring lands in a follow-up task.
+    /// the same `Arc` is handed to the IRC tracker and `!sb`/`!pw` commands
+    /// (via `SpawnDeps`). Not exposed on `WebState` (no dashboard in v1).
     pub hall_of_shame: Arc<
         tokio::sync::RwLock<
             std::collections::HashMap<String, crate::twitch::handlers::tracker_1337::PersonalWorst>,
