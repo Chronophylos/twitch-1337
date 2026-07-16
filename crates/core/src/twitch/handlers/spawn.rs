@@ -279,6 +279,7 @@ where
                 llm,
                 ai_memory_v2,
                 leaderboard,
+                hall_of_shame,
                 ping_actor_tx,
                 ping_names_rx,
                 settings: settings.clone(),
