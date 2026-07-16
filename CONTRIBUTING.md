@@ -5,7 +5,7 @@ Thanks for contributing to twitch-1337. This file covers repo conventions that a
 ## PR flow
 
 1. Branch from `main`, commit, push.
-2. `gh pr create` — fill in summary + test plan.
+2. `gh pr create` — Conventional Commit title in the same brainrot-subject style as commits (squash uses the title), plus summary + test plan.
 3. Wait for the required status checks to go green (see CLAUDE.md § CI & branch policy).
 4. Rebase on `main` if the `strict` check blocks merge.
 5. `gh pr merge --squash` once reviews are in.
