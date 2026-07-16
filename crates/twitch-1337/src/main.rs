@@ -10,10 +10,10 @@ use secrecy::ExposeSecret as _;
 use tokio::sync::oneshot;
 use tracing::info;
 use twitch_1337_core::{
-    AuthenticatedLoginCredentials, PersonalBest, Services,
+    AuthenticatedLoginCredentials, PersonalBest, PersonalWorst, Services,
     ai::memory::store::MemoryStore,
     aviation, doener, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing,
-    llm_factory, load_configuration, load_leaderboard,
+    llm_factory, load_configuration, load_hall_of_shame, load_leaderboard,
     ping::{PingHandle, PingManager, ping_actor_channel_full},
     run_bot, setup_and_verify_twitch_client,
     twitch::whisper,
@@ -261,6 +261,10 @@ pub async fn main() -> Result<()> {
         tokio::sync::RwLock::new(load_leaderboard(&get_data_dir()).await),
     );
 
+    let hall_of_shame: Arc<tokio::sync::RwLock<HashMap<String, PersonalWorst>>> = Arc::new(
+        tokio::sync::RwLock::new(load_hall_of_shame(&get_data_dir()).await),
+    );
+
     // Pre-create the flight-tracker mpsc channel when aviation is enabled so
     // the sender Arc can be wired into WebState before the handlers are spawned.
     let (aviation_tracker_tx, aviation_tracker_rx) = if aviation_client.is_some() {
@@ -314,6 +318,7 @@ pub async fn main() -> Result<()> {
         ping_names_rx,
         memory_store,
         leaderboard,
+        hall_of_shame,
         aviation_tracker_tx,
         aviation_tracker_rx,
         primary_history_tap: None,

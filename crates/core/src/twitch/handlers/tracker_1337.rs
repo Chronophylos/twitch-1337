@@ -35,6 +35,9 @@ const SLOWEST_CHATTER_MIN_MS: u64 = 50_000;
 pub(crate) const MAX_USERS: usize = 10_000;
 
 pub(crate) const LEADERBOARD_FILENAME: &str = "leaderboard.ron";
+pub(crate) const HALL_OF_SHAME_FILENAME: &str = "hall_of_shame.ron";
+
+const MINUTE_MS: u64 = 60_000;
 
 /// A user's personal best time for the 1337 challenge.
 ///
@@ -44,6 +47,16 @@ pub struct PersonalBest {
     /// Milliseconds after 13:37:00.000 (0-999)
     pub ms: u64,
     /// The date (Europe/Berlin) when this record was set
+    pub date: chrono::NaiveDate,
+}
+
+/// A user's personal worst (slowest) time for the 1337 challenge.
+///
+/// Tracks the slowest message time within the 13:37 minute and the date it was achieved.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonalWorst {
+    /// Milliseconds after 13:37:00.000 (elapsed; typically >= 50_000 when stored).
+    pub ms: u64,
     pub date: chrono::NaiveDate,
 }
 
@@ -91,6 +104,36 @@ fn beats_own_best(user: &str, ms: u64, leaderboard: &HashMap<String, PersonalBes
         .get(user)
         .map(|pb| pb.ms)
         .is_none_or(|own| ms < own)
+}
+
+pub fn remaining_ms_in_minute(ms: u64) -> u64 {
+    // Saturating: on-disk / hand-edited values can exceed MINUTE_MS; never panic
+    // a command handler (or wrap to a nonsense u64) on chat display paths.
+    MINUTE_MS.saturating_sub(ms)
+}
+
+/// Formats remaining time in the :37 minute for chat: milliseconds when ≤999ms,
+/// otherwise seconds with at most one decimal digit (`1.2s`, `10s`, …).
+/// Whole seconds omit the fractional part (`9000ms` → `9s`, not `9.0s`).
+pub fn format_remaining(ms: u64) -> String {
+    let remaining = remaining_ms_in_minute(ms);
+    if remaining > 999 {
+        // Nearest tenth of a second.
+        let tenths = (remaining + 50) / 100;
+        let whole = tenths / 10;
+        let frac = tenths % 10;
+        if frac == 0 {
+            format!("{whole}s")
+        } else {
+            format!("{whole}.{frac}s")
+        }
+    } else {
+        format!("{remaining}ms")
+    }
+}
+
+fn beats_own_worst(user: &str, ms: u64, map: &HashMap<String, PersonalWorst>) -> bool {
+    map.get(user).map(|pw| pw.ms).is_none_or(|own| ms > own)
 }
 
 /// Calculates the next occurrence of a daily time in Europe/Berlin timezone.
@@ -362,6 +405,55 @@ pub(crate) async fn save_leaderboard(
     }
 }
 
+/// Loads the all-time hall of shame from disk.
+///
+/// Returns an empty HashMap if the file doesn't exist or is corrupted.
+pub async fn load_hall_of_shame(data_dir: &std::path::Path) -> HashMap<String, PersonalWorst> {
+    let path = data_dir.join(HALL_OF_SHAME_FILENAME);
+    match fs::read_to_string(&path).await {
+        Ok(contents) => match ron::from_str::<HashMap<String, PersonalWorst>>(&contents) {
+            Ok(hall_of_shame) => {
+                info!(
+                    entries = hall_of_shame.len(),
+                    "Loaded hall of shame from {}",
+                    path.display()
+                );
+                hall_of_shame
+            }
+            Err(e) => {
+                warn!(error = ?e, "Failed to parse hall of shame file, starting fresh");
+                HashMap::new()
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            info!("No hall of shame file found, starting fresh");
+            HashMap::new()
+        }
+        Err(e) => {
+            warn!(error = ?e, "Failed to read hall of shame file, starting fresh");
+            HashMap::new()
+        }
+    }
+}
+
+/// Saves the all-time hall of shame to disk using atomic write+rename.
+///
+/// Logs an error and continues if the write fails.
+pub(crate) async fn save_hall_of_shame(
+    hall_of_shame: &HashMap<String, PersonalWorst>,
+    data_dir: &std::path::Path,
+) {
+    let path = data_dir.join(HALL_OF_SHAME_FILENAME);
+    match crate::util::persist::atomic_save_ron_async(hall_of_shame, &path).await {
+        Ok(()) => info!(
+            entries = hall_of_shame.len(),
+            "Saved hall of shame to {}",
+            path.display()
+        ),
+        Err(e) => error!(error = ?e, "Failed to save hall of shame"),
+    }
+}
+
 /// Monitors broadcast messages and tracks users who say 1337 during the target minute.
 ///
 /// Runs in a loop until the broadcast channel closes or an error occurs.
@@ -422,12 +514,17 @@ pub(crate) async fn monitor_1337_messages(
 ///
 /// Monitors messages during the 13:37 window, tracks unique users, and posts stats at 13:38.
 /// Runs continuously, resetting state daily.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "handler deps are injected individually for testability"
+)]
 pub async fn run_1337_handler<T, L>(
     broadcast_tx: broadcast::Sender<ServerMessage>,
     sender: Arc<ChatSender<T, L>>,
     channel: String,
     latency: Arc<AtomicU32>,
     leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
+    hall_of_shame: Arc<tokio::sync::RwLock<HashMap<String, PersonalWorst>>>,
     clock: Arc<dyn Clock>,
     data_dir: std::path::PathBuf,
 ) where
@@ -529,9 +626,9 @@ pub async fn run_1337_handler<T, L>(
                 slowest_user != *fastest_user || slowest_ms != *fastest_ms
             })
         {
-            let slowest_seconds = slowest_ms / 1000;
+            let remaining = format_remaining(slowest_ms);
             message.push_str(&format!(
-                " | Am langsamsten war {slowest_user} mit {slowest_seconds}s"
+                " | Am langsamsten war {slowest_user} mit {remaining} übrig"
             ));
         }
 
@@ -555,6 +652,23 @@ pub async fn run_1337_handler<T, L>(
                 }
             }
             save_leaderboard(&leaderboard_guard, &data_dir).await;
+        }
+
+        {
+            let users = total_users.lock().await;
+            let mut shame = hall_of_shame.write().await;
+            for (username, ms) in users.iter() {
+                if *ms >= SLOWEST_CHATTER_MIN_MS && beats_own_worst(username, *ms, &shame) {
+                    shame.insert(
+                        username.clone(),
+                        PersonalWorst {
+                            ms: *ms,
+                            date: today,
+                        },
+                    );
+                }
+            }
+            save_hall_of_shame(&shame, &data_dir).await;
         }
 
         // Post stats message
@@ -660,5 +774,40 @@ mod tests {
             classify_achievement("alice", 100, &board),
             Achievement::PersonalBest
         );
+    }
+
+    #[test]
+    fn remaining_ms_in_minute_subtracts_from_60000() {
+        assert_eq!(remaining_ms_in_minute(58_791), 1_209);
+        assert_eq!(remaining_ms_in_minute(50_000), 10_000);
+        assert_eq!(remaining_ms_in_minute(60_000), 0);
+        assert_eq!(remaining_ms_in_minute(70_000), 0);
+    }
+
+    #[test]
+    fn format_remaining_uses_ms_under_one_second_else_tenths_of_seconds() {
+        // remaining 999 → ms
+        assert_eq!(format_remaining(59_001), "999ms");
+        // remaining 1000 → whole second, no decimal
+        assert_eq!(format_remaining(59_000), "1s");
+        // remaining 1209 → 1.2s
+        assert_eq!(format_remaining(58_791), "1.2s");
+        // remaining 1300 → 1.3s
+        assert_eq!(format_remaining(58_700), "1.3s");
+        // remaining 9000 → 9s (omit .0)
+        assert_eq!(format_remaining(51_000), "9s");
+        // remaining 10_000 → 10s
+        assert_eq!(format_remaining(50_000), "10s");
+    }
+
+    #[test]
+    fn beats_own_worst_when_absent_or_strictly_slower() {
+        let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let mut map = HashMap::new();
+        map.insert("alice".into(), PersonalWorst { ms: 55_000, date });
+        assert!(beats_own_worst("bob", 50_000, &map));
+        assert!(beats_own_worst("alice", 56_000, &map));
+        assert!(!beats_own_worst("alice", 55_000, &map));
+        assert!(!beats_own_worst("alice", 54_000, &map));
     }
 }

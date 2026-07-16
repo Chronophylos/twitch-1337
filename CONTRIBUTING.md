@@ -5,7 +5,7 @@ Thanks for contributing to twitch-1337. This file covers repo conventions that a
 ## PR flow
 
 1. Branch from `main`, commit, push.
-2. `gh pr create` — fill in summary + test plan.
+2. `gh pr create` — Conventional Commit title in the same brainrot-subject style as commits (squash uses the title), plus summary + test plan.
 3. Wait for the required status checks to go green (see CLAUDE.md § CI & branch policy).
 4. Rebase on `main` if the `strict` check blocks merge.
 5. `gh pr merge --squash` once reviews are in.
@@ -35,7 +35,7 @@ Pick exactly one `type:` per issue. `type:security` takes precedence over `type:
 | `system:ai` | LLM, `!ai` command, memory, prefill |
 | `system:aviation` | ADS-B, flight tracker, `!up`/`!fl`/`!track` |
 | `system:ping` | Ping subsystem — `!p`, ping templates, render/validate |
-| `system:tracker` | 1337 tracker + leaderboard (`!lb`) |
+| `system:tracker` | 1337 tracker + leaderboard (`!lb`) + hall of shame (`!sb`, `!pw`) |
 | `system:schedule` | Scheduled messages + hot-reload |
 | `system:irc` | IRC client core, broadcast channel, latency monitor |
 | `system:config` | `config.toml` schema, loader, file watcher |

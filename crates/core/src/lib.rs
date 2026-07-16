@@ -60,7 +60,7 @@ pub use ai::chat_history::{
 };
 pub use config::{load_configuration, validate_config};
 pub use twitch::{
-    handlers::tracker_1337::{PersonalBest, load_leaderboard},
+    handlers::tracker_1337::{PersonalBest, PersonalWorst, load_hall_of_shame, load_leaderboard},
     setup::{setup_and_verify_twitch_client, setup_twitch_client},
     token_storage::FileBasedTokenStorage,
 };
@@ -136,6 +136,14 @@ pub struct Services {
             std::collections::HashMap<String, crate::twitch::handlers::tracker_1337::PersonalBest>,
         >,
     >,
+    /// Shared 1337 hall of shame. Created by the bin before handlers spawn so
+    /// the same `Arc` is handed to the IRC tracker and `!sb`/`!pw` commands
+    /// (via `SpawnDeps`). Not exposed on `WebState` (no dashboard in v1).
+    pub hall_of_shame: Arc<
+        tokio::sync::RwLock<
+            std::collections::HashMap<String, crate::twitch::handlers::tracker_1337::PersonalWorst>,
+        >,
+    >,
     /// Sender half of the flight-tracker mpsc channel, wrapped in `Arc` so it
     /// can be cheaply cloned into `WebState`. `None` when aviation is disabled.
     /// The matching receiver lives in `aviation_tracker_rx` and is consumed by
@@ -198,6 +206,7 @@ where
         ping_names_rx,
         memory_store,
         leaderboard,
+        hall_of_shame,
         aviation_tracker_tx,
         aviation_tracker_rx,
         primary_history_tap,
@@ -271,6 +280,7 @@ where
         data_dir,
         doener,
         leaderboard,
+        hall_of_shame,
         ping_actor_tx: ping_actor_tx_inner,
         ping_actor_rx,
         ping_manager,

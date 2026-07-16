@@ -241,12 +241,153 @@ async fn tracker_1337_posts_slowest_only_for_final_ten_seconds() {
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
     assert!(
-        stats.contains("Am langsamsten war charlie mit 58s"),
-        "expected slowest seconds in stats, got: {stats}"
+        stats.contains("Am langsamsten war charlie mit 1.3s übrig"),
+        "expected slowest remaining as tenths of seconds, got: {stats}"
     );
     assert!(
-        !stats.contains("58700ms"),
-        "slowest time should be shown in seconds, got: {stats}"
+        !stats.contains("1300ms"),
+        "slowest must not show raw remaining ms when >999, got: {stats}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn tracker_1337_persists_qualifying_personal_worst() {
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    let ts_alice_49999ms = TMI_TS_13_37_BERLIN + 49_999;
+    let ts_charlie_58700ms = TMI_TS_13_37_BERLIN + 58_700;
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", ts_alice_49999ms);
+    let msg_charlie = privmsg_at(&bot.channel, "charlie", "DANKIES", ts_charlie_58700ms);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    bot.transport
+        .inject
+        .send(msg_charlie)
+        .await
+        .expect("inject charlie");
+    yield_a_bit().await;
+
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let _stats = bot.expect_say(Duration::from_secs(3)).await;
+
+    let shame_path = bot.data_dir.path().join("hall_of_shame.ron");
+    let contents = tokio::fs::read_to_string(&shame_path)
+        .await
+        .expect("read hall_of_shame.ron");
+    assert!(
+        contents.contains("charlie"),
+        "hall of shame missing charlie: {contents}"
+    );
+    assert!(
+        contents.contains("ms:58700") || contents.contains("ms: 58700"),
+        "hall of shame missing elapsed 58700: {contents}"
+    );
+    assert!(
+        !contents.contains("alice"),
+        "alice below 50s threshold must not be persisted: {contents}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn tracker_1337_personal_worst_updates_only_when_slower() {
+    use chrono::NaiveDate;
+    use common::seed_hall_of_shame;
+
+    let date_d1 = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let seeded = seed_hall_of_shame(&[("alice", 55_000, date_d1)]);
+
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .with_seeded_hall_of_shame(seeded)
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", TMI_TS_13_37_BERLIN + 56_000);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    yield_a_bit().await;
+
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let _stats = bot.expect_say(Duration::from_secs(3)).await;
+
+    let shame_path = bot.data_dir.path().join("hall_of_shame.ron");
+    let contents = tokio::fs::read_to_string(&shame_path)
+        .await
+        .expect("read hall_of_shame.ron");
+    assert!(
+        contents.contains("ms:56000") || contents.contains("ms: 56000"),
+        "alice slower run should update to 56000: {contents}"
+    );
+    assert!(
+        contents.contains("2026-04-18"),
+        "updated entry should carry today's date: {contents}"
+    );
+
+    bot.shutdown().await;
+
+    // Second session: alice at 55500 must not beat stored 56000.
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 19, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .with_seeded_hall_of_shame(seed_hall_of_shame(&[("alice", 56_000, date_d1)]))
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", TMI_TS_13_37_BERLIN + 55_500);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    yield_a_bit().await;
+
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let _stats = bot.expect_say(Duration::from_secs(3)).await;
+
+    let shame_path = bot.data_dir.path().join("hall_of_shame.ron");
+    let contents = tokio::fs::read_to_string(&shame_path)
+        .await
+        .expect("read hall_of_shame.ron");
+    assert!(
+        contents.contains("ms:56000") || contents.contains("ms: 56000"),
+        "faster repeat must not lower stored worst: {contents}"
+    );
+    assert!(
+        !contents.contains("ms:55500") && !contents.contains("ms: 55500"),
+        "55500 must not replace 56000: {contents}"
     );
 
     bot.shutdown().await;

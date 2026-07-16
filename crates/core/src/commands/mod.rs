@@ -12,11 +12,13 @@ pub mod doener;
 pub mod doener_calc;
 pub mod feedback;
 pub mod haiku;
+pub mod hall_of_shame;
 pub mod leaderboard;
 pub mod news;
 pub mod pb;
 pub mod ping_admin;
 pub mod ping_trigger;
+pub mod pw;
 pub mod suspend;
 pub mod version;
 

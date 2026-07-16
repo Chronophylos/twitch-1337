@@ -12,7 +12,7 @@ use twitch_irc::{
 };
 
 use crate::{
-    ChatHistory, ChatHistoryBuffer, PersonalBest, ai,
+    ChatHistory, ChatHistoryBuffer, PersonalBest, PersonalWorst, ai,
     ai::chat_history::{ai_channel_history_capacity, primary_history_capacity},
     ai::command::{GROK_ALIAS_TRIGGER, is_ai_trigger},
     aviation, commands,
@@ -39,6 +39,7 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     /// Pre-built memory v2 bundle. `None` disables v2 memory for `!ai`.
     pub ai_memory_v2: Option<ai::command::AiMemoryV2>,
     pub leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
+    pub hall_of_shame: Arc<tokio::sync::RwLock<HashMap<String, PersonalWorst>>>,
     pub ping_actor_tx: tokio::sync::mpsc::Sender<PingCommand>,
     pub ping_names_rx: tokio::sync::watch::Receiver<std::collections::HashSet<String>>,
     pub settings: SettingsHandle,
@@ -77,6 +78,7 @@ where
         llm,
         ai_memory_v2,
         leaderboard,
+        hall_of_shame,
         ping_actor_tx,
         ping_names_rx,
         settings,
@@ -181,6 +183,10 @@ where
         Box::new(commands::leaderboard::LeaderboardCommand::new(
             leaderboard.clone(),
         )),
+        Box::new(commands::hall_of_shame::HallOfShameCommand::new(
+            hall_of_shame.clone(),
+        )),
+        Box::new(commands::pw::PwCommand::new(hall_of_shame)),
         Box::new(commands::pb::PbCommand::new(leaderboard)),
         Box::new(commands::feedback::FeedbackCommand::new(
             data_dir.clone(),
