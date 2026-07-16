@@ -104,11 +104,11 @@ struct SaveForm {
     #[serde(default)]
     ai_memory_user_bytes: Option<usize>,
     #[serde(default)]
-    ai_memory_state_bytes: Option<usize>,
+    ai_memory_scratch_bytes: Option<usize>,
     #[serde(default)]
     ai_memory_inject_byte_budget: Option<usize>,
     #[serde(default)]
-    ai_memory_max_state_files: Option<usize>,
+    ai_memory_max_scratch_files: Option<usize>,
 
     // ---- AI dreamer card ----
     #[serde(default)]

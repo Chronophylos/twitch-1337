@@ -1,4 +1,4 @@
-//! Prompt composition: nonce-fenced inject of every memory + state file body,
+//! Prompt composition: nonce-fenced inject of every memory + scratch file body,
 //! plus prompt-file substitution.
 
 use std::sync::Arc;
@@ -39,7 +39,7 @@ pub enum FenceLabel<'a> {
         login: Option<&'a str>,
         display_name: Option<&'a str>,
     },
-    State {
+    Scratch {
         slug: &'a str,
     },
     Transcript {
@@ -48,7 +48,7 @@ pub enum FenceLabel<'a> {
 }
 
 /// Per-section byte caps for rolling chat injected into the v2 prompt.
-/// Independent of `inject_byte_budget`, which covers SOUL/LORE/users/state.
+/// Independent of `inject_byte_budget`, which covers SOUL/LORE/users/scratch.
 const RECENT_CHAT_PRIMARY_BYTES: usize = 2048;
 const RECENT_CHAT_AI_CHANNEL_BYTES: usize = 1024;
 
@@ -75,7 +75,7 @@ fn render_label_attrs(label: &FenceLabel<'_>) -> String {
     match label {
         FenceLabel::Soul => "kind=soul".into(),
         FenceLabel::Lore => "kind=lore".into(),
-        FenceLabel::State { slug } => format!("kind=state slug={slug}"),
+        FenceLabel::Scratch { slug } => format!("kind=scratch slug={slug}"),
         FenceLabel::Transcript { date } => format!("kind=transcript date={date}"),
         FenceLabel::User {
             id,
@@ -157,20 +157,20 @@ pub struct BuildOpts {
 ///
 /// The three fields exist so callers can route blocks to whichever message
 /// maximises prompt-cache hits:
-/// - `durable_memory` holds SOUL/LORE/users (changes on dreamer runs only).
+/// - `memory` holds SOUL/LORE/users (changes on dreamer runs only).
 ///   Lives in the system message so consecutive turns hit the prompt cache.
-/// - `volatile_state` holds the state/<slug> blocks (every `write_state` /
-///   `delete_state` mutates them). Lives in the user message so it can change
+/// - `scratch` holds the scratch/<slug> blocks (every `write_scratch` /
+///   `delete_scratch` mutates them). Lives in the user message so it can change
 ///   freely without invalidating the system-message cache.
 /// - `recent_chat` holds the rolling per-turn chat history (volatile by
 ///   definition). Lives in the user message.
 ///
 /// Any field may be empty. Callers that want the legacy combined memory blob
-/// (dreamer) concatenate `durable_memory` + `volatile_state` themselves.
+/// (dreamer) concatenate `memory` + `scratch` themselves.
 pub struct ChatTurnContext {
     pub recent_chat: String,
-    pub durable_memory: String,
-    pub volatile_state: String,
+    pub memory: String,
+    pub scratch: String,
 }
 
 /// Build the chat-turn injected context split into a recent-chat section and a
@@ -221,11 +221,11 @@ pub async fn build_chat_turn_context(
     let soul = store.read_kind(&FileKind::Soul).await?;
     let lore = store.read_kind(&FileKind::Lore).await?;
     let mut users = store.list_users().await?;
-    let mut states = store.list_state().await?;
+    let mut states = store.list_scratch().await?;
 
-    let mut durable_blocks: Vec<String> = Vec::new();
-    durable_blocks.push(fence_block(FenceLabel::Soul, &opts.nonce, &soul.body));
-    durable_blocks.push(fence_block(FenceLabel::Lore, &opts.nonce, &lore.body));
+    let mut memory_blocks: Vec<String> = Vec::new();
+    memory_blocks.push(fence_block(FenceLabel::Soul, &opts.nonce, &soul.body));
+    memory_blocks.push(fence_block(FenceLabel::Lore, &opts.nonce, &lore.body));
 
     // Scope user files to logins present in the chat window plus the speaker.
     // Users who didn't appear in either are excluded outright: the model only
@@ -274,10 +274,10 @@ pub async fn build_chat_turn_context(
     });
     states.sort_by_key(|f| std::cmp::Reverse(f.frontmatter.updated_at));
 
-    // Pack user blocks until the durable-memory budget is hit. State blocks get
+    // Pack user blocks until the memory budget is hit. Scratch blocks get
     // whatever budget is left over so heavy LORE/user nights don't crowd them
-    // out entirely; remaining state still pops as oldest-first drops.
-    let mut total: usize = durable_blocks.iter().map(String::len).sum();
+    // out entirely; remaining scratch still pops as oldest-first drops.
+    let mut total: usize = memory_blocks.iter().map(String::len).sum();
     for f in users.drain(..) {
         let FileKind::User { user_id } = &f.kind else {
             tracing::error!(?f.kind, "non-user file in user list, skipping");
@@ -293,30 +293,30 @@ pub async fn build_chat_turn_context(
             break;
         }
         total += block.len() + 1;
-        durable_blocks.push(block);
+        memory_blocks.push(block);
     }
 
-    let mut state_blocks: Vec<String> = Vec::new();
+    let mut scratch_blocks: Vec<String> = Vec::new();
     for f in states.drain(..) {
-        let FileKind::State { slug } = &f.kind else {
-            tracing::error!(?f.kind, "non-state file in state list, skipping");
+        let FileKind::Scratch { slug } = &f.kind else {
+            tracing::error!(?f.kind, "non-scratch file in scratch list, skipping");
             continue;
         };
-        let block = fence_block(FenceLabel::State { slug }, &opts.nonce, &f.body);
+        let block = fence_block(FenceLabel::Scratch { slug }, &opts.nonce, &f.body);
         if total + block.len() + 1 > opts.inject_byte_budget {
             break;
         }
         total += block.len() + 1;
-        state_blocks.push(block);
+        scratch_blocks.push(block);
     }
 
-    let durable_memory = durable_blocks.join("\n");
-    let volatile_state = state_blocks.join("\n");
+    let memory = memory_blocks.join("\n");
+    let scratch = scratch_blocks.join("\n");
     let recent_chat = recent_sections.join("\n\n");
     Ok(ChatTurnContext {
         recent_chat,
-        durable_memory,
-        volatile_state,
+        memory,
+        scratch,
     })
 }
 
@@ -394,7 +394,7 @@ pub struct SystemParts {
     pub appendices: Vec<String>,
     /// SOUL/LORE/user fences from [`build_chat_turn_context`]. Stable while the
     /// memory content and the (per-process) nonce are unchanged.
-    pub durable_memory: String,
+    pub memory: String,
 }
 
 /// Per-turn (volatile) parts. Every field here may change turn to turn; all of
@@ -403,8 +403,8 @@ pub struct UserParts {
     /// Relevant-emotes block for this turn (`prompt_block_for_turn`). `None`
     /// when the emote provider is inactive or produced nothing.
     pub emote_block: Option<String>,
-    /// `state/<slug>` fences from [`build_chat_turn_context`].
-    pub volatile_state: String,
+    /// `scratch/<slug>` fences from [`build_chat_turn_context`].
+    pub scratch: String,
     /// Rolling chat history for this turn.
     pub recent_chat: String,
     /// Substituted `ai_instructions.md` (carries speaker vars + date).
@@ -415,8 +415,8 @@ pub struct UserParts {
 
 /// Assemble the `!ai` chat-turn messages from stable and volatile parts.
 ///
-/// `system` = `head` + each appendix + `"\n\n"` + `durable_memory`.
-/// `user`   = `emote_block?` + `volatile_state?` + `recent_chat?` + `instructions` + `instruction`.
+/// `system` = `head` + each appendix + `"\n\n"` + `memory`.
+/// `user`   = `emote_block?` + `scratch?` + `recent_chat?` + `instructions` + `instruction`.
 ///
 /// Keeping every volatile section in the user message is what makes the system
 /// message a stable cache prefix; see `docs/ai-prompts.md`.
@@ -426,15 +426,15 @@ pub fn build_chat_turn_messages(sys: SystemParts, user: UserParts) -> (Message, 
         system.push_str(appendix);
     }
     system.push_str("\n\n");
-    system.push_str(&sys.durable_memory);
+    system.push_str(&sys.memory);
 
     let mut user_message = String::new();
     if let Some(block) = user.emote_block.as_deref() {
         user_message.push_str(block.trim_start());
         user_message.push_str("\n\n");
     }
-    if !user.volatile_state.is_empty() {
-        user_message.push_str(&user.volatile_state);
+    if !user.scratch.is_empty() {
+        user_message.push_str(&user.scratch);
         user_message.push_str("\n\n");
     }
     if !user.recent_chat.is_empty() {
@@ -549,8 +549,8 @@ mod tests {
             fence_block(FenceLabel::Lore, "n", "x").starts_with("<<<FILE kind=lore nonce=n>>>")
         );
         assert!(
-            fence_block(FenceLabel::State { slug: "quiz" }, "n", "x")
-                .starts_with("<<<FILE kind=state slug=quiz nonce=n>>>")
+            fence_block(FenceLabel::Scratch { slug: "quiz" }, "n", "x")
+                .starts_with("<<<FILE kind=scratch slug=quiz nonce=n>>>")
         );
         assert!(
             fence_block(FenceLabel::Transcript { date: "2026-05-05" }, "n", "x",)
@@ -711,7 +711,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_chat_turn_context_routes_state_to_volatile_and_users_to_durable() {
+    async fn build_chat_turn_context_routes_scratch_to_user_msg_and_users_to_memory() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         store
@@ -726,8 +726,8 @@ mod tests {
             .await
             .unwrap();
         store
-            .write_state(
-                &FileKind::State {
+            .write_scratch(
+                &FileKind::Scratch {
                     slug: "quiz".into(),
                 },
                 "score: 3",
@@ -754,16 +754,16 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(ctx.durable_memory.contains("kind=soul"));
-        assert!(ctx.durable_memory.contains("kind=lore"));
-        assert!(ctx.durable_memory.contains("kind=user id=42"));
+        assert!(ctx.memory.contains("kind=soul"));
+        assert!(ctx.memory.contains("kind=lore"));
+        assert!(ctx.memory.contains("kind=user id=42"));
         assert!(
-            !ctx.durable_memory.contains("kind=state"),
-            "state must not appear in durable memory: {}",
-            ctx.durable_memory
+            !ctx.memory.contains("kind=scratch"),
+            "scratch must not appear in memory: {}",
+            ctx.memory
         );
-        assert!(ctx.volatile_state.contains("kind=state slug=quiz"));
-        assert!(!ctx.volatile_state.contains("kind=user"));
+        assert!(ctx.scratch.contains("kind=scratch slug=quiz"));
+        assert!(!ctx.scratch.contains("kind=user"));
     }
 
     #[tokio::test]
@@ -806,8 +806,8 @@ mod tests {
         .await
         .unwrap();
         // Newest user retained, oldest dropped.
-        assert!(ctx.durable_memory.contains("kind=user id=3"));
-        assert!(!ctx.durable_memory.contains("kind=user id=1"));
+        assert!(ctx.memory.contains("kind=user id=3"));
+        assert!(!ctx.memory.contains("kind=user id=1"));
         assert!(ctx.recent_chat.is_empty());
     }
 
@@ -861,8 +861,8 @@ mod tests {
         assert!(ai_idx < pri_idx, "invocation channel must come first");
         assert!(body.recent_chat.contains("alice: hello primary"));
         assert!(body.recent_chat.contains("bob: hello ai"));
-        assert!(!body.durable_memory.contains("Recent chat"));
-        assert!(!body.volatile_state.contains("Recent chat"));
+        assert!(!body.memory.contains("Recent chat"));
+        assert!(!body.scratch.contains("Recent chat"));
     }
 
     #[tokio::test]
@@ -1081,35 +1081,35 @@ mod tests {
         .unwrap();
 
         assert!(
-            ctx.durable_memory.contains("login=alice"),
+            ctx.memory.contains("login=alice"),
             "alice (chat-window) missing:\n{}",
-            ctx.durable_memory
+            ctx.memory
         );
         assert!(
-            ctx.durable_memory.contains("login=bob"),
+            ctx.memory.contains("login=bob"),
             "bob (chat-window) missing:\n{}",
-            ctx.durable_memory
+            ctx.memory
         );
         assert!(
-            ctx.durable_memory.contains("login=carol"),
+            ctx.memory.contains("login=carol"),
             "carol (speaker) missing:\n{}",
-            ctx.durable_memory
+            ctx.memory
         );
         assert!(
-            !ctx.durable_memory.contains("login=lurker"),
+            !ctx.memory.contains("login=lurker"),
             "lurker is neither speaker nor in chat window, must be excluded:\n{}",
-            ctx.durable_memory
+            ctx.memory
         );
 
         // Speaker (carol) must appear before the chat-window users so the
         // byte-budget packing loop can never drop the speaker's own file.
-        let carol_idx = ctx.durable_memory.find("login=carol").unwrap();
-        let alice_idx = ctx.durable_memory.find("login=alice").unwrap();
-        let bob_idx = ctx.durable_memory.find("login=bob").unwrap();
+        let carol_idx = ctx.memory.find("login=carol").unwrap();
+        let alice_idx = ctx.memory.find("login=alice").unwrap();
+        let bob_idx = ctx.memory.find("login=bob").unwrap();
         assert!(
             carol_idx < alice_idx && carol_idx < bob_idx,
             "speaker must come first:\n{}",
-            ctx.durable_memory
+            ctx.memory
         );
     }
 
@@ -1119,11 +1119,11 @@ mod tests {
             SystemParts {
                 head: "HEAD".to_string(),
                 appendices: vec!["\n\nAPP".to_string()],
-                durable_memory: "DURABLE".to_string(),
+                memory: "MEMORY".to_string(),
             },
             UserParts {
                 emote_block: None,
-                volatile_state: String::new(),
+                scratch: String::new(),
                 recent_chat: String::new(),
                 instructions: "INSTR".to_string(),
                 instruction: "INSTRUCTION".to_string(),
@@ -1131,7 +1131,7 @@ mod tests {
         );
         assert_eq!(system.role, llm::Role::System);
         assert_eq!(user.role, llm::Role::User);
-        assert_eq!(system.content, "HEAD\n\nAPP\n\nDURABLE");
+        assert_eq!(system.content, "HEAD\n\nAPP\n\nMEMORY");
         assert_eq!(user.content, "INSTR\n\nINSTRUCTION");
     }
 
@@ -1140,14 +1140,13 @@ mod tests {
         let sys = || SystemParts {
             head: "SYS HEAD".to_string(),
             appendices: vec!["\n\nAPP1".to_string(), "\n\nAPP2".to_string()],
-            durable_memory: "<<<FILE kind=soul nonce=abc>>>\nsoul\n<<<ENDFILE nonce=abc>>>"
-                .to_string(),
+            memory: "<<<FILE kind=soul nonce=abc>>>\nsoul\n<<<ENDFILE nonce=abc>>>".to_string(),
         };
         let (sys_a, user_a) = build_chat_turn_messages(
             sys(),
             UserParts {
                 emote_block: Some("\n\n7TV emotes available: EMOTES_A".to_string()),
-                volatile_state: "STATE A".to_string(),
+                scratch: "SCRATCH A".to_string(),
                 recent_chat: "CHAT A".to_string(),
                 instructions: "INSTR".to_string(),
                 instruction: "do A".to_string(),
@@ -1159,7 +1158,7 @@ mod tests {
                 emote_block: Some(
                     "\n\n7TV emotes available: EMOTES_B totally different".to_string(),
                 ),
-                volatile_state: "STATE B different".to_string(),
+                scratch: "SCRATCH B different".to_string(),
                 recent_chat: "CHAT B different".to_string(),
                 instructions: "INSTR".to_string(),
                 instruction: "do B different".to_string(),
@@ -1172,17 +1171,17 @@ mod tests {
         );
         // Volatile data lands in the user message...
         assert!(user_a.content.contains("EMOTES_A"));
-        assert!(user_a.content.contains("STATE A"));
+        assert!(user_a.content.contains("SCRATCH A"));
         assert!(user_a.content.contains("CHAT A"));
         assert!(user_a.content.contains("do A"));
         // ...and never leaks into the cached system prefix.
         assert!(!sys_a.content.contains("EMOTES_A"));
-        assert!(!sys_a.content.contains("STATE A"));
+        assert!(!sys_a.content.contains("SCRATCH A"));
     }
 
     #[tokio::test]
-    async fn build_chat_turn_context_same_nonce_yields_identical_durable_memory() {
-        // The per-process nonce makes durable memory a stable cache prefix:
+    async fn build_chat_turn_context_same_nonce_yields_identical_memory() {
+        // The per-process nonce makes memory a stable cache prefix:
         // with the nonce fixed and the store unchanged, two builds must be
         // byte-identical. Guards against future per-build variation
         // (timestamps, reordering, fresh randomness) creeping into the block.
@@ -1200,8 +1199,8 @@ mod tests {
             .await
             .unwrap();
         store
-            .write_state(
-                &FileKind::State {
+            .write_scratch(
+                &FileKind::Scratch {
                     slug: "quiz".into(),
                 },
                 "score: 3",
@@ -1227,16 +1226,16 @@ mod tests {
         let second = build_chat_turn_context(&store, opts()).await.unwrap();
 
         assert!(
-            first.durable_memory.contains("kind=soul"),
-            "sanity: durable memory should hold the fenced blocks"
+            first.memory.contains("kind=soul"),
+            "sanity: memory should hold the fenced blocks"
         );
         assert_eq!(
-            first.durable_memory, second.durable_memory,
-            "same nonce + unchanged store must yield byte-identical durable memory"
+            first.memory, second.memory,
+            "same nonce + unchanged store must yield byte-identical memory"
         );
         assert_eq!(
-            first.volatile_state, second.volatile_state,
-            "same nonce + unchanged store must yield byte-identical volatile state"
+            first.scratch, second.scratch,
+            "same nonce + unchanged store must yield byte-identical scratch"
         );
     }
 }

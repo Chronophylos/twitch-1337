@@ -193,7 +193,7 @@ async fn memory_v2_cap() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Reserved slug blocked — write_state("system", …) returns reserved_slug
+// 6. Reserved slug blocked — write_scratch("system", …) returns reserved_slug
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -203,7 +203,7 @@ async fn chat_turn_state_reserved() {
     bot.llm.push_tool(ToolChatCompletionResponse::ToolCalls {
         calls: vec![ToolCall {
             id: "ws1".into(),
-            name: "write_state".into(),
+            name: "write_scratch".into(),
             arguments: serde_json::json!({
                 "slug": "system",
                 "body": "x",

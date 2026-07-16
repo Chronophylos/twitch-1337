@@ -1,4 +1,4 @@
-//! Pure validation helpers for memory paths, state slugs, and file bodies.
+//! Pure validation helpers for memory paths, scratch slugs, and file bodies.
 //!
 //! Centralised so the store and the tool dispatcher share one source of truth.
 //! Errors round-trip back to the LLM as the canonical strings the spec
@@ -19,7 +19,7 @@ const RESERVED: &[&str] = &[
     "dreamer",
     "prompt",
     "instructions",
-    // Dashboard route literals: a state note named `new` would shadow the
+    // Dashboard route literals: a scratch note named `new` would shadow the
     // create form, `delete` would shadow the per-slug delete URL.
     "new",
     "delete",
@@ -27,8 +27,8 @@ const RESERVED: &[&str] = &[
 const FENCE_OPEN: &str = "<<<FILE ";
 const FENCE_CLOSE: &str = "<<<ENDFILE ";
 
-/// Paths the LLM may write to via `write_file`. Excludes `state/<slug>.md`
-/// because state has its own pair of tools.
+/// Paths the LLM may write to via `write_file`. Excludes `scratch/<slug>.md`
+/// because scratch has its own pair of tools.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WritePath {
     Soul,
@@ -126,6 +126,9 @@ pub fn check_body(body: &str) -> Result<(), BodyError> {
         if line.starts_with("# SOUL")
             || line.starts_with("# LORE")
             || line.starts_with("# users/")
+            || line.starts_with("# scratch/")
+            // Pre-ADR-0003 name. Kept so a body can't spoof a header under
+            // the retired path either.
             || line.starts_with("# state/")
         {
             return Err(BodyError);
@@ -185,6 +188,7 @@ mod tests {
             "users/12.md/",
             "../etc/passwd",
             "users/12345.md/",
+            "scratch/foo.md",
             "state/foo.md",
             "users/12345.markdown",
         ] {
@@ -250,6 +254,7 @@ mod tests {
             "ok\n---\nfoo: bar\n---\nmore",
             "intro\n# SOUL\n",
             "intro\n# users/12.md\n",
+            "intro\n# scratch/quiz.md\n",
             "intro\n# state/quiz.md\n",
             "leak <<<FILE path=x nonce=y>>> stuff",
             "leak <<<ENDFILE nonce=y>>> stuff",

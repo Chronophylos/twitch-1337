@@ -37,7 +37,7 @@ fn fake_helix() -> Arc<dyn HelixClient> {
 #[test]
 fn safe_redirect_rejects_scheme_and_host() {
     assert!(is_safe_redirect("/pings"));
-    assert!(is_safe_redirect("/memory/state/notes"));
+    assert!(is_safe_redirect("/memory/scratch/notes"));
     assert!(!is_safe_redirect("//evil.example/x"));
     assert!(!is_safe_redirect("https://evil.example/"));
     assert!(!is_safe_redirect("javascript:alert(1)"));
@@ -54,7 +54,7 @@ async fn unauth_request_redirects_to_login_with_next() {
     let app = build_router(state);
 
     let req = Request::builder()
-        .uri("/memory/state/notes")
+        .uri("/memory/scratch/notes")
         .body(Body::empty())
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
@@ -66,7 +66,7 @@ async fn unauth_request_redirects_to_login_with_next() {
         .to_str()
         .unwrap();
     assert_eq!(
-        location, "/login?next=%2Fmemory%2Fstate%2Fnotes",
+        location, "/login?next=%2Fmemory%2Fscratch%2Fnotes",
         "expected exact encoded next path, got {location}"
     );
 }
@@ -101,7 +101,7 @@ const TEST_USER_ID: &str = "12345";
 const TEST_OAUTH_STATE: &str = "test-oauth-state";
 const TEST_AUTH_CODE: &str = "test-auth-code";
 const TEST_ACCESS_TOKEN: &str = "test-access-token";
-const NEXT_PATH: &str = "/memory/state/notes";
+const NEXT_PATH: &str = "/memory/scratch/notes";
 
 async fn mount_oauth_callback_stubs(server: &MockServer) {
     Mock::given(method("POST"))

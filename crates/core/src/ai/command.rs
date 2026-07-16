@@ -108,8 +108,8 @@ pub struct AiCommand {
     bot_username: String,
     doener: Arc<crate::doener::DoeneratlasClient>,
     model_catalog: Arc<ModelCatalog>,
-    /// Per-process nonce stamped into durable-memory fences. Stable across
-    /// turns so the durable block is a byte-stable cache prefix; the real
+    /// Per-process nonce stamped into memory fences. Stable across
+    /// turns so the memory block is a byte-stable cache prefix; the real
     /// fence-injection guard is `scrub_for_inject`, not nonce freshness.
     prompt_nonce: String,
 }
@@ -178,7 +178,7 @@ impl AiCommand {
 }
 
 /// Memory-v2 path executor that dispatches by tool name to the chat-turn
-/// executor (write_file/write_state/delete_state), the web search executor
+/// executor (write_file/write_scratch/delete_scratch), the web search executor
 /// (web_search/read_url) when web tools are configured, the on-demand
 /// `search_emotes` tool when the emote provider is active, or the always-on
 /// doener_index tool.
@@ -432,19 +432,19 @@ where
         } else {
             inject::InvocationChannel::Primary
         };
-        // Durable memory (SOUL/LORE/users) goes in the system message so the
-        // prompt cache survives across turns. Volatile state and recent chat
-        // go in the user message: any state write or chat line would otherwise
+        // Memory (SOUL/LORE/users) goes in the system message so the
+        // prompt cache survives across turns. Scratch and recent chat
+        // go in the user message: any scratch write or chat line would otherwise
         // invalidate the system-message cache every turn.
         let inject::ChatTurnContext {
             recent_chat,
-            durable_memory,
-            volatile_state,
+            memory,
+            scratch,
         } = inject::build_chat_turn_context(
             &mem.store,
             inject::BuildOpts {
                 inject_byte_budget: mem.inject_byte_budget,
-                // Per-process nonce: durable memory only changes bytes when its
+                // Per-process nonce: memory only changes bytes when its
                 // content actually changes, so the prefix caches across turns.
                 nonce: self.prompt_nonce.clone(),
                 primary_history: cc.map(|c| c.primary_history.clone()),
@@ -496,11 +496,11 @@ where
             inject::SystemParts {
                 head: system_head,
                 appendices,
-                durable_memory,
+                memory,
             },
             inject::UserParts {
                 emote_block,
-                volatile_state,
+                scratch,
                 recent_chat,
                 instructions: instructions_head,
                 instruction: instruction_for_prompt.clone(),

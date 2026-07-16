@@ -5,8 +5,8 @@
 //!
 //! `:user_id` and `:slug` are validated *before* any filesystem access —
 //! together they're the only barrier between an attacker URL and
-//! `MemoryStore::read_kind`. `/memory/state/new` is declared *before*
-//! `/memory/state/{slug}` so axum matches the literal first; a regression
+//! `MemoryStore::read_kind`. `/memory/scratch/new` is declared *before*
+//! `/memory/scratch/{slug}` so axum matches the literal first; a regression
 //! test pins this ordering.
 
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tower_cookies::Cookies;
 use twitch_1337_core::ai::memory::store::{
-    FrontmatterOverride, Mtime, WriteOutcome, validate_state_slug,
+    FrontmatterOverride, Mtime, WriteOutcome, validate_scratch_slug,
 };
 use twitch_1337_core::ai::memory::types::{FileKind, MemoryFile};
 use twitch_1337_core::settings::audit::berlin_now;
@@ -44,20 +44,23 @@ pub fn router() -> Router<WebState> {
         // literal route wins over the dynamic capture.
         .route("/memory/users/new", get(new_user_form).post(create_user))
         .route("/memory/users/{user_id}", get(view_user).post(save_user))
-        // `/memory/state/new` MUST precede `/memory/state/{slug}` so the
+        // `/memory/scratch/new` MUST precede `/memory/scratch/{slug}` so the
         // literal route wins over the dynamic capture.
-        .route("/memory/state/new", get(new_state_form))
+        .route("/memory/scratch/new", get(new_scratch_form))
         // GET lists state notes; POST creates a new one (collection URL).
-        .route("/memory/state", get(list_state).post(create_state))
-        .route("/memory/state/{slug}", get(view_state).post(save_state))
-        .route("/memory/state/{slug}/delete", post(delete_state))
+        .route("/memory/scratch", get(list_scratch).post(create_scratch))
+        .route(
+            "/memory/scratch/{slug}",
+            get(view_scratch).post(save_scratch),
+        )
+        .route("/memory/scratch/{slug}/delete", post(delete_scratch))
 }
 
 #[derive(Template)]
 #[template(path = "memory/tree.html")]
 struct TreeTpl {
     user_count: usize,
-    state_count: usize,
+    scratch_count: usize,
     csrf: String,
     user_login: String,
     user_avatar_url: Option<String>,
@@ -94,20 +97,20 @@ struct EditorTpl<'a> {
     is_owner: bool,
     /// Render the user-only frontmatter inputs (`username`, `display_name`).
     show_user_fm: bool,
-    /// Render the state-only frontmatter input (`created_by`).
-    show_state_fm: bool,
+    /// Render the scratch-only frontmatter input (`created_by`).
+    show_scratch_fm: bool,
     fm_username: &'a str,
     fm_display_name: &'a str,
     fm_created_by: &'a str,
 }
 
-struct StateRow {
+struct ScratchRow {
     slug: String,
     updated_at: String,
     created_by: String,
-    /// Body byte count for the mini-bar in the state list.
+    /// Body byte count for the mini-bar in the scratch list.
     bytes: usize,
-    /// `min(100, bytes * 100 / state_cap)` — pre-computed for the same
+    /// `min(100, bytes * 100 / scratch_cap)` — pre-computed for the same
     /// reason as `EditorTpl::pct`.
     pct: u8,
     created_initial: String,
@@ -116,9 +119,9 @@ struct StateRow {
 }
 
 #[derive(Template)]
-#[template(path = "memory/state_list.html")]
-struct StateListTpl {
-    items: Vec<StateRow>,
+#[template(path = "memory/scratch_list.html")]
+struct ScratchListTpl {
+    items: Vec<ScratchRow>,
     csrf: String,
     user_login: String,
     user_avatar_url: Option<String>,
@@ -242,7 +245,7 @@ fn subtitle_for_kind(kind: &FileKind) -> &'static str {
         FileKind::Soul => "The bot's stable self-description. Read on every `!ai` turn.",
         FileKind::Lore => "Channel-wide history and running threads.",
         FileKind::User { .. } => "Per-user character sheet.",
-        FileKind::State { .. } => "Persistent state note.",
+        FileKind::Scratch { .. } => "Ephemeral scratch note.",
     }
 }
 
@@ -252,7 +255,7 @@ fn list_url_for(kind: &FileKind) -> &'static str {
     match kind {
         FileKind::Soul | FileKind::Lore => "/memory",
         FileKind::User { .. } => "/memory/users",
-        FileKind::State { .. } => "/memory/state",
+        FileKind::Scratch { .. } => "/memory/scratch",
     }
 }
 
@@ -261,7 +264,7 @@ fn nav_slug_for(kind: &FileKind) -> &'static str {
         FileKind::Soul => crate::nav::MEMORY_SOUL,
         FileKind::Lore => crate::nav::MEMORY_LORE,
         FileKind::User { .. } => crate::nav::MEMORY_USERS,
-        FileKind::State { .. } => crate::nav::MEMORY_STATE,
+        FileKind::Scratch { .. } => crate::nav::MEMORY_SCRATCH,
     }
 }
 
@@ -286,8 +289,8 @@ fn is_valid_user_id(s: &str) -> bool {
 
 const SLUG_VALIDATION_MSG: &str = "must be 1-64 chars, [a-zA-Z0-9._-], not `new`/`delete`, no `..`";
 
-/// `..` is the security-critical case: without it a `/memory/state/..` URL would
-/// reach `read_kind` and could escape `memories/state/` to leak SOUL.md or
+/// `..` is the security-critical case: without it a `/memory/scratch/..` URL would
+/// reach `read_kind` and could escape `memories/scratch/` to leak SOUL.md or
 /// LORE.md via the state viewer.
 fn slug_err() -> WebError {
     WebError::Validation {
@@ -306,12 +309,12 @@ async fn tree(
         .await
         .map_err(|e| WebError::Internal(eyre::eyre!("list_users: {e}")))?;
     let states = store
-        .list_state()
+        .list_scratch()
         .await
-        .map_err(|e| WebError::Internal(eyre::eyre!("list_state: {e}")))?;
+        .map_err(|e| WebError::Internal(eyre::eyre!("list_scratch: {e}")))?;
     render(&TreeTpl {
         user_count: users.len(),
-        state_count: states.len(),
+        scratch_count: states.len(),
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
         user_avatar_url: session.avatar_url.clone(),
@@ -369,7 +372,7 @@ async fn view_kind(
         is_broadcaster: session.is_broadcaster,
         is_owner: matches!(session.role, crate::auth::Role::Owner),
         show_user_fm: matches!(kind, FileKind::User { .. }),
-        show_state_fm: matches!(kind, FileKind::State { .. }),
+        show_scratch_fm: matches!(kind, FileKind::Scratch { .. }),
         fm_username: mf.frontmatter.username.as_deref().unwrap_or(""),
         fm_display_name: mf.frontmatter.display_name.as_deref().unwrap_or(""),
         fm_created_by: mf.frontmatter.created_by.as_deref().unwrap_or(""),
@@ -535,16 +538,16 @@ async fn create_user(
     Ok(Redirect::to(&format!("/memory/users/{user_id}")).into_response())
 }
 
-async fn list_state(
+async fn list_scratch(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
 ) -> Result<Response, WebError> {
     let items: Vec<MemoryFile> = state
         .memory_store
-        .list_state()
+        .list_scratch()
         .await
-        .map_err(|e| WebError::Internal(eyre::eyre!("list_state: {e}")))?;
-    let cap = state.memory_store.caps().state_bytes;
+        .map_err(|e| WebError::Internal(eyre::eyre!("list_scratch: {e}")))?;
+    let cap = state.memory_store.caps().scratch_bytes;
     let creator_ids: Vec<&str> = items
         .iter()
         .filter_map(|mf| {
@@ -559,14 +562,14 @@ async fn list_state(
         .into_iter()
         .map(|mf| {
             let slug = match &mf.kind {
-                FileKind::State { slug } => slug.clone(),
+                FileKind::Scratch { slug } => slug.clone(),
                 _ => String::new(),
             };
             let bytes = mf.body.len();
             let created_by = mf.frontmatter.created_by.unwrap_or_default();
             let created_initial = initial_of(&created_by);
             let profile_image_url = avatars.get(&created_by).cloned();
-            StateRow {
+            ScratchRow {
                 slug,
                 updated_at: fmt_ts(mf.frontmatter.updated_at),
                 created_by,
@@ -577,25 +580,25 @@ async fn list_state(
             }
         })
         .collect();
-    render(&StateListTpl {
+    render(&ScratchListTpl {
         items,
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
         user_avatar_url: session.avatar_url.clone(),
-        current_page: crate::nav::MEMORY_STATE,
+        current_page: crate::nav::MEMORY_SCRATCH,
         is_mod: session.is_mod(),
         is_broadcaster: session.is_broadcaster,
         is_owner: matches!(session.role, crate::auth::Role::Owner),
     })
 }
 
-async fn new_state_form(
+async fn new_scratch_form(
     Extension(session): Extension<Session>,
     State(state): State<WebState>,
 ) -> Result<Response, WebError> {
-    let cap = state.memory_store.caps().state_bytes;
+    let cap = state.memory_store.caps().scratch_bytes;
     let csrf_hex = csrf::encode(&session.csrf_value);
-    render_state_create(
+    render_scratch_create(
         StatusCode::OK,
         "",
         None,
@@ -609,19 +612,19 @@ async fn new_state_form(
     )
 }
 
-async fn view_state(
+async fn view_scratch(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
     Path(slug): Path<String>,
 ) -> Result<Response, WebError> {
-    validate_state_slug(&slug).map_err(|_| slug_err())?;
-    let title = format!("State / {slug}");
-    let save_url = format!("/memory/state/{slug}");
-    let delete_url = format!("/memory/state/{slug}/delete");
+    validate_scratch_slug(&slug).map_err(|_| slug_err())?;
+    let title = format!("Scratch / {slug}");
+    let save_url = format!("/memory/scratch/{slug}");
+    let delete_url = format!("/memory/scratch/{slug}/delete");
     view_kind(
         &state,
         &session,
-        FileKind::State { slug: slug.clone() },
+        FileKind::Scratch { slug: slug.clone() },
         title,
         save_url,
         Some(delete_url),
@@ -667,10 +670,15 @@ struct MemoryAuditEntry {
     ts: chrono::DateTime<chrono_tz::Tz>,
     actor_id: String,
     actor_login: String,
-    op: &'static str,   // "write" | "create" | "delete"
-    kind: &'static str, // "soul" | "lore" | "user" | "state"
-    id: String,         // slug or user_id; empty for soul/lore
-    result: String,     // "ok" | "conflict" | "error:<variant>"
+    op: &'static str, // "write" | "create" | "delete"
+    /// "soul" | "lore" | "user" | "scratch".
+    ///
+    /// Lines appended before the ADR-0003 rename (2026-07-16) use scratch's
+    /// old name, "state". This log is append-only history and is never
+    /// rewritten, so any reader must accept both.
+    kind: &'static str,
+    id: String,     // slug or user_id; empty for soul/lore
+    result: String, // "ok" | "conflict" | "error:<variant>"
     #[serde(skip_serializing_if = "Option::is_none")]
     mtime_before: Option<Mtime>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -687,7 +695,7 @@ fn kind_tag(kind: &FileKind) -> &'static str {
         FileKind::Soul => "soul",
         FileKind::Lore => "lore",
         FileKind::User { .. } => "user",
-        FileKind::State { .. } => "state",
+        FileKind::Scratch { .. } => "scratch",
     }
 }
 
@@ -730,7 +738,7 @@ fn audit_memory(
 }
 
 /// Validates csrf, dispatches to `write_with_guard`, and on
-/// `WriteError::{Full,StateFull,InvalidSlug}` re-renders the originating
+/// `WriteError::{Full,ScratchFull,InvalidSlug}` re-renders the originating
 /// editor with the user's draft + an inline error so the work isn't lost.
 #[allow(clippy::too_many_arguments)]
 async fn save_kind(
@@ -871,7 +879,7 @@ async fn save_kind(
                     is_broadcaster: session.is_broadcaster,
                     is_owner: matches!(session.role, crate::auth::Role::Owner),
                     show_user_fm: matches!(&kind, FileKind::User { .. }),
-                    show_state_fm: matches!(&kind, FileKind::State { .. }),
+                    show_scratch_fm: matches!(&kind, FileKind::Scratch { .. }),
                     fm_username: &form.fm_username,
                     fm_display_name: &form.fm_display_name,
                     fm_created_by: &form.fm_created_by,
@@ -957,23 +965,23 @@ async fn save_user(
     .await
 }
 
-async fn save_state(
+async fn save_scratch(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
     cookies: Cookies,
     Path(slug): Path<String>,
     axum::Form(form): axum::Form<SaveForm>,
 ) -> Result<Response, WebError> {
-    validate_state_slug(&slug).map_err(|_| slug_err())?;
-    let redirect = format!("/memory/state/{slug}");
-    let delete_url = format!("/memory/state/{slug}/delete");
-    let cap = state.memory_store.caps().state_bytes;
+    validate_scratch_slug(&slug).map_err(|_| slug_err())?;
+    let redirect = format!("/memory/scratch/{slug}");
+    let delete_url = format!("/memory/scratch/{slug}/delete");
+    let cap = state.memory_store.caps().scratch_bytes;
     save_kind(
         &state,
         &session,
         &cookies,
-        FileKind::State { slug: slug.clone() },
-        format!("state {slug}"),
+        FileKind::Scratch { slug: slug.clone() },
+        format!("scratch {slug}"),
         slug,
         form,
         redirect,
@@ -983,7 +991,7 @@ async fn save_state(
     .await
 }
 
-async fn create_state(
+async fn create_scratch(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
     cookies: Cookies,
@@ -993,10 +1001,10 @@ async fn create_state(
         return Err(WebError::CsrfMismatch);
     }
     let csrf_hex = csrf::encode(&session.csrf_value);
-    let cap = state.memory_store.caps().state_bytes;
+    let cap = state.memory_store.caps().scratch_bytes;
 
-    if validate_state_slug(&form.slug).is_err() {
-        return render_state_create(
+    if validate_scratch_slug(&form.slug).is_err() {
+        return render_scratch_create(
             StatusCode::BAD_REQUEST,
             &form.body,
             Some(SLUG_VALIDATION_MSG.to_owned()),
@@ -1012,8 +1020,8 @@ async fn create_state(
     let slug = form.slug.clone();
     match state
         .memory_store
-        .write_state(
-            &FileKind::State { slug: slug.clone() },
+        .write_scratch(
+            &FileKind::Scratch { slug: slug.clone() },
             &form.body,
             Some(&session.user_id),
         )
@@ -1024,7 +1032,7 @@ async fn create_state(
                 target: "twitch_1337_web",
                 user_id = %session.user_id,
                 action = "memory_create",
-                target_label = "state",
+                target_label = "scratch",
                 target_id = %slug,
                 result = "ok",
             );
@@ -1032,22 +1040,22 @@ async fn create_state(
                 &state,
                 &session,
                 "create",
-                "state",
+                "scratch",
                 &slug,
                 "ok".to_owned(),
                 None,
                 None,
                 Some(form.body.len()),
             );
-            flash::set(&cookies, &format!("state `{slug}` created"));
-            Ok(Redirect::to(&format!("/memory/state/{slug}")).into_response())
+            flash::set(&cookies, &format!("scratch `{slug}` created"));
+            Ok(Redirect::to(&format!("/memory/scratch/{slug}")).into_response())
         }
         Err(err) => {
             tracing::warn!(
                 target: "twitch_1337_web",
                 user_id = %session.user_id,
                 action = "memory_create",
-                target_label = "state",
+                target_label = "scratch",
                 target_id = %slug,
                 result = "error",
                 error = ?err,
@@ -1056,7 +1064,7 @@ async fn create_state(
                 &state,
                 &session,
                 "create",
-                "state",
+                "scratch",
                 &slug,
                 format!("error:{err}"),
                 None,
@@ -1064,7 +1072,7 @@ async fn create_state(
                 None,
             );
             let msg = write_error_for_form(err)?;
-            render_state_create(
+            render_scratch_create(
                 StatusCode::BAD_REQUEST,
                 &form.body,
                 Some(msg),
@@ -1083,7 +1091,7 @@ async fn create_state(
 #[allow(clippy::too_many_arguments)]
 // 8 args is just past clippy's default of 7. Threading a struct here would
 // obscure the call sites without trimming any state; allow it locally.
-fn render_state_create(
+fn render_scratch_create(
     status: StatusCode,
     body: &str,
     error: Option<String>,
@@ -1098,27 +1106,27 @@ fn render_state_create(
     render_with(
         status,
         &EditorTpl {
-            title: "new state note",
+            title: "new scratch note",
             subtitle: "A persistent note keyed by slug.",
-            meta_path: "memories/state/<slug>.md".to_owned(),
+            meta_path: "memories/scratch/<slug>.md".to_owned(),
             body,
             csrf: csrf_hex,
             mtime: 0,
             mtime_display: fmt_mtime_ms(0),
             byte_cap: cap,
             pct: pct_of(body.len(), cap),
-            save_url: "/memory/state",
-            cancel_url: "/memory/state",
+            save_url: "/memory/scratch",
+            cancel_url: "/memory/scratch",
             delete_url: None,
             error,
             user_login,
             user_avatar_url,
-            current_page: crate::nav::MEMORY_STATE,
+            current_page: crate::nav::MEMORY_SCRATCH,
             is_mod,
             is_broadcaster,
             is_owner,
             show_user_fm: false,
-            show_state_fm: false,
+            show_scratch_fm: false,
             fm_username: "",
             fm_display_name: "",
             fm_created_by: "",
@@ -1126,7 +1134,7 @@ fn render_state_create(
     )
 }
 
-async fn delete_state(
+async fn delete_scratch(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
     Path(slug): Path<String>,
@@ -1136,17 +1144,17 @@ async fn delete_state(
     if !csrf::verify(&form.csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    validate_state_slug(&slug).map_err(|_| slug_err())?;
+    validate_scratch_slug(&slug).map_err(|_| slug_err())?;
     state
         .memory_store
-        .delete_state(&slug)
+        .delete_scratch(&slug)
         .await
-        .map_err(|e| WebError::Internal(eyre::eyre!("delete_state: {e}")))?;
+        .map_err(|e| WebError::Internal(eyre::eyre!("delete_scratch: {e}")))?;
     tracing::info!(
         target: "twitch_1337_web",
         user_id = %session.user_id,
         action = "memory_delete",
-        target_label = "state",
+        target_label = "scratch",
         target_id = %slug,
         result = "ok",
     );
@@ -1154,13 +1162,13 @@ async fn delete_state(
         &state,
         &session,
         "delete",
-        "state",
+        "scratch",
         &slug,
         "ok".to_owned(),
         None,
         None,
         None,
     );
-    flash::set(&cookies, &format!("state `{slug}` deleted"));
-    Ok(Redirect::to("/memory/state").into_response())
+    flash::set(&cookies, &format!("scratch `{slug}` deleted"));
+    Ok(Redirect::to("/memory/scratch").into_response())
 }

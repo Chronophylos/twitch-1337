@@ -194,11 +194,11 @@ struct AiMemoryForm {
     #[serde(default)]
     ai_memory_user_bytes: Option<usize>,
     #[serde(default)]
-    ai_memory_state_bytes: Option<usize>,
+    ai_memory_scratch_bytes: Option<usize>,
     #[serde(default)]
     ai_memory_inject_byte_budget: Option<usize>,
     #[serde(default)]
-    ai_memory_max_state_files: Option<usize>,
+    ai_memory_max_scratch_files: Option<usize>,
 }
 
 impl AiMemoryForm {
@@ -207,9 +207,9 @@ impl AiMemoryForm {
             soul_bytes: self.ai_memory_soul_bytes,
             lore_bytes: self.ai_memory_lore_bytes,
             user_bytes: self.ai_memory_user_bytes,
-            state_bytes: self.ai_memory_state_bytes,
+            scratch_bytes: self.ai_memory_scratch_bytes,
             inject_byte_budget: self.ai_memory_inject_byte_budget,
-            max_state_files: self.ai_memory_max_state_files,
+            max_scratch_files: self.ai_memory_max_scratch_files,
         }
     }
 }
@@ -570,9 +570,9 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
                 ai_memory_soul_bytes: form.ai_memory_soul_bytes,
                 ai_memory_lore_bytes: form.ai_memory_lore_bytes,
                 ai_memory_user_bytes: form.ai_memory_user_bytes,
-                ai_memory_state_bytes: form.ai_memory_state_bytes,
+                ai_memory_scratch_bytes: form.ai_memory_scratch_bytes,
                 ai_memory_inject_byte_budget: form.ai_memory_inject_byte_budget,
-                ai_memory_max_state_files: form.ai_memory_max_state_files,
+                ai_memory_max_scratch_files: form.ai_memory_max_scratch_files,
             }
             .into_overrides(),
             dreamer: AiDreamerForm {

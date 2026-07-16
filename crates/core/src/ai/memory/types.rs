@@ -25,13 +25,18 @@ impl Role {
     }
 }
 
-/// Identifies one file in the memory tree.
+/// Identifies one file under `memories/`.
+///
+/// ADR-0003: `Soul`/`Lore`/`User` are Memory; `Scratch` is not. The enum (and
+/// `MemoryStore`) deliberately span both — the glossary governs domain
+/// language, not type names, and renaming the container would migrate every
+/// prod file for no domain gain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileKind {
     Soul,
     Lore,
     User { user_id: String },
-    State { slug: String },
+    Scratch { slug: String },
 }
 
 impl FileKind {
@@ -40,7 +45,7 @@ impl FileKind {
             FileKind::Soul => PathBuf::from("SOUL.md"),
             FileKind::Lore => PathBuf::from("LORE.md"),
             FileKind::User { user_id } => PathBuf::from(format!("users/{user_id}.md")),
-            FileKind::State { slug } => PathBuf::from(format!("state/{slug}.md")),
+            FileKind::Scratch { slug } => PathBuf::from(format!("scratch/{slug}.md")),
         }
     }
 }
@@ -49,10 +54,10 @@ impl FileKind {
 pub struct Frontmatter {
     pub updated_at: DateTime<Utc>,
     /// Twitch login (lowercase username). Set on user files; absent on
-    /// SOUL/LORE/state.
+    /// SOUL/LORE/scratch.
     pub username: Option<String>,
     /// Twitch display name (cased). Set on user files; absent on
-    /// SOUL/LORE/state.
+    /// SOUL/LORE/scratch.
     pub display_name: Option<String>,
     pub created_by: Option<String>,
 }
@@ -64,11 +69,11 @@ pub struct MemoryFile {
     pub body: String,
 }
 
-/// Per-file byte caps and the global state-file count cap.
+/// Per-file byte caps and the global scratch-file count cap.
 ///
 /// Byte caps apply to the *full emitted file* (frontmatter + body), so the
 /// on-disk size never exceeds the configured limit. The cap is enforced
-/// inside the per-path mutex in `MemoryStore::write` / `write_state`, so
+/// inside the per-path mutex in `MemoryStore::write` / `write_scratch`, so
 /// concurrent writes to the same file cannot smuggle an over-cap body past
 /// the check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,11 +81,12 @@ pub struct Caps {
     pub soul_bytes: usize,
     pub lore_bytes: usize,
     pub user_bytes: usize,
-    pub state_bytes: usize,
-    /// Max number of `state/<slug>.md` files that may exist at once.
-    /// Enforced inside `MemoryStore::write_state` under a global state-create
-    /// lock so two concurrent new-slug writes can't both pass the cap check.
-    pub max_state_files: usize,
+    pub scratch_bytes: usize,
+    /// Max number of `scratch/<slug>.md` files that may exist at once.
+    /// Enforced inside `MemoryStore::write_scratch` under a global
+    /// scratch-create lock so two concurrent new-slug writes can't both pass
+    /// the cap check.
+    pub max_scratch_files: usize,
 }
 
 impl Default for Caps {
@@ -89,8 +95,8 @@ impl Default for Caps {
             soul_bytes: 4096,
             lore_bytes: 12_288,
             user_bytes: 4096,
-            state_bytes: 2048,
-            max_state_files: 16,
+            scratch_bytes: 2048,
+            max_scratch_files: 16,
         }
     }
 }
@@ -101,7 +107,7 @@ impl Caps {
             FileKind::Soul => self.soul_bytes,
             FileKind::Lore => self.lore_bytes,
             FileKind::User { .. } => self.user_bytes,
-            FileKind::State { .. } => self.state_bytes,
+            FileKind::Scratch { .. } => self.scratch_bytes,
         }
     }
 
@@ -114,8 +120,8 @@ impl Caps {
             soul_bytes: m.soul_bytes,
             lore_bytes: m.lore_bytes,
             user_bytes: m.user_bytes,
-            state_bytes: m.state_bytes,
-            max_state_files: m.max_state_files,
+            scratch_bytes: m.scratch_bytes,
+            max_scratch_files: m.max_scratch_files,
         }
     }
 }
@@ -137,8 +143,8 @@ mod tests {
         assert_eq!(c.soul_bytes, 4096);
         assert_eq!(c.lore_bytes, 12_288);
         assert_eq!(c.user_bytes, 4096);
-        assert_eq!(c.state_bytes, 2048);
-        assert_eq!(c.max_state_files, 16);
+        assert_eq!(c.scratch_bytes, 2048);
+        assert_eq!(c.max_scratch_files, 16);
     }
 
     #[test]
@@ -155,13 +161,13 @@ mod tests {
             "users/12345.md"
         );
         assert_eq!(
-            FileKind::State {
+            FileKind::Scratch {
                 slug: "quiz".into()
             }
             .relative_path()
             .to_str()
             .unwrap(),
-            "state/quiz.md"
+            "scratch/quiz.md"
         );
     }
 }

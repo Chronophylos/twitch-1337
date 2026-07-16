@@ -153,18 +153,18 @@ async fn create_state_reserved_slug_rejected() {
     );
     let app = build_router(state.clone());
     let res = app
-        .oneshot(post_form("/memory/state", &sid, &csrf, body))
+        .oneshot(post_form("/memory/scratch", &sid, &csrf, body))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     // No file at memories/state/new.md must exist.
-    let kind = FileKind::State { slug: "new".into() };
+    let kind = FileKind::Scratch { slug: "new".into() };
     // read_kind returns empty body for missing files; check via list.
-    let listed = state.memory_store.list_state().await.unwrap();
+    let listed = state.memory_store.list_scratch().await.unwrap();
     assert!(
         listed
             .iter()
-            .all(|f| !matches!(&f.kind, FileKind::State { slug } if slug == "new")),
+            .all(|f| !matches!(&f.kind, FileKind::Scratch { slug } if slug == "new")),
         "reserved slug must not have produced a file"
     );
     let _ = kind;
@@ -179,7 +179,7 @@ async fn create_state_round_trip() {
     );
     let app = build_router(state.clone());
     let res = app
-        .oneshot(post_form("/memory/state", &sid, &csrf, body))
+        .oneshot(post_form("/memory/scratch", &sid, &csrf, body))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
@@ -189,10 +189,10 @@ async fn create_state_round_trip() {
         .unwrap()
         .to_str()
         .unwrap();
-    assert_eq!(location, "/memory/state/quiz");
+    assert_eq!(location, "/memory/scratch/quiz");
     let mf = state
         .memory_store
-        .read_kind(&FileKind::State {
+        .read_kind(&FileKind::Scratch {
             slug: "quiz".into(),
         })
         .await
@@ -202,12 +202,12 @@ async fn create_state_round_trip() {
 }
 
 #[tokio::test]
-async fn delete_state_round_trip() {
+async fn delete_scratch_round_trip() {
     let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
     state
         .memory_store
-        .write_state(
-            &FileKind::State {
+        .write_scratch(
+            &FileKind::Scratch {
                 slug: "doomed".into(),
             },
             "x",
@@ -218,7 +218,12 @@ async fn delete_state_round_trip() {
     let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
     let app = build_router(state.clone());
     let res = app
-        .oneshot(post_form("/memory/state/doomed/delete", &sid, &csrf, body))
+        .oneshot(post_form(
+            "/memory/scratch/doomed/delete",
+            &sid,
+            &csrf,
+            body,
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
@@ -228,12 +233,12 @@ async fn delete_state_round_trip() {
         .unwrap()
         .to_str()
         .unwrap();
-    assert_eq!(location, "/memory/state");
-    let listed = state.memory_store.list_state().await.unwrap();
+    assert_eq!(location, "/memory/scratch");
+    let listed = state.memory_store.list_scratch().await.unwrap();
     assert!(
         listed
             .iter()
-            .all(|f| !matches!(&f.kind, FileKind::State { slug } if slug == "doomed")),
+            .all(|f| !matches!(&f.kind, FileKind::Scratch { slug } if slug == "doomed")),
         "deleted slug must be absent from list"
     );
 }
@@ -301,12 +306,12 @@ async fn save_user_with_frontmatter_override_persists() {
 #[tokio::test]
 async fn save_state_with_frontmatter_override_replaces_created_by() {
     let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
-    let kind = FileKind::State {
+    let kind = FileKind::Scratch {
         slug: "notes".into(),
     };
     state
         .memory_store
-        .write_state(&kind, "x", Some("9001"))
+        .write_scratch(&kind, "x", Some("9001"))
         .await
         .unwrap();
     let mtime = state.memory_store.current_mtime(&kind).await.unwrap();
@@ -316,7 +321,7 @@ async fn save_state_with_frontmatter_override_replaces_created_by() {
     );
     let app = build_router(state.clone());
     let res = app
-        .oneshot(post_form("/memory/state/notes", &sid, &csrf, body))
+        .oneshot(post_form("/memory/scratch/notes", &sid, &csrf, body))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
@@ -363,13 +368,13 @@ async fn save_csrf_mismatch_rejected() {
 #[tokio::test]
 async fn save_state_oversized_renders_editor_with_draft() {
     let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
-    // Create the state note first so save (POST /memory/state/<slug>) is valid.
-    let kind = FileKind::State {
+    // Create the state note first so save (POST /memory/scratch/<slug>) is valid.
+    let kind = FileKind::Scratch {
         slug: "notes".into(),
     };
     state
         .memory_store
-        .write_state(&kind, "hello", Some("9001"))
+        .write_scratch(&kind, "hello", Some("9001"))
         .await
         .unwrap();
     // Read the current mtime so the guard doesn't trip a 409 first.
@@ -383,7 +388,7 @@ async fn save_state_oversized_renders_editor_with_draft() {
     );
     let app = build_router(state);
     let res = app
-        .oneshot(post_form("/memory/state/notes", &sid, &csrf, body))
+        .oneshot(post_form("/memory/scratch/notes", &sid, &csrf, body))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
@@ -493,7 +498,7 @@ async fn create_writes_audit_line() {
     );
     let app = build_router(state.clone());
     let res = app
-        .oneshot(post_form("/memory/state", &sid, &csrf, body))
+        .oneshot(post_form("/memory/scratch", &sid, &csrf, body))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
@@ -501,7 +506,7 @@ async fn create_writes_audit_line() {
     let lines = read_audit_lines(&td_memory);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["op"], "create");
-    assert_eq!(lines[0]["kind"], "state");
+    assert_eq!(lines[0]["kind"], "scratch");
     assert_eq!(lines[0]["id"], "quiz");
     assert_eq!(lines[0]["result"], "ok");
     assert!(
@@ -516,8 +521,8 @@ async fn delete_writes_audit_line() {
     // Create then delete; the audit log should hold one create + one delete.
     state
         .memory_store
-        .write_state(
-            &FileKind::State {
+        .write_scratch(
+            &FileKind::Scratch {
                 slug: "doomed".into(),
             },
             "x",
@@ -528,7 +533,12 @@ async fn delete_writes_audit_line() {
     let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf),);
     let app = build_router(state.clone());
     let res = app
-        .oneshot(post_form("/memory/state/doomed/delete", &sid, &csrf, body))
+        .oneshot(post_form(
+            "/memory/scratch/doomed/delete",
+            &sid,
+            &csrf,
+            body,
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
@@ -536,7 +546,7 @@ async fn delete_writes_audit_line() {
     let lines = read_audit_lines(&td_memory);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["op"], "delete");
-    assert_eq!(lines[0]["kind"], "state");
+    assert_eq!(lines[0]["kind"], "scratch");
     assert_eq!(lines[0]["id"], "doomed");
     assert_eq!(lines[0]["result"], "ok");
 }
@@ -578,8 +588,8 @@ async fn save_error_writes_audit_line() {
 #[tokio::test]
 async fn create_error_writes_audit_line() {
     let (state, sid, csrf, bare_csrf, _tdp, td_memory) = authed_setup().await;
-    // Valid slug (passes validation, so we reach write_state) + an over-cap
-    // body (state_bytes cap is 2048) → WriteError::Full → create_state Err arm.
+    // Valid slug (passes validation, so we reach write_scratch) + an over-cap
+    // body (scratch_bytes cap is 2048) → WriteError::Full → create_scratch Err arm.
     let huge = "x".repeat(3000);
     let body = format!(
         "_csrf={csrf}&slug=toobig&body={huge}",
@@ -587,7 +597,7 @@ async fn create_error_writes_audit_line() {
     );
     let app = build_router(state.clone());
     let res = app
-        .oneshot(post_form("/memory/state", &sid, &csrf, body))
+        .oneshot(post_form("/memory/scratch", &sid, &csrf, body))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
@@ -595,19 +605,19 @@ async fn create_error_writes_audit_line() {
     let lines = read_audit_lines(&td_memory);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["op"], "create");
-    assert_eq!(lines[0]["kind"], "state");
+    assert_eq!(lines[0]["kind"], "scratch");
     assert_eq!(lines[0]["id"], "toobig");
     assert_eq!(lines[0]["result"], "error:file_full");
 }
 
 #[tokio::test]
-async fn delete_state_invalid_slug_400() {
+async fn delete_scratch_invalid_slug_400() {
     let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
     let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
     let app = build_router(state);
     let res = app
         .oneshot(post_form(
-            "/memory/state/..%2Fevil/delete",
+            "/memory/scratch/..%2Fevil/delete",
             &sid,
             &csrf,
             body,

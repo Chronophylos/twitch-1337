@@ -80,9 +80,14 @@ pub struct AiMemory {
     pub soul_bytes: usize,
     pub lore_bytes: usize,
     pub user_bytes: usize,
-    pub state_bytes: usize,
+    /// ADR-0003 renamed `state` to `scratch`. The alias reads settings.ron
+    /// files written before the rename; the next dashboard save rewrites them
+    /// under the new key, so no migration pass is needed.
+    #[serde(alias = "state_bytes")]
+    pub scratch_bytes: usize,
     pub inject_byte_budget: usize,
-    pub max_state_files: usize,
+    #[serde(alias = "max_state_files")]
+    pub max_scratch_files: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -209,9 +214,9 @@ impl Default for AiMemory {
             soul_bytes: 4096,
             lore_bytes: 12_288,
             user_bytes: 4096,
-            state_bytes: 2048,
+            scratch_bytes: 2048,
             inject_byte_budget: 24_576,
-            max_state_files: 16,
+            max_scratch_files: 16,
         }
     }
 }
@@ -303,6 +308,40 @@ mod tests {
         assert_eq!(b.persona_name, "Aurora");
     }
 
+    /// ADR-0003 renamed state -> scratch. Every settings.ron in the wild was
+    /// written with the old keys; without the serde aliases they'd fail to
+    /// parse (or silently fall back to defaults), quietly discarding whatever
+    /// caps the operator had configured.
+    #[test]
+    fn ai_memory_reads_pre_adr0003_state_keys() {
+        let legacy = r#"(
+            soul_bytes: 1,
+            lore_bytes: 2,
+            user_bytes: 3,
+            state_bytes: 4,
+            inject_byte_budget: 5,
+            max_state_files: 6,
+        )"#;
+        let m: AiMemory = ron::from_str(legacy).expect("legacy state_* keys must still parse");
+        assert_eq!(m.scratch_bytes, 4);
+        assert_eq!(m.max_scratch_files, 6);
+    }
+
+    #[test]
+    fn ai_memory_reads_new_scratch_keys() {
+        let current = r#"(
+            soul_bytes: 1,
+            lore_bytes: 2,
+            user_bytes: 3,
+            scratch_bytes: 4,
+            inject_byte_budget: 5,
+            max_scratch_files: 6,
+        )"#;
+        let m: AiMemory = ron::from_str(current).expect("new keys must parse");
+        assert_eq!(m.scratch_bytes, 4);
+        assert_eq!(m.max_scratch_files, 6);
+    }
+
     #[test]
     fn ai_emotes_defaults_pin_soul_reflexes_and_widen_window() {
         let e = AiEmotes::default();
@@ -328,9 +367,9 @@ mod tests {
         assert_eq!(s.memory.soul_bytes, 4096);
         assert_eq!(s.memory.lore_bytes, 12_288);
         assert_eq!(s.memory.user_bytes, 4096);
-        assert_eq!(s.memory.state_bytes, 2048);
+        assert_eq!(s.memory.scratch_bytes, 2048);
         assert_eq!(s.memory.inject_byte_budget, 24_576);
-        assert_eq!(s.memory.max_state_files, 16);
+        assert_eq!(s.memory.max_scratch_files, 16);
         assert!(s.dreamer.enabled);
         assert_eq!(s.dreamer.run_at, "04:00");
         assert_eq!(s.dreamer.timeout_secs, 120);

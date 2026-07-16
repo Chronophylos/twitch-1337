@@ -142,12 +142,13 @@ pub struct AiMemoryOverrides {
     pub lore_bytes: Option<usize>,
     #[serde(default)]
     pub user_bytes: Option<usize>,
-    #[serde(default)]
-    pub state_bytes: Option<usize>,
+    // ADR-0003 rename; aliases read pre-rename settings.ron files.
+    #[serde(default, alias = "state_bytes")]
+    pub scratch_bytes: Option<usize>,
     #[serde(default)]
     pub inject_byte_budget: Option<usize>,
-    #[serde(default)]
-    pub max_state_files: Option<usize>,
+    #[serde(default, alias = "max_state_files")]
+    pub max_scratch_files: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

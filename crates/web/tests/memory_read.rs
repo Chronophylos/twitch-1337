@@ -81,8 +81,8 @@ async fn tree_renders_section_counts() {
         .unwrap();
     state
         .memory_store
-        .write_state(
-            &FileKind::State {
+        .write_scratch(
+            &FileKind::Scratch {
                 slug: "quiz".into(),
             },
             "state body",
@@ -100,8 +100,8 @@ async fn tree_renders_section_counts() {
         "expected users count; got {html}"
     );
     assert!(
-        html.contains(">1 <span class=\"stat-unit\">state</span>"),
-        "expected state count; got {html}"
+        html.contains(">1 <span class=\"stat-unit\">notes</span>"),
+        "expected scratch count; got {html}"
     );
 }
 
@@ -155,7 +155,7 @@ async fn view_state_with_traversal_slug_400() {
     let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
     let app = build_router(state);
     let res = app
-        .oneshot(get("/memory/state/..", &sid, &csrf))
+        .oneshot(get("/memory/scratch/..", &sid, &csrf))
         .await
         .unwrap();
     assert_eq!(
@@ -166,20 +166,20 @@ async fn view_state_with_traversal_slug_400() {
 }
 
 #[tokio::test]
-async fn view_state_new_resolves_to_create_form() {
+async fn view_scratch_new_resolves_to_create_form() {
     let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
     let app = build_router(state);
     let res = app
-        .oneshot(get("/memory/state/new", &sid, &csrf))
+        .oneshot(get("/memory/scratch/new", &sid, &csrf))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_string(res).await;
-    // The literal `/memory/state/new` route must win over the dynamic
-    // `/memory/state/{slug}` capture. The new-form title is unique.
+    // The literal `/memory/scratch/new` route must win over the dynamic
+    // `/memory/scratch/{slug}` capture. The new-form title is unique.
     assert!(
-        html.contains("new state note"),
-        "expected new-state form, got {html}"
+        html.contains("new scratch note"),
+        "expected new-scratch form, got {html}"
     );
     // Guard against accidentally rendering the {slug=new} viewer instead:
     assert!(
@@ -189,18 +189,18 @@ async fn view_state_new_resolves_to_create_form() {
 }
 
 #[tokio::test]
-async fn state_list_renders_existing() {
+async fn scratch_list_renders_existing() {
     let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
     for slug in ["alpha", "bravo"] {
         state
             .memory_store
-            .write_state(&FileKind::State { slug: slug.into() }, "x", Some("9001"))
+            .write_scratch(&FileKind::Scratch { slug: slug.into() }, "x", Some("9001"))
             .await
             .unwrap();
     }
     let app = build_router(state);
     let res = app
-        .oneshot(get("/memory/state", &sid, &csrf))
+        .oneshot(get("/memory/scratch", &sid, &csrf))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -208,7 +208,7 @@ async fn state_list_renders_existing() {
     assert!(html.contains("alpha"), "expected slug alpha; got {html}");
     assert!(html.contains("bravo"), "expected slug bravo; got {html}");
     assert!(
-        html.contains("State <span class=\"count\">(2)</span>"),
+        html.contains("Scratch <span class=\"count\">(2)</span>"),
         "expected count in title; got {html}"
     );
 }
