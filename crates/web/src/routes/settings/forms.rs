@@ -6,8 +6,8 @@
 use serde::Deserialize;
 use twitch_1337_core::settings::overrides::{
     AiBehaviorOverrides, AiConnectionOverrides, AiDreamerOverrides, AiEmotesOverrides,
-    AiHistoryOverrides, AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides, AiWebOverrides,
-    AviationstackOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
+    AiGrokOverrides, AiHistoryOverrides, AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides,
+    AiWebOverrides, AviationstackOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
 };
 use twitch_1337_core::settings::{
     AiBackendKind, AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides,
@@ -249,6 +249,28 @@ impl AiDreamerForm {
             timeout_secs: self.ai_dreamer_timeout_secs,
             max_rounds: self.ai_dreamer_max_rounds,
             max_writes_per_turn: self.ai_dreamer_max_writes_per_turn,
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct AiGrokForm {
+    #[serde(default)]
+    ai_grok_model: Option<String>,
+    #[serde(default)]
+    ai_grok_reasoning_effort: Option<String>,
+    #[serde(default)]
+    ai_grok_service_tier: Option<String>,
+}
+
+impl AiGrokForm {
+    fn into_overrides(self) -> AiGrokOverrides {
+        AiGrokOverrides {
+            model: self
+                .ai_grok_model
+                .map(|v| if v.is_empty() { None } else { Some(v) }),
+            reasoning_effort: segmented_tri_state(self.ai_grok_reasoning_effort),
+            service_tier: segmented_tri_state(self.ai_grok_service_tier),
         }
     }
 }
@@ -564,7 +586,12 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
                 ai_dreamer_max_writes_per_turn: form.ai_dreamer_max_writes_per_turn,
             }
             .into_overrides(),
-            grok: Default::default(),
+            grok: AiGrokForm {
+                ai_grok_model: form.ai_grok_model,
+                ai_grok_reasoning_effort: form.ai_grok_reasoning_effort,
+                ai_grok_service_tier: form.ai_grok_service_tier,
+            }
+            .into_overrides(),
             prefill: AiPrefillForm {
                 ai_prefill_card_visible: form.ai_prefill_card_visible,
                 ai_prefill_enabled: form.ai_prefill_enabled,
@@ -728,7 +755,22 @@ mod tests {
             ..Default::default()
         }
         .into_overrides();
+        let grok_ov = AiGrokForm {
+            ai_grok_service_tier: Some("priority".to_string()),
+            ..Default::default()
+        }
+        .into_overrides();
+        let grok_ov2 = AiGrokForm {
+            ai_grok_service_tier: Some("none".to_string()),
+            ..Default::default()
+        }
+        .into_overrides();
         assert!(matches!(conn_ov2.service_tier, Some(None)));
         assert!(matches!(dream_ov2.service_tier, Some(None)));
+        assert_eq!(
+            grok_ov.service_tier.as_ref().and_then(|v| v.as_deref()),
+            Some("priority")
+        );
+        assert!(matches!(grok_ov2.service_tier, Some(None)));
     }
 }

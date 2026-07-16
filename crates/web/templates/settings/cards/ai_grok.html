@@ -1,0 +1,74 @@
+{# crates/web/templates/settings/cards/ai_grok.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-grok" class="settings-card" data-section="ai_grok">
+  <header class="settings-card-head">
+    <div>
+      <h2>AI · Grok</h2>
+      <p>Optional model overrides for the @grok alias. Empty = use AI · Connection.</p>
+    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+  </header>
+  <div class="settings-rows">
+    {% let grok_model = current.ai.grok.model.as_deref().unwrap_or("") %}
+    <div class="settings-row" data-section="ai_grok">
+      {% call m::row_head("model", "Override the model used for @grok turns. Empty = use connection.model.") %}{% endcall %}
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true">{% if grok_model.is_empty() %}<span class="muted">(connection)</span>{% else %}{{ grok_model }}{% endif %}</span>
+        <input type="text"
+               class="text-input"
+               name="ai_grok_model"
+               list="ai-models-grok"
+               value="{{ grok_model }}"
+               placeholder="(use connection model)"
+               data-default=""
+               data-key="ai.grok.model"
+               data-scope="grok"
+               data-models-url="/settings/ai/models?scope=grok">
+        <datalist id="ai-models-grok"></datalist>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.grok.model") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(connection)</span></span>
+      </div>
+    </div>
+
+    {% let grok_effort = current.ai.grok.reasoning_effort.as_deref().unwrap_or("none") %}
+    <div class="settings-row" data-section="ai_grok">
+      {% call m::row_head("reasoning_effort", "Override reasoning_effort for @grok turns.") %}{% endcall %}
+      <div class="row-control-cell">
+        <div class="segmented" role="radiogroup" aria-label="reasoning_effort">
+          {% call m::effort_segment("ai_grok_reasoning_effort", "ai.grok.reasoning_effort", "none", grok_effort) %}{% endcall %}
+          {% call m::effort_segment("ai_grok_reasoning_effort", "ai.grok.reasoning_effort", "minimal", grok_effort) %}{% endcall %}
+          {% call m::effort_segment("ai_grok_reasoning_effort", "ai.grok.reasoning_effort", "medium", grok_effort) %}{% endcall %}
+          {% call m::effort_segment("ai_grok_reasoning_effort", "ai.grok.reasoning_effort", "high", grok_effort) %}{% endcall %}
+          {% call m::effort_segment("ai_grok_reasoning_effort", "ai.grok.reasoning_effort", "xhigh", grok_effort) %}{% endcall %}
+        </div>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.grok.reasoning_effort") %}{% endcall %}
+        <span class="row-default">default <span class="mono">none</span></span>
+      </div>
+    </div>
+
+    {% let grok_base_url = current.ai.connection.base_url.as_deref().unwrap_or("") %}
+    {% let grok_or = current.ai.connection.backend.as_str() == "openai" && (grok_base_url.is_empty() || grok_base_url.contains("openrouter.ai")) %}
+    {% if grok_or %}
+    {% let grok_tier = current.ai.grok.service_tier.as_deref().unwrap_or("none") %}
+    <div class="settings-row" data-section="ai_grok">
+      {% call m::row_head("service_tier", "Override OpenRouter pricing tier for @grok turns. Falls back to connection tier when set to Default.") %}{% endcall %}
+      <div class="row-control-cell">
+        <div class="segmented" role="radiogroup" aria-label="service_tier">
+          {% call m::tier_segment("ai_grok_service_tier", "ai.grok.service_tier", "none", "Default", grok_tier) %}{% endcall %}
+          {% call m::tier_segment("ai_grok_service_tier", "ai.grok.service_tier", "flex", "Flex", grok_tier) %}{% endcall %}
+          {% call m::tier_segment("ai_grok_service_tier", "ai.grok.service_tier", "priority", "Priority", grok_tier) %}{% endcall %}
+        </div>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.grok.service_tier") %}{% endcall %}
+        <span class="row-default">default <span class="mono">Default</span></span>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</section>
