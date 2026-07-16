@@ -184,6 +184,7 @@ impl SettingsStore {
             SettingsSection::AiHistory => current.ai.history = Default::default(),
             SettingsSection::AiMemory => current.ai.memory = Default::default(),
             SettingsSection::AiDreamer => current.ai.dreamer = Default::default(),
+            SettingsSection::AiGrok => current.ai.grok = Default::default(),
             SettingsSection::AiPrefill => current.ai.prefill = Default::default(),
             SettingsSection::AiWeb => current.ai.web = Default::default(),
             SettingsSection::AiEmotes => current.ai.emotes = Default::default(),

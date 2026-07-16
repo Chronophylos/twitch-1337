@@ -87,6 +87,7 @@ pub enum SettingsSection {
     AiHistory,
     AiMemory,
     AiDreamer,
+    AiGrok,
     AiPrefill,
     AiWeb,
     AiEmotes,

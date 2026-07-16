@@ -107,6 +107,16 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.ai.dreamer.max_writes_per_turn {
         into.ai.dreamer.max_writes_per_turn = Some(v);
     }
+    // AI grok
+    if patch.ai.grok.model.is_some() {
+        into.ai.grok.model = patch.ai.grok.model.clone();
+    }
+    if patch.ai.grok.reasoning_effort.is_some() {
+        into.ai.grok.reasoning_effort = patch.ai.grok.reasoning_effort.clone();
+    }
+    if patch.ai.grok.service_tier.is_some() {
+        into.ai.grok.service_tier = patch.ai.grok.service_tier.clone();
+    }
     // AI prefill
     if let Some(v) = patch.ai.prefill.enabled {
         into.ai.prefill.enabled = Some(v);
@@ -233,6 +243,22 @@ mod tests {
     use crate::settings::overrides::{
         AviationstackOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
     };
+
+    #[test]
+    fn patch_round_trips_service_tier_on_grok() {
+        let mut into = SettingsOverrides::default();
+        let mut patch = SettingsOverrides::default();
+        patch.ai.grok.service_tier = Some(Some("flex".to_string()));
+        merge_into(&mut into, &patch);
+        assert_eq!(
+            into.ai
+                .grok
+                .service_tier
+                .as_ref()
+                .and_then(|v| v.as_deref()),
+            Some("flex")
+        );
+    }
 
     #[test]
     fn patch_round_trips_service_tier_on_connection_and_dreamer() {

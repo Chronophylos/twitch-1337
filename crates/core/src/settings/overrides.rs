@@ -87,6 +87,8 @@ pub struct AiOverrides {
     #[serde(default)]
     pub dreamer: AiDreamerOverrides,
     #[serde(default)]
+    pub grok: AiGrokOverrides,
+    #[serde(default)]
     pub prefill: AiPrefillOverrides,
     #[serde(default)]
     pub web: AiWebOverrides,
@@ -166,6 +168,16 @@ pub struct AiDreamerOverrides {
     pub max_rounds: Option<usize>,
     #[serde(default)]
     pub max_writes_per_turn: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiGrokOverrides {
+    #[serde(default)]
+    pub model: Option<Option<String>>,
+    #[serde(default)]
+    pub reasoning_effort: Option<Option<String>>,
+    #[serde(default)]
+    pub service_tier: Option<Option<String>>,
 }
 
 /// `threshold` is `f64`; manual `PartialEq`/`Eq` use bit comparison.

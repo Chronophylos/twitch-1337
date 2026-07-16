@@ -240,6 +240,10 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
             "ai.dreamer.reasoning_effort",
             ai.dreamer.reasoning_effort.as_deref(),
         ),
+        (
+            "ai.grok.reasoning_effort",
+            ai.grok.reasoning_effort.as_deref(),
+        ),
     ] {
         if let Some(v) = val
             && v.trim().is_empty()
@@ -256,6 +260,7 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
             "ai.dreamer.service_tier",
             ai.dreamer.service_tier.as_deref(),
         ),
+        ("ai.grok.service_tier", ai.grok.service_tier.as_deref()),
     ] {
         if let Some(v) = val {
             let trimmed = v.trim();
@@ -470,6 +475,33 @@ mod tests {
             })
             .expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.connection.base_url"));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_grok_service_tier_value() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.grok.service_tier = Some("turbo".to_string());
+        let err = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("'turbo' must be rejected");
+        assert!(
+            err.iter().any(|e| e.field == "ai.grok.service_tier"),
+            "expected field error for ai.grok.service_tier, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_grok_reasoning_effort() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.grok.reasoning_effort = Some("   ".into());
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.grok.reasoning_effort"));
     }
 
     #[test]
