@@ -14,8 +14,8 @@ to type `1337`, and the bot keeps score.
 ## What it does
 
 - **The 13:37 ritual.** For one minute a day it watches for `1337`/`DANKIES` and
-  records who typed it fastest, down to the millisecond. `!lb` shows the
-  all-time record; `!sb` / `!pw` cover the hall of shame (slowest).
+  records who typed it fastest, down to the millisecond. `!lb` / `!pb` show
+  the all-time / personal bests; `!sb` / `!pw` cover the hall of shame (slowest).
 - **Aviation toys.** What's flying overhead right now (`!up`), a random but
   plausible flight plan (`!fl`), and live tracking of one aircraft from takeoff
   to landing (`!track`).
