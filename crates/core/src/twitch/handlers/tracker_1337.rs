@@ -113,12 +113,20 @@ pub fn remaining_ms_in_minute(ms: u64) -> u64 {
 }
 
 /// Formats remaining time in the :37 minute for chat: milliseconds when ≤999ms,
-/// otherwise nearest whole seconds (`1s`, `10s`, …).
+/// otherwise seconds with at most one decimal digit (`1.2s`, `10s`, …).
+/// Whole seconds omit the fractional part (`9000ms` → `9s`, not `9.0s`).
 pub fn format_remaining(ms: u64) -> String {
     let remaining = remaining_ms_in_minute(ms);
     if remaining > 999 {
-        let secs = (remaining + 500) / 1000;
-        format!("{secs}s")
+        // Nearest tenth of a second.
+        let tenths = (remaining + 50) / 100;
+        let whole = tenths / 10;
+        let frac = tenths % 10;
+        if frac == 0 {
+            format!("{whole}s")
+        } else {
+            format!("{whole}.{frac}s")
+        }
     } else {
         format!("{remaining}ms")
     }
@@ -777,15 +785,17 @@ mod tests {
     }
 
     #[test]
-    fn format_remaining_uses_ms_under_one_second_else_rounded_seconds() {
+    fn format_remaining_uses_ms_under_one_second_else_tenths_of_seconds() {
         // remaining 999 → ms
         assert_eq!(format_remaining(59_001), "999ms");
-        // remaining 1000 → 1s
+        // remaining 1000 → whole second, no decimal
         assert_eq!(format_remaining(59_000), "1s");
-        // remaining 1209 → rounds to 1s
-        assert_eq!(format_remaining(58_791), "1s");
-        // remaining 1500 → rounds to 2s
-        assert_eq!(format_remaining(58_500), "2s");
+        // remaining 1209 → 1.2s
+        assert_eq!(format_remaining(58_791), "1.2s");
+        // remaining 1300 → 1.3s
+        assert_eq!(format_remaining(58_700), "1.3s");
+        // remaining 9000 → 9s (omit .0)
+        assert_eq!(format_remaining(51_000), "9s");
         // remaining 10_000 → 10s
         assert_eq!(format_remaining(50_000), "10s");
     }

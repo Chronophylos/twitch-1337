@@ -241,8 +241,8 @@ async fn tracker_1337_posts_slowest_only_for_final_ten_seconds() {
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
     assert!(
-        stats.contains("Am langsamsten war charlie mit 1s übrig"),
-        "expected slowest remaining as rounded seconds, got: {stats}"
+        stats.contains("Am langsamsten war charlie mit 1.3s übrig"),
+        "expected slowest remaining as tenths of seconds, got: {stats}"
     );
     assert!(
         !stats.contains("1300ms"),

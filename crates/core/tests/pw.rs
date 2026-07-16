@@ -30,7 +30,7 @@ async fn pw_returns_callers_own_pw() {
     bot.send("alice", "!pw").await;
     let out = bot.expect_say(Duration::from_secs(2)).await;
     assert!(out.contains("Dein PW"), "missing self phrasing: {out}");
-    assert!(out.contains("1s übrig"), "missing remaining: {out}");
+    assert!(out.contains("1.2s übrig"), "missing remaining: {out}");
     assert!(out.contains("17.04.2026"), "missing date: {out}");
 
     bot.shutdown().await;
@@ -49,7 +49,7 @@ async fn pw_returns_other_user_pw() {
         out.contains("PW von alice"),
         "missing other phrasing: {out}"
     );
-    assert!(out.contains("1s übrig"), "missing remaining: {out}");
+    assert!(out.contains("1.2s übrig"), "missing remaining: {out}");
     assert!(out.contains("17.04.2026"), "missing date: {out}");
 
     bot.shutdown().await;
@@ -68,7 +68,7 @@ async fn pw_handles_at_prefix_and_case() {
         out.contains("PW von alice"),
         "missing other phrasing: {out}"
     );
-    assert!(out.contains("1s übrig"), "missing remaining: {out}");
+    assert!(out.contains("1.2s übrig"), "missing remaining: {out}");
 
     bot.shutdown().await;
 }

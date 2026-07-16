@@ -35,8 +35,8 @@ async fn sb_returns_slowest_personal_worst() {
     let out = bot.expect_say(Duration::from_secs(2)).await;
     assert!(out.contains("alice"), "missing alice: {out}");
     assert!(
-        out.contains("1s übrig"),
-        "expected remaining as rounded seconds, got: {out}"
+        out.contains("1.2s übrig"),
+        "expected remaining as tenths of seconds, got: {out}"
     );
     assert!(out.contains("17.04.2026"), "missing date: {out}");
     assert!(!out.contains("bob"), "only worst should show: {out}");
