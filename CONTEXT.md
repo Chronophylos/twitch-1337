@@ -59,3 +59,65 @@ _Avoid_: dropped, timed out.
 A Tracked Flight removed because its assigned aircraft never appeared on ADS-B
 within the pending window after tracking began.
 _Avoid_: gave up, abandoned.
+
+## AI memory, scratch, and transcripts
+
+**Memory**:
+The durable, curated record the bot keeps of itself and its chat — the Soul, the
+Lore, and one Character Sheet per user. Only the Dreamer rewrites it, and it is
+meant to last indefinitely. Scratch and Transcripts are *not* Memory.
+_Avoid_: durable memory (redundant), long-term memory, memories.
+
+**Soul**:
+The bot's self-image: who it is, how it speaks, what it cares about. One per bot,
+and the most stable thing in the tree.
+_Avoid_: persona, identity, system prompt (the Soul is injected into the prompt;
+it is not the prompt).
+
+**Lore**:
+The durable culture of the chat as a whole — running bits, dynamics, shared
+history. What belongs to no single user.
+_Avoid_: history, context, chat memory.
+
+**Character Sheet**:
+One user's durable Memory: their interests, bits, and relationships to other
+regulars. What remains after a day's events are drained into it.
+_Avoid_: user file, profile, user memory.
+
+**Scratch**:
+A short-lived note the bot writes for itself mid-conversation — a running quiz, a
+reminder, a pinned request. Not Memory: the Dreamer drains whatever is worth
+keeping and deletes the rest.
+_Avoid_: state (reserved for the persisted flight record), volatile state,
+working memory, cache.
+
+**Transcript**:
+The raw verbatim log of one day's channel messages. Not Memory: nobody curates
+it, and it exists to be the Ritual's input.
+_Avoid_: log, raw memory, chat history, recent chat.
+
+**Recent Chat**:
+The rolling window of the latest messages shown to the bot during a single chat
+turn so it knows what was just said. Distinct from the Transcript — a per-turn
+window, never curated, never read by the Ritual.
+_Avoid_: history, transcript, context window.
+
+**Drain**:
+Moving the substance of a Scratch note or a day's Transcript into the Memory
+where it belongs, then discarding the source. The Dreamer's central move.
+_Avoid_: merge, consolidate, summarize, compact.
+
+**Dreamer**:
+The bot's nightly self-revision persona: the actor that reads everything and
+rewrites Memory. Never a Twitch user, though it outranks every user role.
+_Avoid_: the Ritual (that is the pass, not the actor), night pass, compactor.
+
+**Ritual**:
+The nightly pass in which the Dreamer rewrites Memory from the previous day's
+Transcript and the current Scratch.
+_Avoid_: dream, run, job, cron.
+
+**Stable Slug**:
+A Scratch note's name, required to carry no date. A dated name pins a note to a
+single day, which is what stops the Dreamer from consolidating it.
+_Avoid_: key, id, filename.
