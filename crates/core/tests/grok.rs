@@ -239,3 +239,90 @@ async fn grok_uses_web_tools_when_enabled() {
 
     bot.shutdown().await;
 }
+
+#[tokio::test]
+async fn grok_uses_override_model_effort_and_tier() {
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+            o.ai.connection.model = Some("test-model".into());
+            o.ai.connection.reasoning_effort = Some(Some("minimal".into()));
+            o.ai.connection.service_tier = Some(Some("priority".into()));
+            o.ai.grok.model = Some(Some("x-ai/grok-4".into()));
+            o.ai.grok.reasoning_effort = Some(Some("high".into()));
+            o.ai.grok.service_tier = Some(Some("flex".into()));
+        })
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("ok");
+
+    let mut bot = bot;
+    bot.send("alice", "@grok sag hallo").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+
+    let calls = bot.llm.tool_calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].model, "x-ai/grok-4");
+    assert_eq!(calls[0].reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(calls[0].service_tier.as_deref(), Some("flex"));
+
+    // PROMPT_SYSTEM / ai_instructions.md do not embed {model} or {model_id};
+    // resolved model is carried on the LLM request. @grok appendix proves alias path.
+    let system = calls[0]
+        .messages
+        .iter()
+        .find(|m| m.role == Role::System)
+        .expect("system message");
+    assert!(
+        system.content.contains("Grok-inspired"),
+        "expected @grok system appendix; got: {}",
+        system.content
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn grok_without_override_uses_connection_model() {
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+            o.ai.connection.model = Some("test-model".into());
+            o.ai.grok.model = None; // inherit
+        })
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("ok");
+
+    let mut bot = bot;
+    bot.send("alice", "@grok sag hallo").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+
+    let calls = bot.llm.tool_calls();
+    assert_eq!(calls[0].model, "test-model");
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn ai_ignores_grok_model_override() {
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+            o.ai.connection.model = Some("test-model".into());
+            o.ai.grok.model = Some(Some("x-ai/grok-4".into()));
+        })
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("ok");
+
+    let mut bot = bot;
+    bot.send("alice", "!ai sag hallo").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+
+    let calls = bot.llm.tool_calls();
+    assert_eq!(calls[0].model, "test-model");
+    bot.shutdown().await;
+}
