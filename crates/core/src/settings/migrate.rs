@@ -66,9 +66,13 @@ pub fn migrate_legacy_ai(root: &toml::Value) -> Result<AiOverrides> {
         out.memory.soul_bytes = usz(&v, "soul_bytes");
         out.memory.lore_bytes = usz(&v, "lore_bytes");
         out.memory.user_bytes = usz(&v, "user_bytes");
-        out.memory.scratch_bytes = usz(&v, "scratch_bytes");
+        // These lookup keys name the *legacy config.toml* format, which every
+        // config this reader will ever see predates ADR-0003 — so they stay
+        // `state_*`. Renaming them to `scratch_*` finds nothing and silently
+        // drops the operator's configured caps to defaults.
+        out.memory.scratch_bytes = usz(&v, "state_bytes");
         out.memory.inject_byte_budget = usz(&v, "inject_byte_budget");
-        out.memory.max_scratch_files = usz(&v, "max_scratch_files");
+        out.memory.max_scratch_files = usz(&v, "max_state_files");
     }
 
     if let Some(d) = ai.get("dreamer").and_then(|v| v.as_table()) {
@@ -504,7 +508,9 @@ mod tests {
             [ai.memory]
             soul_bytes = 8192
             lore_bytes = 16384
+            state_bytes = 3072
             inject_byte_budget = 32768
+            max_state_files = 24
 
             [ai.web]
             enabled = true
@@ -515,6 +521,11 @@ mod tests {
         assert_eq!(overrides.connection.model.as_deref(), Some("gemma3:4b"));
         assert_eq!(overrides.connection.timeout, Some(45));
         assert_eq!(overrides.memory.soul_bytes, Some(8192));
+        // Legacy config.toml predates ADR-0003, so the on-disk keys are
+        // `state_*`. If these lookups are ever renamed to `scratch_*` they find
+        // nothing and the operator's caps silently fall back to defaults.
+        assert_eq!(overrides.memory.scratch_bytes, Some(3072));
+        assert_eq!(overrides.memory.max_scratch_files, Some(24));
         assert_eq!(overrides.web.enabled, Some(true));
         assert_eq!(
             overrides.web.base_url.as_deref(),

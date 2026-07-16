@@ -245,7 +245,7 @@ fn subtitle_for_kind(kind: &FileKind) -> &'static str {
         FileKind::Soul => "The bot's stable self-description. Read on every `!ai` turn.",
         FileKind::Lore => "Channel-wide history and running threads.",
         FileKind::User { .. } => "Per-user character sheet.",
-        FileKind::Scratch { .. } => "Persistent state note.",
+        FileKind::Scratch { .. } => "Ephemeral scratch note.",
     }
 }
 
@@ -290,7 +290,7 @@ fn is_valid_user_id(s: &str) -> bool {
 const SLUG_VALIDATION_MSG: &str = "must be 1-64 chars, [a-zA-Z0-9._-], not `new`/`delete`, no `..`";
 
 /// `..` is the security-critical case: without it a `/memory/scratch/..` URL would
-/// reach `read_kind` and could escape `memories/state/` to leak SOUL.md or
+/// reach `read_kind` and could escape `memories/scratch/` to leak SOUL.md or
 /// LORE.md via the state viewer.
 fn slug_err() -> WebError {
     WebError::Validation {
@@ -598,7 +598,7 @@ async fn new_scratch_form(
 ) -> Result<Response, WebError> {
     let cap = state.memory_store.caps().scratch_bytes;
     let csrf_hex = csrf::encode(&session.csrf_value);
-    render_state_create(
+    render_scratch_create(
         StatusCode::OK,
         "",
         None,
@@ -618,7 +618,7 @@ async fn view_scratch(
     Path(slug): Path<String>,
 ) -> Result<Response, WebError> {
     validate_scratch_slug(&slug).map_err(|_| slug_err())?;
-    let title = format!("State / {slug}");
+    let title = format!("Scratch / {slug}");
     let save_url = format!("/memory/scratch/{slug}");
     let delete_url = format!("/memory/scratch/{slug}/delete");
     view_kind(
@@ -981,7 +981,7 @@ async fn save_scratch(
         &session,
         &cookies,
         FileKind::Scratch { slug: slug.clone() },
-        format!("state {slug}"),
+        format!("scratch {slug}"),
         slug,
         form,
         redirect,
@@ -1004,7 +1004,7 @@ async fn create_scratch(
     let cap = state.memory_store.caps().scratch_bytes;
 
     if validate_scratch_slug(&form.slug).is_err() {
-        return render_state_create(
+        return render_scratch_create(
             StatusCode::BAD_REQUEST,
             &form.body,
             Some(SLUG_VALIDATION_MSG.to_owned()),
@@ -1047,7 +1047,7 @@ async fn create_scratch(
                 None,
                 Some(form.body.len()),
             );
-            flash::set(&cookies, &format!("state `{slug}` created"));
+            flash::set(&cookies, &format!("scratch `{slug}` created"));
             Ok(Redirect::to(&format!("/memory/scratch/{slug}")).into_response())
         }
         Err(err) => {
@@ -1072,7 +1072,7 @@ async fn create_scratch(
                 None,
             );
             let msg = write_error_for_form(err)?;
-            render_state_create(
+            render_scratch_create(
                 StatusCode::BAD_REQUEST,
                 &form.body,
                 Some(msg),
@@ -1091,7 +1091,7 @@ async fn create_scratch(
 #[allow(clippy::too_many_arguments)]
 // 8 args is just past clippy's default of 7. Threading a struct here would
 // obscure the call sites without trimming any state; allow it locally.
-fn render_state_create(
+fn render_scratch_create(
     status: StatusCode,
     body: &str,
     error: Option<String>,
@@ -1108,7 +1108,7 @@ fn render_state_create(
         &EditorTpl {
             title: "new scratch note",
             subtitle: "A persistent note keyed by slug.",
-            meta_path: "memories/state/<slug>.md".to_owned(),
+            meta_path: "memories/scratch/<slug>.md".to_owned(),
             body,
             csrf: csrf_hex,
             mtime: 0,
@@ -1169,6 +1169,6 @@ async fn delete_scratch(
         None,
         None,
     );
-    flash::set(&cookies, &format!("state `{slug}` deleted"));
+    flash::set(&cookies, &format!("scratch `{slug}` deleted"));
     Ok(Redirect::to("/memory/scratch").into_response())
 }

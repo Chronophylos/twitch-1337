@@ -8,7 +8,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use eyre::{Result, WrapErr as _, eyre};
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::ai::memory::frontmatter;
 use crate::ai::memory::sanitize::normalize_display_name;
@@ -112,12 +112,21 @@ impl MemoryStore {
         if tokio::fs::try_exists(&legacy_scratch)
             .await
             .unwrap_or(false)
-            && !tokio::fs::try_exists(&scratch_dir).await.unwrap_or(false)
         {
-            tokio::fs::rename(&legacy_scratch, &scratch_dir)
-                .await
-                .wrap_err("migrate memories/state -> memories/scratch")?;
-            info!("Renamed memories/state -> memories/scratch (ADR-0003)");
+            if tokio::fs::try_exists(&scratch_dir).await.unwrap_or(false) {
+                // Both present: refuse to merge or clobber, but say so — a
+                // silent skip leaves notes stranded with no way to notice.
+                warn!(
+                    legacy = %legacy_scratch.display(),
+                    "legacy memories/state/ present alongside memories/scratch/; \
+                     not migrated (ADR-0003). Reconcile by hand and remove state/."
+                );
+            } else {
+                tokio::fs::rename(&legacy_scratch, &scratch_dir)
+                    .await
+                    .wrap_err("migrate memories/state -> memories/scratch")?;
+                info!("Renamed memories/state -> memories/scratch (ADR-0003)");
+            }
         }
 
         for p in [
