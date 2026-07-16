@@ -251,12 +251,6 @@ async fn build_state_inner_keep_settings(
         owner: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
         settings: settings_handle,
         settings_store,
-        ai_bootstrap: None,
-        model_cache: Arc::new(twitch_1337_web::routes::ai_models::ModelListCache::default()),
-        http: reqwest::Client::new(),
-        model_catalog: Arc::new(twitch_1337_core::ai::model_catalog::ModelCatalog::new(
-            reqwest::Client::new(),
-        )),
         telemetry,
     };
     (state, pings_dir, memory_dir, settings_dir)

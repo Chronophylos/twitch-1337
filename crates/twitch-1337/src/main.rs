@@ -441,12 +441,6 @@ async fn build_web_spawner(
         owner: Arc::new(arc_swap::ArcSwap::from_pointee(config.twitch.owner.clone())),
         settings,
         settings_store,
-        ai_bootstrap: config.ai.clone().map(Arc::new),
-        model_cache: Arc::new(twitch_1337_web::routes::ai_models::ModelListCache::default()),
-        http: reqwest::Client::new(),
-        model_catalog: Arc::new(twitch_1337_core::ai::model_catalog::ModelCatalog::new(
-            reqwest::Client::new(),
-        )),
         telemetry,
     };
 
