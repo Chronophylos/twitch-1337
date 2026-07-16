@@ -12,7 +12,7 @@
   <div class="settings-rows">
     {% call m::model_row("ai_media", "ai_media_model", "model",
        "Vision-capable model for media analysis.",
-       current.ai.media.model, defaults.ai.media.model, "media") %}{% endcall %}
+       current.ai.media.model, defaults.ai.media.model) %}{% endcall %}
     {% call m::num_row_bounded("ai_media", "ai_media_timeout", "timeout",
        "Per-request timeout for media calls.",
        current.ai.media.timeout, defaults.ai.media.timeout, "s", 5, 600) %}{% endcall %}

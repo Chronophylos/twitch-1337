@@ -124,7 +124,7 @@
 </div>
 {% endmacro %}
 
-{% macro model_row(section, field, key, hint, value, default, scope) %}
+{% macro model_row(section, field, key, hint, value, default) %}
 <div class="settings-row" data-section="{{ section }}">
   {% call row_head(key, hint) %}{% endcall %}
   <div class="row-control-cell">
@@ -132,13 +132,9 @@
     <input type="text"
            class="text-input"
            name="{{ field }}"
-           list="ai-models-{{ scope }}"
            value="{{ value }}"
            data-default="{{ default }}"
-           data-key="{{ key }}"
-           data-scope="{{ scope }}"
-           data-models-url="/settings/ai/models?scope={{ scope }}">
-    <datalist id="ai-models-{{ scope }}"></datalist>
+           data-key="{{ key }}">
   </div>
   <div class="row-right">
     {% call row_reset(key) %}{% endcall %}
