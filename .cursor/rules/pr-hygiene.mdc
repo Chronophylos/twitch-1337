@@ -15,12 +15,13 @@ alwaysApply: true
 
 Include **Summary** and **Test plan**.
 
-**Title** must be a Conventional Commit subject in the same **stupid subject** style as git commits (see `git-commits.mdc`) — squash merge uses the PR title as the squash commit message unless overridden. Do **not** use normal prose titles.
+**Title** must be a Conventional Commit subject in the same **maximum brainrot** style as git commits (see `git-commits.mdc`) — squash merge uses the PR title as the squash commit message unless overridden. Do **not** use normal prose or tame changelog titles. If it could pass as a corporate Jira summary, rewrite it dumber.
 
 Examples:
 
-- `feat(tracker): hall of shame just unlocked and its giving intentional L`
-- `fix(auth): token refresh was lowkey feral and not in a good way`
+- `feat(tracker): hall of shame just unlocked and chat is about to be so washed`
+- `fix(auth): token refresh was lowkey feral and not in a good way like at all`
+- `feat(ai): memory dreamer went full main character and we let it`
 
 Apply labels via `gh pr edit`:
 

@@ -21,12 +21,12 @@ Common types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `ci`, `perf`
 
 ## The juxtaposition
 
-Every commit is a **stupid subject, serious body** bit:
+Every commit is a **feral subject, serious body** bit. Crank the dial.
 
-- **Subject**: unhinged gen-z slang — brainrot, meme-y, lowercase chaos. The dumber the better.
-- **Body**: crisp, professional engineering prose. What changed, why, trade-offs. Complete sentences. Could go in a PR description or postmortem.
+- **Subject**: maximum unhinged gen-z / brainrot. Lowercase. Slang pile-up. Memes. Emoji OK. Sound like a sleep-deprived group chat that just discovered git. If a sober engineer would write that subject, rewrite it dumber. Prefer chaos over clever.
+- **Body**: crisp, professional engineering prose. What changed, why, trade-offs. Complete sentences. Could go in a PR description or postmortem. Zero slang here.
 
-The contrast is the point. Subject sounds like a group chat; body sounds like a staff engineer wrote it.
+The contrast is the entire joke. Subject = TikTok comment section. Body = staff engineer.
 
 ```bash
 git commit -m "$(cat <<'EOF'
@@ -42,10 +42,18 @@ EOF
 
 More subject examples (body always stays normal):
 
-- `feat(overlay): we cooked so hard the badge renderer is giving sigma grindset`
-- `fix(auth): token refresh was lowkey feral and not in a good way`
+- `feat(overlay): we cooked so hard the badge renderer is giving sigma grindset fr fr`
+- `fix(auth): token refresh was lowkey feral and not in a good way like at all`
 - `refactor(db): yeeted duplicate query into one function no thoughts head empty`
-- `chore(deps): bumped tokio bc living in 2023 is not the vibe`
+- `chore(deps): bumped tokio bc living in 2023 is literally not the vibe anymore`
+- `feat(tracker): hall of shame just unlocked and chat is about to be so washed`
+- `fix(ping): templates were catching bodies with the cr lf split no cap`
+
+**Anti-patterns for subjects** (too tame — rewrite):
+
+- `feat(tracker): add hall of shame commands` ← corporate. trash it.
+- `fix(auth): improve token refresh handling` ← LinkedIn. trash it.
+- Anything a changelog bot would write unchanged.
 
 ## Safety
 
