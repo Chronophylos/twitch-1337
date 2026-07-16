@@ -35,7 +35,7 @@ Pick exactly one `type:` per issue. `type:security` takes precedence over `type:
 | `system:ai` | LLM, `!ai` command, memory, prefill |
 | `system:aviation` | ADS-B, flight tracker, `!up`/`!fl`/`!track` |
 | `system:ping` | Ping subsystem — `!p`, ping templates, render/validate |
-| `system:tracker` | 1337 tracker + leaderboard (`!lb`) |
+| `system:tracker` | 1337 tracker + leaderboard (`!lb`) + hall of shame (`!sb`) |
 | `system:schedule` | Scheduled messages + hot-reload |
 | `system:irc` | IRC client core, broadcast channel, latency monitor |
 | `system:config` | `config.toml` schema, loader, file watcher |
