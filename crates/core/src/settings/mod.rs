@@ -25,8 +25,8 @@ mod validation;
 pub mod web;
 
 pub use ai::{
-    AiBackendKind, AiBehavior, AiConnection, AiDreamer, AiEmotes, AiHistory, AiMedia, AiMemory,
-    AiPrefill, AiSettings, AiWeb,
+    AiBackendKind, AiBehavior, AiConnection, AiDreamer, AiEmotes, AiGrok, AiHistory, AiMedia,
+    AiMemory, AiPrefill, AiSettings, AiWeb,
 };
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
