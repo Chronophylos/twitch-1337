@@ -181,6 +181,7 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .max_writes_per_turn
                 .unwrap_or(defaults.dreamer.max_writes_per_turn),
         },
+        grok: defaults.grok.clone(),
         prefill: resolve_prefill(defaults.prefill.as_ref(), &o.prefill),
         web: resolve_web(defaults.web.as_ref(), &o.web),
         emotes: resolve_emotes(defaults.emotes.as_ref(), &o.emotes),
