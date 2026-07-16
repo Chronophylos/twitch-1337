@@ -413,6 +413,7 @@ async fn settings_page_renders_all_ai_cards() {
         "sec-ai-history",
         "sec-ai-memory",
         "sec-ai-dreamer",
+        "sec-ai-grok",
         "sec-ai-prefill",
         "sec-ai-web",
         "sec-ai-emotes",
@@ -518,6 +519,132 @@ async fn settings_page_shows_openrouter_tiers_for_default_base_url() {
     assert!(
         html.contains("name=\"ai_dreamer_service_tier\""),
         "dreamer service_tier control must render for default OpenRouter base URL"
+    );
+    assert!(
+        html.contains("name=\"ai_grok_service_tier\""),
+        "grok service_tier control must render for default OpenRouter base URL"
+    );
+}
+
+#[tokio::test]
+async fn settings_page_renders_ai_grok_card() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let app = build_router(state);
+    let req = Request::builder()
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "owner GET /settings must 200");
+    let html = body_string(res).await;
+    assert!(
+        html.contains("sec-ai-grok"),
+        "settings page must render the Grok card section"
+    );
+    assert!(
+        html.contains("name=\"ai_grok_model\""),
+        "Grok model input must be present"
+    );
+    assert!(
+        html.contains("name=\"ai_grok_reasoning_effort\""),
+        "Grok reasoning_effort control must be present"
+    );
+}
+
+#[tokio::test]
+async fn post_settings_applies_ai_grok_model() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let app = build_router(state.clone());
+    let defaults = state.settings_store.defaults().clone();
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_grok_model", "x-ai/grok-4")]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::SEE_OTHER,
+        "Grok model save should redirect (303)",
+    );
+    let flash = read_flash(&res).expect("save must emit a flash cookie");
+    assert!(
+        flash.starts_with("Settings saved."),
+        "flash should start with the saved confirmation; got {flash:?}",
+    );
+    assert!(
+        !flash.contains("Restart bot"),
+        "grok model change is live; restart hint must NOT appear; got {flash:?}",
+    );
+    assert_eq!(
+        state.settings.load().ai.grok.model.as_deref(),
+        Some("x-ai/grok-4"),
+        "live handle must reflect saved Grok model override",
+    );
+}
+
+#[tokio::test]
+async fn post_settings_clears_ai_grok_model_when_empty() {
+    use twitch_1337_core::settings::overrides::{AiGrokOverrides, AiOverrides, SettingsOverrides};
+
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let actor = twitch_1337_core::settings::Actor {
+        user_id: "test".into(),
+        user_login: "test".into(),
+    };
+    state
+        .settings_store
+        .apply(
+            SettingsOverrides {
+                ai: AiOverrides {
+                    grok: AiGrokOverrides {
+                        model: Some(Some("x-ai/grok-4".into())),
+                        ..AiGrokOverrides::default()
+                    },
+                    ..AiOverrides::default()
+                },
+                ..SettingsOverrides::default()
+            },
+            actor,
+        )
+        .await
+        .expect("seed grok model override");
+    assert_eq!(
+        state.settings.load().ai.grok.model.as_deref(),
+        Some("x-ai/grok-4"),
+        "fixture must start with a grok model override",
+    );
+
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+    let app = build_router(state.clone());
+    let defaults = state.settings_store.defaults().clone();
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_grok_model", "")]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(
+        state.settings.load().ai.grok.model.is_none(),
+        "empty ai_grok_model must clear the override back to inherit connection",
     );
 }
 

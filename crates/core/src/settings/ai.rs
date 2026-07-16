@@ -14,6 +14,7 @@ pub struct AiSettings {
     pub history: AiHistory,
     pub memory: AiMemory,
     pub dreamer: AiDreamer,
+    pub grok: AiGrok,
     pub prefill: Option<AiPrefill>,
     pub web: Option<AiWeb>,
     pub emotes: Option<AiEmotes>,
@@ -101,6 +102,15 @@ pub struct AiDreamer {
     /// SOUL + LORE + many user files in one pass, so it defaults higher (32 vs
     /// the chat cap's 8). Both are bounded to the same `1..=64` range.
     pub max_writes_per_turn: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiGrok {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    /// OpenRouter service tier hint for `@grok` turns. Falls back to
+    /// `connection.service_tier` when `None`.
+    pub service_tier: Option<String>,
 }
 
 /// Prefill config — `threshold` is `f64` compared as bits to allow `Eq`.
@@ -334,5 +344,8 @@ mod tests {
         assert_eq!(s.media.max_image_size.as_u64(), 10 * 1024 * 1024);
         assert!(s.connection.service_tier.is_none());
         assert!(s.dreamer.service_tier.is_none());
+        assert!(s.grok.model.is_none());
+        assert!(s.grok.reasoning_effort.is_none());
+        assert!(s.grok.service_tier.is_none());
     }
 }

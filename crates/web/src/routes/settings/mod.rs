@@ -128,6 +128,14 @@ struct SaveForm {
     #[serde(default)]
     ai_dreamer_max_writes_per_turn: Option<usize>,
 
+    // ---- AI grok card ----
+    #[serde(default)]
+    ai_grok_model: Option<String>,
+    #[serde(default)]
+    ai_grok_reasoning_effort: Option<String>,
+    #[serde(default)]
+    ai_grok_service_tier: Option<String>,
+
     // ---- AI prefill toggle card ----
     /// Hidden marker so the handler can tell "card visible but unchecked"
     /// from "card not in form".

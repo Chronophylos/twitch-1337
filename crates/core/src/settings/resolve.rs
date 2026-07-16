@@ -93,7 +93,7 @@ impl Settings {
 }
 
 fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
-    use super::ai::{AiBehavior, AiConnection, AiDreamer, AiHistory, AiMedia, AiMemory};
+    use super::ai::{AiBehavior, AiConnection, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory};
     AiSettings {
         connection: AiConnection {
             backend: o.connection.backend.unwrap_or(defaults.connection.backend),
@@ -180,6 +180,20 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .dreamer
                 .max_writes_per_turn
                 .unwrap_or(defaults.dreamer.max_writes_per_turn),
+        },
+        grok: AiGrok {
+            model: match &o.grok.model {
+                Some(v) => v.clone(),
+                None => defaults.grok.model.clone(),
+            },
+            reasoning_effort: match &o.grok.reasoning_effort {
+                Some(v) => v.clone(),
+                None => defaults.grok.reasoning_effort.clone(),
+            },
+            service_tier: match &o.grok.service_tier {
+                Some(v) => v.clone(),
+                None => defaults.grok.service_tier.clone(),
+            },
         },
         prefill: resolve_prefill(defaults.prefill.as_ref(), &o.prefill),
         web: resolve_web(defaults.web.as_ref(), &o.web),
@@ -490,6 +504,34 @@ mod tests {
         let overrides = overrides::SettingsOverrides::default();
         let r = Settings::resolve(&defaults, &overrides);
         assert!(r.schedules.is_empty());
+    }
+
+    #[test]
+    fn grok_overrides_resolve_and_default_to_none() {
+        let defaults = Settings::compiled_defaults();
+        let mut ovr = overrides::SettingsOverrides::default();
+        // No grok patch → still None
+        let s = Settings::resolve(&defaults, &ovr);
+        assert!(s.ai.grok.model.is_none());
+        assert!(s.ai.grok.reasoning_effort.is_none());
+        assert!(s.ai.grok.service_tier.is_none());
+
+        ovr.ai.grok.model = Some(Some("x-ai/grok-4".into()));
+        ovr.ai.grok.reasoning_effort = Some(Some("high".into()));
+        ovr.ai.grok.service_tier = Some(Some("flex".into()));
+        let s = Settings::resolve(&defaults, &ovr);
+        assert_eq!(s.ai.grok.model.as_deref(), Some("x-ai/grok-4"));
+        assert_eq!(s.ai.grok.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(s.ai.grok.service_tier.as_deref(), Some("flex"));
+
+        // Explicit clear
+        ovr.ai.grok.model = Some(None);
+        ovr.ai.grok.reasoning_effort = Some(None);
+        ovr.ai.grok.service_tier = Some(None);
+        let s = Settings::resolve(&defaults, &ovr);
+        assert!(s.ai.grok.model.is_none());
+        assert!(s.ai.grok.reasoning_effort.is_none());
+        assert!(s.ai.grok.service_tier.is_none());
     }
 
     #[test]

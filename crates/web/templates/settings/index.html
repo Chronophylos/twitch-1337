@@ -48,7 +48,7 @@
     </div>
 
     <div class="settings-nav-group" data-group="ai">
-      {% call m::nav_group_head("ai", "AI", 9) %}{% endcall %}
+      {% call m::nav_group_head("ai", "AI", 10) %}{% endcall %}
       <div class="settings-nav-group-body" id="nav-group-body-ai">
         <ul class="settings-nav-group-items">
           {% call m::nav_section_item("ai-connection", "ai_connection", "Connection") %}{% endcall %}
@@ -56,6 +56,7 @@
           {% call m::nav_section_item("ai-history", "ai_history", "History") %}{% endcall %}
           {% call m::nav_section_item("ai-memory", "ai_memory", "Memory") %}{% endcall %}
           {% call m::nav_section_item("ai-dreamer", "ai_dreamer", "Dreamer") %}{% endcall %}
+          {% call m::nav_section_item("ai-grok", "ai_grok", "Grok") %}{% endcall %}
           {% call m::nav_section_item("ai-prefill", "ai_prefill", "Prefill") %}{% endcall %}
           {% call m::nav_section_item("ai-web", "ai_web", "Web tools") %}{% endcall %}
           {% call m::nav_section_item("ai-emotes", "ai_emotes", "Emotes") %}{% endcall %}
@@ -99,6 +100,7 @@
       {% include "settings/cards/ai_history.html" %}
       {% include "settings/cards/ai_memory.html" %}
       {% include "settings/cards/ai_dreamer.html" %}
+      {% include "settings/cards/ai_grok.html" %}
       {% include "settings/cards/ai_prefill.html" %}
       {% include "settings/cards/ai_web.html" %}
       {% include "settings/cards/ai_emotes.html" %}

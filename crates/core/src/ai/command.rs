@@ -367,10 +367,32 @@ where
         // Snapshot connection knobs once per turn so dashboard edits take
         // effect on the next invocation without a bot restart.
         let snap = self.settings.load();
-        let model = snap.ai.connection.model.clone();
         let connection = snap.ai.connection.clone();
-        let reasoning_effort = snap.ai.connection.reasoning_effort.clone();
-        let service_tier = snap.ai.connection.service_tier.clone();
+        let (model, reasoning_effort, service_tier) = if grok_alias {
+            (
+                snap.ai
+                    .grok
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| connection.model.clone()),
+                snap.ai
+                    .grok
+                    .reasoning_effort
+                    .clone()
+                    .or_else(|| connection.reasoning_effort.clone()),
+                snap.ai
+                    .grok
+                    .service_tier
+                    .clone()
+                    .or_else(|| connection.service_tier.clone()),
+            )
+        } else {
+            (
+                connection.model.clone(),
+                connection.reasoning_effort.clone(),
+                connection.service_tier.clone(),
+            )
+        };
         let persona_name = snap.ai.behavior.persona_name.clone();
         drop(snap);
 
