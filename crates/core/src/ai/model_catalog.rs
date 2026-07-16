@@ -90,17 +90,6 @@ impl ModelCatalog {
         }
     }
 
-    /// All OpenRouter models as `(id, normalized_label)` pairs for the dashboard picker.
-    pub async fn openrouter_model_entries(&self) -> Result<Vec<(String, String)>> {
-        let map = self.load_openrouter_catalog().await?;
-        let mut entries: Vec<_> = map
-            .into_iter()
-            .map(|(id, name)| (id, Self::normalize_name(&name)))
-            .collect();
-        entries.sort_by(|a, b| a.1.cmp(&b.1));
-        Ok(entries)
-    }
-
     async fn load_openrouter_catalog(&self) -> Result<HashMap<String, String>> {
         if let Some(map) = self.fresh_catalog() {
             return Ok(map);

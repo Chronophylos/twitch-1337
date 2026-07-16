@@ -44,7 +44,7 @@
 
     {% call m::model_row("ai_connection", "ai_connection_model", "model",
        "Model used for !ai chat turns.",
-       current.ai.connection.model, defaults.ai.connection.model, "connection") %}{% endcall %}
+       current.ai.connection.model, defaults.ai.connection.model) %}{% endcall %}
 
     {% call m::num_row_bounded("ai_connection", "ai_connection_timeout", "timeout",
        "Per-request timeout for chat completions.",

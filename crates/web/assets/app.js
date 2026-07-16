@@ -406,45 +406,6 @@ document.addEventListener(
   refreshAll();
 })();
 
-// ─── Model autocomplete datalist (Task 20) ───────────────────────────────────
-async function refreshModelDatalist(input) {
-  const url = input.dataset.modelsUrl;
-  const scope = input.dataset.scope;
-  if (!url || !scope) return;
-  let body;
-  try {
-    const res = await fetch(url, { credentials: 'same-origin' });
-    if (!res.ok) return;
-    body = await res.json();
-  } catch {
-    return;
-  }
-  const dl = document.getElementById(`ai-models-${scope}`);
-  if (!dl) return;
-  while (dl.firstChild) dl.removeChild(dl.firstChild);
-  for (const m of body.models ?? []) {
-    const opt = document.createElement('option');
-    opt.value = m.id;
-    opt.label = m.label;
-    dl.appendChild(opt);
-  }
-  if (body.error) {
-    input.setAttribute('aria-errormessage', body.error);
-  } else {
-    input.removeAttribute('aria-errormessage');
-  }
-}
-
-document.body.addEventListener('focusin', (evt) => {
-  const t = evt.target;
-  if (t instanceof HTMLInputElement && t.classList.contains('model-input')) {
-    if (!t.dataset.modelsLoaded) {
-      t.dataset.modelsLoaded = '1';
-      refreshModelDatalist(t);
-    }
-  }
-});
-
 // ─── Segmented selector active-state ─────────────────────────────────────────
 document.body.addEventListener('change', (evt) => {
   const radio = evt.target;

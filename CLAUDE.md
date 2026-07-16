@@ -152,9 +152,8 @@ Backend and connection `base_url` changes from the dashboard require a
 bot restart (UI shows a "restart required" badge). Everything else
 applies live via `SettingsHandle` (model, timeout, reasoning_effort,
 behavior limits, history caps, memory byte budgets, dreamer schedule,
-web tools, emotes, media). The `GET /settings/ai/models` endpoint
-proxies upstream `/v1/models` (OpenAI) or `/api/tags` (Ollama) with a
-5-minute TTL cache so the model picker can autocomplete.
+web tools, emotes, media). Model fields are plain text inputs — type the
+upstream model id exactly.
 
 OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config structs are `Deserialize`-only; do NOT add `Serialize` derive (closes credential-leak via debug dump).
 

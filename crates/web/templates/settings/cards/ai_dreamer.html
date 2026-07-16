@@ -28,14 +28,10 @@
         <input type="text"
                class="text-input"
                name="ai_dreamer_model"
-               list="ai-models-dreamer"
                value="{{ dreamer_model }}"
                placeholder="(use connection model)"
                data-default=""
-               data-key="ai.dreamer.model"
-               data-scope="dreamer"
-               data-models-url="/settings/ai/models?scope=dreamer">
-        <datalist id="ai-models-dreamer"></datalist>
+               data-key="ai.dreamer.model">
       </div>
       <div class="row-right">
         {% call m::row_reset("ai.dreamer.model") %}{% endcall %}
