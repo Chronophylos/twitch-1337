@@ -110,10 +110,6 @@ pub fn remaining_ms_in_minute(ms: u64) -> u64 {
     MINUTE_MS - ms
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired in hall-of-shame handler (follow-up task)")
-)]
 fn beats_own_worst(user: &str, ms: u64, map: &HashMap<String, PersonalWorst>) -> bool {
     map.get(user).map(|pw| pw.ms).is_none_or(|own| ms > own)
 }
@@ -421,7 +417,6 @@ pub async fn load_hall_of_shame(data_dir: &std::path::Path) -> HashMap<String, P
 /// Saves the all-time hall of shame to disk using atomic write+rename.
 ///
 /// Logs an error and continues if the write fails.
-#[expect(dead_code, reason = "wired in hall-of-shame handler (follow-up task)")]
 pub(crate) async fn save_hall_of_shame(
     hall_of_shame: &HashMap<String, PersonalWorst>,
     data_dir: &std::path::Path,
@@ -497,12 +492,17 @@ pub(crate) async fn monitor_1337_messages(
 ///
 /// Monitors messages during the 13:37 window, tracks unique users, and posts stats at 13:38.
 /// Runs continuously, resetting state daily.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "handler deps are injected individually for testability"
+)]
 pub async fn run_1337_handler<T, L>(
     broadcast_tx: broadcast::Sender<ServerMessage>,
     sender: Arc<ChatSender<T, L>>,
     channel: String,
     latency: Arc<AtomicU32>,
     leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
+    hall_of_shame: Arc<tokio::sync::RwLock<HashMap<String, PersonalWorst>>>,
     clock: Arc<dyn Clock>,
     data_dir: std::path::PathBuf,
 ) where
@@ -604,9 +604,9 @@ pub async fn run_1337_handler<T, L>(
                 slowest_user != *fastest_user || slowest_ms != *fastest_ms
             })
         {
-            let slowest_seconds = slowest_ms / 1000;
+            let remaining = remaining_ms_in_minute(slowest_ms);
             message.push_str(&format!(
-                " | Am langsamsten war {slowest_user} mit {slowest_seconds}s"
+                " | Am langsamsten war {slowest_user} mit {remaining}ms übrig"
             ));
         }
 
@@ -630,6 +630,23 @@ pub async fn run_1337_handler<T, L>(
                 }
             }
             save_leaderboard(&leaderboard_guard, &data_dir).await;
+        }
+
+        {
+            let users = total_users.lock().await;
+            let mut shame = hall_of_shame.write().await;
+            for (username, ms) in users.iter() {
+                if *ms >= SLOWEST_CHATTER_MIN_MS && beats_own_worst(username, *ms, &shame) {
+                    shame.insert(
+                        username.clone(),
+                        PersonalWorst {
+                            ms: *ms,
+                            date: today,
+                        },
+                    );
+                }
+            }
+            save_hall_of_shame(&shame, &data_dir).await;
         }
 
         // Post stats message

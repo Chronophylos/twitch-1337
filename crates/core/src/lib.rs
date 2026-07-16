@@ -136,6 +136,14 @@ pub struct Services {
             std::collections::HashMap<String, crate::twitch::handlers::tracker_1337::PersonalBest>,
         >,
     >,
+    /// Shared 1337 hall of shame. Created by the bin before handlers spawn so
+    /// the same `Arc` is handed to the IRC tracker handler (via `SpawnDeps`).
+    /// Commands wiring lands in a follow-up task.
+    pub hall_of_shame: Arc<
+        tokio::sync::RwLock<
+            std::collections::HashMap<String, crate::twitch::handlers::tracker_1337::PersonalWorst>,
+        >,
+    >,
     /// Sender half of the flight-tracker mpsc channel, wrapped in `Arc` so it
     /// can be cheaply cloned into `WebState`. `None` when aviation is disabled.
     /// The matching receiver lives in `aviation_tracker_rx` and is consumed by
@@ -198,6 +206,7 @@ where
         ping_names_rx,
         memory_store,
         leaderboard,
+        hall_of_shame,
         aviation_tracker_tx,
         aviation_tracker_rx,
         primary_history_tap,
@@ -271,6 +280,7 @@ where
         data_dir,
         doener,
         leaderboard,
+        hall_of_shame,
         ping_actor_tx: ping_actor_tx_inner,
         ping_actor_rx,
         ping_manager,

@@ -18,10 +18,10 @@ use wiremock::MockServer;
 
 use llm::LlmClient;
 use twitch_1337::{
-    PersonalBest, Services,
+    PersonalBest, PersonalWorst, Services,
     aviation::AviationClient,
     config::{AiBootstrap, Configuration},
-    load_leaderboard,
+    load_hall_of_shame, load_leaderboard,
     ping::{PingHandle, ping_actor_channel_full},
     run_bot,
     twitch::whisper::{self, WhisperError, WhisperSender},
@@ -76,6 +76,7 @@ pub struct TestBotBuilder {
     config: Configuration,
     now: DateTime<Utc>,
     seeded_leaderboard: Option<HashMap<String, PersonalBest>>,
+    seeded_hall_of_shame: Option<HashMap<String, PersonalWorst>>,
     whisper_failure: bool,
     emote_glossary_override: Option<String>,
     doener_base_url: Option<String>,
@@ -88,6 +89,7 @@ impl TestBotBuilder {
             config: Configuration::test_default(),
             now: "2026-04-18T11:00:00Z".parse().unwrap(),
             seeded_leaderboard: None,
+            seeded_hall_of_shame: None,
             whisper_failure: false,
             emote_glossary_override: None,
             doener_base_url: None,
@@ -148,6 +150,11 @@ impl TestBotBuilder {
         self
     }
 
+    pub fn with_seeded_hall_of_shame(mut self, entries: HashMap<String, PersonalWorst>) -> Self {
+        self.seeded_hall_of_shame = Some(entries);
+        self
+    }
+
     pub fn with_failing_whispers(mut self) -> Self {
         self.whisper_failure = true;
         self
@@ -193,6 +200,12 @@ impl TestBotBuilder {
             let path = data_dir.path().join("leaderboard.ron");
             let contents = ron::ser::to_string(entries).expect("serialize leaderboard");
             std::fs::write(&path, contents).expect("write leaderboard.ron");
+        }
+
+        if let Some(entries) = &self.seeded_hall_of_shame {
+            let path = data_dir.path().join("hall_of_shame.ron");
+            let contents = ron::ser::to_string(entries).expect("serialize hall of shame");
+            std::fs::write(&path, contents).expect("write hall_of_shame.ron");
         }
 
         let (adsb_mock, nominatim_mock, seventv_mock) = tokio::join!(
@@ -358,6 +371,9 @@ impl TestBotBuilder {
             memory_store,
             leaderboard: Arc::new(tokio::sync::RwLock::new(
                 load_leaderboard(data_dir.path()).await,
+            )),
+            hall_of_shame: Arc::new(tokio::sync::RwLock::new(
+                load_hall_of_shame(data_dir.path()).await,
             )),
             aviation_tracker_tx,
             aviation_tracker_rx,

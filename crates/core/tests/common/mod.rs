@@ -40,6 +40,25 @@ pub fn seed_leaderboard(
         .collect()
 }
 
+/// Build a hall-of-shame fixture from `(user, ms, date)` tuples for
+/// [`TestBotBuilder::with_seeded_hall_of_shame`].
+pub fn seed_hall_of_shame(
+    entries: &[(&str, u64, chrono::NaiveDate)],
+) -> std::collections::HashMap<String, twitch_1337_core::PersonalWorst> {
+    entries
+        .iter()
+        .map(|(user, ms, date)| {
+            (
+                (*user).to_string(),
+                twitch_1337_core::PersonalWorst {
+                    ms: *ms,
+                    date: *date,
+                },
+            )
+        })
+        .collect()
+}
+
 /// Assert that the next PRIVMSG from the bot contains `text`. Returns the full
 /// line so callers can do further assertions.
 #[allow(dead_code)]

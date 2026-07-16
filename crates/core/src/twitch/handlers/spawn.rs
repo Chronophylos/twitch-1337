@@ -38,7 +38,7 @@ use crate::{
             latency::run_latency_handler,
             router::run_message_router,
             schedule_runner::run_orchestrator,
-            tracker_1337::{PersonalBest, run_1337_handler},
+            tracker_1337::{PersonalBest, PersonalWorst, run_1337_handler},
         },
         whisper::WhisperSender,
     },
@@ -71,6 +71,7 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
 
     // 1337 tracker.
     pub leaderboard: Arc<RwLock<HashMap<String, PersonalBest>>>,
+    pub hall_of_shame: Arc<RwLock<HashMap<String, PersonalWorst>>>,
 
     // Generic commands (ping actor).
     pub ping_actor_tx: mpsc::Sender<PingCommand>,
@@ -137,6 +138,7 @@ where
         data_dir,
         doener,
         leaderboard,
+        hall_of_shame,
         ping_actor_tx,
         ping_actor_rx,
         ping_manager,
@@ -255,10 +257,11 @@ where
         let channel = config.twitch.channel.clone();
         let lat = latency_value.clone();
         let lb = leaderboard.clone();
+        let hos = hall_of_shame.clone();
         let clk = clock.clone();
         let dd = data_dir.clone();
         async move {
-            run_1337_handler(btx, sender, channel, lat, lb, clk, dd).await;
+            run_1337_handler(btx, sender, channel, lat, lb, hos, clk, dd).await;
         }
     });
 
