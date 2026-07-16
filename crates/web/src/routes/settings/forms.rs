@@ -564,6 +564,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
                 ai_dreamer_max_writes_per_turn: form.ai_dreamer_max_writes_per_turn,
             }
             .into_overrides(),
+            grok: Default::default(),
             prefill: AiPrefillForm {
                 ai_prefill_card_visible: form.ai_prefill_card_visible,
                 ai_prefill_enabled: form.ai_prefill_enabled,
