@@ -189,30 +189,31 @@ Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `fli
 
 ## Adding handler
 
-Handlers live in `src/twitch/handlers/` and are spawned from `src/lib.rs::run_bot`. Each handler is generic over `<T: Transport, L: LoginCredentials>` so integration tests can swap in a fake transport. Shared deps (clock, data_dir, llm, aviation) come from `Services` in `src/lib.rs`.
+Handlers live in `crates/core/src/twitch/handlers/`. `run_bot` (`crates/core/src/lib.rs`) calls `spawn_handlers` once; that factory owns every `JoinHandle` and the shutdown `tokio::select!`. Each handler is generic over `<T: Transport, L: LoginCredentials>` so integration tests can swap in a fake transport. Shared deps (clock, data_dir, llm, aviation) come from `Services` in `crates/core/src/lib.rs`, moved into `SpawnDeps`.
 
 ```rust
-// src/twitch/handlers/my_handler.rs
+// crates/core/src/twitch/handlers/my_handler.rs
 pub async fn run_my_handler<T, L>(
     broadcast_tx: broadcast::Sender<ServerMessage>,
     client: Arc<TwitchIRCClient<T, L>>,
-    /* other deps from Services as needed */
+    /* other deps from SpawnDeps as needed */
 ) where T: Transport, L: LoginCredentials { /* subscribe, filter, act */ }
 
-// src/lib.rs::run_bot: spawn + add to the final tokio::select! exit arm
+// crates/core/src/twitch/handlers/spawn.rs: add the dep to SpawnDeps,
+// spawn into HandlerSet, add an exit arm to the final tokio::select!
 ```
 
-Integration-testable via `TestBotBuilder` in `tests/common/`.
+Integration-testable via `TestBotBuilder` in `crates/core/tests/common/`.
 
 ## Key constants
 
-`src/twitch/handlers/tracker_1337.rs`: `TARGET_HOUR=13`, `TARGET_MINUTE=37`, `MAX_USERS=10_000`.
+`crates/core/src/twitch/handlers/tracker_1337.rs`: `TARGET_HOUR=13`, `TARGET_MINUTE=37`, `MAX_USERS=10_000`.
 
-`src/twitch/handlers/latency.rs`: `LATENCY_PING_INTERVAL=300s`, `LATENCY_EMA_ALPHA=0.2`.
+`crates/core/src/twitch/handlers/latency.rs`: `LATENCY_PING_INTERVAL=300s`, `LATENCY_EMA_ALPHA=0.2`.
 
-`src/aviation/tracker.rs`: `MAX_TRACKED_FLIGHTS=12`, `MAX_FLIGHTS_PER_USER=3`, `TRACKING_LOST_THRESHOLD=300s`, `TRACKING_LOST_REMOVAL=1800s`, `POLL_FAST/NORMAL/SLOW=30/60/120s`.
+`crates/core/src/aviation/tracker/mod.rs`: `MAX_TRACKED_FLIGHTS=12`, `MAX_FLIGHTS_PER_USER=3`, `TRACKING_LOST_THRESHOLD=300s`, `TRACKING_LOST_REMOVAL=1800s`, `POLL_FAST/NORMAL/SLOW=30/60/120s`.
 
-`src/aviation/tracker/debug_journal.rs`: `DEBUG_JOURNAL_KEEP_FILES=30` (daily JSONL files retained under `$DATA_DIR/flight-tracker-debug/`; older pruned on tracker startup + date-rollover).
+`crates/core/src/aviation/tracker/debug_journal.rs`: `DEBUG_JOURNAL_KEEP_FILES=30` (daily JSONL files retained under `$DATA_DIR/flight-tracker-debug/`; older pruned on tracker startup + date-rollover).
 
 ## Binary / Docker
 
