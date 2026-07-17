@@ -1,5 +1,6 @@
 //! Tool args + definitions for the v2 chat-turn and dreamer loops.
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
@@ -107,7 +108,7 @@ pub struct ChatTurnExecutorOpts {
     pub max_writes_per_turn: usize,
     /// Paths `read_memory` may serve, from the turn's memory manifest. Empty for
     /// Aurora turns, which have no `read_memory` tool registered at all.
-    pub readable_paths: std::collections::BTreeSet<String>,
+    pub readable_paths: BTreeSet<String>,
     /// Nonce for fencing `read_memory` results. Same nonce as the turn's
     /// injected blocks so the model sees one consistent fence scheme.
     pub inject_nonce: String,
@@ -386,7 +387,7 @@ impl DreamerExecutor {
                 speaker_display_name: String::new(),
                 speaker_role: Role::Dreamer,
                 max_writes_per_turn: opts.max_writes_per_turn,
-                readable_paths: std::collections::BTreeSet::new(),
+                readable_paths: BTreeSet::new(),
                 inject_nonce: String::new(),
             }),
         }

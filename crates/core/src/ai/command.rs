@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -474,12 +475,7 @@ where
             (g.recent_chat, g.manifest, String::new(), g.readable_paths)
         } else {
             let c = inject::build_chat_turn_context(&mem.store, build_opts).await?;
-            (
-                c.recent_chat,
-                c.memory,
-                c.scratch,
-                std::collections::BTreeSet::new(),
-            )
+            (c.recent_chat, c.memory, c.scratch, BTreeSet::new())
         };
 
         let instruction_for_prompt = instruction_with_reply_context(&instruction, &ctx, grok_alias);

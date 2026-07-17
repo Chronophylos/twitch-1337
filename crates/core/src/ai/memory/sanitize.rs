@@ -72,13 +72,12 @@ pub fn parse_write_path(path: &str) -> Result<WritePath, PathError> {
 }
 
 /// Paths the LLM may read via `read_memory`. Unlike [`parse_write_path`] this
-/// spans scratch too (reads have no separate scratch tool) and accepts
-/// `SOUL.md`. This is a syntax check, not an authorization check: whether the
-/// caller may read the parsed path is decided by the turn's manifest allowlist.
+/// additionally accepts `scratch/<slug>.md` (reads have no separate scratch
+/// tool); both already accept `SOUL.md`, `LORE.md`, and `users/<id>.md` as
+/// valid syntax. This is a syntax check, not an authorization check: whether
+/// the caller may read the parsed path is decided by the turn's manifest
+/// allowlist.
 pub fn parse_read_path(path: &str) -> Result<FileKind, PathError> {
-    if path == "SOUL.md" {
-        return Ok(FileKind::Soul);
-    }
     if let Ok(write_path) = parse_write_path(path) {
         return Ok(write_path_to_kind(write_path));
     }
