@@ -2,7 +2,8 @@
 
 **Status:** Accepted (2026-07-17)
 **Relates to:** [CONTEXT.md](../../CONTEXT.md) § Emote tracking;
-`docs/superpowers/specs/2026-07-17-emote-tracker-design.md`
+`docs/superpowers/specs/2026-07-17-emote-tracker-design.md`;
+[ADR-0006](0006-persistence-media-defaults.md) (when to choose SQLite)
 
 ## Context
 

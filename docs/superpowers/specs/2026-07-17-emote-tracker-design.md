@@ -3,7 +3,7 @@
 Status: approved
 Date: 2026-07-17
 Branch: `spec/emote-tracker`
-ADRs: [0004](../../adr/0004-sqlite-for-emote-tracker.md), [0005](../../adr/0005-emote-catalog-ai-fallback.md)
+ADRs: [0004](../../adr/0004-sqlite-for-emote-tracker.md), [0005](../../adr/0005-emote-catalog-ai-fallback.md), [0006](../../adr/0006-persistence-media-defaults.md)
 
 ## Goal
 
