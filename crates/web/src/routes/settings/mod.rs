@@ -135,6 +135,18 @@ struct SaveForm {
     ai_grok_reasoning_effort: Option<String>,
     #[serde(default)]
     ai_grok_service_tier: Option<String>,
+    #[serde(default)]
+    ai_grok_image_gen_enabled: Option<String>,
+    #[serde(default)]
+    ai_grok_image_gen_model: Option<String>,
+
+    // ---- AI image gen card ----
+    #[serde(default)]
+    ai_image_gen_enabled: Option<String>,
+    #[serde(default)]
+    ai_image_gen_model: Option<String>,
+    #[serde(default)]
+    ai_image_gen_timeout_secs: Option<u64>,
 
     // ---- AI prefill toggle card ----
     /// Hidden marker so the handler can tell "card visible but unchecked"

@@ -1,0 +1,34 @@
+{# crates/web/templates/settings/cards/ai_image_gen.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-image-gen" class="settings-card{% if !current.ai.image_gen.enabled %} is-card-off{% endif %}" data-section="ai_image_gen">
+  <header class="settings-card-head">
+    <div>
+      <h2>AI · Image gen</h2>
+      <p>OpenRouter image tool for !ai. Separate from Media (vision analysis).</p>
+      <label class="toggle">
+        <input type="checkbox" name="ai_image_gen_enabled" data-card-toggle value="1"
+               data-key="ai.image_gen.enabled"
+               {% if current.ai.image_gen.enabled %}checked{% endif %}>
+        <span class="toggle-thumb" aria-hidden="true"></span>
+      </label>
+    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+  </header>
+  <div class="settings-rows">
+    {% let ig_base_url = current.ai.connection.base_url.as_deref().unwrap_or("") %}
+    {% let ig_or = current.ai.connection.backend.as_str() == "openai" && (ig_base_url.is_empty() || ig_base_url.contains("openrouter.ai")) %}
+    {% if ig_or %}
+    {% call m::model_row("ai_image_gen", "ai_image_gen_model", "model",
+       "OpenRouter image model id for !ai generate_image tool.",
+       current.ai.image_gen.model, defaults.ai.image_gen.model) %}{% endcall %}
+    {% call m::num_row_bounded("ai_image_gen", "ai_image_gen_timeout_secs", "timeout_secs",
+       "Per-request timeout for image generation.",
+       current.ai.image_gen.timeout_secs, defaults.ai.image_gen.timeout_secs, "s", 5, 600) %}{% endcall %}
+    {% else %}
+    <p class="muted" style="padding: 0 1rem 0.75rem; margin: 0;">
+      Image generation requires an OpenRouter connection. Set AI · Connection to OpenRouter to configure model and timeout; the enable toggle still saves.
+    </p>
+    {% endif %}
+  </div>
+</section>

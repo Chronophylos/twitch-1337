@@ -6,8 +6,9 @@
 use serde::Deserialize;
 use twitch_1337_core::settings::overrides::{
     AiBehaviorOverrides, AiConnectionOverrides, AiDreamerOverrides, AiEmotesOverrides,
-    AiGrokOverrides, AiHistoryOverrides, AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides,
-    AiWebOverrides, AviationstackOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
+    AiGrokImageGenOverrides, AiGrokOverrides, AiHistoryOverrides, AiImageGenOverrides,
+    AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides, AiWebOverrides,
+    AviationstackOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
 };
 use twitch_1337_core::settings::{
     AiBackendKind, AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides,
@@ -261,6 +262,10 @@ struct AiGrokForm {
     ai_grok_reasoning_effort: Option<String>,
     #[serde(default)]
     ai_grok_service_tier: Option<String>,
+    #[serde(default)]
+    ai_grok_image_gen_enabled: Option<String>,
+    #[serde(default)]
+    ai_grok_image_gen_model: Option<String>,
 }
 
 impl AiGrokForm {
@@ -271,7 +276,31 @@ impl AiGrokForm {
                 .map(|v| if v.is_empty() { None } else { Some(v) }),
             reasoning_effort: segmented_tri_state(self.ai_grok_reasoning_effort),
             service_tier: segmented_tri_state(self.ai_grok_service_tier),
-            image_gen: Default::default(),
+            image_gen: AiGrokImageGenOverrides {
+                enabled: Some(self.ai_grok_image_gen_enabled.is_some()),
+                model: self.ai_grok_image_gen_model,
+            },
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct AiImageGenForm {
+    #[serde(default)]
+    ai_image_gen_enabled: Option<String>,
+    #[serde(default)]
+    ai_image_gen_model: Option<String>,
+    #[serde(default)]
+    ai_image_gen_timeout_secs: Option<u64>,
+}
+
+impl AiImageGenForm {
+    fn into_overrides(self) -> AiImageGenOverrides {
+        AiImageGenOverrides {
+            enabled: Some(self.ai_image_gen_enabled.is_some()),
+            model: self.ai_image_gen_model,
+            timeout_secs: self.ai_image_gen_timeout_secs,
+            host: None,
         }
     }
 }
@@ -591,6 +620,8 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
                 ai_grok_model: form.ai_grok_model,
                 ai_grok_reasoning_effort: form.ai_grok_reasoning_effort,
                 ai_grok_service_tier: form.ai_grok_service_tier,
+                ai_grok_image_gen_enabled: form.ai_grok_image_gen_enabled,
+                ai_grok_image_gen_model: form.ai_grok_image_gen_model,
             }
             .into_overrides(),
             prefill: AiPrefillForm {
@@ -632,7 +663,12 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
                 ai_media_max_text_size: form.ai_media_max_text_size,
             }
             .into_overrides(),
-            image_gen: Default::default(),
+            image_gen: AiImageGenForm {
+                ai_image_gen_enabled: form.ai_image_gen_enabled,
+                ai_image_gen_model: form.ai_image_gen_model,
+                ai_image_gen_timeout_secs: form.ai_image_gen_timeout_secs,
+            }
+            .into_overrides(),
         },
         twitch: {
             let mut t = TwitchPermissionsForm {

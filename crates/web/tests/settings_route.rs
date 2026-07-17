@@ -649,6 +649,80 @@ async fn post_settings_clears_ai_grok_model_when_empty() {
 }
 
 #[tokio::test]
+async fn settings_image_gen_card_renders_and_posts() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let app = build_router(state.clone());
+    let req = Request::builder()
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "owner GET /settings must 200");
+    let html = body_string(res).await;
+    assert!(
+        html.contains("AI · Image gen"),
+        "settings page must render the Image gen card title"
+    );
+    assert!(
+        html.contains("name=\"ai_image_gen_model\""),
+        "Image gen model input must be present"
+    );
+
+    let defaults = state.settings_store.defaults().clone();
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[
+            ("ai_image_gen_enabled", "1"),
+            ("ai_image_gen_model", "x-ai/grok-imagine-image-quality"),
+            ("ai_image_gen_timeout_secs", "120"),
+            ("ai_grok_image_gen_enabled", "1"),
+            ("ai_grok_image_gen_model", "black-forest-labs/flux.2-pro"),
+        ],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = build_router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::SEE_OTHER,
+        "Image gen save should redirect (303)",
+    );
+
+    let settings = state.settings.load();
+    assert!(
+        settings.ai.image_gen.enabled,
+        "ai.image_gen.enabled must be true after save"
+    );
+    assert_eq!(
+        settings.ai.image_gen.model, "x-ai/grok-imagine-image-quality",
+        "ai.image_gen.model must match POST"
+    );
+    assert_eq!(
+        settings.ai.image_gen.timeout_secs, 120,
+        "ai.image_gen.timeout_secs must match POST"
+    );
+    assert!(
+        settings.ai.grok.image_gen.enabled,
+        "ai.grok.image_gen.enabled must be true after save"
+    );
+    assert_eq!(
+        settings.ai.grok.image_gen.model, "black-forest-labs/flux.2-pro",
+        "ai.grok.image_gen.model must match POST independently of ai.image_gen"
+    );
+}
+
+#[tokio::test]
 async fn reset_cooldowns_clears_section_overrides() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;

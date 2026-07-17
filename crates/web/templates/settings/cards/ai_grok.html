@@ -70,5 +70,28 @@
       </div>
     </div>
     {% endif %}
+
+    {% call m::toggle_row("ai_grok", "ai_grok_image_gen_enabled", "ai.grok.image_gen.enabled",
+       "Enable OpenRouter image generation for @grok (independent from AI · Image gen).",
+       current.ai.grok.image_gen.enabled, defaults.ai.grok.image_gen.enabled) %}{% endcall %}
+
+    {% let grok_ig_model = current.ai.grok.image_gen.model.as_str() %}
+    <div class="settings-row" data-section="ai_grok">
+      {% call m::row_head("image_gen.model", "OpenRouter image model id for @grok generate_image tool.") %}{% endcall %}
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true">{% if grok_ig_model.is_empty() %}<span class="muted">(empty)</span>{% else %}{{ grok_ig_model }}{% endif %}</span>
+        <input type="text"
+               class="text-input"
+               name="ai_grok_image_gen_model"
+               value="{{ grok_ig_model }}"
+               placeholder="(required when enabled)"
+               data-default="{{ defaults.ai.grok.image_gen.model }}"
+               data-key="ai.grok.image_gen.model">
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.grok.image_gen.model") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(empty)</span></span>
+      </div>
+    </div>
   </div>
 </section>
