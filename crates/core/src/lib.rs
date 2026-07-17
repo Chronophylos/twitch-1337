@@ -10,6 +10,7 @@ pub mod commands;
 pub mod config;
 pub mod cooldown;
 pub mod doener;
+pub mod emote_tracker;
 pub mod llm_factory;
 pub mod ping;
 pub mod schedule;
@@ -165,6 +166,8 @@ pub struct Services {
     /// (via the web spawner closure) so the dashboard reads live fire counters
     /// from the same in-memory map the bot writes.
     pub telemetry: Arc<crate::schedule::TelemetryStore>,
+    /// Emote set audit + usage SoR. `None` when SQLite open/migrate failed.
+    pub emote_tracker: Option<std::sync::Arc<crate::emote_tracker::EmoteTrackerHandle>>,
 }
 
 pub type WebSpawner =
@@ -211,6 +214,7 @@ where
         aviation_tracker_rx,
         primary_history_tap,
         telemetry,
+        emote_tracker: _emote_tracker,
     } = services;
 
     // Clone the sender out of the Arc for SpawnDeps.

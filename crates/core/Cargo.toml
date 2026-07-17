@@ -28,6 +28,7 @@ random-flight = { git = "https://github.com/Chronophylos/random-flight.git", rev
 rand = { workspace = true }
 reqwest = { workspace = true }
 ron = { workspace = true }
+rusqlite = { workspace = true }
 rustls = { workspace = true }
 schemars = { workspace = true }
 scraper = { workspace = true }

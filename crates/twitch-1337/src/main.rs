@@ -277,6 +277,9 @@ pub async fn main() -> Result<()> {
     // Build telemetry once so the IRC orchestrator and WebState share the same Arc.
     let telemetry = twitch_1337::schedule::TelemetryStore::open(&get_data_dir());
 
+    // Soft-fail: open/migrate error leaves None and disables the tracker only.
+    let emote_tracker = twitch_1337::emote_tracker::try_open(&get_data_dir());
+
     let web_spawner = if config.web.enabled {
         let credentials_for_web = credentials.clone();
         Some(
@@ -323,6 +326,7 @@ pub async fn main() -> Result<()> {
         aviation_tracker_rx,
         primary_history_tap: None,
         telemetry,
+        emote_tracker,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();

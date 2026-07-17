@@ -379,6 +379,7 @@ impl TestBotBuilder {
             aviation_tracker_rx,
             primary_history_tap: Some(primary_history_tap.clone()),
             telemetry: telemetry_store.clone(),
+            emote_tracker: None,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
