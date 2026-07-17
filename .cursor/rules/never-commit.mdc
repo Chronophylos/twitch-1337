@@ -10,6 +10,7 @@ Already in `.gitignore` — do not force-add:
 - `.env`, `.env.local`
 - `config.toml` (local copy with secrets — use `config.toml.example` as template)
 - `token.ron`, `*.ron` runtime data (`pings.ron`, `leaderboard.ron`, etc.)
+- `emote_tracker.sqlite`, `emote_tracker.sqlite-wal`, `emote_tracker.sqlite-shm`
 - `./dev-data/`, `./prod-data/`, `/data/`
 - `.worktrees/`
 - `token.ron`, schedule/leaderboard/ping/memory caches at repo root

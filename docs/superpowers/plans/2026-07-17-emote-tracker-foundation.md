@@ -42,9 +42,10 @@
 | `crates/twitch-1337/src/main.rs` | Call `emote_tracker::try_open`, put `Option` on `Services` |
 | `crates/core/tests/common/test_bot.rs` | Default `emote_tracker: None` (or temp DB helper later) |
 | `.gitignore` | `emote_tracker.sqlite`, `-wal`, `-shm` |
-| `CONTEXT.md` | Emote-tracker glossary terms |
-| `docs/adr/0004-sqlite-for-emote-tracker.md` | Why SQLite for this ledger |
-| `.cursor/rules/never-commit.mdc` | Mention sqlite runtime files if listed there |
+| `CONTEXT.md` | Emote-tracker glossary terms (**done** in ADR commit; verify on implement) |
+| `docs/adr/0004-sqlite-for-emote-tracker.md` | Why SQLite for this ledger (**done**) |
+| `docs/adr/0005-emote-catalog-ai-fallback.md` | Tracker SoR + AI REST fallback (**done**; Plan 2 implements) |
+| `.cursor/rules/never-commit.mdc` | `emote_tracker.sqlite*` (**done**) |
 
 **Out of scope files:** `seventv.rs` EventAPI, handlers, web routes, AI prefer/fallback (Plan 2).
 
@@ -567,105 +568,14 @@ EOF
 
 ---
 
-### Task 5: Domain docs (CONTEXT + ADR)
+### Task 5: Domain docs (CONTEXT + ADR) — **DONE upstream**
 
-**Files:**
-- Modify: `CONTEXT.md`
-- Create: `docs/adr/0004-sqlite-for-emote-tracker.md`
-- Modify: `.cursor/rules/never-commit.mdc` (add `emote_tracker.sqlite*`)
-
-**Interfaces:** none (docs only)
-
-- [ ] **Step 1: Add CONTEXT.md section**
-
-```markdown
-## Emote tracking
-
-**Active Catalog:**
-Channel 7TV emotes currently on the set (`emotes.active = 1`). Names here are
-what chat usage matching sees.
-_Avoid_: glossary (AI prompt list), global emotes.
-
-**Emote Tombstone:**
-An `emotes` row with `active = 0` kept after removal so history FKs and
-last-known names remain.
-_Avoid_: deleted emote, hard delete.
-
-**Set Audit / Set Event:**
-Append-only record of bootstrap, add, remove, rename, or observation gap for
-the channel set.
-_Avoid_: changelog, log line.
-
-**Usage Event:**
-One recorded occurrence of an active emote token in a PRIVMSG.
-_Avoid_: hit, impression.
-
-**Gap:**
-A set-audit event marking a time range where the bot did not observe EventAPI
-traffic; may be paired with reconcile-synthesized add/remove/rename.
-_Avoid_: outage (reserve for infra), downtime.
-
-**Flagged Actor:**
-A Twitch user whose usage rows are stored with `flagged = 1` (bot / clankers /
-deny-list) and excluded from default queries.
-_Avoid_: banned, ignored (1337 ignore is separate unless shared via `is_clanker`).
-```
-
-- [ ] **Step 2: ADR-0004**
-
-```markdown
-# ADR-0004: SQLite for the emote tracker ledger
-
-**Status:** Accepted (2026-07-17)
-**Relates to:** [CONTEXT.md](../../CONTEXT.md) § Emote tracking;
-`docs/superpowers/specs/2026-07-17-emote-tracker-design.md`
-
-## Context
-
-Forever per-token emote usage plus a rename-safe set audit need indexed queries
-(dashboard filters, chat lookup by id). The rest of the bot persists small maps
-as RON via atomic replace. Append-only JSONL was considered and rejected: ad-hoc
-indexes and dashboard filters would recreate a database poorly.
-
-The production image is fully static musl (`FROM scratch`), so any SQLite
-dependency must not require a system `libsqlite3`.
-
-## Decision
-
-Store emote catalog, set audit, and usage events in
-`$DATA_DIR/emote_tracker.sqlite` using `rusqlite` with the **`bundled`**
-feature. Soft-delete catalog rows (`active`) so event foreign keys remain valid
-after removals. All SQLite work runs on a dedicated writer thread behind
-`EmoteTrackerHandle`.
-
-## Consequences
-
-- **+** Queryable forever ledger; musl-safe static link.
-- **+** Clear SoR for Plans 2–5.
-- **−** First SQLite dependency in the workspace; ops must watch disk growth
-  (no prune in v1).
-- **−** Contributors need the `cc` toolchain to build `libsqlite3-sys` bundled
-  sources (already true for other native bits if any; document in CONTRIBUTING
-  only if builds fail in practice).
-```
-
-- [ ] **Step 3: never-commit rule**
-
-Add `emote_tracker.sqlite*` next to other runtime data bullets.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add CONTEXT.md docs/adr/0004-sqlite-for-emote-tracker.md .cursor/rules/never-commit.mdc
-git commit -m "$(cat <<'EOF'
-docs(emote): glossary and adr so sqlite is not a surprise lore drop 📚
-
-Record emote-tracker ubiquitous language and ADR-0004 for bundled SQLite
-as the append-only ledger SoR.
-
-EOF
-)"
-```
+ADR-0004, ADR-0005, `CONTEXT.md` § Emote tracking, and `never-commit.mdc`
+sqlite bullets already landed on `spec/emote-tracker` before implementation.
+Skip this task unless those files were lost in a rebase — then restore from
+`docs/adr/0004-sqlite-for-emote-tracker.md`,
+`docs/adr/0005-emote-catalog-ai-fallback.md`, and the glossary section in
+`CONTEXT.md`.
 
 ---
 
@@ -679,7 +589,7 @@ EOF
 | Writer task / non-blocking | Task 3 |
 | Soft-fail open | Tasks 3–4 |
 | `$DATA_DIR` runtime path / gitignore | Tasks 1, 4 |
-| CONTEXT + ADR | Task 5 |
+| CONTEXT + ADR | Task 5 (**done** as ADR-0004/0005 + glossary before impl) |
 | UTC ms timestamps | types/db (`i64` at fields) |
 | No EventAPI / chat / dashboard / AI | Honored (out of scope) |
 

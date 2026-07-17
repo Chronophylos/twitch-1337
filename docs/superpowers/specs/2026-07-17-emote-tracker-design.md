@@ -3,6 +3,7 @@
 Status: approved
 Date: 2026-07-17
 Branch: `spec/emote-tracker`
+ADRs: [0004](../../adr/0004-sqlite-for-emote-tracker.md), [0005](../../adr/0005-emote-catalog-ai-fallback.md)
 
 ## Goal
 
@@ -16,7 +17,7 @@ Track 7TV **channel-set** lifecycle and chat **usage** for the main Twitch chann
 | **This design spec** | Product + domain decisions for the whole epic |
 | **Five implementation plans** | Phased delivery (see [Implementation plans](#implementation-plans)) |
 | Multiple PRs | Ship each plan (Plan 5 may split audit vs usage UI) |
-| `CONTEXT.md` + short ADR | New domain terms and “SQLite for append-only ledgers” when Plan 1 lands |
+| `CONTEXT.md` + ADRs 0004/0005 | Emote-tracker terms; SQLite ledger; AI catalog prefer/fallback |
 
 One design spec; not a tree of child design specs unless a later slice invents new product decisions.
 
