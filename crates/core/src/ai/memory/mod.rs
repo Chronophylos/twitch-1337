@@ -11,7 +11,7 @@ pub use ritual::{run_ritual, spawn_ritual};
 pub use store::{MemoryStore, WriteError};
 pub use tools::{
     ChatTurnExecutor, ChatTurnExecutorOpts, DreamerExecutor, DreamerExecutorOpts, chat_turn_tools,
-    dreamer_tools,
+    dreamer_tools, grok_chat_turn_tools,
 };
 pub use transcript::TranscriptWriter;
 pub use types::{Caps, FileKind, Frontmatter, MemoryFile, Role};

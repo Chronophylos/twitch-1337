@@ -513,6 +513,11 @@ where
             speaker_display_name: ctx.privmsg.sender.name.clone(),
             speaker_role: role,
             max_writes_per_turn: mem.max_writes_per_turn,
+            // Wired up in a later task alongside build_grok_turn_context; until
+            // then no grok_chat_turn_tools() are registered, so read_memory is
+            // never callable and these values are inert.
+            readable_paths: std::collections::BTreeSet::new(),
+            inject_nonce: self.prompt_nonce.clone(),
         });
 
         let mut tools = chat_turn_tools();
