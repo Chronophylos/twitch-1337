@@ -1,6 +1,6 @@
 # AI · Grok Researcher Prompt — Design
 
-Status: designed
+Status: implemented
 Date: 2026-07-17
 Branch: `spec/ai-grok-researcher-prompt`
 
