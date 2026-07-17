@@ -1,4 +1,5 @@
 mod db;
+mod eventapi;
 mod handle;
 mod reconcile;
 mod rest;
@@ -8,6 +9,10 @@ mod types;
 pub use db::{
     apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, insert_set_event,
     insert_usage_events, list_active_emotes, resolve_active_name, upsert_emote,
+};
+pub use eventapi::{
+    DispatchEmoteSetUpdate, EVENTAPI_URL, EventApiConnection, ParsedEvent, connect_and_subscribe,
+    live_change_to_batch, parse_server_message,
 };
 pub use handle::EmoteTrackerHandle;
 pub use reconcile::{ActorRef, DesiredEmote, bootstrap_batch, reconcile_batch};
