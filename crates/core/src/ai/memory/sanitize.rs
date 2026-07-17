@@ -71,6 +71,26 @@ pub fn parse_write_path(path: &str) -> Result<WritePath, PathError> {
     Err(PathError)
 }
 
+/// Paths the LLM may read via `read_memory`. Unlike [`parse_write_path`] this
+/// spans scratch too (reads have no separate scratch tool) and accepts
+/// `SOUL.md`. This is a syntax check, not an authorization check: whether the
+/// caller may read the parsed path is decided by the turn's manifest allowlist.
+pub fn parse_read_path(path: &str) -> Result<FileKind, PathError> {
+    if path == "SOUL.md" {
+        return Ok(FileKind::Soul);
+    }
+    if let Ok(write_path) = parse_write_path(path) {
+        return Ok(write_path_to_kind(write_path));
+    }
+    if let Some(rest) = path.strip_prefix("scratch/")
+        && let Some(slug) = rest.strip_suffix(".md")
+    {
+        let slug = parse_slug(slug).map_err(|_| PathError)?;
+        return Ok(FileKind::Scratch { slug });
+    }
+    Err(PathError)
+}
+
 pub fn parse_slug(slug: &str) -> Result<String, SlugError> {
     // Check reserved first so that case-insensitive matches (e.g. "SOUL") return
     // `Reserved` rather than `Invalid` regardless of casing.
@@ -274,5 +294,43 @@ mod tests {
         assert_eq!(s, "alicebob");
         let long = "x".repeat(200);
         assert_eq!(normalize_display_name(&long).chars().count(), 64);
+    }
+
+    #[test]
+    fn parse_read_path_accepts_every_file_kind() {
+        assert_eq!(parse_read_path("SOUL.md").unwrap(), FileKind::Soul);
+        assert_eq!(parse_read_path("LORE.md").unwrap(), FileKind::Lore);
+        assert_eq!(
+            parse_read_path("users/12345.md").unwrap(),
+            FileKind::User {
+                user_id: "12345".into()
+            }
+        );
+        assert_eq!(
+            parse_read_path("scratch/quiz.md").unwrap(),
+            FileKind::Scratch {
+                slug: "quiz".into()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_read_path_rejects_traversal_and_junk() {
+        for bad in [
+            "../../etc/passwd",
+            "scratch/../SOUL.md",
+            "users/abc.md",
+            "users/.md",
+            "scratch/quiz",
+            "memories/LORE.md",
+            "",
+        ] {
+            assert!(parse_read_path(bad).is_err(), "{bad} must not parse");
+        }
+    }
+
+    #[test]
+    fn parse_read_path_rejects_reserved_scratch_slug() {
+        assert!(parse_read_path("scratch/soul.md").is_err());
     }
 }
