@@ -1,6 +1,7 @@
 mod db;
 mod eventapi;
 mod handle;
+mod ingest;
 mod reconcile;
 mod rest;
 mod schema;
@@ -15,6 +16,7 @@ pub use eventapi::{
     live_change_to_batch, parse_server_message,
 };
 pub use handle::EmoteTrackerHandle;
+pub use ingest::{IngestConfig, StartupReconcileResult, run_set_ingest, startup_reconcile_once};
 pub use reconcile::{ActorRef, DesiredEmote, bootstrap_batch, reconcile_batch};
 pub use rest::{ChannelSetSnapshot, fetch_channel_set};
 pub use schema::{SCHEMA_VERSION, migrate};

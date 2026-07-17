@@ -168,6 +168,8 @@ pub struct Services {
     pub telemetry: Arc<crate::schedule::TelemetryStore>,
     /// Emote set audit + usage SoR. `None` when SQLite open/migrate failed.
     pub emote_tracker: Option<std::sync::Arc<crate::emote_tracker::EmoteTrackerHandle>>,
+    /// Twitch broadcaster user id for 7TV ingest. `None` when Helix resolve failed.
+    pub twitch_channel_id: Option<String>,
 }
 
 pub type WebSpawner =
@@ -214,7 +216,8 @@ where
         aviation_tracker_rx,
         primary_history_tap,
         telemetry,
-        emote_tracker: _emote_tracker,
+        emote_tracker,
+        twitch_channel_id,
     } = services;
 
     // Clone the sender out of the Arc for SpawnDeps.
@@ -306,6 +309,8 @@ where
         primary_history_tap,
         telemetry: telemetry.clone(),
         started_at,
+        emote_tracker,
+        twitch_channel_id,
     });
 
     let shutdown_notify = handlers.shutdown_notify.clone();
@@ -334,7 +339,8 @@ where
 
     info!(
         "Bot running with continuous connection. Handlers: 1337 tracker, \
-         Generic commands, Scheduled messages, Latency monitor, Flight tracker"
+         Generic commands, Scheduled messages, Latency monitor, Flight tracker, \
+         Emote set ingest"
     );
     info!(
         "1337 tracker scheduled to run daily at {}:{:02} (Europe/Berlin)",

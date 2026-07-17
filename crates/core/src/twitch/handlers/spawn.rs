@@ -52,6 +52,7 @@ pub(crate) struct HandlerSet {
     pub tracker_1337: JoinHandle<()>,
     pub generic_commands: JoinHandle<()>,
     pub flight_tracker: JoinHandle<()>,
+    pub emote_set_ingest: JoinHandle<()>,
     pub ping_actor: JoinHandle<()>,
     pub scheduled_messages: JoinHandle<()>,
     /// Shared notify so consolidation/shutdown code can drain in-flight
@@ -120,6 +121,12 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     pub telemetry: Arc<crate::schedule::TelemetryStore>,
     /// Process start instant, captured in `run_bot`; forwarded to `!v`.
     pub started_at: std::time::Instant,
+
+    /// Emote set audit + usage SoR. `None` when SQLite open/migrate failed.
+    pub emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
+    /// Twitch broadcaster user id for 7TV EventAPI subscription. `None` when
+    /// Helix resolve failed — ingest stays off without aborting the bot.
+    pub twitch_channel_id: Option<String>,
 }
 
 /// Spawn every long-running handler task in the order they currently
@@ -160,6 +167,8 @@ where
         primary_history_tap,
         telemetry,
         started_at,
+        emote_tracker,
+        twitch_channel_id,
     } = deps;
 
     let ping_actor = tokio::spawn(run_ping_actor(ping_actor_rx, ping_manager, ping_names_tx));
@@ -186,6 +195,17 @@ where
             (Some(tx), handle)
         }
         _ => (None, tokio::spawn(std::future::pending::<()>())),
+    };
+
+    let emote_set_ingest = match (emote_tracker, twitch_channel_id) {
+        (Some(handle), Some(channel_id)) => {
+            let http = reqwest::Client::new();
+            let cfg = crate::emote_tracker::IngestConfig::new(channel_id);
+            tokio::spawn(async move {
+                crate::emote_tracker::run_set_ingest(handle, cfg, http).await;
+            })
+        }
+        _ => tokio::spawn(std::future::pending::<()>()),
     };
 
     let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(100);
@@ -307,6 +327,7 @@ where
         tracker_1337,
         generic_commands,
         flight_tracker,
+        emote_set_ingest,
         ping_actor,
         scheduled_messages,
         shutdown_notify,
@@ -342,6 +363,7 @@ pub(crate) async fn await_shutdown(
         tracker_1337,
         generic_commands,
         flight_tracker,
+        emote_set_ingest,
         mut ping_actor,
         scheduled_messages: mut sched,
         shutdown_notify,
@@ -362,6 +384,7 @@ pub(crate) async fn await_shutdown(
         result = generic_commands => { error!("Generic Command Handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = latency => { error!("Latency handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
+        result = emote_set_ingest => { error!("Emote set ingest exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut ping_actor => { error!("Ping actor exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut sched => { error!("Scheduled message handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
     };
