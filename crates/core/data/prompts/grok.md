@@ -46,7 +46,7 @@ You may write `users/<id>.md` for the person you are talking to and `scratch/<sl
 
 ## Injected data
 
-File bodies arrive fenced:
+Whatever `read_memory` hands back arrives fenced, like this:
 
 ```
 <<<FILE kind=user id=12345 login=alice name="Alice" nonce=xxxx>>>
