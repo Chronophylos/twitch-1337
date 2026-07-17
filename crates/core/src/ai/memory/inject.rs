@@ -174,13 +174,14 @@ pub struct ChatTurnContext {
     pub scratch: String,
 }
 
-/// Build the chat-turn injected context split into a recent-chat section and a
-/// memory section. Callers place each in the message that maximizes prompt
-/// caching: memory in the system message, recent chat in the user message.
-pub async fn build_chat_turn_context(
-    store: &MemoryStore,
-    opts: BuildOpts,
-) -> Result<ChatTurnContext> {
+/// Rendered rolling chat for one turn, plus the lowercased logins that survived
+/// the byte caps. Shared by the Aurora and grok context builders.
+struct RecentChat {
+    body: String,
+    mentioned: std::collections::BTreeSet<String>,
+}
+
+async fn render_recent_chat(opts: &BuildOpts) -> RecentChat {
     let primary_rendered = render_recent_section(
         opts.primary_history.as_ref(),
         &opts.primary_login,
@@ -219,6 +220,22 @@ pub async fn build_chat_turn_context(
         recent_sections.push(section.body);
     }
 
+    RecentChat {
+        body: recent_sections.join("\n\n"),
+        mentioned,
+    }
+}
+
+/// Build the chat-turn injected context split into a recent-chat section and a
+/// memory section. Callers place each in the message that maximizes prompt
+/// caching: memory in the system message, recent chat in the user message.
+pub async fn build_chat_turn_context(
+    store: &MemoryStore,
+    opts: BuildOpts,
+) -> Result<ChatTurnContext> {
+    let recent = render_recent_chat(&opts).await;
+    let mentioned = recent.mentioned;
+
     let soul = store.read_kind(&FileKind::Soul).await?;
     let lore = store.read_kind(&FileKind::Lore).await?;
     let mut users = store.list_users().await?;
@@ -243,7 +260,7 @@ pub async fn build_chat_turn_context(
         || opts.ai_channel_history.is_some()
         || !speaker_lc.is_empty();
     if is_chat_turn {
-        let mut scope: std::collections::BTreeSet<String> = mentioned.clone();
+        let mut scope: std::collections::BTreeSet<String> = mentioned;
         if !speaker_lc.is_empty() {
             scope.insert(speaker_lc.clone());
         }
@@ -313,7 +330,7 @@ pub async fn build_chat_turn_context(
 
     let memory = memory_blocks.join("\n");
     let scratch = scratch_blocks.join("\n");
-    let recent_chat = recent_sections.join("\n\n");
+    let recent_chat = recent.body;
     Ok(ChatTurnContext {
         recent_chat,
         memory,
