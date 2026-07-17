@@ -261,6 +261,7 @@ where
                 let provider = crate::twitch::seventv::SevenTvEmoteProvider::new(
                     settings.clone(),
                     glossary_toml,
+                    emote_tracker.clone(),
                 )
                 .wrap_err("Failed to initialize 7TV emote provider")?;
                 tracing::info!("7TV emote glossary prompt grounding enabled");

@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashSet,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -10,7 +11,10 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
-use crate::{APP_USER_AGENT, settings::SettingsHandle, settings::ai::AiEmotes};
+use crate::{
+    APP_USER_AGENT, emote_tracker::EmoteTrackerHandle, settings::SettingsHandle,
+    settings::ai::AiEmotes,
+};
 
 const DEFAULT_BASE_URL: &str = "https://7tv.io/v3";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -26,12 +30,12 @@ pub const BAKED_GLOSSARY_TOML: &str = include_str!("../../data/7tv_emotes.toml")
 
 /// Lazily refreshes the available 7TV catalog and builds an LLM prompt block
 /// from the intersection with a manual glossary.
-#[derive(Debug)]
 pub struct SevenTvEmoteProvider {
     settings: SettingsHandle,
     http: reqwest::Client,
     base_url: String,
     glossary: Vec<GlossaryEmote>,
+    emote_tracker: Option<Arc<EmoteTrackerHandle>>,
     cache: Mutex<PromptCache>,
 }
 
@@ -119,16 +123,25 @@ fn live_caps_from_handle(settings: &SettingsHandle) -> EmotesLiveCaps {
 }
 
 impl SevenTvEmoteProvider {
-    /// Build a provider from a [`SettingsHandle`] and a TOML glossary string.
+    /// Build a provider from a [`SettingsHandle`], a TOML glossary string, and
+    /// an optional emote-tracker handle.
     ///
     /// Production code passes [`BAKED_GLOSSARY_TOML`]; integration tests pass
     /// a custom fixture. The glossary is parsed eagerly so malformed TOML
     /// fails the bot at startup instead of silently disabling emotes.
     ///
+    /// When `emote_tracker` is present and its active catalog is non-empty,
+    /// channel emote names are read from SQLite; otherwise the provider falls
+    /// back to the REST channel-set fetch. Globals always use REST.
+    ///
     /// `base_url` is resolved once at startup from the current snapshot;
     /// changing it requires a restart. All other emote knobs are read live
     /// per-call via [`Self::live_caps`].
-    pub fn new(settings: SettingsHandle, glossary_toml: &str) -> Result<Self> {
+    pub fn new(
+        settings: SettingsHandle,
+        glossary_toml: &str,
+        emote_tracker: Option<Arc<EmoteTrackerHandle>>,
+    ) -> Result<Self> {
         let snap = settings.load();
         let cfg = snap
             .ai
@@ -172,6 +185,7 @@ impl SevenTvEmoteProvider {
             http,
             base_url,
             glossary: glossary.emotes,
+            emote_tracker,
             cache: Mutex::new(PromptCache::default()),
         })
     }
@@ -288,15 +302,46 @@ impl SevenTvEmoteProvider {
             }
         }
 
-        match self.fetch_channel_emotes(twitch_channel_id).await {
-            Ok(emotes) => channel = emotes,
-            Err(e) => {
-                warn!(
-                    error = ?e,
-                    twitch_channel_id,
-                    "Failed to fetch channel 7TV emotes"
-                );
-                had_error = true;
+        let mut used_tracker = false;
+        if let Some(tracker) = &self.emote_tracker {
+            match tracker.list_active_emotes().await {
+                Ok(active) if !active.is_empty() => {
+                    channel = active
+                        .into_iter()
+                        .filter_map(|row| {
+                            let name = row.name.trim().to_string();
+                            if name.is_empty() {
+                                None
+                            } else {
+                                Some(SevenTvEmote { name })
+                            }
+                        })
+                        .collect();
+                    used_tracker = true;
+                }
+                Ok(_) => {
+                    debug!("emote tracker catalog empty; falling back to REST channel fetch");
+                }
+                Err(e) => {
+                    warn!(
+                        error = ?e,
+                        "Failed to read emote tracker catalog; falling back to REST channel fetch"
+                    );
+                }
+            }
+        }
+
+        if !used_tracker {
+            match self.fetch_channel_emotes(twitch_channel_id).await {
+                Ok(emotes) => channel = emotes,
+                Err(e) => {
+                    warn!(
+                        error = ?e,
+                        twitch_channel_id,
+                        "Failed to fetch channel 7TV emotes"
+                    );
+                    had_error = true;
+                }
             }
         }
 
@@ -1405,5 +1450,212 @@ meaning = "fifth"
             !prompt2.contains("- C:"),
             "prompt should be capped at 2:\n{prompt2}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tracker catalog prefer / REST fallback
+    // -----------------------------------------------------------------------
+
+    const TRACKER_GLOSSARY_TOML: &str = r#"
+[[emotes]]
+name = "TrackerOnly"
+meaning = "from the SQLite catalog"
+
+[[emotes]]
+name = "RestOnly"
+meaning = "from the REST channel set"
+"#;
+
+    fn tracker_test_settings(
+        mock_uri: &str,
+        include_global: bool,
+    ) -> crate::settings::SettingsHandle {
+        use std::sync::Arc;
+
+        use arc_swap::ArcSwap;
+
+        use crate::settings::Settings;
+
+        let mut s = Settings::compiled_defaults();
+        s.ai.emotes = Some(AiEmotes {
+            base_url: Some(mock_uri.to_string()),
+            include_global,
+            refresh_interval_secs: 0,
+            ..AiEmotes::default()
+        });
+        Arc::new(ArcSwap::from_pointee(s))
+    }
+
+    async fn tracker_test_provider(
+        mock_uri: &str,
+        tracker: Option<Arc<EmoteTrackerHandle>>,
+        include_global: bool,
+    ) -> SevenTvEmoteProvider {
+        let settings = tracker_test_settings(mock_uri, include_global);
+        SevenTvEmoteProvider::new(settings, TRACKER_GLOSSARY_TOML, tracker).unwrap()
+    }
+
+    #[tokio::test]
+    async fn prefers_tracker_channel_names_when_catalog_non_empty() {
+        crate::install_crypto_provider();
+
+        let mock = wiremock::MockServer::start().await;
+        let channel_id = "12345";
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(format!(
+                "/users/twitch/{channel_id}"
+            )))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "user",
+                    "emote_set": {
+                        "emotes": [{"id": "rest", "name": "RestOnly"}]
+                    }
+                })),
+            )
+            .expect(0)
+            .mount(&mock)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let handle =
+            Arc::new(EmoteTrackerHandle::open(&dir.path().join("emote_tracker.sqlite")).unwrap());
+        handle
+            .upsert_emote("tracker-1", "TrackerOnly", true, 1)
+            .await
+            .unwrap();
+
+        let provider = tracker_test_provider(&mock.uri(), Some(handle), false).await;
+        let prompt = provider
+            .prompt_block_for_turn(channel_id, "hi", "")
+            .await
+            .expect("prompt block should be available");
+
+        assert!(
+            prompt.contains("- TrackerOnly:"),
+            "tracker catalog emote missing:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains("- RestOnly:"),
+            "REST channel emote must not appear when tracker catalog is warm:\n{prompt}"
+        );
+
+        mock.verify().await;
+    }
+
+    #[tokio::test]
+    async fn empty_tracker_catalog_falls_back_to_rest_channel_fetch() {
+        crate::install_crypto_provider();
+
+        let mock = wiremock::MockServer::start().await;
+        let channel_id = "12345";
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(format!(
+                "/users/twitch/{channel_id}"
+            )))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "user",
+                    "emote_set": {
+                        "emotes": [{"id": "rest", "name": "RestOnly"}]
+                    }
+                })),
+            )
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let handle =
+            Arc::new(EmoteTrackerHandle::open(&dir.path().join("emote_tracker.sqlite")).unwrap());
+
+        let provider = tracker_test_provider(&mock.uri(), Some(handle), false).await;
+        let prompt = provider
+            .prompt_block_for_turn(channel_id, "hi", "")
+            .await
+            .expect("prompt block should be available");
+
+        assert!(
+            prompt.contains("- RestOnly:"),
+            "REST fallback emote missing:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains("- TrackerOnly:"),
+            "tracker-only emote must not appear on empty catalog:\n{prompt}"
+        );
+
+        mock.verify().await;
+    }
+
+    #[tokio::test]
+    async fn globals_still_fetch_from_rest_when_tracker_catalog_is_warm() {
+        crate::install_crypto_provider();
+
+        let mock = wiremock::MockServer::start().await;
+        let channel_id = "12345";
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/emote-sets/global"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "global",
+                    "emotes": [{"id": "global-kekw", "name": "KEKW"}]
+                })),
+            )
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(format!(
+                "/users/twitch/{channel_id}"
+            )))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "user",
+                    "emote_set": { "emotes": [] }
+                })),
+            )
+            .expect(0)
+            .mount(&mock)
+            .await;
+
+        let glossary = r#"
+[[emotes]]
+name = "TrackerOnly"
+meaning = "from the SQLite catalog"
+
+[[emotes]]
+name = "KEKW"
+meaning = "global emote"
+"#;
+
+        let dir = tempfile::tempdir().unwrap();
+        let handle =
+            Arc::new(EmoteTrackerHandle::open(&dir.path().join("emote_tracker.sqlite")).unwrap());
+        handle
+            .upsert_emote("tracker-1", "TrackerOnly", true, 1)
+            .await
+            .unwrap();
+
+        let settings = tracker_test_settings(&mock.uri(), true);
+        let provider = SevenTvEmoteProvider::new(settings, glossary, Some(handle)).unwrap();
+        let prompt = provider
+            .prompt_block_for_turn(channel_id, "hi", "")
+            .await
+            .expect("prompt block should be available");
+
+        assert!(
+            prompt.contains("- TrackerOnly:"),
+            "tracker channel emote missing:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("- KEKW:"),
+            "global REST emote missing:\n{prompt}"
+        );
+
+        mock.verify().await;
     }
 }
