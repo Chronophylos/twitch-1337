@@ -1,5 +1,6 @@
 mod db;
 mod handle;
+mod reconcile;
 mod schema;
 mod types;
 
@@ -8,6 +9,7 @@ pub use db::{
     insert_usage_events, list_active_emotes, resolve_active_name, upsert_emote,
 };
 pub use handle::EmoteTrackerHandle;
+pub use reconcile::{ActorRef, DesiredEmote, bootstrap_batch, reconcile_batch};
 pub use schema::{SCHEMA_VERSION, migrate};
 pub use types::{
     CatalogMutation, EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch, SetEventKind,
