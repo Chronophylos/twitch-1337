@@ -8,11 +8,11 @@ use rusqlite::Connection;
 use tokio::sync::{mpsc, oneshot};
 
 use super::db::{
-    deactivate_emote, get_emote, insert_set_event, insert_usage_events, list_active_emotes,
-    resolve_active_name, upsert_emote,
+    apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, insert_set_event,
+    insert_usage_events, list_active_emotes, resolve_active_name, upsert_emote,
 };
 use super::migrate;
-use super::types::{EmoteRow, NewSetEvent, NewUsageEvent};
+use super::types::{EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch};
 
 enum StoreCmd {
     UpsertEmote {
@@ -45,6 +45,13 @@ enum StoreCmd {
     ResolveActiveName {
         name: String,
         reply: oneshot::Sender<Result<Option<EmoteRow>>>,
+    },
+    ApplySetChanges {
+        batch: SetChangeBatch,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    CatalogIsEmpty {
+        reply: oneshot::Sender<Result<bool>>,
     },
 }
 
@@ -148,6 +155,15 @@ impl EmoteTrackerHandle {
         self.send(|reply| StoreCmd::ResolveActiveName { name, reply })
             .await
     }
+
+    pub async fn apply_set_changes(&self, batch: SetChangeBatch) -> Result<()> {
+        self.send(|reply| StoreCmd::ApplySetChanges { batch, reply })
+            .await
+    }
+
+    pub async fn catalog_is_empty(&self) -> Result<bool> {
+        self.send(|reply| StoreCmd::CatalogIsEmpty { reply }).await
+    }
 }
 
 fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
@@ -183,6 +199,12 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
             }
             StoreCmd::ResolveActiveName { name, reply } => {
                 let _ = reply.send(resolve_active_name(&conn, &name));
+            }
+            StoreCmd::ApplySetChanges { batch, reply } => {
+                let _ = reply.send(apply_set_changes(&conn, &batch));
+            }
+            StoreCmd::CatalogIsEmpty { reply } => {
+                let _ = reply.send(catalog_is_empty(&conn));
             }
         }
     }

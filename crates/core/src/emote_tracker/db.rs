@@ -116,6 +116,35 @@ pub fn resolve_active_name(conn: &Connection, name: &str) -> Result<Option<Emote
     .map_err(Into::into)
 }
 
+/// Apply catalog mutations and set events in a single transaction.
+pub fn apply_set_changes(conn: &Connection, batch: &super::types::SetChangeBatch) -> Result<()> {
+    use super::types::CatalogMutation;
+
+    let tx = conn.unchecked_transaction()?;
+    for m in &batch.mutations {
+        match m {
+            CatalogMutation::Upsert {
+                emote_id,
+                name,
+                active,
+            } => upsert_emote(&tx, emote_id, name, *active, batch.updated_at)?,
+            CatalogMutation::Deactivate { emote_id } => {
+                deactivate_emote(&tx, emote_id, batch.updated_at)?;
+            }
+        }
+    }
+    for event in &batch.events {
+        insert_set_event(&tx, event)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn catalog_is_empty(conn: &Connection) -> Result<bool> {
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM emotes", [], |r| r.get(0))?;
+    Ok(n == 0)
+}
+
 fn map_emote_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EmoteRow> {
     let active: i32 = row.get(2)?;
     Ok(EmoteRow {
@@ -130,7 +159,87 @@ fn map_emote_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EmoteRow> {
 mod tests {
     use super::*;
     use crate::emote_tracker::schema::migrate;
+    use crate::emote_tracker::types::{CatalogMutation, SetChangeBatch, SetEventKind};
     use rusqlite::Connection;
+
+    #[test]
+    fn apply_set_changes_is_atomic_catalog_and_audit() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let batch = SetChangeBatch {
+            updated_at: 10,
+            mutations: vec![CatalogMutation::Upsert {
+                emote_id: "e1".into(),
+                name: "Kappa".into(),
+                active: true,
+            }],
+            events: vec![NewSetEvent {
+                at: 10,
+                kind: SetEventKind::Bootstrap,
+                emote_id: Some("e1".into()),
+                old_name: None,
+                new_name: Some("Kappa".into()),
+                actor_7tv_id: None,
+                actor_username: None,
+                actor_display_name: None,
+                gap_from: None,
+                gap_to: None,
+            }],
+        };
+        apply_set_changes(&conn, &batch).unwrap();
+        assert!(!catalog_is_empty(&conn).unwrap());
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM set_events WHERE kind = 'bootstrap'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn apply_deactivate_keeps_row_for_fk() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        apply_set_changes(
+            &conn,
+            &SetChangeBatch {
+                updated_at: 1,
+                mutations: vec![CatalogMutation::Upsert {
+                    emote_id: "e1".into(),
+                    name: "Foo".into(),
+                    active: true,
+                }],
+                events: vec![],
+            },
+        )
+        .unwrap();
+        apply_set_changes(
+            &conn,
+            &SetChangeBatch {
+                updated_at: 2,
+                mutations: vec![CatalogMutation::Deactivate {
+                    emote_id: "e1".into(),
+                }],
+                events: vec![NewSetEvent {
+                    at: 2,
+                    kind: SetEventKind::Remove,
+                    emote_id: Some("e1".into()),
+                    old_name: Some("Foo".into()),
+                    new_name: None,
+                    actor_7tv_id: None,
+                    actor_username: None,
+                    actor_display_name: None,
+                    gap_from: None,
+                    gap_to: None,
+                }],
+            },
+        )
+        .unwrap();
+        let row = get_emote(&conn, "e1").unwrap().unwrap();
+        assert!(!row.active);
+    }
 
     #[test]
     fn deactivate_keeps_row_and_usage_fk_ok() {
