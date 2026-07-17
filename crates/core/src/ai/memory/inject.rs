@@ -22,6 +22,7 @@ const FENCE_CLOSE: &str = "<<<ENDFILE";
 // override, no drift. Substitution of `{speaker_*}`/`{date}`/`{model}`/`{channel}`
 // happens in `substitute` below.
 pub(crate) const PROMPT_SYSTEM: &str = include_str!("../../../data/prompts/system.md");
+pub(crate) const PROMPT_GROK: &str = include_str!("../../../data/prompts/grok.md");
 pub(crate) const PROMPT_INSTRUCTIONS: &str =
     include_str!("../../../data/prompts/ai_instructions.md");
 pub(crate) const PROMPT_DREAMER: &str = include_str!("../../../data/prompts/dreamer.md");
@@ -701,6 +702,16 @@ mod tests {
                 "bundled system prompt leaked unsubstituted token {tok}:\n{out}"
             );
         }
+    }
+
+    #[test]
+    fn grok_prompt_does_not_interpolate_speaker_role() {
+        // {speaker_role} in the cached system prefix would vary it per speaker
+        // and defeat the prompt cache. Speaker vars belong in ai_instructions.md.
+        assert!(
+            !PROMPT_GROK.contains("{speaker_role}"),
+            "grok.md must not interpolate {{speaker_role}}"
+        );
     }
 
     #[test]

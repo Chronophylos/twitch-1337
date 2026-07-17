@@ -128,14 +128,7 @@ pub struct AiCommandDeps {
 
 pub const GROK_ALIAS_TRIGGER: &str = "@grok";
 const GROK_REPLY_DEFAULT_INSTRUCTION: &str =
-    "Prüfe die Reply-Nachricht, ordne sie ein und antworte kurz im Twitch-Chat-Stil.";
-const GROK_SYSTEM_APPENDIX: &str = "\
-\n\n## @grok style\n\
-This request came through the @grok alias. Answer in a Grok-inspired Twitch-chat style: direct, \
-playful, a little sarcastic when it fits, and aware of memes, irony, arguments, and social-media \
-tone. Stay useful and concise. Do not claim to be xAI Grok, do not claim access to X, and do not \
-invent X posts, trends, threads, or private context. If web tools are unavailable, say only what \
-you can infer from the provided Twitch reply/chat context.";
+    "Check the replied-to message, work out what it claims, and answer briefly.";
 const GROK_WEB_SYSTEM_APPENDIX: &str = "\
 \n\n## @grok alias\n\
 This request came through the @grok alias. Actively use web_search before answering when web tools \
@@ -423,7 +416,14 @@ where
             model_id: &model,
         };
         // Prompt templates are baked into the binary (#321), not read from disk.
-        let system_head = inject::substitute(inject::PROMPT_SYSTEM, vars);
+        // @grok is a separate agent, not a style flag on Aurora: it gets its
+        // own baked head rather than an appendix arguing with system.md.
+        let head_tmpl = if grok_alias {
+            inject::PROMPT_GROK
+        } else {
+            inject::PROMPT_SYSTEM
+        };
+        let system_head = inject::substitute(head_tmpl, vars);
         let instructions_head = inject::substitute(inject::PROMPT_INSTRUCTIONS, vars);
 
         let invocation_channel = if cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login))
@@ -484,7 +484,6 @@ where
             appendices.push(EMOTE_TOOLS_SYSTEM_APPENDIX.to_string());
         }
         if grok_alias {
-            appendices.push(GROK_SYSTEM_APPENDIX.to_string());
             if self.web.is_some() {
                 appendices.push(GROK_WEB_SYSTEM_APPENDIX.to_string());
             }

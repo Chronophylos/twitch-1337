@@ -135,7 +135,11 @@ async fn grok_empty_reply_with_leading_mention_uses_default_instruction() {
         .iter()
         .find(|message| message.role == Role::User)
         .expect("request has a user message");
-    assert!(user_message.content.contains("Prüfe die Reply-Nachricht"));
+    assert!(
+        user_message
+            .content
+            .contains("Check the replied-to message")
+    );
     assert!(
         user_message
             .content
@@ -233,9 +237,13 @@ async fn grok_uses_web_tools_when_enabled() {
         .iter()
         .find(|message| message.role == Role::System)
         .expect("request has a system message");
-    assert!(system_message.content.contains("Grok-inspired"));
-    assert!(system_message.content.contains("do not claim access to X"));
-    assert!(system_message.content.contains("do not invent X posts"));
+    assert!(system_message.content.contains("You are grok"));
+    assert!(
+        system_message
+            .content
+            .contains("This request came through the @grok alias")
+    );
+    assert!(system_message.content.contains("Do not invent X posts"));
 
     bot.shutdown().await;
 }
@@ -268,15 +276,16 @@ async fn grok_uses_override_model_effort_and_tier() {
     assert_eq!(calls[0].service_tier.as_deref(), Some("flex"));
 
     // PROMPT_SYSTEM / ai_instructions.md do not embed {model} or {model_id};
-    // resolved model is carried on the LLM request. @grok appendix proves alias path.
+    // resolved model is carried on the LLM request. grok.md's own head proves
+    // the alias path (its own baked prompt, not Aurora's + an appendix).
     let system = calls[0]
         .messages
         .iter()
         .find(|m| m.role == Role::System)
         .expect("system message");
     assert!(
-        system.content.contains("Grok-inspired"),
-        "expected @grok system appendix; got: {}",
+        system.content.contains("You are grok"),
+        "expected grok's own system head; got: {}",
         system.content
     );
 
@@ -302,6 +311,66 @@ async fn grok_without_override_uses_connection_model() {
 
     let calls = bot.llm.tool_calls();
     assert_eq!(calls[0].model, "test-model");
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn grok_uses_its_own_system_prompt() {
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+        })
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("checked");
+
+    let mut bot = bot;
+    bot.send("alice", "@grok is the earth flat").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+
+    let calls = bot.llm.tool_calls();
+    let system = calls[0]
+        .messages
+        .iter()
+        .find(|m| m.role == Role::System)
+        .expect("request has a system message");
+    assert!(
+        system.content.contains("You are grok"),
+        "grok turn must use grok.md as its system head"
+    );
+    assert!(
+        !system.content.contains("Du bist Aurora"),
+        "grok turn must not inherit Aurora's system.md"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn ai_still_uses_auroras_system_prompt() {
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+        })
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("ok");
+
+    let mut bot = bot;
+    bot.send("alice", "!ai sag hallo").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+
+    let calls = bot.llm.tool_calls();
+    let system = calls[0]
+        .messages
+        .iter()
+        .find(|m| m.role == Role::System)
+        .expect("request has a system message");
+    assert!(system.content.contains("Du bist Aurora"));
+    assert!(!system.content.contains("You are grok"));
+
     bot.shutdown().await;
 }
 
