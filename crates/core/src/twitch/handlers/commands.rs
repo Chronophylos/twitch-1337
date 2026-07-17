@@ -5,6 +5,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use llm::LlmClient;
+use llm::OpenRouterImageClient;
+use secrecy::ExposeSecret as _;
 use tokio::{sync::broadcast, time::Duration};
 use tracing::{debug, error, info};
 use twitch_irc::{
@@ -291,6 +293,31 @@ where
                 .expect("build model catalog HTTP client"),
         ));
 
+        let image = if ai::model_catalog::ModelCatalog::is_openrouter(ai_conn) {
+            match OpenRouterImageClient::new(
+                ai_boot.api_key.expose_secret(),
+                ai_conn.base_url.as_deref(),
+                crate::APP_USER_AGENT,
+            ) {
+                Ok(client) => {
+                    let http = reqwest::Client::builder()
+                        .user_agent(crate::APP_USER_AGENT)
+                        .build()
+                        .expect("build image host HTTP client");
+                    Some(ai::command::AiImageDeps {
+                        client: Arc::new(client),
+                        host: Arc::new(ai::image_host::ImgdripHost::new(http)),
+                    })
+                }
+                Err(e) => {
+                    error!(error = ?e, "Failed to initialize image client; disabling image gen");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         cmd_list.push(Box::new(ai::command::AiCommand::new(
             ai::command::AiCommandDeps {
                 llm_client: llm.clone(),
@@ -298,6 +325,7 @@ where
                 chat_ctx: chat_ctx.clone(),
                 memory: ai_memory_v2,
                 web: web.clone(),
+                image,
                 emotes: emote_provider,
                 bot_username: bot_username.clone(),
                 doener: doener.clone(),

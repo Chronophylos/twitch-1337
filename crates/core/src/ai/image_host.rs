@@ -88,6 +88,7 @@ fn parse_upload_url(body: &str) -> Result<String> {
         if let Some(url) = parsed.image.page_url.filter(|u| !u.trim().is_empty()) {
             return Ok(url);
         }
+        eyre::bail!("imgdrip response missing image.cdn_url and image.page_url");
     }
 
     let trimmed = body.trim();

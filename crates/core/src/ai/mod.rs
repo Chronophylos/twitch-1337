@@ -4,6 +4,7 @@ pub mod content;
 pub mod doener_tool;
 pub mod emote_tool;
 pub mod image_host;
+pub mod image_tool;
 pub mod memory;
 pub mod model_catalog;
 pub mod prefill;

@@ -9,12 +9,14 @@ use tracing::{debug, error, instrument, warn};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use llm::{
-    AgentOpts, AgentOutcome, LlmClient, LlmError, ToolCall, ToolCallRound,
+    AgentOpts, AgentOutcome, ImageClient, LlmClient, LlmError, ToolCall, ToolCallRound,
     ToolChatCompletionRequest, ToolExecutor, ToolResultMessage, TraceIds, run_agent,
 };
 
 use crate::ai::chat_history::ChatHistory;
 use crate::ai::content;
+use crate::ai::image_host::ImageHost;
+use crate::ai::image_tool::{self, ImageGenRuntime};
 use crate::ai::memory::inject;
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::{ChatTurnExecutor, ChatTurnExecutorOpts, chat_turn_tools};
@@ -97,6 +99,13 @@ impl AiWeb {
     }
 }
 
+/// Optional image generation dependencies for `!ai` / `@grok`.
+#[derive(Clone)]
+pub struct AiImageDeps {
+    pub client: Arc<dyn ImageClient>,
+    pub host: Arc<dyn ImageHost>,
+}
+
 pub struct AiCommand {
     llm_client: Arc<dyn LlmClient>,
     settings: SettingsHandle,
@@ -104,6 +113,7 @@ pub struct AiCommand {
     chat_ctx: Option<ChatContext>,
     memory: AiMemoryV2,
     web: Option<AiWeb>,
+    image: Option<AiImageDeps>,
     emotes: Option<Arc<SevenTvEmoteProvider>>,
     bot_username: String,
     doener: Arc<crate::doener::DoeneratlasClient>,
@@ -120,6 +130,7 @@ pub struct AiCommandDeps {
     pub chat_ctx: Option<ChatContext>,
     pub memory: AiMemoryV2,
     pub web: Option<AiWeb>,
+    pub image: Option<AiImageDeps>,
     pub emotes: Option<Arc<SevenTvEmoteProvider>>,
     pub bot_username: String,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
@@ -168,6 +179,7 @@ impl AiCommand {
             chat_ctx: deps.chat_ctx,
             memory: deps.memory,
             web: deps.web,
+            image: deps.image,
             emotes: deps.emotes,
             bot_username: deps.bot_username,
             doener: deps.doener,
@@ -185,6 +197,7 @@ impl AiCommand {
 struct V2Executor<'a> {
     chat: &'a ChatTurnExecutor,
     web: Option<&'a content::ContentToolExecutor>,
+    image: Option<(&'a dyn ImageClient, &'a dyn ImageHost, &'a ImageGenRuntime)>,
     emotes: Option<&'a SevenTvEmoteProvider>,
     emote_channel_id: &'a str,
     doener: &'a crate::doener::DoeneratlasClient,
@@ -202,6 +215,14 @@ impl ToolExecutor for V2Executor<'_> {
                 Some(p) => {
                     crate::ai::emote_tool::execute_search_emotes(p, self.emote_channel_id, call)
                         .await
+                }
+                None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
+            };
+        }
+        if call.name == image_tool::GENERATE_IMAGE_TOOL_NAME {
+            return match self.image {
+                Some((client, host, rt)) => {
+                    image_tool::execute_generate_image(client, host, rt, call).await
                 }
                 None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
             };
@@ -368,6 +389,9 @@ where
         // effect on the next invocation without a bot restart.
         let snap = self.settings.load();
         let connection = snap.ai.connection.clone();
+        let image_rt = image_tool::resolve_image_gen_runtime(&snap, grok_alias);
+        let image_tools_enabled =
+            self.image.is_some() && image_rt.enabled && ModelCatalog::is_openrouter(&connection);
         let (model, reasoning_effort, service_tier) = if grok_alias {
             (
                 snap.ai
@@ -491,6 +515,9 @@ where
         } else if self.web.is_some() {
             appendices.push(WEB_TOOLS_SYSTEM_APPENDIX.to_string());
         }
+        if image_tools_enabled {
+            appendices.push(image_tool::IMAGE_GEN_SYSTEM_APPENDIX.to_string());
+        }
 
         let (system_msg, user_msg) = inject::build_chat_turn_messages(
             inject::SystemParts {
@@ -524,6 +551,9 @@ where
         if self.emotes.is_some() {
             tools.push(crate::ai::emote_tool::search_emotes_tool());
         }
+        if image_tools_enabled {
+            tools.push(image_tool::generate_image_tool());
+        }
         let trace = TraceIds {
             user: Some(ctx.privmsg.sender.login.clone()),
             session_id: Some(crate::ai::session::new_session_id()),
@@ -547,9 +577,22 @@ where
             per_round_timeout: Some(mem.turn_timeout),
         };
 
+        let image_exec = image_tools_enabled.then(|| {
+            let img = self
+                .image
+                .as_ref()
+                .expect("image_tools_enabled implies Some");
+            (
+                img.client.as_ref() as &dyn ImageClient,
+                img.host.as_ref() as &dyn ImageHost,
+                &image_rt,
+            )
+        });
+
         let combined_exec = V2Executor {
             chat: &exec,
             web: self.web.as_ref().map(|w| w.executor.as_ref()),
+            image: image_exec,
             emotes: self.emotes.as_deref(),
             emote_channel_id: &ctx.privmsg.channel_id,
             doener: self.doener.as_ref(),
