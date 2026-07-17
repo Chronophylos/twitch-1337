@@ -63,6 +63,8 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub primary_history_tap: Option<Arc<tokio::sync::Mutex<Option<ChatHistory>>>>,
     /// Process start instant, captured in `run_bot`. Used by `!v` for uptime.
     pub started_at: std::time::Instant,
+    /// Optional imgdrip upload URL override for integration tests.
+    pub image_upload_url_override: Option<String>,
 }
 
 /// Handler for generic text commands that start with `!`.
@@ -97,6 +99,7 @@ where
         emote_provider,
         primary_history_tap,
         started_at,
+        image_upload_url_override,
     } = cfg;
 
     let ping_handle = PingHandle::new(ping_actor_tx);
@@ -304,9 +307,13 @@ where
                         .user_agent(crate::APP_USER_AGENT)
                         .build()
                         .expect("build image host HTTP client");
+                    let host = match image_upload_url_override.as_deref() {
+                        Some(url) => ai::image_host::ImgdripHost::with_upload_url(http, url.into()),
+                        None => ai::image_host::ImgdripHost::new(http),
+                    };
                     Some(ai::command::AiImageDeps {
                         client: Arc::new(client),
-                        host: Arc::new(ai::image_host::ImgdripHost::new(http)),
+                        host: Arc::new(host),
                     })
                 }
                 Err(e) => {

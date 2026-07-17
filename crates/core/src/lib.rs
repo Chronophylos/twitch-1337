@@ -165,6 +165,10 @@ pub struct Services {
     /// (via the web spawner closure) so the dashboard reads live fire counters
     /// from the same in-memory map the bot writes.
     pub telemetry: Arc<crate::schedule::TelemetryStore>,
+
+    /// Optional override for the imgdrip upload endpoint. Production leaves
+    /// this `None` (real CDN); integration tests point at wiremock.
+    pub image_upload_url_override: Option<String>,
 }
 
 pub type WebSpawner =
@@ -211,6 +215,7 @@ where
         aviation_tracker_rx,
         primary_history_tap,
         telemetry,
+        image_upload_url_override,
     } = services;
 
     // Clone the sender out of the Arc for SpawnDeps.
@@ -302,6 +307,7 @@ where
         primary_history_tap,
         telemetry: telemetry.clone(),
         started_at,
+        image_upload_url_override,
     });
 
     let shutdown_notify = handlers.shutdown_notify.clone();

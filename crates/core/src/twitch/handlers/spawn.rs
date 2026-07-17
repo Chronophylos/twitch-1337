@@ -120,6 +120,9 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     pub telemetry: Arc<crate::schedule::TelemetryStore>,
     /// Process start instant, captured in `run_bot`; forwarded to `!v`.
     pub started_at: std::time::Instant,
+
+    /// Optional imgdrip upload URL override for integration tests.
+    pub image_upload_url_override: Option<String>,
 }
 
 /// Spawn every long-running handler task in the order they currently
@@ -160,6 +163,7 @@ where
         primary_history_tap,
         telemetry,
         started_at,
+        image_upload_url_override,
     } = deps;
 
     let ping_actor = tokio::spawn(run_ping_actor(ping_actor_rx, ping_manager, ping_names_tx));
@@ -296,6 +300,7 @@ where
                 emote_provider,
                 primary_history_tap,
                 started_at,
+                image_upload_url_override,
             })
             .await;
         }

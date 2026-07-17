@@ -323,6 +323,7 @@ pub async fn main() -> Result<()> {
         aviation_tracker_rx,
         primary_history_tap: None,
         telemetry,
+        image_upload_url_override: None,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();

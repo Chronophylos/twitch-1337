@@ -80,6 +80,7 @@ pub struct TestBotBuilder {
     whisper_failure: bool,
     emote_glossary_override: Option<String>,
     doener_base_url: Option<String>,
+    image_upload_url: Option<String>,
     settings_overrides: Option<twitch_1337::settings::SettingsOverrides>,
 }
 
@@ -93,6 +94,7 @@ impl TestBotBuilder {
             whisper_failure: false,
             emote_glossary_override: None,
             doener_base_url: None,
+            image_upload_url: None,
             settings_overrides: None,
         }
     }
@@ -174,6 +176,12 @@ impl TestBotBuilder {
     /// Override the Döneratlas API base URL (wiremock) for `!dpi` / `!döner` / AI tool.
     pub fn with_doener_base_url(mut self, base: impl Into<String>) -> Self {
         self.doener_base_url = Some(base.into());
+        self
+    }
+
+    /// Point imgdrip uploads at a wiremock (or other test) endpoint.
+    pub fn with_image_upload_url(mut self, url: impl Into<String>) -> Self {
+        self.image_upload_url = Some(url.into());
         self
     }
 
@@ -379,6 +387,7 @@ impl TestBotBuilder {
             aviation_tracker_rx,
             primary_history_tap: Some(primary_history_tap.clone()),
             telemetry: telemetry_store.clone(),
+            image_upload_url_override: self.image_upload_url.clone(),
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
