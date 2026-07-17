@@ -108,17 +108,19 @@ Reads are also a precondition for writes here, not an optional lookup — `write
 
 **Chat history** (`recent_chat`) is not memory and stays injected in the user message, unchanged.
 
-## Write scope
+## Write scope — no change needed
 
-`ChatTurnExecutorOpts` gains `allow_soul_writes: bool` — `true` for `!ai`, `false` for `@grok`. A `write_file` targeting `SOUL.md` on a grok turn is rejected with a tool error the model can read and recover from, not a silent drop. `users/*` and scratch writes stay open under the existing `max_writes_per_turn` cap.
+The design review assumed `@grok` could write `SOUL.md`. It cannot, and neither can `!ai`. `ChatTurnExecutor::deny_reason_for_write_path` (`crates/core/src/ai/memory/tools.rs:114`) already denies `WritePath::Soul` for every role except `Role::Dreamer`, and a chat turn is never `Dreamer`. SOUL is dreamer-only by construction.
 
-Rationale: a separate agent should not be rewriting Aurora's self-description. Recording that someone got fact-checked and lost is in role; editing who Aurora is, is not.
+So the intended restriction is already the status quo: no `allow_soul_writes` flag, no executor change. `users/*` and scratch writes stay open under the existing `max_writes_per_turn` cap and the existing role rules (a regular may only edit their own sheet; LORE needs moderator).
+
+The one thing that does change: `@grok` cannot *read* `SOUL.md` either, because the manifest never lists it and reads are allowlisted against the manifest. Aurora's self-description is invisible to the second agent, which is the separation this design wanted.
 
 ## Error handling
 
 - `read_memory` on a nonexistent path: tool error with the manifest's valid paths, model retries or proceeds without.
 - `read_memory` on a path outside the allowed set: same rejection path as `write_file`'s existing validation.
-- `write_file` to `SOUL.md` on a grok turn: tool error naming the restriction.
+- `write_file` to `SOUL.md` on a grok turn: already denied by the existing role rules with `permission_denied: SOUL.md is rewritten only by the daily dreamer ritual`.
 - Web tools unavailable (`self.web.is_none()`): `GROK_WEB_SYSTEM_APPENDIX` is not pushed and `forced_web_search_round` does not run; `grok.md` must state that with no web tools it answers from the provided reply/chat context only and says the check is unverified rather than bluffing.
 
 ## Testing
@@ -130,7 +132,7 @@ Extend `crates/core/tests/grok.rs`:
 - a `@grok` system message contains no memory fences, only manifest paths;
 - the manifest includes the reply-target's path on a reply invocation and omits unrelated chatters;
 - `read_memory` returns a nonce-fenced body and rejects an out-of-manifest path;
-- `write_file` to `SOUL.md` is rejected on a grok turn and accepted on an `!ai` turn.
+- `read_memory("SOUL.md")` is rejected on a grok turn (not in the manifest).
 
 Unit test in `inject.rs`: `PROMPT_GROK` does not contain `{speaker_role}`.
 
