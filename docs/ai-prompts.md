@@ -61,6 +61,16 @@ There is no live, no-restart edit: the running binary always reflects whatever w
 
 File caps (SOUL 4 KiB, LORE 12 KiB, user 4 KiB, scratch 2 KiB) are enforced by the store. The auto-injected context (every memory + scratch file body) is bounded by `inject_byte_budget` (default 24 KiB ≈ 6k tokens) — oldest user/scratch files drop first. Prompt files are *additional* on top of that — keep them tight.
 
+## grok.md
+
+`@grok` selects `grok.md` instead of `system.md` as the chat-turn system head, gated on the existing `grok_alias` bool in `command.rs`. Every other injection point (`ai_instructions.md`, speaker metadata, relevant-emotes block, volatile state, recent chat) is unchanged.
+
+`grok.md` is a full separate baked prompt, not an appendix stacked on `system.md`. The earlier design appended `GROK_SYSTEM_APPENDIX` after the substituted `system.md`, so every override it wanted (English-only replies, no sentence cap, no lowercase default) had to contradict German prose already sitting above it in the same message. Models follow a trailing contradiction unreliably, so the appendix approach stopped scaling once the persona needed more than a couple of overrides. A second head states its own rules once, with nothing above it to argue against.
+
+Memory access differs from `!ai` too. `system.md` gets the full SOUL/LORE/user bodies injected straight into the system message; `grok.md` gets a paths-only manifest (`LORE.md`, the speaker's and reply-target's user sheet, the active scratch slugs) plus a `read_memory(path)` tool scoped to `@grok` turns, so the model pulls a body only when the turn actually needs it. Pulled bodies are nonce-fenced the same way the injected ones are. `read_memory` is not registered for `!ai` turns: its bodies are already in the prompt, so the tool would just spend a round-trip re-fetching what it can already see.
+
+`SOUL.md` never appears on the manifest, and `read_memory` only allows manifest paths, so it's unreachable from a grok turn. Aurora's self-description stays invisible to the second agent. Writes were already this restricted before this change: `SOUL.md` is dreamer-only for both aliases.
+
 ## See also
 
 - `docs/superpowers/specs/2026-04-28-ai-memory-rework-v2-design.md` — full design.

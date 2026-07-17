@@ -1,5 +1,6 @@
 //! Tool args + definitions for the v2 chat-turn and dreamer loops.
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
@@ -8,9 +9,10 @@ use serde::Deserialize;
 
 use llm::{ToolCall, ToolDefinition, ToolExecutor, ToolResultMessage};
 
+use crate::ai::memory::inject::{FenceLabel, fence_block};
 use crate::ai::memory::sanitize::{
-    PathError, SlugError, WritePath, check_body, has_trailing_iso_date, parse_slug,
-    parse_write_path, write_path_to_kind,
+    PathError, SlugError, WritePath, check_body, has_trailing_iso_date, parse_read_path,
+    parse_slug, parse_write_path, write_path_to_kind,
 };
 use crate::ai::memory::store::{MemoryStore, WriteError};
 use crate::ai::memory::types::{FileKind, Role};
@@ -36,6 +38,11 @@ pub struct DeleteScratchArgs {
     pub slug: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReadMemoryArgs {
+    pub path: String,
+}
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -55,6 +62,18 @@ pub fn chat_turn_tools() -> Vec<ToolDefinition> {
             "Remove a scratch file. Regulars may only delete scratch files they created.",
         ),
     ]
+}
+
+/// Chat-turn tools plus `read_memory`, for the grok alias. Grok gets a paths-only
+/// manifest instead of injected bodies, so it needs a way to pull one; Aurora
+/// already has every body in her prompt and would only burn a round-trip.
+pub fn grok_chat_turn_tools() -> Vec<ToolDefinition> {
+    let mut tools = chat_turn_tools();
+    tools.push(ToolDefinition::derived::<ReadMemoryArgs>(
+        "read_memory",
+        "Read one memory file listed in this turn's memory index. path is an exact path from that index (LORE.md, users/<id>.md, or scratch/<slug>.md). Returns the fenced body. Paths outside the index are refused.",
+    ));
+    tools
 }
 
 pub fn dreamer_tools() -> Vec<ToolDefinition> {
@@ -87,6 +106,12 @@ pub struct ChatTurnExecutorOpts {
     /// Maximum write-class tool calls (write_file, write_scratch, delete_scratch)
     /// per turn.
     pub max_writes_per_turn: usize,
+    /// Paths `read_memory` may serve, from the turn's memory manifest. Empty for
+    /// Aurora turns, which have no `read_memory` tool registered at all.
+    pub readable_paths: BTreeSet<String>,
+    /// Nonce for fencing `read_memory` results. Same nonce as the turn's
+    /// injected blocks so the model sees one consistent fence scheme.
+    pub inject_nonce: String,
 }
 
 pub struct ChatTurnExecutor {
@@ -280,6 +305,49 @@ impl ChatTurnExecutor {
             Err(e) => format!("io_error: {e}"),
         }
     }
+
+    async fn handle_read_memory(&self, call: &ToolCall) -> String {
+        let args: ReadMemoryArgs = match call.parse_args() {
+            Ok(a) => a,
+            Err(_) => return "invalid_arguments: could not parse the tool arguments".into(),
+        };
+        // Authorization is the manifest, not the parser: a well-formed path the
+        // manifest never listed is refused before the store is touched.
+        if !self.opts.readable_paths.contains(&args.path) {
+            let listed = self
+                .opts
+                .readable_paths
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!(
+                "invalid_path: {} is not in this turn's memory index. Readable paths: {listed}",
+                args.path
+            );
+        }
+        let kind = match parse_read_path(&args.path) {
+            Ok(k) => k,
+            Err(PathError) => {
+                return "invalid_path: path must be LORE.md, users/<numeric-id>.md, or scratch/<slug>.md".into();
+            }
+        };
+        let file = match self.opts.store.read_kind(&kind).await {
+            Ok(f) => f,
+            Err(e) => return format!("io_error: {e}"),
+        };
+        let label = match &kind {
+            FileKind::Soul => FenceLabel::Soul,
+            FileKind::Lore => FenceLabel::Lore,
+            FileKind::User { user_id } => FenceLabel::User {
+                id: user_id,
+                login: file.frontmatter.username.as_deref(),
+                display_name: file.frontmatter.display_name.as_deref(),
+            },
+            FileKind::Scratch { slug } => FenceLabel::Scratch { slug },
+        };
+        fence_block(label, &self.opts.inject_nonce, &file.body)
+    }
 }
 
 #[async_trait]
@@ -289,6 +357,7 @@ impl ToolExecutor for ChatTurnExecutor {
             "write_file" => self.handle_write_file(call).await,
             "write_scratch" => self.handle_write_scratch(call).await,
             "delete_scratch" => self.handle_delete_scratch(call).await,
+            "read_memory" => self.handle_read_memory(call).await,
             _ => "unknown_tool: no memory tool with that name".to_string(),
         };
         ToolResultMessage::for_call(call, content)
@@ -318,6 +387,8 @@ impl DreamerExecutor {
                 speaker_display_name: String::new(),
                 speaker_role: Role::Dreamer,
                 max_writes_per_turn: opts.max_writes_per_turn,
+                readable_paths: BTreeSet::new(),
+                inject_nonce: String::new(),
             }),
         }
     }
@@ -348,6 +419,14 @@ mod schema_tests {
     fn dreamer_tools_matches_chat_turn_tools() {
         let names: Vec<_> = dreamer_tools().into_iter().map(|t| t.name).collect();
         assert_eq!(names, vec!["write_file", "write_scratch", "delete_scratch"]);
+    }
+
+    #[test]
+    fn grok_tools_add_read_memory_to_the_chat_turn_set() {
+        let names: Vec<_> = grok_chat_turn_tools().into_iter().map(|t| t.name).collect();
+        assert!(names.contains(&"read_memory".to_string()));
+        assert!(names.contains(&"write_file".to_string()));
+        assert_eq!(names.len(), chat_turn_tools().len() + 1);
     }
 
     #[test]
@@ -401,6 +480,8 @@ mod exec_tests {
             speaker_display_name: "Alice".into(),
             speaker_role: role,
             max_writes_per_turn: max_writes,
+            readable_paths: Default::default(),
+            inject_nonce: "n0".into(),
         })
     }
 
@@ -639,6 +720,104 @@ mod exec_tests {
             "got {}",
             r2.content
         );
+    }
+
+    #[tokio::test]
+    async fn read_memory_returns_a_fenced_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        store
+            .write(&FileKind::Lore, "the channel hates mondays", None, None)
+            .await
+            .unwrap();
+
+        let exec = ChatTurnExecutor::new(ChatTurnExecutorOpts {
+            store: store.clone(),
+            speaker_user_id: "111".into(),
+            speaker_login: "alice".into(),
+            speaker_display_name: "Alice".into(),
+            speaker_role: Role::Regular,
+            max_writes_per_turn: 4,
+            readable_paths: ["LORE.md".to_string()].into_iter().collect(),
+            inject_nonce: "cafebabecafebabe".into(),
+        });
+
+        let out = exec
+            .execute(&call("read_memory", serde_json::json!({"path": "LORE.md"})))
+            .await;
+
+        assert!(out.content.contains("the channel hates mondays"));
+        assert!(
+            out.content
+                .contains("<<<FILE kind=lore nonce=cafebabecafebabe>>>")
+        );
+        assert!(out.content.contains("<<<ENDFILE nonce=cafebabecafebabe>>>"));
+    }
+
+    #[tokio::test]
+    async fn read_memory_refuses_a_path_outside_the_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        store
+            .write(&FileKind::Soul, "aurora self description", None, None)
+            .await
+            .unwrap();
+
+        let exec = ChatTurnExecutor::new(ChatTurnExecutorOpts {
+            store: store.clone(),
+            speaker_user_id: "111".into(),
+            speaker_login: "alice".into(),
+            speaker_display_name: "Alice".into(),
+            speaker_role: Role::Regular,
+            max_writes_per_turn: 4,
+            readable_paths: ["LORE.md".to_string()].into_iter().collect(),
+            inject_nonce: "n0".into(),
+        });
+
+        let out = exec
+            .execute(&call("read_memory", serde_json::json!({"path": "SOUL.md"})))
+            .await;
+
+        assert!(out.content.starts_with("invalid_path:"));
+        // The refusal must not leak the body it refused to serve.
+        assert!(!out.content.contains("aurora self description"));
+    }
+
+    #[tokio::test]
+    async fn read_memory_does_not_consume_write_quota() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        store
+            .write(&FileKind::Lore, "body", None, None)
+            .await
+            .unwrap();
+
+        let exec = ChatTurnExecutor::new(ChatTurnExecutorOpts {
+            store: store.clone(),
+            speaker_user_id: "111".into(),
+            speaker_login: "alice".into(),
+            speaker_display_name: "Alice".into(),
+            speaker_role: Role::Regular,
+            max_writes_per_turn: 1,
+            readable_paths: ["LORE.md".to_string()].into_iter().collect(),
+            inject_nonce: "n0".into(),
+        });
+
+        for _ in 0..3 {
+            let out = exec
+                .execute(&call("read_memory", serde_json::json!({"path": "LORE.md"})))
+                .await;
+            assert!(!out.content.contains("write_quota_exhausted"));
+        }
+
+        // The one write is still available after three reads.
+        let out = exec
+            .execute(&call(
+                "write_scratch",
+                serde_json::json!({"slug": "quiz", "body": "round 1"}),
+            ))
+            .await;
+        assert_eq!(out.content, "ok");
     }
 
     #[tokio::test]

@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,7 +18,9 @@ use crate::ai::chat_history::ChatHistory;
 use crate::ai::content;
 use crate::ai::memory::inject;
 use crate::ai::memory::store::MemoryStore;
-use crate::ai::memory::tools::{ChatTurnExecutor, ChatTurnExecutorOpts, chat_turn_tools};
+use crate::ai::memory::tools::{
+    ChatTurnExecutor, ChatTurnExecutorOpts, chat_turn_tools, grok_chat_turn_tools,
+};
 use crate::ai::memory::transcript::TranscriptWriter;
 use crate::ai::memory::types::Role;
 use crate::ai::model_catalog::ModelCatalog;
@@ -128,14 +131,7 @@ pub struct AiCommandDeps {
 
 pub const GROK_ALIAS_TRIGGER: &str = "@grok";
 const GROK_REPLY_DEFAULT_INSTRUCTION: &str =
-    "Prüfe die Reply-Nachricht, ordne sie ein und antworte kurz im Twitch-Chat-Stil.";
-const GROK_SYSTEM_APPENDIX: &str = "\
-\n\n## @grok style\n\
-This request came through the @grok alias. Answer in a Grok-inspired Twitch-chat style: direct, \
-playful, a little sarcastic when it fits, and aware of memes, irony, arguments, and social-media \
-tone. Stay useful and concise. Do not claim to be xAI Grok, do not claim access to X, and do not \
-invent X posts, trends, threads, or private context. If web tools are unavailable, say only what \
-you can infer from the provided Twitch reply/chat context.";
+    "Check the replied-to message, work out what it claims, and answer briefly.";
 const GROK_WEB_SYSTEM_APPENDIX: &str = "\
 \n\n## @grok alias\n\
 This request came through the @grok alias. Actively use web_search before answering when web tools \
@@ -423,7 +419,14 @@ where
             model_id: &model,
         };
         // Prompt templates are baked into the binary (#321), not read from disk.
-        let system_head = inject::substitute(inject::PROMPT_SYSTEM, vars);
+        // @grok is a separate agent, not a style flag on Aurora: it gets its
+        // own baked head rather than an appendix arguing with system.md.
+        let head_tmpl = if grok_alias {
+            inject::PROMPT_GROK
+        } else {
+            inject::PROMPT_SYSTEM
+        };
+        let system_head = inject::substitute(head_tmpl, vars);
         let instructions_head = inject::substitute(inject::PROMPT_INSTRUCTIONS, vars);
 
         let invocation_channel = if cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login))
@@ -436,30 +439,44 @@ where
         // prompt cache survives across turns. Scratch and recent chat
         // go in the user message: any scratch write or chat line would otherwise
         // invalidate the system-message cache every turn.
-        let inject::ChatTurnContext {
-            recent_chat,
-            memory,
-            scratch,
-        } = inject::build_chat_turn_context(
-            &mem.store,
-            inject::BuildOpts {
-                inject_byte_budget: mem.inject_byte_budget,
-                // Per-process nonce: memory only changes bytes when its
-                // content actually changes, so the prefix caches across turns.
-                nonce: self.prompt_nonce.clone(),
-                primary_history: cc.map(|c| c.primary_history.clone()),
-                primary_login: cc
-                    .map(|c| c.primary_login.clone())
-                    .unwrap_or_else(|| ctx.privmsg.channel_login.clone()),
-                ai_channel_history: cc.and_then(|c| c.ai_channel_history.clone()),
-                ai_channel_login: cc.and_then(|c| c.ai_channel_login.clone()),
-                invocation_channel,
-                bot_login: self.bot_username.clone(),
-                persona_name: persona_name.clone(),
-                speaker_login: ctx.privmsg.sender.login.clone(),
-            },
-        )
-        .await?;
+        let build_opts = inject::BuildOpts {
+            inject_byte_budget: mem.inject_byte_budget,
+            // Per-process nonce: memory only changes bytes when its
+            // content actually changes, so the prefix caches across turns.
+            nonce: self.prompt_nonce.clone(),
+            primary_history: cc.map(|c| c.primary_history.clone()),
+            primary_login: cc
+                .map(|c| c.primary_login.clone())
+                .unwrap_or_else(|| ctx.privmsg.channel_login.clone()),
+            ai_channel_history: cc.and_then(|c| c.ai_channel_history.clone()),
+            ai_channel_login: cc.and_then(|c| c.ai_channel_login.clone()),
+            invocation_channel,
+            bot_login: self.bot_username.clone(),
+            persona_name: persona_name.clone(),
+            speaker_login: ctx.privmsg.sender.login.clone(),
+        };
+
+        // Aurora gets bodies injected; grok gets an index and pulls what it
+        // needs. Two agents, two memory postures.
+        let (recent_chat, memory, scratch, readable_paths) = if grok_alias {
+            let g = inject::build_grok_turn_context(
+                &mem.store,
+                inject::ManifestOpts {
+                    build: build_opts,
+                    speaker_user_id: ctx.privmsg.sender.id.clone(),
+                    reply_target_user_id: ctx
+                        .privmsg
+                        .reply_parent
+                        .as_ref()
+                        .map(|p| p.reply_parent_user.id.clone()),
+                },
+            )
+            .await?;
+            (g.recent_chat, g.manifest, String::new(), g.readable_paths)
+        } else {
+            let c = inject::build_chat_turn_context(&mem.store, build_opts).await?;
+            (c.recent_chat, c.memory, c.scratch, BTreeSet::new())
+        };
 
         let instruction_for_prompt = instruction_with_reply_context(&instruction, &ctx, grok_alias);
 
@@ -484,7 +501,6 @@ where
             appendices.push(EMOTE_TOOLS_SYSTEM_APPENDIX.to_string());
         }
         if grok_alias {
-            appendices.push(GROK_SYSTEM_APPENDIX.to_string());
             if self.web.is_some() {
                 appendices.push(GROK_WEB_SYSTEM_APPENDIX.to_string());
             }
@@ -514,9 +530,15 @@ where
             speaker_display_name: ctx.privmsg.sender.name.clone(),
             speaker_role: role,
             max_writes_per_turn: mem.max_writes_per_turn,
+            readable_paths,
+            inject_nonce: self.prompt_nonce.clone(),
         });
 
-        let mut tools = chat_turn_tools();
+        let mut tools = if grok_alias {
+            grok_chat_turn_tools()
+        } else {
+            chat_turn_tools()
+        };
         tools.push(crate::ai::doener_tool::doener_tool());
         if self.web.is_some() {
             tools.extend(content::ai_tools());

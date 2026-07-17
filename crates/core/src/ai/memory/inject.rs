@@ -1,7 +1,7 @@
 //! Prompt composition: nonce-fenced inject of every memory + scratch file body,
 //! plus prompt-file substitution.
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use chrono_tz::Europe::Berlin;
 use eyre::Result;
@@ -22,6 +22,7 @@ const FENCE_CLOSE: &str = "<<<ENDFILE";
 // override, no drift. Substitution of `{speaker_*}`/`{date}`/`{model}`/`{channel}`
 // happens in `substitute` below.
 pub(crate) const PROMPT_SYSTEM: &str = include_str!("../../../data/prompts/system.md");
+pub(crate) const PROMPT_GROK: &str = include_str!("../../../data/prompts/grok.md");
 pub(crate) const PROMPT_INSTRUCTIONS: &str =
     include_str!("../../../data/prompts/ai_instructions.md");
 pub(crate) const PROMPT_DREAMER: &str = include_str!("../../../data/prompts/dreamer.md");
@@ -173,13 +174,14 @@ pub struct ChatTurnContext {
     pub scratch: String,
 }
 
-/// Build the chat-turn injected context split into a recent-chat section and a
-/// memory section. Callers place each in the message that maximizes prompt
-/// caching: memory in the system message, recent chat in the user message.
-pub async fn build_chat_turn_context(
-    store: &MemoryStore,
-    opts: BuildOpts,
-) -> Result<ChatTurnContext> {
+/// Rendered rolling chat for one turn, plus the lowercased logins that survived
+/// the byte caps. Shared by the Aurora and grok context builders.
+struct RecentChat {
+    body: String,
+    mentioned: std::collections::BTreeSet<String>,
+}
+
+async fn render_recent_chat(opts: &BuildOpts) -> RecentChat {
     let primary_rendered = render_recent_section(
         opts.primary_history.as_ref(),
         &opts.primary_login,
@@ -218,6 +220,22 @@ pub async fn build_chat_turn_context(
         recent_sections.push(section.body);
     }
 
+    RecentChat {
+        body: recent_sections.join("\n\n"),
+        mentioned,
+    }
+}
+
+/// Build the chat-turn injected context split into a recent-chat section and a
+/// memory section. Callers place each in the message that maximizes prompt
+/// caching: memory in the system message, recent chat in the user message.
+pub async fn build_chat_turn_context(
+    store: &MemoryStore,
+    opts: BuildOpts,
+) -> Result<ChatTurnContext> {
+    let recent = render_recent_chat(&opts).await;
+    let mentioned = recent.mentioned;
+
     let soul = store.read_kind(&FileKind::Soul).await?;
     let lore = store.read_kind(&FileKind::Lore).await?;
     let mut users = store.list_users().await?;
@@ -242,7 +260,7 @@ pub async fn build_chat_turn_context(
         || opts.ai_channel_history.is_some()
         || !speaker_lc.is_empty();
     if is_chat_turn {
-        let mut scope: std::collections::BTreeSet<String> = mentioned.clone();
+        let mut scope: std::collections::BTreeSet<String> = mentioned;
         if !speaker_lc.is_empty() {
             scope.insert(speaker_lc.clone());
         }
@@ -312,11 +330,95 @@ pub async fn build_chat_turn_context(
 
     let memory = memory_blocks.join("\n");
     let scratch = scratch_blocks.join("\n");
-    let recent_chat = recent_sections.join("\n\n");
+    let recent_chat = recent.body;
     Ok(ChatTurnContext {
         recent_chat,
         memory,
         scratch,
+    })
+}
+
+/// Result of [`build_grok_turn_context`].
+///
+/// The grok agent reads memory on request instead of having it injected, so
+/// `manifest` carries paths only and the bodies stay on disk until a
+/// `read_memory` call pulls one. Two consequences worth knowing:
+/// - the system message has no memory block, making grok's cache prefix
+///   smaller and more stable than Aurora's;
+/// - `readable_paths` is the authorization list for `read_memory`. A path not
+///   in it does not exist as far as the model is concerned.
+pub struct GrokTurnContext {
+    pub recent_chat: String,
+    pub manifest: String,
+    pub readable_paths: BTreeSet<String>,
+}
+
+pub struct ManifestOpts {
+    pub build: BuildOpts,
+    /// Numeric Twitch id of the invoking user.
+    pub speaker_user_id: String,
+    /// Numeric Twitch id of the user whose message was replied to, when the
+    /// invocation is a reply.
+    pub reply_target_user_id: Option<String>,
+}
+
+/// Build the grok chat-turn context: rolling chat plus a paths-only memory
+/// index. SOUL is deliberately absent — the second agent has no business
+/// reading Aurora's self-description.
+pub async fn build_grok_turn_context(
+    store: &MemoryStore,
+    opts: ManifestOpts,
+) -> Result<GrokTurnContext> {
+    let recent = render_recent_chat(&opts.build).await;
+
+    let mut entries: Vec<String> = Vec::new();
+    let mut readable: BTreeSet<String> = BTreeSet::new();
+
+    entries.push("- LORE.md".to_string());
+    readable.insert("LORE.md".to_string());
+
+    // Scope to the people this turn is actually about: the speaker and, on a
+    // reply invocation, whoever is being checked.
+    let mut wanted: BTreeSet<&str> = BTreeSet::from([opts.speaker_user_id.as_str()]);
+    if let Some(id) = opts.reply_target_user_id.as_deref() {
+        wanted.insert(id);
+    }
+
+    let users = store.list_users().await?;
+    for f in &users {
+        let FileKind::User { user_id } = &f.kind else {
+            continue;
+        };
+        if !wanted.contains(user_id.as_str()) {
+            continue;
+        }
+        let path = format!("users/{user_id}.md");
+        match f.frontmatter.username.as_deref() {
+            Some(login) if !login.is_empty() => entries.push(format!("- {path} ({login})")),
+            _ => entries.push(format!("- {path}")),
+        }
+        readable.insert(path);
+    }
+
+    let scratch = store.list_scratch().await?;
+    for f in &scratch {
+        let FileKind::Scratch { slug } = &f.kind else {
+            continue;
+        };
+        let path = format!("scratch/{slug}.md");
+        entries.push(format!("- {path}"));
+        readable.insert(path);
+    }
+
+    let manifest = format!(
+        "## Memory index\n\nThese files exist. Bodies are not included. Call read_memory(path) with one of these exact paths to pull a body. Nothing outside this list is readable.\n\n{}",
+        entries.join("\n")
+    );
+
+    Ok(GrokTurnContext {
+        recent_chat: recent.body,
+        manifest,
+        readable_paths: readable,
     })
 }
 
@@ -506,6 +608,146 @@ mod tests {
 
     fn test_handle() -> crate::settings::SettingsHandle {
         Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
+    }
+
+    async fn test_store() -> (MemoryStore, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(tmp.path(), test_handle()).await.unwrap();
+        (store, tmp)
+    }
+
+    fn sample_build_opts(speaker_login: &str) -> BuildOpts {
+        BuildOpts {
+            inject_byte_budget: 32_000,
+            nonce: "deadbeefdeadbeef".into(),
+            primary_history: None,
+            primary_login: "channel".into(),
+            ai_channel_history: None,
+            ai_channel_login: None,
+            invocation_channel: InvocationChannel::Primary,
+            bot_login: "bot".into(),
+            persona_name: "Aurora".into(),
+            speaker_login: speaker_login.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn grok_manifest_lists_paths_without_bodies() {
+        let (store, _tmp) = test_store().await;
+        store
+            .write(&FileKind::Lore, "lore body text", None, None)
+            .await
+            .unwrap();
+        store
+            .write(
+                &FileKind::User {
+                    user_id: "111".into(),
+                },
+                "alice body text",
+                Some("alice"),
+                Some("Alice"),
+            )
+            .await
+            .unwrap();
+        store
+            .write_scratch(
+                &FileKind::Scratch {
+                    slug: "quiz".into(),
+                },
+                "quiz body text",
+                Some("111"),
+            )
+            .await
+            .unwrap();
+
+        let ctx = build_grok_turn_context(
+            &store,
+            ManifestOpts {
+                build: sample_build_opts("alice"),
+                speaker_user_id: "111".into(),
+                reply_target_user_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(ctx.manifest.contains("LORE.md"));
+        assert!(ctx.manifest.contains("users/111.md"));
+        assert!(ctx.manifest.contains("scratch/quiz.md"));
+        // Paths only. A body in the manifest defeats the whole design.
+        assert!(!ctx.manifest.contains("lore body text"));
+        assert!(!ctx.manifest.contains("alice body text"));
+        assert!(!ctx.manifest.contains("quiz body text"));
+        // No fences: nothing is injected, so nothing needs fencing.
+        assert!(!ctx.manifest.contains("<<<FILE"));
+
+        assert_eq!(
+            ctx.readable_paths,
+            ["LORE.md", "users/111.md", "scratch/quiz.md"]
+                .into_iter()
+                .map(String::from)
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn grok_manifest_scopes_users_to_speaker_and_reply_target() {
+        let (store, _tmp) = test_store().await;
+        store
+            .write(&FileKind::Lore, "lore", None, None)
+            .await
+            .unwrap();
+        for (id, login) in [("111", "alice"), ("222", "bob"), ("333", "carol")] {
+            store
+                .write(
+                    &FileKind::User { user_id: id.into() },
+                    "body",
+                    Some(login),
+                    Some(login),
+                )
+                .await
+                .unwrap();
+        }
+
+        let ctx = build_grok_turn_context(
+            &store,
+            ManifestOpts {
+                build: sample_build_opts("alice"),
+                speaker_user_id: "111".into(),
+                reply_target_user_id: Some("222".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(ctx.readable_paths.contains("users/111.md"));
+        assert!(ctx.readable_paths.contains("users/222.md"));
+        // carol is a bystander. A validator works the claim in front of it.
+        assert!(!ctx.readable_paths.contains("users/333.md"));
+        assert!(!ctx.manifest.contains("users/333.md"));
+    }
+
+    #[tokio::test]
+    async fn grok_manifest_never_lists_soul() {
+        let (store, _tmp) = test_store().await;
+        store
+            .write(&FileKind::Soul, "aurora self description", None, None)
+            .await
+            .unwrap();
+
+        let ctx = build_grok_turn_context(
+            &store,
+            ManifestOpts {
+                build: sample_build_opts("alice"),
+                speaker_user_id: "111".into(),
+                reply_target_user_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!ctx.manifest.contains("SOUL.md"));
+        assert!(!ctx.readable_paths.contains("SOUL.md"));
     }
 
     #[test]
@@ -701,6 +943,16 @@ mod tests {
                 "bundled system prompt leaked unsubstituted token {tok}:\n{out}"
             );
         }
+    }
+
+    #[test]
+    fn grok_prompt_does_not_interpolate_speaker_role() {
+        // {speaker_role} in the cached system prefix would vary it per speaker
+        // and defeat the prompt cache. Speaker vars belong in ai_instructions.md.
+        assert!(
+            !PROMPT_GROK.contains("{speaker_role}"),
+            "grok.md must not interpolate {{speaker_role}}"
+        );
     }
 
     #[test]
