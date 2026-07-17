@@ -45,6 +45,9 @@ leaderboard.ron
 hall_of_shame.ron
 pings.ron
 ai_memory.ron
+emote_tracker.sqlite
+emote_tracker.sqlite-wal
+emote_tracker.sqlite-shm
 
 # Caveman compression backups
 *.original.md

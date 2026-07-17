@@ -121,3 +121,34 @@ _Avoid_: dream, run, job, cron.
 A Scratch note's name, required to carry no date. A dated name pins a note to a
 single day, which is what stops the Dreamer from consolidating it.
 _Avoid_: key, id, filename.
+
+## Emote tracking
+
+**Active Catalog:**
+Channel 7TV emotes currently on the set (`emotes.active = 1`). Names here are
+what chat usage matching sees.
+_Avoid_: glossary (AI prompt list), global emotes.
+
+**Emote Tombstone:**
+An `emotes` row with `active = 0` kept after removal so history foreign keys and
+last-known names remain.
+_Avoid_: deleted emote, hard delete.
+
+**Set Audit / Set Event:**
+Append-only record of bootstrap, add, remove, rename, or observation gap for
+the channel set.
+_Avoid_: changelog, log line.
+
+**Usage Event:**
+One recorded occurrence of an active emote token in a PRIVMSG.
+_Avoid_: hit, impression.
+
+**Gap:**
+A set-audit event marking a time range where the bot did not observe EventAPI
+traffic; may be paired with reconcile-synthesized add/remove/rename.
+_Avoid_: outage (reserve for infra), downtime.
+
+**Flagged Actor:**
+A Twitch user whose usage rows are stored with `flagged = 1` (bot / clankers /
+deny-list) and excluded from default queries.
+_Avoid_: banned, ignored (1337 ignore is separate unless shared via `is_clanker`).
