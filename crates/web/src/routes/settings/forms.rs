@@ -271,6 +271,7 @@ impl AiGrokForm {
                 .map(|v| if v.is_empty() { None } else { Some(v) }),
             reasoning_effort: segmented_tri_state(self.ai_grok_reasoning_effort),
             service_tier: segmented_tri_state(self.ai_grok_service_tier),
+            image_gen: Default::default(),
         }
     }
 }
@@ -631,6 +632,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
                 ai_media_max_text_size: form.ai_media_max_text_size,
             }
             .into_overrides(),
+            image_gen: Default::default(),
         },
         twitch: {
             let mut t = TwitchPermissionsForm {

@@ -189,6 +189,7 @@ impl SettingsStore {
             SettingsSection::AiWeb => current.ai.web = Default::default(),
             SettingsSection::AiEmotes => current.ai.emotes = Default::default(),
             SettingsSection::AiMedia => current.ai.media = Default::default(),
+            SettingsSection::AiImageGen => current.ai.image_gen = Default::default(),
             SettingsSection::TwitchPermissions => {
                 current.twitch.hidden_admins = None;
                 current.twitch.viewer_allowlist = None;

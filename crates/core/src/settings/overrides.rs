@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::SCHEMA_VERSION;
-use super::ai::AiBackendKind;
+use super::ai::{AiBackendKind, ImageHostKind};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SettingsOverrides {
@@ -96,6 +96,8 @@ pub struct AiOverrides {
     pub emotes: AiEmotesOverrides,
     #[serde(default)]
     pub media: AiMediaOverrides,
+    #[serde(default)]
+    pub image_gen: AiImageGenOverrides,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -179,6 +181,8 @@ pub struct AiGrokOverrides {
     pub reasoning_effort: Option<Option<String>>,
     #[serde(default)]
     pub service_tier: Option<Option<String>>,
+    #[serde(default)]
+    pub image_gen: AiGrokImageGenOverrides,
 }
 
 /// `threshold` is `f64`; manual `PartialEq`/`Eq` use bit comparison.
@@ -242,6 +246,26 @@ pub struct AiEmotesOverrides {
     pub pinned_emotes: Option<Vec<String>>,
     #[serde(default)]
     pub base_url: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiImageGenOverrides {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub host: Option<ImageHostKind>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiGrokImageGenOverrides {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

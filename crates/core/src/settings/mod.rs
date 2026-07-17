@@ -92,6 +92,7 @@ pub enum SettingsSection {
     AiWeb,
     AiEmotes,
     AiMedia,
+    AiImageGen,
     TwitchPermissions,
     TwitchChannels,
     Aviationstack,

@@ -93,7 +93,10 @@ impl Settings {
 }
 
 fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
-    use super::ai::{AiBehavior, AiConnection, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory};
+    use super::ai::{
+        AiBehavior, AiConnection, AiDreamer, AiGrok, AiGrokImageGen, AiHistory, AiImageGen,
+        AiMedia, AiMemory,
+    };
     AiSettings {
         connection: AiConnection {
             backend: o.connection.backend.unwrap_or(defaults.connection.backend),
@@ -197,9 +200,33 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 Some(v) => v.clone(),
                 None => defaults.grok.service_tier.clone(),
             },
-            image_gen: defaults.grok.image_gen.clone(),
+            image_gen: AiGrokImageGen {
+                enabled: o
+                    .grok
+                    .image_gen
+                    .enabled
+                    .unwrap_or(defaults.grok.image_gen.enabled),
+                model: o
+                    .grok
+                    .image_gen
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| defaults.grok.image_gen.model.clone()),
+            },
         },
-        image_gen: defaults.image_gen.clone(),
+        image_gen: AiImageGen {
+            enabled: o.image_gen.enabled.unwrap_or(defaults.image_gen.enabled),
+            model: o
+                .image_gen
+                .model
+                .clone()
+                .unwrap_or_else(|| defaults.image_gen.model.clone()),
+            timeout_secs: o
+                .image_gen
+                .timeout_secs
+                .unwrap_or(defaults.image_gen.timeout_secs),
+            host: o.image_gen.host.unwrap_or(defaults.image_gen.host),
+        },
         prefill: resolve_prefill(defaults.prefill.as_ref(), &o.prefill),
         web: resolve_web(defaults.web.as_ref(), &o.web),
         emotes: resolve_emotes(defaults.emotes.as_ref(), &o.emotes),
@@ -537,6 +564,30 @@ mod tests {
         assert!(s.ai.grok.model.is_none());
         assert!(s.ai.grok.reasoning_effort.is_none());
         assert!(s.ai.grok.service_tier.is_none());
+    }
+
+    #[test]
+    fn image_gen_resolves_independently_for_ai_and_grok() {
+        let defaults = Settings::compiled_defaults();
+        let mut ovr = overrides::SettingsOverrides::default();
+        let s = Settings::resolve(&defaults, &ovr);
+        assert!(!s.ai.image_gen.enabled);
+        assert!(!s.ai.grok.image_gen.enabled);
+
+        ovr.ai.image_gen.enabled = Some(true);
+        ovr.ai.image_gen.model = Some("google/gemini-2.5-flash-image".into());
+        ovr.ai.grok.image_gen.enabled = Some(true);
+        ovr.ai.grok.image_gen.model = Some("x-ai/grok-imagine-image-quality".into());
+        let s = Settings::resolve(&defaults, &ovr);
+        assert!(s.ai.image_gen.enabled);
+        assert_eq!(s.ai.image_gen.model, "google/gemini-2.5-flash-image");
+        assert!(s.ai.grok.image_gen.enabled);
+        assert_eq!(s.ai.grok.image_gen.model, "x-ai/grok-imagine-image-quality");
+        // No cross-fallback: disabling ai model must not clear grok model
+        ovr.ai.image_gen.model = Some(String::new());
+        let s = Settings::resolve(&defaults, &ovr);
+        assert!(s.ai.image_gen.model.is_empty());
+        assert_eq!(s.ai.grok.image_gen.model, "x-ai/grok-imagine-image-quality");
     }
 
     #[test]

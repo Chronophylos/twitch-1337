@@ -117,6 +117,25 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if patch.ai.grok.service_tier.is_some() {
         into.ai.grok.service_tier = patch.ai.grok.service_tier.clone();
     }
+    if let Some(v) = patch.ai.grok.image_gen.enabled {
+        into.ai.grok.image_gen.enabled = Some(v);
+    }
+    if let Some(v) = patch.ai.grok.image_gen.model.as_ref() {
+        into.ai.grok.image_gen.model = Some(v.clone());
+    }
+    // AI image gen
+    if let Some(v) = patch.ai.image_gen.enabled {
+        into.ai.image_gen.enabled = Some(v);
+    }
+    if let Some(v) = patch.ai.image_gen.model.as_ref() {
+        into.ai.image_gen.model = Some(v.clone());
+    }
+    if let Some(v) = patch.ai.image_gen.timeout_secs {
+        into.ai.image_gen.timeout_secs = Some(v);
+    }
+    if let Some(v) = patch.ai.image_gen.host {
+        into.ai.image_gen.host = Some(v);
+    }
     // AI prefill
     if let Some(v) = patch.ai.prefill.enabled {
         into.ai.prefill.enabled = Some(v);

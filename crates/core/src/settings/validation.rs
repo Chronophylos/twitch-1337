@@ -5,7 +5,7 @@ use super::{AiSettings, FieldError, Settings};
 /// Bootstrap-side context required for cross-field validation. `channel`
 /// is the IRC channel from config.toml, used to enforce that
 /// `twitch.admin_channel` and `twitch.ai_channel` differ from it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ValidationContext {
     pub channel: String,
 }
@@ -332,6 +332,27 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
             err(errs, "ai.web.cache_capacity", "must be > 0".into());
         }
     }
+    if ai.image_gen.enabled && ai.image_gen.model.trim().is_empty() {
+        err(
+            errs,
+            "ai.image_gen.model",
+            "must be non-empty when image gen is enabled".into(),
+        );
+    }
+    bound(
+        "ai.image_gen.timeout_secs",
+        ai.image_gen.timeout_secs,
+        1,
+        600,
+        errs,
+    );
+    if ai.grok.image_gen.enabled && ai.grok.image_gen.model.trim().is_empty() {
+        err(
+            errs,
+            "ai.grok.image_gen.model",
+            "must be non-empty when grok image gen is enabled".into(),
+        );
+    }
     if let Some(em) = &ai.emotes {
         if em.refresh_interval_secs == 0 {
             err(
@@ -384,6 +405,32 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_rejects_image_gen_enabled_without_model() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.image_gen.enabled = true;
+        s.ai.image_gen.model.clear();
+        let errs = s.validate(&ValidationContext::default()).unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "ai.image_gen.model"));
+    }
+
+    #[test]
+    fn validate_rejects_grok_image_gen_enabled_without_model() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.grok.image_gen.enabled = true;
+        s.ai.grok.image_gen.model.clear();
+        let errs = s.validate(&ValidationContext::default()).unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "ai.grok.image_gen.model"));
+    }
+
+    #[test]
+    fn validate_rejects_zero_image_gen_timeout() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.image_gen.timeout_secs = 0;
+        let errs = s.validate(&ValidationContext::default()).unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "ai.image_gen.timeout_secs"));
+    }
 
     #[test]
     fn validate_collects_multiple_errors() {
