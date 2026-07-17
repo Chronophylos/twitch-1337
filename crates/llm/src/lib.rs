@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod error;
+pub mod image;
 pub mod ollama;
 pub mod openai;
 
@@ -12,6 +13,7 @@ mod util;
 pub use agent::{AgentOpts, AgentOutcome, ToolExecutor, run_agent};
 pub use client::LlmClient;
 pub use error::{LlmError, Result};
+pub use image::{GeneratedImage, ImageClient, ImageGenerateRequest, OpenRouterImageClient};
 pub use ollama::OllamaClient;
 pub use openai::OpenAiClient;
 pub use types::{
