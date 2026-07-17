@@ -15,6 +15,7 @@ pub struct AiSettings {
     pub memory: AiMemory,
     pub dreamer: AiDreamer,
     pub grok: AiGrok,
+    pub image_gen: AiImageGen,
     pub prefill: Option<AiPrefill>,
     pub web: Option<AiWeb>,
     pub emotes: Option<AiEmotes>,
@@ -116,6 +117,40 @@ pub struct AiGrok {
     /// OpenRouter service tier hint for `@grok` turns. Falls back to
     /// `connection.service_tier` when `None`.
     pub service_tier: Option<String>,
+    #[serde(default)]
+    pub image_gen: AiGrokImageGen,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageHostKind {
+    #[default]
+    Imgdrip,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiImageGen {
+    pub enabled: bool,
+    pub model: String,
+    pub timeout_secs: u64,
+    pub host: ImageHostKind,
+}
+
+impl Default for AiImageGen {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: String::new(),
+            timeout_secs: 90,
+            host: ImageHostKind::Imgdrip,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiGrokImageGen {
+    pub enabled: bool,
+    pub model: String,
 }
 
 /// Prefill config — `threshold` is `f64` compared as bits to allow `Eq`.
@@ -386,5 +421,11 @@ mod tests {
         assert!(s.grok.model.is_none());
         assert!(s.grok.reasoning_effort.is_none());
         assert!(s.grok.service_tier.is_none());
+        assert!(!s.image_gen.enabled);
+        assert!(s.image_gen.model.is_empty());
+        assert_eq!(s.image_gen.timeout_secs, 90);
+        assert_eq!(s.image_gen.host, ImageHostKind::Imgdrip);
+        assert!(!s.grok.image_gen.enabled);
+        assert!(s.grok.image_gen.model.is_empty());
     }
 }
