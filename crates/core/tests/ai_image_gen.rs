@@ -24,6 +24,33 @@ fn openrouter_mock_base(mock: &MockServer) -> String {
 }
 
 #[tokio::test]
+async fn ai_does_not_register_generate_image_when_disabled() {
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+            o.ai.image_gen.enabled = Some(false);
+        })
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("ok");
+
+    let mut bot = bot;
+    bot.send("alice", "!ai draw a cat").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+
+    let calls = bot.llm.tool_calls();
+    assert_eq!(calls.len(), 1, "expected exactly one LLM call");
+    let tool_names: Vec<&str> = calls[0].tools.iter().map(|t| t.name.as_str()).collect();
+    assert!(
+        !tool_names.contains(&GENERATE_IMAGE_TOOL_NAME),
+        "generate_image must be absent when image_gen is disabled; got: {tool_names:?}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
 async fn ai_registers_generate_image_when_enabled() {
     let bot = TestBotBuilder::new()
         .with_ai()

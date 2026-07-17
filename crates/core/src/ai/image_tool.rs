@@ -135,14 +135,62 @@ pub async fn execute_generate_image(
         aspect_ratio,
     };
 
-    let generated = match tokio::time::timeout(runtime.timeout, client.generate(request)).await {
-        Ok(Ok(img)) => img,
-        Ok(Err(e)) => {
+    enum PipelineError {
+        Generation(llm::LlmError),
+        TooLarge { got_bytes: usize },
+        Upload(eyre::Report),
+    }
+
+    let pipeline = async {
+        let generated = client
+            .generate(request)
+            .await
+            .map_err(PipelineError::Generation)?;
+
+        if generated.bytes.len() > MAX_DECODED_IMAGE_BYTES {
+            return Err(PipelineError::TooLarge {
+                got_bytes: generated.bytes.len(),
+            });
+        }
+
+        let url = host
+            .upload(&generated.bytes, &generated.media_type)
+            .await
+            .map_err(PipelineError::Upload)?;
+
+        Ok((generated, url))
+    };
+
+    let (generated, url) = match tokio::time::timeout(runtime.timeout, pipeline).await {
+        Ok(Ok(pair)) => pair,
+        Ok(Err(PipelineError::Generation(e))) => {
             warn!(error = ?e, model = %runtime.model, "generate_image provider error");
             return ToolResultMessage::for_call(
                 call,
                 json!({
                     "error": "generation_failed",
+                    "details": e.to_string(),
+                })
+                .to_string(),
+            );
+        }
+        Ok(Err(PipelineError::TooLarge { got_bytes })) => {
+            return ToolResultMessage::for_call(
+                call,
+                json!({
+                    "error": "image_too_large",
+                    "max_bytes": MAX_DECODED_IMAGE_BYTES,
+                    "got_bytes": got_bytes,
+                })
+                .to_string(),
+            );
+        }
+        Ok(Err(PipelineError::Upload(e))) => {
+            warn!(error = ?e, model = %runtime.model, "generate_image upload failed");
+            return ToolResultMessage::for_call(
+                call,
+                json!({
+                    "error": "upload_failed",
                     "details": e.to_string(),
                 })
                 .to_string(),
@@ -155,33 +203,6 @@ pub async fn execute_generate_image(
                 "generate_image timed out"
             );
             return ToolResultMessage::for_call(call, json!({"error": "timeout"}).to_string());
-        }
-    };
-
-    if generated.bytes.len() > MAX_DECODED_IMAGE_BYTES {
-        return ToolResultMessage::for_call(
-            call,
-            json!({
-                "error": "image_too_large",
-                "max_bytes": MAX_DECODED_IMAGE_BYTES,
-                "got_bytes": generated.bytes.len(),
-            })
-            .to_string(),
-        );
-    }
-
-    let url = match host.upload(&generated.bytes, &generated.media_type).await {
-        Ok(u) => u,
-        Err(e) => {
-            warn!(error = ?e, model = %runtime.model, "generate_image upload failed");
-            return ToolResultMessage::for_call(
-                call,
-                json!({
-                    "error": "upload_failed",
-                    "details": e.to_string(),
-                })
-                .to_string(),
-            );
         }
     };
 
