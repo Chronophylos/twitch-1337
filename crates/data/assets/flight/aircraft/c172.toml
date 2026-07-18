@@ -1,0 +1,26 @@
+[aircraft]
+name = "Cessna 172 Skyhawk"
+icao_type = "C172"
+
+[performance]
+cruise_speed_ktas = 122
+cruise_altitude_ft = 8000
+service_ceiling_ft = 14000
+min_runway_length_ft = 2000
+
+[performance.climb]
+speed_ktas = 80
+rate_fpm = 700
+
+[performance.descent]
+speed_ktas = 90
+rate_fpm = 500
+
+[fuel]
+capacity_kg = 109.0
+fuel_type = "avgas"
+
+[fuel.flow]
+climb_kg_per_hour = 30.0
+cruise_kg_per_hour = 21.0
+descent_kg_per_hour = 16.0

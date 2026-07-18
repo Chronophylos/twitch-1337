@@ -1,0 +1,26 @@
+[aircraft]
+name = "Cirrus SR22"
+icao_type = "SR22"
+
+[performance]
+cruise_speed_ktas = 176
+cruise_altitude_ft = 12000
+service_ceiling_ft = 17500
+min_runway_length_ft = 2500
+
+[performance.climb]
+speed_ktas = 130
+rate_fpm = 1000
+
+[performance.descent]
+speed_ktas = 140
+rate_fpm = 700
+
+[fuel]
+capacity_kg = 227.0
+fuel_type = "avgas"
+
+[fuel.flow]
+climb_kg_per_hour = 50.0
+cruise_kg_per_hour = 40.0
+descent_kg_per_hour = 25.0

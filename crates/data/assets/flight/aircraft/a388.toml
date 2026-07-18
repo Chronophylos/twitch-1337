@@ -1,0 +1,26 @@
+[aircraft]
+name = "Airbus A380-800"
+icao_type = "A388"
+
+[performance]
+cruise_speed_ktas = 480
+cruise_altitude_ft = 40000
+service_ceiling_ft = 45000
+min_runway_length_ft = 9000
+
+[performance.climb]
+speed_ktas = 330
+rate_fpm = 2000
+
+[performance.descent]
+speed_ktas = 300
+rate_fpm = 1500
+
+[fuel]
+capacity_kg = 253983.0
+fuel_type = "jet"
+
+[fuel.flow]
+climb_kg_per_hour = 14000.0
+cruise_kg_per_hour = 10000.0
+descent_kg_per_hour = 5500.0

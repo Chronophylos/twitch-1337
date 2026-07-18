@@ -1,0 +1,26 @@
+[aircraft]
+name = "Bombardier CRJ-700"
+icao_type = "CRJ7"
+
+[performance]
+cruise_speed_ktas = 447
+cruise_altitude_ft = 37000
+service_ceiling_ft = 41000
+min_runway_length_ft = 5500
+
+[performance.climb]
+speed_ktas = 310
+rate_fpm = 2500
+
+[performance.descent]
+speed_ktas = 280
+rate_fpm = 1800
+
+[fuel]
+capacity_kg = 8875.0
+fuel_type = "jet"
+
+[fuel.flow]
+climb_kg_per_hour = 2200.0
+cruise_kg_per_hour = 1600.0
+descent_kg_per_hour = 900.0

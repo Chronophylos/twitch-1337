@@ -1,0 +1,26 @@
+[aircraft]
+name = "Beechcraft King Air 350i"
+icao_type = "B350"
+
+[performance]
+cruise_speed_ktas = 312
+cruise_altitude_ft = 35000
+service_ceiling_ft = 35000
+min_runway_length_ft = 3500
+
+[performance.climb]
+speed_ktas = 230
+rate_fpm = 1800
+
+[performance.descent]
+speed_ktas = 200
+rate_fpm = 1200
+
+[fuel]
+capacity_kg = 2720.0
+fuel_type = "jet"
+
+[fuel.flow]
+climb_kg_per_hour = 600.0
+cruise_kg_per_hour = 450.0
+descent_kg_per_hour = 250.0

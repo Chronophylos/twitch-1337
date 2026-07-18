@@ -1,0 +1,26 @@
+[aircraft]
+name = "Boeing 777-200ER"
+icao_type = "B772"
+
+[performance]
+cruise_speed_ktas = 490
+cruise_altitude_ft = 39000
+service_ceiling_ft = 43100
+min_runway_length_ft = 8000
+
+[performance.climb]
+speed_ktas = 330
+rate_fpm = 2000
+
+[performance.descent]
+speed_ktas = 290
+rate_fpm = 1800
+
+[fuel]
+capacity_kg = 117340.0
+fuel_type = "jet"
+
+[fuel.flow]
+climb_kg_per_hour = 9500.0
+cruise_kg_per_hour = 6500.0
+descent_kg_per_hour = 3500.0

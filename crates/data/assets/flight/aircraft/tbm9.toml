@@ -1,0 +1,26 @@
+[aircraft]
+name = "Daher TBM 930"
+icao_type = "TBM9"
+
+[performance]
+cruise_speed_ktas = 330
+cruise_altitude_ft = 31000
+service_ceiling_ft = 31000
+min_runway_length_ft = 2500
+
+[performance.climb]
+speed_ktas = 250
+rate_fpm = 1500
+
+[performance.descent]
+speed_ktas = 220
+rate_fpm = 1200
+
+[fuel]
+capacity_kg = 1130.0
+fuel_type = "jet"
+
+[fuel.flow]
+climb_kg_per_hour = 350.0
+cruise_kg_per_hour = 250.0
+descent_kg_per_hour = 150.0
