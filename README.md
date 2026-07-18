@@ -6,7 +6,7 @@
 [![Rust Edition 2024](https://img.shields.io/badge/rust-2024-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
 
 A personal Twitch chat bot for a single channel, with a mind of its own.
-Written in Rust, it ships as a ~6 MB static binary.
+Written in Rust, it ships as a ~29 MB stripped static binary.
 
 The name is from its oldest job: every day at **13:37** Berlin time, chat races
 to type `1337`, and the bot keeps score.

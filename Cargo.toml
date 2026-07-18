@@ -65,6 +65,11 @@ urlencoding = "2"
 time = "0.3"
 wiremock = "0.6"
 
+[profile.release]
+# Drop .symtab/.strtab from the musl static binary (~8 MiB). The scratch
+# image is essentially just this binary, so strip directly caps image size.
+strip = "symbols"
+
 [workspace.lints.clippy]
 cast_lossless = "warn"
 implicit_clone = "warn"
