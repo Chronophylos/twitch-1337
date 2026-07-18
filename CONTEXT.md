@@ -118,9 +118,10 @@ Transcript and the current Scratch.
 _Avoid_: dream, run, job, cron.
 
 **Stable Slug**:
-A Scratch note's name, required to carry no date. A dated name pins a note to a
-single day, which is what stops the Dreamer from consolidating it.
-_Avoid_: key, id, filename.
+The only legal name for a Scratch note. It must not be pinned to a calendar day
+— a dated name stops the Dreamer from consolidating the note. Every read,
+write, or delete of Scratch by name requires a Stable Slug.
+_Avoid_: key, id, filename, dated slug.
 
 ## Emote tracking
 

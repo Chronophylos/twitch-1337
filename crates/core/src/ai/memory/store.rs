@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::ai::memory::frontmatter;
-use crate::ai::memory::sanitize::normalize_display_name;
+use crate::ai::memory::sanitize::{SlugError, normalize_display_name};
 use crate::ai::memory::types::{Caps, FileKind, Frontmatter, MemoryFile};
 use crate::settings::SettingsHandle;
 use crate::util::persist::atomic_write_bytes_async;
@@ -20,36 +20,13 @@ use crate::util::persist::atomic_write_bytes_async;
 /// lost-update token by the dashboard memory editor.
 pub type Mtime = u64;
 
-/// Slugs the dashboard reserves for literal `/memory/scratch/...` routes; the
-/// store rejects writes targeting these names so the AI's `write_scratch` tool
-/// gets the same protection the route layer already applies. See spec
-/// "Routes" — the literal `/memory/scratch/new` route lives next to the
-/// dynamic `/memory/scratch/{slug}` capture, so a user-controlled `new` slug
-/// would shadow the create form.
-pub const RESERVED_SCRATCH_SLUGS: &[&str] = &["new", "delete"];
+pub use crate::ai::memory::sanitize::validate_scratch_slug;
 
-/// `^[a-zA-Z0-9._-]{1,64}$` and not in `RESERVED_SCRATCH_SLUGS`. Mirrors the
-/// route-layer `is_valid_slug` check so the store is authoritative whether
-/// the call comes from the web dashboard, the AI tool, or the dreamer
-/// ritual. Keeping the rule in the store closes the gap a route-only check
-/// would leave open.
-pub fn validate_scratch_slug(slug: &str) -> Result<(), WriteError> {
-    if slug.is_empty() || slug.len() > 64 {
-        return Err(WriteError::InvalidSlug);
+fn slug_write_err(err: SlugError) -> WriteError {
+    match err {
+        SlugError::Invalid => WriteError::InvalidSlug,
+        SlugError::Reserved => WriteError::ReservedSlug,
     }
-    if RESERVED_SCRATCH_SLUGS.contains(&slug) {
-        return Err(WriteError::InvalidSlug);
-    }
-    if slug.contains("..") {
-        return Err(WriteError::InvalidSlug);
-    }
-    if !slug
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-    {
-        return Err(WriteError::InvalidSlug);
-    }
-    Ok(())
 }
 
 /// Outcome of `MemoryStore::write_with_guard`: either the write went
@@ -208,8 +185,23 @@ impl MemoryStore {
             .clone()
     }
 
+    /// Read Scratch by Stable Slug. Missing → empty body, default frontmatter.
+    /// Invalid / reserved / dated slugs return [`WriteError`] without touching disk.
+    pub async fn read_scratch(&self, slug: &str) -> Result<MemoryFile, WriteError> {
+        validate_scratch_slug(slug).map_err(slug_write_err)?;
+        self.read_kind(&FileKind::Scratch {
+            slug: slug.to_string(),
+        })
+        .await
+        .map_err(WriteError::Io)
+    }
+
     /// Read a single file by `FileKind`. Missing → empty body, default frontmatter.
+    /// Scratch slugs are validated before any filesystem access.
     pub async fn read_kind(&self, kind: &FileKind) -> Result<MemoryFile> {
+        if let FileKind::Scratch { slug } = kind {
+            validate_scratch_slug(slug).map_err(|e| eyre!("{}", slug_write_err(e)))?;
+        }
         let rel = kind.relative_path();
         let abs = self.inner.memories_dir.join(&rel);
         match tokio::fs::read_to_string(&abs).await {
@@ -332,7 +324,7 @@ impl MemoryStore {
         // Validate before touching the filesystem — the AI tool, the
         // dashboard, and the dreamer all funnel through this method, so the
         // slug rule lives here rather than at any one call site.
-        validate_scratch_slug(slug)?;
+        validate_scratch_slug(slug).map_err(slug_write_err)?;
         let limit = self.caps().scratch_bytes;
 
         let rel = kind.relative_path();
@@ -490,9 +482,9 @@ impl MemoryStore {
         Ok(WriteOutcome::Written { new_mtime })
     }
 
-    pub async fn delete_scratch(&self, slug: &str) -> Result<()> {
-        // Reject reserved/path-traversal slugs symmetrically with `write_scratch`.
-        validate_scratch_slug(slug).map_err(|e| eyre!("delete_scratch: {e}"))?;
+    pub async fn delete_scratch(&self, slug: &str) -> Result<(), WriteError> {
+        // Same Stable Slug rule as write/read — every slug-taking call enforces it.
+        validate_scratch_slug(slug).map_err(slug_write_err)?;
         let rel = PathBuf::from(format!("scratch/{slug}.md"));
         let abs = self.inner.memories_dir.join(&rel);
         let lock = self.lock_for(&rel).await;
@@ -500,7 +492,7 @@ impl MemoryStore {
         match tokio::fs::remove_file(&abs).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(eyre!(e)),
+            Err(e) => Err(WriteError::Io(eyre!(e))),
         }
     }
 
@@ -551,6 +543,8 @@ pub enum WriteError {
     ScratchFull,
     #[error("invalid_slug")]
     InvalidSlug,
+    #[error("reserved_slug")]
+    ReservedSlug,
     #[error("io: {0}")]
     Io(#[from] eyre::Report),
 }
@@ -1052,7 +1046,7 @@ mod tests {
     async fn state_reserved_slugs_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        for reserved in ["new", "delete"] {
+        for reserved in ["new", "delete", "system"] {
             let err = store
                 .write_scratch(
                     &FileKind::Scratch {
@@ -1064,8 +1058,8 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(
-                matches!(err, WriteError::InvalidSlug),
-                "slug `{reserved}` must be rejected, got {err:?}"
+                matches!(err, WriteError::ReservedSlug),
+                "slug `{reserved}` must be reserved, got {err:?}"
             );
         }
     }
@@ -1075,7 +1069,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let too_long = "x".repeat(65);
-        let cases = [too_long.as_str(), "", "with/slash", "..", "with..dots"];
+        let cases = [
+            too_long.as_str(),
+            "",
+            "with/slash",
+            "..",
+            "with..dots",
+            "Foo",
+            "has_underscore",
+            "av-depot-2026-05-08",
+        ];
         for slug in cases {
             let err = store
                 .write_scratch(&FileKind::Scratch { slug: slug.into() }, "x", Some("1"))
@@ -1086,6 +1089,14 @@ mod tests {
                 "slug `{slug}` must be rejected, got {err:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn delete_scratch_rejects_dated_slug() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        let err = store.delete_scratch("legacy-2026-05-08").await.unwrap_err();
+        assert!(matches!(err, WriteError::InvalidSlug));
     }
 
     /// Verify that `MemoryStore::caps()` reflects settings changes published

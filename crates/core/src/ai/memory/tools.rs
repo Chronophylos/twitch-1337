@@ -11,11 +11,34 @@ use llm::{ToolCall, ToolDefinition, ToolExecutor, ToolResultMessage};
 
 use crate::ai::memory::inject::{FenceLabel, fence_block};
 use crate::ai::memory::sanitize::{
-    PathError, SlugError, WritePath, check_body, has_trailing_iso_date, parse_read_path,
-    parse_slug, parse_write_path, write_path_to_kind,
+    PathError, SlugError, WritePath, check_body, parse_read_path, parse_write_path,
+    validate_scratch_slug, write_path_to_kind,
 };
 use crate::ai::memory::store::{MemoryStore, WriteError};
 use crate::ai::memory::types::{FileKind, Role};
+
+/// Canonical LLM string for Stable Slug charset / length / date failures.
+const INVALID_SLUG_MSG: &str = "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars, and must not end in a -YYYY-MM-DD date suffix";
+const RESERVED_SLUG_MSG: &str = "reserved_slug: that slug name is reserved";
+
+fn map_slug_err(err: SlugError) -> String {
+    match err {
+        SlugError::Invalid => INVALID_SLUG_MSG.into(),
+        SlugError::Reserved => RESERVED_SLUG_MSG.into(),
+    }
+}
+
+fn map_write_err(err: WriteError) -> String {
+    match err {
+        WriteError::Full => "file_full: body exceeds the byte cap for this file".into(),
+        WriteError::ScratchFull => {
+            "scratch_full: the maximum number of scratch files already exists".into()
+        }
+        WriteError::InvalidSlug => INVALID_SLUG_MSG.into(),
+        WriteError::ReservedSlug => RESERVED_SLUG_MSG.into(),
+        WriteError::Io(e) => format!("io_error: {e}"),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Arg structs
@@ -210,14 +233,7 @@ impl ChatTurnExecutor {
             .await
         {
             Ok(()) => "ok".into(),
-            Err(WriteError::Full) => "file_full: body exceeds the byte cap for this file".into(),
-            Err(WriteError::ScratchFull) => {
-                "scratch_full: the maximum number of scratch files already exists".into()
-            } // unreachable for write()
-            Err(WriteError::InvalidSlug) => {
-                "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars".into()
-            } // unreachable for non-scratch write
-            Err(WriteError::Io(e)) => format!("io_error: {e}"),
+            Err(e) => map_write_err(e),
         }
     }
 
@@ -226,16 +242,10 @@ impl ChatTurnExecutor {
             Ok(a) => a,
             Err(_) => return "invalid_arguments: could not parse the tool arguments".into(),
         };
-        let slug = match parse_slug(&args.slug) {
-            Ok(s) => s,
-            Err(SlugError::Invalid) => {
-                return "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars"
-                    .into();
-            }
-            Err(SlugError::Reserved) => return "reserved_slug: that slug name is reserved".into(),
-        };
-        if has_trailing_iso_date(&slug) {
-            return "dated_slug: scratch slugs may not end in a -YYYY-MM-DD date suffix".into();
+        // Same predicate the store enforces — checked here only so invalid
+        // slugs do not burn write quota before the store rejects them.
+        if let Err(e) = validate_scratch_slug(&args.slug) {
+            return map_slug_err(e);
         }
         if check_body(&args.body).is_err() {
             return "invalid_body: body contains a reserved marker (frontmatter fence, path header, or carriage return)".into();
@@ -248,21 +258,14 @@ impl ChatTurnExecutor {
             .opts
             .store
             .write_scratch(
-                &FileKind::Scratch { slug },
+                &FileKind::Scratch { slug: args.slug },
                 &args.body,
                 Some(self.opts.speaker_user_id.as_str()),
             )
             .await
         {
             Ok(()) => "ok".into(),
-            Err(WriteError::Full) => "file_full: body exceeds the byte cap for this file".into(),
-            Err(WriteError::ScratchFull) => {
-                "scratch_full: the maximum number of scratch files already exists".into()
-            }
-            Err(WriteError::InvalidSlug) => {
-                "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars".into()
-            }
-            Err(WriteError::Io(e)) => format!("io_error: {e}"),
+            Err(e) => map_write_err(e),
         }
     }
 
@@ -271,23 +274,15 @@ impl ChatTurnExecutor {
             Ok(a) => a,
             Err(_) => return "invalid_arguments: could not parse the tool arguments".into(),
         };
-        let slug = match parse_slug(&args.slug) {
-            Ok(s) => s,
-            Err(SlugError::Invalid) => {
-                return "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars"
-                    .into();
-            }
-            Err(SlugError::Reserved) => return "reserved_slug: that slug name is reserved".into(),
-        };
+        if let Err(e) = validate_scratch_slug(&args.slug) {
+            return map_slug_err(e);
+        }
 
         // Check ownership before consuming quota.
-        let owner = self
-            .opts
-            .store
-            .read_kind(&FileKind::Scratch { slug: slug.clone() })
-            .await
-            .ok()
-            .and_then(|f| f.frontmatter.created_by);
+        let owner = match self.opts.store.read_scratch(&args.slug).await {
+            Ok(f) => f.frontmatter.created_by,
+            Err(e) => return map_write_err(e),
+        };
         let allowed = match self.role() {
             Role::Regular => owner.as_deref() == Some(self.opts.speaker_user_id.as_str()),
             _ => true,
@@ -300,9 +295,9 @@ impl ChatTurnExecutor {
             return "write_quota_exhausted: the write limit for this turn is used up".into();
         }
 
-        match self.opts.store.delete_scratch(&slug).await {
+        match self.opts.store.delete_scratch(&args.slug).await {
             Ok(()) => "ok".into(),
-            Err(e) => format!("io_error: {e}"),
+            Err(e) => map_write_err(e),
         }
     }
 
@@ -619,39 +614,26 @@ mod exec_tests {
     }
 
     #[tokio::test]
-    async fn dated_slug_is_blocked_on_write_but_delete_is_allowed() {
+    async fn dated_slug_is_blocked_on_write_and_delete() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
 
-        // write rejects trailing -YYYY-MM-DD slugs so dated-suffix accumulation
-        // cannot recur via fresh writes.
         let r = exec
             .execute(&call(
                 "write_scratch",
                 serde_json::json!({"slug": "av-depot-2026-05-08", "body": "x"}),
             ))
             .await;
-        assert!(r.content.starts_with("dated_slug"), "got {}", r.content);
+        assert!(r.content.starts_with("invalid_slug"), "got {}", r.content);
 
-        // delete still accepts dated slugs so the dreamer can prune the backlog.
-        store
-            .write_scratch(
-                &FileKind::Scratch {
-                    slug: "legacy-2026-05-08".into(),
-                },
-                "x",
-                Some("12345"),
-            )
-            .await
-            .unwrap();
         let r = exec
             .execute(&call(
                 "delete_scratch",
                 serde_json::json!({"slug": "legacy-2026-05-08"}),
             ))
             .await;
-        assert_eq!(r.content, "ok");
+        assert!(r.content.starts_with("invalid_slug"), "got {}", r.content);
     }
 
     #[tokio::test]

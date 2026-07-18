@@ -84,13 +84,17 @@ pub fn parse_read_path(path: &str) -> Result<FileKind, PathError> {
     if let Some(rest) = path.strip_prefix("scratch/")
         && let Some(slug) = rest.strip_suffix(".md")
     {
-        let slug = parse_slug(slug).map_err(|_| PathError)?;
-        return Ok(FileKind::Scratch { slug });
+        validate_scratch_slug(slug).map_err(|_| PathError)?;
+        return Ok(FileKind::Scratch {
+            slug: slug.to_string(),
+        });
     }
     Err(PathError)
 }
 
-pub fn parse_slug(slug: &str) -> Result<String, SlugError> {
+/// Stable Slug check: charset, reserved names, and no trailing `-YYYY-MM-DD`.
+/// The store calls this on every slug-taking Scratch operation.
+pub fn validate_scratch_slug(slug: &str) -> Result<(), SlugError> {
     // Check reserved first so that case-insensitive matches (e.g. "SOUL") return
     // `Reserved` rather than `Invalid` regardless of casing.
     if RESERVED.iter().any(|r| r.eq_ignore_ascii_case(slug)) {
@@ -104,17 +108,17 @@ pub fn parse_slug(slug: &str) -> Result<String, SlugError> {
         .bytes()
         .skip(1)
         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
-    if !valid_first || !valid_rest || slug.len() > 64 {
+    if !valid_first || !valid_rest || slug.is_empty() || slug.len() > 64 {
         return Err(SlugError::Invalid);
     }
-    Ok(slug.to_string())
+    if has_trailing_iso_date(slug) {
+        return Err(SlugError::Invalid);
+    }
+    Ok(())
 }
 
-/// True iff `slug` ends in `-YYYY-MM-DD`. Forbidden on writes so memory
-/// entries get stable slugs the dreamer can rewrite in place, rather than
-/// one slug per day piling up indefinitely. Deletes still accept dated
-/// slugs so the dreamer can drain the existing backlog.
-pub fn has_trailing_iso_date(slug: &str) -> bool {
+/// True iff `slug` ends in `-YYYY-MM-DD`.
+fn has_trailing_iso_date(slug: &str) -> bool {
     let bytes = slug.as_bytes();
     if bytes.len() < 11 {
         return false;
@@ -217,21 +221,25 @@ mod tests {
 
     #[test]
     fn slug_accepts_canonical_and_rejects_others() {
-        assert!(parse_slug("quiz-night").is_ok());
-        assert!(parse_slug("a").is_ok());
+        assert!(validate_scratch_slug("quiz-night").is_ok());
+        assert!(validate_scratch_slug("a").is_ok());
         for bad in ["", "-foo", "Foo", "fo o", "a".repeat(65).as_str(), "../x"] {
-            assert!(parse_slug(bad).is_err(), "should reject {bad}");
+            assert!(validate_scratch_slug(bad).is_err(), "should reject {bad}");
         }
     }
 
     #[test]
-    fn has_trailing_iso_date_matches_yyyy_mm_dd_suffix() {
+    fn dated_slug_is_invalid() {
         for s in [
             "av-depot-2026-05-08",
             "hantavirus-lockdown-2026-05-06",
             "x-1999-12-31",
         ] {
-            assert!(has_trailing_iso_date(s), "expected dated: {s}");
+            assert_eq!(
+                validate_scratch_slug(s),
+                Err(SlugError::Invalid),
+                "expected dated invalid: {s}"
+            );
         }
         for s in [
             "magie-023-schufa",
@@ -240,7 +248,7 @@ mod tests {
             "av-depot-202-05-08",
             "2026-05-08",
         ] {
-            assert!(!has_trailing_iso_date(s), "expected not dated: {s}");
+            assert!(validate_scratch_slug(s).is_ok(), "expected stable ok: {s}");
         }
     }
 
@@ -258,9 +266,11 @@ mod tests {
             "dreamer",
             "prompt",
             "instructions",
+            "new",
+            "delete",
         ] {
             assert!(
-                matches!(parse_slug(s), Err(SlugError::Reserved)),
+                matches!(validate_scratch_slug(s), Err(SlugError::Reserved)),
                 "expected reserved for {s}"
             );
         }
@@ -323,6 +333,7 @@ mod tests {
             "scratch/quiz",
             "memories/LORE.md",
             "",
+            "scratch/quiz-2026-05-08.md",
         ] {
             assert!(parse_read_path(bad).is_err(), "{bad} must not parse");
         }
