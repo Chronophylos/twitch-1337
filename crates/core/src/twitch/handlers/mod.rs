@@ -4,6 +4,7 @@
 //! via `tokio::select!`.
 
 pub mod commands;
+pub mod emote_usage;
 pub mod latency;
 pub mod router;
 pub mod schedule_runner;
