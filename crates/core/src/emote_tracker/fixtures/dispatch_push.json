@@ -1,0 +1,29 @@
+{
+  "op": 0,
+  "t": 1739904376646,
+  "d": {
+    "type": "emote_set.update",
+    "body": {
+      "id": "01JGJCANV798N56YAYBXG2M06P",
+      "kind": 3,
+      "actor": {
+        "id": "01GAK4CXN00002Z53DR6PAWQVE",
+        "username": "uniidev",
+        "display_name": "uniiDev"
+      },
+      "pushed": [
+        {
+          "key": "emotes",
+          "index": 0,
+          "type": "object",
+          "value": {
+            "id": "01F6MZGCNG000255K4X1K7NTHR",
+            "name": "Kappa",
+            "flags": 0,
+            "timestamp": 1622054286000
+          }
+        }
+      ]
+    }
+  }
+}

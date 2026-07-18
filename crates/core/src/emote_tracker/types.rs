@@ -90,6 +90,25 @@ pub struct NewSetEvent {
 /// already exist in `emotes` (FK). [`Self::flagged`] marks bot/clanker
 /// traffic so default queries can exclude it. Timestamps are UTC unix ms.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogMutation {
+    Upsert {
+        emote_id: String,
+        name: String,
+        active: bool,
+    },
+    Deactivate {
+        emote_id: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetChangeBatch {
+    pub updated_at: i64,
+    pub mutations: Vec<CatalogMutation>,
+    pub events: Vec<NewSetEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewUsageEvent {
     /// Observation time (UTC unix ms).
     pub at: i64,

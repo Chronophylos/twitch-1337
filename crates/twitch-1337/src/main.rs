@@ -280,6 +280,17 @@ pub async fn main() -> Result<()> {
     // Soft-fail: open/migrate error leaves None and disables the tracker only.
     let emote_tracker = twitch_1337::emote_tracker::try_open(&get_data_dir());
 
+    let twitch_channel_id = match resolve_twitch_channel_id(&config, &credentials).await {
+        Ok(id) => Some(id),
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                "Failed to resolve Twitch channel id; emote set ingest disabled"
+            );
+            None
+        }
+    };
+
     let web_spawner = if config.web.enabled {
         let credentials_for_web = credentials.clone();
         Some(
@@ -327,6 +338,7 @@ pub async fn main() -> Result<()> {
         primary_history_tap: None,
         telemetry,
         emote_tracker,
+        twitch_channel_id,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -461,6 +473,29 @@ async fn build_web_spawner(
             }
         })
     }))
+}
+
+/// Resolve the broadcaster's Twitch user id for 7TV ingest subscription.
+async fn resolve_twitch_channel_id(
+    config: &twitch_1337::config::Configuration,
+    credentials: &AuthenticatedLoginCredentials,
+) -> Result<String> {
+    let token_provider: Arc<dyn AccessTokenProvider> = Arc::new(CredsTokenProvider {
+        creds: Arc::new(credentials.clone()),
+    });
+    let helix = ReqwestHelixClient::new(
+        reqwest::Client::new(),
+        config.twitch.client_id.clone(),
+        token_provider,
+    );
+
+    let broadcaster = helix
+        .fetch_user_by_login(&config.twitch.channel)
+        .await
+        .wrap_err("resolve broadcaster id for emote ingest")?
+        .ok_or_else(|| eyre!("channel `{}` not found on twitch", config.twitch.channel))?;
+
+    Ok(broadcaster.id)
 }
 
 /// Bridges the bot's `RefreshingLoginCredentials` to the web crate's

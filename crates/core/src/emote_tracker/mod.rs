@@ -1,15 +1,28 @@
 mod db;
+mod eventapi;
 mod handle;
+mod ingest;
+mod reconcile;
+mod rest;
 mod schema;
 mod types;
 
 pub use db::{
-    deactivate_emote, get_emote, insert_set_event, insert_usage_events, list_active_emotes,
-    resolve_active_name, upsert_emote,
+    apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, insert_set_event,
+    insert_usage_events, list_active_emotes, resolve_active_name, upsert_emote,
+};
+pub use eventapi::{
+    DispatchEmoteSetUpdate, EVENTAPI_URL, EventApiConnection, ParsedEvent, connect_and_subscribe,
+    live_change_to_batch, parse_server_message,
 };
 pub use handle::EmoteTrackerHandle;
+pub use ingest::{IngestConfig, StartupReconcileResult, run_set_ingest, startup_reconcile_once};
+pub use reconcile::{ActorRef, DesiredEmote, bootstrap_batch, reconcile_batch};
+pub use rest::{ChannelSetSnapshot, fetch_channel_set};
 pub use schema::{SCHEMA_VERSION, migrate};
-pub use types::{EmoteRow, NewSetEvent, NewUsageEvent, SetEventKind};
+pub use types::{
+    CatalogMutation, EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch, SetEventKind,
+};
 
 pub const DB_FILENAME: &str = "emote_tracker.sqlite";
 
