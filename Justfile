@@ -80,6 +80,18 @@ dev-web-shot path="/pings" file="/tmp/wd.png" base="http://127.0.0.1:8761":
   @chromium --headless=new --no-sandbox --disable-gpu --hide-scrollbars --window-size=1400,900 --user-data-dir=/tmp/wd-cprof --virtual-time-budget=4000 --screenshot={{file}} "{{base}}/_dev/login?next={{path}}" 2>&1 | tail -1
   @echo "shot {{base}}{{path}} -> {{file}}"
 
+# ADR-0007: fail if aws-lc-sys appears anywhere in the workspace graph
+# (including test/dev deps). Ring-only rustls for musl/`FROM scratch`.
+check-no-aws-lc:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if cargo tree --workspace --all-targets -i aws-lc-sys >/dev/null 2>&1; then
+    echo "aws-lc-sys must not appear in the dependency graph (ADR-0007)" >&2
+    cargo tree --workspace --all-targets -i aws-lc-sys >&2
+    exit 1
+  fi
+  echo "ok: no aws-lc-sys in workspace graph"
+
 # Run browser e2e tests. Starts chromedriver on :9515 if not already up.
 # Requires chromedriver + Chrome installed and version-matched.
 e2e:

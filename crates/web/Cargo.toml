@@ -60,8 +60,10 @@ required-features = ["dev-login"]
 
 [dev-dependencies]
 arc-swap = { workspace = true }
-fantoccini = { version = "0.22", default-features = false, features = ["rustls-tls"] }
-rustls = { workspace = true }
+# HTTP-only WebDriver (chromedriver on http://localhost). Avoid rustls-tls /
+# native-tls — hyper-rustls defaults pull aws-lc-rs into the workspace graph.
+fantoccini = { version = "0.22", default-features = false }
+hyper-util = { version = "0.1", default-features = false, features = ["client", "client-legacy", "http1", "tokio"] }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 wiremock = { workspace = true }

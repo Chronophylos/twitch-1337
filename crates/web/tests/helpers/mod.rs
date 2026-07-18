@@ -78,7 +78,7 @@ impl HelixClient for FakeHelix {
 }
 
 pub fn install_crypto() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    twitch_1337_core::install_crypto_provider();
 }
 
 pub async fn build_state(helix: Arc<dyn HelixClient>) -> WebState {

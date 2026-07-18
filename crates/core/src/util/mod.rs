@@ -117,10 +117,9 @@ pub fn parse_flight_duration(s: &str) -> Option<std::time::Duration> {
 
 /// Install the `ring` rustls [`CryptoProvider`] as the process-wide default.
 ///
-/// Our dependency tree enables both `ring` (via this crate) and `aws-lc-rs`
-/// (transitively, through rustls' default features on other deps), so rustls
-/// 0.23 refuses to auto-pick and panics on the first TLS handshake. Pick one
-/// explicitly. Must run before any TLS client is built. Idempotent.
+/// Workspace policy is ring-only (see ADR-0007). reqwest uses
+/// `rustls-no-provider`, so a provider must be installed before any TLS
+/// client is built or `Client::builder().build()` panics. Idempotent.
 ///
 /// [`CryptoProvider`]: rustls::crypto::CryptoProvider
 pub fn install_crypto_provider() {

@@ -217,7 +217,7 @@ Integration-testable via `TestBotBuilder` in `crates/core/tests/common/`.
 
 ## Binary / Docker
 
-Musl static build: `cargo build --release --target x86_64-unknown-linux-musl` (~6MB, works on Alpine/busybox, FROM scratch image). rustls not OpenSSL. Multi-stage Dockerfile with cargo-chef.
+Musl static build: `cargo build --release --target x86_64-unknown-linux-musl` (~6MB, works on Alpine/busybox, FROM scratch image). rustls + **ring** only (no OpenSSL, no aws-lc — see ADR-0007); call `install_crypto_provider()` before any TLS client. Multi-stage Dockerfile with cargo-chef.
 
 Verify static: `ldd target/x86_64-unknown-linux-musl/release/twitch-1337` → "statically linked".
 
