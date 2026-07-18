@@ -12,7 +12,7 @@ use super::db::{
     insert_usage_events, list_active_emotes, resolve_active_name, upsert_emote,
 };
 use super::migrate;
-use super::types::{EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch};
+use super::types::{EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch, SetEventRow};
 
 enum StoreCmd {
     UpsertEmote {
@@ -52,6 +52,14 @@ enum StoreCmd {
     },
     CatalogIsEmpty {
         reply: oneshot::Sender<Result<bool>>,
+    },
+    ResolveEmoteQuery {
+        query: String,
+        reply: oneshot::Sender<Result<Option<EmoteRow>>>,
+    },
+    LatestLifecycleEvent {
+        emote_id: String,
+        reply: oneshot::Sender<Result<Option<SetEventRow>>>,
     },
 }
 
@@ -164,6 +172,18 @@ impl EmoteTrackerHandle {
     pub async fn catalog_is_empty(&self) -> Result<bool> {
         self.send(|reply| StoreCmd::CatalogIsEmpty { reply }).await
     }
+
+    pub async fn resolve_emote_query(&self, query: &str) -> Result<Option<EmoteRow>> {
+        let query = query.to_owned();
+        self.send(|reply| StoreCmd::ResolveEmoteQuery { query, reply })
+            .await
+    }
+
+    pub async fn latest_lifecycle_event(&self, emote_id: &str) -> Result<Option<SetEventRow>> {
+        let emote_id = emote_id.to_owned();
+        self.send(|reply| StoreCmd::LatestLifecycleEvent { emote_id, reply })
+            .await
+    }
 }
 
 fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
@@ -206,6 +226,12 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
             StoreCmd::CatalogIsEmpty { reply } => {
                 let _ = reply.send(catalog_is_empty(&conn));
             }
+            StoreCmd::ResolveEmoteQuery { query, reply } => {
+                let _ = reply.send(super::lookup::resolve_emote_query(&conn, &query));
+            }
+            StoreCmd::LatestLifecycleEvent { emote_id, reply } => {
+                let _ = reply.send(super::db::latest_lifecycle_event(&conn, &emote_id));
+            }
         }
     }
 }
@@ -213,7 +239,41 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emote_tracker::{DB_FILENAME, try_open};
+    use crate::emote_tracker::{DB_FILENAME, SetEventKind, try_open};
+
+    const TEST_EMOTE_ID: &str = "0123456789abcdef01234567";
+
+    #[tokio::test]
+    async fn handle_resolves_and_fetches_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DB_FILENAME);
+        let h = EmoteTrackerHandle::open(&path).unwrap();
+        h.upsert_emote(TEST_EMOTE_ID, "Kappa", true, 1_736_000_000_000)
+            .await
+            .unwrap();
+        h.insert_set_event(NewSetEvent {
+            at: 1_736_000_000_000,
+            kind: SetEventKind::Bootstrap,
+            emote_id: Some(TEST_EMOTE_ID.into()),
+            old_name: None,
+            new_name: Some("Kappa".into()),
+            actor_7tv_id: None,
+            actor_username: None,
+            actor_display_name: None,
+            gap_from: None,
+            gap_to: None,
+        })
+        .await
+        .unwrap();
+        let row = h.resolve_emote_query("Kappa").await.unwrap().unwrap();
+        assert_eq!(row.emote_id, TEST_EMOTE_ID);
+        let life = h
+            .latest_lifecycle_event(TEST_EMOTE_ID)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(life.kind, SetEventKind::Bootstrap);
+    }
 
     #[tokio::test]
     async fn handle_round_trips_emote_and_usage() {

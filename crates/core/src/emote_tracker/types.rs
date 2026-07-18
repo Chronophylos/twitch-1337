@@ -57,6 +57,22 @@ pub struct EmoteRow {
     pub updated_at: i64,
 }
 
+/// One persisted row from `set_events`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetEventRow {
+    pub id: i64,
+    pub at: i64,
+    pub kind: SetEventKind,
+    pub emote_id: Option<String>,
+    pub old_name: Option<String>,
+    pub new_name: Option<String>,
+    pub actor_7tv_id: Option<String>,
+    pub actor_username: Option<String>,
+    pub actor_display_name: Option<String>,
+    pub gap_from: Option<i64>,
+    pub gap_to: Option<i64>,
+}
+
 /// Input for inserting one `set_events` audit row.
 ///
 /// Non-gap kinds should pass an `emote_id` that already exists in `emotes`

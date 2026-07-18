@@ -55,6 +55,8 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub suspension_manager: Arc<SuspensionManager>,
     /// Pre-built 7TV emote provider. `None` disables emote grounding for `!ai`.
     pub emote_provider: Option<Arc<SevenTvEmoteProvider>>,
+    /// Emote set-audit store. `None` disables `!emote`.
+    pub emote_tracker: Option<std::sync::Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     /// Optional test-only sink: when set, the freshly built primary
     /// `ChatHistory` `Arc` is stored here so integration tests can peek at
     /// chat-history entries. Production wires `None`.
@@ -93,6 +95,7 @@ where
         doener,
         suspension_manager,
         emote_provider,
+        emote_tracker,
         primary_history_tap,
         started_at,
     } = cfg;
@@ -216,6 +219,10 @@ where
             tx.clone(),
         )));
         cmd_list.push(Box::new(aviation::commands::info::InfoCommand::new(tx)));
+    }
+
+    if let Some(tracker) = emote_tracker {
+        cmd_list.push(Box::new(commands::emote::EmoteCommand::new(tracker)));
     }
 
     if let (Some((llm, ai_boot)), Some(ai_memory_v2)) = (llm_client, ai_memory_v2) {
