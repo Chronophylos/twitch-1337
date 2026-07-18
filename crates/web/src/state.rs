@@ -67,6 +67,10 @@ pub struct WebState {
     /// aviation is disabled at startup; the `/flights` handler then renders
     /// the disabled placeholder instead of awaiting a snapshot.
     pub tracker_tx: Option<Arc<tokio::sync::mpsc::Sender<TrackerCommand>>>,
+    /// Shared emote-tracker handle (same `Arc` the bot's usage ingest writes
+    /// through). `None` when SQLite open/migrate failed at startup; emote
+    /// dashboard routes then render the disabled placeholder.
+    pub emote_tracker: Option<Arc<twitch_1337_core::emote_tracker::EmoteTrackerHandle>>,
     /// TTL cache for Twitch helix `profile_image_url` lookups. Shared
     /// across handlers so repeat `/memory/users` loads don't re-issue
     /// the same helix batch call.

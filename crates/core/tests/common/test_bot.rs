@@ -904,6 +904,7 @@ fn build_test_web_state(
         signed_key,
         leaderboard: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         tracker_tx: None,
+        emote_tracker: None,
         avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
             std::time::Duration::from_secs(3600),
         )),
