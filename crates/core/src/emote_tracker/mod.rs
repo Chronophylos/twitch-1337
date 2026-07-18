@@ -1,5 +1,6 @@
 mod db;
 mod eventapi;
+mod format;
 mod handle;
 mod ingest;
 mod reconcile;
@@ -15,6 +16,7 @@ pub use eventapi::{
     DispatchEmoteSetUpdate, EVENTAPI_URL, EventApiConnection, ParsedEvent, connect_and_subscribe,
     live_change_to_batch, parse_server_message, subscribe_emote_set_update_message,
 };
+pub use format::{format_actor_display, format_berlin_millis};
 pub use handle::EmoteTrackerHandle;
 pub use ingest::{IngestConfig, StartupReconcileResult, run_set_ingest, startup_reconcile_once};
 pub use reconcile::{ActorRef, DesiredEmote, bootstrap_batch, reconcile_batch};
@@ -22,6 +24,7 @@ pub use rest::{ChannelSetSnapshot, fetch_channel_set};
 pub use schema::{SCHEMA_VERSION, migrate};
 pub use types::{
     CatalogMutation, EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch, SetEventKind,
+    SetEventRow,
 };
 
 pub const DB_FILENAME: &str = "emote_tracker.sqlite";
