@@ -185,6 +185,7 @@ fn main() {
     );
 
     generate_aircraft_db(&out_dir, &manifest_dir);
+    generate_lookup_airport_db(&out_dir, &manifest_dir);
 }
 
 // ── Aircraft TOML parsing ──────────────────────────────────────────────
@@ -446,5 +447,84 @@ fn generate_aircraft_db(out_dir: &Path, manifest_dir: &Path) {
     println!(
         "cargo:warning=Generated aircraft DB with {} aircraft",
         aircraft_list.len()
+    );
+}
+
+fn sanitize_lookup_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| {
+            !c.is_control()
+                && *c != '\u{00ad}'
+                && *c != '\u{200b}'
+                && *c != '\u{200c}'
+                && *c != '\u{200d}'
+                && *c != '\u{feff}'
+        })
+        .collect()
+}
+
+fn generate_lookup_airport_db(out_dir: &Path, manifest_dir: &Path) {
+    let path = manifest_dir.join("assets/location/airports.csv");
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    let mut rows = Vec::new();
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(false)
+        .from_path(&path)
+        .expect("open location airports.csv");
+    for result in rdr.records() {
+        let Ok(rec) = result else { continue };
+        if rec.len() < 5 {
+            continue;
+        }
+        let icao = rec[0].trim();
+        let iata = rec[1].trim();
+        let name = sanitize_lookup_name(rec[2].trim());
+        let Ok(lat) = rec[3].trim().parse::<f32>() else {
+            continue;
+        };
+        let Ok(lon) = rec[4].trim().parse::<f32>() else {
+            continue;
+        };
+
+        let icao_ok = icao.len() == 4;
+        let iata_ok = iata.len() == 3;
+        if !icao_ok && !iata_ok {
+            continue;
+        }
+
+        rows.push((
+            icao_ok.then(|| icao.to_owned()),
+            iata_ok.then(|| iata.to_owned()),
+            name,
+            lat,
+            lon,
+        ));
+    }
+
+    let gen_path = out_dir.join("location_airport_db.rs");
+    let mut f = fs::File::create(&gen_path).expect("create location_airport_db.rs");
+    writeln!(f, "#[allow(clippy::approx_constant)]").unwrap();
+    writeln!(f, "static LOOKUP_AIRPORTS: &[LookupAirport] = &[").unwrap();
+    for (icao, iata, name, lat, lon) in &rows {
+        let icao_lit = match icao {
+            Some(c) => format!("Some(\"{c}\")"),
+            None => "None".into(),
+        };
+        let iata_lit = match iata {
+            Some(c) => format!("Some(\"{c}\")"),
+            None => "None".into(),
+        };
+        let name_esc = name.replace('\\', "\\\\").replace('"', "\\\"");
+        writeln!(
+            f,
+            "    LookupAirport {{ icao: {icao_lit}, iata: {iata_lit}, name: \"{name_esc}\", lat: {lat}_f32, lon: {lon}_f32 }},"
+        )
+        .unwrap();
+    }
+    writeln!(f, "];").unwrap();
+    println!(
+        "cargo:warning=Generated lookup airport DB with {} airports",
+        rows.len()
     );
 }
