@@ -1,6 +1,6 @@
 //! Embedded location data + IATA/ICAO predicates + location resolution.
 //!
-//! PLZ and airline tables are baked in via `include_str!` and lazy-initialized
+//! PLZ and airline tables are baked in via the data crate and lazy-initialized
 //! into `OnceLock` `HashMap`s. Airport codes come from the data-crate bake
 //! (`twitch_1337_data::location`). Predicate helpers (`is_iata_flight_number`
 //! etc.) are used by both `client.rs` (for `resolve_callsign` /
@@ -13,8 +13,8 @@ use std::time::Duration;
 use eyre::Result;
 use tracing::{trace, warn};
 
-use twitch_1337_data::location::{LookupAirport, lookup_airports};
-use twitch_1337_data::raw::{AIRLINES_CSV, PLZ_CSV};
+use twitch_1337_data::location::{LookupAirport, lookup_airports, plz_entries};
+use twitch_1337_data::raw::AIRLINES_CSV;
 
 use super::AviationClient;
 
@@ -22,29 +22,14 @@ const UP_NOMINATIM_TIMEOUT: Duration = Duration::from_secs(5);
 
 // --- PLZ Lookup ---
 
-const PLZ_DATA: &str = PLZ_CSV;
-
 fn plz_table() -> &'static HashMap<&'static str, (f64, f64)> {
     static TABLE: OnceLock<HashMap<&'static str, (f64, f64)>> = OnceLock::new();
     TABLE.get_or_init(|| {
-        trace!("Initializing PLZ lookup table from CSV data");
-        let mut map = HashMap::new();
-        for line in PLZ_DATA.lines() {
-            let mut parts = line.splitn(3, ',');
-            let (Some(plz), Some(lat_str), Some(lon_str)) =
-                (parts.next(), parts.next(), parts.next())
-            else {
-                continue;
-            };
-            let Ok(lat) = lat_str.parse::<f64>() else {
-                continue;
-            };
-            let Ok(lon) = lon_str.parse::<f64>() else {
-                continue;
-            };
-            map.insert(plz, (lat, lon));
-        }
-        map
+        trace!("Initializing PLZ lookup table from baked data");
+        plz_entries()
+            .iter()
+            .map(|e| (e.plz, (f64::from(e.lat), f64::from(e.lon))))
+            .collect()
     })
 }
 

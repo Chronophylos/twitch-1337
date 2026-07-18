@@ -1,4 +1,24 @@
 #[derive(Debug, Clone, Copy)]
+pub struct PlzEntry {
+    pub plz: &'static str,
+    pub lat: f32,
+    pub lon: f32,
+}
+
+include!(concat!(env!("OUT_DIR"), "/plz_db.rs"));
+
+pub fn plz_entries() -> &'static [PlzEntry] {
+    PLZ_ENTRIES
+}
+
+pub fn plz_coords(plz: &str) -> Option<(f32, f32)> {
+    plz_entries()
+        .iter()
+        .find(|e| e.plz == plz)
+        .map(|e| (e.lat, e.lon))
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct LookupAirport {
     pub icao: Option<&'static str>,
     pub iata: Option<&'static str>,
@@ -51,5 +71,21 @@ mod tests {
     fn unusable_heliport_style_rows_absent() {
         // 00A is first line of source CSV today: heliport, empty IATA — must not bake.
         assert!(lookup_by_icao("00A").is_none());
+    }
+
+    #[test]
+    fn berlin_plz_resolves() {
+        // 10115 is Mitte — present in current plz.csv
+        let (lat, lon) = plz_coords("10115").expect("10115");
+        assert!((lat - 52.53).abs() < 0.2);
+        assert!((lon - 13.38).abs() < 0.2);
+    }
+
+    #[test]
+    fn plz_keys_are_five_digits() {
+        for e in plz_entries() {
+            assert_eq!(e.plz.len(), 5);
+            assert!(e.plz.chars().all(|c| c.is_ascii_digit()));
+        }
     }
 }
