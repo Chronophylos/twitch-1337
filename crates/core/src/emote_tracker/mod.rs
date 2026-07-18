@@ -3,6 +3,7 @@ mod eventapi;
 mod format;
 mod handle;
 mod ingest;
+mod lookup;
 mod reconcile;
 mod rest;
 mod schema;
@@ -20,6 +21,10 @@ pub use eventapi::{
 pub use format::{format_actor_display, format_berlin_millis};
 pub use handle::EmoteTrackerHandle;
 pub use ingest::{IngestConfig, StartupReconcileResult, run_set_ingest, startup_reconcile_once};
+pub use lookup::{
+    EMOTE_CMD_USAGE, EMOTE_NOT_FOUND, EmoteQueryParse, format_emote_chat_reply, parse_emote_query,
+    resolve_emote_query,
+};
 pub use reconcile::{ActorRef, DesiredEmote, bootstrap_batch, reconcile_batch};
 pub use rest::{ChannelSetSnapshot, fetch_channel_set};
 pub use schema::{SCHEMA_VERSION, migrate};
