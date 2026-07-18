@@ -40,5 +40,19 @@
         <span class="row-default">default <span class="mono">(empty)</span></span>
       </div>
     </div>
+    <div class="settings-row" data-section="twitch_permissions">
+      <div class="row-left">
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">emote_usage_deny_list</code></div>
+        <div class="row-hint">Twitch logins (one per line) whose emote usage is stored flagged and excluded from default usage queries.</div>
+      </div>
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true">{% if current.twitch.emote_usage_deny_list.is_empty() %}<span class="muted">(empty)</span>{% else %}{{ current.twitch.emote_usage_deny_list.join(", ") }}{% endif %}</span>
+        <textarea class="text-input is-wide" rows="4" name="twitch_emote_usage_deny_list" data-key="emote_usage_deny_list" data-default="">{{ current.twitch.emote_usage_deny_list.join("\n") }}</textarea>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("emote_usage_deny_list") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(empty)</span></span>
+      </div>
+    </div>
   </div>
 </section>

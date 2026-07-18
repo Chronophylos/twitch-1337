@@ -434,6 +434,8 @@ struct TwitchPermissionsForm {
     twitch_hidden_admins: Option<String>,
     #[serde(default)]
     twitch_viewer_allowlist: Option<String>,
+    #[serde(default)]
+    twitch_emote_usage_deny_list: Option<String>,
 }
 
 impl TwitchPermissionsForm {
@@ -441,6 +443,10 @@ impl TwitchPermissionsForm {
         TwitchOverrides {
             hidden_admins: self.twitch_hidden_admins.as_deref().map(parse_id_list),
             viewer_allowlist: self.twitch_viewer_allowlist.as_deref().map(parse_id_list),
+            emote_usage_deny_list: self
+                .twitch_emote_usage_deny_list
+                .as_deref()
+                .map(parse_id_list),
             ..Default::default()
         }
     }
@@ -636,6 +642,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             let mut t = TwitchPermissionsForm {
                 twitch_hidden_admins: form.twitch_hidden_admins,
                 twitch_viewer_allowlist: form.twitch_viewer_allowlist,
+                twitch_emote_usage_deny_list: form.twitch_emote_usage_deny_list,
             }
             .into_overrides();
             let c = TwitchChannelsForm {

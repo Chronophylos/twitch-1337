@@ -428,11 +428,12 @@ async fn settings_page_renders_all_ai_cards() {
 
 #[tokio::test]
 async fn permissions_lists_render_pretty_resting_display() {
-    // hidden_admins / viewer_allowlist are the only multi-line (textarea) rows.
-    // Like every other settings row they must carry a `.row-pretty` overlay so
-    // the value is visible at rest (controls are opacity:0 until hover). The
-    // textarea renders IDs newline-joined ("111\n222"); only the pretty span
-    // renders them comma-joined ("111, 222"), so finding that proves the span.
+    // hidden_admins / viewer_allowlist / emote_usage_deny_list are the
+    // multi-line (textarea) rows. Like every other settings row they must
+    // carry a `.row-pretty` overlay so the value is visible at rest
+    // (controls are opacity:0 until hover). The textarea renders IDs
+    // newline-joined ("111\n222"); only the pretty span renders them
+    // comma-joined ("111, 222"), so finding that proves the span.
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     set_owner(&state, Some("123"));
@@ -442,7 +443,7 @@ async fn permissions_lists_render_pretty_resting_display() {
     let defaults = state.settings_store.defaults().clone();
     let app = build_router(state.clone());
     let body = format!(
-        "_csrf={csrf}&cooldown_ai={ai}&cooldown_news={n}&cooldown_up={u}&cooldown_feedback={f}&cooldown_doener={d}&ping_cooldown={p}&twitch_hidden_admins={ha}&twitch_viewer_allowlist={va}",
+        "_csrf={csrf}&cooldown_ai={ai}&cooldown_news={n}&cooldown_up={u}&cooldown_feedback={f}&cooldown_doener={d}&ping_cooldown={p}&twitch_hidden_admins={ha}&twitch_viewer_allowlist={va}&twitch_emote_usage_deny_list={ed}",
         csrf = urlencoding::encode(&bare_csrf),
         ai = defaults.cooldowns.ai,
         n = defaults.cooldowns.news,
@@ -452,6 +453,7 @@ async fn permissions_lists_render_pretty_resting_display() {
         p = defaults.pings.cooldown,
         ha = urlencoding::encode("111\n222"),
         va = urlencoding::encode("333\n444"),
+        ed = urlencoding::encode("evilbot\notherbot"),
     );
     let req = Request::builder()
         .method("POST")
@@ -462,6 +464,11 @@ async fn permissions_lists_render_pretty_resting_display() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        state.settings.load().twitch.emote_usage_deny_list,
+        vec!["evilbot".to_owned(), "otherbot".to_owned()],
+        "emote_usage_deny_list must persist from POST"
+    );
 
     // GET and confirm the pretty (comma-joined) display is present.
     let app = build_router(state);
@@ -484,6 +491,10 @@ async fn permissions_lists_render_pretty_resting_display() {
     assert!(
         html.contains("333, 444"),
         "viewer_allowlist must render a comma-joined pretty display"
+    );
+    assert!(
+        html.contains("evilbot, otherbot"),
+        "emote_usage_deny_list must render a comma-joined pretty display"
     );
 }
 
@@ -905,7 +916,10 @@ async fn twitch_permissions_save_persists() {
     let body = save_form_body(
         &bare_csrf,
         &defaults,
-        &[("twitch_hidden_admins", "111\n222")],
+        &[
+            ("twitch_hidden_admins", "111\n222"),
+            ("twitch_emote_usage_deny_list", "evilbot\notherbot"),
+        ],
     );
     let req = Request::builder()
         .method("POST")
@@ -925,6 +939,11 @@ async fn twitch_permissions_save_persists() {
         s.twitch.hidden_admins,
         vec!["111".to_owned(), "222".to_owned()],
         "hidden_admins must persist",
+    );
+    assert_eq!(
+        s.twitch.emote_usage_deny_list,
+        vec!["evilbot".to_owned(), "otherbot".to_owned()],
+        "emote_usage_deny_list must persist",
     );
 }
 

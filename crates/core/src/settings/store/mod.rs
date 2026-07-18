@@ -192,6 +192,7 @@ impl SettingsStore {
             SettingsSection::TwitchPermissions => {
                 current.twitch.hidden_admins = None;
                 current.twitch.viewer_allowlist = None;
+                current.twitch.emote_usage_deny_list = None;
             }
             SettingsSection::TwitchChannels => {
                 current.twitch.admin_channel = None;

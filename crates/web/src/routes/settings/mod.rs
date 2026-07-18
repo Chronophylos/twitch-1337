@@ -205,6 +205,8 @@ struct SaveForm {
     twitch_hidden_admins: Option<String>,
     #[serde(default)]
     twitch_viewer_allowlist: Option<String>,
+    #[serde(default)]
+    twitch_emote_usage_deny_list: Option<String>,
 
     // ---- Twitch · Channels card ----
     #[serde(default)]

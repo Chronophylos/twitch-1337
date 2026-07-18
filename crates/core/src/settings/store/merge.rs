@@ -203,6 +203,9 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if patch.twitch.viewer_allowlist.is_some() {
         into.twitch.viewer_allowlist = patch.twitch.viewer_allowlist.clone();
     }
+    if patch.twitch.emote_usage_deny_list.is_some() {
+        into.twitch.emote_usage_deny_list = patch.twitch.emote_usage_deny_list.clone();
+    }
     if patch.twitch.admin_channel.is_some() {
         into.twitch.admin_channel = patch.twitch.admin_channel.clone();
     }
