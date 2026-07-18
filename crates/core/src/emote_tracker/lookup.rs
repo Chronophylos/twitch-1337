@@ -148,6 +148,30 @@ mod tests {
     }
 
     #[test]
+    fn parse_emote_query_multi_arg_joins_with_space() {
+        match parse_emote_query(&["my", "emote"]) {
+            EmoteQueryParse::Query(q) => assert_eq!(q, "my emote"),
+            _ => panic!("expected query"),
+        }
+    }
+
+    #[test]
+    fn unknown_24_hex_id_returns_none_without_name_fallback() {
+        const KNOWN_ID: &str = "0123456789abcdef01234567";
+        const UNKNOWN_ID: &str = "fedcba9876543210fedcba98";
+        let conn = Connection::open_in_memory().unwrap();
+        seed_kappa_bootstrap(&conn, 100);
+        assert_eq!(
+            resolve_emote_query(&conn, KNOWN_ID).unwrap().unwrap().name,
+            "Kappa"
+        );
+        assert!(
+            resolve_emote_query(&conn, UNKNOWN_ID).unwrap().is_none(),
+            "missing 24-hex id must not fall through to name resolution"
+        );
+    }
+
+    #[test]
     fn resolve_by_raw_id_and_url() {
         const ID: &str = "0123456789abcdef01234567";
         let conn = Connection::open_in_memory().unwrap();
@@ -158,6 +182,20 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(url.emote_id, ID);
+    }
+
+    #[test]
+    fn resolve_by_http_url_and_trailing_slash() {
+        const ID: &str = "0123456789abcdef01234567";
+        let conn = Connection::open_in_memory().unwrap();
+        seed_kappa_bootstrap(&conn, 100);
+        for url in [
+            format!("http://7tv.app/emotes/{ID}"),
+            format!("https://7tv.app/emotes/{ID}/"),
+        ] {
+            let row = resolve_emote_query(&conn, &url).unwrap().unwrap();
+            assert_eq!(row.emote_id, ID);
+        }
     }
 
     #[test]
