@@ -2267,6 +2267,15 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "random-flight"
+version = "0.0.0"
+dependencies = [
+ "rand 0.10.2",
+ "thiserror 2.0.18",
+ "twitch-1337-data",
+]
+
+[[package]]
+name = "random-flight"
 version = "0.1.0"
 source = "git+https://github.com/Chronophylos/random-flight.git?rev=ceb23b00ddc7dab6ef26da06059495b86fde6071#ceb23b00ddc7dab6ef26da06059495b86fde6071"
 dependencies = [
@@ -3490,7 +3499,7 @@ dependencies = [
  "infer",
  "llm",
  "rand 0.10.2",
- "random-flight",
+ "random-flight 0.1.0",
  "reqwest",
  "ron",
  "rusqlite",
