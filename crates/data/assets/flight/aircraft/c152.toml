@@ -1,0 +1,26 @@
+[aircraft]
+name = "Cessna 152"
+icao_type = "C152"
+
+[performance]
+cruise_speed_ktas = 107
+cruise_altitude_ft = 8000
+service_ceiling_ft = 14700
+min_runway_length_ft = 1500
+
+[performance.climb]
+speed_ktas = 75
+rate_fpm = 715
+
+[performance.descent]
+speed_ktas = 80
+rate_fpm = 500
+
+[fuel]
+capacity_kg = 86.0
+fuel_type = "avgas"
+
+[fuel.flow]
+climb_kg_per_hour = 24.0
+cruise_kg_per_hour = 18.0
+descent_kg_per_hour = 12.0

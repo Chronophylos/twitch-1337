@@ -1,0 +1,26 @@
+[aircraft]
+name = "Airbus A330-300"
+icao_type = "A333"
+
+[performance]
+cruise_speed_ktas = 470
+cruise_altitude_ft = 39000
+service_ceiling_ft = 41100
+min_runway_length_ft = 7500
+
+[performance.climb]
+speed_ktas = 320
+rate_fpm = 2000
+
+[performance.descent]
+speed_ktas = 280
+rate_fpm = 1700
+
+[fuel]
+capacity_kg = 109185.0
+fuel_type = "jet"
+
+[fuel.flow]
+climb_kg_per_hour = 8000.0
+cruise_kg_per_hour = 5800.0
+descent_kg_per_hour = 3200.0

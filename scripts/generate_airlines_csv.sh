@@ -21,6 +21,6 @@ curl -sL "$OPTD_URL" \
   ' \
   | sort \
   | awk -F',' '!seen[$1]++' \
-  > crates/core/data/airlines.csv
+  > crates/data/assets/location/airlines.csv
 
-echo "Generated crates/core/data/airlines.csv with $(wc -l < crates/core/data/airlines.csv) entries"
+echo "Generated crates/data/assets/location/airlines.csv with $(wc -l < crates/data/assets/location/airlines.csv) entries"

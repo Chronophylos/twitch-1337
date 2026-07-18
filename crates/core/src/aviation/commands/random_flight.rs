@@ -50,7 +50,7 @@ where
         return Ok(());
     };
 
-    let Some(aircraft) = random_flight::aircraft_by_icao_type(aircraft_code) else {
+    let Some(aircraft) = twitch_1337_data::flight::aircraft_by_icao_type(aircraft_code) else {
         sender
             .reply(privmsg, "Das Flugzeug kenn ich nich FDM")
             .await;
@@ -64,7 +64,7 @@ where
 
     // Can take many retries internally
     let result = tokio::task::spawn_blocking(move || {
-        random_flight::generate_flight_plan(aircraft, duration, None)
+        random_flight::generate_flight_plan(aircraft, duration)
     })
     .await
     .wrap_err("Flight plan generation task panicked")?;

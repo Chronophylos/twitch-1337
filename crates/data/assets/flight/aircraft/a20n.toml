@@ -1,0 +1,26 @@
+[aircraft]
+name = "Airbus A320neo"            # A320-251N as modeled by FlyByWire A32NX
+icao_type = "A20N"                 # ICAO designator for A320neo family
+
+[performance]
+cruise_speed_ktas = 450            # M0.78 at FL390 ≈ 450 KTAS
+cruise_altitude_ft = 39000         # FL390, neo cruises higher than ceo
+service_ceiling_ft = 39800         # Per Airbus type certificate
+min_runway_length_ft = 6000        # ~5500 ft MTOW takeoff + margin
+
+[performance.climb]
+speed_ktas = 305                   # 305 KTAS average through climb
+rate_fpm = 2400                    # Mid-altitude average rate
+
+[performance.descent]
+speed_ktas = 280                   # Standard descent profile
+rate_fpm = 1800                    # ~3 degree path
+
+[fuel]
+capacity_kg = 19182.0              # 23,859 L usable × 0.804 kg/L (inner + center tanks)
+fuel_type = "jet"                  # Jet-A
+
+[fuel.flow]
+climb_kg_per_hour = 2900.0         # LEAP-1A26, ~12% less than CFM56-5B
+cruise_kg_per_hour = 2000.0        # ~15% SFC improvement over ceo at cruise
+descent_kg_per_hour = 1050.0       # Idle descent

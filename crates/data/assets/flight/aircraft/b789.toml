@@ -1,0 +1,26 @@
+[aircraft]
+name = "Boeing 787-9 Dreamliner"
+icao_type = "B789"
+
+[performance]
+cruise_speed_ktas = 488
+cruise_altitude_ft = 40000
+service_ceiling_ft = 43100
+min_runway_length_ft = 7500
+
+[performance.climb]
+speed_ktas = 330
+rate_fpm = 2200
+
+[performance.descent]
+speed_ktas = 290
+rate_fpm = 1800
+
+[fuel]
+capacity_kg = 101323.0
+fuel_type = "jet"
+
+[fuel.flow]
+climb_kg_per_hour = 7500.0
+cruise_kg_per_hour = 5200.0
+descent_kg_per_hour = 2800.0

@@ -9,7 +9,7 @@ alwaysApply: true
 
 - Runtime files: `get_data_dir().join(...)` — never hardcode `/data` or relative paths
 - Persist with atomic write + rename (see `ping.rs`, memory, flight tracker)
-- Embedded CSVs via `include_str!` in `data/` — no runtime file deps for prod image
+- Baked assets in `crates/data/assets/` (CSVs via `include_str!`, flight DBs via build.rs) — no runtime file deps for prod image
 
 ## Time
 

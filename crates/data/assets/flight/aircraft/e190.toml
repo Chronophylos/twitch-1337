@@ -1,0 +1,26 @@
+[aircraft]
+name = "Embraer E190"
+icao_type = "E190"
+
+[performance]
+cruise_speed_ktas = 470
+cruise_altitude_ft = 39000
+service_ceiling_ft = 41000
+min_runway_length_ft = 6000
+
+[performance.climb]
+speed_ktas = 310
+rate_fpm = 2500
+
+[performance.descent]
+speed_ktas = 280
+rate_fpm = 1800
+
+[fuel]
+capacity_kg = 12971.0
+fuel_type = "jet"
+
+[fuel.flow]
+climb_kg_per_hour = 2800.0
+cruise_kg_per_hour = 1900.0
+descent_kg_per_hour = 1000.0
