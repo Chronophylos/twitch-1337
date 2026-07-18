@@ -183,7 +183,7 @@ Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `fli
 - `prompts/` — AI prompt templates
 - `flight/` — aircraft profiles + OurAirports CSVs for flight-plan DB generation
 
-Location CSVs and prompts are baked via `include_str!`; flight-plan tables are generated in `build.rs`. Zero runtime data-file dep (important for `FROM scratch` musl image).
+Lookup airports and PLZ are trimmed and packed in `build.rs` (`location_airport_db.rs`, `plz_db.rs`); flight-plan tables use the same pattern. Airlines CSV, 7tv TOML, and prompts stay `include_str!`. Zero runtime data-file dep (important for `FROM scratch` musl image).
 
 ## Architecture invariants
 
