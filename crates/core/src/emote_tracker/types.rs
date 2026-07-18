@@ -124,6 +124,40 @@ pub struct SetChangeBatch {
     pub events: Vec<NewSetEvent>,
 }
 
+/// One row from `usage_events`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageEventRow {
+    pub id: i64,
+    pub at: i64,
+    pub emote_id: String,
+    pub twitch_user_id: String,
+    pub login: Option<String>,
+    pub flagged: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SetEventListFilter {
+    pub kind: Option<SetEventKind>,
+    pub emote_id: Option<String>,
+    pub name_substr: Option<String>,
+    pub since_ms: Option<i64>,
+    pub until_ms: Option<i64>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UsageEventListFilter {
+    pub emote_id: Option<String>,
+    pub twitch_user_id: Option<String>,
+    pub login_substr: Option<String>,
+    pub since_ms: Option<i64>,
+    pub until_ms: Option<i64>,
+    pub include_flagged: bool,
+    pub limit: u32,
+    pub offset: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewUsageEvent {
     /// Observation time (UTC unix ms).
