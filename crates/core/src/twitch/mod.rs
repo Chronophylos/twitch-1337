@@ -1,5 +1,6 @@
 pub mod announce;
 pub mod chat_sender;
+pub mod clanker;
 pub mod handlers;
 pub mod setup;
 pub mod seventv;
