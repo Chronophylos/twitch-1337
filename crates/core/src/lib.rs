@@ -279,6 +279,7 @@ where
     let ai_present_for_ritual = config.ai.is_some();
     let settings_for_ritual = settings.clone();
     let channel_for_ritual = config.twitch.channel.clone();
+    let emote_usage_enabled = emote_tracker.is_some();
 
     let handlers = spawn_handlers(SpawnDeps {
         client,
@@ -338,10 +339,16 @@ where
 
     crate::twitch::announce::announce_startup(&client_for_announce, admin_channel.as_deref()).await;
 
+    if emote_usage_enabled {
+        tracing::info!("Emote usage recording enabled");
+    } else {
+        tracing::info!("Emote usage recording disabled (SQLite unavailable)");
+    }
+
     info!(
         "Bot running with continuous connection. Handlers: 1337 tracker, \
          Generic commands, Scheduled messages, Latency monitor, Flight tracker, \
-         Emote set ingest"
+         Emote set ingest, Emote usage"
     );
     info!(
         "1337 tracker scheduled to run daily at {}:{:02} (Europe/Berlin)",

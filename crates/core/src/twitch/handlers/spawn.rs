@@ -35,6 +35,7 @@ use crate::{
         ChatSender,
         handlers::{
             commands::{CommandHandlerConfig, run_generic_command_handler},
+            emote_usage::run_emote_usage_handler,
             latency::run_latency_handler,
             router::run_message_router,
             schedule_runner::run_orchestrator,
@@ -53,6 +54,7 @@ pub(crate) struct HandlerSet {
     pub generic_commands: JoinHandle<()>,
     pub flight_tracker: JoinHandle<()>,
     pub emote_set_ingest: JoinHandle<()>,
+    pub emote_usage: JoinHandle<()>,
     pub ping_actor: JoinHandle<()>,
     pub scheduled_messages: JoinHandle<()>,
     /// Shared notify so consolidation/shutdown code can drain in-flight
@@ -271,6 +273,19 @@ where
         None
     };
 
+    let emote_usage = match emote_tracker {
+        Some(handle) => {
+            let rx = broadcast_tx.subscribe();
+            let settings = settings.clone();
+            let channel = config.twitch.channel.clone();
+            let bot_username = config.twitch.username.clone();
+            tokio::spawn(async move {
+                run_emote_usage_handler(rx, handle, settings, channel, bot_username).await;
+            })
+        }
+        None => tokio::spawn(std::future::pending::<()>()),
+    };
+
     let tracker_1337 = tokio::spawn({
         let btx = broadcast_tx.clone();
         let sender = chat_sender.clone();
@@ -329,6 +344,7 @@ where
         generic_commands,
         flight_tracker,
         emote_set_ingest,
+        emote_usage,
         ping_actor,
         scheduled_messages,
         shutdown_notify,
@@ -365,6 +381,7 @@ pub(crate) async fn await_shutdown(
         generic_commands,
         flight_tracker,
         emote_set_ingest,
+        emote_usage,
         mut ping_actor,
         scheduled_messages: mut sched,
         shutdown_notify,
@@ -386,6 +403,7 @@ pub(crate) async fn await_shutdown(
         result = latency => { error!("Latency handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = emote_set_ingest => { error!("Emote set ingest exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
+        result = emote_usage => { error!("Emote usage handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut ping_actor => { error!("Ping actor exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut sched => { error!("Scheduled message handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
     };
