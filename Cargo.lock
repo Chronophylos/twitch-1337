@@ -3350,7 +3350,6 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "color-eyre",
- "csv",
  "either",
  "eyre",
  "futures-util",

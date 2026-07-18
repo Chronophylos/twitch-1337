@@ -179,6 +179,7 @@ Aircraft lookup has a single home: **`twitch_1337_data::flight::aircraft_by_icao
 
 ## Follow-ups (explicitly later)
 
+- [Fat-asset bake](./2026-07-18-data-embeddings-bake-design.md) — trim lookup airports/PLZ, pack in `build.rs` (landed on this branch).
 - Share one OurAirports download/refresh pipeline for lookup CSV + flight bake.
 - Further row filters in `data`’s `build.rs` if binary size still hurts.
 - Drop unused `FlightPlan` fields from the public struct if the generator can be slimmed without behavior change.

@@ -1,9 +1,10 @@
 //! Embedded location data + IATA/ICAO predicates + location resolution.
 //!
-//! Static tables (PLZ, airports, airlines) are baked in via `include_str!`
-//! and lazy-initialized into `OnceLock` `HashMap`s. Predicate helpers
-//! (`is_iata_flight_number` etc.) are used by both `client.rs` (for
-//! `resolve_callsign` / `aviationstack_query`) and `resolve_location`.
+//! PLZ and airline tables are baked in via the data crate and lazy-initialized
+//! into `OnceLock` `HashMap`s. Airport codes come from the data-crate bake
+//! (`twitch_1337_data::location`). Predicate helpers (`is_iata_flight_number`
+//! etc.) are used by both `client.rs` (for `resolve_callsign` /
+//! `aviationstack_query`) and `resolve_location`.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -12,7 +13,8 @@ use std::time::Duration;
 use eyre::Result;
 use tracing::{trace, warn};
 
-use twitch_1337_data::raw::{AIRLINES_CSV, AIRPORTS_CSV, PLZ_CSV};
+use twitch_1337_data::location::{LookupAirport, lookup_airports, plz_entries};
+use twitch_1337_data::raw::AIRLINES_CSV;
 
 use super::AviationClient;
 
@@ -20,29 +22,14 @@ const UP_NOMINATIM_TIMEOUT: Duration = Duration::from_secs(5);
 
 // --- PLZ Lookup ---
 
-const PLZ_DATA: &str = PLZ_CSV;
-
 fn plz_table() -> &'static HashMap<&'static str, (f64, f64)> {
     static TABLE: OnceLock<HashMap<&'static str, (f64, f64)>> = OnceLock::new();
     TABLE.get_or_init(|| {
-        trace!("Initializing PLZ lookup table from CSV data");
-        let mut map = HashMap::new();
-        for line in PLZ_DATA.lines() {
-            let mut parts = line.splitn(3, ',');
-            let (Some(plz), Some(lat_str), Some(lon_str)) =
-                (parts.next(), parts.next(), parts.next())
-            else {
-                continue;
-            };
-            let Ok(lat) = lat_str.parse::<f64>() else {
-                continue;
-            };
-            let Ok(lon) = lon_str.parse::<f64>() else {
-                continue;
-            };
-            map.insert(plz, (lat, lon));
-        }
-        map
+        trace!("Initializing PLZ lookup table from baked data");
+        plz_entries()
+            .iter()
+            .map(|e| (e.plz, (f64::from(e.lat), f64::from(e.lon))))
+            .collect()
     })
 }
 
@@ -56,44 +43,23 @@ fn is_valid_plz(plz: &str) -> bool {
 
 // --- Airport Lookup ---
 
-const AIRPORT_DATA: &str = AIRPORTS_CSV;
-
 struct AirportData {
-    by_icao: HashMap<String, (f64, f64, String)>,
-    by_iata: HashMap<String, (f64, f64, String)>,
+    by_icao: HashMap<&'static str, &'static LookupAirport>,
+    by_iata: HashMap<&'static str, &'static LookupAirport>,
 }
 
 fn airport_data() -> &'static AirportData {
     static DATA: OnceLock<AirportData> = OnceLock::new();
     DATA.get_or_init(|| {
-        trace!("Initializing airport lookup tables from CSV data");
+        trace!("Initializing airport lookup tables from baked data");
         let mut by_icao = HashMap::new();
         let mut by_iata = HashMap::new();
-        let mut reader = csv::ReaderBuilder::new()
-            .has_headers(false)
-            .from_reader(AIRPORT_DATA.as_bytes());
-        for result in reader.records() {
-            let Ok(record) = result else { continue };
-            if record.len() < 5 {
-                continue;
+        for apt in lookup_airports() {
+            if let Some(icao) = apt.icao {
+                by_icao.insert(icao, apt);
             }
-            let icao = record[0].trim();
-            let iata = record[1].trim();
-            let name = record[2].trim().to_string();
-            let Ok(lat) = record[3].trim().parse::<f64>() else {
-                continue;
-            };
-            let Ok(lon) = record[4].trim().parse::<f64>() else {
-                continue;
-            };
-
-            // Only insert 4-letter codes into by_icao (codes are already uppercase in data)
-            if icao.len() == 4 {
-                by_icao.insert(icao.to_string(), (lat, lon, name.clone()));
-            }
-            // Insert non-empty IATA codes
-            if iata.len() == 3 {
-                by_iata.insert(iata.to_string(), (lat, lon, name));
+            if let Some(iata) = apt.iata {
+                by_iata.insert(iata, apt);
             }
         }
         AirportData { by_icao, by_iata }
@@ -104,14 +70,14 @@ fn icao_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
     airport_data()
         .by_icao
         .get(code)
-        .map(|(lat, lon, name)| (*lat, *lon, name.as_str()))
+        .map(|a| (f64::from(a.lat), f64::from(a.lon), a.name))
 }
 
 pub(crate) fn iata_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
     airport_data()
         .by_iata
         .get(code)
-        .map(|(lat, lon, name)| (*lat, *lon, name.as_str()))
+        .map(|a| (f64::from(a.lat), f64::from(a.lon), a.name))
 }
 
 // --- Airline IATA-to-ICAO Lookup ---
@@ -281,5 +247,19 @@ mod tests {
         assert!(!is_iata_flight_number("12345"));
         assert!(!is_iata_flight_number("ABCDEF"));
         assert!(!is_iata_flight_number("TP12345")); // too many digits
+    }
+
+    #[test]
+    fn eddf_resolves_via_baked_table() {
+        let (lat, lon, name) = icao_to_coords("EDDF").expect("EDDF");
+        assert!(name.to_ascii_lowercase().contains("frankfurt"));
+        assert!((lat - 50.03).abs() < 0.1);
+        assert!((lon - 8.57).abs() < 0.1);
+    }
+
+    #[test]
+    fn fra_iata_resolves() {
+        let (_, _, name) = iata_to_coords("FRA").expect("FRA");
+        assert!(name.to_ascii_lowercase().contains("frankfurt"));
     }
 }
