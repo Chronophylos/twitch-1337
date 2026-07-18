@@ -738,7 +738,7 @@ fn audit_memory(
 }
 
 /// Validates csrf, dispatches to `write_with_guard`, and on
-/// `WriteError::{Full,ScratchFull,InvalidSlug}` re-renders the originating
+/// `WriteError::{Full,ScratchFull,InvalidSlug,ReservedSlug}` re-renders the originating
 /// editor with the user's draft + an inline error so the work isn't lost.
 #[allow(clippy::too_many_arguments)]
 async fn save_kind(
@@ -1149,7 +1149,11 @@ async fn delete_scratch(
         .memory_store
         .delete_scratch(&slug)
         .await
-        .map_err(|e| WebError::Internal(eyre::eyre!("delete_scratch: {e}")))?;
+        .map_err(|e| match e {
+            twitch_1337_core::ai::memory::store::WriteError::InvalidSlug
+            | twitch_1337_core::ai::memory::store::WriteError::ReservedSlug => slug_err(),
+            other => WebError::Internal(eyre::eyre!("delete_scratch: {other}")),
+        })?;
     tracing::info!(
         target: "twitch_1337_web",
         user_id = %session.user_id,

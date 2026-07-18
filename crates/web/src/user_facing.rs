@@ -18,7 +18,8 @@ impl UserFacing for WriteError {
         match self {
             WriteError::Full => "exceeds byte cap".to_owned(),
             WriteError::ScratchFull => "scratch collection full".to_owned(),
-            WriteError::InvalidSlug => "reserved or invalid slug".to_owned(),
+            WriteError::InvalidSlug => "invalid slug".to_owned(),
+            WriteError::ReservedSlug => "reserved slug".to_owned(),
             // `Io` should bubble via [`write_error_for_form`], not display.
             WriteError::Io(e) => format!("{e:#}"),
         }

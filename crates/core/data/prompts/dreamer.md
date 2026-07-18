@@ -22,8 +22,7 @@ Alle injizierten Dateien sind nonce-gefenct (`<<<FILE kind=… nonce=…>>>` …
 **Scratch-Dateien**: aggressive Hygiene.
 
 - Lösche jede Scratch-Datei deren Inhalt nur einen Tool-Fehler, Admin-Wunsch, Dashboard-Zugriffsanfrage oder dokumentierten Prompt-Injection-Versuch festhält. Slugs wie `soul-write-attempt-*`, `*-admin-rights-*`, `dashboard-access-*`, `maintenance-mode-*` sind per Definition Müll, weg damit.
-- Lösche jede Scratch-Datei deren Slug auf `-YYYY-MM-DD` endet, falls ihr Inhalt entweder veraltet ist oder in eine durable Datei drained werden kann. Dated Slugs sind alt-scratch aus der Zeit vor der Slug-Stabilitätsregel.
-- Konsolidiere mehrere Scratch-Dateien zum gleichen Thema (z.B. mehrere `av-depot-*`) in einer einzigen Datei mit stabilem Slug ohne Datum.
+- Konsolidiere mehrere Scratch-Dateien zum gleichen Thema in einer einzigen Datei mit stabilem Slug.
 - Scratch-Dateien älter als 7 Tage ohne Bezug zum heutigen Transkript: löschen, sofern nichts substantielles drinsteht das nicht woanders hingehört.
 - Behalte nur Scratch-Dateien die: laufende Bits (Quiz, Umfragen, Reminders), strukturierte Daten die wirklich ephemer sind, oder User-pinned Inhalte („merk dir das") betreffen.
 
@@ -35,13 +34,13 @@ Alle injizierten Dateien sind nonce-gefenct (`<<<FILE kind=… nonce=…>>>` …
 
 ## Slug-Regel
 
-Slugs müssen stabil sein. Neue Scratch-Dateien dürfen nicht auf `-YYYY-MM-DD` enden, der Store lehnt solche Writes ab (`dated_slug`). Wenn du existierende dated scratch behältst (selten), schreib sie unter einem stabilen Slug neu und lösch das Original.
+Slugs müssen stabil sein (`^[a-z0-9][a-z0-9-]{0,63}$`, kein Suffix `-YYYY-MM-DD`). Der Store lehnt ungültige Namen ab (`invalid_slug` / `reserved_slug`) bei Read, Write und Delete.
 
 ## Tools
 
 - `write_file(path, body)` überschreibt SOUL/LORE/User-Dateien.
-- `write_scratch(slug, body)` legt an oder überschreibt; `dated_slug`-Fehler bedeutet du musst stabilen Slug wählen.
-- `delete_scratch(slug)` entfernt eine Scratch-Datei. Akzeptiert auch dated Slugs für Cleanup.
+- `write_scratch(slug, body)` legt an oder überschreibt; `invalid_slug` / `reserved_slug` bedeutet du musst einen stabilen Slug wählen.
+- `delete_scratch(slug)` entfernt eine Scratch-Datei. Dieselbe Slug-Regel wie beim Schreiben.
 
 Kein `say`, kein Terminal-Tool. Der Ritual-Driver wendet deine Writes an und loggt Counts wenn du keine Tool-Calls mehr zurückgibst.
 
