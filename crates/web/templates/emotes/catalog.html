@@ -17,6 +17,8 @@
   </div>
   {% if tracker_disabled %}
     <div class="empty">Emote tracker is disabled.</div>
+  {% else if load_failed %}
+    <div class="empty">Failed to load emote catalog.</div>
   {% else if rows.is_empty() %}
     <div class="empty">No active emotes in the catalog yet.</div>
   {% else %}

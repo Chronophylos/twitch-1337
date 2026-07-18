@@ -44,6 +44,8 @@
   </div>
   {% if tracker_disabled %}
     <div class="empty">Emote tracker is disabled.</div>
+  {% else if load_failed %}
+    <div class="empty">Failed to load set events.</div>
   {% else if rows.is_empty() %}
     <div class="empty">No set events match the current filters.</div>
   {% else %}

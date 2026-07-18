@@ -34,6 +34,7 @@ struct CatalogRowView {
 struct CatalogTpl {
     rows: Vec<CatalogRowView>,
     tracker_disabled: bool,
+    load_failed: bool,
     user_login: String,
     user_avatar_url: Option<String>,
     csrf: String,
@@ -61,6 +62,7 @@ struct AuditRowView {
 struct AuditTpl {
     rows: Vec<AuditRowView>,
     tracker_disabled: bool,
+    load_failed: bool,
     kind_filter: String,
     emote_id_filter: String,
     name_filter: String,
@@ -97,6 +99,7 @@ struct UsageRowView {
 struct UsageTpl {
     rows: Vec<UsageRowView>,
     tracker_disabled: bool,
+    load_failed: bool,
     include_flagged: bool,
     emote_id_filter: String,
     user_filter: String,
@@ -124,14 +127,27 @@ pub struct UsageQuery {
     pub offset: Option<u32>,
 }
 
-/// Parse an HTML `datetime-local` value (`%Y-%m-%dT%H:%M`) as Europe/Berlin local time.
-fn parse_berlin_datetime_local(value: Option<&str>) -> Option<i64> {
-    let raw = value.filter(|s| !s.is_empty())?;
-    let naive = NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M").ok()?;
-    Berlin
-        .from_local_datetime(&naive)
-        .single()
-        .map(|dt| dt.timestamp_millis())
+fn merge_flash(existing: Option<String>, msg: &str) -> Option<String> {
+    Some(match existing {
+        Some(existing) => format!("{existing} {msg}"),
+        None => msg.to_owned(),
+    })
+}
+
+/// Parse `since` (`datetime-local`) as start-of-minute Berlin local time.
+fn parse_berlin_since_local(value: Option<&str>) -> Result<Option<i64>, ()> {
+    let Some(raw) = value.filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let naive = NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M").map_err(|_| ())?;
+    let dt = Berlin.from_local_datetime(&naive).single().ok_or(())?;
+    Ok(Some(dt.timestamp_millis()))
+}
+
+/// Parse `until` (`datetime-local`) as inclusive end-of-minute Berlin local time.
+fn parse_berlin_until_local(value: Option<&str>) -> Result<Option<i64>, ()> {
+    let ms = parse_berlin_since_local(value)?.map(|start| start + 59_999);
+    Ok(ms)
 }
 
 pub fn router() -> Router<WebState> {
@@ -147,16 +163,22 @@ async fn catalog(
     cookies: Cookies,
 ) -> Result<Response, WebError> {
     let tracker_disabled = state.emote_tracker.is_none();
+    let mut load_failed = false;
     let rows = if let Some(ref h) = state.emote_tracker {
-        h.list_active_emotes()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|e| CatalogRowView {
-                emote_id: e.emote_id,
-                name: e.name,
-            })
-            .collect()
+        match h.list_active_emotes().await {
+            Ok(emotes) => emotes
+                .into_iter()
+                .map(|e| CatalogRowView {
+                    emote_id: e.emote_id,
+                    name: e.name,
+                })
+                .collect(),
+            Err(error) => {
+                tracing::warn!(?error, "failed to load emote catalog");
+                load_failed = true;
+                Vec::new()
+            }
+        }
     } else {
         Vec::new()
     };
@@ -166,6 +188,7 @@ async fn catalog(
     Ok(render(&CatalogTpl {
         rows,
         tracker_disabled,
+        load_failed,
         user_avatar_url: session.avatar_url.clone(),
         user_login: session.user_login,
         csrf,
@@ -228,6 +251,7 @@ async fn audit(
     let kind_filter = q.kind.clone().unwrap_or_default();
     let emote_id_filter = q.emote_id.clone().unwrap_or_default();
     let name_filter = q.name.clone().unwrap_or_default();
+    let mut load_failed = false;
     let rows = if let Some(ref h) = state.emote_tracker {
         let filter = SetEventListFilter {
             kind: q
@@ -242,12 +266,14 @@ async fn audit(
             limit: 200,
             offset: q.offset.unwrap_or(0),
         };
-        h.list_set_events(filter)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(audit_row_view)
-            .collect()
+        match h.list_set_events(filter).await {
+            Ok(events) => events.into_iter().map(audit_row_view).collect(),
+            Err(error) => {
+                tracing::warn!(?error, "failed to load emote set events");
+                load_failed = true;
+                Vec::new()
+            }
+        }
     } else {
         Vec::new()
     };
@@ -257,6 +283,7 @@ async fn audit(
     Ok(render(&AuditTpl {
         rows,
         tracker_disabled,
+        load_failed,
         kind_filter,
         emote_id_filter,
         name_filter,
@@ -285,8 +312,24 @@ async fn usage(
     let login_filter = q.login.clone().unwrap_or_default();
     let since_filter = q.since.clone().unwrap_or_default();
     let until_filter = q.until.clone().unwrap_or_default();
-    let since_ms = parse_berlin_datetime_local(q.since.as_deref());
-    let until_ms = parse_berlin_datetime_local(q.until.as_deref());
+    let (since_ms, since_invalid) = match parse_berlin_since_local(q.since.as_deref()) {
+        Ok(v) => (v, false),
+        Err(()) => (None, true),
+    };
+    let (until_ms, until_invalid) = match parse_berlin_until_local(q.until.as_deref()) {
+        Ok(v) => (v, false),
+        Err(()) => (None, true),
+    };
+    let mut flash_msg = flash::take(&cookies);
+    if since_invalid || until_invalid {
+        tracing::warn!(
+            since = q.since.as_deref(),
+            until = q.until.as_deref(),
+            "invalid since/until datetime filter; ignoring time bounds"
+        );
+        flash_msg = merge_flash(flash_msg, "Invalid since/until time; filter ignored.");
+    }
+    let mut load_failed = false;
     let rows = if let Some(ref h) = state.emote_tracker {
         let filter = UsageEventListFilter {
             emote_id: q.emote_id.filter(|s| !s.is_empty()),
@@ -298,35 +341,43 @@ async fn usage(
             limit: 200,
             offset: q.offset.unwrap_or(0),
         };
-        let events = h.list_usage_events(filter).await.unwrap_or_default();
-        let mut out = Vec::with_capacity(events.len());
-        for ev in events {
-            let emote_name = h
-                .get_emote(&ev.emote_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|e| e.name)
-                .unwrap_or_else(|| "—".into());
-            let user = ev
-                .login
-                .clone()
-                .unwrap_or_else(|| ev.twitch_user_id.clone());
-            let at_berlin = format_berlin_millis(ev.at);
-            let filter_blob = format!(
-                "{} {} {} {} {}",
-                at_berlin, ev.emote_id, emote_name, user, ev.twitch_user_id
-            );
-            out.push(UsageRowView {
-                at_berlin,
-                emote_id: ev.emote_id,
-                emote_name,
-                user,
-                flagged: ev.flagged,
-                filter_blob,
-            });
+        match h.list_usage_events(filter).await {
+            Ok(events) => {
+                let mut out = Vec::with_capacity(events.len());
+                for ev in events {
+                    let emote_name = h
+                        .get_emote(&ev.emote_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|e| e.name)
+                        .unwrap_or_else(|| "—".into());
+                    let user = ev
+                        .login
+                        .clone()
+                        .unwrap_or_else(|| ev.twitch_user_id.clone());
+                    let at_berlin = format_berlin_millis(ev.at);
+                    let filter_blob = format!(
+                        "{} {} {} {} {}",
+                        at_berlin, ev.emote_id, emote_name, user, ev.twitch_user_id
+                    );
+                    out.push(UsageRowView {
+                        at_berlin,
+                        emote_id: ev.emote_id,
+                        emote_name,
+                        user,
+                        flagged: ev.flagged,
+                        filter_blob,
+                    });
+                }
+                out
+            }
+            Err(error) => {
+                tracing::warn!(?error, "failed to load emote usage events");
+                load_failed = true;
+                Vec::new()
+            }
         }
-        out
     } else {
         Vec::new()
     };
@@ -336,6 +387,7 @@ async fn usage(
     Ok(render(&UsageTpl {
         rows,
         tracker_disabled,
+        load_failed,
         include_flagged,
         emote_id_filter,
         user_filter,
@@ -345,7 +397,7 @@ async fn usage(
         user_avatar_url: session.avatar_url.clone(),
         user_login: session.user_login,
         csrf,
-        flash: flash::take(&cookies),
+        flash: flash_msg,
         current_page: nav::EMOTES_USAGE,
         is_mod,
         is_broadcaster: session.is_broadcaster,
@@ -356,22 +408,38 @@ async fn usage(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_berlin_datetime_local;
+    use super::{parse_berlin_since_local, parse_berlin_until_local};
 
     #[test]
-    fn parse_berlin_datetime_local_valid_returns_utc_millis() {
+    fn parse_berlin_since_local_valid_returns_start_of_minute_utc_millis() {
         // 2025-01-04T16:53 Berlin (CET, UTC+1) → 15:53:00Z
         assert_eq!(
-            parse_berlin_datetime_local(Some("2025-01-04T16:53")),
-            Some(1_736_005_980_000)
+            parse_berlin_since_local(Some("2025-01-04T16:53")),
+            Ok(Some(1_736_005_980_000))
         );
     }
 
     #[test]
-    fn parse_berlin_datetime_local_empty_or_invalid_returns_none() {
-        assert_eq!(parse_berlin_datetime_local(None), None);
-        assert_eq!(parse_berlin_datetime_local(Some("")), None);
-        assert_eq!(parse_berlin_datetime_local(Some("not-a-datetime")), None);
-        assert_eq!(parse_berlin_datetime_local(Some("2025-01-04 16:53")), None);
+    fn parse_berlin_until_local_includes_end_of_selected_minute() {
+        let start = parse_berlin_since_local(Some("2025-01-04T16:53"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            parse_berlin_until_local(Some("2025-01-04T16:53")),
+            Ok(Some(start + 59_999))
+        );
+    }
+
+    #[test]
+    fn parse_berlin_since_local_empty_is_ok_none() {
+        assert_eq!(parse_berlin_since_local(None), Ok(None));
+        assert_eq!(parse_berlin_since_local(Some("")), Ok(None));
+    }
+
+    #[test]
+    fn parse_berlin_datetime_local_invalid_returns_err() {
+        assert!(parse_berlin_since_local(Some("not-a-datetime")).is_err());
+        assert!(parse_berlin_since_local(Some("2025-01-04 16:53")).is_err());
+        assert!(parse_berlin_until_local(Some("not-a-datetime")).is_err());
     }
 }
