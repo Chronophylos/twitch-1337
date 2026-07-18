@@ -1,7 +1,7 @@
 use eyre::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::types::{EmoteRow, NewSetEvent, NewUsageEvent};
+use super::types::{EmoteRow, NewSetEvent, NewUsageEvent, SetEventKind, SetEventRow};
 
 /// Insert or update an emote catalog row.
 pub fn upsert_emote(
@@ -116,6 +116,49 @@ pub fn resolve_active_name(conn: &Connection, name: &str) -> Result<Option<Emote
     .map_err(Into::into)
 }
 
+/// Inactive catalog tombstone with an exact `name` match (`active = 0`).
+/// On collision, lowest `emote_id` wins. Does not return active rows.
+pub fn get_emote_by_name_any(conn: &Connection, name: &str) -> Result<Option<EmoteRow>> {
+    conn.query_row(
+        "SELECT emote_id, name, active, updated_at FROM emotes
+         WHERE name = ?1 AND active = 0
+         ORDER BY emote_id ASC LIMIT 1",
+        params![name],
+        map_emote_row,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+/// Latest emote id that ever used this spelling in `set_events` (`old_name` or `new_name`).
+pub fn latest_emote_id_for_name_in_events(conn: &Connection, name: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT emote_id FROM set_events
+         WHERE emote_id IS NOT NULL AND (old_name = ?1 OR new_name = ?1)
+         ORDER BY at DESC, id DESC LIMIT 1",
+        params![name],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+/// Latest bootstrap / add / remove audit row for an emote (chat lifecycle line).
+pub fn latest_lifecycle_event(conn: &Connection, emote_id: &str) -> Result<Option<SetEventRow>> {
+    conn.query_row(
+        "SELECT id, at, kind, emote_id, old_name, new_name,
+                actor_7tv_id, actor_username, actor_display_name,
+                gap_from, gap_to
+         FROM set_events
+         WHERE emote_id = ?1 AND kind IN ('bootstrap', 'add', 'remove')
+         ORDER BY at DESC, id DESC LIMIT 1",
+        params![emote_id],
+        map_set_event_row,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
 /// Apply catalog mutations and set events in a single transaction.
 pub fn apply_set_changes(conn: &Connection, batch: &super::types::SetChangeBatch) -> Result<()> {
     use super::types::CatalogMutation;
@@ -152,6 +195,26 @@ fn map_emote_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EmoteRow> {
         name: row.get(1)?,
         active: active != 0,
         updated_at: row.get(3)?,
+    })
+}
+
+fn map_set_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SetEventRow> {
+    let kind_str: String = row.get(2)?;
+    let kind = SetEventKind::parse(&kind_str).ok_or_else(|| {
+        rusqlite::Error::InvalidColumnType(2, kind_str, rusqlite::types::Type::Text)
+    })?;
+    Ok(SetEventRow {
+        id: row.get(0)?,
+        at: row.get(1)?,
+        kind,
+        emote_id: row.get(3)?,
+        old_name: row.get(4)?,
+        new_name: row.get(5)?,
+        actor_7tv_id: row.get(6)?,
+        actor_username: row.get(7)?,
+        actor_display_name: row.get(8)?,
+        gap_from: row.get(9)?,
+        gap_to: row.get(10)?,
     })
 }
 
@@ -297,5 +360,125 @@ mod tests {
         upsert_emote(&conn, "a", "Same", true, 1).unwrap();
         let row = resolve_active_name(&conn, "Same").unwrap().unwrap();
         assert_eq!(row.emote_id, "a");
+    }
+
+    const TEST_EMOTE_A: &str = "0123456789abcdef01234567";
+    const TEST_EMOTE_B: &str = "abcdef0123456789abcdef01";
+
+    #[test]
+    fn get_emote_by_name_any_returns_inactive_tombstone_only() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        upsert_emote(&conn, TEST_EMOTE_A, "OldName", false, 1).unwrap();
+        upsert_emote(&conn, TEST_EMOTE_B, "OldName", true, 2).unwrap();
+        // Active name resolves via resolve_active_name — tombstone helper skips active rows.
+        let row = get_emote_by_name_any(&conn, "OldName").unwrap().unwrap();
+        assert_eq!(row.emote_id, TEST_EMOTE_A);
+        assert!(!row.active);
+        assert!(get_emote_by_name_any(&conn, "Missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn latest_emote_id_for_name_in_events_picks_latest_spelling() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        upsert_emote(&conn, TEST_EMOTE_A, "Now", true, 1).unwrap();
+        insert_set_event(
+            &conn,
+            &NewSetEvent {
+                at: 10,
+                kind: SetEventKind::Rename,
+                emote_id: Some(TEST_EMOTE_A.into()),
+                old_name: Some("Was".into()),
+                new_name: Some("Now".into()),
+                actor_7tv_id: None,
+                actor_username: None,
+                actor_display_name: None,
+                gap_from: None,
+                gap_to: None,
+            },
+        )
+        .unwrap();
+        upsert_emote(&conn, TEST_EMOTE_B, "Other", true, 21).unwrap();
+        insert_set_event(
+            &conn,
+            &NewSetEvent {
+                at: 20,
+                kind: SetEventKind::Add,
+                emote_id: Some(TEST_EMOTE_B.into()),
+                old_name: None,
+                new_name: Some("Was".into()),
+                actor_7tv_id: None,
+                actor_username: None,
+                actor_display_name: None,
+                gap_from: None,
+                gap_to: None,
+            },
+        )
+        .unwrap();
+        let id = latest_emote_id_for_name_in_events(&conn, "Was")
+            .unwrap()
+            .unwrap();
+        assert_eq!(id, TEST_EMOTE_B);
+    }
+
+    #[test]
+    fn latest_lifecycle_event_ignores_rename_and_gap() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        upsert_emote(&conn, TEST_EMOTE_A, "Kappa", true, 1).unwrap();
+        insert_set_event(
+            &conn,
+            &NewSetEvent {
+                at: 5,
+                kind: SetEventKind::Bootstrap,
+                emote_id: Some(TEST_EMOTE_A.into()),
+                old_name: None,
+                new_name: Some("Kappa".into()),
+                actor_7tv_id: None,
+                actor_username: None,
+                actor_display_name: None,
+                gap_from: None,
+                gap_to: None,
+            },
+        )
+        .unwrap();
+        insert_set_event(
+            &conn,
+            &NewSetEvent {
+                at: 10,
+                kind: SetEventKind::Rename,
+                emote_id: Some(TEST_EMOTE_A.into()),
+                old_name: Some("Kappa".into()),
+                new_name: Some("Kappa2".into()),
+                actor_7tv_id: None,
+                actor_username: None,
+                actor_display_name: None,
+                gap_from: None,
+                gap_to: None,
+            },
+        )
+        .unwrap();
+        insert_set_event(
+            &conn,
+            &NewSetEvent {
+                at: 15,
+                kind: SetEventKind::Add,
+                emote_id: Some(TEST_EMOTE_A.into()),
+                old_name: None,
+                new_name: Some("Kappa2".into()),
+                actor_7tv_id: Some("111111111111111111111111".into()),
+                actor_username: Some("moduser".into()),
+                actor_display_name: Some("Mod User".into()),
+                gap_from: None,
+                gap_to: None,
+            },
+        )
+        .unwrap();
+        let row = latest_lifecycle_event(&conn, TEST_EMOTE_A)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.kind, SetEventKind::Add);
+        assert_eq!(row.at, 15);
     }
 }

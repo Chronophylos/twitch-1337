@@ -9,8 +9,9 @@ mod schema;
 mod types;
 
 pub use db::{
-    apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, insert_set_event,
-    insert_usage_events, list_active_emotes, resolve_active_name, upsert_emote,
+    apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, get_emote_by_name_any,
+    insert_set_event, insert_usage_events, latest_emote_id_for_name_in_events,
+    latest_lifecycle_event, list_active_emotes, resolve_active_name, upsert_emote,
 };
 pub use eventapi::{
     DispatchEmoteSetUpdate, EVENTAPI_URL, EventApiConnection, ParsedEvent, connect_and_subscribe,
