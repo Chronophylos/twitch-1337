@@ -18,6 +18,8 @@ const OP_DISPATCH: u64 = 0;
 const OP_HELLO: u64 = 1;
 const OP_HEARTBEAT: u64 = 2;
 const OP_ACK: u64 = 5;
+const OP_ERROR: u64 = 6;
+const OP_END_OF_STREAM: u64 = 7;
 const OP_SUBSCRIBE: u64 = 35;
 
 pub type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -40,11 +42,25 @@ pub struct DispatchEmoteSetUpdate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedEvent {
-    Hello { heartbeat_interval_ms: Option<u64> },
+    Hello {
+        heartbeat_interval_ms: Option<u64>,
+    },
     Heartbeat,
     Dispatch(DispatchEmoteSetUpdate),
     Ack,
-    Other { op: u64 },
+    /// Server error frame (`op` 6). Connection may continue or close next.
+    Error {
+        code: Option<u16>,
+        message: String,
+    },
+    /// Server will close imminently (`op` 7). Includes EventAPI close code.
+    EndOfStream {
+        code: u16,
+        message: String,
+    },
+    Other {
+        op: u64,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,8 +90,58 @@ pub fn parse_server_message(text: &str) -> Result<Option<ParsedEvent>> {
         }
         OP_HEARTBEAT => Ok(Some(ParsedEvent::Heartbeat)),
         OP_ACK => Ok(Some(ParsedEvent::Ack)),
+        OP_ERROR => {
+            let code = root
+                .d
+                .get("code")
+                .and_then(Value::as_u64)
+                .and_then(|c| u16::try_from(c).ok());
+            let message = root
+                .d
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+                .to_string();
+            Ok(Some(ParsedEvent::Error { code, message }))
+        }
+        OP_END_OF_STREAM => {
+            let code = root
+                .d
+                .get("code")
+                .and_then(Value::as_u64)
+                .and_then(|c| u16::try_from(c).ok())
+                .unwrap_or(0);
+            let message = root
+                .d
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            Ok(Some(ParsedEvent::EndOfStream { code, message }))
+        }
         op => Ok(Some(ParsedEvent::Other { op })),
     }
+}
+
+/// JSON text frame for `op` 35 subscribe to channel `emote_set.update`.
+///
+/// Condition shape matches EventAPI / Chatterino channel filters:
+/// `{"ctx":"channel","platform":"TWITCH","id":"<twitch_user_id>"}`.
+/// The incorrect `{"channel":...,"platform":...}` form is rejected with close
+/// code `4002 Invalid Payload`.
+pub fn subscribe_emote_set_update_message(twitch_channel_id: &str) -> String {
+    serde_json::json!({
+        "op": OP_SUBSCRIBE,
+        "d": {
+            "type": "emote_set.update",
+            "condition": {
+                "ctx": "channel",
+                "platform": "TWITCH",
+                "id": twitch_channel_id,
+            }
+        }
+    })
+    .to_string()
 }
 
 fn parse_dispatch(data: Value) -> Result<Option<ParsedEvent>> {
@@ -311,24 +377,15 @@ fn apply_actor(event: &mut NewSetEvent, actor: Option<&ActorRef>) {
 
 /// Open the EventAPI websocket and subscribe to `emote_set.update` for a Twitch channel.
 ///
-/// Heartbeat handling and reconnect logic belong in the ingest loop (Task 5). Server heartbeats
+/// Heartbeat handling and reconnect logic belong in the ingest loop. Server heartbeats
 /// use opcode 2 and require no client ack; Hello (opcode 1) may include `heartbeat_interval`.
 pub async fn connect_and_subscribe(twitch_channel_id: &str) -> Result<EventApiConnection> {
     let (ws, _) = connect_async(EVENTAPI_URL)
         .await
         .wrap_err_with(|| format!("failed to connect to EventAPI at {EVENTAPI_URL}"))?;
     let (mut sink, stream) = ws.split();
-    let sub = serde_json::json!({
-        "op": OP_SUBSCRIBE,
-        "d": {
-            "type": "emote_set.update",
-            "condition": {
-                "channel": twitch_channel_id,
-                "platform": "TWITCH"
-            }
-        }
-    });
-    sink.send(Message::Text(sub.to_string().into()))
+    let sub = subscribe_emote_set_update_message(twitch_channel_id);
+    sink.send(Message::Text(sub.into()))
         .await
         .wrap_err("failed to send EventAPI subscribe")?;
     Ok(EventApiConnection { sink, stream })
@@ -433,5 +490,30 @@ mod tests {
             parse_server_message(heartbeat).unwrap(),
             Some(ParsedEvent::Heartbeat)
         ));
+    }
+
+    #[test]
+    fn parse_end_of_stream_invalid_payload() {
+        let raw = r#"{"op":7,"d":{"code":4002,"message":"Invalid Payload"}}"#;
+        let ParsedEvent::EndOfStream { code, message } =
+            parse_server_message(raw).unwrap().unwrap()
+        else {
+            panic!("expected end of stream");
+        };
+        assert_eq!(code, 4002);
+        assert_eq!(message, "Invalid Payload");
+    }
+
+    #[test]
+    fn subscribe_message_uses_ctx_platform_id_condition() {
+        let raw = subscribe_emote_set_update_message("12345");
+        let value: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["op"], 35);
+        assert_eq!(value["d"]["type"], "emote_set.update");
+        let condition = &value["d"]["condition"];
+        assert_eq!(condition["ctx"], "channel");
+        assert_eq!(condition["platform"], "TWITCH");
+        assert_eq!(condition["id"], "12345");
+        assert!(condition.get("channel").is_none());
     }
 }

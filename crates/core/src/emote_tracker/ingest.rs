@@ -11,13 +11,12 @@ use tracing::{debug, error, warn};
 
 use super::eventapi::{
     EventApiConnection, ParsedEvent, connect_and_subscribe, live_change_to_batch,
-    parse_server_message,
+    parse_server_message, subscribe_emote_set_update_message,
 };
 use super::handle::EmoteTrackerHandle;
 use super::reconcile::{bootstrap_batch, reconcile_batch};
 use super::rest::fetch_channel_set;
 
-const OP_SUBSCRIBE: u64 = 35;
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
@@ -199,6 +198,15 @@ async fn run_eventapi_session(
                             }
                         }
                     }
+                    ParsedEvent::Error { code, message } => {
+                        warn!(?code, %message, "EventAPI error frame");
+                    }
+                    ParsedEvent::EndOfStream { code, message } => {
+                        *gap_started_at = Some(gap_started_at.unwrap_or_else(now_ms));
+                        return Err(eyre!(
+                            "EventAPI end of stream code={code} message={message}"
+                        ));
+                    }
                     ParsedEvent::Ack | ParsedEvent::Other { .. } => {}
                 }
 
@@ -209,9 +217,16 @@ async fn run_eventapi_session(
                     heartbeat_deadline = None;
                 }
             }
-            Message::Close(_) => {
+            Message::Close(frame) => {
                 *gap_started_at = Some(gap_started_at.unwrap_or_else(now_ms));
-                return Err(eyre!("EventAPI websocket closed"));
+                return Err(match frame {
+                    Some(close) => eyre!(
+                        "EventAPI websocket closed code={} reason={}",
+                        u16::from(close.code),
+                        close.reason
+                    ),
+                    None => eyre!("EventAPI websocket closed"),
+                });
             }
             Message::Ping(payload) => {
                 let _ = conn.sink.send(Message::Pong(payload)).await;
@@ -265,17 +280,8 @@ async fn connect_eventapi(
         .await
         .wrap_err_with(|| format!("failed to connect to EventAPI at {eventapi_url}"))?;
     let (mut sink, stream) = ws.split();
-    let sub = serde_json::json!({
-        "op": OP_SUBSCRIBE,
-        "d": {
-            "type": "emote_set.update",
-            "condition": {
-                "channel": twitch_channel_id,
-                "platform": "TWITCH"
-            }
-        }
-    });
-    sink.send(Message::Text(sub.to_string().into()))
+    let sub = subscribe_emote_set_update_message(twitch_channel_id);
+    sink.send(Message::Text(sub.into()))
         .await
         .wrap_err("failed to send EventAPI subscribe")?;
     Ok(EventApiConnection { sink, stream })
