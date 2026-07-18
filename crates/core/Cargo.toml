@@ -24,7 +24,7 @@ humantime = "2"
 humantime-serde = { workspace = true }
 infer = { workspace = true }
 llm = { path = "../llm" }
-random-flight = { git = "https://github.com/Chronophylos/random-flight.git", rev = "ceb23b00ddc7dab6ef26da06059495b86fde6071" }
+random-flight = { path = "../random-flight" }
 rand = { workspace = true }
 reqwest = { workspace = true }
 ron = { workspace = true }
