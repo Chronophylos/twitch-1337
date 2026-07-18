@@ -44,6 +44,11 @@ impl Settings {
                     .viewer_allowlist
                     .clone()
                     .unwrap_or_else(|| defaults.twitch.viewer_allowlist.clone()),
+                emote_usage_deny_list: overrides
+                    .twitch
+                    .emote_usage_deny_list
+                    .clone()
+                    .unwrap_or_else(|| defaults.twitch.emote_usage_deny_list.clone()),
                 admin_channel: match &overrides.twitch.admin_channel {
                     Some(v) => v.clone(),
                     None => defaults.twitch.admin_channel.clone(),

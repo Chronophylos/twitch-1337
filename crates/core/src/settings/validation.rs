@@ -102,6 +102,14 @@ impl Settings {
                 });
             }
         }
+        for (idx, login) in self.twitch.emote_usage_deny_list.iter().enumerate() {
+            if login.trim().is_empty() {
+                errs.push(FieldError {
+                    field: format!("twitch.emote_usage_deny_list[{idx}]"),
+                    message: "must not be blank".into(),
+                });
+            }
+        }
         if !(1..=604_800).contains(&self.suspend.default_duration_secs) {
             errs.push(FieldError {
                 field: "suspend.default_duration_secs".into(),
@@ -895,6 +903,21 @@ mod tests {
             })
             .expect_err("should fail");
         assert!(errs.iter().any(|e| e.field == "schedules[0].name"));
+    }
+
+    #[test]
+    fn emote_usage_deny_list_rejects_blank_entries() {
+        let mut s = Settings::compiled_defaults();
+        s.twitch.emote_usage_deny_list = vec!["ok".into(), "  ".into()];
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("blank login must fail");
+        assert!(
+            errs.iter()
+                .any(|e| e.field.contains("emote_usage_deny_list"))
+        );
     }
 
     #[test]

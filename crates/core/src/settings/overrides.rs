@@ -271,6 +271,8 @@ pub struct TwitchOverrides {
     #[serde(default)]
     pub viewer_allowlist: Option<Vec<String>>,
     #[serde(default)]
+    pub emote_usage_deny_list: Option<Vec<String>>,
+    #[serde(default)]
     pub admin_channel: Option<Option<String>>,
     #[serde(default)]
     pub ai_channel: Option<Option<String>>,

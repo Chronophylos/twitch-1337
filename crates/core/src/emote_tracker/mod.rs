@@ -8,6 +8,7 @@ mod reconcile;
 mod rest;
 mod schema;
 mod types;
+mod usage;
 
 pub use db::{
     apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, get_emote_by_name_any,
@@ -32,6 +33,7 @@ pub use types::{
     CatalogMutation, EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch, SetEventKind,
     SetEventRow,
 };
+pub use usage::match_usage_tokens;
 
 pub const DB_FILENAME: &str = "emote_tracker.sqlite";
 

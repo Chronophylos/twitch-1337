@@ -1,6 +1,7 @@
 //! Twitch runtime settings — formerly inline in `[twitch]` of config.toml.
 //!
-//! `expected_latency`, `hidden_admins`, `viewer_allowlist` apply live.
+//! `expected_latency`, `hidden_admins`, `viewer_allowlist`,
+//! `emote_usage_deny_list` apply live.
 //! `admin_channel` and `ai_channel` are read once at startup (IRC join +
 //! message routing); changes require a bot restart and the dashboard surfaces
 //! a "restart required" badge on those fields.
@@ -14,6 +15,8 @@ pub struct TwitchRuntime {
     pub expected_latency: u32,
     pub hidden_admins: Vec<String>,
     pub viewer_allowlist: Vec<String>,
+    /// Twitch logins whose emote usage rows are stored with flagged = 1.
+    pub emote_usage_deny_list: Vec<String>,
     pub admin_channel: Option<String>,
     pub ai_channel: Option<String>,
 }
@@ -24,6 +27,7 @@ impl Default for TwitchRuntime {
             expected_latency: 100,
             hidden_admins: Vec::new(),
             viewer_allowlist: Vec::new(),
+            emote_usage_deny_list: Vec::new(),
             admin_channel: None,
             ai_channel: None,
         }

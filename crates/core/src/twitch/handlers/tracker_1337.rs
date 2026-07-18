@@ -24,7 +24,11 @@ use twitch_irc::{
     transport::Transport,
 };
 
-use crate::{resolve_berlin_time, twitch::ChatSender, util::clock::Clock};
+use crate::{
+    resolve_berlin_time,
+    twitch::{ChatSender, clanker::is_clanker},
+    util::clock::Clock,
+};
 
 pub const TARGET_HOUR: u32 = 13;
 pub const TARGET_MINUTE: u32 = 37;
@@ -211,20 +215,6 @@ pub(crate) async fn sleep_until_hms(
         );
         clock.sleep_until(target).await;
     }
-}
-
-/// Checks if a given user is a clanker
-///
-/// Returns true if the login name matches any bot in the ignore list.
-pub(crate) fn is_clanker(login: &str) -> bool {
-    [
-        "supibot",
-        "potatbotat",
-        "streamelements",
-        "koknuts",
-        "thedagothur",
-    ]
-    .contains(&login)
 }
 
 /// Determines if a message should be counted as a valid 1337 message.
