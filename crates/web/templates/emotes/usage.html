@@ -23,6 +23,14 @@
     <span class="filter-label">Login</span>
     <input type="text" name="login" class="input" value="{{ login_filter }}" placeholder="substring" autocomplete="off" spellcheck="false">
   </label>
+  <label class="filter-field">
+    <span class="filter-label">Since</span>
+    <input type="datetime-local" name="since" class="input" value="{{ since_filter }}">
+  </label>
+  <label class="filter-field">
+    <span class="filter-label">Until</span>
+    <input type="datetime-local" name="until" class="input" value="{{ until_filter }}">
+  </label>
   <label class="filter-field filter-check">
     <input type="checkbox" name="flagged" value="1" {% if include_flagged %}checked{% endif %}>
     <span class="filter-label">Include flagged</span>

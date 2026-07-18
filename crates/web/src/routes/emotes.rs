@@ -5,6 +5,9 @@ use axum::Router;
 use axum::extract::{Extension, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use chrono::NaiveDateTime;
+use chrono::TimeZone;
+use chrono_tz::Europe::Berlin;
 use serde::Deserialize;
 use tower_cookies::Cookies;
 use twitch_1337_core::emote_tracker::{
@@ -98,6 +101,8 @@ struct UsageTpl {
     emote_id_filter: String,
     user_filter: String,
     login_filter: String,
+    since_filter: String,
+    until_filter: String,
     user_login: String,
     user_avatar_url: Option<String>,
     csrf: String,
@@ -114,7 +119,19 @@ pub struct UsageQuery {
     pub emote_id: Option<String>,
     pub user: Option<String>,
     pub login: Option<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
     pub offset: Option<u32>,
+}
+
+/// Parse an HTML `datetime-local` value (`%Y-%m-%dT%H:%M`) as Europe/Berlin local time.
+fn parse_berlin_datetime_local(value: Option<&str>) -> Option<i64> {
+    let raw = value.filter(|s| !s.is_empty())?;
+    let naive = NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M").ok()?;
+    Berlin
+        .from_local_datetime(&naive)
+        .single()
+        .map(|dt| dt.timestamp_millis())
 }
 
 pub fn router() -> Router<WebState> {
@@ -266,13 +283,17 @@ async fn usage(
     let emote_id_filter = q.emote_id.clone().unwrap_or_default();
     let user_filter = q.user.clone().unwrap_or_default();
     let login_filter = q.login.clone().unwrap_or_default();
+    let since_filter = q.since.clone().unwrap_or_default();
+    let until_filter = q.until.clone().unwrap_or_default();
+    let since_ms = parse_berlin_datetime_local(q.since.as_deref());
+    let until_ms = parse_berlin_datetime_local(q.until.as_deref());
     let rows = if let Some(ref h) = state.emote_tracker {
         let filter = UsageEventListFilter {
             emote_id: q.emote_id.filter(|s| !s.is_empty()),
             twitch_user_id: q.user.filter(|s| !s.is_empty()),
             login_substr: q.login.filter(|s| !s.is_empty()),
-            since_ms: None,
-            until_ms: None,
+            since_ms,
+            until_ms,
             include_flagged,
             limit: 200,
             offset: q.offset.unwrap_or(0),
@@ -319,6 +340,8 @@ async fn usage(
         emote_id_filter,
         user_filter,
         login_filter,
+        since_filter,
+        until_filter,
         user_avatar_url: session.avatar_url.clone(),
         user_login: session.user_login,
         csrf,
@@ -329,4 +352,26 @@ async fn usage(
         is_owner,
     })
     .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_berlin_datetime_local;
+
+    #[test]
+    fn parse_berlin_datetime_local_valid_returns_utc_millis() {
+        // 2025-01-04T16:53 Berlin (CET, UTC+1) → 15:53:00Z
+        assert_eq!(
+            parse_berlin_datetime_local(Some("2025-01-04T16:53")),
+            Some(1_736_005_980_000)
+        );
+    }
+
+    #[test]
+    fn parse_berlin_datetime_local_empty_or_invalid_returns_none() {
+        assert_eq!(parse_berlin_datetime_local(None), None);
+        assert_eq!(parse_berlin_datetime_local(Some("")), None);
+        assert_eq!(parse_berlin_datetime_local(Some("not-a-datetime")), None);
+        assert_eq!(parse_berlin_datetime_local(Some("2025-01-04 16:53")), None);
+    }
 }
