@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Emote usage — twitch-1337{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Emote usage <span class="count">({{ rows.len() }})</span></h1>
+    <p class="page-sub">Chat usage timeline — who used which emote and when.</p>
+  </div>
+</div>
+
+{% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
+
+<form class="filters emote-filters" method="get" action="/emotes/usage">
+  <label class="filter-field">
+    <span class="filter-label">Emote id</span>
+    <input type="text" name="emote_id" class="input" value="{{ emote_id_filter }}" placeholder="7TV id" autocomplete="off" spellcheck="false">
+  </label>
+  <label class="filter-field">
+    <span class="filter-label">User id</span>
+    <input type="text" name="user" class="input" value="{{ user_filter }}" placeholder="Twitch user id" autocomplete="off" spellcheck="false">
+  </label>
+  <label class="filter-field">
+    <span class="filter-label">Login</span>
+    <input type="text" name="login" class="input" value="{{ login_filter }}" placeholder="substring" autocomplete="off" spellcheck="false">
+  </label>
+  <label class="filter-field">
+    <span class="filter-label">Since</span>
+    <input type="datetime-local" name="since" class="input" value="{{ since_filter }}">
+  </label>
+  <label class="filter-field">
+    <span class="filter-label">Until</span>
+    <input type="datetime-local" name="until" class="input" value="{{ until_filter }}">
+  </label>
+  <label class="filter-field filter-check">
+    <input type="checkbox" name="flagged" value="1" {% if include_flagged %}checked{% endif %}>
+    <span class="filter-label">Include flagged</span>
+  </label>
+  <button type="submit" class="btn primary">Filter</button>
+</form>
+
+<div class="table emotes-usage">
+  <div class="thead">
+    <div class="th">Time</div>
+    <div class="th col-name">Emote</div>
+    <div class="th">Id</div>
+    <div class="th">User</div>
+    <div class="th">Flagged</div>
+  </div>
+  {% if tracker_disabled %}
+    <div class="empty">Emote tracker is disabled.</div>
+  {% else if load_failed %}
+    <div class="empty">Failed to load usage events.</div>
+  {% else if rows.is_empty() %}
+    <div class="empty">No usage events match the current filters.</div>
+  {% else %}
+    <div class="tbody">
+    {% for row in rows %}
+      <div class="tr{% if row.flagged %} row-flagged{% endif %}" data-filter="{{ row.filter_blob }}">
+        <div class="td mono">{{ row.at_berlin }}</div>
+        <div class="td col-name">
+          <span class="ping-name">{{ row.emote_name }}</span>
+        </div>
+        <div class="td mono">{{ row.emote_id }}</div>
+        <div class="td">{{ row.user }}</div>
+        <div class="td">
+          {% if row.flagged %}
+            <span class="badge badge-flagged">flagged</span>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

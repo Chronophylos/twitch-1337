@@ -13,7 +13,8 @@ mod usage;
 pub use db::{
     apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, get_emote_by_name_any,
     insert_set_event, insert_usage_events, latest_emote_id_for_name_in_events,
-    latest_lifecycle_event, list_active_emotes, resolve_active_name, upsert_emote,
+    latest_lifecycle_event, list_active_emotes, list_set_events, list_usage_events,
+    resolve_active_name, upsert_emote,
 };
 pub use eventapi::{
     DispatchEmoteSetUpdate, EVENTAPI_URL, EventApiConnection, ParsedEvent, connect_and_subscribe,
@@ -31,7 +32,7 @@ pub use rest::{ChannelSetSnapshot, fetch_channel_set};
 pub use schema::{SCHEMA_VERSION, migrate};
 pub use types::{
     CatalogMutation, EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch, SetEventKind,
-    SetEventRow,
+    SetEventListFilter, SetEventRow, UsageEventListFilter, UsageEventRow,
 };
 pub use usage::match_usage_tokens;
 

@@ -116,6 +116,7 @@ pub fn build_router(state: WebState) -> Router {
         .merge(routes::flights::mod_router())
         .merge(routes::memory::router())
         .merge(routes::schedules::router())
+        .merge(routes::emotes::router())
         .merge(routes::stubs::router())
         .route_layer(axum::middleware::from_fn_with_state(
             mod_state.clone(),

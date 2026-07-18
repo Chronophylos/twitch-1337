@@ -9,10 +9,14 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::db::{
     apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, insert_set_event,
-    insert_usage_events, list_active_emotes, resolve_active_name, upsert_emote,
+    insert_usage_events, list_active_emotes, list_set_events, list_usage_events,
+    resolve_active_name, upsert_emote,
 };
 use super::migrate;
-use super::types::{EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch, SetEventRow};
+use super::types::{
+    EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch, SetEventListFilter, SetEventRow,
+    UsageEventListFilter, UsageEventRow,
+};
 
 enum StoreCmd {
     UpsertEmote {
@@ -60,6 +64,14 @@ enum StoreCmd {
     LatestLifecycleEvent {
         emote_id: String,
         reply: oneshot::Sender<Result<Option<SetEventRow>>>,
+    },
+    ListSetEvents {
+        filter: SetEventListFilter,
+        reply: oneshot::Sender<Result<Vec<SetEventRow>>>,
+    },
+    ListUsageEvents {
+        filter: UsageEventListFilter,
+        reply: oneshot::Sender<Result<Vec<UsageEventRow>>>,
     },
 }
 
@@ -184,6 +196,19 @@ impl EmoteTrackerHandle {
         self.send(|reply| StoreCmd::LatestLifecycleEvent { emote_id, reply })
             .await
     }
+
+    pub async fn list_set_events(&self, filter: SetEventListFilter) -> Result<Vec<SetEventRow>> {
+        self.send(|reply| StoreCmd::ListSetEvents { filter, reply })
+            .await
+    }
+
+    pub async fn list_usage_events(
+        &self,
+        filter: UsageEventListFilter,
+    ) -> Result<Vec<UsageEventRow>> {
+        self.send(|reply| StoreCmd::ListUsageEvents { filter, reply })
+            .await
+    }
 }
 
 fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
@@ -232,6 +257,12 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
             StoreCmd::LatestLifecycleEvent { emote_id, reply } => {
                 let _ = reply.send(super::db::latest_lifecycle_event(&conn, &emote_id));
             }
+            StoreCmd::ListSetEvents { filter, reply } => {
+                let _ = reply.send(list_set_events(&conn, &filter));
+            }
+            StoreCmd::ListUsageEvents { filter, reply } => {
+                let _ = reply.send(list_usage_events(&conn, &filter));
+            }
         }
     }
 }
@@ -239,7 +270,7 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emote_tracker::{DB_FILENAME, SetEventKind, try_open};
+    use crate::emote_tracker::{DB_FILENAME, SetEventKind, UsageEventListFilter, try_open};
 
     const TEST_EMOTE_ID: &str = "0123456789abcdef01234567";
 
@@ -273,6 +304,43 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(life.kind, SetEventKind::Bootstrap);
+    }
+
+    #[tokio::test]
+    async fn handle_lists_usage_with_flag_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DB_FILENAME);
+        let h = EmoteTrackerHandle::open(&path).unwrap();
+        h.upsert_emote("aaaaaaaaaaaaaaaaaaaaaaaa", "Kappa", true, 1)
+            .await
+            .unwrap();
+        h.insert_usage_events(vec![
+            NewUsageEvent {
+                at: 1,
+                emote_id: "aaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                twitch_user_id: "1".into(),
+                login: Some("a".into()),
+                flagged: false,
+            },
+            NewUsageEvent {
+                at: 2,
+                emote_id: "aaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                twitch_user_id: "2".into(),
+                login: Some("b".into()),
+                flagged: true,
+            },
+        ])
+        .await
+        .unwrap();
+        let rows = h
+            .list_usage_events(UsageEventListFilter {
+                include_flagged: false,
+                limit: 200,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
     }
 
     #[tokio::test]

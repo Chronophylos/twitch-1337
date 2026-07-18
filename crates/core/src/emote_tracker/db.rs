@@ -1,7 +1,10 @@
 use eyre::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::types::{EmoteRow, NewSetEvent, NewUsageEvent, SetEventKind, SetEventRow};
+use super::types::{
+    EmoteRow, NewSetEvent, NewUsageEvent, SetEventKind, SetEventListFilter, SetEventRow,
+    UsageEventListFilter, UsageEventRow,
+};
 
 /// Insert or update an emote catalog row.
 pub fn upsert_emote(
@@ -188,6 +191,106 @@ pub fn catalog_is_empty(conn: &Connection) -> Result<bool> {
     Ok(n == 0)
 }
 
+fn clamp_limit(limit: u32) -> u32 {
+    limit.clamp(1, 1000)
+}
+
+pub fn list_set_events(conn: &Connection, filter: &SetEventListFilter) -> Result<Vec<SetEventRow>> {
+    let limit = clamp_limit(if filter.limit == 0 { 200 } else { filter.limit });
+    let mut sql = String::from(
+        "SELECT id, at, kind, emote_id, old_name, new_name,
+                actor_7tv_id, actor_username, actor_display_name, gap_from, gap_to
+         FROM set_events WHERE 1=1",
+    );
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    if let Some(kind) = filter.kind {
+        sql.push_str(" AND kind = ?");
+        params.push(Box::new(kind.as_str().to_string()));
+    }
+    if let Some(ref id) = filter.emote_id {
+        sql.push_str(" AND emote_id = ?");
+        params.push(Box::new(id.clone()));
+    }
+    if let Some(ref name) = filter.name_substr {
+        sql.push_str(" AND (old_name LIKE ? OR new_name LIKE ?)");
+        let pat = format!("%{name}%");
+        params.push(Box::new(pat.clone()));
+        params.push(Box::new(pat));
+    }
+    if let Some(since) = filter.since_ms {
+        sql.push_str(" AND at >= ?");
+        params.push(Box::new(since));
+    }
+    if let Some(until) = filter.until_ms {
+        sql.push_str(" AND at <= ?");
+        params.push(Box::new(until));
+    }
+    sql.push_str(" ORDER BY at DESC, id DESC LIMIT ? OFFSET ?");
+    params.push(Box::new(i64::from(limit)));
+    params.push(Box::new(i64::from(filter.offset)));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(std::convert::AsRef::as_ref).collect();
+    let rows = stmt.query_map(param_refs.as_slice(), map_set_event_row)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+pub fn list_usage_events(
+    conn: &Connection,
+    filter: &UsageEventListFilter,
+) -> Result<Vec<UsageEventRow>> {
+    let limit = clamp_limit(if filter.limit == 0 { 200 } else { filter.limit });
+    let mut sql = String::from(
+        "SELECT id, at, emote_id, twitch_user_id, login, flagged
+         FROM usage_events WHERE 1=1",
+    );
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    if !filter.include_flagged {
+        sql.push_str(" AND flagged = 0");
+    }
+    if let Some(ref id) = filter.emote_id {
+        sql.push_str(" AND emote_id = ?");
+        params.push(Box::new(id.clone()));
+    }
+    if let Some(ref uid) = filter.twitch_user_id {
+        sql.push_str(" AND twitch_user_id = ?");
+        params.push(Box::new(uid.clone()));
+    }
+    if let Some(ref login) = filter.login_substr {
+        sql.push_str(" AND login LIKE ?");
+        params.push(Box::new(format!("%{login}%")));
+    }
+    if let Some(since) = filter.since_ms {
+        sql.push_str(" AND at >= ?");
+        params.push(Box::new(since));
+    }
+    if let Some(until) = filter.until_ms {
+        sql.push_str(" AND at <= ?");
+        params.push(Box::new(until));
+    }
+    sql.push_str(" ORDER BY at DESC, id DESC LIMIT ? OFFSET ?");
+    params.push(Box::new(i64::from(limit)));
+    params.push(Box::new(i64::from(filter.offset)));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(std::convert::AsRef::as_ref).collect();
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+        Ok(UsageEventRow {
+            id: row.get(0)?,
+            at: row.get(1)?,
+            emote_id: row.get(2)?,
+            twitch_user_id: row.get(3)?,
+            login: row.get(4)?,
+            flagged: row.get::<_, i64>(5)? != 0,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 fn map_emote_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EmoteRow> {
     let active: i32 = row.get(2)?;
     Ok(EmoteRow {
@@ -222,7 +325,9 @@ fn map_set_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SetEventRow> {
 mod tests {
     use super::*;
     use crate::emote_tracker::schema::migrate;
-    use crate::emote_tracker::types::{CatalogMutation, SetChangeBatch, SetEventKind};
+    use crate::emote_tracker::types::{
+        CatalogMutation, SetChangeBatch, SetEventKind, SetEventListFilter, UsageEventListFilter,
+    };
     use rusqlite::Connection;
 
     #[test]
@@ -420,6 +525,114 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(id, TEST_EMOTE_B);
+    }
+
+    #[test]
+    fn list_set_events_orders_newest_first_and_filters_kind() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        upsert_emote(&conn, "aaaaaaaaaaaaaaaaaaaaaaaa", "Kappa", true, 1).unwrap();
+        insert_set_event(
+            &conn,
+            &NewSetEvent {
+                at: 100,
+                kind: SetEventKind::Bootstrap,
+                emote_id: Some("aaaaaaaaaaaaaaaaaaaaaaaa".into()),
+                old_name: None,
+                new_name: Some("Kappa".into()),
+                actor_7tv_id: None,
+                actor_username: None,
+                actor_display_name: None,
+                gap_from: None,
+                gap_to: None,
+            },
+        )
+        .unwrap();
+        insert_set_event(
+            &conn,
+            &NewSetEvent {
+                at: 200,
+                kind: SetEventKind::Add,
+                emote_id: Some("aaaaaaaaaaaaaaaaaaaaaaaa".into()),
+                old_name: None,
+                new_name: Some("Kappa".into()),
+                actor_7tv_id: Some("act".into()),
+                actor_username: Some("alice".into()),
+                actor_display_name: Some("Alice".into()),
+                gap_from: None,
+                gap_to: None,
+            },
+        )
+        .unwrap();
+        let all = list_set_events(
+            &conn,
+            &SetEventListFilter {
+                limit: 200,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].kind, SetEventKind::Add);
+        let boot = list_set_events(
+            &conn,
+            &SetEventListFilter {
+                kind: Some(SetEventKind::Bootstrap),
+                limit: 200,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(boot.len(), 1);
+        assert_eq!(boot[0].kind, SetEventKind::Bootstrap);
+    }
+
+    #[test]
+    fn list_usage_events_hides_flagged_by_default() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        upsert_emote(&conn, "aaaaaaaaaaaaaaaaaaaaaaaa", "Kappa", true, 1).unwrap();
+        insert_usage_events(
+            &conn,
+            &[
+                NewUsageEvent {
+                    at: 10,
+                    emote_id: "aaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                    twitch_user_id: "1".into(),
+                    login: Some("alice".into()),
+                    flagged: false,
+                },
+                NewUsageEvent {
+                    at: 11,
+                    emote_id: "aaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                    twitch_user_id: "2".into(),
+                    login: Some("supibot".into()),
+                    flagged: true,
+                },
+            ],
+        )
+        .unwrap();
+        let hidden = list_usage_events(
+            &conn,
+            &UsageEventListFilter {
+                include_flagged: false,
+                limit: 200,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(hidden.len(), 1);
+        assert_eq!(hidden[0].login.as_deref(), Some("alice"));
+        let shown = list_usage_events(
+            &conn,
+            &UsageEventListFilter {
+                include_flagged: true,
+                limit: 200,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(shown.len(), 2);
     }
 
     #[test]

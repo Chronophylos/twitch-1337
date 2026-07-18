@@ -302,6 +302,7 @@ pub async fn main() -> Result<()> {
                 memory_store.clone(),
                 leaderboard.clone(),
                 aviation_tracker_tx.clone(),
+                emote_tracker.clone(),
                 settings_handle.clone(),
                 settings_store.clone(),
                 telemetry.clone(),
@@ -365,6 +366,7 @@ async fn build_web_spawner(
     memory_store: MemoryStore,
     leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
     tracker_tx: Option<Arc<tokio::sync::mpsc::Sender<aviation::TrackerCommand>>>,
+    emote_tracker: Option<Arc<twitch_1337::emote_tracker::EmoteTrackerHandle>>,
     settings: twitch_1337::settings::SettingsHandle,
     settings_store: Arc<twitch_1337::settings::SettingsStore>,
     telemetry: Arc<twitch_1337::schedule::TelemetryStore>,
@@ -456,6 +458,7 @@ async fn build_web_spawner(
         signed_key,
         leaderboard,
         tracker_tx,
+        emote_tracker,
         avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
             std::time::Duration::from_secs(3600),
         )),
