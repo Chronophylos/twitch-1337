@@ -58,7 +58,26 @@ RUN cargo build -p twitch-1337 --release --target x86_64-unknown-linux-musl
 
 # 4. Runtime stage - minimal FROM scratch image
 FROM scratch
-LABEL org.opencontainers.image.description="Rust Twitch IRC bot: 1337 tracker, community pings, AI/flight commands, and scheduled messages — single persistent IRC connection with broadcast-based handler routing."
+
+# Re-declare build-args here — ARG scope does not cross FROM.
+# Builder stage still owns ENV GIT_SHA/BUILD_NUM for the binary;
+# these feed OCI labels only.
+ARG GIT_SHA=unknown
+ARG BUILD_NUM=dev
+ARG CREATED=
+
+LABEL org.opencontainers.image.title="twitch-1337" \
+  org.opencontainers.image.description="Opinionated personal Rust Twitch bot with a mind of its own — in a tiny static binary." \
+  org.opencontainers.image.source="https://github.com/Chronophylos/twitch-1337" \
+  org.opencontainers.image.url="https://github.com/Chronophylos/twitch-1337" \
+  org.opencontainers.image.documentation="https://github.com/Chronophylos/twitch-1337#readme" \
+  org.opencontainers.image.licenses="MIT OR Apache-2.0" \
+  org.opencontainers.image.authors="https://github.com/Chronophylos" \
+  org.opencontainers.image.vendor="Chronophylos" \
+  org.opencontainers.image.revision="${GIT_SHA}" \
+  org.opencontainers.image.version="${BUILD_NUM}" \
+  org.opencontainers.image.created="${CREATED}"
+
 ENV DATA_DIR=/data
 
 # Copy CA bundle so rustls-platform-verifier can load system roots
