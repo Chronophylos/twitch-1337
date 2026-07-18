@@ -10,6 +10,7 @@ use crate::twitch::ChatSender;
 
 pub mod doener;
 pub mod doener_calc;
+pub mod emote;
 pub mod feedback;
 pub mod haiku;
 pub mod hall_of_shame;

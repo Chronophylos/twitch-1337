@@ -197,7 +197,7 @@ where
         _ => (None, tokio::spawn(std::future::pending::<()>())),
     };
 
-    let emote_set_ingest = match (emote_tracker, twitch_channel_id) {
+    let emote_set_ingest = match (emote_tracker.clone(), twitch_channel_id) {
         (Some(handle), Some(channel_id)) => {
             let http = reqwest::Client::new();
             let cfg = crate::emote_tracker::IngestConfig::new(channel_id);
@@ -314,6 +314,7 @@ where
                 doener: doener.clone(),
                 suspension_manager: suspension_manager.clone(),
                 emote_provider,
+                emote_tracker,
                 primary_history_tap,
                 started_at,
             })
