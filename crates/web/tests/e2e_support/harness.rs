@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fantoccini::{Client, ClientBuilder, Locator};
+use hyper_util::client::legacy::connect::HttpConnector;
 use serde_json::json;
 use tokio::sync::Notify;
 use twitch_1337_web::{bind, build_router, serve_app};
@@ -114,7 +115,10 @@ impl E2eSession {
         }
         let caps = caps.as_object().expect("caps is a json object").clone();
 
-        let mut builder = ClientBuilder::rustls().expect("rustls builder");
+        // Plain HTTP connector: chromedriver and the in-process app are both
+        // http:// loopback. Skipping fantoccini's rustls-tls feature keeps
+        // aws-lc-rs out of the workspace graph.
+        let mut builder = ClientBuilder::new(HttpConnector::new());
         builder.capabilities(caps);
         let client = builder
             .connect(&webdriver_url())

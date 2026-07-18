@@ -73,10 +73,10 @@ pub(crate) fn issue_session_cookies(
 pub struct OAuthCtx {
     pub basic: ConfiguredClient,
     /// Owned reqwest client used for token exchanges. Disables redirects to
-    /// avoid SSRF (oauth2 docs explicitly recommend this). Workspace pins
-    /// `reqwest = 0.13` while oauth2 v5 pins `reqwest = 0.12`; the closure
-    /// adapter `oauth_http_call` translates between the workspace reqwest
-    /// and oauth2's `AsyncHttpClient` blanket impl over `Fn(HttpRequest)`.
+    /// avoid SSRF (oauth2 docs explicitly recommend this). oauth2 is compiled
+    /// without its bundled HTTP client; the closure adapter `oauth_http_call`
+    /// supplies this workspace `reqwest` 0.13 client via
+    /// `AsyncHttpClient` / `Fn(HttpRequest)`.
     pub http: reqwest::Client,
     /// Base URL for Helix calls made during the OAuth callback (`/helix/users`,
     /// `/helix/moderation/channels`). Production uses `https://api.twitch.tv`;
@@ -139,10 +139,10 @@ pub enum OAuthHttpError {
     Header(String),
 }
 
-/// Adapt the workspace `reqwest::Client` (0.13) to the closure form
+/// Adapt the workspace `reqwest::Client` to the closure form
 /// `Fn(HttpRequest) -> Future<Output = Result<HttpResponse, _>>` so it
-/// satisfies `oauth2::AsyncHttpClient` despite oauth2 internally depending
-/// on `reqwest = 0.12`.
+/// satisfies `oauth2::AsyncHttpClient` without enabling oauth2's bundled
+/// reqwest feature.
 async fn oauth_http_call(
     client: reqwest::Client,
     req: oauth2::HttpRequest,
