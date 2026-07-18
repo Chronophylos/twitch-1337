@@ -1,6 +1,6 @@
 # AI Prompts
 
-The bot's prompts live as Markdown files in the repo at `crates/core/data/prompts/`, baked into the binary via `include_str!` and used directly at runtime. They are code: the repo is the single source of truth. There is no on-disk override under `$DATA_DIR` — that path was dropped in #321 to end the silent drift between the repo copy and a mutable on-disk copy.
+The bot's prompts live as Markdown files in the repo at `crates/data/assets/prompts/`, baked into the binary via `include_str!` and used directly at runtime. They are code: the repo is the single source of truth. There is no on-disk override under `$DATA_DIR` — that path was dropped in #321 to end the silent drift between the repo copy and a mutable on-disk copy.
 
 ## Files
 
@@ -51,7 +51,7 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 
 ## Editing flow
 
-1. Edit the file in the repo under `crates/core/data/prompts/`.
+1. Edit the file in the repo under `crates/data/assets/prompts/`.
 2. Commit on a branch, open a PR, merge. The rolling deploy ships it within minutes (see `CLAUDE.md` → Release flow).
 3. To roll back, revert the commit and merge again.
 
@@ -74,4 +74,4 @@ Memory access differs from `!ai` too. `system.md` gets the full SOUL/LORE/user b
 ## See also
 
 - `docs/superpowers/specs/2026-04-28-ai-memory-rework-v2-design.md` — full design.
-- `crates/core/data/prompts/*.md` — the prompt templates (source of truth).
+- `crates/data/assets/prompts/*.md` — the prompt templates (source of truth).

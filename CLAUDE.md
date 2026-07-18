@@ -8,6 +8,17 @@ Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`),
 
 Single persistent IRC connection, broadcast channel routes to independent handler tasks.
 
+## Crate layout
+
+| Crate | Role |
+|---|---|
+| `crates/core` | Bot logic: IRC handlers, aviation, AI memory, pings, schedules, config/settings types |
+| `crates/data` (`twitch-1337-data`) | Baked assets: location CSVs, emotes, prompts, flight-plan DB generation |
+| `crates/random-flight` | In-tree geo + route selection + flight-plan math (depends on `twitch-1337-data`) |
+| `crates/llm` | LLM backends, agent loop, tool calling |
+| `crates/web` | Axum dashboard, routes, templates, auth |
+| `crates/twitch-1337` | Binary entrypoint (`main.rs`), builds `Services`, calls `run_bot` |
+
 ## Commands
 
 ```bash
@@ -159,13 +170,20 @@ OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config
 
 ## Data dir
 
-All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `pings.ron`, `leaderboard.ron`, `hall_of_shame.ron`, `flights.ron`, `feedback.txt`. Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/scratch/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt templates are *not* here — they're baked into the binary from `crates/core/data/prompts/` (`include_str!`, single source of truth; see `docs/ai-prompts.md`).
+All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `pings.ron`, `leaderboard.ron`, `hall_of_shame.ron`, `flights.ron`, `feedback.txt`. Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/scratch/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt templates are *not* here — they're baked into the binary from `crates/data/assets/prompts/` (`include_str!` via `twitch-1337-data`, single source of truth; see `docs/ai-prompts.md`).
 
 Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `flight_tracker.rs`.
 
 ## Embedded data
 
-`data/plz.csv`, `data/airports.csv`, `data/airlines.csv` baked in via `include_str!`. Zero runtime data-file dep (important for `FROM scratch` musl image).
+`twitch-1337-data` owns all baked assets under `crates/data/assets/`:
+
+- `location/` — `plz.csv`, `airports.csv`, `airlines.csv` (refreshed weekly by `data-refresh.yml`)
+- `emotes/` — `7tv_emotes.toml`
+- `prompts/` — AI prompt templates
+- `flight/` — aircraft profiles + OurAirports CSVs for flight-plan DB generation
+
+Location CSVs and prompts are baked via `include_str!`; flight-plan tables are generated in `build.rs`. Zero runtime data-file dep (important for `FROM scratch` musl image).
 
 ## Architecture invariants
 

@@ -18,7 +18,7 @@ const FENCE_CLOSE: &str = "<<<ENDFILE";
 
 // Prompt templates are code (#321): baked into the binary and used directly at
 // runtime by the !ai handler and the dreamer ritual. The repo copy
-// (`crates/core/data/prompts/`) is the single source of truth — no on-disk
+// (`crates/data/assets/prompts/`) is the single source of truth — no on-disk
 // override, no drift. Substitution of `{speaker_*}`/`{date}`/`{model}`/`{channel}`
 // happens in `substitute` below.
 pub(crate) const PROMPT_SYSTEM: &str = twitch_1337_data::prompts::SYSTEM;
