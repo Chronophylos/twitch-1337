@@ -7,11 +7,17 @@ default:
 # Build the Docker image. Passes the current commit SHA so the running
 # binary can report it via `/version` and the sidebar brand-meta.
 build:
-  podman build --build-arg GIT_SHA=$(git rev-parse --short=12 HEAD) -t chronophylos/twitch-1337:latest .
+  podman build \
+    --build-arg GIT_SHA=$(git rev-parse --short=12 HEAD) \
+    --build-arg CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+    -t chronophylos/twitch-1337:latest .
 
 # Build with no cache (force full rebuild)
 build-no-cache:
-  podman build --no-cache --build-arg GIT_SHA=$(git rev-parse --short=12 HEAD) -t chronophylos/twitch-1337:latest .
+  podman build --no-cache \
+    --build-arg GIT_SHA=$(git rev-parse --short=12 HEAD) \
+    --build-arg CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+    -t chronophylos/twitch-1337:latest .
 
 # Push the image to docker host
 push:
