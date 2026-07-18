@@ -81,6 +81,9 @@ pub struct TestBotBuilder {
     emote_glossary_override: Option<String>,
     doener_base_url: Option<String>,
     settings_overrides: Option<twitch_1337::settings::SettingsOverrides>,
+    open_emote_tracker: bool,
+    emote_catalog_seed: Vec<(String, String)>,
+    emote_set_event_seed: Vec<twitch_1337::emote_tracker::NewSetEvent>,
 }
 
 impl TestBotBuilder {
@@ -94,6 +97,9 @@ impl TestBotBuilder {
             emote_glossary_override: None,
             doener_base_url: None,
             settings_overrides: None,
+            open_emote_tracker: false,
+            emote_catalog_seed: Vec::new(),
+            emote_set_event_seed: Vec::new(),
         }
     }
 
@@ -174,6 +180,29 @@ impl TestBotBuilder {
     /// Override the Döneratlas API base URL (wiremock) for `!dpi` / `!döner` / AI tool.
     pub fn with_doener_base_url(mut self, base: impl Into<String>) -> Self {
         self.doener_base_url = Some(base.into());
+        self
+    }
+
+    pub fn with_emote_tracker(mut self) -> Self {
+        self.open_emote_tracker = true;
+        self
+    }
+
+    pub fn with_emote_catalog(mut self, entries: &[(&str, &str)]) -> Self {
+        self.open_emote_tracker = true;
+        self.emote_catalog_seed = entries
+            .iter()
+            .map(|(id, name)| (id.to_string(), name.to_string()))
+            .collect();
+        self
+    }
+
+    pub fn with_emote_set_events(
+        mut self,
+        events: Vec<twitch_1337::emote_tracker::NewSetEvent>,
+    ) -> Self {
+        self.open_emote_tracker = true;
+        self.emote_set_event_seed = events;
         self
     }
 
@@ -341,6 +370,31 @@ impl TestBotBuilder {
         let primary_history_tap: Arc<Mutex<Option<twitch_1337::ai::chat_history::ChatHistory>>> =
             Arc::new(Mutex::new(None));
 
+        let emote_tracker = if !self.open_emote_tracker {
+            None
+        } else {
+            let path = data_dir
+                .path()
+                .join(twitch_1337::emote_tracker::DB_FILENAME);
+            let handle = Arc::new(
+                twitch_1337::emote_tracker::EmoteTrackerHandle::open(&path)
+                    .expect("open test emote tracker"),
+            );
+            for (id, name) in &self.emote_catalog_seed {
+                handle
+                    .upsert_emote(id, name, true, 0)
+                    .await
+                    .expect("seed catalog");
+            }
+            for event in &self.emote_set_event_seed {
+                handle
+                    .insert_set_event(event.clone())
+                    .await
+                    .expect("seed set event");
+            }
+            Some(handle)
+        };
+
         let services = Services {
             clock: clock.clone(),
             ai_bootstrap: self.config.ai.clone(),
@@ -379,7 +433,7 @@ impl TestBotBuilder {
             aviation_tracker_rx,
             primary_history_tap: Some(primary_history_tap.clone()),
             telemetry: telemetry_store.clone(),
-            emote_tracker: None,
+            emote_tracker,
             twitch_channel_id: None,
         };
 
