@@ -500,6 +500,11 @@ impl TestBot {
         self.transport.inject.send(line).await.expect("inject");
     }
 
+    /// Alias for [`Self::send_to`] matching emote-usage test naming.
+    pub async fn send_privmsg_to(&self, channel: &str, user: &str, text: &str) {
+        self.send_to(channel, user, text).await;
+    }
+
     /// Same, but with an explicit `tmi-sent-ts` (used by 1337 tracker tests).
     pub async fn send_to_at(&self, channel: &str, user: &str, text: &str, tmi_ts_ms: i64) {
         let line = privmsg_at(channel, user, text, tmi_ts_ms);
@@ -688,6 +693,35 @@ impl TestBot {
         }
     }
 
+    /// Poll `usage_events` until at least `min_count` rows exist or `timeout`
+    /// elapses.
+    pub async fn wait_usage_events(&self, min_count: usize, timeout: Duration) -> EyreResult<()> {
+        let path = self
+            .data_dir
+            .path()
+            .join(twitch_1337::emote_tracker::DB_FILENAME);
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let n = count_usage_events_sync(&path)?;
+            if n >= min_count {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                eyre::bail!("timed out waiting for {min_count} usage rows (got {n})");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Return the number of `usage_events` rows with `flagged = 1`.
+    pub fn usage_flagged_count(&self) -> EyreResult<usize> {
+        let path = self
+            .data_dir
+            .path()
+            .join(twitch_1337::emote_tracker::DB_FILENAME);
+        flagged_usage_count_sync(&path)
+    }
+
     /// Open fresh v2 memory handles on the same `data_dir` and run the
     /// dreamer ritual for `yesterday`. Uses `self.settings` so that any
     /// `with_settings` overrides applied at build time are visible to the
@@ -785,6 +819,22 @@ impl WhisperSender for FakeWhisperSender {
         self.notify.notify_waiters();
         Ok(message)
     }
+}
+
+fn count_usage_events_sync(path: &std::path::Path) -> EyreResult<usize> {
+    let conn = rusqlite::Connection::open(path)?;
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM usage_events", [], |r| r.get(0))?;
+    Ok(n as usize)
+}
+
+fn flagged_usage_count_sync(path: &std::path::Path) -> EyreResult<usize> {
+    let conn = rusqlite::Connection::open(path)?;
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM usage_events WHERE flagged = 1",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(n as usize)
 }
 
 /// Build a minimal `WebState` for tests that flip on `with_web`. Uses a
