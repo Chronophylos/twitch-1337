@@ -8,7 +8,8 @@ use axum::routing::get;
 use serde::Deserialize;
 use tower_cookies::Cookies;
 use twitch_1337_core::emote_tracker::{
-    SetEventKind, SetEventListFilter, SetEventRow, format_actor_display, format_berlin_millis,
+    SetEventKind, SetEventListFilter, SetEventRow, UsageEventListFilter, format_actor_display,
+    format_berlin_millis,
 };
 
 use crate::auth::csrf;
@@ -78,11 +79,49 @@ pub struct AuditQuery {
     pub offset: Option<u32>,
 }
 
+#[derive(Clone)]
+struct UsageRowView {
+    at_berlin: String,
+    emote_id: String,
+    emote_name: String,
+    user: String,
+    flagged: bool,
+    filter_blob: String,
+}
+
+#[derive(Template)]
+#[template(path = "emotes/usage.html")]
+struct UsageTpl {
+    rows: Vec<UsageRowView>,
+    tracker_disabled: bool,
+    include_flagged: bool,
+    emote_id_filter: String,
+    user_filter: String,
+    login_filter: String,
+    user_login: String,
+    user_avatar_url: Option<String>,
+    csrf: String,
+    flash: Option<String>,
+    current_page: &'static str,
+    is_mod: bool,
+    is_broadcaster: bool,
+    is_owner: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UsageQuery {
+    pub flagged: Option<String>,
+    pub emote_id: Option<String>,
+    pub user: Option<String>,
+    pub login: Option<String>,
+    pub offset: Option<u32>,
+}
+
 pub fn router() -> Router<WebState> {
     Router::new()
         .route("/emotes", get(catalog))
         .route("/emotes/audit", get(audit))
-    // usage added in Task 5
+        .route("/emotes/usage", get(usage))
 }
 
 async fn catalog(
@@ -209,6 +248,82 @@ async fn audit(
         csrf,
         flash: flash::take(&cookies),
         current_page: nav::EMOTES_AUDIT,
+        is_mod,
+        is_broadcaster: session.is_broadcaster,
+        is_owner,
+    })
+    .into_response())
+}
+
+async fn usage(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    Query(q): Query<UsageQuery>,
+) -> Result<Response, WebError> {
+    let tracker_disabled = state.emote_tracker.is_none();
+    let include_flagged = matches!(q.flagged.as_deref(), Some("1") | Some("true"));
+    let emote_id_filter = q.emote_id.clone().unwrap_or_default();
+    let user_filter = q.user.clone().unwrap_or_default();
+    let login_filter = q.login.clone().unwrap_or_default();
+    let rows = if let Some(ref h) = state.emote_tracker {
+        let filter = UsageEventListFilter {
+            emote_id: q.emote_id.filter(|s| !s.is_empty()),
+            twitch_user_id: q.user.filter(|s| !s.is_empty()),
+            login_substr: q.login.filter(|s| !s.is_empty()),
+            since_ms: None,
+            until_ms: None,
+            include_flagged,
+            limit: 200,
+            offset: q.offset.unwrap_or(0),
+        };
+        let events = h.list_usage_events(filter).await.unwrap_or_default();
+        let mut out = Vec::with_capacity(events.len());
+        for ev in events {
+            let emote_name = h
+                .get_emote(&ev.emote_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|e| e.name)
+                .unwrap_or_else(|| "—".into());
+            let user = ev
+                .login
+                .clone()
+                .unwrap_or_else(|| ev.twitch_user_id.clone());
+            let at_berlin = format_berlin_millis(ev.at);
+            let filter_blob = format!(
+                "{} {} {} {} {}",
+                at_berlin, ev.emote_id, emote_name, user, ev.twitch_user_id
+            );
+            out.push(UsageRowView {
+                at_berlin,
+                emote_id: ev.emote_id,
+                emote_name,
+                user,
+                flagged: ev.flagged,
+                filter_blob,
+            });
+        }
+        out
+    } else {
+        Vec::new()
+    };
+    let csrf = csrf::encode(&session.csrf_value);
+    let is_mod = session.is_mod();
+    let is_owner = matches!(session.role, crate::auth::Role::Owner);
+    Ok(render(&UsageTpl {
+        rows,
+        tracker_disabled,
+        include_flagged,
+        emote_id_filter,
+        user_filter,
+        login_filter,
+        user_avatar_url: session.avatar_url.clone(),
+        user_login: session.user_login,
+        csrf,
+        flash: flash::take(&cookies),
+        current_page: nav::EMOTES_USAGE,
         is_mod,
         is_broadcaster: session.is_broadcaster,
         is_owner,
