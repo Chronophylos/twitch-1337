@@ -13,7 +13,7 @@ pub use db::{
 };
 pub use eventapi::{
     DispatchEmoteSetUpdate, EVENTAPI_URL, EventApiConnection, ParsedEvent, connect_and_subscribe,
-    live_change_to_batch, parse_server_message,
+    live_change_to_batch, parse_server_message, subscribe_emote_set_update_message,
 };
 pub use handle::EmoteTrackerHandle;
 pub use ingest::{IngestConfig, StartupReconcileResult, run_set_ingest, startup_reconcile_once};
