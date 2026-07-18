@@ -21,11 +21,10 @@ const FENCE_CLOSE: &str = "<<<ENDFILE";
 // (`crates/core/data/prompts/`) is the single source of truth — no on-disk
 // override, no drift. Substitution of `{speaker_*}`/`{date}`/`{model}`/`{channel}`
 // happens in `substitute` below.
-pub(crate) const PROMPT_SYSTEM: &str = include_str!("../../../data/prompts/system.md");
-pub(crate) const PROMPT_GROK: &str = include_str!("../../../data/prompts/grok.md");
-pub(crate) const PROMPT_INSTRUCTIONS: &str =
-    include_str!("../../../data/prompts/ai_instructions.md");
-pub(crate) const PROMPT_DREAMER: &str = include_str!("../../../data/prompts/dreamer.md");
+pub(crate) const PROMPT_SYSTEM: &str = twitch_1337_data::prompts::SYSTEM;
+pub(crate) const PROMPT_GROK: &str = twitch_1337_data::prompts::GROK;
+pub(crate) const PROMPT_INSTRUCTIONS: &str = twitch_1337_data::prompts::AI_INSTRUCTIONS;
+pub(crate) const PROMPT_DREAMER: &str = twitch_1337_data::prompts::DREAMER;
 
 /// Identifies what a fenced inject block represents. Renders into the FILE
 /// header attrs so the model can map a block to its subject without parsing

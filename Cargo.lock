@@ -3512,10 +3512,15 @@ dependencies = [
  "tracing-error",
  "tracing-subscriber",
  "twitch-1337-core",
+ "twitch-1337-data",
  "twitch-1337-web",
  "twitch-irc",
  "wiremock",
 ]
+
+[[package]]
+name = "twitch-1337-data"
+version = "0.0.0"
 
 [[package]]
 name = "twitch-1337-web"

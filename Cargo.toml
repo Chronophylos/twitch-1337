@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/llm", "crates/twitch-1337", "crates/web"]
+members = ["crates/core", "crates/data", "crates/llm", "crates/twitch-1337", "crates/web"]
 
 [workspace.package]
 # Pinned: this project uses a rolling release model (see

@@ -26,7 +26,7 @@ pub const SEARCH_EMOTES_LIMIT: usize = 20;
 
 /// Manual glossary baked into the binary at build time. Curated alongside the
 /// rest of the codebase; updates ship with the binary, not as a runtime file.
-pub const BAKED_GLOSSARY_TOML: &str = include_str!("../../data/7tv_emotes.toml");
+pub const BAKED_GLOSSARY_TOML: &str = twitch_1337_data::raw::SEVENTV_EMOTES_TOML;
 
 /// Lazily refreshes the available 7TV catalog and builds an LLM prompt block
 /// from the intersection with a manual glossary.

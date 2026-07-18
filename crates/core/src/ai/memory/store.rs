@@ -56,7 +56,7 @@ pub struct FrontmatterOverride {
     pub created_by: Option<String>,
 }
 
-const SOUL_SEED: &str = include_str!("../../../data/prompts/seed_soul.md");
+const SOUL_SEED: &str = twitch_1337_data::prompts::SEED_SOUL;
 
 #[derive(Clone)]
 pub struct MemoryStore {

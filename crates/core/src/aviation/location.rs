@@ -12,13 +12,15 @@ use std::time::Duration;
 use eyre::Result;
 use tracing::{trace, warn};
 
+use twitch_1337_data::raw::{AIRLINES_CSV, AIRPORTS_CSV, PLZ_CSV};
+
 use super::AviationClient;
 
 const UP_NOMINATIM_TIMEOUT: Duration = Duration::from_secs(5);
 
 // --- PLZ Lookup ---
 
-const PLZ_DATA: &str = include_str!("../../data/plz.csv");
+const PLZ_DATA: &str = PLZ_CSV;
 
 fn plz_table() -> &'static HashMap<&'static str, (f64, f64)> {
     static TABLE: OnceLock<HashMap<&'static str, (f64, f64)>> = OnceLock::new();
@@ -54,7 +56,7 @@ fn is_valid_plz(plz: &str) -> bool {
 
 // --- Airport Lookup ---
 
-const AIRPORT_DATA: &str = include_str!("../../data/airports.csv");
+const AIRPORT_DATA: &str = AIRPORTS_CSV;
 
 struct AirportData {
     by_icao: HashMap<String, (f64, f64, String)>,
@@ -114,7 +116,7 @@ pub(crate) fn iata_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
 
 // --- Airline IATA-to-ICAO Lookup ---
 
-const AIRLINE_DATA: &str = include_str!("../../data/airlines.csv");
+const AIRLINE_DATA: &str = AIRLINES_CSV;
 
 /// Returns the static IATA→ICAO airline code table (lazy-initialized).
 pub(super) fn airline_table() -> &'static HashMap<&'static str, &'static str> {
