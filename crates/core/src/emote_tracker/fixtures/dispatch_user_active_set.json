@@ -1,0 +1,29 @@
+{
+  "op": 0,
+  "t": 1739904376646,
+  "d": {
+    "type": "user.update",
+    "body": {
+      "id": "01FZKKA0A8000FP66RDQP75B9A",
+      "actor": {
+        "id": "01ACTOR",
+        "username": "streamer",
+        "display_name": "Streamer"
+      },
+      "updated": [
+        {
+          "key": "connections",
+          "index": 0,
+          "type": "object",
+          "value": [
+            {
+              "key": "emote_set",
+              "old_value": { "id": "01FZKKA0A8000FP66RDQP75B9A" },
+              "value": { "id": "01NEWACTIVESET000000000000" }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

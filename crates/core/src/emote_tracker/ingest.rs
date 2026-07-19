@@ -10,8 +10,9 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, warn};
 
 use super::eventapi::{
-    EventApiConnection, ParsedEvent, connect_and_subscribe, live_change_to_batch,
-    parse_server_message, subscribe_emote_set_update_message,
+    EventApiConnection, EventApiSink, ParsedEvent, connect_and_subscribe, live_change_to_batch,
+    parse_server_message, subscribe_emote_set_update_message, subscribe_user_update_message,
+    unsubscribe_emote_set_update_message,
 };
 use super::handle::EmoteTrackerHandle;
 use super::reconcile::{bootstrap_batch, reconcile_batch};
@@ -41,6 +42,7 @@ impl IngestConfig {
 /// Result of a REST fetch + catalog bootstrap/reconcile pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartupReconcileResult {
+    pub user_id: String,
     pub set_id: String,
     pub emote_count: usize,
 }
@@ -69,6 +71,7 @@ pub async fn startup_reconcile_once(
     handle.apply_set_changes(batch).await?;
 
     Ok(StartupReconcileResult {
+        user_id: snapshot.user_id,
         emote_count: snapshot.emotes.len(),
         set_id: snapshot.set_id,
     })
@@ -89,6 +92,7 @@ pub async fn run_set_ingest(
         match startup_reconcile_once(&handle, &http, &cfg, gap_started_at).await {
             Ok(result) => {
                 debug!(
+                    user_id = %result.user_id,
                     set_id = %result.set_id,
                     emote_count = result.emote_count,
                     "emote set ingest REST reconcile complete"
@@ -100,6 +104,7 @@ pub async fn run_set_ingest(
                     &handle,
                     &http,
                     &cfg,
+                    &result.user_id,
                     &result.set_id,
                     &mut gap_started_at,
                 )
@@ -135,11 +140,12 @@ async fn run_eventapi_session(
     handle: &EmoteTrackerHandle,
     http: &reqwest::Client,
     cfg: &IngestConfig,
+    seventv_user_id: &str,
     initial_set_id: &str,
     gap_started_at: &mut Option<i64>,
 ) -> Result<String> {
     let mut remembered_set_id = initial_set_id.to_string();
-    let mut conn = connect_eventapi(&cfg.eventapi_url, &cfg.twitch_channel_id).await?;
+    let mut conn = connect_eventapi(&cfg.eventapi_url, &remembered_set_id, seventv_user_id).await?;
     let mut heartbeat_interval_ms: Option<u64> = None;
     let mut heartbeat_deadline: Option<tokio::time::Instant> = None;
 
@@ -181,12 +187,15 @@ async fn run_eventapi_session(
                     }
                     ParsedEvent::Dispatch(dispatch) => {
                         if dispatch.set_id != remembered_set_id {
-                            handle_set_switch(
+                            // Defense in depth: object_id sub should only deliver the
+                            // active set. Confirm via REST before treating as a switch.
+                            handle_possible_set_switch(
                                 handle,
                                 http,
                                 cfg,
                                 gap_started_at,
                                 &mut remembered_set_id,
+                                Some(&mut conn.sink),
                                 &dispatch.set_id,
                             )
                             .await?;
@@ -196,6 +205,20 @@ async fn run_eventapi_session(
                             if !batch.mutations.is_empty() {
                                 handle.apply_set_changes(batch).await?;
                             }
+                        }
+                    }
+                    ParsedEvent::UserActiveSetChanged(change) => {
+                        if change.new_set_id != remembered_set_id {
+                            handle_possible_set_switch(
+                                handle,
+                                http,
+                                cfg,
+                                gap_started_at,
+                                &mut remembered_set_id,
+                                Some(&mut conn.sink),
+                                &change.new_set_id,
+                            )
+                            .await?;
                         }
                     }
                     ParsedEvent::Error { code, message } => {
@@ -239,15 +262,10 @@ async fn run_eventapi_session(
     Err(eyre!("EventAPI websocket stream ended"))
 }
 
-/// How to treat an `emote_set.update` whose `body.id` differs from the
-/// remembered channel active set.
-///
-/// Channel-scoped EventAPI subscriptions also deliver updates for unrelated
-/// painted/community sets (e.g. NNYS). Those must not be treated as active-set
-/// switches — that discards the live payload, REST-reconciles, and spams gaps.
+/// How to treat a set-id mismatch against the REST active set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SetIdMismatch {
-    /// Dispatch targets a set that is not the channel's current active set.
+    /// Hint targets a set that is not the channel's current active set.
     Foreign,
     /// Channel active emote set changed; REST reports `active_set_id`.
     ActiveSetChanged { active_set_id: String },
@@ -263,21 +281,23 @@ fn classify_set_id_mismatch(remembered_set_id: &str, rest_active_set_id: &str) -
     }
 }
 
-async fn handle_set_switch(
+/// Confirm a hinted set-id change via REST; on real switch, reconcile + resubscribe.
+async fn handle_possible_set_switch(
     handle: &EmoteTrackerHandle,
     http: &reqwest::Client,
     cfg: &IngestConfig,
     gap_started_at: &mut Option<i64>,
     remembered_set_id: &mut String,
-    dispatch_set_id: &str,
+    sink: Option<&mut EventApiSink>,
+    hinted_set_id: &str,
 ) -> Result<()> {
     let snapshot = fetch_channel_set(http, &cfg.rest_base_url, &cfg.twitch_channel_id).await?;
     match classify_set_id_mismatch(remembered_set_id, &snapshot.set_id) {
         SetIdMismatch::Foreign => {
             debug!(
                 remembered_set_id = %remembered_set_id,
-                dispatch_set_id = %dispatch_set_id,
-                "ignoring emote_set.update for non-active set"
+                hinted_set_id = %hinted_set_id,
+                "ignoring EventAPI hint for non-active set"
             );
             Ok(())
         }
@@ -285,7 +305,7 @@ async fn handle_set_switch(
             warn!(
                 old_set_id = %remembered_set_id,
                 new_set_id = %active_set_id,
-                dispatch_set_id = %dispatch_set_id,
+                hinted_set_id = %hinted_set_id,
                 "7TV emote set switch detected"
             );
             let gap_from = gap_started_at.unwrap_or_else(|| {
@@ -298,6 +318,11 @@ async fn handle_set_switch(
             let current = handle.list_active_emotes().await?;
             let batch = reconcile_batch(at, &current, &snapshot.emotes, Some((gap_from, at)), None);
             handle.apply_set_changes(batch).await?;
+
+            if let Some(sink) = sink {
+                resubscribe_emote_set(sink, remembered_set_id, &active_set_id).await?;
+            }
+
             *remembered_set_id = active_set_id;
             *gap_started_at = None;
             Ok(())
@@ -305,22 +330,46 @@ async fn handle_set_switch(
     }
 }
 
+async fn resubscribe_emote_set(
+    sink: &mut EventApiSink,
+    old_set_id: &str,
+    new_set_id: &str,
+) -> Result<()> {
+    if old_set_id == new_set_id {
+        return Ok(());
+    }
+    let unsub = unsubscribe_emote_set_update_message(old_set_id);
+    if let Err(error) = sink.send(Message::Text(unsub.into())).await {
+        warn!(?error, old_set_id, "failed to unsubscribe old emote set");
+    }
+    let sub = subscribe_emote_set_update_message(new_set_id);
+    sink.send(Message::Text(sub.into()))
+        .await
+        .wrap_err("failed to subscribe new emote set after switch")?;
+    Ok(())
+}
+
 async fn connect_eventapi(
     eventapi_url: &str,
-    twitch_channel_id: &str,
+    emote_set_id: &str,
+    seventv_user_id: &str,
 ) -> Result<EventApiConnection> {
     if eventapi_url == super::eventapi::EVENTAPI_URL {
-        return connect_and_subscribe(twitch_channel_id).await;
+        return connect_and_subscribe(emote_set_id, seventv_user_id).await;
     }
 
     let (ws, _) = connect_async(eventapi_url)
         .await
         .wrap_err_with(|| format!("failed to connect to EventAPI at {eventapi_url}"))?;
     let (mut sink, stream) = ws.split();
-    let sub = subscribe_emote_set_update_message(twitch_channel_id);
-    sink.send(Message::Text(sub.into()))
-        .await
-        .wrap_err("failed to send EventAPI subscribe")?;
+    for sub in [
+        subscribe_emote_set_update_message(emote_set_id),
+        subscribe_user_update_message(seventv_user_id),
+    ] {
+        sink.send(Message::Text(sub.into()))
+            .await
+            .wrap_err("failed to send EventAPI subscribe")?;
+    }
     Ok(EventApiConnection { sink, stream })
 }
 
@@ -346,20 +395,30 @@ mod tests {
         .unwrap()
     }
 
+    fn user_set_body(user_id: &str, set_id: &str, emotes_json: &str) -> String {
+        format!(
+            r#"{{
+            "id": "784681545",
+            "platform": "TWITCH",
+            "user": {{ "id": "{user_id}", "username": "streamer" }},
+            "emote_set": {{
+                "id": "{set_id}",
+                "emotes": {emotes_json}
+            }}
+        }}"#
+        )
+    }
+
     #[tokio::test]
     async fn startup_reconcile_cold_start_bootstraps_without_gap() {
         crate::install_crypto_provider();
         let mock = MockServer::start().await;
         let channel_id = "12345";
-        let body = r#"{
-            "emote_set": {
-                "id": "set123",
-                "emotes": [
-                    {"id": "e1", "name": "Kappa"},
-                    {"id": "e2", "name": "Pog"}
-                ]
-            }
-        }"#;
+        let body = user_set_body(
+            "01USER",
+            "set123",
+            r#"[{"id": "e1", "name": "Kappa"}, {"id": "e2", "name": "Pog"}]"#,
+        );
         Mock::given(method("GET"))
             .and(path(format!("/v3/users/twitch/{channel_id}")))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
@@ -380,6 +439,7 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(result.user_id, "01USER");
         assert_eq!(result.set_id, "set123");
         assert_eq!(result.emote_count, 2);
         assert_eq!(count_events(&db_path, SetEventKind::Bootstrap), 2);
@@ -419,14 +479,7 @@ mod tests {
         let mock = MockServer::start().await;
         let channel_id = "784681545";
         let active_set = "01FZKKA0A8000FP66RDQP75B9A";
-        let body = format!(
-            r#"{{
-            "emote_set": {{
-                "id": "{active_set}",
-                "emotes": [{{"id": "e1", "name": "Kappa"}}]
-            }}
-        }}"#
-        );
+        let body = user_set_body(active_set, active_set, r#"[{"id": "e1", "name": "Kappa"}]"#);
         Mock::given(method("GET"))
             .and(path(format!("/v3/users/twitch/{channel_id}")))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
@@ -449,12 +502,13 @@ mod tests {
 
         let mut remembered = active_set.to_string();
         let mut gap_started_at = None;
-        handle_set_switch(
+        handle_possible_set_switch(
             &handle,
             &reqwest::Client::new(),
             &cfg,
             &mut gap_started_at,
             &mut remembered,
+            None,
             "01JEY2SMVTRMC4ZHWCYKBA6M5R", // NNYS 2024 — not the active set
         )
         .await
@@ -470,27 +524,15 @@ mod tests {
         crate::install_crypto_provider();
         let mock = MockServer::start().await;
         let channel_id = "784681545";
+        let user_id = "01FZKKA0A8000FP66RDQP75B9A";
         let old_set = "01FZKKA0A8000FP66RDQP75B9A";
         let new_set = "01NEWACTIVESET000000000000";
 
-        let initial = format!(
-            r#"{{
-            "emote_set": {{
-                "id": "{old_set}",
-                "emotes": [{{"id": "e1", "name": "Kappa"}}]
-            }}
-        }}"#
-        );
-        let switched = format!(
-            r#"{{
-            "emote_set": {{
-                "id": "{new_set}",
-                "emotes": [
-                    {{"id": "e1", "name": "Kappa"}},
-                    {{"id": "e2", "name": "Pog"}}
-                ]
-            }}
-        }}"#
+        let initial = user_set_body(user_id, old_set, r#"[{"id": "e1", "name": "Kappa"}]"#);
+        let switched = user_set_body(
+            user_id,
+            new_set,
+            r#"[{"id": "e1", "name": "Kappa"}, {"id": "e2", "name": "Pog"}]"#,
         );
 
         Mock::given(method("GET"))
@@ -520,12 +562,13 @@ mod tests {
 
         let mut remembered = old_set.to_string();
         let mut gap_started_at = None;
-        handle_set_switch(
+        handle_possible_set_switch(
             &handle,
             &reqwest::Client::new(),
             &cfg,
             &mut gap_started_at,
             &mut remembered,
+            None,
             new_set,
         )
         .await
