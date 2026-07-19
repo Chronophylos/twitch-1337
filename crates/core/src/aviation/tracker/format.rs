@@ -34,8 +34,14 @@ fn present(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-fn format_time(value: Option<DateTime<Utc>>) -> Option<String> {
-    value.map(|dt| dt.format("%H:%M").to_string())
+fn format_time(value: Option<DateTime<Utc>>, timezone: Option<&str>) -> Option<String> {
+    let dt = value?;
+    if let Some(tz_name) = present(timezone)
+        && let Ok(tz) = tz_name.parse::<chrono_tz::Tz>()
+    {
+        return Some(dt.with_timezone(&tz).format("%H:%M").to_string());
+    }
+    Some(dt.format("%H:%M").to_string())
 }
 
 fn first_present<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
@@ -77,7 +83,10 @@ fn delay_part(label: &str, delay: Option<i64>) -> Option<String> {
     }
 }
 
-pub(crate) fn msg_aviationstack_info(metadata: &AviationstackFlightMetadata) -> String {
+pub(crate) fn msg_aviationstack_info(
+    metadata: &AviationstackFlightMetadata,
+    now: DateTime<Utc>,
+) -> String {
     let flight = first_present([
         metadata.flight_iata.as_deref(),
         metadata.flight_icao.as_deref(),
@@ -107,21 +116,19 @@ pub(crate) fn msg_aviationstack_info(metadata: &AviationstackFlightMetadata) -> 
     if let Some(dep_time) = format_time(
         metadata
             .departure_actual_runway
-            .as_ref()
-            .cloned()
-            .or_else(|| metadata.departure_actual.as_ref().cloned())
-            .or_else(|| metadata.departure_estimated.as_ref().cloned())
-            .or_else(|| metadata.departure_scheduled.as_ref().cloned()),
+            .or(metadata.departure_actual)
+            .or(metadata.departure_estimated)
+            .or(metadata.departure_scheduled),
+        metadata.departure_timezone.as_deref(),
     ) {
         parts.push(format!("Dep: {dep_time}"));
     }
     if let Some(arr_time) = format_time(
         metadata
             .arrival_actual
-            .as_ref()
-            .cloned()
-            .or_else(|| metadata.arrival_estimated.as_ref().cloned())
-            .or_else(|| metadata.arrival_scheduled.as_ref().cloned()),
+            .or(metadata.arrival_estimated)
+            .or(metadata.arrival_scheduled),
+        metadata.arrival_timezone.as_deref(),
     ) {
         parts.push(format!("Arr: {arr_time}"));
     }
@@ -134,7 +141,7 @@ pub(crate) fn msg_aviationstack_info(metadata: &AviationstackFlightMetadata) -> 
     if let Some(part) = delay_part("Arr", metadata.arrival_delay_minutes) {
         parts.push(part);
     }
-    if let Some(status) = present(metadata.flight_status.as_deref()) {
+    if let Some(status) = present(metadata.effective_flight_status(now)) {
         parts.push(format!("Status: {status}"));
     }
 
@@ -335,6 +342,35 @@ mod tests {
             target_confirmation: TargetConfirmation::ConfirmedByCallsign,
             ..tracked_flight()
         }
+    }
+
+    #[test]
+    fn msg_aviationstack_info_uses_local_times_and_infers_active() {
+        use crate::aviation::types::AviationstackFlightMetadata;
+        use chrono::TimeZone as _;
+
+        let metadata = AviationstackFlightMetadata {
+            flight_iata: Some("TK751".into()),
+            airline_name: Some("Turkish Airlines".into()),
+            flight_status: Some("scheduled".into()),
+            departure_iata: Some("ISB".into()),
+            departure_gate: Some("B6".into()),
+            departure_timezone: Some("Asia/Karachi".into()),
+            departure_scheduled: Some(Utc.with_ymd_and_hms(2026, 7, 19, 4, 15, 0).unwrap()),
+            arrival_iata: Some("IST".into()),
+            arrival_terminal: Some("I".into()),
+            arrival_timezone: Some("Europe/Istanbul".into()),
+            arrival_scheduled: Some(Utc.with_ymd_and_hms(2026, 7, 19, 10, 30, 0).unwrap()),
+            ..AviationstackFlightMetadata::default()
+        };
+        let now = Utc.with_ymd_and_hms(2026, 7, 19, 7, 13, 0).unwrap();
+
+        let msg = msg_aviationstack_info(&metadata, now);
+
+        assert_eq!(
+            msg,
+            "TK751 Turkish Airlines | ISB Gate B6 -> IST TI | Dep: 09:15 | Arr: 13:30 | Status: active"
+        );
     }
 
     #[test]

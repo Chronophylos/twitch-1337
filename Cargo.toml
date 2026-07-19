@@ -32,7 +32,8 @@ axum-extra = { version = "0.12", default-features = false, features = ["form"] }
 base64 = "0.22"
 bytesize = { version = "2", features = ["serde"] }
 chrono = { version = "0.4.44", features = ["now", "serde"], default-features = false }
-chrono-tz = { version = "0.10.4", features = ["filter-by-regex"] }
+# Full IANA DB (no filter-by-regex): Aviationstack airport timezones must resolve.
+chrono-tz = { version = "0.10.4" }
 color-eyre = "0.6"
 csv = "1.4.0"
 eyre = "0.6.12"

@@ -13,7 +13,8 @@ alwaysApply: true
 
 ## Time
 
-- All time ops use `Europe/Berlin` (see `.cargo/config.toml` timezone filter)
+- Bot scheduling / local display use `Europe/Berlin`
+- `chrono-tz` ships the full IANA DB (no `filter-by-regex` / `CHRONO_TZ_TIMEZONE_FILTER`) so Aviationstack airport timezones can reinterpret local wall times stamped as `+00:00`
 
 ## Config security
 
