@@ -187,7 +187,7 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 
 ## Architecture invariants
 
-- All time ops use `Europe/Berlin` (chrono-tz with `CHRONO_TZ_TIMEZONE_FILTER=Europe/Berlin` in `.cargo/config.toml` — only Berlin data compiled in).
+- Bot scheduling / display use `Europe/Berlin`. `chrono-tz` is built with the full IANA database (no `CHRONO_TZ_TIMEZONE_FILTER`) so Aviationstack airport timezones can reinterpret local wall times stamped as `+00:00`.
 - 1337 tracker: messages containing "1337" or "DANKIES" at exactly 13:37:xx. Ignore "supibot", "potatbotat". Dedupe via HashSet (max 10k). Leaderboard = fastest sub-1s PB.
 - Broadcast channel capacity 100. Lagging handlers get `RecvError::Lagged`, continue.
 - Handlers independent. Errors in one don't crash others (`bail!` on startup only).

@@ -4,7 +4,8 @@
 //! Internal envelope types (`AdsbDbResponse`, `Aviationstack*`) are
 //! `pub(super)` so `client.rs` can deserialize them.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, MappedLocalTime, Utc};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 // --- ADS-B v2 response types ---
@@ -139,6 +140,7 @@ struct AviationstackDeparture {
     airport: Option<String>,
     iata: Option<String>,
     icao: Option<String>,
+    timezone: Option<String>,
     terminal: Option<String>,
     gate: Option<String>,
     scheduled: Option<String>,
@@ -153,6 +155,7 @@ struct AviationstackArrival {
     airport: Option<String>,
     iata: Option<String>,
     icao: Option<String>,
+    timezone: Option<String>,
     terminal: Option<String>,
     gate: Option<String>,
     baggage: Option<String>,
@@ -183,6 +186,7 @@ pub struct AviationstackFlightMetadata {
     pub departure_airport: Option<String>,
     pub departure_iata: Option<String>,
     pub departure_icao: Option<String>,
+    pub departure_timezone: Option<String>,
     pub departure_terminal: Option<String>,
     pub departure_gate: Option<String>,
     pub departure_scheduled: Option<DateTime<Utc>>,
@@ -193,6 +197,7 @@ pub struct AviationstackFlightMetadata {
     pub arrival_airport: Option<String>,
     pub arrival_iata: Option<String>,
     pub arrival_icao: Option<String>,
+    pub arrival_timezone: Option<String>,
     pub arrival_terminal: Option<String>,
     pub arrival_gate: Option<String>,
     pub arrival_baggage: Option<String>,
@@ -211,6 +216,35 @@ impl AviationstackFlightMetadata {
             .as_ref()
             .cloned()
             .or_else(|| self.departure_actual.as_ref().cloned())
+    }
+
+    /// Status for chat / logic: prefer Aviationstack's value, but when it still
+    /// says `scheduled` (or omits status) while the corrected schedule window
+    /// contains `now` and no actual departure is known, treat the flight as
+    /// `active`. Covers Aviationstack lag on airborne flights.
+    pub fn effective_flight_status(&self, now: DateTime<Utc>) -> Option<&str> {
+        let raw = self
+            .flight_status
+            .as_deref()
+            .map(str::trim)
+            .filter(|status| !status.is_empty());
+        if raw.is_some_and(|status| !status.eq_ignore_ascii_case("scheduled")) {
+            return raw;
+        }
+
+        if self.takeoff_time().is_none()
+            && let Some(dep) = self.departure_scheduled
+            && let Some(arr) = self
+                .arrival_actual
+                .or(self.arrival_estimated)
+                .or(self.arrival_scheduled)
+            && now > dep
+            && now < arr
+        {
+            return Some("active");
+        }
+
+        raw
     }
 }
 
@@ -234,36 +268,38 @@ impl From<AviationstackFlight> for AviationstackFlightMetadata {
             departure_airport: departure.as_ref().and_then(|d| d.airport.clone()),
             departure_iata: departure.as_ref().and_then(|d| d.iata.clone()),
             departure_icao: departure.as_ref().and_then(|d| d.icao.clone()),
+            departure_timezone: departure.as_ref().and_then(|d| d.timezone.clone()),
             departure_terminal: departure.as_ref().and_then(|d| d.terminal.clone()),
             departure_gate: departure.as_ref().and_then(|d| d.gate.clone()),
-            departure_scheduled: departure
-                .as_ref()
-                .and_then(|d| parse_aviationstack_datetime(d.scheduled.as_deref())),
-            departure_estimated: departure
-                .as_ref()
-                .and_then(|d| parse_aviationstack_datetime(d.estimated.as_deref())),
-            departure_actual: departure
-                .as_ref()
-                .and_then(|d| parse_aviationstack_datetime(d.actual.as_deref())),
-            departure_actual_runway: departure
-                .as_ref()
-                .and_then(|d| parse_aviationstack_datetime(d.actual_runway.as_deref())),
+            departure_scheduled: departure.as_ref().and_then(|d| {
+                parse_aviationstack_datetime(d.scheduled.as_deref(), d.timezone.as_deref())
+            }),
+            departure_estimated: departure.as_ref().and_then(|d| {
+                parse_aviationstack_datetime(d.estimated.as_deref(), d.timezone.as_deref())
+            }),
+            departure_actual: departure.as_ref().and_then(|d| {
+                parse_aviationstack_datetime(d.actual.as_deref(), d.timezone.as_deref())
+            }),
+            departure_actual_runway: departure.as_ref().and_then(|d| {
+                parse_aviationstack_datetime(d.actual_runway.as_deref(), d.timezone.as_deref())
+            }),
             departure_delay_minutes: departure.as_ref().and_then(|d| d.delay),
             arrival_airport: arrival.as_ref().and_then(|a| a.airport.clone()),
             arrival_iata: arrival.as_ref().and_then(|a| a.iata.clone()),
             arrival_icao: arrival.as_ref().and_then(|a| a.icao.clone()),
+            arrival_timezone: arrival.as_ref().and_then(|a| a.timezone.clone()),
             arrival_terminal: arrival.as_ref().and_then(|a| a.terminal.clone()),
             arrival_gate: arrival.as_ref().and_then(|a| a.gate.clone()),
             arrival_baggage: arrival.as_ref().and_then(|a| a.baggage.clone()),
-            arrival_scheduled: arrival
-                .as_ref()
-                .and_then(|a| parse_aviationstack_datetime(a.scheduled.as_deref())),
-            arrival_estimated: arrival
-                .as_ref()
-                .and_then(|a| parse_aviationstack_datetime(a.estimated.as_deref())),
-            arrival_actual: arrival
-                .as_ref()
-                .and_then(|a| parse_aviationstack_datetime(a.actual.as_deref())),
+            arrival_scheduled: arrival.as_ref().and_then(|a| {
+                parse_aviationstack_datetime(a.scheduled.as_deref(), a.timezone.as_deref())
+            }),
+            arrival_estimated: arrival.as_ref().and_then(|a| {
+                parse_aviationstack_datetime(a.estimated.as_deref(), a.timezone.as_deref())
+            }),
+            arrival_actual: arrival.as_ref().and_then(|a| {
+                parse_aviationstack_datetime(a.actual.as_deref(), a.timezone.as_deref())
+            }),
             arrival_delay_minutes: arrival.as_ref().and_then(|a| a.delay),
             aircraft_registration: aircraft.as_ref().and_then(|a| a.registration.clone()),
             aircraft_icao24: aircraft.as_ref().and_then(|a| a.icao24.clone()),
@@ -272,19 +308,46 @@ impl From<AviationstackFlight> for AviationstackFlightMetadata {
     }
 }
 
-fn parse_aviationstack_datetime(value: Option<&str>) -> Option<DateTime<Utc>> {
+/// Parse an Aviationstack timestamp.
+///
+/// When `timezone` is present, the clock fields are treated as local wall time
+/// in that zone and the numeric offset is ignored. Aviationstack commonly
+/// stamps local schedules as `+00:00` while still providing the correct IANA
+/// zone (e.g. `09:15+00:00` + `Asia/Karachi` → 04:15Z).
+fn parse_aviationstack_datetime(
+    value: Option<&str>,
+    timezone: Option<&str>,
+) -> Option<DateTime<Utc>> {
     let value = value?.trim();
     if value.is_empty() {
         return None;
     }
-    DateTime::parse_from_rfc3339(value)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
+    let parsed = DateTime::parse_from_rfc3339(value).ok()?;
+    let naive = parsed.naive_local();
+
+    if let Some(tz_name) = timezone.map(str::trim).filter(|name| !name.is_empty())
+        && let Ok(tz) = tz_name.parse::<Tz>()
+    {
+        return match naive.and_local_timezone(tz) {
+            MappedLocalTime::Single(dt) | MappedLocalTime::Ambiguous(dt, _) => {
+                Some(dt.with_timezone(&Utc))
+            }
+            MappedLocalTime::None => None,
+        };
+    }
+
+    Some(parsed.with_timezone(&Utc))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone as _;
+
+    fn metadata_from_json(value: serde_json::Value) -> AviationstackFlightMetadata {
+        let flight: AviationstackFlight = serde_json::from_value(value).unwrap();
+        AviationstackFlightMetadata::from(flight)
+    }
 
     #[test]
     fn nearby_aircraft_deserializes_signal_fields() {
@@ -304,5 +367,83 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "hex": "3c6589" })).unwrap();
         assert_eq!(ac.rssi, None);
         assert_eq!(ac.seen_pos, None);
+    }
+
+    /// Aviationstack stamps local wall times as `+00:00` while also sending the
+    /// real IANA `timezone`. TK751 ISB→IST repro: 09:15 Asia/Karachi is 04:15Z.
+    #[test]
+    fn aviationstack_local_wall_times_are_reinterpreted_via_timezone() {
+        let metadata = metadata_from_json(serde_json::json!({
+            "flight_date": "2026-07-19",
+            "flight_status": "scheduled",
+            "flight": { "iata": "TK751", "icao": "THY751", "number": "751" },
+            "departure": {
+                "iata": "ISB",
+                "timezone": "Asia/Karachi",
+                "gate": "B6",
+                "scheduled": "2026-07-19T09:15:00+00:00",
+                "estimated": "2026-07-19T09:15:00+00:00"
+            },
+            "arrival": {
+                "iata": "IST",
+                "timezone": "Europe/Istanbul",
+                "terminal": "I",
+                "scheduled": "2026-07-19T13:30:00+00:00"
+            }
+        }));
+
+        assert_eq!(
+            metadata.departure_scheduled,
+            Some(Utc.with_ymd_and_hms(2026, 7, 19, 4, 15, 0).unwrap())
+        );
+        assert_eq!(
+            metadata.departure_estimated,
+            Some(Utc.with_ymd_and_hms(2026, 7, 19, 4, 15, 0).unwrap())
+        );
+        assert_eq!(
+            metadata.arrival_scheduled,
+            Some(Utc.with_ymd_and_hms(2026, 7, 19, 10, 30, 0).unwrap())
+        );
+        assert_eq!(metadata.departure_timezone.as_deref(), Some("Asia/Karachi"));
+        assert_eq!(
+            metadata.arrival_timezone.as_deref(),
+            Some("Europe/Istanbul")
+        );
+    }
+
+    #[test]
+    fn effective_status_infers_active_between_corrected_scheduled_times() {
+        let metadata = metadata_from_json(serde_json::json!({
+            "flight_status": "scheduled",
+            "departure": {
+                "timezone": "Asia/Karachi",
+                "scheduled": "2026-07-19T09:15:00+00:00"
+            },
+            "arrival": {
+                "timezone": "Europe/Istanbul",
+                "scheduled": "2026-07-19T13:30:00+00:00"
+            }
+        }));
+        let now = Utc.with_ymd_and_hms(2026, 7, 19, 7, 13, 0).unwrap();
+
+        assert_eq!(metadata.effective_flight_status(now), Some("active"));
+    }
+
+    #[test]
+    fn effective_status_keeps_scheduled_before_departure() {
+        let metadata = metadata_from_json(serde_json::json!({
+            "flight_status": "scheduled",
+            "departure": {
+                "timezone": "Asia/Karachi",
+                "scheduled": "2026-07-19T09:15:00+00:00"
+            },
+            "arrival": {
+                "timezone": "Europe/Istanbul",
+                "scheduled": "2026-07-19T13:30:00+00:00"
+            }
+        }));
+        let now = Utc.with_ymd_and_hms(2026, 7, 19, 3, 0, 0).unwrap();
+
+        assert_eq!(metadata.effective_flight_status(now), Some("scheduled"));
     }
 }

@@ -1,6 +1,6 @@
-[env]
-CHRONO_TZ_TIMEZONE_FILTER = "Europe/Berlin"
-
+# chrono-tz: do not filter to Berlin-only. Aviationstack airport `timezone`
+# fields (e.g. Asia/Karachi) must resolve so local wall times stamped as
+# +00:00 can be reinterpreted to real UTC. Bot scheduling still uses Berlin.
 [profile.dev]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"

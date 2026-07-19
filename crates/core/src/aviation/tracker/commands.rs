@@ -596,7 +596,9 @@ async fn handle_track<T, L>(
     let aviationstack_cache_changed = aviationstack_lookup.cache_changed;
     let metadata = aviationstack_lookup.metadata;
     let aviationstack_checked = aviationstack_lookup.checked;
-    let aviationstack_info = metadata.as_ref().map(msg_aviationstack_info);
+    let aviationstack_info = metadata
+        .as_ref()
+        .map(|metadata| msg_aviationstack_info(metadata, now));
     if matches!(&identifier, FlightIdentifier::Callsign(_)) {
         let outcome = if metadata.is_some() {
             DebugHttpOutcome::success("aviationstack", "flight_metadata")
@@ -962,7 +964,7 @@ async fn handle_info<T, L>(
     }
 
     let response = if let Some(metadata) = lookup.metadata {
-        msg_aviationstack_info(&metadata)
+        msg_aviationstack_info(&metadata, now)
     } else if lookup.failed {
         "AviationStack Anfrage fehlgeschlagen FDM".to_string()
     } else if lookup.checked || aviation_client.aviationstack_enabled() {
