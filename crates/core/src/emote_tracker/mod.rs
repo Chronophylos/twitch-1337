@@ -17,8 +17,10 @@ pub use db::{
     resolve_active_name, upsert_emote,
 };
 pub use eventapi::{
-    DispatchEmoteSetUpdate, EVENTAPI_URL, EventApiConnection, ParsedEvent, connect_and_subscribe,
-    live_change_to_batch, parse_server_message, subscribe_emote_set_update_message,
+    DispatchEmoteSetUpdate, DispatchUserActiveSetChanged, EVENTAPI_URL, EventApiConnection,
+    ParsedEvent, connect_and_subscribe, live_change_to_batch, parse_server_message,
+    subscribe_emote_set_update_message, subscribe_user_update_message,
+    unsubscribe_emote_set_update_message,
 };
 pub use format::{format_actor_display, format_berlin_millis};
 pub use handle::EmoteTrackerHandle;

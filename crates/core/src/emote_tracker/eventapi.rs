@@ -21,6 +21,7 @@ const OP_ACK: u64 = 5;
 const OP_ERROR: u64 = 6;
 const OP_END_OF_STREAM: u64 = 7;
 const OP_SUBSCRIBE: u64 = 35;
+const OP_UNSUBSCRIBE: u64 = 36;
 
 pub type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub type EventApiSink = futures_util::stream::SplitSink<WsStream, Message>;
@@ -40,6 +41,19 @@ pub struct DispatchEmoteSetUpdate {
     pub updated: Vec<(DesiredEmote, DesiredEmote)>,
 }
 
+/// Active emote-set change on a Twitch connection (`user.update`).
+///
+/// Chatterino parses `body.updated[]` entries with `key == "connections"` and a
+/// nested `emote_set` field change — see `UserConnectionUpdateDispatch`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DispatchUserActiveSetChanged {
+    pub user_id: String,
+    pub old_set_id: String,
+    pub new_set_id: String,
+    pub actor: Option<ActorRef>,
+    pub connection_index: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedEvent {
     Hello {
@@ -47,6 +61,7 @@ pub enum ParsedEvent {
     },
     Heartbeat,
     Dispatch(DispatchEmoteSetUpdate),
+    UserActiveSetChanged(DispatchUserActiveSetChanged),
     Ack,
     /// Server error frame (`op` 6). Connection may continue or close next.
     Error {
@@ -123,21 +138,49 @@ pub fn parse_server_message(text: &str) -> Result<Option<ParsedEvent>> {
     }
 }
 
-/// JSON text frame for `op` 35 subscribe to channel `emote_set.update`.
+/// JSON text frame for `op` 35 subscribe to `emote_set.update` for one set.
 ///
-/// Condition shape matches EventAPI / Chatterino channel filters:
-/// `{"ctx":"channel","platform":"TWITCH","id":"<twitch_user_id>"}`.
-/// The incorrect `{"channel":...,"platform":...}` form is rejected with close
-/// code `4002 Invalid Payload`.
-pub fn subscribe_emote_set_update_message(twitch_channel_id: &str) -> String {
+/// Official EventAPI / Chatterino use `object_id` for set membership changes.
+/// Channel `ctx` is for cosmetics/entitlements and does **not** deliver personal
+/// set add/remove/rename events.
+pub fn subscribe_emote_set_update_message(emote_set_id: &str) -> String {
     serde_json::json!({
         "op": OP_SUBSCRIBE,
         "d": {
             "type": "emote_set.update",
             "condition": {
-                "ctx": "channel",
-                "platform": "TWITCH",
-                "id": twitch_channel_id,
+                "object_id": emote_set_id,
+            }
+        }
+    })
+    .to_string()
+}
+
+/// JSON text frame for `op` 36 unsubscribe from `emote_set.update` on one set.
+pub fn unsubscribe_emote_set_update_message(emote_set_id: &str) -> String {
+    serde_json::json!({
+        "op": OP_UNSUBSCRIBE,
+        "d": {
+            "type": "emote_set.update",
+            "condition": {
+                "object_id": emote_set_id,
+            }
+        }
+    })
+    .to_string()
+}
+
+/// JSON text frame for `op` 35 subscribe to `user.update` for a 7TV user.
+///
+/// Used to detect active emote-set switches on the Twitch connection (Chatterino
+/// `subscribeUser`).
+pub fn subscribe_user_update_message(seventv_user_id: &str) -> String {
+    serde_json::json!({
+        "op": OP_SUBSCRIBE,
+        "d": {
+            "type": "user.update",
+            "condition": {
+                "object_id": seventv_user_id,
             }
         }
     })
@@ -149,10 +192,15 @@ fn parse_dispatch(data: Value) -> Result<Option<ParsedEvent>> {
         .get("type")
         .and_then(Value::as_str)
         .ok_or_else(|| eyre!("dispatch missing d.type"))?;
-    if event_type != "emote_set.update" {
-        return Ok(None);
-    }
 
+    match event_type {
+        "emote_set.update" => parse_emote_set_update(data),
+        "user.update" => parse_user_update(data),
+        _ => Ok(None),
+    }
+}
+
+fn parse_emote_set_update(data: Value) -> Result<Option<ParsedEvent>> {
     let body = data
         .get("body")
         .ok_or_else(|| eyre!("emote_set.update dispatch missing d.body"))?;
@@ -179,6 +227,72 @@ fn parse_dispatch(data: Value) -> Result<Option<ParsedEvent>> {
         pulled,
         updated,
     })))
+}
+
+fn parse_user_update(data: Value) -> Result<Option<ParsedEvent>> {
+    let body = data
+        .get("body")
+        .ok_or_else(|| eyre!("user.update dispatch missing d.body"))?;
+
+    let user_id = body
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("user.update body missing id"))?
+        .to_string();
+
+    let actor = body
+        .get("actor")
+        .filter(|value| !value.is_null())
+        .map(parse_actor);
+
+    let Some(updated) = body.get("updated").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+
+    for entry in updated {
+        if entry.get("key").and_then(Value::as_str) != Some("connections") {
+            continue;
+        }
+        let connection_index = entry
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|i| usize::try_from(i).ok())
+            .unwrap_or(0);
+        let Some(fields) = entry.get("value").and_then(Value::as_array) else {
+            continue;
+        };
+        for field in fields {
+            if field.get("key").and_then(Value::as_str) != Some("emote_set") {
+                continue;
+            }
+            let old_set_id = field
+                .get("old_value")
+                .and_then(|v| v.get("id"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| eyre!("user.update emote_set missing old_value.id"))?
+                .to_string();
+            let new_set_id = field
+                .get("value")
+                .and_then(|v| v.get("id"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| eyre!("user.update emote_set missing value.id"))?
+                .to_string();
+            if old_set_id == new_set_id {
+                continue;
+            }
+            return Ok(Some(ParsedEvent::UserActiveSetChanged(
+                DispatchUserActiveSetChanged {
+                    user_id,
+                    old_set_id,
+                    new_set_id,
+                    actor,
+                    connection_index,
+                },
+            )));
+        }
+    }
+
+    Ok(None)
 }
 
 fn parse_actor(value: &Value) -> ActorRef {
@@ -375,19 +489,29 @@ fn apply_actor(event: &mut NewSetEvent, actor: Option<&ActorRef>) {
     }
 }
 
-/// Open the EventAPI websocket and subscribe to `emote_set.update` for a Twitch channel.
+/// Open the EventAPI websocket and subscribe for live set audit + set switches.
+///
+/// - `emote_set.update` + `object_id` = active set (membership changes)
+/// - `user.update` + `object_id` = 7TV user (active-set switches)
 ///
 /// Heartbeat handling and reconnect logic belong in the ingest loop. Server heartbeats
 /// use opcode 2 and require no client ack; Hello (opcode 1) may include `heartbeat_interval`.
-pub async fn connect_and_subscribe(twitch_channel_id: &str) -> Result<EventApiConnection> {
+pub async fn connect_and_subscribe(
+    emote_set_id: &str,
+    seventv_user_id: &str,
+) -> Result<EventApiConnection> {
     let (ws, _) = connect_async(EVENTAPI_URL)
         .await
         .wrap_err_with(|| format!("failed to connect to EventAPI at {EVENTAPI_URL}"))?;
     let (mut sink, stream) = ws.split();
-    let sub = subscribe_emote_set_update_message(twitch_channel_id);
-    sink.send(Message::Text(sub.into()))
-        .await
-        .wrap_err("failed to send EventAPI subscribe")?;
+    for sub in [
+        subscribe_emote_set_update_message(emote_set_id),
+        subscribe_user_update_message(seventv_user_id),
+    ] {
+        sink.send(Message::Text(sub.into()))
+            .await
+            .wrap_err("failed to send EventAPI subscribe")?;
+    }
     Ok(EventApiConnection { sink, stream })
 }
 
@@ -505,15 +629,47 @@ mod tests {
     }
 
     #[test]
-    fn subscribe_message_uses_ctx_platform_id_condition() {
-        let raw = subscribe_emote_set_update_message("12345");
+    fn subscribe_emote_set_uses_object_id() {
+        let raw = subscribe_emote_set_update_message("01SETID");
         let value: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(value["op"], 35);
         assert_eq!(value["d"]["type"], "emote_set.update");
-        let condition = &value["d"]["condition"];
-        assert_eq!(condition["ctx"], "channel");
-        assert_eq!(condition["platform"], "TWITCH");
-        assert_eq!(condition["id"], "12345");
-        assert!(condition.get("channel").is_none());
+        assert_eq!(value["d"]["condition"]["object_id"], "01SETID");
+        assert!(value["d"]["condition"].get("ctx").is_none());
+    }
+
+    #[test]
+    fn subscribe_user_update_uses_object_id() {
+        let raw = subscribe_user_update_message("01USERID");
+        let value: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["op"], 35);
+        assert_eq!(value["d"]["type"], "user.update");
+        assert_eq!(value["d"]["condition"]["object_id"], "01USERID");
+    }
+
+    #[test]
+    fn unsubscribe_emote_set_uses_opcode_36() {
+        let raw = unsubscribe_emote_set_update_message("01SETID");
+        let value: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["op"], 36);
+        assert_eq!(value["d"]["type"], "emote_set.update");
+        assert_eq!(value["d"]["condition"]["object_id"], "01SETID");
+    }
+
+    #[test]
+    fn parse_user_update_active_set_change() {
+        let raw = include_str!("fixtures/dispatch_user_active_set.json");
+        let msg = parse_server_message(raw).unwrap().unwrap();
+        let ParsedEvent::UserActiveSetChanged(u) = msg else {
+            panic!("expected user active set change, got {msg:?}");
+        };
+        assert_eq!(u.user_id, "01FZKKA0A8000FP66RDQP75B9A");
+        assert_eq!(u.old_set_id, "01FZKKA0A8000FP66RDQP75B9A");
+        assert_eq!(u.new_set_id, "01NEWACTIVESET000000000000");
+        assert_eq!(u.connection_index, 0);
+        assert_eq!(
+            u.actor.as_ref().and_then(|a| a.display_name.as_deref()),
+            Some("Streamer")
+        );
     }
 }
