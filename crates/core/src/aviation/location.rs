@@ -1,10 +1,10 @@
 //! Embedded location data + IATA/ICAO predicates + location resolution.
 //!
-//! PLZ and airline tables are baked in via the data crate and lazy-initialized
-//! into `OnceLock` `HashMap`s. Airport codes come from the data-crate bake
-//! (`twitch_1337_data::location`). Predicate helpers (`is_iata_flight_number`
-//! etc.) are used by both `client.rs` (for `resolve_callsign` /
-//! `aviationstack_query`) and `resolve_location`.
+//! PLZ and airport tables come from packed blobs in `twitch_1337_data::location`
+//! and are indexed into `OnceLock` `HashMap`s. Airlines stay as `include_str!`
+//! CSV. Predicate helpers (`is_iata_flight_number` etc.) are used by both
+//! `client.rs` (for `resolve_callsign` / `aviationstack_query`) and
+//! `resolve_location`.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -27,7 +27,6 @@ fn plz_table() -> &'static HashMap<&'static str, (f64, f64)> {
     TABLE.get_or_init(|| {
         trace!("Initializing PLZ lookup table from baked data");
         plz_entries()
-            .iter()
             .map(|e| (e.plz, (f64::from(e.lat), f64::from(e.lon))))
             .collect()
     })
@@ -44,8 +43,8 @@ fn is_valid_plz(plz: &str) -> bool {
 // --- Airport Lookup ---
 
 struct AirportData {
-    by_icao: HashMap<&'static str, &'static LookupAirport>,
-    by_iata: HashMap<&'static str, &'static LookupAirport>,
+    by_icao: HashMap<&'static str, LookupAirport>,
+    by_iata: HashMap<&'static str, LookupAirport>,
 }
 
 fn airport_data() -> &'static AirportData {
