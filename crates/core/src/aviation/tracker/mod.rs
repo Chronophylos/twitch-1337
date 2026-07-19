@@ -214,6 +214,14 @@ pub struct TrackedFlight {
     pub dest_lon: Option<f64>,
 }
 
+/// Bump when [`AviationstackFlightMetadata`] shape/semantics change so persisted
+/// `flight_info_cache` entries from older builds are ignored and refetched.
+///
+/// v1 (default for missing field): pre-timezone-reinterpretation cache. Those
+/// entries store local wall times as UTC and omit `*_timezone`, which made
+/// `!track` keep saying `Status: scheduled` after the timezone fix shipped.
+pub const FLIGHT_INFO_CACHE_VERSION: u32 = 2;
+
 /// Persisted AviationStack lookup result shared by `!track` and `!info`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedFlightInfo {
@@ -222,11 +230,17 @@ pub struct CachedFlightInfo {
     pub metadata: Option<AviationstackFlightMetadata>,
     pub cached_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    #[serde(default)]
+    pub cache_version: u32,
 }
 
 impl CachedFlightInfo {
     pub(crate) fn is_expired(&self, now: DateTime<Utc>) -> bool {
         self.expires_at <= now
+    }
+
+    pub(crate) fn is_current(&self) -> bool {
+        self.cache_version >= FLIGHT_INFO_CACHE_VERSION
     }
 
     pub(crate) fn matches_any_alias(&self, aliases: &[String]) -> bool {
@@ -373,6 +387,30 @@ mod tests {
             polls_since_change,
             ..tracked_flight()
         }
+    }
+
+    #[test]
+    fn flight_info_cache_version_defaults_stale_and_rejects_pre_timezone_entries() {
+        let legacy = r#"(
+            aliases: ["TK751"],
+            flight_date: Some("2026-07-19"),
+            metadata: None,
+            cached_at: "2026-07-19T07:13:08Z",
+            expires_at: "2026-07-19T17:30:00Z",
+        )"#;
+        let entry: CachedFlightInfo = ron::from_str(legacy).unwrap();
+        assert_eq!(entry.cache_version, 0);
+        assert!(!entry.is_current());
+
+        let current = CachedFlightInfo {
+            aliases: vec!["TK751".into()],
+            flight_date: Some("2026-07-19".into()),
+            metadata: None,
+            cached_at: dt("2026-07-19T07:13:08Z"),
+            expires_at: dt("2026-07-19T17:30:00Z"),
+            cache_version: FLIGHT_INFO_CACHE_VERSION,
+        };
+        assert!(current.is_current());
     }
 
     #[test]

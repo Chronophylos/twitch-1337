@@ -253,7 +253,7 @@ fn prune_flight_info_cache(state: &mut FlightTrackerState, now: DateTime<Utc>) -
     let before = state.flight_info_cache.len();
     state
         .flight_info_cache
-        .retain(|entry| !entry.is_expired(now));
+        .retain(|entry| !entry.is_expired(now) && entry.is_current());
     before != state.flight_info_cache.len()
 }
 
@@ -265,7 +265,9 @@ fn cached_flight_info(
     state
         .flight_info_cache
         .iter()
-        .filter(|entry| !entry.is_expired(now) && entry.matches_any_alias(aliases))
+        .filter(|entry| {
+            !entry.is_expired(now) && entry.is_current() && entry.matches_any_alias(aliases)
+        })
         .max_by_key(|entry| entry.cached_at)
         .map(|entry| entry.metadata.clone())
 }
@@ -301,6 +303,7 @@ fn upsert_flight_info_cache(
         entry.metadata = metadata;
         entry.cached_at = now;
         entry.expires_at = expires_at;
+        entry.cache_version = super::FLIGHT_INFO_CACHE_VERSION;
         return;
     }
 
@@ -310,6 +313,7 @@ fn upsert_flight_info_cache(
         metadata,
         cached_at: now,
         expires_at,
+        cache_version: super::FLIGHT_INFO_CACHE_VERSION,
     });
 }
 

@@ -479,6 +479,10 @@ async fn info_reuses_aviationstack_cache_seeded_by_track() {
         ron::from_str(&persisted).unwrap();
     assert_eq!(state.flight_info_cache.len(), 1);
     assert!(state.flight_info_cache[0].metadata.is_some());
+    assert_eq!(
+        state.flight_info_cache[0].cache_version,
+        twitch_1337::aviation::tracker::FLIGHT_INFO_CACHE_VERSION
+    );
     assert!(
         state.flight_info_cache[0]
             .aliases
