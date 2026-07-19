@@ -239,33 +239,70 @@ async fn run_eventapi_session(
     Err(eyre!("EventAPI websocket stream ended"))
 }
 
+/// How to treat an `emote_set.update` whose `body.id` differs from the
+/// remembered channel active set.
+///
+/// Channel-scoped EventAPI subscriptions also deliver updates for unrelated
+/// painted/community sets (e.g. NNYS). Those must not be treated as active-set
+/// switches — that discards the live payload, REST-reconciles, and spams gaps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SetIdMismatch {
+    /// Dispatch targets a set that is not the channel's current active set.
+    Foreign,
+    /// Channel active emote set changed; REST reports `active_set_id`.
+    ActiveSetChanged { active_set_id: String },
+}
+
+fn classify_set_id_mismatch(remembered_set_id: &str, rest_active_set_id: &str) -> SetIdMismatch {
+    if rest_active_set_id == remembered_set_id {
+        SetIdMismatch::Foreign
+    } else {
+        SetIdMismatch::ActiveSetChanged {
+            active_set_id: rest_active_set_id.to_string(),
+        }
+    }
+}
+
 async fn handle_set_switch(
     handle: &EmoteTrackerHandle,
     http: &reqwest::Client,
     cfg: &IngestConfig,
     gap_started_at: &mut Option<i64>,
     remembered_set_id: &mut String,
-    new_set_id: &str,
+    dispatch_set_id: &str,
 ) -> Result<()> {
-    warn!(
-        old_set_id = %remembered_set_id,
-        new_set_id = %new_set_id,
-        "7TV emote set switch detected"
-    );
-    let gap_from = gap_started_at.unwrap_or_else(|| {
-        let at = now_ms();
-        *gap_started_at = Some(at);
-        at
-    });
-
     let snapshot = fetch_channel_set(http, &cfg.rest_base_url, &cfg.twitch_channel_id).await?;
-    let at = now_ms();
-    let current = handle.list_active_emotes().await?;
-    let batch = reconcile_batch(at, &current, &snapshot.emotes, Some((gap_from, at)), None);
-    handle.apply_set_changes(batch).await?;
-    *remembered_set_id = snapshot.set_id;
-    *gap_started_at = None;
-    Ok(())
+    match classify_set_id_mismatch(remembered_set_id, &snapshot.set_id) {
+        SetIdMismatch::Foreign => {
+            debug!(
+                remembered_set_id = %remembered_set_id,
+                dispatch_set_id = %dispatch_set_id,
+                "ignoring emote_set.update for non-active set"
+            );
+            Ok(())
+        }
+        SetIdMismatch::ActiveSetChanged { active_set_id } => {
+            warn!(
+                old_set_id = %remembered_set_id,
+                new_set_id = %active_set_id,
+                dispatch_set_id = %dispatch_set_id,
+                "7TV emote set switch detected"
+            );
+            let gap_from = gap_started_at.unwrap_or_else(|| {
+                let at = now_ms();
+                *gap_started_at = Some(at);
+                at
+            });
+
+            let at = now_ms();
+            let current = handle.list_active_emotes().await?;
+            let batch = reconcile_batch(at, &current, &snapshot.emotes, Some((gap_from, at)), None);
+            handle.apply_set_changes(batch).await?;
+            *remembered_set_id = active_set_id;
+            *gap_started_at = None;
+            Ok(())
+        }
+    }
 }
 
 async fn connect_eventapi(
@@ -350,5 +387,153 @@ mod tests {
 
         let active = handle.list_active_emotes().await.unwrap();
         assert_eq!(active.len(), 2);
+    }
+
+    #[test]
+    fn foreign_set_update_when_rest_active_unchanged() {
+        // Prod symptom: channel sub delivers NNYS set updates while the
+        // channel active set stays 01FZKKA0A8000FP66RDQP75B9A.
+        let remembered = "01FZKKA0A8000FP66RDQP75B9A";
+        let rest_active = "01FZKKA0A8000FP66RDQP75B9A";
+        assert_eq!(
+            classify_set_id_mismatch(remembered, rest_active),
+            SetIdMismatch::Foreign
+        );
+    }
+
+    #[test]
+    fn active_set_changed_when_rest_reports_new_id() {
+        let remembered = "01FZKKA0A8000FP66RDQP75B9A";
+        let rest_active = "01NEWACTIVESET000000000000";
+        assert_eq!(
+            classify_set_id_mismatch(remembered, rest_active),
+            SetIdMismatch::ActiveSetChanged {
+                active_set_id: rest_active.into(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn foreign_set_dispatch_does_not_write_gap() {
+        crate::install_crypto_provider();
+        let mock = MockServer::start().await;
+        let channel_id = "784681545";
+        let active_set = "01FZKKA0A8000FP66RDQP75B9A";
+        let body = format!(
+            r#"{{
+            "emote_set": {{
+                "id": "{active_set}",
+                "emotes": [{{"id": "e1", "name": "Kappa"}}]
+            }}
+        }}"#
+        );
+        Mock::given(method("GET"))
+            .and(path(format!("/v3/users/twitch/{channel_id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&mock)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join(DB_FILENAME);
+        let handle = EmoteTrackerHandle::open(&db_path).unwrap();
+        let cfg = IngestConfig {
+            twitch_channel_id: channel_id.into(),
+            rest_base_url: format!("{}/v3", mock.uri()),
+            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+        };
+
+        startup_reconcile_once(&handle, &reqwest::Client::new(), &cfg, None)
+            .await
+            .unwrap();
+        assert_eq!(count_events(&db_path, SetEventKind::Gap), 0);
+
+        let mut remembered = active_set.to_string();
+        let mut gap_started_at = None;
+        handle_set_switch(
+            &handle,
+            &reqwest::Client::new(),
+            &cfg,
+            &mut gap_started_at,
+            &mut remembered,
+            "01JEY2SMVTRMC4ZHWCYKBA6M5R", // NNYS 2024 — not the active set
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(remembered, active_set);
+        assert_eq!(count_events(&db_path, SetEventKind::Gap), 0);
+        assert!(gap_started_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn real_active_set_switch_still_reconciles_with_gap() {
+        crate::install_crypto_provider();
+        let mock = MockServer::start().await;
+        let channel_id = "784681545";
+        let old_set = "01FZKKA0A8000FP66RDQP75B9A";
+        let new_set = "01NEWACTIVESET000000000000";
+
+        let initial = format!(
+            r#"{{
+            "emote_set": {{
+                "id": "{old_set}",
+                "emotes": [{{"id": "e1", "name": "Kappa"}}]
+            }}
+        }}"#
+        );
+        let switched = format!(
+            r#"{{
+            "emote_set": {{
+                "id": "{new_set}",
+                "emotes": [
+                    {{"id": "e1", "name": "Kappa"}},
+                    {{"id": "e2", "name": "Pog"}}
+                ]
+            }}
+        }}"#
+        );
+
+        Mock::given(method("GET"))
+            .and(path(format!("/v3/users/twitch/{channel_id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(initial))
+            .up_to_n_times(1)
+            .mount(&mock)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v3/users/twitch/{channel_id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(switched))
+            .mount(&mock)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join(DB_FILENAME);
+        let handle = EmoteTrackerHandle::open(&db_path).unwrap();
+        let cfg = IngestConfig {
+            twitch_channel_id: channel_id.into(),
+            rest_base_url: format!("{}/v3", mock.uri()),
+            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+        };
+
+        startup_reconcile_once(&handle, &reqwest::Client::new(), &cfg, None)
+            .await
+            .unwrap();
+
+        let mut remembered = old_set.to_string();
+        let mut gap_started_at = None;
+        handle_set_switch(
+            &handle,
+            &reqwest::Client::new(),
+            &cfg,
+            &mut gap_started_at,
+            &mut remembered,
+            new_set,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(remembered, new_set);
+        assert_eq!(count_events(&db_path, SetEventKind::Gap), 1);
+        assert_eq!(count_events(&db_path, SetEventKind::Add), 1);
+        assert!(gap_started_at.is_none());
     }
 }
