@@ -464,11 +464,23 @@ fn sanitize_lookup_name(name: &str) -> String {
         .collect()
 }
 
+/// Packed lookup-airport blob (`LKA1`):
+/// header (12) + rows (`count` × 24) + UTF-8 name blob.
+/// Row: icao[4] iata[3] flags lat_le lon_le name_off_le name_len_le.
+const LOOKUP_AIRPORT_ROW_SIZE: usize = 24;
+const LOOKUP_FLAG_ICAO: u8 = 1;
+const LOOKUP_FLAG_IATA: u8 = 2;
+
+/// Packed PLZ blob (`PLZ1`): header (8) + rows (`count` × 16).
+/// Row: plz[5] pad[3] lat_le lon_le.
+const PLZ_ROW_SIZE: usize = 16;
+
 fn generate_lookup_airport_db(out_dir: &Path, manifest_dir: &Path) {
     let path = manifest_dir.join("assets/location/airports.csv");
     println!("cargo:rerun-if-changed={}", path.display());
 
     let mut rows = Vec::new();
+    let mut name_blob = Vec::new();
     let mut rdr = ReaderBuilder::new()
         .has_headers(false)
         .from_path(&path)
@@ -494,39 +506,48 @@ fn generate_lookup_airport_db(out_dir: &Path, manifest_dir: &Path) {
             continue;
         }
 
-        rows.push((
-            icao_ok.then(|| icao.to_owned()),
-            iata_ok.then(|| iata.to_owned()),
-            name,
-            lat,
-            lon,
-        ));
+        let name_off = u32::try_from(name_blob.len()).expect("name blob offset fits u32");
+        let name_len = u32::try_from(name.len()).expect("name length fits u32");
+        name_blob.extend_from_slice(name.as_bytes());
+
+        let mut icao_bytes = [0u8; 4];
+        let mut iata_bytes = [0u8; 3];
+        let mut flags = 0u8;
+        if icao_ok {
+            icao_bytes.copy_from_slice(icao.as_bytes());
+            flags |= LOOKUP_FLAG_ICAO;
+        }
+        if iata_ok {
+            iata_bytes.copy_from_slice(iata.as_bytes());
+            flags |= LOOKUP_FLAG_IATA;
+        }
+
+        rows.push((icao_bytes, iata_bytes, flags, lat, lon, name_off, name_len));
     }
 
-    let gen_path = out_dir.join("location_airport_db.rs");
-    let mut f = fs::File::create(&gen_path).expect("create location_airport_db.rs");
-    writeln!(f, "#[allow(clippy::approx_constant)]").unwrap();
-    writeln!(f, "static LOOKUP_AIRPORTS: &[LookupAirport] = &[").unwrap();
-    for (icao, iata, name, lat, lon) in &rows {
-        let icao_lit = match icao {
-            Some(c) => format!("Some(\"{c}\")"),
-            None => "None".into(),
-        };
-        let iata_lit = match iata {
-            Some(c) => format!("Some(\"{c}\")"),
-            None => "None".into(),
-        };
-        let name_esc = name.replace('\\', "\\\\").replace('"', "\\\"");
-        writeln!(
-            f,
-            "    LookupAirport {{ icao: {icao_lit}, iata: {iata_lit}, name: \"{name_esc}\", lat: {lat}_f32, lon: {lon}_f32 }},"
-        )
-        .unwrap();
+    let count = u32::try_from(rows.len()).expect("airport count fits u32");
+    let name_blob_len = u32::try_from(name_blob.len()).expect("name blob len fits u32");
+    let mut blob = Vec::with_capacity(12 + rows.len() * LOOKUP_AIRPORT_ROW_SIZE + name_blob.len());
+    blob.extend_from_slice(b"LKA1");
+    blob.extend_from_slice(&count.to_le_bytes());
+    blob.extend_from_slice(&name_blob_len.to_le_bytes());
+    for (icao, iata, flags, lat, lon, name_off, name_len) in &rows {
+        blob.extend_from_slice(icao);
+        blob.extend_from_slice(iata);
+        blob.push(*flags);
+        blob.extend_from_slice(&lat.to_le_bytes());
+        blob.extend_from_slice(&lon.to_le_bytes());
+        blob.extend_from_slice(&name_off.to_le_bytes());
+        blob.extend_from_slice(&name_len.to_le_bytes());
     }
-    writeln!(f, "];").unwrap();
+    blob.extend_from_slice(&name_blob);
+
+    let bin_path = out_dir.join("location_airports.bin");
+    fs::write(&bin_path, &blob).expect("write location_airports.bin");
     println!(
-        "cargo:warning=Generated lookup airport DB with {} airports",
-        rows.len()
+        "cargo:warning=Generated packed lookup airport DB with {} airports ({} bytes)",
+        rows.len(),
+        blob.len()
     );
 }
 
@@ -554,20 +575,27 @@ fn generate_plz_db(out_dir: &Path, manifest_dir: &Path) {
         let Ok(lon) = rec[2].trim().parse::<f32>() else {
             continue;
         };
-        rows.push((plz.to_owned(), lat, lon));
+        let mut plz_bytes = [0u8; 5];
+        plz_bytes.copy_from_slice(plz.as_bytes());
+        rows.push((plz_bytes, lat, lon));
     }
 
-    let gen_path = out_dir.join("plz_db.rs");
-    let mut f = fs::File::create(&gen_path).expect("create plz_db.rs");
-    writeln!(f, "#[allow(clippy::approx_constant)]").unwrap();
-    writeln!(f, "static PLZ_ENTRIES: &[PlzEntry] = &[").unwrap();
+    let count = u32::try_from(rows.len()).expect("plz count fits u32");
+    let mut blob = Vec::with_capacity(8 + rows.len() * PLZ_ROW_SIZE);
+    blob.extend_from_slice(b"PLZ1");
+    blob.extend_from_slice(&count.to_le_bytes());
     for (plz, lat, lon) in &rows {
-        writeln!(
-            f,
-            "    PlzEntry {{ plz: \"{plz}\", lat: {lat}_f32, lon: {lon}_f32 }},"
-        )
-        .unwrap();
+        blob.extend_from_slice(plz);
+        blob.extend_from_slice(&[0u8; 3]);
+        blob.extend_from_slice(&lat.to_le_bytes());
+        blob.extend_from_slice(&lon.to_le_bytes());
     }
-    writeln!(f, "];").unwrap();
-    println!("cargo:warning=Generated PLZ DB with {} entries", rows.len());
+
+    let bin_path = out_dir.join("plz.bin");
+    fs::write(&bin_path, &blob).expect("write plz.bin");
+    println!(
+        "cargo:warning=Generated packed PLZ DB with {} entries ({} bytes)",
+        rows.len(),
+        blob.len()
+    );
 }
