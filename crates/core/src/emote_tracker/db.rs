@@ -151,7 +151,7 @@ pub fn latest_emote_id_for_name_in_events(conn: &Connection, name: &str) -> Resu
     .map_err(Into::into)
 }
 
-/// Latest bootstrap / add / remove audit row for an emote (chat lifecycle line).
+/// Latest bootstrap / add / remove / rename audit row for an emote (chat lifecycle line).
 pub fn latest_lifecycle_event(conn: &Connection, emote_id: &str) -> Result<Option<SetEventRow>> {
     conn.query_row(
         "SELECT id, at, kind, emote_id, old_name, new_name,

@@ -1,6 +1,6 @@
 # PotatBotat emote-set attribution — Design
 
-Status: approved (pending implementation plans)
+Status: implemented (on `spec/potat-emote-attribution`; PR may keep or retitle the branch)
 Date: 2026-07-20
 Branch: `spec/potat-emote-attribution`
 Parent: [2026-07-17-emote-tracker-design.md](./2026-07-17-emote-tracker-design.md)
@@ -17,7 +17,7 @@ instead of bare `"unknown"` or only a 7TV performer that is missing/null.
 
 - PotatBotat mutates 7TV **as its own 7TV user** (`01GNRG2MDG0000DM7N933JH49Y` / `potatbotat`). The chat requester is **not** on EventAPI `body.actor`.
 - Potat’s own history API already splits `user_login` (chatter) vs `actor` (`potatbotat` | `external`), including `#undo` / `#redo` as `type: UNDO|REDO`.
-- Our ingest already persists nullable `actor_*` from `body.actor` only. Per-emote `value.actor_id` on EventAPI/REST is **ignored** today.
+- Our ingest persists nullable `actor_*` from EventAPI `body.actor` only. Per-emote `value.actor_id` is the original set-adder and must **not** be copied into `actor_7tv_id` (that poisoned Step A in an early draft).
 - Prod channel **euterheissgetraenk** (set `01FZKKA0A8000FP66RDQP75B9A`, ~980 emotes): live `add` rows for `zen` / `HomeAutomation` had **all-null** `actor_*` while REST still had `actor_id` → **D3vistat3r**. Potat history for that channel mixes `external` and `potatbotat` heavily — performer-first gating matters.
 - IRC command correlation was considered and **rejected for v1**: fragile for undo/redo (no emote name), prefix/silent races, and same-emote multi-user ambiguity. History is the sole requester source.
 
@@ -43,7 +43,7 @@ Primary Potat sources: [potat.app/help](https://potat.app/help), [api.potat.app/
 | Correlation | **Fetch history once per EventAPI dispatch**; match by **newest-first list order**; `ago` is a **soft staleness cap** only (no precise absolute timeline) |
 | Persistence | **Hybrid**: persist attribution columns when confidently matched; keep raw EventAPI/reconcile `actor_*` untouched |
 | Display | **Audit:** Actor (raw `actor_*`) **and** Attribution (requester via Potat) as separate columns. **`!emote`:** attribution clause when present; lifecycle includes rename |
-| Actor_id fallback | **add/remove only** — never on rename (`updated`); `actor_id` is original adder |
+| Actor / `value.actor_id` | **Do not** copy per-emote `value.actor_id` into `actor_7tv_id` — that field is the original set-adder, not the live mutation performer (same trap as rename). Actor column = true EventAPI `body.actor` only (null → `"unknown"`). |
 | Safety | **Performer-first Step A**; Step B = id + action + **newest-first**; `ago` soft cap; ambiguous head → null |
 
 ## Architecture
@@ -52,7 +52,7 @@ Primary Potat sources: [potat.app/help](https://potat.app/help), [api.potat.app/
 EventAPI emote_set.update
         │
         ▼
- actor resolve: body.actor → else value.actor_id (+ optional REST name cache)
+ actor resolve: body.actor only (true performer; null stays null)
         │
         ▼
  set_events.actor_*  (performer; may still be null)
@@ -75,20 +75,18 @@ EventAPI emote_set.update
 On each live push/pull/rename change entry:
 
 1. Prefer `body.actor` → `actor_7tv_id` / `actor_username` / `actor_display_name` (existing).
-2. **Else** (null/`body.actor` missing), per-emote `actor_id` fallback:
-   - **add (`pushed`) / remove (`pulled`):** use `value.actor_id` / `old_value.actor_id` → store as `actor_7tv_id`; best-effort resolve username/display via REST user fetch + small in-memory cache.
-   - **rename (`updated`):** **do not** fall back to `value.actor_id` / `old_value.actor_id`. On 7TV, that field is the **original set-adder**, not the renamer — REST membership keeps the same `actor_id` after alias/rename (verified on euterheissgetraenk aliased emotes). EventAPI rename samples ([SevenTV#256](https://github.com/SevenTV/SevenTV/issues/256)) keep the same `actor_id` on both `old_value` and `value` while `body.actor` is the mutation performer. Falling back would mis-label the rename Actor column as the original adder.
-3. If still missing → leave null (display `"unknown"` as today).
+2. **Do not** fall back to per-emote `value.actor_id` / `old_value.actor_id` for any kind (add / remove / rename). On 7TV that field is the **original set-adder**, not the live mutation performer — copying it into `actor_7tv_id` would (a) close Step A for Potat-mediated null-`body.actor` events and (b) mislabel the Actor column (especially wrong for removals). EventAPI rename samples ([SevenTV#256](https://github.com/SevenTV/SevenTV/issues/256)) keep the same `actor_id` on both `old_value` and `value` while `body.actor` is the mutation performer.
+3. If `body.actor` is missing → leave `actor_*` null (display `"unknown"` as today). Optional out-of-scope: REST user fetch to decorate a known performer id with username/display — **not required** for gate/attribution.
 
-**Parse wiring:** today’s `DesiredEmote` is `{ emote_id, name }` only — EventAPI `value.actor_id` is dropped. Extend live parse so each pushed/pulled/updated value carries optional `actor_id: Option<String>` (field name on the Rust struct: `actor_id`). REST `DesiredEmote` / reconcile snapshots leave it `None`. Actor_id fallback runs only in `live_change_to_batch` (or a helper it calls) after `apply_actor(body.actor)`.
+**Parse wiring:** live parse may still carry optional `actor_id: Option<String>` on `DesiredEmote` for fixtures/debug, but `live_change_to_batch` must not write it into `actor_7tv_id`. REST / reconcile snapshots leave it `None`.
 
-Preferring `body.actor` is always correct when present (including Potat renames). Null-body rename → Actor stays unknown unless/until history attribution fills requester separately (Step B with `ALIAS`).
+Preferring `body.actor` is always correct when present (including Potat renames). Null-body events → Actor stays unknown; Potat history attribution may still fill requester separately when Step A opens on a null performer + history hit (or when `body.actor` is Potat).
 
-Reconcile/bootstrap paths stay actor-null unless we later choose to enrich from REST `actor_id` on desired snapshot (**adds only** if ever — never treat REST `actor_id` as renamer).
+Reconcile/bootstrap paths stay actor-null unless we later choose to enrich from REST `actor_id` on desired snapshot (**adds only** if ever — never treat REST `actor_id` as renamer / remover).
 
 ### Step A — Potat mediation gate (performer-first, emote-id only)
 
-Resolved performer (`actor_7tv_id` after the actor pipeline) is authoritative for *who mutated 7TV*. History must not contradict a known human/editor performer. **Step A never matches on emote name** — only on resolved performer identity and/or Potat history rows keyed by **emote id**.
+Resolved performer (`actor_7tv_id` from **true EventAPI `body.actor` only**) is authoritative for *who mutated 7TV*. History must not contradict a known human/editor performer. **Step A never matches on emote name** — only on resolved performer identity and/or Potat history rows keyed by **emote id**.
 
 | Resolved `actor_7tv_id` | Gate |
 |---|---|
@@ -96,7 +94,7 @@ Resolved performer (`actor_7tv_id` after the actor pipeline) is authoritative fo
 | **== Potat** | **OPEN** — proceed to Step B for requester. |
 | **Null / unknown** | **OPEN** only if Potat history (when attribution enabled), fetched per [history matching](#history-matching-list-order-primary-ago-soft), has a qualifying **`STV` + `potatbotat` + emote id** row (same filters as Step B, without requiring action align for the gate — id + actor + provider + not-stale is enough to prove Potat mediation). |
 
-Rationale: after `actor_id` fallback, null should be rare. When it happens, an id-keyed Potat history hit is the only non-performer signal allowed to open the gate. History must never reopen a gate that a concrete non-Potat performer already closed.
+Rationale: null `body.actor` is common on Potat-mediated EventAPI frames. An id-keyed Potat history hit is the only non-performer signal allowed to open the gate. History must never reopen a gate that a concrete non-Potat performer already closed.
 
 If the gate fails → **do not** set `via` / requester. Display uses the actor display rule only.
 
@@ -108,11 +106,12 @@ Potat history items expose **no absolute timestamp** — only relative `ago` (sw
 
 **On each live EventAPI `emote_set.update` dispatch** (attribution enabled):
 
-1. **Fetch once per dispatch** `GET /emotes/history/{channel_login}` (not once per pushed/pulled/updated entry). Multi-emote `#add` shares one history page; each `NewSetEvent` still matches independently by `emote_id` + action.
-2. **Retry (locked):** if the first response is empty **or** no event in the batch finds a qualifying Step B candidate, sleep **`500ms`** and fetch **once** more. Soft-fail on HTTP/timeout/parse errors (log + leave attribution null). Never block catalog mutations on history failure.
-3. Treat the `history[]` array as **newest-first** (observed API order). Scan at most `head_scan_limit` rows from the head (first page only — do not follow pagination).
-4. Apply filters below while walking from the head.
-5. Use parsed `ago` only as a **soft staleness cap**: skip a row if age is clearly **> `window_secs + small_slack`**. If `ago` is missing/unparsable, **do not invent a time** — keep the row eligible by list position only (still subject to head-window / ambiguity rules).
+1. **Skip history entirely** when every eligible event already has a known non-Potat `actor_7tv_id` (Step A permanently closed for the whole batch).
+2. **Fetch once per dispatch** `GET /emotes/history/{channel_login}` (not once per pushed/pulled/updated entry). Multi-emote `#add` shares one history page; each `NewSetEvent` still matches independently by `emote_id` + action.
+3. **Retry (locked):** if the first response is empty **or** no event in the batch finds a qualifying Step B candidate, **and** at least one eligible event still has a null or Potat performer (gate not permanently closed for all), sleep **`500ms`** and fetch **once** more. Do **not** retry when every eligible event has a known non-Potat performer. Soft-fail on HTTP/timeout/parse errors (log + leave attribution null). Never block catalog mutations on history failure.
+4. Treat the `history[]` array as **newest-first** (observed API order). Scan at most `head_scan_limit` rows from the head (first page only — do not follow pagination).
+5. Apply filters below while walking from the head.
+6. Use parsed `ago` only as a **soft staleness cap**: skip a row if age is clearly **> `window_secs + small_slack`**. If `ago` is missing/unparsable, **do not invent a time** — keep the row eligible by list position only (still subject to head-window / ambiguity rules).
 
 | Symbol | Default | Role |
 |---|---|---|
@@ -276,7 +275,7 @@ New nullable columns on `set_events`:
 
 Update `NewSetEvent` / `SetEventRow` / `insert_set_event` / `list_set_events` / `map_set_event_row` / all `NewSetEvent { … }` literals to include the four fields (default `None`).
 
-**Clarification on `via`:** set `via = "potatbotat"` only together with a non-null `requester_login`. If we know Potat performed the change but cannot resolve requester, rely on `actor_*` showing PotatBotat (after actor_id fallback) without a `via` column.
+**Clarification on `via`:** set `via = "potatbotat"` only together with a non-null `requester_login`. If we know Potat performed the change but cannot resolve requester, rely on `actor_*` showing PotatBotat (when `body.actor` is Potat) without a `via` column.
 
 **Login casing:** lowercase `user_login` from Potat history before uniqueness compares and before persist (Twitch login style). Do not depend on Potat’s display casing.
 
@@ -306,7 +305,7 @@ Code constants (not settings): `small_slack = 2s`, `head_scan_limit = 50`, `ambi
 
 No chat-prefix setting (IRC attribution dropped; `#` is Potat’s chat UX only).
 
-When `enabled = false`: skip Potat history calls + attribution writes; actor_id fallback for `actor_*` still runs (fixes `"unknown"` independently).
+When `enabled = false`: skip Potat history calls + attribution writes; `actor_*` still come from EventAPI `body.actor` only.
 
 ## Runtime wiring
 
@@ -317,8 +316,8 @@ When `enabled = false`: skip Potat history calls + attribution writes; actor_id 
 
 ## Testing
 
-- Unit: actor_id fallback (add/remove yes, rename no); gate rejects non-Potat performer; null performer opens only on STV+potatbotat+id; newest-first unique history login → attribution; two head logins → null; soft `ago` skips clearly stale rows; unparsable `ago` still allows head match; `ago` parser unit cases; display helpers; lowercase login persist.
-- Fixture: EventAPI push with null `actor` + `value.actor_id`; mocked Potat history JSON (STANDARD / UNDO / REDO / external / non-STV / multi-emote).
+- Unit: null `body.actor` + non-Potat `value.actor_id` keeps Actor null and still attributes via history; gate rejects known non-Potat performer; null performer opens only on STV+potatbotat+id; newest-first unique history login → attribution; two head logins → null; soft `ago` skips clearly stale rows; unparsable `ago` still allows head match; `ago` parser unit cases; ALIAS↔rename; display helpers; lowercase login persist; skip history fetch/retry when all gates permanently closed.
+- Fixture: EventAPI push with null `actor` + `value.actor_id`; mocked Potat history JSON (STANDARD / UNDO / REDO / ALIAS / external / non-STV / multi-emote).
 - Integration (optional): apply batch with mock history → attribution columns; `!emote` / audit formatting; settings `enabled=false` skips fetch.
 - Migrate: fresh DB at v2; in-memory v1 schema upgraded via ALTER path.
 
@@ -340,7 +339,7 @@ Each plan → its own PR from a `feature/` branch after this spec is accepted.
 | Safer attribution | Performer-first Step A; Step B newest-first + action + STV; ambiguous head → null |
 | `!emote` / audit display | `!emote` uses attribution in the prose line; audit shows **both** Actor + Attribution columns |
 | Login casing | Lowercase normalize history logins |
-| Rename vs `actor_id` | Prefer `body.actor`; **no** `actor_id` fallback on rename (adder ≠ renamer) |
+| Rename vs `actor_id` | Prefer `body.actor`; **never** copy `value.actor_id` into `actor_7tv_id` (adder ≠ performer for add/remove/rename) |
 | Multi-emote `#add` | Per emote **id** independently via history |
 | `#undo` / `#redo` | History rows only; ordinary added/removed display |
 

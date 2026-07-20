@@ -221,6 +221,7 @@ mod tests {
         let raw = match name {
             "standard" => include_str!("fixtures/potat_history_standard.json"),
             "undo" => include_str!("fixtures/potat_history_undo.json"),
+            "alias" => include_str!("fixtures/potat_history_alias.json"),
             "ambiguous" => include_str!("fixtures/potat_history_ambiguous.json"),
             "non_stv" => include_str!("fixtures/potat_history_non_stv.json"),
             _ => panic!("unknown fixture {name}"),
@@ -300,6 +301,21 @@ mod tests {
             resolve_requester_login(&history, "e1", SetEventKind::Remove, 17).as_deref(),
             Some("chronophylos")
         );
+    }
+
+    #[test]
+    fn step_b_alias_rename_aligns() {
+        let history = load_fixture("alias");
+        assert_eq!(
+            resolve_requester_login(&history, "e1", SetEventKind::Rename, 17).as_deref(),
+            Some("nozzlenols")
+        );
+        // Wrong EventAPI kind must not pick an ALIAS row.
+        assert_eq!(
+            resolve_requester_login(&history, "e1", SetEventKind::Add, 17),
+            None
+        );
+        assert!(mediation_gate_open(None, POTAT_ID, &history, "e1", 17,));
     }
 
     #[test]

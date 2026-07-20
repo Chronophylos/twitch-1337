@@ -1,0 +1,18 @@
+{
+  "data": [
+    {
+      "history": [
+        {
+          "user_login": "NozzleNols",
+          "actor": "potatbotat",
+          "action": "ALIAS",
+          "type": "STANDARD",
+          "emote_id": "e1",
+          "emote_name": "faileg",
+          "provider": "STV",
+          "ago": "5s ago"
+        }
+      ]
+    }
+  ]
+}
