@@ -37,7 +37,7 @@ deploy: build push restart
 # Mount prod data dir from docker host via sshfs at ./prod-data
 mount-prod-data:
   mkdir -p prod-data
-  sshfs root@docker.homelab:/opt/dockhand/stacks/twitch/data prod-data
+  sshfs root@docker.homelab:/opt/dockhand/stacks/compute-1/twitch-1337/data prod-data
 
 # Unmount prod data dir
 unmount-prod-data:
