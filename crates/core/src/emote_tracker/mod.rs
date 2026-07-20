@@ -18,8 +18,8 @@ pub use db::{
 };
 pub use eventapi::{
     DispatchEmoteSetUpdate, DispatchUserActiveSetChanged, EVENTAPI_URL, EventApiConnection,
-    ParsedEvent, connect_and_subscribe, live_change_to_batch, parse_server_message,
-    subscribe_emote_set_update_message, subscribe_user_update_message,
+    ParsedEvent, connect_and_subscribe, is_expected_reconnect, live_change_to_batch,
+    parse_server_message, subscribe_emote_set_update_message, subscribe_user_update_message,
     unsubscribe_emote_set_update_message,
 };
 pub use format::{format_actor_display, format_berlin_millis};
