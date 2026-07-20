@@ -23,6 +23,16 @@ const OP_END_OF_STREAM: u64 = 7;
 const OP_SUBSCRIBE: u64 = 35;
 const OP_UNSUBSCRIBE: u64 = 36;
 
+/// EventAPI close codes where the server asks clients to reconnect.
+///
+/// From the [EventAPI close-code table](https://github.com/SevenTV/EventAPI)
+/// (`Reconnect? = Yes`) plus `4012` which production sends hourly as
+/// `End of Stream` / `message=Reconnect` (scheduled session rotation; not in the
+/// published table yet).
+pub fn is_expected_reconnect(code: u16) -> bool {
+    matches!(code, 4000 | 4006 | 4007 | 4008 | 4012)
+}
+
 pub type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub type EventApiSink = futures_util::stream::SplitSink<WsStream, Message>;
 pub type EventApiStream = futures_util::stream::SplitStream<WsStream>;
@@ -626,6 +636,27 @@ mod tests {
         };
         assert_eq!(code, 4002);
         assert_eq!(message, "Invalid Payload");
+    }
+
+    #[test]
+    fn expected_reconnect_codes_do_not_require_gap() {
+        // Documented reconnect-yes close codes + observed scheduled rotation (4012).
+        for code in [4000, 4006, 4007, 4008, 4012] {
+            assert!(
+                is_expected_reconnect(code),
+                "code {code} should be an expected reconnect"
+            );
+        }
+    }
+
+    #[test]
+    fn client_error_close_codes_are_not_expected_reconnect() {
+        for code in [4001, 4002, 4003, 4004, 4009, 4010, 4011] {
+            assert!(
+                !is_expected_reconnect(code),
+                "code {code} should not be treated as expected reconnect"
+            );
+        }
     }
 
     #[test]

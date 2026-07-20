@@ -7,12 +7,12 @@ use chrono::Utc;
 use eyre::{Result, WrapErr as _, eyre};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use super::eventapi::{
-    EventApiConnection, EventApiSink, ParsedEvent, connect_and_subscribe, live_change_to_batch,
-    parse_server_message, subscribe_emote_set_update_message, subscribe_user_update_message,
-    unsubscribe_emote_set_update_message,
+    EventApiConnection, EventApiSink, ParsedEvent, connect_and_subscribe, is_expected_reconnect,
+    live_change_to_batch, parse_server_message, subscribe_emote_set_update_message,
+    subscribe_user_update_message, unsubscribe_emote_set_update_message,
 };
 use super::handle::EmoteTrackerHandle;
 use super::reconcile::{bootstrap_batch, reconcile_batch};
@@ -20,6 +20,19 @@ use super::rest::fetch_channel_set;
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// EventAPI close `4007 Maintenance` — docs ask for ≥5 minutes including jitter.
+const MAINTENANCE_BACKOFF: Duration = Duration::from_secs(300);
+
+/// How an EventAPI websocket session ended.
+#[derive(Debug)]
+enum SessionEnd {
+    /// Server asked for a reconnect (soft); REST reconcile without a gap stamp.
+    ExpectedReconnect {
+        code: u16,
+        message: String,
+        remembered_set_id: String,
+    },
+}
 
 /// Runtime configuration for the emote-set ingest task.
 #[derive(Debug, Clone)]
@@ -110,23 +123,40 @@ pub async fn run_set_ingest(
                 )
                 .await
                 {
-                    Ok(remembered_set_id) => {
-                        // Session ended cleanly (should not happen); reconnect.
+                    Ok(SessionEnd::ExpectedReconnect {
+                        code,
+                        message,
+                        remembered_set_id,
+                    }) => {
+                        // Soft reconnect: keep listening without stamping a gap.
+                        // Next loop REST-reconciles (gap=None) to catch anything
+                        // missed in the brief window.
                         let _ = remembered_set_id;
+                        info!(
+                            code,
+                            %message,
+                            "EventAPI requested reconnect; resuming without gap"
+                        );
+                        if code == 4007 {
+                            backoff = MAINTENANCE_BACKOFF;
+                        }
                     }
                     Err(error) => {
                         error!(?error, "emote set ingest EventAPI session ended");
+                        if gap_started_at.is_none() {
+                            gap_started_at = Some(Utc::now().timestamp_millis());
+                        }
                     }
                 }
             }
             Err(error) => {
                 error!(?error, "emote set ingest REST reconcile failed");
+                if gap_started_at.is_none() {
+                    gap_started_at = Some(Utc::now().timestamp_millis());
+                }
             }
         }
 
-        if gap_started_at.is_none() {
-            gap_started_at = Some(Utc::now().timestamp_millis());
-        }
         warn!(
             backoff_secs = backoff.as_secs(),
             "emote set ingest backing off before reconnect"
@@ -143,7 +173,7 @@ async fn run_eventapi_session(
     seventv_user_id: &str,
     initial_set_id: &str,
     gap_started_at: &mut Option<i64>,
-) -> Result<String> {
+) -> Result<SessionEnd> {
     let mut remembered_set_id = initial_set_id.to_string();
     let mut conn = connect_eventapi(&cfg.eventapi_url, &remembered_set_id, seventv_user_id).await?;
     let mut heartbeat_interval_ms: Option<u64> = None;
@@ -225,6 +255,13 @@ async fn run_eventapi_session(
                         warn!(?code, %message, "EventAPI error frame");
                     }
                     ParsedEvent::EndOfStream { code, message } => {
+                        if is_expected_reconnect(code) {
+                            return Ok(SessionEnd::ExpectedReconnect {
+                                code,
+                                message,
+                                remembered_set_id,
+                            });
+                        }
                         *gap_started_at = Some(gap_started_at.unwrap_or_else(now_ms));
                         return Err(eyre!(
                             "EventAPI end of stream code={code} message={message}"
@@ -241,6 +278,16 @@ async fn run_eventapi_session(
                 }
             }
             Message::Close(frame) => {
+                if let Some(close) = &frame {
+                    let code = u16::from(close.code);
+                    if is_expected_reconnect(code) {
+                        return Ok(SessionEnd::ExpectedReconnect {
+                            code,
+                            message: close.reason.to_string(),
+                            remembered_set_id,
+                        });
+                    }
+                }
                 *gap_started_at = Some(gap_started_at.unwrap_or_else(now_ms));
                 return Err(match frame {
                     Some(close) => eyre!(
