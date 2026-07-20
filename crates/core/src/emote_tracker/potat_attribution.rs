@@ -12,9 +12,11 @@ pub const HEAD_SCAN_LIMIT: usize = 50;
 pub const AMBIGUITY_N: usize = 2;
 pub const HISTORY_RETRY_DELAY: Duration = Duration::from_millis(500);
 
-const POTAT_HISTORY_BASE: &str = "https://api.potat.app/emotes/history";
 const POTAT_ACTOR: &str = "potatbotat";
 const STV_PROVIDER: &str = "STV";
+
+/// Default Potat history API base (without trailing channel login).
+pub const POTAT_HISTORY_BASE_URL: &str = "https://api.potat.app/emotes/history";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PotatHistoryItem {
@@ -180,12 +182,17 @@ fn history_from_envelope(env: PotatHistoryEnvelope) -> Vec<PotatHistoryItem> {
         .collect()
 }
 
-/// `GET https://api.potat.app/emotes/history/{channel_login}` — first page only.
+/// `GET {base_url}/{channel_login}` — first page only.
 pub async fn fetch_potat_history(
     http: &reqwest::Client,
+    base_url: &str,
     channel_login: &str,
 ) -> Result<Vec<PotatHistoryItem>> {
-    let url = format!("{POTAT_HISTORY_BASE}/{channel_login}");
+    let url = format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        channel_login.trim_start_matches('/')
+    );
     let resp = http
         .get(&url)
         .send()
@@ -194,8 +201,8 @@ pub async fn fetch_potat_history(
     if !resp.status().is_success() {
         return Err(eyre!("potat history HTTP {}", resp.status()));
     }
-    let env: PotatHistoryEnvelope = resp.json().await.wrap_err("potat history JSON")?;
-    Ok(history_from_envelope(env))
+    let text = resp.text().await.wrap_err("potat history body")?;
+    parse_potat_history_json(&text)
 }
 
 /// Parse a fixture / mock JSON body into history items (test + ingest helpers).
