@@ -27,6 +27,8 @@ pub struct SettingsOverrides {
     #[serde(default)]
     pub suspend: SuspendOverrides,
     #[serde(default)]
+    pub emote_tracker: EmoteTrackerOverrides,
+    #[serde(default)]
     pub web: WebRuntimeOverrides,
     #[serde(default)]
     pub schedules: Option<Vec<crate::schedule::Schedule>>,
@@ -46,6 +48,7 @@ impl Default for SettingsOverrides {
             twitch: TwitchOverrides::default(),
             aviationstack: AviationstackOverrides::default(),
             suspend: SuspendOverrides::default(),
+            emote_tracker: EmoteTrackerOverrides::default(),
             web: WebRuntimeOverrides::default(),
             schedules: None,
         }
@@ -292,6 +295,22 @@ pub struct AviationstackOverrides {
 pub struct SuspendOverrides {
     #[serde(default)]
     pub default_duration_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmoteTrackerOverrides {
+    #[serde(default)]
+    pub potat_attribution: PotatAttributionOverrides,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PotatAttributionOverrides {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub window_secs: Option<u64>,
+    #[serde(default)]
+    pub potat_7tv_user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

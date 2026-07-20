@@ -37,6 +37,15 @@
       </div>
     </div>
 
+    <div class="settings-nav-group" data-group="emote_tracker">
+      {% call m::nav_group_head("emote_tracker", "Emote Tracker", 1) %}{% endcall %}
+      <div class="settings-nav-group-body" id="nav-group-body-emote_tracker">
+        <ul class="settings-nav-group-items">
+          {% call m::nav_section_item("emote_tracker_potat", "emote_tracker_potat", "Potat attribution") %}{% endcall %}
+        </ul>
+      </div>
+    </div>
+
     <div class="settings-nav-group" data-group="twitch">
       {% call m::nav_group_head("twitch", "Twitch", 2) %}{% endcall %}
       <div class="settings-nav-group-body" id="nav-group-body-twitch">
@@ -91,6 +100,8 @@
       {% include "settings/cards/cooldowns.html" %}
       {% include "settings/cards/pings.html" %}
       {% include "settings/cards/suspend.html" %}
+      <div class="settings-group-divider" data-group="emote_tracker"><span>EMOTE TRACKER</span></div>
+      {% include "settings/cards/emote_tracker_potat.html" %}
       <div class="settings-group-divider" data-group="twitch"><span>TWITCH</span></div>
       {% include "settings/cards/twitch_permissions.html" %}
       {% include "settings/cards/twitch_channels.html" %}

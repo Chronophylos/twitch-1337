@@ -7,7 +7,8 @@ use serde::Deserialize;
 use twitch_1337_core::settings::overrides::{
     AiBehaviorOverrides, AiConnectionOverrides, AiDreamerOverrides, AiEmotesOverrides,
     AiGrokOverrides, AiHistoryOverrides, AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides,
-    AiWebOverrides, AviationstackOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
+    AiWebOverrides, AviationstackOverrides, EmoteTrackerOverrides, PotatAttributionOverrides,
+    SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
 };
 use twitch_1337_core::settings::{
     AiBackendKind, AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides,
@@ -516,6 +517,33 @@ impl SuspendForm {
 }
 
 #[derive(Default, Deserialize)]
+struct EmoteTrackerPotatForm {
+    #[serde(default)]
+    emote_tracker_potat_card_visible: Option<String>,
+    #[serde(default)]
+    emote_tracker_potat_enabled: Option<String>,
+    #[serde(default)]
+    emote_tracker_potat_window_secs: Option<u64>,
+    #[serde(default)]
+    emote_tracker_potat_7tv_user_id: Option<String>,
+}
+
+impl EmoteTrackerPotatForm {
+    fn into_overrides(self) -> EmoteTrackerOverrides {
+        EmoteTrackerOverrides {
+            potat_attribution: PotatAttributionOverrides {
+                enabled: enabled_from_card(
+                    &self.emote_tracker_potat_card_visible,
+                    &self.emote_tracker_potat_enabled,
+                ),
+                window_secs: self.emote_tracker_potat_window_secs,
+                potat_7tv_user_id: self.emote_tracker_potat_7tv_user_id,
+            },
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
 struct WebRuntimeForm {
     #[serde(default)]
     web_session_ttl_secs: Option<u64>,
@@ -665,6 +693,13 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
         .into_overrides(),
         suspend: SuspendForm {
             suspend_default_duration_secs: form.suspend_default_duration_secs,
+        }
+        .into_overrides(),
+        emote_tracker: EmoteTrackerPotatForm {
+            emote_tracker_potat_card_visible: form.emote_tracker_potat_card_visible,
+            emote_tracker_potat_enabled: form.emote_tracker_potat_enabled,
+            emote_tracker_potat_window_secs: form.emote_tracker_potat_window_secs,
+            emote_tracker_potat_7tv_user_id: form.emote_tracker_potat_7tv_user_id,
         }
         .into_overrides(),
         web: WebRuntimeForm {
