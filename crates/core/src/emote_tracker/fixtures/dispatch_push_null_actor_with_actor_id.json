@@ -1,0 +1,23 @@
+{
+  "op": 0,
+  "t": 1739904376646,
+  "d": {
+    "type": "emote_set.update",
+    "body": {
+      "id": "01JGJCANV798N56YAYBXG2M06P",
+      "kind": 3,
+      "pushed": [
+        {
+          "key": "emotes",
+          "index": 0,
+          "type": "object",
+          "value": {
+            "id": "01F6MZGCNG000255K4X1K7NTHR",
+            "name": "Kappa",
+            "actor_id": "01ACTORIDFROMVALUE000000"
+          }
+        }
+      ]
+    }
+  }
+}

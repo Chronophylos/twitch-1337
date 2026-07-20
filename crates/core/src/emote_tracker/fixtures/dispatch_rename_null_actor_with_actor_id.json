@@ -1,0 +1,28 @@
+{
+  "op": 0,
+  "t": 1739904376646,
+  "d": {
+    "type": "emote_set.update",
+    "body": {
+      "id": "01JGJCANV798N56YAYBXG2M06P",
+      "kind": 3,
+      "updated": [
+        {
+          "key": "emotes",
+          "index": 176,
+          "type": "object",
+          "old_value": {
+            "id": "01F6MZGCNG000255K4X1K7NTHR",
+            "name": "GIGACHAD",
+            "actor_id": "01ORIGINALADDERID00000000"
+          },
+          "value": {
+            "id": "01F6MZGCNG000255K4X1K7NTHR",
+            "name": "GigaChad",
+            "actor_id": "01ORIGINALADDERID00000000"
+          }
+        }
+      ]
+    }
+  }
+}

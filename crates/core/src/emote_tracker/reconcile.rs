@@ -6,6 +6,9 @@ use super::types::{CatalogMutation, EmoteRow, NewSetEvent, SetChangeBatch, SetEv
 pub struct DesiredEmote {
     pub emote_id: String,
     pub name: String,
+    /// Per-emote 7TV `actor_id` from EventAPI `value` / `old_value` (live only).
+    /// REST/reconcile snapshots leave this `None`.
+    pub actor_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +39,10 @@ pub fn bootstrap_batch(at: i64, desired: &[DesiredEmote]) -> SetChangeBatch {
             actor_display_name: None,
             gap_from: None,
             gap_to: None,
+            requester_login: None,
+            requester_twitch_id: None,
+            via: None,
+            attribution_method: None,
         });
     }
 
@@ -85,6 +92,10 @@ pub fn reconcile_batch(
                     actor_display_name: None,
                     gap_from: None,
                     gap_to: None,
+                    requester_login: None,
+                    requester_twitch_id: None,
+                    via: None,
+                    attribution_method: None,
                 };
                 apply_actor(&mut event, actor);
                 events.push(event);
@@ -106,6 +117,10 @@ pub fn reconcile_batch(
                     actor_display_name: None,
                     gap_from: None,
                     gap_to: None,
+                    requester_login: None,
+                    requester_twitch_id: None,
+                    via: None,
+                    attribution_method: None,
                 };
                 apply_actor(&mut event, actor);
                 events.push(event);
@@ -130,6 +145,10 @@ pub fn reconcile_batch(
                 actor_display_name: None,
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             };
             apply_actor(&mut event, actor);
             events.push(event);
@@ -148,6 +167,10 @@ pub fn reconcile_batch(
             actor_display_name: None,
             gap_from: Some(gap_from),
             gap_to: Some(gap_to),
+            requester_login: None,
+            requester_twitch_id: None,
+            via: None,
+            attribution_method: None,
         });
     }
 
@@ -177,6 +200,7 @@ mod tests {
             &[DesiredEmote {
                 emote_id: "a".into(),
                 name: "A".into(),
+                actor_id: None,
             }],
         );
         assert_eq!(batch.mutations.len(), 1);
@@ -205,10 +229,12 @@ mod tests {
             DesiredEmote {
                 emote_id: "keep".into(),
                 name: "New".into(),
+                actor_id: None,
             },
             DesiredEmote {
                 emote_id: "fresh".into(),
                 name: "Fresh".into(),
+                actor_id: None,
             },
         ];
         let batch = reconcile_batch(50, &current, &desired, Some((40, 50)), None);
