@@ -524,7 +524,7 @@ kbd {
   grid-template-columns: minmax(140px, 1fr) minmax(180px, 280px);
 }
 .table.emotes-audit .thead, .table.emotes-audit .tr {
-  grid-template-columns: 160px 90px minmax(120px, 1fr) minmax(120px, 180px) minmax(120px, 1fr) minmax(180px, 260px);
+  grid-template-columns: 160px 90px minmax(120px, 1fr) minmax(120px, 180px) minmax(120px, 1fr) minmax(140px, 1fr) minmax(180px, 260px);
 }
 .table.emotes-usage .thead, .table.emotes-usage .tr {
   grid-template-columns: 160px minmax(120px, 1fr) minmax(120px, 180px) minmax(120px, 1fr) 90px;

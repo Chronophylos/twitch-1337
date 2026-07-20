@@ -22,7 +22,7 @@ pub use eventapi::{
     parse_server_message, subscribe_emote_set_update_message, subscribe_user_update_message,
     unsubscribe_emote_set_update_message,
 };
-pub use format::{format_actor_display, format_berlin_millis};
+pub use format::{format_actor_display, format_berlin_millis, format_set_event_attribution};
 pub use handle::EmoteTrackerHandle;
 pub use ingest::{IngestConfig, StartupReconcileResult, run_set_ingest, startup_reconcile_once};
 pub use lookup::{

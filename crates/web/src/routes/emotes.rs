@@ -12,7 +12,7 @@ use serde::Deserialize;
 use tower_cookies::Cookies;
 use twitch_1337_core::emote_tracker::{
     SetEventKind, SetEventListFilter, SetEventRow, UsageEventListFilter, format_actor_display,
-    format_berlin_millis,
+    format_berlin_millis, format_set_event_attribution,
 };
 
 use crate::auth::csrf;
@@ -52,6 +52,7 @@ struct AuditRowView {
     emote_id: String,
     name: String,
     actor: String,
+    attribution: String,
     is_gap: bool,
     gap_range: String,
     filter_blob: String,
@@ -217,6 +218,12 @@ fn audit_row_view(ev: SetEventRow) -> AuditRowView {
             ev.actor_7tv_id.as_deref(),
         )
     };
+    let attribution = if is_gap {
+        "—".into()
+    } else {
+        format_set_event_attribution(ev.requester_login.as_deref(), ev.via.as_deref())
+            .unwrap_or_else(|| "—".into())
+    };
     let gap_range = match (ev.gap_from, ev.gap_to) {
         (Some(from), Some(to)) => format!(
             "{} → {}",
@@ -228,13 +235,14 @@ fn audit_row_view(ev: SetEventRow) -> AuditRowView {
     let kind = ev.kind.as_str().to_string();
     let emote_id = ev.emote_id.clone().unwrap_or_default();
     let at_berlin = format_berlin_millis(ev.at);
-    let filter_blob = format!("{kind} {emote_id} {name} {actor}");
+    let filter_blob = format!("{kind} {emote_id} {name} {actor} {attribution}");
     AuditRowView {
         at_berlin,
         kind,
         emote_id,
         name,
         actor,
+        attribution,
         is_gap,
         gap_range,
         filter_blob,
