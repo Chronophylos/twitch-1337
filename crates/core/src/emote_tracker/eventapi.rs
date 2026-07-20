@@ -411,7 +411,6 @@ pub fn live_change_to_batch(at: i64, dispatch: &DispatchEmoteSetUpdate) -> SetCh
             attribution_method: None,
         };
         apply_actor(&mut event, actor);
-        apply_actor_id_fallback(&mut event, &emote.actor_id);
         events.push(event);
     }
 
@@ -436,7 +435,6 @@ pub fn live_change_to_batch(at: i64, dispatch: &DispatchEmoteSetUpdate) -> SetCh
             attribution_method: None,
         };
         apply_actor(&mut event, actor);
-        apply_actor_id_fallback(&mut event, &emote.actor_id);
         events.push(event);
     }
 
@@ -486,7 +484,6 @@ pub fn live_change_to_batch(at: i64, dispatch: &DispatchEmoteSetUpdate) -> SetCh
                 attribution_method: None,
             };
             apply_actor(&mut remove, actor);
-            apply_actor_id_fallback(&mut remove, &old_emote.actor_id);
             events.push(remove);
 
             mutations.push(CatalogMutation::Upsert {
@@ -511,7 +508,6 @@ pub fn live_change_to_batch(at: i64, dispatch: &DispatchEmoteSetUpdate) -> SetCh
                 attribution_method: None,
             };
             apply_actor(&mut add, actor);
-            apply_actor_id_fallback(&mut add, &new_emote.actor_id);
             events.push(add);
         }
     }
@@ -520,14 +516,6 @@ pub fn live_change_to_batch(at: i64, dispatch: &DispatchEmoteSetUpdate) -> SetCh
         updated_at: at,
         mutations,
         events,
-    }
-}
-
-fn apply_actor_id_fallback(event: &mut NewSetEvent, actor_id: &Option<String>) {
-    if event.actor_7tv_id.is_none()
-        && let Some(id) = actor_id.clone()
-    {
-        event.actor_7tv_id = Some(id);
     }
 }
 
@@ -690,7 +678,10 @@ mod tests {
     }
 
     #[test]
-    fn live_push_null_body_actor_falls_back_to_value_actor_id() {
+    fn live_push_null_body_actor_keeps_actor_null_despite_value_actor_id() {
+        // value.actor_id is the original set-adder, not the live mutation
+        // performer. Copying it into actor_7tv_id would close Step A for
+        // Potat-mediated null-body events and mislabel the Actor column.
         let raw = include_str!("fixtures/dispatch_push_null_actor_with_actor_id.json");
         let ParsedEvent::Dispatch(d) = parse_server_message(raw).unwrap().unwrap() else {
             panic!("expected dispatch");
@@ -701,9 +692,14 @@ mod tests {
             Some("01ACTORIDFROMVALUE000000")
         );
         let batch = live_change_to_batch(100, &d);
+        assert!(batch.events[0].actor_7tv_id.is_none());
         assert_eq!(
-            batch.events[0].actor_7tv_id.as_deref(),
-            Some("01ACTORIDFROMVALUE000000")
+            super::super::format::format_actor_display(
+                batch.events[0].actor_display_name.as_deref(),
+                batch.events[0].actor_username.as_deref(),
+                batch.events[0].actor_7tv_id.as_deref(),
+            ),
+            "unknown"
         );
     }
 
