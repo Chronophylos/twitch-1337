@@ -1,0 +1,28 @@
+{
+  "data": [
+    {
+      "history": [
+        {
+          "user_login": "alice",
+          "actor": "potatbotat",
+          "action": "ADD",
+          "type": "STANDARD",
+          "emote_id": "e1",
+          "emote_name": "Foo",
+          "provider": "STV",
+          "ago": "5s ago"
+        },
+        {
+          "user_login": "bob",
+          "actor": "potatbotat",
+          "action": "ADD",
+          "type": "STANDARD",
+          "emote_id": "e1",
+          "emote_name": "Foo",
+          "provider": "STV",
+          "ago": "8s ago"
+        }
+      ]
+    }
+  ]
+}

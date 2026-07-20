@@ -4,6 +4,7 @@ mod format;
 mod handle;
 mod ingest;
 mod lookup;
+mod potat_attribution;
 mod reconcile;
 mod rest;
 mod schema;

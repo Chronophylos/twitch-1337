@@ -1,0 +1,18 @@
+{
+  "data": [
+    {
+      "history": [
+        {
+          "user_login": "ringomar",
+          "actor": "potatbotat",
+          "action": "ADD",
+          "type": "STANDARD",
+          "emote_id": "e1",
+          "emote_name": "2024Silky",
+          "provider": "STV",
+          "ago": "5s ago"
+        }
+      ]
+    }
+  ]
+}

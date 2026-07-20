@@ -1,0 +1,18 @@
+{
+  "data": [
+    {
+      "history": [
+        {
+          "user_login": "chronophylos",
+          "actor": "potatbotat",
+          "action": "REMOVE",
+          "type": "UNDO",
+          "emote_id": "e1",
+          "emote_name": "Backseating",
+          "provider": "STV",
+          "ago": "5s ago"
+        }
+      ]
+    }
+  ]
+}
