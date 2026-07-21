@@ -55,7 +55,7 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub suspension_manager: Arc<SuspensionManager>,
     /// Pre-built 7TV emote provider. `None` disables emote grounding for `!ai`.
     pub emote_provider: Option<Arc<SevenTvEmoteProvider>>,
-    /// Emote set-audit store. `None` disables `!emote`.
+    /// Emote set-audit store. `None` disables `!e`.
     pub emote_tracker: Option<std::sync::Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     /// Optional test-only sink: when set, the freshly built primary
     /// `ChatHistory` `Arc` is stored here so integration tests can peek at
