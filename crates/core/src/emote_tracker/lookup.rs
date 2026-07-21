@@ -7,8 +7,9 @@ use super::db::{get_emote, resolve_active_name};
 use super::format::format_berlin_millis;
 use super::types::{EmoteRow, SetEventKind, SetEventRow};
 
-pub const EMOTE_CMD_USAGE: &str = "Usage: !emote <name, id, or https://7tv.app/emotes/…>";
-pub const EMOTE_NOT_FOUND: &str = "Emote not found.";
+pub const EMOTE_CMD_USAGE: &str =
+    "Benutzung: !e <Name, ID oder https://7tv.app/emotes/…> FDM";
+pub const EMOTE_NOT_FOUND: &str = "Emote nicht gefunden FDM";
 
 pub enum EmoteQueryParse<'a> {
     Missing,
@@ -78,18 +79,18 @@ pub fn format_emote_chat_reply(emote: &EmoteRow, lifecycle: Option<&SetEventRow>
     let name = &emote.name;
     let id = &emote.emote_id;
     let Some(event) = lifecycle else {
-        return format!("{name} ({id}) — no set history yet");
+        return format!("{name} ({id}) noch keine Set-History");
     };
     let when = format_berlin_millis(event.at);
     match event.kind {
         SetEventKind::Bootstrap => {
-            format!("{name} ({id}) — present when tracking started ({when})")
+            format!("{name} ({id}) war schon da als Tracking anfing ({when})")
         }
         SetEventKind::Add | SetEventKind::Remove | SetEventKind::Rename => {
             let verb = match event.kind {
-                SetEventKind::Add => "added",
-                SetEventKind::Remove => "removed",
-                SetEventKind::Rename => "renamed",
+                SetEventKind::Add => "hinzugefügt",
+                SetEventKind::Remove => "entfernt",
+                SetEventKind::Rename => "umbenannt",
                 SetEventKind::Bootstrap | SetEventKind::Gap => unreachable!(),
             };
             let by = super::format::format_set_event_attribution(
@@ -103,10 +104,10 @@ pub fn format_emote_chat_reply(emote: &EmoteRow, lifecycle: Option<&SetEventRow>
                     event.actor_7tv_id.as_deref(),
                 )
             });
-            format!("{name} ({id}) — {verb} by {by} on {when}")
+            format!("{name} ({id}) {verb} von {by} am {when}")
         }
         SetEventKind::Gap => {
-            format!("{name} ({id}) — no set history yet")
+            format!("{name} ({id}) noch keine Set-History")
         }
     }
 }
@@ -284,7 +285,7 @@ mod tests {
         };
         assert_eq!(
             format_emote_chat_reply(&emote, Some(&bootstrap)),
-            format!("Kappa ({ID}) — present when tracking started ({when})")
+            format!("Kappa ({ID}) war schon da als Tracking anfing ({when})")
         );
         let add = SetEventRow {
             kind: SetEventKind::Add,
@@ -295,7 +296,7 @@ mod tests {
         };
         assert_eq!(
             format_emote_chat_reply(&emote, Some(&add)),
-            format!("Kappa ({ID}) — added by Mod User on {when}")
+            format!("Kappa ({ID}) hinzugefügt von Mod User am {when}")
         );
         let add_unknown = SetEventRow {
             actor_display_name: None,
@@ -305,7 +306,7 @@ mod tests {
         };
         assert_eq!(
             format_emote_chat_reply(&emote, Some(&add_unknown)),
-            format!("Kappa ({ID}) — added by unknown on {when}")
+            format!("Kappa ({ID}) hinzugefügt von unbekannt am {when}")
         );
         let remove = SetEventRow {
             kind: SetEventKind::Remove,
@@ -313,7 +314,7 @@ mod tests {
         };
         assert_eq!(
             format_emote_chat_reply(&emote, Some(&remove)),
-            format!("Kappa ({ID}) — removed by unknown on {when}")
+            format!("Kappa ({ID}) entfernt von unbekannt am {when}")
         );
         let attributed = SetEventRow {
             kind: SetEventKind::Add,
@@ -327,7 +328,7 @@ mod tests {
         };
         assert_eq!(
             format_emote_chat_reply(&emote, Some(&attributed)),
-            format!("Kappa ({ID}) — added by nozzlenols via PotatBotat on {when}")
+            format!("Kappa ({ID}) hinzugefügt von nozzlenols via PotatBotat am {when}")
         );
         let rename = SetEventRow {
             kind: SetEventKind::Rename,
@@ -341,11 +342,11 @@ mod tests {
         };
         assert_eq!(
             format_emote_chat_reply(&emote, Some(&rename)),
-            format!("Kappa ({ID}) — renamed by Mod User on {when}")
+            format!("Kappa ({ID}) umbenannt von Mod User am {when}")
         );
         assert_eq!(
             format_emote_chat_reply(&emote, None),
-            "Kappa (0123456789abcdef01234567) — no set history yet"
+            "Kappa (0123456789abcdef01234567) noch keine Set-History"
         );
     }
 }
