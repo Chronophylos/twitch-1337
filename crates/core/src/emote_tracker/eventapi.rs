@@ -371,7 +371,15 @@ fn parse_emote_value(value: &Value) -> Result<DesiredEmote> {
         .and_then(Value::as_str)
         .ok_or_else(|| eyre!("emote value missing name"))?
         .to_string();
-    Ok(DesiredEmote { emote_id, name })
+    let actor_id = value
+        .get("actor_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Ok(DesiredEmote {
+        emote_id,
+        name,
+        actor_id,
+    })
 }
 
 /// Map a live `emote_set.update` dispatch into catalog mutations + audit events.
@@ -397,6 +405,10 @@ pub fn live_change_to_batch(at: i64, dispatch: &DispatchEmoteSetUpdate) -> SetCh
             actor_display_name: None,
             gap_from: None,
             gap_to: None,
+            requester_login: None,
+            requester_twitch_id: None,
+            via: None,
+            attribution_method: None,
         };
         apply_actor(&mut event, actor);
         events.push(event);
@@ -417,6 +429,10 @@ pub fn live_change_to_batch(at: i64, dispatch: &DispatchEmoteSetUpdate) -> SetCh
             actor_display_name: None,
             gap_from: None,
             gap_to: None,
+            requester_login: None,
+            requester_twitch_id: None,
+            via: None,
+            attribution_method: None,
         };
         apply_actor(&mut event, actor);
         events.push(event);
@@ -440,6 +456,10 @@ pub fn live_change_to_batch(at: i64, dispatch: &DispatchEmoteSetUpdate) -> SetCh
                 actor_display_name: None,
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             };
             apply_actor(&mut event, actor);
             events.push(event);
@@ -458,6 +478,10 @@ pub fn live_change_to_batch(at: i64, dispatch: &DispatchEmoteSetUpdate) -> SetCh
                 actor_display_name: None,
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             };
             apply_actor(&mut remove, actor);
             events.push(remove);
@@ -478,6 +502,10 @@ pub fn live_change_to_batch(at: i64, dispatch: &DispatchEmoteSetUpdate) -> SetCh
                 actor_display_name: None,
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             };
             apply_actor(&mut add, actor);
             events.push(add);
@@ -647,6 +675,50 @@ mod tests {
                 "code {code} should be an expected reconnect"
             );
         }
+    }
+
+    #[test]
+    fn live_push_null_body_actor_keeps_actor_null_despite_value_actor_id() {
+        // value.actor_id is the original set-adder, not the live mutation
+        // performer. Copying it into actor_7tv_id would close Step A for
+        // Potat-mediated null-body events and mislabel the Actor column.
+        let raw = include_str!("fixtures/dispatch_push_null_actor_with_actor_id.json");
+        let ParsedEvent::Dispatch(d) = parse_server_message(raw).unwrap().unwrap() else {
+            panic!("expected dispatch");
+        };
+        assert!(d.actor.is_none());
+        assert_eq!(
+            d.pushed[0].actor_id.as_deref(),
+            Some("01ACTORIDFROMVALUE000000")
+        );
+        let batch = live_change_to_batch(100, &d);
+        assert!(batch.events[0].actor_7tv_id.is_none());
+        assert_eq!(
+            super::super::format::format_actor_display(
+                batch.events[0].actor_display_name.as_deref(),
+                batch.events[0].actor_username.as_deref(),
+                batch.events[0].actor_7tv_id.as_deref(),
+            ),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn live_rename_null_body_actor_does_not_use_value_actor_id() {
+        let raw = include_str!("fixtures/dispatch_rename_null_actor_with_actor_id.json");
+        let ParsedEvent::Dispatch(d) = parse_server_message(raw).unwrap().unwrap() else {
+            panic!("expected dispatch");
+        };
+        assert!(d.actor.is_none());
+        assert!(d.updated[0].0.actor_id.is_some());
+        assert!(d.updated[0].1.actor_id.is_some());
+        let batch = live_change_to_batch(100, &d);
+        assert!(
+            batch
+                .events
+                .iter()
+                .all(|e| e.kind != SetEventKind::Rename || e.actor_7tv_id.is_none())
+        );
     }
 
     #[test]

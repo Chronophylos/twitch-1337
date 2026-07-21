@@ -4,6 +4,7 @@ mod format;
 mod handle;
 mod ingest;
 mod lookup;
+mod potat_attribution;
 mod reconcile;
 mod rest;
 mod schema;
@@ -22,9 +23,12 @@ pub use eventapi::{
     parse_server_message, subscribe_emote_set_update_message, subscribe_user_update_message,
     unsubscribe_emote_set_update_message,
 };
-pub use format::{format_actor_display, format_berlin_millis};
+pub use format::{format_actor_display, format_berlin_millis, format_set_event_attribution};
 pub use handle::EmoteTrackerHandle;
-pub use ingest::{IngestConfig, StartupReconcileResult, run_set_ingest, startup_reconcile_once};
+pub use ingest::{
+    IngestConfig, StartupReconcileResult, maybe_attribute_batch, run_set_ingest,
+    startup_reconcile_once,
+};
 pub use lookup::{
     EMOTE_CMD_USAGE, EMOTE_NOT_FOUND, EmoteQueryParse, format_emote_chat_reply, parse_emote_query,
     resolve_emote_query,

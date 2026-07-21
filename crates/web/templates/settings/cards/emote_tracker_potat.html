@@ -1,0 +1,30 @@
+{# crates/web/templates/settings/cards/emote_tracker_potat.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-emote_tracker_potat" class="settings-card" data-section="emote_tracker_potat">
+  <input type="hidden" name="emote_tracker_potat_card_visible" value="1">
+  <header class="settings-card-head">
+    <div>
+      <h2>Emote tracker · Potat attribution</h2>
+      <p>Attribute 7TV set changes mediated by PotatBotat to the chat requester via Potat history. Live — no restart.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    {% call m::toggle_row("emote_tracker_potat", "emote_tracker_potat_enabled", "enabled",
+       "Fetch Potat history on live set changes and fill requester attribution columns.",
+       current.emote_tracker.potat_attribution.enabled,
+       defaults.emote_tracker.potat_attribution.enabled) %}{% endcall %}
+    {% call m::num_row_bounded("emote_tracker_potat", "emote_tracker_potat_window_secs", "window_secs",
+       "Soft max age (seconds) from Potat history ago strings. Rows older than window + 2s slack are skipped.",
+       current.emote_tracker.potat_attribution.window_secs,
+       defaults.emote_tracker.potat_attribution.window_secs, "s", 3, 120) %}{% endcall %}
+    {% call m::text_row("emote_tracker_potat", "emote_tracker_potat_7tv_user_id", "potat_7tv_user_id",
+       "7TV user id for PotatBotat (performer-first gate). Required when enabled.",
+       current.emote_tracker.potat_attribution.potat_7tv_user_id,
+       defaults.emote_tracker.potat_attribution.potat_7tv_user_id,
+       defaults.emote_tracker.potat_attribution.potat_7tv_user_id) %}{% endcall %}
+  </div>
+</section>

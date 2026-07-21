@@ -85,23 +85,27 @@ pub fn format_emote_chat_reply(emote: &EmoteRow, lifecycle: Option<&SetEventRow>
         SetEventKind::Bootstrap => {
             format!("{name} ({id}) — present when tracking started ({when})")
         }
-        SetEventKind::Add => {
-            let actor = super::format::format_actor_display(
-                event.actor_display_name.as_deref(),
-                event.actor_username.as_deref(),
-                event.actor_7tv_id.as_deref(),
-            );
-            format!("{name} ({id}) — added by {actor} on {when}")
+        SetEventKind::Add | SetEventKind::Remove | SetEventKind::Rename => {
+            let verb = match event.kind {
+                SetEventKind::Add => "added",
+                SetEventKind::Remove => "removed",
+                SetEventKind::Rename => "renamed",
+                SetEventKind::Bootstrap | SetEventKind::Gap => unreachable!(),
+            };
+            let by = super::format::format_set_event_attribution(
+                event.requester_login.as_deref(),
+                event.via.as_deref(),
+            )
+            .unwrap_or_else(|| {
+                super::format::format_actor_display(
+                    event.actor_display_name.as_deref(),
+                    event.actor_username.as_deref(),
+                    event.actor_7tv_id.as_deref(),
+                )
+            });
+            format!("{name} ({id}) — {verb} by {by} on {when}")
         }
-        SetEventKind::Remove => {
-            let actor = super::format::format_actor_display(
-                event.actor_display_name.as_deref(),
-                event.actor_username.as_deref(),
-                event.actor_7tv_id.as_deref(),
-            );
-            format!("{name} ({id}) — removed by {actor} on {when}")
-        }
-        SetEventKind::Rename | SetEventKind::Gap => {
+        SetEventKind::Gap => {
             format!("{name} ({id}) — no set history yet")
         }
     }
@@ -133,6 +137,10 @@ mod tests {
                 actor_display_name: None,
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             },
         )
         .unwrap();
@@ -235,6 +243,10 @@ mod tests {
                 actor_display_name: None,
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             },
         )
         .unwrap();
@@ -265,6 +277,10 @@ mod tests {
             actor_display_name: None,
             gap_from: None,
             gap_to: None,
+            requester_login: None,
+            requester_twitch_id: None,
+            via: None,
+            attribution_method: None,
         };
         assert_eq!(
             format_emote_chat_reply(&emote, Some(&bootstrap)),
@@ -298,6 +314,34 @@ mod tests {
         assert_eq!(
             format_emote_chat_reply(&emote, Some(&remove)),
             format!("Kappa ({ID}) — removed by unknown on {when}")
+        );
+        let attributed = SetEventRow {
+            kind: SetEventKind::Add,
+            actor_display_name: Some("PotatBotat".into()),
+            actor_username: Some("potatbotat".into()),
+            actor_7tv_id: Some("potat".into()),
+            requester_login: Some("nozzlenols".into()),
+            via: Some("potatbotat".into()),
+            attribution_method: Some("potat_history".into()),
+            ..bootstrap.clone()
+        };
+        assert_eq!(
+            format_emote_chat_reply(&emote, Some(&attributed)),
+            format!("Kappa ({ID}) — added by nozzlenols via PotatBotat on {when}")
+        );
+        let rename = SetEventRow {
+            kind: SetEventKind::Rename,
+            actor_display_name: Some("Mod User".into()),
+            actor_username: Some("moduser".into()),
+            actor_7tv_id: Some("a7".into()),
+            requester_login: None,
+            via: None,
+            attribution_method: None,
+            ..bootstrap
+        };
+        assert_eq!(
+            format_emote_chat_reply(&emote, Some(&rename)),
+            format!("Kappa ({ID}) — renamed by Mod User on {when}")
         );
         assert_eq!(
             format_emote_chat_reply(&emote, None),

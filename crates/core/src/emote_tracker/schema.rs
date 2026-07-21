@@ -1,9 +1,11 @@
 use eyre::Result;
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
-const SCHEMA_V1: &str = r"
+/// Frozen v1 DDL for upgrade tests and documenting the pre-attribution schema.
+#[cfg(test)]
+pub const SCHEMA_V1: &str = r"
 CREATE TABLE emotes (
   emote_id   TEXT PRIMARY KEY NOT NULL,
   name       TEXT NOT NULL,
@@ -46,6 +48,61 @@ CREATE INDEX idx_emotes_active_name ON emotes(active, name);
 PRAGMA user_version = 1;
 ";
 
+const SCHEMA_V2: &str = r"
+CREATE TABLE emotes (
+  emote_id   TEXT PRIMARY KEY NOT NULL,
+  name       TEXT NOT NULL,
+  active     INTEGER NOT NULL CHECK (active IN (0, 1)),
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE set_events (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  at                   INTEGER NOT NULL,
+  kind                 TEXT NOT NULL,
+  emote_id             TEXT,
+  old_name             TEXT,
+  new_name             TEXT,
+  actor_7tv_id         TEXT,
+  actor_username       TEXT,
+  actor_display_name   TEXT,
+  gap_from             INTEGER,
+  gap_to               INTEGER,
+  requester_login      TEXT,
+  requester_twitch_id  TEXT,
+  via                  TEXT,
+  attribution_method   TEXT,
+  FOREIGN KEY (emote_id) REFERENCES emotes(emote_id)
+);
+
+CREATE TABLE usage_events (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  at              INTEGER NOT NULL,
+  emote_id        TEXT NOT NULL,
+  twitch_user_id  TEXT NOT NULL,
+  login           TEXT,
+  flagged         INTEGER NOT NULL CHECK (flagged IN (0, 1)),
+  FOREIGN KEY (emote_id) REFERENCES emotes(emote_id)
+);
+
+CREATE INDEX idx_set_events_emote_at ON set_events(emote_id, at);
+CREATE INDEX idx_set_events_at ON set_events(at);
+CREATE INDEX idx_usage_events_emote_at ON usage_events(emote_id, at);
+CREATE INDEX idx_usage_events_user_at ON usage_events(twitch_user_id, at);
+CREATE INDEX idx_usage_events_at ON usage_events(at);
+CREATE INDEX idx_emotes_active_name ON emotes(active, name);
+
+PRAGMA user_version = 2;
+";
+
+const MIGRATE_1_TO_2: &str = r"
+ALTER TABLE set_events ADD COLUMN requester_login TEXT;
+ALTER TABLE set_events ADD COLUMN requester_twitch_id TEXT;
+ALTER TABLE set_events ADD COLUMN via TEXT;
+ALTER TABLE set_events ADD COLUMN attribution_method TEXT;
+PRAGMA user_version = 2;
+";
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
 
@@ -53,8 +110,11 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(eyre::Report::from)?;
 
-    if version < SCHEMA_VERSION {
-        conn.execute_batch(SCHEMA_V1)?;
+    match version {
+        0 => conn.execute_batch(SCHEMA_V2)?,
+        1 => conn.execute_batch(MIGRATE_1_TO_2)?,
+        v if v >= SCHEMA_VERSION => {}
+        other => eyre::bail!("unsupported emote_tracker schema version {other}"),
     }
 
     Ok(())
@@ -78,5 +138,53 @@ mod tests {
             ("id1", "Kappa"),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn migrate_v1_to_v2_adds_attribution_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_V1).unwrap();
+        let v1: i32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v1, 1);
+
+        migrate(&conn).unwrap();
+
+        let v: i32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 2);
+        let mut stmt = conn.prepare("PRAGMA table_info(set_events)").unwrap();
+        let names: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for col in [
+            "requester_login",
+            "requester_twitch_id",
+            "via",
+            "attribution_method",
+        ] {
+            assert!(names.iter().any(|n| n == col), "missing {col}");
+        }
+    }
+
+    #[test]
+    fn migrate_fresh_db_lands_at_v2_with_attribution_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let v: i32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 2);
+        let mut stmt = conn.prepare("PRAGMA table_info(set_events)").unwrap();
+        let names: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(names.iter().any(|n| n == "requester_login"));
     }
 }

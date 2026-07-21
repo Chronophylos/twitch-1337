@@ -71,6 +71,14 @@ pub struct SetEventRow {
     pub actor_display_name: Option<String>,
     pub gap_from: Option<i64>,
     pub gap_to: Option<i64>,
+    /// Potat history requester login (lowercase), when attributed.
+    pub requester_login: Option<String>,
+    /// Twitch user id of the requester, when known.
+    pub requester_twitch_id: Option<String>,
+    /// Mediation product label (`"potatbotat"`) when requester is set.
+    pub via: Option<String>,
+    /// How attribution was resolved (`"potat_history"`), when set.
+    pub attribution_method: Option<String>,
 }
 
 /// Input for inserting one `set_events` audit row.
@@ -98,6 +106,14 @@ pub struct NewSetEvent {
     pub gap_from: Option<i64>,
     /// Gap window end (UTC unix ms), when `kind` is [`SetEventKind::Gap`].
     pub gap_to: Option<i64>,
+    /// Potat history requester login (lowercase), when attributed.
+    pub requester_login: Option<String>,
+    /// Twitch user id of the requester, when known.
+    pub requester_twitch_id: Option<String>,
+    /// Mediation product label (`"potatbotat"`) when requester is set.
+    pub via: Option<String>,
+    /// How attribution was resolved (`"potat_history"`), when set.
+    pub attribution_method: Option<String>,
 }
 
 /// Input for inserting one `usage_events` chat-usage row.

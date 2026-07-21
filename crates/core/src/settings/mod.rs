@@ -13,6 +13,7 @@
 pub mod ai;
 pub mod audit;
 pub mod aviationstack;
+pub mod emote_tracker;
 pub mod migrate;
 pub mod overrides;
 mod resolve;
@@ -32,6 +33,7 @@ pub use ai::{
 pub use audit::MemoryAuditLog;
 pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
 pub use aviationstack::AviationstackSettings;
+pub use emote_tracker::{EmoteTrackerSettings, PotatAttributionSettings};
 pub use overrides::{AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides};
 pub use schedules::Schedule;
 pub use store::{Actor, SettingsStore};
@@ -48,7 +50,7 @@ use thiserror::Error;
 
 pub type SettingsHandle = Arc<ArcSwap<Settings>>;
 
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Settings {
@@ -59,6 +61,7 @@ pub struct Settings {
     pub twitch: TwitchRuntime,
     pub aviationstack: AviationstackSettings,
     pub suspend: SuspendSettings,
+    pub emote_tracker: EmoteTrackerSettings,
     pub web: WebRuntime,
     pub schedules: Vec<Schedule>,
 }
@@ -96,6 +99,7 @@ pub enum SettingsSection {
     TwitchChannels,
     Aviationstack,
     Suspend,
+    EmoteTrackerPotat,
     WebRuntime,
     Schedules,
 }
@@ -143,6 +147,7 @@ impl Settings {
             twitch: TwitchRuntime::default(),
             aviationstack: AviationstackSettings::default(),
             suspend: SuspendSettings::default(),
+            emote_tracker: EmoteTrackerSettings::default(),
             web: WebRuntime::default(),
             schedules: Vec::new(),
         }
@@ -159,13 +164,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compiled_defaults_v4_layout() {
+    fn compiled_defaults_v5_layout() {
         let s = Settings::compiled_defaults();
-        assert_eq!(s.schema_version, 4);
+        assert_eq!(s.schema_version, 5);
         assert_eq!(s.ai, AiSettings::default());
         assert_eq!(s.twitch, TwitchRuntime::default());
         assert_eq!(s.aviationstack, AviationstackSettings::default());
         assert_eq!(s.suspend, SuspendSettings::default());
+        assert_eq!(s.emote_tracker, EmoteTrackerSettings::default());
+        assert!(s.emote_tracker.potat_attribution.enabled);
+        assert_eq!(s.emote_tracker.potat_attribution.window_secs, 15);
         assert_eq!(s.web, WebRuntime::default());
         assert!(s.schedules.is_empty());
     }

@@ -19,6 +19,22 @@ pub fn format_actor_display(
     "unknown".to_owned()
 }
 
+/// Attribution cell / chat clause: `{login} via PotatBotat` when both fields present.
+///
+/// `via` must be the stored lowercase product id `"potatbotat"`; the display label is
+/// always title-case `PotatBotat`.
+pub fn format_set_event_attribution(
+    requester_login: Option<&str>,
+    via: Option<&str>,
+) -> Option<String> {
+    let login = requester_login.filter(|s| !s.is_empty())?;
+    let via = via.filter(|s| !s.is_empty())?;
+    if via != "potatbotat" {
+        return None;
+    }
+    Some(format!("{login} via PotatBotat"))
+}
+
 /// Format UTC unix milliseconds as `DD.MM.YYYY HH:MM` in Europe/Berlin.
 pub fn format_berlin_millis(at_ms: i64) -> String {
     match Utc.timestamp_millis_opt(at_ms).single() {
@@ -47,6 +63,21 @@ mod tests {
         assert_eq!(format_actor_display(None, None, Some("abc")), "abc");
         assert_eq!(format_actor_display(None, None, None), "unknown");
         assert_eq!(format_actor_display(Some(""), Some(""), None), "unknown");
+    }
+
+    #[test]
+    fn format_set_event_attribution_requires_login_and_via() {
+        assert_eq!(
+            format_set_event_attribution(Some("NozzleNols"), Some("potatbotat")).as_deref(),
+            Some("NozzleNols via PotatBotat")
+        );
+        assert_eq!(format_set_event_attribution(Some("x"), None), None);
+        assert_eq!(format_set_event_attribution(None, Some("potatbotat")), None);
+        assert_eq!(format_set_event_attribution(Some("x"), Some("other")), None);
+        assert_eq!(
+            format_set_event_attribution(Some(""), Some("potatbotat")),
+            None
+        );
     }
 
     #[test]

@@ -40,6 +40,7 @@
     <div class="th col-name">Name</div>
     <div class="th">Emote id</div>
     <div class="th">Actor</div>
+    <div class="th">Attribution</div>
     <div class="th">Gap range</div>
   </div>
   {% if tracker_disabled %}
@@ -57,6 +58,7 @@
         <div class="td col-name{% if row.is_gap %} muted{% endif %}">{{ row.name }}</div>
         <div class="td mono{% if row.is_gap %} muted{% endif %}">{% if row.emote_id.is_empty() %}<span class="muted">—</span>{% else %}{{ row.emote_id }}{% endif %}</div>
         <div class="td{% if row.is_gap %} muted{% endif %}">{{ row.actor }}</div>
+        <div class="td{% if row.is_gap %} muted{% endif %}">{{ row.attribution }}</div>
         <div class="td mono{% if row.is_gap %} muted{% endif %}">{% if row.gap_range.is_empty() %}<span class="muted">—</span>{% else %}{{ row.gap_range }}{% endif %}</div>
       </div>
     {% endfor %}

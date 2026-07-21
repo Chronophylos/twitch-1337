@@ -15,8 +15,14 @@ use super::eventapi::{
     subscribe_user_update_message, unsubscribe_emote_set_update_message,
 };
 use super::handle::EmoteTrackerHandle;
+use super::potat_attribution::{
+    HISTORY_RETRY_DELAY, POTAT_HISTORY_BASE_URL, SMALL_SLACK_SECS, fetch_potat_history,
+    mediation_gate_open, resolve_requester_login,
+};
 use super::reconcile::{bootstrap_batch, reconcile_batch};
 use super::rest::fetch_channel_set;
+use super::types::{NewSetEvent, SetChangeBatch, SetEventKind};
+use crate::settings::{PotatAttributionSettings, SettingsHandle};
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
@@ -38,16 +44,25 @@ enum SessionEnd {
 #[derive(Debug, Clone)]
 pub struct IngestConfig {
     pub twitch_channel_id: String,
+    /// Twitch login for Potat history URLs (`config.twitch.channel`).
+    pub twitch_channel_login: String,
     pub rest_base_url: String,
     pub eventapi_url: String,
+    /// Override for tests (`wiremock`); production uses [`POTAT_HISTORY_BASE_URL`].
+    pub potat_history_base_url: String,
 }
 
 impl IngestConfig {
-    pub fn new(twitch_channel_id: impl Into<String>) -> Self {
+    pub fn new(
+        twitch_channel_id: impl Into<String>,
+        twitch_channel_login: impl Into<String>,
+    ) -> Self {
         Self {
             twitch_channel_id: twitch_channel_id.into(),
+            twitch_channel_login: twitch_channel_login.into(),
             rest_base_url: "https://7tv.io/v3".into(),
             eventapi_url: super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: POTAT_HISTORY_BASE_URL.into(),
         }
     }
 }
@@ -97,6 +112,7 @@ pub async fn run_set_ingest(
     handle: Arc<EmoteTrackerHandle>,
     cfg: IngestConfig,
     http: reqwest::Client,
+    settings: SettingsHandle,
 ) {
     let mut backoff = INITIAL_BACKOFF;
     let mut gap_started_at: Option<i64> = None;
@@ -117,6 +133,7 @@ pub async fn run_set_ingest(
                     &handle,
                     &http,
                     &cfg,
+                    &settings,
                     &result.user_id,
                     &result.set_id,
                     &mut gap_started_at,
@@ -170,6 +187,7 @@ async fn run_eventapi_session(
     handle: &EmoteTrackerHandle,
     http: &reqwest::Client,
     cfg: &IngestConfig,
+    settings: &SettingsHandle,
     seventv_user_id: &str,
     initial_set_id: &str,
     gap_started_at: &mut Option<i64>,
@@ -231,7 +249,8 @@ async fn run_eventapi_session(
                             .await?;
                         } else {
                             let at = now_ms();
-                            let batch = live_change_to_batch(at, &dispatch);
+                            let mut batch = live_change_to_batch(at, &dispatch);
+                            maybe_attribute_batch(http, settings, cfg, &mut batch).await;
                             if !batch.mutations.is_empty() {
                                 handle.apply_set_changes(batch).await?;
                             }
@@ -307,6 +326,130 @@ async fn run_eventapi_session(
 
     *gap_started_at = Some(gap_started_at.unwrap_or_else(now_ms));
     Err(eyre!("EventAPI websocket stream ended"))
+}
+
+fn event_is_attribute_eligible(event: &NewSetEvent) -> bool {
+    matches!(
+        event.kind,
+        SetEventKind::Add | SetEventKind::Remove | SetEventKind::Rename
+    ) && event.emote_id.is_some()
+}
+
+/// Known non-Potat performers permanently close Step A — history can never reopen them.
+fn performer_gate_permanently_closed(actor_7tv_id: Option<&str>, potat_7tv_user_id: &str) -> bool {
+    matches!(actor_7tv_id, Some(id) if id != potat_7tv_user_id)
+}
+
+/// True when at least one eligible event has null or Potat performer (history may help).
+fn batch_needs_history_fetch(batch: &SetChangeBatch, potat_7tv_user_id: &str) -> bool {
+    batch.events.iter().any(|event| {
+        event_is_attribute_eligible(event)
+            && !performer_gate_permanently_closed(event.actor_7tv_id.as_deref(), potat_7tv_user_id)
+    })
+}
+
+fn attribute_one(
+    event: &mut NewSetEvent,
+    history: &[super::potat_attribution::PotatHistoryItem],
+    potat: &PotatAttributionSettings,
+    soft_cap: u64,
+) {
+    let Some(emote_id) = event.emote_id.as_deref() else {
+        return;
+    };
+    if !event_is_attribute_eligible(event) {
+        return;
+    }
+    if !mediation_gate_open(
+        event.actor_7tv_id.as_deref(),
+        &potat.potat_7tv_user_id,
+        history,
+        emote_id,
+        soft_cap,
+    ) {
+        return;
+    }
+    let Some(login) = resolve_requester_login(history, emote_id, event.kind, soft_cap) else {
+        return;
+    };
+    event.requester_login = Some(login);
+    event.via = Some("potatbotat".into());
+    event.attribution_method = Some("potat_history".into());
+}
+
+fn any_step_b_hit(
+    batch: &SetChangeBatch,
+    history: &[super::potat_attribution::PotatHistoryItem],
+    potat: &PotatAttributionSettings,
+    soft_cap: u64,
+) -> bool {
+    batch.events.iter().any(|event| {
+        let Some(emote_id) = event.emote_id.as_deref() else {
+            return false;
+        };
+        if !event_is_attribute_eligible(event) {
+            return false;
+        }
+        if !mediation_gate_open(
+            event.actor_7tv_id.as_deref(),
+            &potat.potat_7tv_user_id,
+            history,
+            emote_id,
+            soft_cap,
+        ) {
+            return false;
+        }
+        resolve_requester_login(history, emote_id, event.kind, soft_cap).is_some()
+    })
+}
+
+async fn fetch_with_retry(
+    http: &reqwest::Client,
+    cfg: &IngestConfig,
+    batch: &SetChangeBatch,
+    potat: &PotatAttributionSettings,
+    soft_cap: u64,
+) -> eyre::Result<Vec<super::potat_attribution::PotatHistoryItem>> {
+    let first =
+        fetch_potat_history(http, &cfg.potat_history_base_url, &cfg.twitch_channel_login).await?;
+    if any_step_b_hit(batch, &first, potat, soft_cap) {
+        return Ok(first);
+    }
+    // Do not sleep+retry when every eligible event has a known non-Potat
+    // performer — Step A is permanently closed and a second fetch cannot help.
+    if !batch_needs_history_fetch(batch, &potat.potat_7tv_user_id) {
+        return Ok(first);
+    }
+    tokio::time::sleep(HISTORY_RETRY_DELAY).await;
+    fetch_potat_history(http, &cfg.potat_history_base_url, &cfg.twitch_channel_login).await
+}
+
+/// Settings-gated Potat history attribution for one live EventAPI dispatch.
+pub async fn maybe_attribute_batch(
+    http: &reqwest::Client,
+    settings: &SettingsHandle,
+    cfg: &IngestConfig,
+    batch: &mut SetChangeBatch,
+) {
+    let snap = settings.load();
+    let potat = &snap.emote_tracker.potat_attribution;
+    if !potat.enabled {
+        return;
+    }
+    if !batch_needs_history_fetch(batch, &potat.potat_7tv_user_id) {
+        return;
+    }
+    let soft_cap = potat.window_secs.saturating_add(SMALL_SLACK_SECS);
+    let history = match fetch_with_retry(http, cfg, batch, potat, soft_cap).await {
+        Ok(h) => h,
+        Err(error) => {
+            warn!(?error, "potat history fetch failed; skipping attribution");
+            return;
+        }
+    };
+    for event in &mut batch.events {
+        attribute_one(event, &history, potat, soft_cap);
+    }
 }
 
 /// How to treat a set-id mismatch against the REST active set.
@@ -427,8 +570,12 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::emote_tracker::eventapi::ParsedEvent;
     use crate::emote_tracker::{DB_FILENAME, types::SetEventKind};
+    use crate::settings::{PotatAttributionSettings, Settings};
+    use arc_swap::ArcSwap;
     use rusqlite::Connection;
+    use std::sync::Arc;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -478,8 +625,10 @@ mod tests {
 
         let cfg = IngestConfig {
             twitch_channel_id: channel_id.into(),
+            twitch_channel_login: "testchannel".into(),
             rest_base_url: format!("{}/v3", mock.uri()),
             eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: POTAT_HISTORY_BASE_URL.into(),
         };
 
         let result = startup_reconcile_once(&handle, &reqwest::Client::new(), &cfg, None)
@@ -538,8 +687,10 @@ mod tests {
         let handle = EmoteTrackerHandle::open(&db_path).unwrap();
         let cfg = IngestConfig {
             twitch_channel_id: channel_id.into(),
+            twitch_channel_login: "testchannel".into(),
             rest_base_url: format!("{}/v3", mock.uri()),
             eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: POTAT_HISTORY_BASE_URL.into(),
         };
 
         startup_reconcile_once(&handle, &reqwest::Client::new(), &cfg, None)
@@ -599,8 +750,10 @@ mod tests {
         let handle = EmoteTrackerHandle::open(&db_path).unwrap();
         let cfg = IngestConfig {
             twitch_channel_id: channel_id.into(),
+            twitch_channel_login: "testchannel".into(),
             rest_base_url: format!("{}/v3", mock.uri()),
             eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: POTAT_HISTORY_BASE_URL.into(),
         };
 
         startup_reconcile_once(&handle, &reqwest::Client::new(), &cfg, None)
@@ -625,5 +778,336 @@ mod tests {
         assert_eq!(count_events(&db_path, SetEventKind::Gap), 1);
         assert_eq!(count_events(&db_path, SetEventKind::Add), 1);
         assert!(gap_started_at.is_none());
+    }
+
+    fn potat_settings_handle(enabled: bool) -> SettingsHandle {
+        let mut s = Settings::compiled_defaults();
+        s.emote_tracker.potat_attribution = PotatAttributionSettings {
+            enabled,
+            window_secs: 15,
+            potat_7tv_user_id: "01GNRG2MDG0000DM7N933JH49Y".into(),
+        };
+        Arc::new(ArcSwap::from_pointee(s))
+    }
+
+    fn add_event(emote_id: &str, actor_7tv_id: Option<&str>) -> NewSetEvent {
+        NewSetEvent {
+            at: 1,
+            kind: SetEventKind::Add,
+            emote_id: Some(emote_id.into()),
+            old_name: None,
+            new_name: Some("Kappa".into()),
+            actor_7tv_id: actor_7tv_id.map(str::to_owned),
+            actor_username: None,
+            actor_display_name: None,
+            gap_from: None,
+            gap_to: None,
+            requester_login: None,
+            requester_twitch_id: None,
+            via: None,
+            attribution_method: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn live_batch_attributes_from_mocked_potat_history() {
+        crate::install_crypto_provider();
+        let mock = MockServer::start().await;
+        let login = "euterheissgetraenk";
+        let body = include_str!("fixtures/potat_history_standard.json");
+        Mock::given(method("GET"))
+            .and(path(format!("/emotes/history/{login}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let cfg = IngestConfig {
+            twitch_channel_id: "123".into(),
+            twitch_channel_login: login.into(),
+            rest_base_url: "https://7tv.io/v3".into(),
+            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
+        };
+        let settings = potat_settings_handle(true);
+        let mut batch = SetChangeBatch {
+            updated_at: 1,
+            mutations: vec![],
+            events: vec![add_event("e1", Some("01GNRG2MDG0000DM7N933JH49Y"))],
+        };
+
+        maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
+
+        assert_eq!(batch.events[0].requester_login.as_deref(), Some("ringomar"));
+        assert_eq!(batch.events[0].via.as_deref(), Some("potatbotat"));
+        assert_eq!(
+            batch.events[0].attribution_method.as_deref(),
+            Some("potat_history")
+        );
+    }
+
+    #[tokio::test]
+    async fn attribution_skipped_when_disabled() {
+        crate::install_crypto_provider();
+        let mock = MockServer::start().await;
+        let login = "euterheissgetraenk";
+        Mock::given(method("GET"))
+            .and(path(format!("/emotes/history/{login}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .expect(0)
+            .mount(&mock)
+            .await;
+
+        let cfg = IngestConfig {
+            twitch_channel_id: "123".into(),
+            twitch_channel_login: login.into(),
+            rest_base_url: "https://7tv.io/v3".into(),
+            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
+        };
+        let settings = potat_settings_handle(false);
+        let mut batch = SetChangeBatch {
+            updated_at: 1,
+            mutations: vec![],
+            events: vec![add_event("e1", Some("01GNRG2MDG0000DM7N933JH49Y"))],
+        };
+
+        maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
+
+        assert!(batch.events[0].requester_login.is_none());
+        assert!(batch.events[0].via.is_none());
+    }
+
+    #[tokio::test]
+    async fn multi_emote_batch_fetches_history_once() {
+        crate::install_crypto_provider();
+        let mock = MockServer::start().await;
+        let login = "euterheissgetraenk";
+        let body = r#"{
+          "data": [{
+            "history": [
+              {
+                "user_login": "alice",
+                "actor": "potatbotat",
+                "action": "ADD",
+                "type": "STANDARD",
+                "emote_id": "e1",
+                "provider": "STV",
+                "ago": "5s ago"
+              },
+              {
+                "user_login": "bob",
+                "actor": "potatbotat",
+                "action": "ADD",
+                "type": "STANDARD",
+                "emote_id": "e2",
+                "provider": "STV",
+                "ago": "5s ago"
+              }
+            ]
+          }]
+        }"#;
+        Mock::given(method("GET"))
+            .and(path(format!("/emotes/history/{login}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let cfg = IngestConfig {
+            twitch_channel_id: "123".into(),
+            twitch_channel_login: login.into(),
+            rest_base_url: "https://7tv.io/v3".into(),
+            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
+        };
+        let settings = potat_settings_handle(true);
+        let mut batch = SetChangeBatch {
+            updated_at: 1,
+            mutations: vec![],
+            events: vec![
+                add_event("e1", Some("01GNRG2MDG0000DM7N933JH49Y")),
+                add_event("e2", Some("01GNRG2MDG0000DM7N933JH49Y")),
+            ],
+        };
+
+        maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
+
+        assert_eq!(batch.events[0].requester_login.as_deref(), Some("alice"));
+        assert_eq!(batch.events[1].requester_login.as_deref(), Some("bob"));
+    }
+
+    #[tokio::test]
+    async fn soft_fail_leaves_attribution_null_on_http_error() {
+        crate::install_crypto_provider();
+        let mock = MockServer::start().await;
+        let login = "euterheissgetraenk";
+        Mock::given(method("GET"))
+            .and(path(format!("/emotes/history/{login}")))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&mock)
+            .await;
+
+        let cfg = IngestConfig {
+            twitch_channel_id: "123".into(),
+            twitch_channel_login: login.into(),
+            rest_base_url: "https://7tv.io/v3".into(),
+            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
+        };
+        let settings = potat_settings_handle(true);
+        let mut batch = SetChangeBatch {
+            updated_at: 1,
+            mutations: vec![],
+            events: vec![add_event("e1", Some("01GNRG2MDG0000DM7N933JH49Y"))],
+        };
+
+        maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
+
+        assert!(batch.events[0].requester_login.is_none());
+    }
+
+    #[tokio::test]
+    async fn null_body_actor_value_actor_id_does_not_block_potat_attribution() {
+        crate::install_crypto_provider();
+        let raw = include_str!("fixtures/dispatch_push_null_actor_with_actor_id.json");
+        let ParsedEvent::Dispatch(d) = crate::emote_tracker::eventapi::parse_server_message(raw)
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("expected dispatch");
+        };
+        let mut batch = crate::emote_tracker::eventapi::live_change_to_batch(100, &d);
+        assert!(
+            batch.events[0].actor_7tv_id.is_none(),
+            "true body.actor must stay null for Step A; value.actor_id must not poison the gate"
+        );
+
+        let emote_id = batch.events[0].emote_id.clone().unwrap();
+        let mock = MockServer::start().await;
+        let login = "euterheissgetraenk";
+        let history = format!(
+            r#"{{
+              "data": [{{
+                "history": [{{
+                  "user_login": "NozzleNols",
+                  "actor": "potatbotat",
+                  "action": "ADD",
+                  "type": "STANDARD",
+                  "emote_id": "{emote_id}",
+                  "provider": "STV",
+                  "ago": "5s ago"
+                }}]
+              }}]
+            }}"#
+        );
+        Mock::given(method("GET"))
+            .and(path(format!("/emotes/history/{login}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(history))
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let cfg = IngestConfig {
+            twitch_channel_id: "123".into(),
+            twitch_channel_login: login.into(),
+            rest_base_url: "https://7tv.io/v3".into(),
+            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
+        };
+        let settings = potat_settings_handle(true);
+
+        maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
+
+        assert!(batch.events[0].actor_7tv_id.is_none());
+        assert_eq!(
+            batch.events[0].requester_login.as_deref(),
+            Some("nozzlenols")
+        );
+        assert_eq!(batch.events[0].via.as_deref(), Some("potatbotat"));
+        assert_eq!(
+            batch.events[0].attribution_method.as_deref(),
+            Some("potat_history")
+        );
+    }
+
+    #[tokio::test]
+    async fn history_fetch_skipped_when_all_gates_permanently_closed() {
+        crate::install_crypto_provider();
+        let mock = MockServer::start().await;
+        let login = "euterheissgetraenk";
+        Mock::given(method("GET"))
+            .and(path(format!("/emotes/history/{login}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .expect(0)
+            .mount(&mock)
+            .await;
+
+        let cfg = IngestConfig {
+            twitch_channel_id: "123".into(),
+            twitch_channel_login: login.into(),
+            rest_base_url: "https://7tv.io/v3".into(),
+            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
+        };
+        let settings = potat_settings_handle(true);
+        let mut batch = SetChangeBatch {
+            updated_at: 1,
+            mutations: vec![],
+            events: vec![
+                add_event("e1", Some("01HUMANEDITOR0000000000000")),
+                add_event("e2", Some("01ANOTHERHUMAN000000000000")),
+            ],
+        };
+
+        maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
+
+        assert!(batch.events[0].requester_login.is_none());
+        assert!(batch.events[1].requester_login.is_none());
+    }
+
+    #[tokio::test]
+    async fn history_does_not_retry_when_gates_closed_after_first_fetch() {
+        // Guard the fetch_with_retry path: if a fetch somehow runs for a
+        // permanently closed batch, we must not sleep+retry. Empty response
+        // would otherwise look like "no Step B hit" and trigger a second GET.
+        crate::install_crypto_provider();
+        let mock = MockServer::start().await;
+        let login = "euterheissgetraenk";
+        Mock::given(method("GET"))
+            .and(path(format!("/emotes/history/{login}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"data":[{"history":[]}]}"#),
+            )
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let cfg = IngestConfig {
+            twitch_channel_id: "123".into(),
+            twitch_channel_login: login.into(),
+            rest_base_url: "https://7tv.io/v3".into(),
+            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
+        };
+        let potat = PotatAttributionSettings {
+            enabled: true,
+            window_secs: 15,
+            potat_7tv_user_id: "01GNRG2MDG0000DM7N933JH49Y".into(),
+        };
+        let soft_cap = potat.window_secs.saturating_add(SMALL_SLACK_SECS);
+        let batch = SetChangeBatch {
+            updated_at: 1,
+            mutations: vec![],
+            events: vec![add_event("e1", Some("01HUMANEDITOR0000000000000"))],
+        };
+
+        // Call fetch_with_retry directly so we exercise the no-retry branch
+        // even though maybe_attribute_batch now skips the fetch entirely.
+        let history = fetch_with_retry(&reqwest::Client::new(), &cfg, &batch, &potat, soft_cap)
+            .await
+            .unwrap();
+        assert!(history.is_empty());
+        // wiremock expect(1) asserts no second request on drop
     }
 }

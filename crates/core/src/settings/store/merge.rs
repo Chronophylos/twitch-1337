@@ -226,6 +226,21 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.suspend.default_duration_secs {
         into.suspend.default_duration_secs = Some(v);
     }
+    // Emote tracker · Potat attribution
+    if let Some(v) = patch.emote_tracker.potat_attribution.enabled {
+        into.emote_tracker.potat_attribution.enabled = Some(v);
+    }
+    if let Some(v) = patch.emote_tracker.potat_attribution.window_secs {
+        into.emote_tracker.potat_attribution.window_secs = Some(v);
+    }
+    if let Some(v) = patch
+        .emote_tracker
+        .potat_attribution
+        .potat_7tv_user_id
+        .as_ref()
+    {
+        into.emote_tracker.potat_attribution.potat_7tv_user_id = Some(v.clone());
+    }
     // Web
     if let Some(v) = patch.web.session_ttl_secs {
         into.web.session_ttl_secs = Some(v);

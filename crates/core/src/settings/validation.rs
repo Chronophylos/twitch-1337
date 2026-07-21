@@ -119,6 +119,19 @@ impl Settings {
                 ),
             });
         }
+        let potat = &self.emote_tracker.potat_attribution;
+        if !(3..=120).contains(&potat.window_secs) {
+            errs.push(FieldError {
+                field: "emote_tracker.potat_attribution.window_secs".into(),
+                message: format!("must be 3..=120 (got {})", potat.window_secs),
+            });
+        }
+        if potat.enabled && potat.potat_7tv_user_id.trim().is_empty() {
+            errs.push(FieldError {
+                field: "emote_tracker.potat_attribution.potat_7tv_user_id".into(),
+                message: "must not be blank when attribution is enabled".into(),
+            });
+        }
         if self.aviationstack.enabled {
             if reqwest::Url::parse(&self.aviationstack.base_url).is_err() {
                 errs.push(FieldError {
@@ -576,6 +589,36 @@ mod tests {
         assert!(
             errs.iter()
                 .any(|e| e.field == "suspend.default_duration_secs")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_potat_window_out_of_range() {
+        let mut s = Settings::compiled_defaults();
+        s.emote_tracker.potat_attribution.window_secs = 2;
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "emote_tracker.potat_attribution.window_secs")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_blank_potat_7tv_id_when_enabled() {
+        let mut s = Settings::compiled_defaults();
+        s.emote_tracker.potat_attribution.potat_7tv_user_id = "  ".into();
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "emote_tracker.potat_attribution.potat_7tv_user_id")
         );
     }
 

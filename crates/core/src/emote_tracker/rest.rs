@@ -56,6 +56,7 @@ impl ChannelSetSnapshot {
                 .map(|emote| DesiredEmote {
                     emote_id: emote.id,
                     name: emote.name,
+                    actor_id: None,
                 })
                 .collect(),
         })

@@ -1,0 +1,28 @@
+{
+  "data": [
+    {
+      "history": [
+        {
+          "user_login": "someone",
+          "actor": "potatbotat",
+          "action": "ADD",
+          "type": "STANDARD",
+          "emote_id": "e1",
+          "emote_name": "BttvThing",
+          "provider": "BTTV",
+          "ago": "5s ago"
+        },
+        {
+          "user_login": "someone",
+          "actor": "external",
+          "action": "ADD",
+          "type": "STANDARD",
+          "emote_id": "e1",
+          "emote_name": "ExternalAdd",
+          "provider": "STV",
+          "ago": "5s ago"
+        }
+      ]
+    }
+  ]
+}

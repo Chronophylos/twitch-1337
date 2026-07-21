@@ -3,8 +3,9 @@
 
 use super::overrides;
 use super::{
-    AiEmotes, AiPrefill, AiSettings, AiWeb, AviationstackSettings, Cooldowns, PingsSettings,
-    SCHEMA_VERSION, Settings, SuspendSettings, TwitchRuntime, WebRuntime,
+    AiEmotes, AiPrefill, AiSettings, AiWeb, AviationstackSettings, Cooldowns, EmoteTrackerSettings,
+    PingsSettings, PotatAttributionSettings, SCHEMA_VERSION, Settings, SuspendSettings,
+    TwitchRuntime, WebRuntime,
 };
 
 impl Settings {
@@ -78,6 +79,32 @@ impl Settings {
                     .suspend
                     .default_duration_secs
                     .unwrap_or(defaults.suspend.default_duration_secs),
+            },
+            emote_tracker: EmoteTrackerSettings {
+                potat_attribution: PotatAttributionSettings {
+                    enabled: overrides
+                        .emote_tracker
+                        .potat_attribution
+                        .enabled
+                        .unwrap_or(defaults.emote_tracker.potat_attribution.enabled),
+                    window_secs: overrides
+                        .emote_tracker
+                        .potat_attribution
+                        .window_secs
+                        .unwrap_or(defaults.emote_tracker.potat_attribution.window_secs),
+                    potat_7tv_user_id: overrides
+                        .emote_tracker
+                        .potat_attribution
+                        .potat_7tv_user_id
+                        .clone()
+                        .unwrap_or_else(|| {
+                            defaults
+                                .emote_tracker
+                                .potat_attribution
+                                .potat_7tv_user_id
+                                .clone()
+                        }),
+                },
             },
             web: WebRuntime {
                 session_ttl_secs: overrides

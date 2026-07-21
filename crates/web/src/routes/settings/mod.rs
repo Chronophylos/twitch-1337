@@ -230,6 +230,16 @@ struct SaveForm {
     #[serde(default)]
     suspend_default_duration_secs: Option<u64>,
 
+    // ---- Emote tracker · Potat attribution card ----
+    #[serde(default)]
+    emote_tracker_potat_card_visible: Option<String>,
+    #[serde(default)]
+    emote_tracker_potat_enabled: Option<String>,
+    #[serde(default)]
+    emote_tracker_potat_window_secs: Option<u64>,
+    #[serde(default)]
+    emote_tracker_potat_7tv_user_id: Option<String>,
+
     // ---- Web · Sessions card ----
     #[serde(default)]
     web_session_ttl_secs: Option<u64>,
@@ -387,6 +397,7 @@ async fn reset(
         "twitch_channels" => SettingsSection::TwitchChannels,
         "aviationstack" => SettingsSection::Aviationstack,
         "suspend" => SettingsSection::Suspend,
+        "emote_tracker_potat" => SettingsSection::EmoteTrackerPotat,
         "web_runtime" => SettingsSection::WebRuntime,
         other => {
             return Err(WebError::Validation {

@@ -203,6 +203,7 @@ impl SettingsStore {
             }
             SettingsSection::Aviationstack => current.aviationstack = Default::default(),
             SettingsSection::Suspend => current.suspend = Default::default(),
+            SettingsSection::EmoteTrackerPotat => current.emote_tracker = Default::default(),
             SettingsSection::WebRuntime => current.web = Default::default(),
             SettingsSection::Schedules => current.schedules = None,
         }

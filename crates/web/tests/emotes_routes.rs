@@ -56,6 +56,10 @@ async fn seeded_tracker() -> (Arc<EmoteTrackerHandle>, TempDir) {
         actor_display_name: None,
         gap_from: None,
         gap_to: None,
+        requester_login: None,
+        requester_twitch_id: None,
+        via: None,
+        attribution_method: None,
     })
     .await
     .unwrap();

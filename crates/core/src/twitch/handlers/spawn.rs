@@ -202,9 +202,11 @@ where
     let emote_set_ingest = match (emote_tracker.clone(), twitch_channel_id) {
         (Some(handle), Some(channel_id)) => {
             let http = reqwest::Client::new();
-            let cfg = crate::emote_tracker::IngestConfig::new(channel_id);
+            let cfg =
+                crate::emote_tracker::IngestConfig::new(channel_id, config.twitch.channel.clone());
+            let settings = settings.clone();
             tokio::spawn(async move {
-                crate::emote_tracker::run_set_ingest(handle, cfg, http).await;
+                crate::emote_tracker::run_set_ingest(handle, cfg, http, settings).await;
             })
         }
         _ => tokio::spawn(std::future::pending::<()>()),

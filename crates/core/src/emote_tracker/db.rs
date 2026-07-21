@@ -44,8 +44,9 @@ pub fn insert_set_event(conn: &Connection, event: &NewSetEvent) -> Result<i64> {
         "INSERT INTO set_events (
            at, kind, emote_id, old_name, new_name,
            actor_7tv_id, actor_username, actor_display_name,
-           gap_from, gap_to
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+           gap_from, gap_to,
+           requester_login, requester_twitch_id, via, attribution_method
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             event.at,
             event.kind.as_str(),
@@ -57,6 +58,10 @@ pub fn insert_set_event(conn: &Connection, event: &NewSetEvent) -> Result<i64> {
             event.actor_display_name,
             event.gap_from,
             event.gap_to,
+            event.requester_login,
+            event.requester_twitch_id,
+            event.via,
+            event.attribution_method,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -146,14 +151,15 @@ pub fn latest_emote_id_for_name_in_events(conn: &Connection, name: &str) -> Resu
     .map_err(Into::into)
 }
 
-/// Latest bootstrap / add / remove audit row for an emote (chat lifecycle line).
+/// Latest bootstrap / add / remove / rename audit row for an emote (chat lifecycle line).
 pub fn latest_lifecycle_event(conn: &Connection, emote_id: &str) -> Result<Option<SetEventRow>> {
     conn.query_row(
         "SELECT id, at, kind, emote_id, old_name, new_name,
                 actor_7tv_id, actor_username, actor_display_name,
-                gap_from, gap_to
+                gap_from, gap_to,
+                requester_login, requester_twitch_id, via, attribution_method
          FROM set_events
-         WHERE emote_id = ?1 AND kind IN ('bootstrap', 'add', 'remove')
+         WHERE emote_id = ?1 AND kind IN ('bootstrap', 'add', 'remove', 'rename')
          ORDER BY at DESC, id DESC LIMIT 1",
         params![emote_id],
         map_set_event_row,
@@ -199,7 +205,8 @@ pub fn list_set_events(conn: &Connection, filter: &SetEventListFilter) -> Result
     let limit = clamp_limit(if filter.limit == 0 { 200 } else { filter.limit });
     let mut sql = String::from(
         "SELECT id, at, kind, emote_id, old_name, new_name,
-                actor_7tv_id, actor_username, actor_display_name, gap_from, gap_to
+                actor_7tv_id, actor_username, actor_display_name, gap_from, gap_to,
+                requester_login, requester_twitch_id, via, attribution_method
          FROM set_events WHERE 1=1",
     );
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -318,6 +325,10 @@ fn map_set_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SetEventRow> {
         actor_display_name: row.get(8)?,
         gap_from: row.get(9)?,
         gap_to: row.get(10)?,
+        requester_login: row.get(11)?,
+        requester_twitch_id: row.get(12)?,
+        via: row.get(13)?,
+        attribution_method: row.get(14)?,
     })
 }
 
@@ -352,6 +363,10 @@ mod tests {
                 actor_display_name: None,
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             }],
         };
         apply_set_changes(&conn, &batch).unwrap();
@@ -401,6 +416,10 @@ mod tests {
                     actor_display_name: None,
                     gap_from: None,
                     gap_to: None,
+                    requester_login: None,
+                    requester_twitch_id: None,
+                    via: None,
+                    attribution_method: None,
                 }],
             },
         )
@@ -501,6 +520,10 @@ mod tests {
                 actor_display_name: None,
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             },
         )
         .unwrap();
@@ -518,6 +541,10 @@ mod tests {
                 actor_display_name: None,
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             },
         )
         .unwrap();
@@ -545,6 +572,10 @@ mod tests {
                 actor_display_name: None,
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             },
         )
         .unwrap();
@@ -561,6 +592,10 @@ mod tests {
                 actor_display_name: Some("Alice".into()),
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             },
         )
         .unwrap();
@@ -636,7 +671,46 @@ mod tests {
     }
 
     #[test]
-    fn latest_lifecycle_event_ignores_rename_and_gap() {
+    fn insert_and_list_preserves_attribution_fields() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        upsert_emote(&conn, "e1", "Kappa", true, 1).unwrap();
+        insert_set_event(
+            &conn,
+            &NewSetEvent {
+                at: 1,
+                kind: SetEventKind::Add,
+                emote_id: Some("e1".into()),
+                old_name: None,
+                new_name: Some("Kappa".into()),
+                actor_7tv_id: Some("potat".into()),
+                actor_username: Some("potatbotat".into()),
+                actor_display_name: Some("PotatBotat".into()),
+                gap_from: None,
+                gap_to: None,
+                requester_login: Some("nozzlenols".into()),
+                requester_twitch_id: None,
+                via: Some("potatbotat".into()),
+                attribution_method: Some("potat_history".into()),
+            },
+        )
+        .unwrap();
+        let rows = list_set_events(
+            &conn,
+            &SetEventListFilter {
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(rows[0].requester_login.as_deref(), Some("nozzlenols"));
+        assert_eq!(rows[0].via.as_deref(), Some("potatbotat"));
+        assert_eq!(rows[0].attribution_method.as_deref(), Some("potat_history"));
+        assert_eq!(rows[0].requester_twitch_id, None);
+    }
+
+    #[test]
+    fn latest_lifecycle_event_includes_rename_ignores_gap() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         upsert_emote(&conn, TEST_EMOTE_A, "Kappa", true, 1).unwrap();
@@ -653,6 +727,10 @@ mod tests {
                 actor_display_name: None,
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             },
         )
         .unwrap();
@@ -664,34 +742,42 @@ mod tests {
                 emote_id: Some(TEST_EMOTE_A.into()),
                 old_name: Some("Kappa".into()),
                 new_name: Some("Kappa2".into()),
-                actor_7tv_id: None,
-                actor_username: None,
-                actor_display_name: None,
+                actor_7tv_id: Some("renamer".into()),
+                actor_username: Some("moduser".into()),
+                actor_display_name: Some("Mod User".into()),
                 gap_from: None,
                 gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             },
         )
         .unwrap();
         insert_set_event(
             &conn,
             &NewSetEvent {
-                at: 15,
-                kind: SetEventKind::Add,
+                at: 12,
+                kind: SetEventKind::Gap,
                 emote_id: Some(TEST_EMOTE_A.into()),
                 old_name: None,
-                new_name: Some("Kappa2".into()),
-                actor_7tv_id: Some("111111111111111111111111".into()),
-                actor_username: Some("moduser".into()),
-                actor_display_name: Some("Mod User".into()),
-                gap_from: None,
-                gap_to: None,
+                new_name: None,
+                actor_7tv_id: None,
+                actor_username: None,
+                actor_display_name: None,
+                gap_from: Some(11),
+                gap_to: Some(12),
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
             },
         )
         .unwrap();
         let row = latest_lifecycle_event(&conn, TEST_EMOTE_A)
             .unwrap()
             .unwrap();
-        assert_eq!(row.kind, SetEventKind::Add);
-        assert_eq!(row.at, 15);
+        assert_eq!(row.kind, SetEventKind::Rename);
+        assert_eq!(row.at, 10);
     }
 }
