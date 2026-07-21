@@ -275,7 +275,7 @@ where
         None
     };
 
-    // Clone so `CommandHandlerConfig` (Plan 4 `!emote`) can still take `emote_tracker`.
+    // Clone so `CommandHandlerConfig` (Plan 4 `!e`) can still take `emote_tracker`.
     let emote_usage = match emote_tracker.clone() {
         Some(handle) => {
             let rx = broadcast_tx.subscribe();

@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 use chrono_tz::Europe::Berlin;
 
-/// Display rule for set-change actors: display name → username → 7TV id → `unknown`.
+/// Display rule for set-change actors: display name → username → 7TV id → `unbekannt`.
 pub fn format_actor_display(
     actor_display_name: Option<&str>,
     actor_username: Option<&str>,
@@ -16,7 +16,7 @@ pub fn format_actor_display(
     if let Some(id) = actor_7tv_id.filter(|s| !s.is_empty()) {
         return id.to_owned();
     }
-    "unknown".to_owned()
+    "unbekannt".to_owned()
 }
 
 /// Attribution cell / chat clause: `{login} via PotatBotat` when both fields present.
@@ -42,7 +42,7 @@ pub fn format_berlin_millis(at_ms: i64) -> String {
             .with_timezone(&Berlin)
             .format("%d.%m.%Y %H:%M")
             .to_string(),
-        None => "invalid time".to_owned(),
+        None => "ungültige Zeit".to_owned(),
     }
 }
 
@@ -61,8 +61,8 @@ mod tests {
             "coolmod"
         );
         assert_eq!(format_actor_display(None, None, Some("abc")), "abc");
-        assert_eq!(format_actor_display(None, None, None), "unknown");
-        assert_eq!(format_actor_display(Some(""), Some(""), None), "unknown");
+        assert_eq!(format_actor_display(None, None, None), "unbekannt");
+        assert_eq!(format_actor_display(Some(""), Some(""), None), "unbekannt");
     }
 
     #[test]

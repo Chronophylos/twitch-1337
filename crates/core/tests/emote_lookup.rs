@@ -30,9 +30,9 @@ async fn emote_command_bootstrap_reply() {
         }])
         .spawn()
         .await;
-    bot.send("alice", "!emote Kappa").await;
+    bot.send("alice", "!e Kappa").await;
     let when = format_berlin_millis(AT_MS);
-    let expected = format!("Kappa ({TEST_EMOTE_ID}) — present when tracking started ({when})");
+    let expected = format!("Kappa ({TEST_EMOTE_ID}) war schon da als Tracking anfing ({when})");
     let reply = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(reply, expected);
     bot.shutdown().await;
@@ -62,11 +62,11 @@ async fn emote_command_add_shows_actor() {
         .await;
     bot.send(
         "alice",
-        &format!("!emote https://7tv.app/emotes/{TEST_EMOTE_ID}"),
+        &format!("!e https://7tv.app/emotes/{TEST_EMOTE_ID}"),
     )
     .await;
     let when = format_berlin_millis(AT_MS);
-    let expected = format!("Kappa ({TEST_EMOTE_ID}) — added by Mod User on {when}");
+    let expected = format!("Kappa ({TEST_EMOTE_ID}) hinzugefügt von Mod User am {when}");
     let reply = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(reply, expected);
     bot.shutdown().await;
@@ -75,22 +75,22 @@ async fn emote_command_add_shows_actor() {
 #[tokio::test]
 async fn emote_command_usage_and_not_found() {
     let mut bot = TestBotBuilder::new().with_emote_tracker().spawn().await;
-    bot.send("alice", "!emote").await;
+    bot.send("alice", "!e").await;
     let usage = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(
         usage,
-        "Usage: !emote <name, id, or https://7tv.app/emotes/…>"
+        "Benutzung: !e <Name, ID oder https://7tv.app/emotes/…> FDM"
     );
-    bot.send("alice", "!emote NoSuchEmote").await;
+    bot.send("alice", "!e NoSuchEmote").await;
     let nf = bot.expect_reply(Duration::from_secs(2)).await;
-    assert_eq!(nf, "Emote not found.");
+    assert_eq!(nf, "Emote nicht gefunden FDM");
     bot.shutdown().await;
 }
 
 #[tokio::test]
 async fn emote_command_absent_when_tracker_disabled() {
     let mut bot = TestBotBuilder::new().spawn().await;
-    bot.send("alice", "!emote Kappa").await;
+    bot.send("alice", "!e Kappa").await;
     bot.expect_silent(Duration::from_millis(400)).await;
     bot.shutdown().await;
 }

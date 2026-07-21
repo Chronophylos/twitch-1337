@@ -27,7 +27,7 @@ where
     L: LoginCredentials,
 {
     fn name(&self) -> &str {
-        "!emote"
+        "!e"
     }
 
     async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
