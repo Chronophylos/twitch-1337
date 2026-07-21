@@ -699,7 +699,7 @@ mod tests {
                 batch.events[0].actor_username.as_deref(),
                 batch.events[0].actor_7tv_id.as_deref(),
             ),
-            "unknown"
+            "unbekannt"
         );
     }
 
