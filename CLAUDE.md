@@ -181,7 +181,7 @@ Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `fli
 - `location/` — `plz.csv`, `airports.csv`, `airlines.csv` (refreshed weekly by `data-refresh.yml`)
 - `emotes/` — `7tv_emotes.toml`
 - `prompts/` — AI prompt templates
-- `flight/` — aircraft profiles + OurAirports CSVs for flight-plan DB generation
+- `flight/` — aircraft profiles + OurAirports CSVs for flight-plan DB generation (OurAirports CSVs refreshed by `data-refresh.yml` / `just data-refresh`; `build.rs` bakes from committed files only — no network at compile time)
 
 Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endian blobs (`location_airports.bin`, `plz.bin` via `include_bytes!`) to avoid PIE reloc bloat from `&str`-heavy static structs; flight-plan tables still emit generated Rust slices. Airlines CSV, 7tv TOML, and prompts stay `include_str!`. Zero runtime data-file dep (important for `FROM scratch` musl image).
 

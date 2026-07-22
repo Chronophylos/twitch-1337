@@ -29,6 +29,9 @@ jobs:
       - name: Regenerate plz.csv
         run: uv run scripts/update-plz.py
 
+      - name: Regenerate flight OurAirports CSVs
+        run: bash scripts/update-ourairports.sh
+
       - name: Count rows for PR body
         id: counts
         run: |
@@ -36,6 +39,8 @@ jobs:
             echo "airlines=$(wc -l < crates/data/assets/location/airlines.csv)"
             echo "airports=$(wc -l < crates/data/assets/location/airports.csv)"
             echo "plz=$(wc -l < crates/data/assets/location/plz.csv)"
+            echo "oa_airports=$(wc -l < crates/data/assets/flight/ourairports/airports.csv)"
+            echo "oa_runways=$(wc -l < crates/data/assets/flight/ourairports/runways.csv)"
           } >> "$GITHUB_OUTPUT"
 
       - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
@@ -51,6 +56,8 @@ jobs:
             - `crates/data/assets/location/airlines.csv`: ${{ steps.counts.outputs.airlines }} rows
             - `crates/data/assets/location/airports.csv`: ${{ steps.counts.outputs.airports }} rows
             - `crates/data/assets/location/plz.csv`: ${{ steps.counts.outputs.plz }} rows
+            - `crates/data/assets/flight/ourairports/airports.csv`: ${{ steps.counts.outputs.oa_airports }} rows
+            - `crates/data/assets/flight/ourairports/runways.csv`: ${{ steps.counts.outputs.oa_runways }} rows
 
             Merge if the diff looks reasonable. If CI fails, a parser likely
             needs to be adjusted for an upstream schema change.

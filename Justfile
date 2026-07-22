@@ -92,6 +92,15 @@ check-no-aws-lc:
   fi
   echo "ok: no aws-lc-sys in workspace graph"
 
+# Regenerate committed public-dataset CSVs (location + flight OurAirports).
+# Requires network + `uv` (for the Python update scripts). Same steps as
+# `.github/workflows/data-refresh.yml`.
+data-refresh:
+  bash scripts/generate_airlines_csv.sh
+  uv run scripts/update-airports.py
+  uv run scripts/update-plz.py
+  bash scripts/update-ourairports.sh
+
 # Run browser e2e tests. Starts chromedriver on :9515 if not already up.
 # Requires chromedriver + Chrome installed and version-matched.
 e2e:
