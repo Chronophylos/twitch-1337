@@ -24,6 +24,28 @@ pub struct TwitchConfiguration {
     /// Absent → no owner exists and the settings page returns 403.
     #[serde(default)]
     pub owner: Option<String>,
+    /// Bootstrap credentials for secondary AI mouth accounts. Absent →
+    /// that mouth is disabled.
+    #[serde(default)]
+    pub mouths: Mouths,
+}
+
+/// Bootstrap-only credentials for a secondary AI mouth account.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MouthConfig {
+    pub username: String,
+    pub refresh_token: SecretString,
+}
+
+/// Bootstrap-only container for optional secondary AI mouth accounts.
+/// Each field is absent unless a `[twitch.mouths.<name>]` section is
+/// present in config.toml.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Mouths {
+    #[serde(default)]
+    pub aurora: Option<MouthConfig>,
+    #[serde(default)]
+    pub grok: Option<MouthConfig>,
 }
 
 /// Bootstrap-only aviationstack configuration. Only the secret api_key belongs
@@ -98,6 +120,7 @@ impl Configuration {
                 client_id: SecretString::new("test".into()),
                 client_secret: SecretString::new("test".into()),
                 owner: None,
+                mouths: Mouths::default(),
             },
             aviationstack: None,
             ai: None,
@@ -271,5 +294,36 @@ mod tests {
         cfg.web.public_url = "https://bot.test".into();
         let err = validate_config(&cfg).unwrap_err().to_string();
         assert!(err.contains("session_secret"), "{err}");
+    }
+
+    #[test]
+    fn parses_optional_mouths() {
+        let toml = r#"
+channel = "c"
+username = "u"
+refresh_token = "r"
+client_id = "ci"
+client_secret = "cs"
+
+[mouths.aurora]
+username = "aurora_bot"
+refresh_token = "ar"
+"#;
+        let cfg: super::TwitchConfiguration = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.mouths.aurora.as_ref().unwrap().username, "aurora_bot");
+        assert!(cfg.mouths.grok.is_none());
+    }
+
+    #[test]
+    fn absent_mouths_default_empty() {
+        let toml = r#"
+channel = "c"
+username = "u"
+refresh_token = "r"
+client_id = "ci"
+client_secret = "cs"
+"#;
+        let cfg: super::TwitchConfiguration = toml::from_str(toml).unwrap();
+        assert!(cfg.mouths.aurora.is_none() && cfg.mouths.grok.is_none());
     }
 }
