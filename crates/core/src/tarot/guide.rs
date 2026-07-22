@@ -20,5 +20,18 @@ mod tests {
             !READING_GUIDE.contains('\u{2014}') && !READING_GUIDE.contains('\u{2013}'),
             "guide has forbidden dash"
         );
+        // Style anti-pattern from prod: labeled past/present/future with card in parens
+        assert!(
+            lower.contains("nicht die label-formel")
+                || lower.contains("kein `vergangenheit")
+                || lower.contains("kein vergangenheit"),
+            "guide should ban the clinical label formula: {READING_GUIDE}"
+        );
+        assert!(
+            lower.contains("fließend")
+                || lower.contains("fliessend")
+                || lower.contains("ineinander"),
+            "guide should push woven flowing replies: {READING_GUIDE}"
+        );
     }
 }

@@ -19,8 +19,9 @@ pub fn tarot_tool() -> ToolDefinition {
     ToolDefinition {
         name: TAROT_TOOL_NAME.into(),
         description: "Wenn jemand ein Tarot-Reading oder einen Card Pull will. Zieht einen Spread \
-            und liefert Karten, Bedeutungen und eine kurze Leseanleitung. Lieber dieses Tool als \
-            Karten zu erfinden."
+            und liefert deutsche Kartennamen, Bedeutungen und eine Leseanleitung. Lieber dieses Tool \
+            als Karten zu erfinden. Die Chat-Antwort soll fließend und persönlich sein, nicht als \
+            Past/Present/Future-Liste mit Kartennamen in Klammern."
             .into(),
         parameters: json!({
             "type": "object",

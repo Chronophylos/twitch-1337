@@ -36,7 +36,7 @@ pub static DECK: &[Card] = &[
     // --- 22 majors ---
     Card {
         id: "major_00_fool",
-        name: "The Fool",
+        name: "Der Narr",
         arcana: Arcana::Major,
         suit: None,
         upright: "Ein frischer Sprung. Vertrau der offenen Straße mehr als der Karte.",
@@ -44,7 +44,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_01_magician",
-        name: "The Magician",
+        name: "Der Magier",
         arcana: Arcana::Major,
         suit: None,
         upright: "Die Werkzeuge liegen bereit. Wille trifft Können, der Trick ist aufzutauchen.",
@@ -52,7 +52,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_02_high_priestess",
-        name: "The High Priestess",
+        name: "Die Hohepriesterin",
         arcana: Arcana::Major,
         suit: None,
         upright: "Bleib beim Schleier. Was du schon spürst, ist die erste Antwort.",
@@ -60,7 +60,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_03_empress",
-        name: "The Empress",
+        name: "Die Herrscherin",
         arcana: Arcana::Major,
         suit: None,
         upright: "Fülle in Blüte. Pfleg was wächst, lass Schönheit ihre Arbeit machen.",
@@ -68,7 +68,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_04_emperor",
-        name: "The Emperor",
+        name: "Der Herrscher",
         arcana: Arcana::Major,
         suit: None,
         upright: "Struktur hält den Thron. Setz Grenzen, führ mit ruhiger Autorität.",
@@ -76,7 +76,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_05_hierophant",
-        name: "The Hierophant",
+        name: "Der Hierophant",
         arcana: Arcana::Major,
         suit: None,
         upright: "Tradition als Brücke. Lern das Ritual, sprich es dann in deiner Stimme.",
@@ -84,7 +84,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_06_lovers",
-        name: "The Lovers",
+        name: "Die Liebenden",
         arcana: Arcana::Major,
         suit: None,
         upright: "Eine echte Wahl mit Herz. Ausrichtung zählt mehr als Perfektion.",
@@ -92,7 +92,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_07_chariot",
-        name: "The Chariot",
+        name: "Der Wagen",
         arcana: Arcana::Major,
         suit: None,
         upright: "Halt die Zügel. Gegensätzliche Kräfte ziehen dich voran, wenn du steuerst.",
@@ -100,7 +100,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_08_strength",
-        name: "Strength",
+        name: "Die Kraft",
         arcana: Arcana::Major,
         suit: None,
         upright: "Sanfter Mut zähmt den Löwen. Geduld schlägt rohe Gewalt.",
@@ -108,7 +108,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_09_hermit",
-        name: "The Hermit",
+        name: "Der Eremit",
         arcana: Arcana::Major,
         suit: None,
         upright: "Die Laterne brennt innen. Einsamkeit klärt, was die Menge nicht kann.",
@@ -116,7 +116,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_10_wheel_of_fortune",
-        name: "Wheel of Fortune",
+        name: "Das Rad des Schicksals",
         arcana: Arcana::Major,
         suit: None,
         upright: "Das Rad dreht sich. Reit die Welle nach oben, nichts bleibt ewig oben.",
@@ -124,7 +124,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_11_justice",
-        name: "Justice",
+        name: "Die Gerechtigkeit",
         arcana: Arcana::Major,
         suit: None,
         upright: "Die Waage will Ehrlichkeit. Ursache trifft Folge, offen sichtbar.",
@@ -132,7 +132,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_12_hanged_man",
-        name: "The Hanged Man",
+        name: "Der Gehängte",
         arcana: Arcana::Major,
         suit: None,
         upright: "Halt den Drang an. Ein neuer Blickwinkel kommt, wenn du das Ergebnis nicht erzwingst.",
@@ -140,7 +140,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_13_death",
-        name: "Death",
+        name: "Der Tod",
         arcana: Arcana::Major,
         suit: None,
         upright: "Ein Ende räumt das Feld. Lass die alte Form fallen, damit etwas Wahres wachsen kann.",
@@ -148,7 +148,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_14_temperance",
-        name: "Temperance",
+        name: "Die Mäßigkeit",
         arcana: Arcana::Major,
         suit: None,
         upright: "Mischen mit Bedacht. Maß ist Alchemie, nicht Langweile.",
@@ -156,7 +156,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_15_devil",
-        name: "The Devil",
+        name: "Der Teufel",
         arcana: Arcana::Major,
         suit: None,
         upright: "Ketten, die du gewählt hast. Benenn die Gewohnheit, das Schloss war nie ganz zu.",
@@ -164,7 +164,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_16_tower",
-        name: "The Tower",
+        name: "Der Turm",
         arcana: Arcana::Major,
         suit: None,
         upright: "Blitz auf falschen Fundamenten. Plötzliche Wahrheit ist brutal, aber ehrlich.",
@@ -172,7 +172,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_17_star",
-        name: "The Star",
+        name: "Der Stern",
         arcana: Arcana::Major,
         suit: None,
         upright: "Hoffnung nach dem Sturm. Gieß Glauben zurück in den Becher, schau nach oben.",
@@ -180,7 +180,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_18_moon",
-        name: "The Moon",
+        name: "Der Mond",
         arcana: Arcana::Major,
         suit: None,
         upright: "Geh den unsicheren Pfad. Nicht alles in der Dunkelheit ist Feind.",
@@ -188,7 +188,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_19_sun",
-        name: "The Sun",
+        name: "Die Sonne",
         arcana: Arcana::Major,
         suit: None,
         upright: "Klarheit und Wärme. Erfolg leuchtet simpel, wenn du aufhörst dich zu verstecken.",
@@ -196,7 +196,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_20_judgement",
-        name: "Judgement",
+        name: "Das Gericht",
         arcana: Arcana::Major,
         suit: None,
         upright: "Der Ruf aufzustehen. Rechne mit der Vergangenheit, antworte wer du wirst.",
@@ -204,7 +204,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "major_21_world",
-        name: "The World",
+        name: "Die Welt",
         arcana: Arcana::Major,
         suit: None,
         upright: "Vollendung und Integration. Der Kreis schließt sich, der Tanz beginnt von vorn.",
@@ -213,7 +213,7 @@ pub static DECK: &[Card] = &[
     // --- wands ---
     Card {
         id: "wands_01",
-        name: "Ace of Wands",
+        name: "Ass der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Ein Funke landet. Pack die Inspiration, bevor das Zunder abkühlt.",
@@ -221,7 +221,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_02",
-        name: "Two of Wands",
+        name: "Zwei der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Die Welt in der Hand. Plan die Reise, dann tritt vom Balkon.",
@@ -229,7 +229,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_03",
-        name: "Three of Wands",
+        name: "Drei der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Schiffe am Horizont. Expansion läuft, acht auf ihre Rückkehr.",
@@ -237,7 +237,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_04",
-        name: "Four of Wands",
+        name: "Vier der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Heimkehr und Fest. Stabiler Boden verdient einen Kranz.",
@@ -245,7 +245,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_05",
-        name: "Five of Wands",
+        name: "Fünf der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Freundschaftliches Sparring. Wettbewerb schärft dich, wenn's niemand persönlich nimmt.",
@@ -253,7 +253,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_06",
-        name: "Six of Wands",
+        name: "Sechs der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Verdiente Ehrenrunde. Anerkennung kommt, nimm sie an ohne dich zu verkleinern.",
@@ -261,7 +261,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_07",
-        name: "Seven of Wands",
+        name: "Sieben der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Halt die hohe Position. Verteidige mit Überzeugung, nicht Panik.",
@@ -269,7 +269,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_08",
-        name: "Eight of Wands",
+        name: "Acht der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Botschaften im Flug. Schwung nimmt zu, sei bereit zu fangen was ankommt.",
@@ -277,7 +277,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_09",
-        name: "Nine of Wands",
+        name: "Neun der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Kampfmüde, aber stehend. Noch ein Stand, die Ziellinie ist näher als es sich anfühlt.",
@@ -285,7 +285,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_10",
-        name: "Ten of Wands",
+        name: "Zehn der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Last des Erfolgs. Du hast es bis hier getragen, delegier bevor der Rücken nachgibt.",
@@ -293,7 +293,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_page",
-        name: "Page of Wands",
+        name: "Page der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Neugieriger Bote. Ein neues Abenteuer klopft, antwort mit Begeisterung.",
@@ -301,7 +301,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_knight",
-        name: "Knight of Wands",
+        name: "Ritter der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Voran galoppieren. Leidenschaft treibt das Pferd, steuer bevor du von der Klippe fliegst.",
@@ -309,7 +309,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_queen",
-        name: "Queen of Wands",
+        name: "Königin der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Magnetisches Selbstvertrauen. Führ mit Wärme, der Raum folgt deiner Flamme.",
@@ -317,7 +317,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "wands_king",
-        name: "King of Wands",
+        name: "König der Stäbe",
         arcana: Arcana::Minor,
         suit: Some(Suit::Wands),
         upright: "Visionäres Kommando. Mutige Führung mit Weitblick und stabiler Fackel.",
@@ -326,7 +326,7 @@ pub static DECK: &[Card] = &[
     // --- cups ---
     Card {
         id: "cups_01",
-        name: "Ace of Cups",
+        name: "Ass der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Gefühle quellen über. Liebe oder Mitgefühl fließt frisch, fang mit beiden Händen.",
@@ -334,7 +334,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_02",
-        name: "Two of Cups",
+        name: "Zwei der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Gegenseitige Wertschätzung. Partnerschaft fließt, wenn beide Becher sich treffen.",
@@ -342,7 +342,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_03",
-        name: "Three of Cups",
+        name: "Drei der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Glas heben zusammen. Freundschaft und Community füllen den Brunnen.",
@@ -350,7 +350,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_04",
-        name: "Four of Cups",
+        name: "Vier der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Nachdenkliche Langeweile. Der angebotene Becher wartet, heb den Blick vom Grübeln.",
@@ -358,7 +358,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_05",
-        name: "Five of Cups",
+        name: "Fünf der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Trauer um den Verlust. Trauer ist berechtigt, aber zwei Becher stehen noch hinter dir.",
@@ -366,7 +366,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_06",
-        name: "Six of Cups",
+        name: "Sechs der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Süße Erinnerung. Nostalgie heilt, wenn du die Geschichte teilst, nicht darin feststeckst.",
@@ -374,7 +374,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_07",
-        name: "Seven of Cups",
+        name: "Sieben der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Viele Visionen, eine Wahl. Fantasien glitzern, Unterscheidungskraft wählt den echten Becher.",
@@ -382,7 +382,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_08",
-        name: "Eight of Cups",
+        name: "Acht der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Geh weg von dem, was nicht mehr füllt. Der mondbeschienene Pfad will Mut.",
@@ -390,7 +390,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_09",
-        name: "Nine of Cups",
+        name: "Neun der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Wunsch erfüllt. Zufriedenheit sitzt schwer und gut, genieß ohne Schuld.",
@@ -398,7 +398,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_10",
-        name: "Ten of Cups",
+        name: "Zehn der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Emotionale Erfüllung. Harmonie zu Hause, der Regenbogen ist der Punkt.",
@@ -406,7 +406,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_page",
-        name: "Page of Cups",
+        name: "Page der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Sanfte Überraschung. Kreative oder romantische Nachricht wie ein Fisch im Becher.",
@@ -414,7 +414,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_knight",
-        name: "Knight of Cups",
+        name: "Ritter der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Romantische Verfolgung. Folg der Einladung des Herzens mit Anstand, nicht nur Fantasie.",
@@ -422,7 +422,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_queen",
-        name: "Queen of Cups",
+        name: "Königin der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Tiefe Empathie. Intuition liest den Raum, halte Raum ohne alles aufzusaugen.",
@@ -430,7 +430,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "cups_king",
-        name: "King of Cups",
+        name: "König der Kelche",
         arcana: Arcana::Minor,
         suit: Some(Suit::Cups),
         upright: "Ruhige Meisterschaft der Gefühle. Führ mit emotionalem Verstand durch raue See.",
@@ -439,7 +439,7 @@ pub static DECK: &[Card] = &[
     // --- swords ---
     Card {
         id: "swords_01",
-        name: "Ace of Swords",
+        name: "Ass der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Schneidende Klarheit. Wahrheit bricht durch, führ die Klinge präzise.",
@@ -447,7 +447,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_02",
-        name: "Two of Swords",
+        name: "Zwei der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Pattsituation im Kopf. Die Augenbinde fällt, wenn du eine Seite wählst.",
@@ -455,7 +455,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_03",
-        name: "Three of Swords",
+        name: "Drei der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Herz von Wahrheit durchbohrt. Kummer tut weh, weil es zählte, lass es regnen.",
@@ -463,7 +463,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_04",
-        name: "Four of Swords",
+        name: "Vier der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Heilige Ruhe. Rückzug lädt den Kopf auf, Stille ist Strategie.",
@@ -471,7 +471,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_05",
-        name: "Five of Swords",
+        name: "Fünf der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Pyrrhussieg. Das Argument gewinnen kann die Beziehung kosten.",
@@ -479,7 +479,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_06",
-        name: "Six of Swords",
+        name: "Sechs der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Übergang übers Wasser. Verlass die trüben Ufer, Heilung ist das Ziel.",
@@ -487,7 +487,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_07",
-        name: "Seven of Swords",
+        name: "Sieben der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Heimlichkeit oder Strategie. Nicht jede Schlacht ist offen, kenn deine Ethik.",
@@ -495,7 +495,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_08",
-        name: "Eight of Swords",
+        name: "Acht der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Selbst gesetzte Grenzen. Die Fesseln sind locker, Freiheit beginnt im Kopf.",
@@ -503,7 +503,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_09",
-        name: "Nine of Swords",
+        name: "Neun der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Nachtangst. Der Kopf erfindet Monster, die Morgendämmerung schrumpft sie.",
@@ -511,7 +511,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_10",
-        name: "Ten of Swords",
+        name: "Zehn der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Tiefpunkt des Denkens. Das Schlimmste liegt hinter dir, der Sonnenaufgang ist wörtlich.",
@@ -519,7 +519,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_page",
-        name: "Page of Swords",
+        name: "Page der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Scharfer Beobachter. Ideen kommen schnell, prüf bevor du sendest.",
@@ -527,7 +527,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_knight",
-        name: "Knight of Swords",
+        name: "Ritter der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Schneller Verstand. Sturm auf die Wahrheit, denk an Verbündete im Rausch.",
@@ -535,7 +535,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_queen",
-        name: "Queen of Swords",
+        name: "Königin der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Klarer Blick, ehrliche Grenzen. Schärfe und Witz schützen ein offenes Herz.",
@@ -543,7 +543,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "swords_king",
-        name: "King of Swords",
+        name: "König der Schwerter",
         arcana: Arcana::Minor,
         suit: Some(Suit::Swords),
         upright: "Geistige Autorität. Faires Urteil vom Thron der Vernunft.",
@@ -552,7 +552,7 @@ pub static DECK: &[Card] = &[
     // --- pentacles ---
     Card {
         id: "pentacles_01",
-        name: "Ace of Pentacles",
+        name: "Ass der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Samen von Wohlstand. Eine greifbare Chance wurzelt, wenn du sie jetzt pflanzt.",
@@ -560,7 +560,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_02",
-        name: "Two of Pentacles",
+        name: "Zwei der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Jonglieren mit Mitteln. Balance ist ein Tanz, Flexibilität schlägt starre Pläne.",
@@ -568,7 +568,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_03",
-        name: "Three of Pentacles",
+        name: "Drei der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Handwerk anerkannt. Zusammenarbeit baut etwas, das bleibt.",
@@ -576,7 +576,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_04",
-        name: "Four of Pentacles",
+        name: "Vier der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Sicherheit und Halten. Spare klug, aber zu fest umklammern erstickt Wachstum.",
@@ -584,7 +584,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_05",
-        name: "Five of Pentacles",
+        name: "Fünf der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Harte Zeiten draußen. Not ist real, Hilfe kann näher sein als das Kirchenfenster.",
@@ -592,7 +592,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_06",
-        name: "Six of Pentacles",
+        name: "Sechs der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Geben und Nehmen. Großzügigkeit fließt beide Wege, wenn die Waage ehrlich bleibt.",
@@ -600,7 +600,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_07",
-        name: "Seven of Pentacles",
+        name: "Sieben der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Geduldige Ernte. Schau die Frucht an, langsame Arbeit reift im eigenen Tempo.",
@@ -608,7 +608,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_08",
-        name: "Eight of Pentacles",
+        name: "Acht der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Meisterschaft durch Wiederholung. An die Werkbank, Können wird täglich gemeißelt.",
@@ -616,7 +616,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_09",
-        name: "Nine of Pentacles",
+        name: "Neun der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Selbst erarbeiteter Komfort. Genieß was Disziplin baute, Unabhängigkeit ist der Garten.",
@@ -624,7 +624,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_10",
-        name: "Ten of Pentacles",
+        name: "Zehn der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Erbe und Stabilität. Familienwohl reicht über Generationen, wenn die Wurzeln tief sind.",
@@ -632,7 +632,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_page",
-        name: "Page of Pentacles",
+        name: "Page der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Schüler des Materiellen. Lernen, Lehre oder gute Nachricht über Geld.",
@@ -640,7 +640,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_knight",
-        name: "Knight of Pentacles",
+        name: "Ritter der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Stetiger Fortschritt. Langsame Hufe legen Strecke zurück, Zuverlässigkeit ist die Superkraft.",
@@ -648,7 +648,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_queen",
-        name: "Queen of Pentacles",
+        name: "Königin der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Praktische Fürsorge. Behaglichkeit und Kompetenz halten Herd und Kassenbuch im Gleichklang.",
@@ -656,7 +656,7 @@ pub static DECK: &[Card] = &[
     },
     Card {
         id: "pentacles_king",
-        name: "King of Pentacles",
+        name: "König der Münzen",
         arcana: Arcana::Minor,
         suit: Some(Suit::Pentacles),
         upright: "Materielle Meisterschaft. Baue Imperien mit Geduld und großzügiger Hand.",
@@ -716,6 +716,22 @@ mod tests {
             .count();
         assert_eq!(majors, 22);
         assert_eq!(minors, 56);
+    }
+
+    #[test]
+    fn card_names_are_german_rws() {
+        assert_eq!(DECK[0].name, "Der Narr");
+        assert_eq!(DECK[21].name, "Die Welt");
+        assert_eq!(DECK[22].name, "Ass der Stäbe");
+        assert_eq!(DECK[77].name, "König der Münzen");
+        for c in DECK {
+            assert!(
+                !c.name.contains(" of "),
+                "{} still looks English: {}",
+                c.id,
+                c.name
+            );
+        }
     }
 
     #[test]
