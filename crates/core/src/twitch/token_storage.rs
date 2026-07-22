@@ -19,8 +19,12 @@ pub struct FileBasedTokenStorage {
 
 impl FileBasedTokenStorage {
     pub fn new(initial_refresh_token: SecretString) -> Self {
+        Self::with_path(get_data_dir().join("token.ron"), initial_refresh_token)
+    }
+
+    pub fn with_path(path: std::path::PathBuf, initial_refresh_token: SecretString) -> Self {
         Self {
-            path: get_data_dir().join("token.ron"),
+            path,
             initial_refresh_token,
         }
     }
@@ -104,5 +108,14 @@ mod tests {
         let t2: UserAccessToken = ron::from_str(&s).unwrap();
         // subsecond precision may differ; compare at second granularity
         assert_eq!(t2.expires_at.unwrap().timestamp(), now.timestamp());
+    }
+
+    #[test]
+    fn with_path_sets_explicit_path() {
+        let s = super::FileBasedTokenStorage::with_path(
+            "/tmp/token-aurora.ron".into(),
+            "ref".to_string().into(),
+        );
+        assert_eq!(s.path.to_str(), Some("/tmp/token-aurora.ron"));
     }
 }
