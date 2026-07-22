@@ -176,8 +176,8 @@ impl AiCommand {
 /// Memory-v2 path executor that dispatches by tool name to the chat-turn
 /// executor (write_file/write_scratch/delete_scratch), the web search executor
 /// (web_search/read_url) when web tools are configured, the on-demand
-/// `search_emotes` tool when the emote provider is active, or the always-on
-/// doener_index tool.
+/// `search_emotes` tool when the emote provider is active, the always-on
+/// doener_index tool, or the Aurora-only draw_tarot tool.
 struct V2Executor<'a> {
     chat: &'a ChatTurnExecutor,
     web: Option<&'a content::ContentToolExecutor>,
@@ -192,6 +192,9 @@ impl ToolExecutor for V2Executor<'_> {
     async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
         if call.name == crate::ai::doener_tool::DOENER_TOOL_NAME {
             return crate::ai::doener_tool::execute_doener_index(self.doener, call).await;
+        }
+        if call.name == crate::ai::tarot_tool::TAROT_TOOL_NAME {
+            return crate::ai::tarot_tool::execute_draw_tarot(call).await;
         }
         if call.name == crate::ai::emote_tool::SEARCH_EMOTES_TOOL_NAME {
             return match self.emotes {
@@ -540,6 +543,9 @@ where
             chat_turn_tools()
         };
         tools.push(crate::ai::doener_tool::doener_tool());
+        if !grok_alias {
+            tools.push(crate::ai::tarot_tool::tarot_tool());
+        }
         if self.web.is_some() {
             tools.extend(content::ai_tools());
         }
