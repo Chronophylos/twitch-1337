@@ -37,6 +37,8 @@ cards.
 | Availability | Always on for `!ai` only |
 | Args | Optional `question`, optional `spread` |
 | Meanings | Waite-flavored original one-liners (not PD verbatim, not modern LWB) |
+| Deck storage | Rust `'static` table in `tarot/deck.rs` (not TOML / data-crate asset) |
+| Reading guide | `include_str!` markdown next to the engine (ADR-0002 spirit) |
 | Architecture | Small tarot engine + thin AI tool wrapper |
 
 ## Architecture
@@ -51,10 +53,10 @@ model may call draw_tarot(spread?, question?)
 V2Executor → ai/tarot_tool.rs
    ▼
 crates/core/src/tarot/   (engine)
-   ├─ deck      baked 78 cards + upright/reversed blurbs
+   ├─ deck      &'static [Card; 78] + upright/reversed blurbs
    ├─ draw      weighted sample w/o replacement + orientation
    ├─ spreads   three_card → Past / Present / Future
-   └─ guide     static reading-guide string
+   └─ guide     include_str!(reading_guide.md)
    ▼
 ToolResultMessage (JSON string: cards + meanings + guide)
    ▼
@@ -62,26 +64,29 @@ model writes short in-character chat reply from that payload only
 ```
 
 Domain logic stays in `crates/core`. The `llm` crate remains primitives-only
-(`ToolDefinition` / `ToolCall` / `run_agent`).
+(`ToolDefinition` / `ToolCall` / `run_agent`). No `twitch-1337-data` tarot
+assets — this table is tiny and domain-local (fat-asset bake / data-crate
+centralization does not apply).
+
+**Format rationale:** [ADR-0006](../../adr/0006-persistence-media-defaults.md)
+covers runtime on-disk persistence only and explicitly excludes compile-time
+embeds; its TOML row is bootstrap config, not baked card tables. Model-facing
+static prose follows [ADR-0002](../../adr/0002-prompt-templates-as-code.md):
+repo constants via `include_str!`, single source of truth in git.
 
 ### Module layout
 
 ```
 crates/core/src/tarot/
   mod.rs
-  deck.rs      # Card, Arcana, load from baked asset
-  draw.rs      # weighted draw + orientation
-  spreads.rs   # SpreadKind, position labels
-  guide.rs     # READING_GUIDE str (from data crate)
+  deck.rs            # Card, Arcana, Suit; pub static DECK: &[Card]
+  draw.rs            # weighted draw + orientation
+  spreads.rs         # SpreadKind, position labels
+  guide.rs           # pub const READING_GUIDE: &str = include_str!(…)
+  reading_guide.md   # guide body (edited as markdown, baked as code)
 
 crates/core/src/ai/tarot_tool.rs
   # ToolDefinition, args, execute_draw_tarot → ToolResultMessage
-
-crates/data/assets/tarot/
-  deck.toml            # 78 entries
-  reading_guide.md     # guide body
-
-crates/data/src/…      # export include_str! / typed access as with prompts
 ```
 
 ### Wiring
@@ -131,7 +136,7 @@ Mirror `doener_index` / `search_emotes`, with an Aurora-only gate:
       "meaning": "…"
     }
   ],
-  "guide": "<reading_guide.md body>"
+  "guide": "<READING_GUIDE body>"
 }
 ```
 
@@ -146,20 +151,20 @@ Same JSON-error style as `doener_index`:
 | `invalid_arguments` | Args fail schema / parse |
 | `unsupported_spread` | `spread` present but not `three_card` |
 
-## Deck asset & meanings
+## Deck data & meanings
 
-Each of 78 cards in `deck.toml`:
+`deck.rs` holds a `'static` slice of 78 `Card` values. Each entry:
 
 - Stable `id` (e.g. `major_16_tower`, `wands_03`)
 - Display `name`
 - `arcana`: `major` | `minor`
-- `suit` for minors: `wands` | `cups` | `swords` | `pentacles`
+- `suit` for minors: `wands` | `cups` | `swords` | `pentacles` (`None` for majors)
 - `upright` / `reversed`: short Waite-flavored one-liners written for chat
   (tone of the tradition, original wording — not a pasted *Pictorial Key*
   excerpt and not a commercial LWB)
 
-Asset header notes: original paraphrases for bot use; “Rider–Waite” used
-descriptively only.
+Module docs note: original paraphrases for bot use; “Rider–Waite” used
+descriptively only. No runtime parse step — compile-time typed data.
 
 ## Draw rules
 
@@ -175,7 +180,8 @@ a seeded RNG (or equivalent seam) so draws are deterministic where needed.
 
 ## Reading guide (content goals)
 
-Short, instructional prose covering:
+`reading_guide.md` beside the engine, exposed as `READING_GUIDE` via
+`include_str!` (same “templates as code” posture as ADR-0002). Content covers:
 
 - Read positions left → right (Past → Present → Future)
 - Upright vs reversed
@@ -189,7 +195,7 @@ Shipped only inside successful tool results (not a permanent system appendix).
 
 ### Engine unit tests
 
-- Deck loads 78 unique ids; every card has upright + reversed text
+- `DECK` has 78 unique ids; every card has non-empty upright + reversed text
 - Weighting: majors appear more often than uniform (seeded / weight-table assert)
 - No duplicate card ids in one spread
 - Orientation roughly 50/50 over many trials, or forced via injectable RNG
