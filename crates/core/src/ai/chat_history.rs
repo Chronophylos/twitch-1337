@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::settings::{Settings, SettingsHandle};
+use crate::twitch::mouth::Agent;
 
 pub const MAX_HISTORY_LENGTH: u64 = 5_000;
 pub const DEFAULT_HISTORY_LENGTH: u64 = 200;
@@ -30,6 +31,8 @@ pub struct ChatHistoryEntry {
     pub user_id: Option<String>,
     pub text: String,
     pub source: ChatHistorySource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<Agent>,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -124,6 +127,7 @@ impl ChatHistoryBuffer {
             None,
             text,
             ChatHistorySource::User,
+            None,
             timestamp,
         );
     }
@@ -152,18 +156,20 @@ impl ChatHistoryBuffer {
             user_id.map(str::to_string),
             text,
             ChatHistorySource::User,
+            None,
             timestamp,
         );
     }
 
-    pub fn push_bot(&mut self, username: impl Into<String>, text: impl Into<String>) {
-        self.push_bot_at(username, text, Utc::now());
+    pub fn push_bot(&mut self, username: impl Into<String>, text: impl Into<String>, agent: Agent) {
+        self.push_bot_at(username, text, agent, Utc::now());
     }
 
     pub fn push_bot_at(
         &mut self,
         username: impl Into<String>,
         text: impl Into<String>,
+        agent: Agent,
         timestamp: DateTime<Utc>,
     ) {
         self.push(
@@ -172,6 +178,7 @@ impl ChatHistoryBuffer {
             None,
             text,
             ChatHistorySource::Bot,
+            Some(agent),
             timestamp,
         );
     }
@@ -180,15 +187,17 @@ impl ChatHistoryBuffer {
         &mut self,
         username: impl Into<String>,
         display_name: Option<&str>,
+        agent: Agent,
         text: impl Into<String>,
     ) {
-        self.push_bot_with_identity_at(username, display_name, text, Utc::now());
+        self.push_bot_with_identity_at(username, display_name, agent, text, Utc::now());
     }
 
     pub fn push_bot_with_identity_at(
         &mut self,
         username: impl Into<String>,
         display_name: Option<&str>,
+        agent: Agent,
         text: impl Into<String>,
         timestamp: DateTime<Utc>,
     ) {
@@ -198,10 +207,15 @@ impl ChatHistoryBuffer {
             None,
             text,
             ChatHistorySource::Bot,
+            Some(agent),
             timestamp,
         );
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "private helper, arity mirrors ChatHistoryEntry's fields 1:1"
+    )]
     fn push(
         &mut self,
         username: impl Into<String>,
@@ -209,6 +223,7 @@ impl ChatHistoryBuffer {
         user_id: Option<String>,
         text: impl Into<String>,
         source: ChatHistorySource,
+        agent: Option<Agent>,
         timestamp: DateTime<Utc>,
     ) {
         let cap = self.current_capacity();
@@ -227,6 +242,7 @@ impl ChatHistoryBuffer {
             user_id,
             text: text.into(),
             source,
+            agent,
             timestamp,
         });
     }
@@ -315,7 +331,7 @@ mod tests {
         buffer.push_user("alice", "hello chat");
         buffer.push_user("bob", "weather is bad");
         buffer.push_user("alice", "weather got better");
-        buffer.push_bot("bot", "I can check that");
+        buffer.push_bot("bot", "I can check that", Agent::Aurora);
         buffer.push_user("carol", "different topic");
         buffer
     }

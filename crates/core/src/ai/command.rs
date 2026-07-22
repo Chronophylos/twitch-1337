@@ -27,6 +27,7 @@ use crate::ai::model_catalog::ModelCatalog;
 use crate::commands::{Command, CommandContext};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
+use crate::twitch::mouth::Agent;
 use crate::twitch::seventv::SevenTvEmoteProvider;
 
 /// Chat history buffers and channel logins for `!ai`. Both buffers share the
@@ -327,6 +328,13 @@ where
     async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
         let user = &ctx.privmsg.sender.login;
         let grok_alias = is_grok_alias(ctx.trigger);
+        // Which logical agent is speaking this turn. Drives chat-history
+        // `(self)` tagging; Task 4 threads this into mouth selection too.
+        let agent = if grok_alias {
+            Agent::Grok
+        } else {
+            Agent::Aurora
+        };
 
         if let Some(remaining) = self.cooldown.check(user).await {
             debug!(user = %user, remaining_secs = remaining.as_secs(), "AI command on cooldown");
@@ -454,8 +462,7 @@ where
             ai_channel_history: cc.and_then(|c| c.ai_channel_history.clone()),
             ai_channel_login: cc.and_then(|c| c.ai_channel_login.clone()),
             invocation_channel,
-            bot_login: self.bot_username.clone(),
-            persona_name: persona_name.clone(),
+            current_agent: agent,
             speaker_login: ctx.privmsg.sender.login.clone(),
         };
 
@@ -614,6 +621,7 @@ where
                         .push_bot_with_identity_at(
                             self.bot_username.clone(),
                             Some(&persona_name),
+                            agent,
                             line.clone(),
                             ts,
                         );
