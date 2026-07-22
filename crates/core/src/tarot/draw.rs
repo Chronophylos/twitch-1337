@@ -2,7 +2,7 @@ use rand::Rng;
 use rand::RngExt as _;
 
 use super::deck::{Card, DECK, card_weight};
-use super::spreads::THREE_CARD_LABELS;
+use super::spreads::SINGLE_CARD_LABEL;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
@@ -31,6 +31,11 @@ pub struct ThreeCardDraw {
     pub positions: [DrawnCard; 3],
 }
 
+#[derive(Debug, Clone)]
+pub struct SingleCardDraw {
+    pub card: DrawnCard,
+}
+
 fn draw_weighted_card(rng: &mut impl Rng, pool: &mut Vec<&'static Card>) -> &'static Card {
     let weights: Vec<f64> = pool.iter().map(|c| card_weight(c)).collect();
     let total: f64 = weights.iter().sum();
@@ -46,47 +51,80 @@ fn draw_weighted_card(rng: &mut impl Rng, pool: &mut Vec<&'static Card>) -> &'st
     pool.swap_remove(pick)
 }
 
-pub fn draw_three_card(rng: &mut impl Rng) -> ThreeCardDraw {
+fn flip_orientation(rng: &mut impl Rng) -> Orientation {
+    if rng.random::<bool>() {
+        Orientation::Upright
+    } else {
+        Orientation::Reversed
+    }
+}
+
+pub fn draw_three_card(rng: &mut impl Rng, labels: [&'static str; 3]) -> ThreeCardDraw {
     let mut pool: Vec<&'static Card> = DECK.iter().collect();
     let mut positions = [DrawnCard {
         card: &DECK[0],
         orientation: Orientation::Upright,
-        label: THREE_CARD_LABELS[0],
+        label: labels[0],
     }; 3];
 
     for (i, slot) in positions.iter_mut().enumerate() {
         let card = draw_weighted_card(rng, &mut pool);
-        let orientation = if rng.random::<bool>() {
-            Orientation::Upright
-        } else {
-            Orientation::Reversed
-        };
         *slot = DrawnCard {
             card,
-            orientation,
-            label: THREE_CARD_LABELS[i],
+            orientation: flip_orientation(rng),
+            label: labels[i],
         };
     }
 
     ThreeCardDraw { positions }
 }
 
+pub fn draw_single_card(rng: &mut impl Rng) -> SingleCardDraw {
+    let mut pool: Vec<&'static Card> = DECK.iter().collect();
+    let card = draw_weighted_card(rng, &mut pool);
+    SingleCardDraw {
+        card: DrawnCard {
+            card,
+            orientation: flip_orientation(rng),
+            label: SINGLE_CARD_LABEL,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tarot::spreads::{FUTURE_LABELS, GUIDANCE_LABELS};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
     use std::collections::HashSet;
 
     #[test]
-    fn draw_has_three_distinct_cards_and_labels() {
+    fn future_draw_labels() {
         let mut rng = SmallRng::seed_from_u64(42);
-        let draw = draw_three_card(&mut rng);
+        let draw = draw_three_card(&mut rng, FUTURE_LABELS);
         let ids: HashSet<_> = draw.positions.iter().map(|p| p.card.id).collect();
         assert_eq!(ids.len(), 3);
-        assert_eq!(draw.positions[0].label, "Past");
-        assert_eq!(draw.positions[1].label, "Present");
-        assert_eq!(draw.positions[2].label, "Future");
+        assert_eq!(draw.positions[0].label, "Vergangenheit");
+        assert_eq!(draw.positions[1].label, "Gegenwart");
+        assert_eq!(draw.positions[2].label, "Zukunft");
+    }
+
+    #[test]
+    fn guidance_draw_labels() {
+        let mut rng = SmallRng::seed_from_u64(42);
+        let draw = draw_three_card(&mut rng, GUIDANCE_LABELS);
+        assert_eq!(draw.positions[0].label, "Ursache");
+        assert_eq!(draw.positions[1].label, "Hindernis");
+        assert_eq!(draw.positions[2].label, "Rat");
+    }
+
+    #[test]
+    fn single_draw_has_day_label() {
+        let mut rng = SmallRng::seed_from_u64(42);
+        let draw = draw_single_card(&mut rng);
+        assert_eq!(draw.card.label, "Day");
+        assert!(!draw.card.meaning().is_empty());
     }
 
     #[test]
@@ -95,12 +133,12 @@ mod tests {
         let up = DrawnCard {
             card,
             orientation: Orientation::Upright,
-            label: "Past",
+            label: "Vergangenheit",
         };
         let rev = DrawnCard {
             card,
             orientation: Orientation::Reversed,
-            label: "Past",
+            label: "Vergangenheit",
         };
         assert_eq!(up.meaning(), card.upright);
         assert_eq!(rev.meaning(), card.reversed);
@@ -112,7 +150,7 @@ mod tests {
         const N: usize = 3000;
         let mut major_first = 0usize;
         for _ in 0..N {
-            let draw = draw_three_card(&mut rng);
+            let draw = draw_three_card(&mut rng, FUTURE_LABELS);
             if matches!(draw.positions[0].card.arcana, crate::tarot::Arcana::Major) {
                 major_first += 1;
             }
