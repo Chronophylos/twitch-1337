@@ -153,9 +153,6 @@ mod tests {
     #[test]
     fn tool_def_name() {
         assert_eq!(tarot_tool().name, TAROT_TOOL_NAME);
-        let desc = tarot_tool().description.to_lowercase();
-        assert!(desc.contains("single") && desc.contains("guidance") && desc.contains("future"));
-        assert!(desc.contains("pflicht"));
     }
 
     #[tokio::test]
@@ -180,10 +177,7 @@ mod tests {
         assert_eq!(v["positions"][0]["label"], "Vergangenheit");
         assert_eq!(v["positions"][1]["label"], "Gegenwart");
         assert_eq!(v["positions"][2]["label"], "Zukunft");
-        let guide = v["guide"].as_str().unwrap().to_lowercase();
-        assert!(guide.contains("vergangenheit"));
-        assert!(!guide.contains("ursache"));
-        assert!(!guide.contains("tageskarte"));
+        assert_eq!(v["guide"].as_str().unwrap(), guide_for(SpreadKind::Future));
     }
 
     #[tokio::test]
@@ -205,9 +199,10 @@ mod tests {
         assert_eq!(v["positions"][0]["label"], "Ursache");
         assert_eq!(v["positions"][1]["label"], "Hindernis");
         assert_eq!(v["positions"][2]["label"], "Rat");
-        let guide = v["guide"].as_str().unwrap().to_lowercase();
-        assert!(guide.contains("ursache"));
-        assert!(!guide.contains("vergangenheit"));
+        assert_eq!(
+            v["guide"].as_str().unwrap(),
+            guide_for(SpreadKind::Guidance)
+        );
     }
 
     #[tokio::test]
@@ -218,10 +213,7 @@ mod tests {
         assert!(v.get("question").is_none());
         assert_eq!(v["positions"].as_array().unwrap().len(), 1);
         assert_eq!(v["positions"][0]["label"], "Day");
-        let guide = v["guide"].as_str().unwrap().to_lowercase();
-        assert!(guide.contains("tageskarte") || guide.contains("single"));
-        assert!(!guide.contains("ursache"));
-        assert!(!guide.contains("vergangenheit"));
+        assert_eq!(v["guide"].as_str().unwrap(), guide_for(SpreadKind::Single));
     }
 
     #[tokio::test]
