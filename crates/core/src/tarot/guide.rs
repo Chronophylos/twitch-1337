@@ -29,6 +29,7 @@ mod tests {
         let g = guide_for(SpreadKind::Single).to_lowercase();
         assert!(g.contains("tageskarte") || g.contains("single"));
         assert!(g.contains("große arkana") || g.contains("grosse arkana"));
+        assert!(g.contains("tagesdevise") || g.contains("erstgefühl") || g.contains("erstgefuehl"));
         assert!(!g.contains("ursache"));
         assert!(!g.contains("vergangenheit"));
         assert!(g.contains("erfinden"));
@@ -39,6 +40,7 @@ mod tests {
     fn guidance_guide_has_cause_obstacle_advice() {
         let g = guide_for(SpreadKind::Guidance).to_lowercase();
         assert!(g.contains("ursache") && g.contains("hindernis") && g.contains("rat"));
+        assert!(g.contains("synoptisch") || g.contains("muster") || g.contains("fragebezogen"));
         assert!(!g.contains("vergangenheit"));
         assert!(g.contains("erfinden"));
         assert!(g.contains("fließend") || g.contains("fliessend") || g.contains("ineinander"));
@@ -49,6 +51,7 @@ mod tests {
     fn future_guide_has_timeline_and_bans_label_formula() {
         let g = guide_for(SpreadKind::Future).to_lowercase();
         assert!(g.contains("vergangenheit") && g.contains("gegenwart") && g.contains("zukunft"));
+        assert!(g.contains("trend") || g.contains("kausal") || g.contains("geschichte"));
         assert!(!g.contains("ursache → hindernis") && !g.contains("ursache -> hindernis"));
         assert!(
             g.contains("kein `vergangenheit")

@@ -8,6 +8,12 @@ Positionen: Vergangenheit → Gegenwart → Zukunft.
 - `card` deutsch, `arcana` major/minor, `meaning` Rohstoff (upright/reversed).
 - `question` ist gesetzt: darauf beziehen.
 
+## So lesen
+
+- Als Geschichte / Kausalität: Vergangenheit legt die Basis, Gegenwart zeigt die aktuelle Haltung, Zukunft ist das logische Resultat daraus. Die Zukunftskarte nie isoliert lesen.
+- Zukunft = aktueller Trend, kein festgenageltes Schicksal.
+- Gefällt der Trend nicht: zurück zur Gegenwartskarte und fragen, welche Haltung oder Handlung den Trend drehen könnte.
+
 ## Chat (Aurora)
 
 Fließender Block, kleingeschrieben. Persönlich wenn Name da (`deine karten, <name>:`).
