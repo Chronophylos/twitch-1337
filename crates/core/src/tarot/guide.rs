@@ -33,5 +33,13 @@ mod tests {
                 || lower.contains("ineinander"),
             "guide should push woven flowing replies: {READING_GUIDE}"
         );
+        assert!(
+            lower.contains("single") && lower.contains("tageskarte"),
+            "guide should document single/day spread: {READING_GUIDE}"
+        );
+        assert!(
+            lower.contains("große arkana") || lower.contains("grosse arkana"),
+            "guide should mention große arkana for day format: {READING_GUIDE}"
+        );
     }
 }

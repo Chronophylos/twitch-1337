@@ -1,12 +1,14 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpreadKind {
     ThreeCard,
+    Single,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpreadError;
 
 pub const THREE_CARD_LABELS: [&str; 3] = ["Past", "Present", "Future"];
+pub const SINGLE_CARD_LABEL: &str = "Day";
 
 pub fn parse_spread(raw: Option<&str>) -> Result<SpreadKind, SpreadError> {
     match raw {
@@ -17,6 +19,8 @@ pub fn parse_spread(raw: Option<&str>) -> Result<SpreadKind, SpreadError> {
                 Err(SpreadError)
             } else if trimmed == "three_card" {
                 Ok(SpreadKind::ThreeCard)
+            } else if trimmed == "single" {
+                Ok(SpreadKind::Single)
             } else {
                 Err(SpreadError)
             }
@@ -29,11 +33,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_and_three_card_ok() {
+    fn default_and_named_spreads_ok() {
         assert!(matches!(parse_spread(None).unwrap(), SpreadKind::ThreeCard));
         assert!(matches!(
             parse_spread(Some("three_card")).unwrap(),
             SpreadKind::ThreeCard
+        ));
+        assert!(matches!(
+            parse_spread(Some("single")).unwrap(),
+            SpreadKind::Single
         ));
     }
 

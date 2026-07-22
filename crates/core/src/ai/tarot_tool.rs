@@ -1,9 +1,12 @@
 use llm::{ToolCall, ToolDefinition, ToolResultMessage};
 use rand::rng;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
-use crate::tarot::{Orientation, READING_GUIDE, SpreadKind, draw_three_card, parse_spread};
+use crate::tarot::{
+    Arcana, DrawnCard, Orientation, READING_GUIDE, SpreadKind, draw_single_card, draw_three_card,
+    parse_spread,
+};
 
 pub const TAROT_TOOL_NAME: &str = "draw_tarot";
 
@@ -18,17 +21,17 @@ struct DrawTarotArgs {
 pub fn tarot_tool() -> ToolDefinition {
     ToolDefinition {
         name: TAROT_TOOL_NAME.into(),
-        description: "Wenn jemand ein Tarot-Reading oder einen Card Pull will. Zieht einen Spread \
-            und liefert deutsche Kartennamen, Bedeutungen und eine Leseanleitung. Lieber dieses Tool \
-            als Karten zu erfinden. Die Chat-Antwort soll fließend und persönlich sein, nicht als \
-            Past/Present/Future-Liste mit Kartennamen in Klammern."
+        description: "Wenn jemand Tarot will: Tageskarte / cards for today → spread \"single\". \
+            Allgemeine Legung oder drei Karten → \"three_card\" (default). Liefert deutsche Namen, \
+            Bedeutungen und Leseanleitung. Lieber dieses Tool als Karten zu erfinden. Antwortstil \
+            steht in der guide im Result (Tageskarte vs Drei-Karten unterscheiden sich)."
             .into(),
         parameters: json!({
             "type": "object",
             "properties": {
                 "spread": {
                     "type": "string",
-                    "description": "Named spread. v1 only \"three_card\" (default)."
+                    "description": "\"single\" (Tageskarte) oder \"three_card\" (default)."
                 },
                 "question": {
                     "type": "string",
@@ -37,6 +40,27 @@ pub fn tarot_tool() -> ToolDefinition {
             }
         }),
     }
+}
+
+fn arcana_json(card: &crate::tarot::Card) -> &'static str {
+    match card.arcana {
+        Arcana::Major => "major",
+        Arcana::Minor => "minor",
+    }
+}
+
+fn position_json(p: &DrawnCard) -> Value {
+    json!({
+        "label": p.label,
+        "id": p.card.id,
+        "card": p.card.name,
+        "arcana": arcana_json(p.card),
+        "orientation": match p.orientation {
+            Orientation::Upright => "upright",
+            Orientation::Reversed => "reversed",
+        },
+        "meaning": p.meaning(),
+    })
 }
 
 pub async fn execute_draw_tarot(call: &ToolCall) -> ToolResultMessage {
@@ -51,7 +75,7 @@ pub async fn execute_draw_tarot(call: &ToolCall) -> ToolResultMessage {
     };
 
     let spread = match parse_spread(args.spread.as_deref()) {
-        Ok(SpreadKind::ThreeCard) => SpreadKind::ThreeCard,
+        Ok(s) => s,
         Err(_) => {
             return ToolResultMessage::for_call(
                 call,
@@ -59,28 +83,24 @@ pub async fn execute_draw_tarot(call: &ToolCall) -> ToolResultMessage {
             );
         }
     };
-    let _ = spread;
 
-    let draw = draw_three_card(&mut rng());
-    let positions: Vec<_> = draw
-        .positions
-        .iter()
-        .map(|p| {
-            json!({
-                "label": p.label,
-                "id": p.card.id,
-                "card": p.card.name,
-                "orientation": match p.orientation {
-                    Orientation::Upright => "upright",
-                    Orientation::Reversed => "reversed",
-                },
-                "meaning": p.meaning(),
-            })
-        })
-        .collect();
+    let mut rng = rng();
+    let (spread_name, positions) = match spread {
+        SpreadKind::ThreeCard => {
+            let draw = draw_three_card(&mut rng);
+            (
+                "three_card",
+                draw.positions.iter().map(position_json).collect::<Vec<_>>(),
+            )
+        }
+        SpreadKind::Single => {
+            let draw = draw_single_card(&mut rng);
+            ("single", vec![position_json(&draw.card)])
+        }
+    };
 
     let mut body = json!({
-        "spread": "three_card",
+        "spread": spread_name,
         "positions": positions,
         "guide": READING_GUIDE,
     });
@@ -124,8 +144,23 @@ mod tests {
         assert!(v.get("question").is_none());
         assert_eq!(v["positions"].as_array().unwrap().len(), 3);
         assert_eq!(v["positions"][0]["label"], "Past");
+        assert!(v["positions"][0].get("arcana").is_some());
         assert!(v["guide"].as_str().unwrap().contains("Past"));
         assert!(!v["positions"][0]["meaning"].as_str().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn single_spread_returns_one_day_card() {
+        let msg = execute_draw_tarot(&call(json!({"spread": "single"}))).await;
+        let v: serde_json::Value = serde_json::from_str(&msg.content).unwrap();
+        assert_eq!(v["spread"], "single");
+        assert_eq!(v["positions"].as_array().unwrap().len(), 1);
+        assert_eq!(v["positions"][0]["label"], "Day");
+        assert!(matches!(
+            v["positions"][0]["arcana"].as_str(),
+            Some("major") | Some("minor")
+        ));
+        assert!(v["guide"].as_str().unwrap().contains("single"));
     }
 
     #[tokio::test]
@@ -145,9 +180,6 @@ mod tests {
     #[tokio::test]
     async fn malformed_args_invalid_arguments() {
         let mut c = call(json!({}));
-        c.arguments = json!("nope");
-        // Force deserialize failure via parse_args path: set arguments to a
-        // non-object that DrawTarotArgs rejects, or use arguments_parse_error.
         c.arguments = json!({"spread": 123});
         let msg = execute_draw_tarot(&c).await;
         let v: serde_json::Value = serde_json::from_str(&msg.content).unwrap();

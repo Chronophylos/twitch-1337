@@ -2,7 +2,7 @@ use rand::Rng;
 use rand::RngExt as _;
 
 use super::deck::{Card, DECK, card_weight};
-use super::spreads::THREE_CARD_LABELS;
+use super::spreads::{SINGLE_CARD_LABEL, THREE_CARD_LABELS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
@@ -31,6 +31,11 @@ pub struct ThreeCardDraw {
     pub positions: [DrawnCard; 3],
 }
 
+#[derive(Debug, Clone)]
+pub struct SingleCardDraw {
+    pub card: DrawnCard,
+}
+
 fn draw_weighted_card(rng: &mut impl Rng, pool: &mut Vec<&'static Card>) -> &'static Card {
     let weights: Vec<f64> = pool.iter().map(|c| card_weight(c)).collect();
     let total: f64 = weights.iter().sum();
@@ -46,6 +51,14 @@ fn draw_weighted_card(rng: &mut impl Rng, pool: &mut Vec<&'static Card>) -> &'st
     pool.swap_remove(pick)
 }
 
+fn flip_orientation(rng: &mut impl Rng) -> Orientation {
+    if rng.random::<bool>() {
+        Orientation::Upright
+    } else {
+        Orientation::Reversed
+    }
+}
+
 pub fn draw_three_card(rng: &mut impl Rng) -> ThreeCardDraw {
     let mut pool: Vec<&'static Card> = DECK.iter().collect();
     let mut positions = [DrawnCard {
@@ -56,19 +69,26 @@ pub fn draw_three_card(rng: &mut impl Rng) -> ThreeCardDraw {
 
     for (i, slot) in positions.iter_mut().enumerate() {
         let card = draw_weighted_card(rng, &mut pool);
-        let orientation = if rng.random::<bool>() {
-            Orientation::Upright
-        } else {
-            Orientation::Reversed
-        };
         *slot = DrawnCard {
             card,
-            orientation,
+            orientation: flip_orientation(rng),
             label: THREE_CARD_LABELS[i],
         };
     }
 
     ThreeCardDraw { positions }
+}
+
+pub fn draw_single_card(rng: &mut impl Rng) -> SingleCardDraw {
+    let mut pool: Vec<&'static Card> = DECK.iter().collect();
+    let card = draw_weighted_card(rng, &mut pool);
+    SingleCardDraw {
+        card: DrawnCard {
+            card,
+            orientation: flip_orientation(rng),
+            label: SINGLE_CARD_LABEL,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -87,6 +107,14 @@ mod tests {
         assert_eq!(draw.positions[0].label, "Past");
         assert_eq!(draw.positions[1].label, "Present");
         assert_eq!(draw.positions[2].label, "Future");
+    }
+
+    #[test]
+    fn single_draw_has_day_label() {
+        let mut rng = SmallRng::seed_from_u64(42);
+        let draw = draw_single_card(&mut rng);
+        assert_eq!(draw.card.label, "Day");
+        assert!(!draw.card.meaning().is_empty());
     }
 
     #[test]
