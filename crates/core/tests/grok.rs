@@ -514,3 +514,37 @@ async fn grok_registers_the_read_memory_tool_and_ai_does_not() {
 
     bot.shutdown().await;
 }
+
+#[tokio::test]
+async fn aurora_registers_draw_tarot_and_grok_does_not() {
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+        })
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("checked");
+    bot.llm.push_tool_message("ok");
+
+    let mut bot = bot;
+    bot.send("alice", "@grok check this").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+    bot.send("bob", "!ai sag hallo").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+
+    let calls = bot.llm.tool_calls();
+    let grok_tools: Vec<_> = calls[0].tools.iter().map(|t| t.name.as_str()).collect();
+    let ai_tools: Vec<_> = calls[1].tools.iter().map(|t| t.name.as_str()).collect();
+
+    assert!(
+        ai_tools.contains(&"draw_tarot"),
+        "aurora should expose draw_tarot: {ai_tools:?}"
+    );
+    assert!(
+        !grok_tools.contains(&"draw_tarot"),
+        "grok must not get draw_tarot: {grok_tools:?}"
+    );
+
+    bot.shutdown().await;
+}
