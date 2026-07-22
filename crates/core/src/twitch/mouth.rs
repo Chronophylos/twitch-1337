@@ -9,7 +9,11 @@ use std::{
 };
 
 use async_trait::async_trait;
+use eyre::{Result, WrapErr as _};
 use serde::Serialize;
+use twitch_irc::login::LoginCredentials;
+
+use crate::util::APP_USER_AGENT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -93,6 +97,132 @@ impl MouthRouter {
             None => Ok(SpeakOutcome::NoMouth),
         }
     }
+}
+
+/// Helix `POST /helix/chat/messages` adapter. Mirrors `HelixWhisperSender`
+/// (`crates/core/src/twitch/whisper.rs`): same client shape, same
+/// `get_credentials().await` → `creds.token` flow, same `Client-Id` +
+/// bearer-auth headers. `base_url` is a constructor arg so tests can point
+/// it at a local wiremock server; production passes `"https://api.twitch.tv"`.
+pub struct HelixMouth<L: LoginCredentials> {
+    http: reqwest::Client,
+    credentials: L,
+    client_id: String,
+    user_id: String,
+    login: String,
+    base_url: String,
+}
+
+impl<L: LoginCredentials> HelixMouth<L> {
+    pub async fn new(
+        credentials: L,
+        client_id: String,
+        user_id: String,
+        login: String,
+        base_url: String,
+    ) -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .user_agent(APP_USER_AGENT)
+            .build()
+            .wrap_err("failed to build Twitch chat-send HTTP client")?;
+
+        Ok(Self {
+            http,
+            credentials,
+            client_id,
+            user_id,
+            login,
+            base_url,
+        })
+    }
+
+    async fn post_once(
+        &self,
+        token: &str,
+        req: &SpeakRequest<'_>,
+    ) -> Result<reqwest::Response, SpeakError> {
+        let mut body = serde_json::json!({
+            "broadcaster_id": req.broadcaster_id,
+            "sender_id": self.user_id,
+            "message": req.text,
+        });
+        if let Some(ref parent) = req.reply_parent_message_id {
+            body["reply_parent_message_id"] = serde_json::Value::String(parent.clone());
+        }
+
+        Ok(self
+            .http
+            .post(format!("{}/helix/chat/messages", self.base_url))
+            .header("Client-Id", &self.client_id)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await?)
+    }
+}
+
+#[async_trait]
+impl<L: LoginCredentials> Mouth for HelixMouth<L> {
+    async fn speak(&self, req: SpeakRequest<'_>) -> Result<SpokenMessage, SpeakError> {
+        if req.text.trim().is_empty() {
+            return Err(SpeakError::Empty);
+        }
+
+        let creds = self
+            .credentials
+            .get_credentials()
+            .await
+            .map_err(|error| SpeakError::Credentials(error.to_string()))?;
+        let token = creds
+            .token
+            .ok_or_else(|| SpeakError::Credentials("missing access token".into()))?;
+
+        let mut response = self.post_once(&token, &req).await?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            // 401: force a refresh via get_credentials and retry once.
+            let creds = self
+                .credentials
+                .get_credentials()
+                .await
+                .map_err(|error| SpeakError::Credentials(error.to_string()))?;
+            let token = creds
+                .token
+                .ok_or_else(|| SpeakError::Credentials("missing access token".into()))?;
+            response = self.post_once(&token, &req).await?;
+        }
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(SpeakError::Api { status, body });
+        }
+
+        let parsed: SendChatResponse = response.json().await?;
+        let sent = parsed.data.into_iter().next();
+        let message_id = sent
+            .filter(|datum| datum.is_sent)
+            .and_then(|datum| datum.message_id);
+        Ok(SpokenMessage {
+            message_id,
+            login: self.login.clone(),
+        })
+    }
+
+    fn login(&self) -> &str {
+        &self.login
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SendChatResponse {
+    data: Vec<SendChatDatum>,
+}
+
+#[derive(serde::Deserialize)]
+struct SendChatDatum {
+    message_id: Option<String>,
+    #[serde(default)]
+    is_sent: bool,
 }
 
 #[cfg(test)]
