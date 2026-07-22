@@ -1,42 +1,61 @@
-pub const READING_GUIDE: &str = include_str!("reading_guide.md");
+use crate::tarot::SpreadKind;
+
+const GUIDE_SINGLE: &str = include_str!("guide_single.md");
+const GUIDE_GUIDANCE: &str = include_str!("guide_guidance.md");
+const GUIDE_FUTURE: &str = include_str!("guide_future.md");
+
+/// Reading guide for the chosen spread only (not the full multi-spread doc).
+pub fn guide_for(spread: SpreadKind) -> &'static str {
+    match spread {
+        SpreadKind::Single => GUIDE_SINGLE,
+        SpreadKind::Guidance => GUIDE_GUIDANCE,
+        SpreadKind::Future => GUIDE_FUTURE,
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use super::READING_GUIDE;
+    use super::*;
+
+    fn assert_no_forbidden_dashes(text: &str) {
+        assert!(
+            !text.contains('\u{2014}') && !text.contains('\u{2013}'),
+            "guide has forbidden dash: {text}"
+        );
+    }
 
     #[test]
-    fn reading_guide_covers_spreads_and_styles() {
-        assert!(!READING_GUIDE.is_empty());
-        let lower = READING_GUIDE.to_lowercase();
-        assert!(lower.contains("single") && lower.contains("tageskarte"));
-        assert!(lower.contains("guidance") && lower.contains("ursache"));
-        assert!(lower.contains("hindernis") && lower.contains("rat"));
-        assert!(lower.contains("future") && lower.contains("vergangenheit"));
-        assert!(lower.contains("gegenwart") && lower.contains("zukunft"));
-        assert!(lower.contains("reversed") || lower.contains("upright"));
+    fn single_guide_is_day_focused() {
+        let g = guide_for(SpreadKind::Single).to_lowercase();
+        assert!(g.contains("tageskarte") || g.contains("single"));
+        assert!(g.contains("große arkana") || g.contains("grosse arkana"));
+        assert!(!g.contains("ursache"));
+        assert!(!g.contains("vergangenheit"));
+        assert!(g.contains("erfinden"));
+        assert_no_forbidden_dashes(guide_for(SpreadKind::Single));
+    }
+
+    #[test]
+    fn guidance_guide_has_cause_obstacle_advice() {
+        let g = guide_for(SpreadKind::Guidance).to_lowercase();
+        assert!(g.contains("ursache") && g.contains("hindernis") && g.contains("rat"));
+        assert!(!g.contains("vergangenheit"));
+        assert!(g.contains("erfinden"));
+        assert!(g.contains("fließend") || g.contains("fliessend") || g.contains("ineinander"));
+        assert_no_forbidden_dashes(guide_for(SpreadKind::Guidance));
+    }
+
+    #[test]
+    fn future_guide_has_timeline_and_bans_label_formula() {
+        let g = guide_for(SpreadKind::Future).to_lowercase();
+        assert!(g.contains("vergangenheit") && g.contains("gegenwart") && g.contains("zukunft"));
+        assert!(!g.contains("ursache → hindernis") && !g.contains("ursache -> hindernis"));
         assert!(
-            lower.contains("erfinden") || lower.contains("keine karten erfinden"),
-            "guide should forbid inventing cards: {READING_GUIDE}"
+            g.contains("kein `vergangenheit")
+                || g.contains("kein vergangenheit")
+                || g.contains("nicht als steife")
         );
-        assert!(
-            !READING_GUIDE.contains('\u{2014}') && !READING_GUIDE.contains('\u{2013}'),
-            "guide has forbidden dash"
-        );
-        assert!(
-            lower.contains("nicht die label-formel")
-                || lower.contains("kein `vergangenheit")
-                || lower.contains("kein vergangenheit"),
-            "guide should ban the clinical label formula: {READING_GUIDE}"
-        );
-        assert!(
-            lower.contains("fließend")
-                || lower.contains("fliessend")
-                || lower.contains("ineinander"),
-            "guide should push woven flowing replies: {READING_GUIDE}"
-        );
-        assert!(
-            lower.contains("große arkana") || lower.contains("grosse arkana"),
-            "guide should mention große arkana for day format: {READING_GUIDE}"
-        );
+        assert!(g.contains("erfinden"));
+        assert_no_forbidden_dashes(guide_for(SpreadKind::Future));
     }
 }

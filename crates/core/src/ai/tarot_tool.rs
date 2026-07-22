@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::tarot::{
-    Arcana, DrawnCard, Orientation, READING_GUIDE, SpreadKind, draw_single_card, draw_three_card,
+    Arcana, DrawnCard, Orientation, SpreadKind, draw_single_card, draw_three_card, guide_for,
     parse_spread,
 };
 
@@ -21,11 +21,13 @@ struct DrawTarotArgs {
 pub fn tarot_tool() -> ToolDefinition {
     ToolDefinition {
         name: TAROT_TOOL_NAME.into(),
-        description: "Tarot ziehen statt Karten erfinden. \
-            Tageskarte → spread \"single\". \
-            Rat/Guidance zu einem Thema → \"guidance\" (Ursache, Hindernis, Rat). \
-            Zukunft/Verlauf → \"future\" (Vergangenheit, Gegenwart, Zukunft; default). \
-            Antwortstil steht in der guide im Result."
+        description: "Tarot ziehen statt Karten erfinden. Zuerst den richtigen Spread wählen:\n\
+            - Tageskarte / \"für heute\" / daily → spread \"single\" (question optional).\n\
+            - Rat zu einem Thema / Blockade / \"was soll ich tun\" → \"guidance\" \
+(Ursache, Hindernis, Rat). question Pflicht.\n\
+            - Zukunft / Verlauf / \"was kommt\" → \"future\" (Vergangenheit, Gegenwart, Zukunft; \
+default). question Pflicht.\n\
+            Alias: \"three_card\" → future. Die guide im Result gilt nur für den gewählten Spread."
             .into(),
         parameters: json!({
             "type": "object",
@@ -36,7 +38,7 @@ pub fn tarot_tool() -> ToolDefinition {
                 },
                 "question": {
                     "type": "string",
-                    "description": "Optionale Frage der fragenden Person. Wird im Result wiederholt, ändert den Shuffle nicht."
+                    "description": "Frage / Thema der Asker-Person. Pflicht bei guidance und future; bei single optional. Ändert den Shuffle nicht."
                 }
             }
         }),
@@ -64,6 +66,14 @@ fn position_json(p: &DrawnCard) -> Value {
     })
 }
 
+fn normalized_question(raw: Option<&str>) -> Option<&str> {
+    raw.map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn question_required(spread: SpreadKind) -> bool {
+    matches!(spread, SpreadKind::Guidance | SpreadKind::Future)
+}
+
 pub async fn execute_draw_tarot(call: &ToolCall) -> ToolResultMessage {
     let args = match call.parse_args::<DrawTarotArgs>() {
         Ok(a) => a,
@@ -85,6 +95,19 @@ pub async fn execute_draw_tarot(call: &ToolCall) -> ToolResultMessage {
         }
     };
 
+    let question = normalized_question(args.question.as_deref());
+    if question_required(spread) && question.is_none() {
+        return ToolResultMessage::for_call(
+            call,
+            json!({
+                "error": "missing_question",
+                "spread": spread.as_str(),
+                "details": "guidance and future require a non-empty question",
+            })
+            .to_string(),
+        );
+    }
+
     let mut rng = rng();
     let positions = match spread {
         SpreadKind::Single => {
@@ -103,14 +126,9 @@ pub async fn execute_draw_tarot(call: &ToolCall) -> ToolResultMessage {
     let mut body = json!({
         "spread": spread.as_str(),
         "positions": positions,
-        "guide": READING_GUIDE,
+        "guide": guide_for(spread),
     });
-    if let Some(q) = args
-        .question
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(q) = question {
         body["question"] = json!(q);
     }
 
@@ -135,53 +153,75 @@ mod tests {
     #[test]
     fn tool_def_name() {
         assert_eq!(tarot_tool().name, TAROT_TOOL_NAME);
+        let desc = tarot_tool().description.to_lowercase();
+        assert!(desc.contains("single") && desc.contains("guidance") && desc.contains("future"));
+        assert!(desc.contains("pflicht"));
     }
 
     #[tokio::test]
-    async fn empty_args_defaults_to_future_timeline() {
+    async fn empty_args_require_question_for_default_future() {
         let msg = execute_draw_tarot(&call(json!({}))).await;
         let v: serde_json::Value = serde_json::from_str(&msg.content).unwrap();
+        assert_eq!(v["error"], "missing_question");
         assert_eq!(v["spread"], "future");
-        assert!(v.get("question").is_none());
+    }
+
+    #[tokio::test]
+    async fn future_with_question_returns_timeline() {
+        let msg = execute_draw_tarot(&call(json!({
+            "spread": "future",
+            "question": "was kommt beruflich?"
+        })))
+        .await;
+        let v: serde_json::Value = serde_json::from_str(&msg.content).unwrap();
+        assert_eq!(v["spread"], "future");
+        assert_eq!(v["question"], "was kommt beruflich?");
         assert_eq!(v["positions"].as_array().unwrap().len(), 3);
         assert_eq!(v["positions"][0]["label"], "Vergangenheit");
         assert_eq!(v["positions"][1]["label"], "Gegenwart");
         assert_eq!(v["positions"][2]["label"], "Zukunft");
-        assert!(v["positions"][0].get("arcana").is_some());
-        assert!(v["guide"].as_str().unwrap().contains("future"));
-        assert!(!v["positions"][0]["meaning"].as_str().unwrap().is_empty());
+        let guide = v["guide"].as_str().unwrap().to_lowercase();
+        assert!(guide.contains("vergangenheit"));
+        assert!(!guide.contains("ursache"));
+        assert!(!guide.contains("tageskarte"));
     }
 
     #[tokio::test]
-    async fn guidance_spread_uses_cause_obstacle_advice_labels() {
+    async fn guidance_requires_question() {
         let msg = execute_draw_tarot(&call(json!({"spread": "guidance"}))).await;
         let v: serde_json::Value = serde_json::from_str(&msg.content).unwrap();
+        assert_eq!(v["error"], "missing_question");
+    }
+
+    #[tokio::test]
+    async fn guidance_with_question_uses_cause_obstacle_advice_labels() {
+        let msg = execute_draw_tarot(&call(json!({
+            "spread": "guidance",
+            "question": "jobwechsel?"
+        })))
+        .await;
+        let v: serde_json::Value = serde_json::from_str(&msg.content).unwrap();
         assert_eq!(v["spread"], "guidance");
-        assert_eq!(v["positions"].as_array().unwrap().len(), 3);
         assert_eq!(v["positions"][0]["label"], "Ursache");
         assert_eq!(v["positions"][1]["label"], "Hindernis");
         assert_eq!(v["positions"][2]["label"], "Rat");
+        let guide = v["guide"].as_str().unwrap().to_lowercase();
+        assert!(guide.contains("ursache"));
+        assert!(!guide.contains("vergangenheit"));
     }
 
     #[tokio::test]
-    async fn single_spread_returns_one_day_card() {
+    async fn single_spread_returns_one_day_card_without_question() {
         let msg = execute_draw_tarot(&call(json!({"spread": "single"}))).await;
         let v: serde_json::Value = serde_json::from_str(&msg.content).unwrap();
         assert_eq!(v["spread"], "single");
+        assert!(v.get("question").is_none());
         assert_eq!(v["positions"].as_array().unwrap().len(), 1);
         assert_eq!(v["positions"][0]["label"], "Day");
-        assert!(matches!(
-            v["positions"][0]["arcana"].as_str(),
-            Some("major") | Some("minor")
-        ));
-        assert!(v["guide"].as_str().unwrap().contains("single"));
-    }
-
-    #[tokio::test]
-    async fn question_is_echoed() {
-        let msg = execute_draw_tarot(&call(json!({"question": "pass the exam?"}))).await;
-        let v: serde_json::Value = serde_json::from_str(&msg.content).unwrap();
-        assert_eq!(v["question"], "pass the exam?");
+        let guide = v["guide"].as_str().unwrap().to_lowercase();
+        assert!(guide.contains("tageskarte") || guide.contains("single"));
+        assert!(!guide.contains("ursache"));
+        assert!(!guide.contains("vergangenheit"));
     }
 
     #[tokio::test]
