@@ -16,6 +16,7 @@ pub mod ping;
 pub mod schedule;
 pub mod settings;
 pub mod suspend;
+pub mod tarot;
 pub mod twitch;
 pub mod util;
 
