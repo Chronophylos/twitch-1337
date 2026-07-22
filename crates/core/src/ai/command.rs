@@ -112,6 +112,7 @@ pub struct AiCommand {
     bot_username: String,
     doener: Arc<crate::doener::DoeneratlasClient>,
     model_catalog: Arc<ModelCatalog>,
+    mouths: Arc<crate::twitch::mouth::MouthRouter>,
     /// Per-process nonce stamped into memory fences. Stable across
     /// turns so the memory block is a byte-stable cache prefix; the real
     /// fence-injection guard is `scrub_for_inject`, not nonce freshness.
@@ -128,6 +129,7 @@ pub struct AiCommandDeps {
     pub bot_username: String,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
     pub model_catalog: Arc<ModelCatalog>,
+    pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
 }
 
 pub const GROK_ALIAS_TRIGGER: &str = "@grok";
@@ -169,6 +171,7 @@ impl AiCommand {
             bot_username: deps.bot_username,
             doener: deps.doener,
             model_catalog: deps.model_catalog,
+            mouths: deps.mouths,
             prompt_nonce: inject::fresh_nonce(),
         }
     }
@@ -401,6 +404,11 @@ where
             )
         };
         let persona_name = snap.ai.behavior.persona_name.clone();
+        let display_name = if grok_alias {
+            snap.ai.grok.persona_name.clone()
+        } else {
+            persona_name.clone()
+        };
         drop(snap);
 
         let model_display = self.model_catalog.display_name(&connection, &model).await;
@@ -613,14 +621,35 @@ where
             let line = clean_user_facing_ai_response(&text).to_string();
             if !line.is_empty() {
                 let ts = Utc::now();
-                ctx.sender.reply(ctx.privmsg, line.clone()).await;
+                let req = crate::twitch::mouth::SpeakRequest {
+                    broadcaster_id: &ctx.privmsg.channel_id,
+                    channel_login: &ctx.privmsg.channel_login,
+                    text: line.clone(),
+                    reply_parent_message_id: Some(ctx.privmsg.message_id.clone()),
+                };
+                let (recorded_login, message_id) = match self.mouths.speak(agent, req).await {
+                    Ok(crate::twitch::mouth::SpeakOutcome::Spoken(spoken)) => {
+                        // Task 9 inserts `self.echo.register(id).await` here once EchoGuard is wired.
+                        (spoken.login, spoken.message_id)
+                    }
+                    Ok(crate::twitch::mouth::SpeakOutcome::NoMouth) => {
+                        ctx.sender.reply(ctx.privmsg, line.clone()).await;
+                        (self.bot_username.clone(), None)
+                    }
+                    Err(e) => {
+                        error!(error = ?e, agent = ?agent, "mouth speak failed");
+                        // Out of v1: no auto-fallback resend (double-speak risk). No history write.
+                        return Ok(());
+                    }
+                };
+                let _ = message_id; // reserved for future dashboard/debug surfacing
                 if let Some(ref chat) = self.chat_ctx {
                     chat.buffer_for(&ctx.privmsg.channel_login)
                         .lock()
                         .await
                         .push_bot_with_identity_at(
-                            self.bot_username.clone(),
-                            Some(&persona_name),
+                            recorded_login.clone(),
+                            Some(&display_name),
                             agent,
                             line.clone(),
                             ts,
@@ -629,10 +658,7 @@ where
                 let is_primary_source =
                     !cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));
                 if is_primary_source
-                    && let Err(e) = mem
-                        .transcript
-                        .append_line(ts, &self.bot_username, &line)
-                        .await
+                    && let Err(e) = mem.transcript.append_line(ts, &recorded_login, &line).await
                 {
                     error!(error = ?e, "transcript bot-reply append failed");
                 }

@@ -335,6 +335,12 @@ where
                 emote_tracker,
                 primary_history_tap,
                 started_at,
+                // Phase A: no Helix mouths wired yet. Task 9 replaces this
+                // with a real router built from configured mouth accounts.
+                mouths: Arc::new(crate::twitch::mouth::MouthRouter {
+                    aurora: None,
+                    grok: None,
+                }),
             })
             .await;
         }

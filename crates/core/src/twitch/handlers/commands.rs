@@ -52,6 +52,10 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub channel: String,
     pub data_dir: std::path::PathBuf,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
+    /// Per-agent Helix chat-send mouths. Phase A wires an empty router (no
+    /// configured mouths); the reply path still routes through it and falls
+    /// back to utility IRC via `SpeakOutcome::NoMouth`.
+    pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
     pub suspension_manager: Arc<SuspensionManager>,
     /// Pre-built 7TV emote provider. `None` disables emote grounding for `!ai`.
     pub emote_provider: Option<Arc<SevenTvEmoteProvider>>,
@@ -98,6 +102,7 @@ where
         emote_tracker,
         primary_history_tap,
         started_at,
+        mouths,
     } = cfg;
 
     let ping_handle = PingHandle::new(ping_actor_tx);
@@ -309,6 +314,7 @@ where
                 bot_username: bot_username.clone(),
                 doener: doener.clone(),
                 model_catalog,
+                mouths: mouths.clone(),
             },
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
