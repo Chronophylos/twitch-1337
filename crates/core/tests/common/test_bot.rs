@@ -84,6 +84,7 @@ pub struct TestBotBuilder {
     open_emote_tracker: bool,
     emote_catalog_seed: Vec<(String, String)>,
     emote_set_event_seed: Vec<twitch_1337::emote_tracker::NewSetEvent>,
+    mouth_identity: Option<(String, String)>,
 }
 
 impl TestBotBuilder {
@@ -100,6 +101,7 @@ impl TestBotBuilder {
             open_emote_tracker: false,
             emote_catalog_seed: Vec::new(),
             emote_set_event_seed: Vec::new(),
+            mouth_identity: None,
         }
     }
 
@@ -180,6 +182,16 @@ impl TestBotBuilder {
     /// Override the Döneratlas API base URL (wiremock) for `!dpi` / `!döner` / AI tool.
     pub fn with_doener_base_url(mut self, base: impl Into<String>) -> Self {
         self.doener_base_url = Some(base.into());
+        self
+    }
+
+    /// Register a fixed AI-mouth identity (login + user id) in the
+    /// `EchoGuard` for this test, bypassing production `build_mouths` (which
+    /// does live Helix I/O tests can't perform). The `MouthRouter` itself is
+    /// wired empty (`aurora: None, grok: None`) since these tests only need
+    /// echo suppression, not an actual speak path.
+    pub fn with_mouth_identity(mut self, login: &str, user_id: &str) -> Self {
+        self.mouth_identity = Some((login.to_string(), user_id.to_string()));
         self
     }
 
@@ -435,6 +447,20 @@ impl TestBotBuilder {
             telemetry: telemetry_store.clone(),
             emote_tracker,
             twitch_channel_id: None,
+            mouths_override: self.mouth_identity.map(|(login, user_id)| {
+                (
+                    Arc::new(twitch_1337::twitch::mouth::MouthRouter {
+                        aurora: None,
+                        grok: None,
+                    }),
+                    Arc::new(twitch_1337::twitch::echo::EchoGuard::new(
+                        twitch_1337::twitch::echo::MouthIdentities {
+                            logins: [login.to_ascii_lowercase()].into(),
+                            user_ids: [user_id].into(),
+                        },
+                    )),
+                )
+            }),
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -621,6 +647,13 @@ impl TestBot {
             Some(history) => history.lock().await.snapshot(),
             None => Vec::new(),
         }
+    }
+
+    /// Entry count of the primary chat-history buffer. Used by echo-guard
+    /// tests that only need to assert "did this message get recorded at
+    /// all", not inspect specific entries.
+    pub async fn primary_history_len(&self) -> usize {
+        self.primary_history_snapshot().await.len()
     }
 
     /// Flip the shared `irc_connected` flag. Used by web smoke tests since

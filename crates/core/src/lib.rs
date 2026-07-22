@@ -171,6 +171,14 @@ pub struct Services {
     pub emote_tracker: Option<std::sync::Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     /// Twitch broadcaster user id for 7TV ingest. `None` when Helix resolve failed.
     pub twitch_channel_id: Option<String>,
+    /// Optional override for the AI-mouth router + echo guard. Production
+    /// leaves this `None` so `run_bot` builds them via
+    /// `mouth_setup::build_mouths` (which does live Helix I/O); integration
+    /// tests inject a fixed identity here since they can't do network calls.
+    pub mouths_override: Option<(
+        Arc<crate::twitch::mouth::MouthRouter>,
+        Arc<crate::twitch::echo::EchoGuard>,
+    )>,
 }
 
 pub type WebSpawner =
@@ -219,6 +227,7 @@ where
         telemetry,
         emote_tracker,
         twitch_channel_id,
+        mouths_override,
     } = services;
 
     // Clone the sender out of the Arc for SpawnDeps.
@@ -282,7 +291,10 @@ where
     let channel_for_ritual = config.twitch.channel.clone();
     let emote_usage_enabled = emote_tracker.is_some();
 
-    let (mouths, echo) = crate::twitch::mouth_setup::build_mouths(&config, &data_dir).await;
+    let (mouths, echo) = match mouths_override {
+        Some(pair) => pair,
+        None => crate::twitch::mouth_setup::build_mouths(&config, &data_dir).await,
+    };
 
     let handlers = spawn_handlers(SpawnDeps {
         client,

@@ -277,8 +277,9 @@ where
         let rx = broadcast_tx.subscribe();
         let w = Arc::new(t);
         let ch = config.twitch.channel.clone();
+        let echo_tap = echo.clone();
         Some(tokio::spawn(async move {
-            crate::twitch::handlers::transcript::run_transcript_tap(rx, w, ch).await;
+            crate::twitch::handlers::transcript::run_transcript_tap(rx, w, ch, echo_tap).await;
         }))
     } else {
         None
@@ -291,8 +292,10 @@ where
             let settings = settings.clone();
             let channel = config.twitch.channel.clone();
             let bot_username = config.twitch.username.clone();
+            let echo_usage = echo.clone();
             tokio::spawn(async move {
-                run_emote_usage_handler(rx, handle, settings, channel, bot_username).await;
+                run_emote_usage_handler(rx, handle, settings, channel, bot_username, echo_usage)
+                    .await;
             })
         }
         None => tokio::spawn(std::future::pending::<()>()),
@@ -307,8 +310,9 @@ where
         let hos = hall_of_shame.clone();
         let clk = clock.clone();
         let dd = data_dir.clone();
+        let echo_tracker = echo.clone();
         async move {
-            run_1337_handler(btx, sender, channel, lat, lb, hos, clk, dd).await;
+            run_1337_handler(btx, sender, channel, lat, lb, hos, clk, dd, echo_tracker).await;
         }
     });
 

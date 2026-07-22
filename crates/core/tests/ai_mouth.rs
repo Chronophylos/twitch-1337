@@ -69,3 +69,36 @@ async fn ai_fallback_reply_is_tagged_aurora() {
 
     bot.shutdown().await;
 }
+
+/// A PRIVMSG from a known mouth identity (as if Twitch fanned the bot's own
+/// Helix send back over IRC) must be treated as an echo, not fresh chat
+/// input: no chat-history entry, and no command dispatch (mouths are
+/// speak-only, never command callers). `with_mouth_identity` registers the
+/// identity directly in `EchoGuard` via the `Services::mouths_override` test
+/// seam, since production `build_mouths` does live Helix I/O.
+#[tokio::test]
+async fn mouth_echo_does_not_double_log_or_run_commands() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
+        })
+        .with_mouth_identity("aurora_bot", "42")
+        .spawn()
+        .await;
+
+    // A PRIVMSG from the mouth login/id, containing a command trigger.
+    bot.send_privmsg_as("aurora_bot", "42", "!lb").await;
+
+    // No command output — mouths never dispatch a command.
+    bot.expect_silent(Duration::from_millis(400)).await;
+
+    // No history row recorded for the mouth line.
+    assert_eq!(
+        bot.primary_history_len().await,
+        0,
+        "mouth echo must not be ingested into chat history"
+    );
+
+    bot.shutdown().await;
+}

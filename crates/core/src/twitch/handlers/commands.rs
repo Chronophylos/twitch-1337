@@ -367,6 +367,7 @@ where
         primary_history,
         ai_channel_history,
         suspension_manager,
+        echo,
     )
     .await;
 }
@@ -418,6 +419,7 @@ pub(crate) async fn run_command_dispatcher<T, L>(
     primary_history_for_dispatch: Option<ChatHistory>,
     ai_channel_history_for_dispatch: Option<ChatHistory>,
     suspension_manager: Arc<SuspensionManager>,
+    echo: Arc<crate::twitch::echo::EchoGuard>,
 ) where
     T: Transport,
     L: LoginCredentials,
@@ -452,7 +454,16 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                 } else {
                     primary_history_for_dispatch.as_ref()
                 };
-                if let Some(buffer) = target_buffer {
+                let is_mouth = echo.is_mouth(&privmsg.sender.id, &privmsg.sender.login);
+                let skip_history = is_mouth
+                    || echo
+                        .is_echo(
+                            &privmsg.sender.id,
+                            &privmsg.sender.login,
+                            &privmsg.message_id,
+                        )
+                        .await;
+                if let Some(buffer) = target_buffer.filter(|_| !skip_history) {
                     let display_name = Some(privmsg.sender.name.as_str()).filter(|s| !s.is_empty());
                     let user_id = Some(privmsg.sender.id.as_str()).filter(|s| !s.is_empty());
                     buffer.lock().await.push_user_with_identity_at(
@@ -462,6 +473,10 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                         privmsg.message_text.clone(),
                         privmsg.server_timestamp,
                     );
+                }
+                if is_mouth {
+                    // Mouths are speak-only: never dispatch a command from their own echo.
+                    continue;
                 }
 
                 let Some(invocation) = command_invocation(&privmsg.message_text) else {

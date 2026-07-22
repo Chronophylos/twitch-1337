@@ -340,6 +340,7 @@ pub async fn main() -> Result<()> {
         telemetry,
         emote_tracker,
         twitch_channel_id,
+        mouths_override: None,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();

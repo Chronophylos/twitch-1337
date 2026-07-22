@@ -12,6 +12,7 @@ use twitch_irc::message::ServerMessage;
 use crate::emote_tracker::{EmoteRow, EmoteTrackerHandle, NewUsageEvent, match_usage_tokens};
 use crate::settings::SettingsHandle;
 use crate::twitch::clanker::should_flag_usage;
+use crate::twitch::echo::EchoGuard;
 
 pub const CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -39,12 +40,17 @@ pub async fn run_emote_usage_handler(
     settings: SettingsHandle,
     channel: String,
     bot_username: String,
+    echo: Arc<EchoGuard>,
 ) {
     let mut active_names = HashMap::new();
     refresh_catalog(&emote_tracker, &mut active_names).await;
 
     let mut refresh = interval(CATALOG_REFRESH_INTERVAL);
     refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    // Mouth logins never change post-startup; clone once so the per-message
+    // deny-list merge below is just a cheap chain, not a re-clone of the guard's set.
+    let mouth_logins: Vec<String> = echo.mouth_logins().iter().cloned().collect();
 
     loop {
         tokio::select! {
@@ -59,8 +65,15 @@ pub async fn run_emote_usage_handler(
                             continue;
                         }
                         let snapshot = settings.load();
-                        let deny = &snapshot.twitch.emote_usage_deny_list;
-                        let flagged = should_flag_usage(&p.sender.login, &bot_username, deny);
+                        let deny_with_mouths: Vec<String> = snapshot
+                            .twitch
+                            .emote_usage_deny_list
+                            .iter()
+                            .cloned()
+                            .chain(mouth_logins.iter().cloned())
+                            .collect();
+                        let flagged =
+                            should_flag_usage(&p.sender.login, &bot_username, &deny_with_mouths);
                         let emote_ids = match_usage_tokens(&p.message_text, &active_names);
                         if emote_ids.is_empty() {
                             continue;

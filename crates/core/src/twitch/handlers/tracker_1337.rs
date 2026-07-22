@@ -26,7 +26,7 @@ use twitch_irc::{
 
 use crate::{
     resolve_berlin_time,
-    twitch::{ChatSender, clanker::is_clanker},
+    twitch::{ChatSender, clanker::is_clanker, echo::EchoGuard},
     util::clock::Clock,
 };
 
@@ -228,9 +228,11 @@ pub(crate) async fn sleep_until_hms(
 
 /// Determines if a message should be counted as a valid 1337 message.
 ///
-/// Filters out clanker messages and checks for keywords "1337" or "DANKIES".
-pub(crate) fn is_valid_1337_message(message: &PrivmsgMessage) -> bool {
-    if is_clanker(&message.sender.login) {
+/// Filters out clanker messages, the bot's own AI mouths, and checks for
+/// keywords "1337" or "DANKIES".
+pub(crate) fn is_valid_1337_message(message: &PrivmsgMessage, echo: &EchoGuard) -> bool {
+    if is_clanker(&message.sender.login) || echo.is_mouth(&message.sender.id, &message.sender.login)
+    {
         return false;
     }
     message.message_text.contains("DANKIES") || message.message_text.contains("1337")
@@ -457,11 +459,12 @@ pub(crate) async fn save_hall_of_shame(
 ///
 /// Runs in a loop until the broadcast channel closes or an error occurs.
 /// Only tracks messages sent during the configured TARGET_HOUR:TARGET_MINUTE from the primary channel.
-#[instrument(skip(broadcast_rx, total_users, channel))]
+#[instrument(skip(broadcast_rx, total_users, channel, echo))]
 pub(crate) async fn monitor_1337_messages(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
     total_users: Arc<Mutex<HashMap<String, u64>>>,
     channel: String,
+    echo: Arc<EchoGuard>,
 ) {
     loop {
         match broadcast_rx.recv().await {
@@ -481,7 +484,7 @@ pub(crate) async fn monitor_1337_messages(
                     continue;
                 }
 
-                if is_valid_1337_message(&privmsg) {
+                if is_valid_1337_message(&privmsg, &echo) {
                     let mut users = total_users.lock().await;
                     if users.len() >= MAX_USERS {
                         error!(max = MAX_USERS, "User limit reached");
@@ -526,6 +529,7 @@ pub async fn run_1337_handler<T, L>(
     hall_of_shame: Arc<tokio::sync::RwLock<HashMap<String, PersonalWorst>>>,
     clock: Arc<dyn Clock>,
     data_dir: std::path::PathBuf,
+    echo: Arc<EchoGuard>,
 ) where
     T: Transport,
     L: LoginCredentials,
@@ -547,9 +551,10 @@ pub async fn run_1337_handler<T, L>(
             // Subscribe fresh when we wake up - only see messages from now on
             let broadcast_rx = broadcast_tx.subscribe();
             let monitor_channel = channel.clone();
+            let echo = echo.clone();
 
             async move {
-                monitor_1337_messages(broadcast_rx, total_users, monitor_channel).await;
+                monitor_1337_messages(broadcast_rx, total_users, monitor_channel, echo).await;
             }
         });
 
