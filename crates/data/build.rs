@@ -6,9 +6,6 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const AIRPORTS_URL: &str = "https://davidmegginson.github.io/ourairports-data/airports.csv";
-const RUNWAYS_URL: &str = "https://davidmegginson.github.io/ourairports-data/runways.csv";
-
 #[derive(Debug, Deserialize)]
 struct RawAirport {
     ident: String,
@@ -27,31 +24,6 @@ struct RawRunway {
     closed: Option<u8>,
 }
 
-fn download_or_fallback(url: &str, fallback_path: &Path, dest_path: &Path) {
-    if let Ok(body) = try_download(url) {
-        fs::write(dest_path, &body).expect("failed to write downloaded CSV");
-        // Also update fallback
-        fs::create_dir_all(fallback_path.parent().unwrap()).ok();
-        fs::write(fallback_path, &body).ok();
-    } else {
-        eprintln!("cargo:warning=Failed to download {url}, using fallback");
-        if fallback_path.exists() {
-            fs::copy(fallback_path, dest_path).expect("fallback copy failed");
-        } else {
-            panic!(
-                "No fallback data at {} and download failed",
-                fallback_path.display()
-            );
-        }
-    }
-}
-
-fn try_download(url: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let response = ureq::get(url).call()?;
-    let body = response.into_body().read_to_vec()?;
-    Ok(body)
-}
-
 fn is_hard_surface(surface: &str) -> bool {
     const PREFIXES: &[&str] = &["ASP", "CON", "BIT", "PEM"];
     let upper = surface.to_ascii_uppercase();
@@ -63,26 +35,15 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let ourairports_dir = manifest_dir.join("assets/flight/ourairports");
 
-    let airports_tmp = out_dir.join("airports.csv");
-    let runways_tmp = out_dir.join("runways.csv");
-
-    download_or_fallback(
-        AIRPORTS_URL,
-        &ourairports_dir.join("airports.csv"),
-        &airports_tmp,
-    );
-    download_or_fallback(
-        RUNWAYS_URL,
-        &ourairports_dir.join("runways.csv"),
-        &runways_tmp,
-    );
+    let airports_csv = ourairports_dir.join("airports.csv");
+    let runways_csv = ourairports_dir.join("runways.csv");
 
     // Parse runways: map airport_ident -> longest hard-surface non-closed runway length
     let mut best_runway: HashMap<String, u32> = HashMap::new();
     {
         let mut rdr = ReaderBuilder::new()
-            .from_path(&runways_tmp)
-            .expect("open runways.csv");
+            .from_path(&runways_csv)
+            .unwrap_or_else(|e| panic!("open {}: {e}", runways_csv.display()));
         for result in rdr.deserialize::<RawRunway>() {
             let rwy = match result {
                 Ok(r) => r,
@@ -112,8 +73,8 @@ fn main() {
     let mut airports = Vec::new();
     {
         let mut rdr = ReaderBuilder::new()
-            .from_path(&airports_tmp)
-            .expect("open airports.csv");
+            .from_path(&airports_csv)
+            .unwrap_or_else(|e| panic!("open {}: {e}", airports_csv.display()));
         for result in rdr.deserialize::<RawAirport>() {
             let apt = match result {
                 Ok(a) => a,
@@ -171,14 +132,8 @@ fn main() {
     writeln!(f, "];").unwrap();
 
     println!("cargo:rerun-if-changed=build.rs");
-    println!(
-        "cargo:rerun-if-changed={}",
-        ourairports_dir.join("airports.csv").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        ourairports_dir.join("runways.csv").display()
-    );
+    println!("cargo:rerun-if-changed={}", airports_csv.display());
+    println!("cargo:rerun-if-changed={}", runways_csv.display());
     println!(
         "cargo:warning=Generated airport DB with {} airports",
         airports.len()
