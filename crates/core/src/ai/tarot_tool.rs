@@ -21,17 +21,18 @@ struct DrawTarotArgs {
 pub fn tarot_tool() -> ToolDefinition {
     ToolDefinition {
         name: TAROT_TOOL_NAME.into(),
-        description: "Wenn jemand Tarot will: Tageskarte / cards for today → spread \"single\". \
-            Allgemeine Legung oder drei Karten → \"three_card\" (default). Liefert deutsche Namen, \
-            Bedeutungen und Leseanleitung. Lieber dieses Tool als Karten zu erfinden. Antwortstil \
-            steht in der guide im Result (Tageskarte vs Drei-Karten unterscheiden sich)."
+        description: "Tarot ziehen statt Karten erfinden. \
+            Tageskarte → spread \"single\". \
+            Rat/Guidance zu einem Thema → \"guidance\" (Ursache, Hindernis, Rat). \
+            Zukunft/Verlauf → \"future\" (Vergangenheit, Gegenwart, Zukunft; default). \
+            Antwortstil steht in der guide im Result."
             .into(),
         parameters: json!({
             "type": "object",
             "properties": {
                 "spread": {
                     "type": "string",
-                    "description": "\"single\" (Tageskarte) oder \"three_card\" (default)."
+                    "description": "\"single\" | \"guidance\" | \"future\" (default). Alias: \"three_card\" → future."
                 },
                 "question": {
                     "type": "string",
@@ -85,22 +86,22 @@ pub async fn execute_draw_tarot(call: &ToolCall) -> ToolResultMessage {
     };
 
     let mut rng = rng();
-    let (spread_name, positions) = match spread {
-        SpreadKind::ThreeCard => {
-            let draw = draw_three_card(&mut rng);
-            (
-                "three_card",
-                draw.positions.iter().map(position_json).collect::<Vec<_>>(),
-            )
-        }
+    let positions = match spread {
         SpreadKind::Single => {
             let draw = draw_single_card(&mut rng);
-            ("single", vec![position_json(&draw.card)])
+            vec![position_json(&draw.card)]
+        }
+        SpreadKind::Guidance | SpreadKind::Future => {
+            let labels = spread
+                .three_card_labels()
+                .expect("guidance/future always have three-card labels");
+            let draw = draw_three_card(&mut rng, labels);
+            draw.positions.iter().map(position_json).collect()
         }
     };
 
     let mut body = json!({
-        "spread": spread_name,
+        "spread": spread.as_str(),
         "positions": positions,
         "guide": READING_GUIDE,
     });
@@ -137,16 +138,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_args_returns_three_positions_and_guide() {
+    async fn empty_args_defaults_to_future_timeline() {
         let msg = execute_draw_tarot(&call(json!({}))).await;
         let v: serde_json::Value = serde_json::from_str(&msg.content).unwrap();
-        assert_eq!(v["spread"], "three_card");
+        assert_eq!(v["spread"], "future");
         assert!(v.get("question").is_none());
         assert_eq!(v["positions"].as_array().unwrap().len(), 3);
-        assert_eq!(v["positions"][0]["label"], "Past");
+        assert_eq!(v["positions"][0]["label"], "Vergangenheit");
+        assert_eq!(v["positions"][1]["label"], "Gegenwart");
+        assert_eq!(v["positions"][2]["label"], "Zukunft");
         assert!(v["positions"][0].get("arcana").is_some());
-        assert!(v["guide"].as_str().unwrap().contains("Past"));
+        assert!(v["guide"].as_str().unwrap().contains("future"));
         assert!(!v["positions"][0]["meaning"].as_str().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn guidance_spread_uses_cause_obstacle_advice_labels() {
+        let msg = execute_draw_tarot(&call(json!({"spread": "guidance"}))).await;
+        let v: serde_json::Value = serde_json::from_str(&msg.content).unwrap();
+        assert_eq!(v["spread"], "guidance");
+        assert_eq!(v["positions"].as_array().unwrap().len(), 3);
+        assert_eq!(v["positions"][0]["label"], "Ursache");
+        assert_eq!(v["positions"][1]["label"], "Hindernis");
+        assert_eq!(v["positions"][2]["label"], "Rat");
     }
 
     #[tokio::test]

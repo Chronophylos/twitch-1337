@@ -5,12 +5,14 @@ mod tests {
     use super::READING_GUIDE;
 
     #[test]
-    fn reading_guide_mentions_positions_and_no_inventing() {
+    fn reading_guide_covers_spreads_and_styles() {
         assert!(!READING_GUIDE.is_empty());
         let lower = READING_GUIDE.to_lowercase();
-        assert!(lower.contains("past"));
-        assert!(lower.contains("present"));
-        assert!(lower.contains("future"));
+        assert!(lower.contains("single") && lower.contains("tageskarte"));
+        assert!(lower.contains("guidance") && lower.contains("ursache"));
+        assert!(lower.contains("hindernis") && lower.contains("rat"));
+        assert!(lower.contains("future") && lower.contains("vergangenheit"));
+        assert!(lower.contains("gegenwart") && lower.contains("zukunft"));
         assert!(lower.contains("reversed") || lower.contains("upright"));
         assert!(
             lower.contains("erfinden") || lower.contains("keine karten erfinden"),
@@ -20,7 +22,6 @@ mod tests {
             !READING_GUIDE.contains('\u{2014}') && !READING_GUIDE.contains('\u{2013}'),
             "guide has forbidden dash"
         );
-        // Style anti-pattern from prod: labeled past/present/future with card in parens
         assert!(
             lower.contains("nicht die label-formel")
                 || lower.contains("kein `vergangenheit")
@@ -32,10 +33,6 @@ mod tests {
                 || lower.contains("fliessend")
                 || lower.contains("ineinander"),
             "guide should push woven flowing replies: {READING_GUIDE}"
-        );
-        assert!(
-            lower.contains("single") && lower.contains("tageskarte"),
-            "guide should document single/day spread: {READING_GUIDE}"
         );
         assert!(
             lower.contains("große arkana") || lower.contains("grosse arkana"),
