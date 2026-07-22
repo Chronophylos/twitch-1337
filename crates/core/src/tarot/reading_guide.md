@@ -1,7 +1,7 @@
-# How to read this draw
+# So liest du den Draw
 
-- Cards are ordered Past → Present → Future (left to right).
-- Upright leans toward the card's upright meaning; reversed leans toward its reversed meaning.
-- You may remap the three labels to fit the asker's question, but do not change which card sits in which slot.
-- Do not invent cards, swaps, or extra pulls beyond this draw.
-- Keep the Twitch reply concise and in-character; entertainment tone is fine.
+- Karten von links nach rechts: Past → Present → Future.
+- upright nimmt die upright-Bedeutung, reversed die reversed-Bedeutung.
+- Du darfst die drei Labels an die Frage anpassen, aber nicht welche Karte in welchem Slot liegt.
+- Keine Karten erfinden, keine Swaps, keine Extra-Pulls außerhalb dieses Draws.
+- Twitch-Antwort kurz und in character. Entertainment ist okay.

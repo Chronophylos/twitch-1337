@@ -18,19 +18,20 @@ struct DrawTarotArgs {
 pub fn tarot_tool() -> ToolDefinition {
     ToolDefinition {
         name: TAROT_TOOL_NAME.into(),
-        description: "Use when a viewer wants a tarot reading or card pull. Draws a spread and \
-            returns cards, meanings, and a short how-to-read guide. Prefer this over inventing cards."
+        description: "Wenn jemand ein Tarot-Reading oder einen Card Pull will. Zieht einen Spread \
+            und liefert Karten, Bedeutungen und eine kurze Leseanleitung. Lieber dieses Tool als \
+            Karten zu erfinden."
             .into(),
         parameters: json!({
             "type": "object",
             "properties": {
                 "spread": {
                     "type": "string",
-                    "description": "Named spread. v1 supports only \"three_card\" (default)."
+                    "description": "Named spread. v1 only \"three_card\" (default)."
                 },
                 "question": {
                     "type": "string",
-                    "description": "Optional asker question; echoed into the result and does not change the shuffle."
+                    "description": "Optionale Frage der fragenden Person. Wird im Result wiederholt, ändert den Shuffle nicht."
                 }
             }
         }),

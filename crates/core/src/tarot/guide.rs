@@ -13,9 +13,12 @@ mod tests {
         assert!(lower.contains("future"));
         assert!(lower.contains("reversed") || lower.contains("upright"));
         assert!(
-            lower.contains("invent")
-                || lower.contains("do not invent")
-                || lower.contains("don't invent")
+            lower.contains("erfinden") || lower.contains("keine karten erfinden"),
+            "guide should forbid inventing cards: {READING_GUIDE}"
+        );
+        assert!(
+            !READING_GUIDE.contains('\u{2014}') && !READING_GUIDE.contains('\u{2013}'),
+            "guide has forbidden dash"
         );
     }
 }
