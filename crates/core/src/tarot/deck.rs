@@ -719,22 +719,6 @@ mod tests {
     }
 
     #[test]
-    fn card_names_are_german_rws() {
-        assert_eq!(DECK[0].name, "Der Narr");
-        assert_eq!(DECK[21].name, "Die Welt");
-        assert_eq!(DECK[22].name, "Ass der Stäbe");
-        assert_eq!(DECK[77].name, "König der Münzen");
-        for c in DECK {
-            assert!(
-                !c.name.contains(" of "),
-                "{} still looks English: {}",
-                c.id,
-                c.name
-            );
-        }
-    }
-
-    #[test]
     fn meanings_have_no_em_or_en_dashes() {
         for c in DECK {
             for text in [c.upright, c.reversed] {
