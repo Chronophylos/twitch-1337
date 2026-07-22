@@ -1,6 +1,7 @@
 pub mod announce;
 pub mod chat_sender;
 pub mod clanker;
+pub mod echo;
 pub mod handlers;
 pub mod mouth;
 pub mod setup;
