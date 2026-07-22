@@ -52,10 +52,15 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub channel: String,
     pub data_dir: std::path::PathBuf,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
-    /// Per-agent Helix chat-send mouths. Phase A wires an empty router (no
-    /// configured mouths); the reply path still routes through it and falls
-    /// back to utility IRC via `SpeakOutcome::NoMouth`.
+    /// Per-agent Helix chat-send mouths, built at startup from configured
+    /// mouth accounts. A mouth without a configured account (or one whose
+    /// Helix setup failed) is `None`; the reply path routes through it and
+    /// falls back to utility IRC via `SpeakOutcome::NoMouth`.
     pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
+    /// Echo suppression for the bot's own AI mouths; registered on speak so
+    /// the reply path (and other broadcast consumers) can recognize its own
+    /// outgoing messages coming back over the broadcast channel.
+    pub echo: Arc<crate::twitch::echo::EchoGuard>,
     pub suspension_manager: Arc<SuspensionManager>,
     /// Pre-built 7TV emote provider. `None` disables emote grounding for `!ai`.
     pub emote_provider: Option<Arc<SevenTvEmoteProvider>>,
@@ -103,6 +108,7 @@ where
         primary_history_tap,
         started_at,
         mouths,
+        echo,
     } = cfg;
 
     let ping_handle = PingHandle::new(ping_actor_tx);
@@ -315,6 +321,7 @@ where
                 doener: doener.clone(),
                 model_catalog,
                 mouths: mouths.clone(),
+                echo: echo.clone(),
             },
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(

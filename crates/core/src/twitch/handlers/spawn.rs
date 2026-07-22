@@ -129,6 +129,13 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     /// Twitch broadcaster user id for 7TV EventAPI subscription. `None` when
     /// Helix resolve failed — ingest stays off without aborting the bot.
     pub twitch_channel_id: Option<String>,
+
+    /// Per-agent Helix chat-send mouths, built at startup from configured
+    /// mouth accounts (`crate::twitch::mouth_setup::build_mouths`).
+    pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
+    /// Echo suppression for the bot's own AI mouths, sharing the same
+    /// identities `build_mouths` collected.
+    pub echo: Arc<crate::twitch::echo::EchoGuard>,
 }
 
 /// Spawn every long-running handler task in the order they currently
@@ -171,6 +178,8 @@ where
         started_at,
         emote_tracker,
         twitch_channel_id,
+        mouths,
+        echo,
     } = deps;
 
     let ping_actor = tokio::spawn(run_ping_actor(ping_actor_rx, ping_manager, ping_names_tx));
@@ -335,12 +344,8 @@ where
                 emote_tracker,
                 primary_history_tap,
                 started_at,
-                // Phase A: no Helix mouths wired yet. Task 9 replaces this
-                // with a real router built from configured mouth accounts.
-                mouths: Arc::new(crate::twitch::mouth::MouthRouter {
-                    aurora: None,
-                    grok: None,
-                }),
+                mouths,
+                echo,
             })
             .await;
         }

@@ -282,6 +282,8 @@ where
     let channel_for_ritual = config.twitch.channel.clone();
     let emote_usage_enabled = emote_tracker.is_some();
 
+    let (mouths, echo) = crate::twitch::mouth_setup::build_mouths(&config, &data_dir).await;
+
     let handlers = spawn_handlers(SpawnDeps {
         client,
         incoming,
@@ -314,6 +316,8 @@ where
         started_at,
         emote_tracker,
         twitch_channel_id,
+        mouths,
+        echo,
     });
 
     let shutdown_notify = handlers.shutdown_notify.clone();

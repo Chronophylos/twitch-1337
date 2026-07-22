@@ -113,6 +113,7 @@ pub struct AiCommand {
     doener: Arc<crate::doener::DoeneratlasClient>,
     model_catalog: Arc<ModelCatalog>,
     mouths: Arc<crate::twitch::mouth::MouthRouter>,
+    echo: Arc<crate::twitch::echo::EchoGuard>,
     /// Per-process nonce stamped into memory fences. Stable across
     /// turns so the memory block is a byte-stable cache prefix; the real
     /// fence-injection guard is `scrub_for_inject`, not nonce freshness.
@@ -130,6 +131,7 @@ pub struct AiCommandDeps {
     pub doener: Arc<crate::doener::DoeneratlasClient>,
     pub model_catalog: Arc<ModelCatalog>,
     pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
+    pub echo: Arc<crate::twitch::echo::EchoGuard>,
 }
 
 pub const GROK_ALIAS_TRIGGER: &str = "@grok";
@@ -172,6 +174,7 @@ impl AiCommand {
             doener: deps.doener,
             model_catalog: deps.model_catalog,
             mouths: deps.mouths,
+            echo: deps.echo,
             prompt_nonce: inject::fresh_nonce(),
         }
     }
@@ -629,7 +632,9 @@ where
                 };
                 let (recorded_login, message_id) = match self.mouths.speak(agent, req).await {
                     Ok(crate::twitch::mouth::SpeakOutcome::Spoken(spoken)) => {
-                        // Task 9 inserts `self.echo.register(id).await` here once EchoGuard is wired.
+                        if let Some(id) = spoken.message_id.as_deref() {
+                            self.echo.register(id).await;
+                        }
                         (spoken.login, spoken.message_id)
                     }
                     Ok(crate::twitch::mouth::SpeakOutcome::NoMouth) => {
