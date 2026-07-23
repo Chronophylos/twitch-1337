@@ -64,6 +64,10 @@ pub async fn run_emote_usage_handler(
                         if user_id.is_empty() {
                             continue;
                         }
+                        let emote_ids = match_usage_tokens(&p.message_text, &active_names);
+                        if emote_ids.is_empty() {
+                            continue;
+                        }
                         let snapshot = settings.load();
                         let deny_with_mouths: Vec<String> = snapshot
                             .twitch
@@ -74,10 +78,6 @@ pub async fn run_emote_usage_handler(
                             .collect();
                         let flagged =
                             should_flag_usage(&p.sender.login, &bot_username, &deny_with_mouths);
-                        let emote_ids = match_usage_tokens(&p.message_text, &active_names);
-                        if emote_ids.is_empty() {
-                            continue;
-                        }
                         let at = p.server_timestamp.timestamp_millis();
                         let login = Some(p.sender.login.clone());
                         let events: Vec<NewUsageEvent> = emote_ids
