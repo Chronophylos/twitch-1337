@@ -2,8 +2,26 @@ mod common;
 
 use std::time::Duration;
 
-use common::TestBotBuilder;
+use common::{TestBot, TestBotBuilder};
+use twitch_1337_core::ai::chat_history::{ChatHistoryEntry, ChatHistorySource};
 use twitch_1337_core::twitch::mouth::Agent;
+
+/// Poll the primary chat history until it holds at least `min` entries.
+async fn wait_history_len(bot: &TestBot, min: usize) -> Vec<ChatHistoryEntry> {
+    let deadline = tokio::time::Instant::now() + common::GENEROUS_WAIT;
+    loop {
+        let entries = bot.primary_history_snapshot().await;
+        if entries.len() >= min {
+            return entries;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "chat history never reached {min} entries (got {})",
+            entries.len()
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
 
 /// Phase A: `MouthRouter` is wired but constructed empty (no Helix mouths
 /// configured yet). A `@grok` turn should still fall through to the utility
@@ -31,7 +49,7 @@ async fn grok_fallback_reply_is_tagged_grok() {
     let entry = entries
         .iter()
         .rev()
-        .find(|e| e.source == twitch_1337_core::ai::chat_history::ChatHistorySource::Bot)
+        .find(|e| e.source == ChatHistorySource::Bot)
         .expect("bot history entry");
     assert_eq!(entry.agent, Some(Agent::Grok));
     assert_eq!(entry.display_name.as_deref(), Some("Grok"));
@@ -62,7 +80,7 @@ async fn ai_fallback_reply_is_tagged_aurora() {
     let entry = entries
         .iter()
         .rev()
-        .find(|e| e.source == twitch_1337_core::ai::chat_history::ChatHistorySource::Bot)
+        .find(|e| e.source == ChatHistorySource::Bot)
         .expect("bot history entry");
     assert_eq!(entry.agent, Some(Agent::Aurora));
     assert_eq!(entry.display_name.as_deref(), Some("Aurora"));
@@ -98,6 +116,73 @@ async fn mouth_echo_does_not_double_log_or_run_commands() {
         bot.primary_history_len().await,
         0,
         "mouth echo must not be ingested into chat history"
+    );
+
+    bot.shutdown().await;
+}
+
+/// End-to-end Helix reply: a configured mouth speaks over Helix (no utility
+/// IRC `say`), the turn is recorded once under the mouth's login + logical
+/// agent, and when Twitch fans that same message back over the utility bot's
+/// IRC connection it is suppressed instead of logged a second time.
+///
+/// The second echo injection is the load-bearing one: it carries the spoken
+/// `message_id` but a *stranger's* login/user-id, so the mouth-identity
+/// backstop cannot match it. Only the pending-id path registered by
+/// `EchoGuard::register` can suppress it.
+#[tokio::test]
+async fn helix_reply_records_once_and_suppresses_echo() {
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
+        })
+        .with_fake_mouth(Agent::Grok, "grok_bot", "77", "spoken-id-1")
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("nuh uh");
+
+    bot.send("viewer", "@grok is water wet").await;
+
+    // Viewer trigger + bot reply. The mouth swallowed the send, so nothing
+    // goes out over the utility IRC connection.
+    let entries = wait_history_len(&bot, 2).await;
+    let entry = entries
+        .iter()
+        .rev()
+        .find(|e| e.source == ChatHistorySource::Bot)
+        .expect("bot history entry");
+    assert_eq!(entry.agent, Some(Agent::Grok));
+    assert_eq!(entry.username, "grok_bot");
+    assert_eq!(entry.text, "nuh uh");
+    let n_before = entries.len();
+
+    // Twitch fans the Helix send back over IRC from the mouth account.
+    bot.send_privmsg_with_id("grok_bot", "77", "spoken-id-1", "nuh uh")
+        .await;
+    // Same message id, unknown sender: the identity backstop cannot fire, so
+    // this row only stays out if the pending-id registration is live.
+    bot.send_privmsg_with_id("relay_account", "999", "spoken-id-1", "nuh uh")
+        .await;
+    // Barrier: an ordinary line injected after both echoes. Once it lands in
+    // history the handler has necessarily drained past them, so the absence
+    // of echo rows is a decision, not a race.
+    bot.send("viewer", "still here").await;
+
+    let entries = wait_history_len(&bot, n_before + 1).await;
+    assert_eq!(
+        entries.iter().filter(|e| e.username == "grok_bot").count(),
+        1,
+        "mouth-account echo must not add a second row: {entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|e| e.username == "relay_account"),
+        "pending message id must suppress the echo without the identity backstop: {entries:?}"
+    );
+    assert_eq!(
+        entries.len(),
+        n_before + 1,
+        "only the barrier line may be appended: {entries:?}"
     );
 
     bot.shutdown().await;
