@@ -21,6 +21,7 @@ use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::{DreamerExecutor, DreamerExecutorOpts, dreamer_tools};
 use crate::ai::memory::transcript::TranscriptWriter;
 use crate::settings::SettingsHandle;
+use crate::twitch::mouth::Agent;
 
 /// Resolve `run_at` on `date` to a Berlin `DateTime`, bumping forward across the
 /// spring-forward DST gap (02:00–03:00 on the last Sunday in March) when the
@@ -135,10 +136,10 @@ pub async fn run_ritual(
             ai_channel_history: None,
             ai_channel_login: None,
             invocation_channel: InvocationChannel::Primary,
+            self_logins: Vec::new(),
             // Dreamer never renders recent_chat (no history buffers supplied),
-            // so these are never read; pass empties to satisfy the type.
-            bot_login: String::new(),
-            persona_name: String::new(),
+            // so this is never read; the value is arbitrary.
+            current_agent: Agent::Aurora,
             // Dreamer has no speaker. Empty string + no history buffers
             // tells build_chat_turn_context to skip the chat-window scope
             // filter so the dreamer still sees every user file in its

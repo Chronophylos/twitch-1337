@@ -129,6 +129,13 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     /// Twitch broadcaster user id for 7TV EventAPI subscription. `None` when
     /// Helix resolve failed — ingest stays off without aborting the bot.
     pub twitch_channel_id: Option<String>,
+
+    /// Per-agent Helix chat-send mouths, built at startup from configured
+    /// mouth accounts (`crate::twitch::mouth_setup::build_mouths`).
+    pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
+    /// Echo suppression for the bot's own AI mouths, sharing the same
+    /// identities `build_mouths` collected.
+    pub echo: Arc<crate::twitch::echo::EchoGuard>,
 }
 
 /// Spawn every long-running handler task in the order they currently
@@ -171,6 +178,8 @@ where
         started_at,
         emote_tracker,
         twitch_channel_id,
+        mouths,
+        echo,
     } = deps;
 
     let ping_actor = tokio::spawn(run_ping_actor(ping_actor_rx, ping_manager, ping_names_tx));
@@ -268,8 +277,9 @@ where
         let rx = broadcast_tx.subscribe();
         let w = Arc::new(t);
         let ch = config.twitch.channel.clone();
+        let echo_tap = echo.clone();
         Some(tokio::spawn(async move {
-            crate::twitch::handlers::transcript::run_transcript_tap(rx, w, ch).await;
+            crate::twitch::handlers::transcript::run_transcript_tap(rx, w, ch, echo_tap).await;
         }))
     } else {
         None
@@ -282,8 +292,10 @@ where
             let settings = settings.clone();
             let channel = config.twitch.channel.clone();
             let bot_username = config.twitch.username.clone();
+            let echo_usage = echo.clone();
             tokio::spawn(async move {
-                run_emote_usage_handler(rx, handle, settings, channel, bot_username).await;
+                run_emote_usage_handler(rx, handle, settings, channel, bot_username, echo_usage)
+                    .await;
             })
         }
         None => tokio::spawn(std::future::pending::<()>()),
@@ -298,8 +310,9 @@ where
         let hos = hall_of_shame.clone();
         let clk = clock.clone();
         let dd = data_dir.clone();
+        let echo_tracker = echo.clone();
         async move {
-            run_1337_handler(btx, sender, channel, lat, lb, hos, clk, dd).await;
+            run_1337_handler(btx, sender, channel, lat, lb, hos, clk, dd, echo_tracker).await;
         }
     });
 
@@ -335,6 +348,8 @@ where
                 emote_tracker,
                 primary_history_tap,
                 started_at,
+                mouths,
+                echo,
             })
             .await;
         }

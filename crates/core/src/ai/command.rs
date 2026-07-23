@@ -27,6 +27,7 @@ use crate::ai::model_catalog::ModelCatalog;
 use crate::commands::{Command, CommandContext};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
+use crate::twitch::mouth::{Agent, SpeakError};
 use crate::twitch::seventv::SevenTvEmoteProvider;
 
 /// Chat history buffers and channel logins for `!ai`. Both buffers share the
@@ -111,6 +112,8 @@ pub struct AiCommand {
     bot_username: String,
     doener: Arc<crate::doener::DoeneratlasClient>,
     model_catalog: Arc<ModelCatalog>,
+    mouths: Arc<crate::twitch::mouth::MouthRouter>,
+    echo: Arc<crate::twitch::echo::EchoGuard>,
     /// Per-process nonce stamped into memory fences. Stable across
     /// turns so the memory block is a byte-stable cache prefix; the real
     /// fence-injection guard is `scrub_for_inject`, not nonce freshness.
@@ -127,6 +130,8 @@ pub struct AiCommandDeps {
     pub bot_username: String,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
     pub model_catalog: Arc<ModelCatalog>,
+    pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
+    pub echo: Arc<crate::twitch::echo::EchoGuard>,
 }
 
 pub const GROK_ALIAS_TRIGGER: &str = "@grok";
@@ -168,6 +173,8 @@ impl AiCommand {
             bot_username: deps.bot_username,
             doener: deps.doener,
             model_catalog: deps.model_catalog,
+            mouths: deps.mouths,
+            echo: deps.echo,
             prompt_nonce: inject::fresh_nonce(),
         }
     }
@@ -327,6 +334,13 @@ where
     async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
         let user = &ctx.privmsg.sender.login;
         let grok_alias = is_grok_alias(ctx.trigger);
+        // Which logical agent is speaking this turn. Drives chat-history
+        // `(self)` tagging; Task 4 threads this into mouth selection too.
+        let agent = if grok_alias {
+            Agent::Grok
+        } else {
+            Agent::Aurora
+        };
 
         if let Some(remaining) = self.cooldown.check(user).await {
             debug!(user = %user, remaining_secs = remaining.as_secs(), "AI command on cooldown");
@@ -393,6 +407,11 @@ where
             )
         };
         let persona_name = snap.ai.behavior.persona_name.clone();
+        let display_name = if grok_alias {
+            snap.ai.grok.persona_name.clone()
+        } else {
+            persona_name.clone()
+        };
         drop(snap);
 
         let model_display = self.model_catalog.display_name(&connection, &model).await;
@@ -454,8 +473,12 @@ where
             ai_channel_history: cc.and_then(|c| c.ai_channel_history.clone()),
             ai_channel_login: cc.and_then(|c| c.ai_channel_login.clone()),
             invocation_channel,
-            bot_login: self.bot_username.clone(),
-            persona_name: persona_name.clone(),
+            current_agent: agent,
+            // Every login the bot speaks under. Only used to rescue `(self)` on
+            // prefilled rows, which carry no agent tag.
+            self_logins: std::iter::once(self.bot_username.to_ascii_lowercase())
+                .chain(self.echo.mouth_logins().iter().cloned())
+                .collect(),
             speaker_login: ctx.privmsg.sender.login.clone(),
         };
 
@@ -606,14 +629,44 @@ where
             let line = clean_user_facing_ai_response(&text).to_string();
             if !line.is_empty() {
                 let ts = Utc::now();
-                ctx.sender.reply(ctx.privmsg, line.clone()).await;
+                let req = crate::twitch::mouth::SpeakRequest {
+                    broadcaster_id: &ctx.privmsg.channel_id,
+                    channel_login: &ctx.privmsg.channel_login,
+                    text: line.clone(),
+                    reply_parent_message_id: Some(ctx.privmsg.message_id.clone()),
+                };
+                let (recorded_login, message_id) = match self.mouths.speak(agent, req).await {
+                    Ok(crate::twitch::mouth::SpeakOutcome::Spoken(spoken)) => {
+                        if let Some(id) = spoken.message_id.as_deref() {
+                            self.echo.register(id).await;
+                        }
+                        (spoken.login, spoken.message_id)
+                    }
+                    Ok(crate::twitch::mouth::SpeakOutcome::NoMouth) => {
+                        ctx.sender.reply(ctx.privmsg, line.clone()).await;
+                        (self.bot_username.clone(), None)
+                    }
+                    Err(e) => {
+                        error!(error = ?e, agent = ?agent, "mouth speak failed");
+                        // Out of v1: no auto-fallback resend (double-speak risk). No history write.
+                        // A short notice is not a resend — Err means chat saw nothing — and the
+                        // realistic failure (mouth timed out, channel-restricted) is persistent,
+                        // so without this the command is a black hole for every user.
+                        ctx.sender
+                            .reply(ctx.privmsg, user_facing_mouth_message(&e))
+                            .await;
+                        return Ok(());
+                    }
+                };
+                let _ = message_id; // reserved for future dashboard/debug surfacing
                 if let Some(ref chat) = self.chat_ctx {
                     chat.buffer_for(&ctx.privmsg.channel_login)
                         .lock()
                         .await
                         .push_bot_with_identity_at(
-                            self.bot_username.clone(),
-                            Some(&persona_name),
+                            recorded_login.clone(),
+                            Some(&display_name),
+                            agent,
                             line.clone(),
                             ts,
                         );
@@ -621,10 +674,7 @@ where
                 let is_primary_source =
                     !cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));
                 if is_primary_source
-                    && let Err(e) = mem
-                        .transcript
-                        .append_line(ts, &self.bot_username, &line)
-                        .await
+                    && let Err(e) = mem.transcript.append_line(ts, &recorded_login, &line).await
                 {
                     error!(error = ?e, "transcript bot-reply append failed");
                 }
@@ -632,6 +682,21 @@ where
         }
 
         Ok(())
+    }
+}
+
+/// Map a mouth send failure to a short German chat reply, sent over the
+/// utility bot's IRC connection.
+///
+/// Unlike the LLM mapper below there is no silent case: a mouth failure means
+/// the answer exists but chat never saw it, and the common causes (the mouth
+/// account timed out, or a channel restriction) persist until someone
+/// intervenes. Staying quiet would make `!ai` and `@grok` look broken with no
+/// signal outside the logs.
+fn user_facing_mouth_message(err: &SpeakError) -> &'static str {
+    match err {
+        SpeakError::Dropped { .. } => "Twitch hat die Antwort verschluckt Stare",
+        _ => "KI-Account kann gerade nicht reden FeelsBadMan",
     }
 }
 

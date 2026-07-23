@@ -229,6 +229,9 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 Some(v) => v.clone(),
                 None => defaults.grok.service_tier.clone(),
             },
+            // No override plumbing in v1 — baked default only (brief: dashboard
+            // field is optional / not yet wired).
+            persona_name: defaults.grok.persona_name.clone(),
         },
         prefill: resolve_prefill(defaults.prefill.as_ref(), &o.prefill),
         web: resolve_web(defaults.web.as_ref(), &o.web),

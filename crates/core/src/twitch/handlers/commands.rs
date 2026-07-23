@@ -52,6 +52,15 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub channel: String,
     pub data_dir: std::path::PathBuf,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
+    /// Per-agent Helix chat-send mouths, built at startup from configured
+    /// mouth accounts. A mouth without a configured account (or one whose
+    /// Helix setup failed) is `None`; the reply path routes through it and
+    /// falls back to utility IRC via `SpeakOutcome::NoMouth`.
+    pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
+    /// Echo suppression for the bot's own AI mouths; registered on speak so
+    /// the reply path (and other broadcast consumers) can recognize its own
+    /// outgoing messages coming back over the broadcast channel.
+    pub echo: Arc<crate::twitch::echo::EchoGuard>,
     pub suspension_manager: Arc<SuspensionManager>,
     /// Pre-built 7TV emote provider. `None` disables emote grounding for `!ai`.
     pub emote_provider: Option<Arc<SevenTvEmoteProvider>>,
@@ -98,6 +107,8 @@ where
         emote_tracker,
         primary_history_tap,
         started_at,
+        mouths,
+        echo,
     } = cfg;
 
     let ping_handle = PingHandle::new(ping_actor_tx);
@@ -309,6 +320,8 @@ where
                 bot_username: bot_username.clone(),
                 doener: doener.clone(),
                 model_catalog,
+                mouths: mouths.clone(),
+                echo: echo.clone(),
             },
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
@@ -354,6 +367,7 @@ where
         primary_history,
         ai_channel_history,
         suspension_manager,
+        echo,
     )
     .await;
 }
@@ -405,6 +419,7 @@ pub(crate) async fn run_command_dispatcher<T, L>(
     primary_history_for_dispatch: Option<ChatHistory>,
     ai_channel_history_for_dispatch: Option<ChatHistory>,
     suspension_manager: Arc<SuspensionManager>,
+    echo: Arc<crate::twitch::echo::EchoGuard>,
 ) where
     T: Transport,
     L: LoginCredentials,
@@ -439,7 +454,16 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                 } else {
                     primary_history_for_dispatch.as_ref()
                 };
-                if let Some(buffer) = target_buffer {
+                let is_mouth = echo.is_mouth(&privmsg.sender.id, &privmsg.sender.login);
+                let skip_history = is_mouth
+                    || echo
+                        .is_echo(
+                            &privmsg.sender.id,
+                            &privmsg.sender.login,
+                            &privmsg.message_id,
+                        )
+                        .await;
+                if let Some(buffer) = target_buffer.filter(|_| !skip_history) {
                     let display_name = Some(privmsg.sender.name.as_str()).filter(|s| !s.is_empty());
                     let user_id = Some(privmsg.sender.id.as_str()).filter(|s| !s.is_empty());
                     buffer.lock().await.push_user_with_identity_at(
@@ -449,6 +473,10 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                         privmsg.message_text.clone(),
                         privmsg.server_timestamp,
                     );
+                }
+                if is_mouth {
+                    // Mouths are speak-only: never dispatch a command from their own echo.
+                    continue;
                 }
 
                 let Some(invocation) = command_invocation(&privmsg.message_text) else {

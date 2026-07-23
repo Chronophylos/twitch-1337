@@ -109,13 +109,34 @@ pub struct AiDreamer {
     pub max_writes_per_turn: usize,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiGrok {
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     /// OpenRouter service tier hint for `@grok` turns. Falls back to
     /// `connection.service_tier` when `None`.
     pub service_tier: Option<String>,
+    /// Persona name for the `@grok` alias, used in chat-history identity push
+    /// and chat-line rendering (mirrors `AiBehavior::persona_name` for
+    /// Aurora). Defaults to `"Grok"`. `#[serde(default = ...)]` keeps v1
+    /// settings.ron reads forward-compatible without a migration sentinel.
+    #[serde(default = "default_grok_persona_name")]
+    pub persona_name: String,
+}
+
+impl Default for AiGrok {
+    fn default() -> Self {
+        Self {
+            model: None,
+            reasoning_effort: None,
+            service_tier: None,
+            persona_name: default_grok_persona_name(),
+        }
+    }
+}
+
+fn default_grok_persona_name() -> String {
+    "Grok".to_string()
 }
 
 /// Prefill config — `threshold` is `f64` compared as bits to allow `Eq`.
@@ -306,6 +327,12 @@ mod tests {
     fn ai_behavior_default_has_persona_aurora() {
         let b = AiBehavior::default();
         assert_eq!(b.persona_name, "Aurora");
+    }
+
+    #[test]
+    fn ai_grok_persona_name_defaults_to_grok() {
+        let g = crate::settings::ai::AiGrok::default();
+        assert_eq!(g.persona_name, "Grok");
     }
 
     /// ADR-0003 renamed state -> scratch. Every settings.ron in the wild was

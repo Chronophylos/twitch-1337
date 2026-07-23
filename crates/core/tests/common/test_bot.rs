@@ -24,6 +24,8 @@ use twitch_1337::{
     load_hall_of_shame, load_leaderboard,
     ping::{PingHandle, ping_actor_channel_full},
     run_bot,
+    twitch::echo::{EchoGuard, MouthIdentities},
+    twitch::mouth::{Agent, Mouth, MouthRouter, SpeakError, SpeakRequest, SpokenMessage},
     twitch::whisper::{self, WhisperError, WhisperSender},
 };
 use twitch_irc::login::StaticLoginCredentials;
@@ -84,6 +86,8 @@ pub struct TestBotBuilder {
     open_emote_tracker: bool,
     emote_catalog_seed: Vec<(String, String)>,
     emote_set_event_seed: Vec<twitch_1337::emote_tracker::NewSetEvent>,
+    mouth_identity: Option<(String, String)>,
+    fake_mouths: Vec<(Agent, FakeMouth)>,
 }
 
 impl TestBotBuilder {
@@ -100,6 +104,8 @@ impl TestBotBuilder {
             open_emote_tracker: false,
             emote_catalog_seed: Vec::new(),
             emote_set_event_seed: Vec::new(),
+            mouth_identity: None,
+            fake_mouths: Vec::new(),
         }
     }
 
@@ -180,6 +186,39 @@ impl TestBotBuilder {
     /// Override the Döneratlas API base URL (wiremock) for `!dpi` / `!döner` / AI tool.
     pub fn with_doener_base_url(mut self, base: impl Into<String>) -> Self {
         self.doener_base_url = Some(base.into());
+        self
+    }
+
+    /// Register a fixed AI-mouth identity (login + user id) in the
+    /// `EchoGuard` for this test, bypassing production `build_mouths` (which
+    /// does live Helix I/O tests can't perform). The `MouthRouter` itself is
+    /// wired empty (`aurora: None, grok: None`) since these tests only need
+    /// echo suppression, not an actual speak path.
+    pub fn with_mouth_identity(mut self, login: &str, user_id: &str) -> Self {
+        self.mouth_identity = Some((login.to_string(), user_id.to_string()));
+        self
+    }
+
+    /// Install a stub `Mouth` for `agent` that reports every send as
+    /// delivered under `login` with Helix message id `message_id`, and
+    /// register `{login, user_id}` in the `EchoGuard` identities the way
+    /// production `build_mouths` would. Replaces the real Helix adapter so
+    /// the reply path can be driven end to end without network I/O.
+    pub fn with_fake_mouth(
+        mut self,
+        agent: Agent,
+        login: &str,
+        user_id: &str,
+        message_id: &str,
+    ) -> Self {
+        self.fake_mouths.push((
+            agent,
+            FakeMouth {
+                login: login.to_string(),
+                user_id: user_id.to_string(),
+                message_id: message_id.to_string(),
+            },
+        ));
         self
     }
 
@@ -435,6 +474,7 @@ impl TestBotBuilder {
             telemetry: telemetry_store.clone(),
             emote_tracker,
             twitch_channel_id: None,
+            mouths_override: build_mouths_override(self.mouth_identity, self.fake_mouths),
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -526,6 +566,25 @@ impl TestBot {
     /// on the numeric speaker id rather than the display name.
     pub async fn send_privmsg_as(&self, user: &str, user_id: &str, text: &str) {
         let line = privmsg_with(&self.channel, user, text, &[("user-id", user_id)]);
+        self.transport.inject.send(line).await.expect("inject");
+    }
+
+    /// Inject a PRIVMSG with caller-supplied `user-id` and `id` (the Twitch
+    /// message id) tags. Used by echo tests to replay a message the bot's own
+    /// mouth sent, carrying the message id Helix reported back.
+    pub async fn send_privmsg_with_id(
+        &self,
+        user: &str,
+        user_id: &str,
+        message_id: &str,
+        text: &str,
+    ) {
+        let line = privmsg_with(
+            &self.channel,
+            user,
+            text,
+            &[("user-id", user_id), ("id", message_id)],
+        );
         self.transport.inject.send(line).await.expect("inject");
     }
 
@@ -621,6 +680,13 @@ impl TestBot {
             Some(history) => history.lock().await.snapshot(),
             None => Vec::new(),
         }
+    }
+
+    /// Entry count of the primary chat-history buffer. Used by echo-guard
+    /// tests that only need to assert "did this message get recorded at
+    /// all", not inspect specific entries.
+    pub async fn primary_history_len(&self) -> usize {
+        self.primary_history_snapshot().await.len()
     }
 
     /// Flip the shared `irc_connected` flag. Used by web smoke tests since
@@ -750,6 +816,71 @@ impl TestBot {
         .await
         .expect("ritual ok");
     }
+}
+
+/// Stub `Mouth`: performs no I/O and reports every send as delivered under a
+/// fixed login + Helix message id, so tests can drive the post-speak
+/// bookkeeping (history row, `EchoGuard::register`) without a Helix server.
+pub struct FakeMouth {
+    login: String,
+    user_id: String,
+    message_id: String,
+}
+
+#[async_trait]
+impl Mouth for FakeMouth {
+    async fn speak(
+        &self,
+        _req: SpeakRequest<'_>,
+    ) -> std::result::Result<SpokenMessage, SpeakError> {
+        Ok(SpokenMessage {
+            message_id: Some(self.message_id.clone()),
+            login: self.login.clone(),
+        })
+    }
+
+    fn login(&self) -> &str {
+        &self.login
+    }
+}
+
+/// Assemble the `Services::mouths_override` pair from the builder's mouth
+/// configuration. `None` when the test configured neither an identity nor a
+/// fake mouth, so `run_bot` falls back to production `build_mouths`.
+fn build_mouths_override(
+    identity: Option<(String, String)>,
+    fake_mouths: Vec<(Agent, FakeMouth)>,
+) -> Option<(Arc<MouthRouter>, Arc<EchoGuard>)> {
+    if identity.is_none() && fake_mouths.is_empty() {
+        return None;
+    }
+
+    let mut identities = MouthIdentities::default();
+    let mut register = |login: &str, user_id: &str| {
+        identities.logins.insert(login.to_ascii_lowercase());
+        identities.user_ids.insert(user_id.to_owned());
+    };
+    if let Some((login, user_id)) = &identity {
+        register(login, user_id);
+    }
+    for (_, mouth) in &fake_mouths {
+        register(&mouth.login, &mouth.user_id);
+    }
+
+    let mut router = MouthRouter {
+        aurora: None,
+        grok: None,
+    };
+    for (agent, mouth) in fake_mouths {
+        let mouth: Arc<dyn Mouth> = Arc::new(mouth);
+        match agent {
+            Agent::Aurora => router.aurora = Some(mouth),
+            Agent::Grok => router.grok = Some(mouth),
+            Agent::Utility => panic!("Agent::Utility has no mouth — it speaks over utility IRC"),
+        }
+    }
+
+    Some((Arc::new(router), Arc::new(EchoGuard::new(identities))))
 }
 
 #[derive(Debug, Clone)]

@@ -9,9 +9,10 @@ use llm::Message;
 use rand::Rng as _;
 use tokio::sync::Mutex;
 
-use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry, ChatHistorySource};
+use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry};
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::types::FileKind;
+use crate::twitch::mouth::Agent;
 
 const FENCE_OPEN: &str = "<<<FILE";
 const FENCE_CLOSE: &str = "<<<ENDFILE";
@@ -144,8 +145,15 @@ pub struct BuildOpts {
     pub ai_channel_history: Option<Arc<Mutex<ChatHistoryBuffer>>>,
     pub ai_channel_login: Option<String>,
     pub invocation_channel: InvocationChannel,
-    pub bot_login: String,
-    pub persona_name: String,
+    /// Which agent is speaking this turn. Drives the `(self)` tag in rendered
+    /// recent-chat lines: a line is self iff `entry.agent == Some(current_agent)`.
+    pub current_agent: Agent,
+    /// Lowercased logins the bot speaks under: the utility account plus any
+    /// configured mouths. Only consulted for entries with `agent: None`, which
+    /// is what `ChatHistoryBuffer::from_prefill` produces — recovered history
+    /// carries no agent tag, so without this the bot reads its own past lines
+    /// back as a stranger's for the whole prefill window after a restart.
+    pub self_logins: Vec<String>,
     /// Lowercased Twitch login of the user that triggered this turn (i.e.
     /// `!ai` invoker). Empty string for the dreamer ritual (no speaker).
     /// Used by [`build_chat_turn_context`] to scope the injected user-file
@@ -185,8 +193,8 @@ async fn render_recent_chat(opts: &BuildOpts) -> RecentChat {
         opts.primary_history.as_ref(),
         &opts.primary_login,
         RECENT_CHAT_PRIMARY_BYTES,
-        &opts.bot_login,
-        &opts.persona_name,
+        opts.current_agent,
+        &opts.self_logins,
     )
     .await;
     let ai_rendered = match (
@@ -198,8 +206,8 @@ async fn render_recent_chat(opts: &BuildOpts) -> RecentChat {
                 Some(buf),
                 login,
                 RECENT_CHAT_AI_CHANNEL_BYTES,
-                &opts.bot_login,
-                &opts.persona_name,
+                opts.current_agent,
+                &opts.self_logins,
             )
             .await
         }
@@ -434,8 +442,8 @@ async fn render_recent_section(
     buf: Option<&Arc<Mutex<ChatHistoryBuffer>>>,
     login: &str,
     cap: usize,
-    bot_login: &str,
-    persona_name: &str,
+    current_agent: Agent,
+    self_logins: &[String],
 ) -> Option<RenderedRecentSection> {
     let buf = buf?;
     let snapshot: Vec<ChatHistoryEntry> = buf.lock().await.snapshot();
@@ -447,7 +455,7 @@ async fn render_recent_section(
     let mut usernames: Vec<String> = Vec::new();
     let mut bytes = 0usize;
     for entry in snapshot.iter().rev() {
-        let line = format_entry_line(entry, bot_login, persona_name);
+        let line = format_entry_line(entry, current_agent, self_logins);
         let line_bytes = line.len() + 1;
         if bytes + line_bytes > cap {
             break;
@@ -466,18 +474,28 @@ async fn render_recent_section(
     Some(RenderedRecentSection { body, usernames })
 }
 
-fn format_entry_line(entry: &ChatHistoryEntry, bot_login: &str, persona_name: &str) -> String {
+fn format_entry_line(
+    entry: &ChatHistoryEntry,
+    current_agent: Agent,
+    self_logins: &[String],
+) -> String {
     let ts = entry.timestamp.with_timezone(&Berlin).format("%H:%M");
-    let is_self =
-        entry.source == ChatHistorySource::Bot || entry.username.eq_ignore_ascii_case(bot_login);
-    if is_self {
-        return format!("[{ts}] {persona_name} (self): {}", entry.text);
-    }
     let name = entry
         .display_name
         .as_deref()
         .filter(|s| !s.is_empty())
         .unwrap_or(entry.username.as_str());
+    // Tagged rows are authoritative. Untagged ones only come from prefill, where
+    // the speaking agent was never recorded, so fall back to the login.
+    let is_self = match entry.agent {
+        Some(agent) => agent == current_agent,
+        None => self_logins
+            .iter()
+            .any(|l| l.eq_ignore_ascii_case(&entry.username)),
+    };
+    if is_self {
+        return format!("[{ts}] {name} (self): {}", entry.text);
+    }
     format!("[{ts}] {name}: {}", entry.text)
 }
 
@@ -556,6 +574,7 @@ mod tests {
     use arc_swap::ArcSwap;
 
     use super::*;
+    use crate::ai::chat_history::ChatHistorySource;
     use crate::ai::memory::store::MemoryStore;
     use crate::ai::memory::types::FileKind;
     use crate::settings::Settings;
@@ -569,9 +588,10 @@ mod tests {
             user_id: None,
             text: "gemerkt".into(),
             source: ChatHistorySource::Bot,
+            agent: Some(Agent::Aurora),
             timestamp: chrono::Utc::now(),
         };
-        let line = format_entry_line(&entry, "chronophylosbot", "Aurora");
+        let line = format_entry_line(&entry, Agent::Aurora, &[]);
         assert!(line.ends_with(" Aurora (self): gemerkt"), "got: {line}");
     }
 
@@ -584,9 +604,10 @@ mod tests {
             user_id: Some("141690010".into()),
             text: "hi".into(),
             source: ChatHistorySource::User,
+            agent: None,
             timestamp: chrono::Utc::now(),
         };
-        let line = format_entry_line(&entry, "chronophylosbot", "Aurora");
+        let line = format_entry_line(&entry, Agent::Aurora, &[]);
         assert!(line.ends_with(" MagieDisplay: hi"), "got: {line}");
     }
 
@@ -599,10 +620,74 @@ mod tests {
             user_id: None,
             text: "?".into(),
             source: ChatHistorySource::User,
+            agent: None,
             timestamp: chrono::Utc::now(),
         };
-        let line = format_entry_line(&entry, "chronophylosbot", "Aurora");
+        let line = format_entry_line(&entry, Agent::Aurora, &[]);
         assert!(line.ends_with(" lurker42: ?"), "got: {line}");
+    }
+
+    #[test]
+    fn grok_line_on_aurora_turn_is_not_self() {
+        use crate::twitch::mouth::Agent;
+        let ts = chrono::Utc::now();
+        let grok_entry = ChatHistoryEntry {
+            seq: 1,
+            username: "grok_bot".into(),
+            display_name: Some("Grok".into()),
+            user_id: None,
+            text: "nuh uh".into(),
+            source: ChatHistorySource::Bot,
+            agent: Some(Agent::Grok),
+            timestamp: ts,
+        };
+        let line = format_entry_line(&grok_entry, Agent::Aurora, &[]);
+        assert!(line.ends_with(" Grok: nuh uh"), "got: {line}");
+
+        let aurora_entry = ChatHistoryEntry {
+            agent: Some(Agent::Aurora),
+            ..grok_entry.clone()
+        };
+        let line = format_entry_line(&aurora_entry, Agent::Aurora, &[]);
+        assert!(line.contains(" Grok (self): "), "got: {line}");
+    }
+
+    /// Prefilled history carries `agent: None` (the speaking agent was never
+    /// recorded), so after a restart the bot would read its own past lines back
+    /// as a stranger's for the whole prefill window without the login fallback.
+    #[test]
+    fn format_entry_line_untagged_bot_login_is_self() {
+        let ts = chrono::Utc::now();
+        let prefilled = ChatHistoryEntry {
+            seq: 1,
+            username: "GrokBot".into(),
+            display_name: None,
+            user_id: None,
+            text: "nuh uh".into(),
+            source: ChatHistorySource::User,
+            agent: None,
+            timestamp: ts,
+        };
+        let self_logins = vec!["chronophylosbot".to_string(), "grokbot".to_string()];
+
+        // Case-insensitive, and it does not matter which agent is speaking now:
+        // the tag is only about whether the bot said it.
+        let line = format_entry_line(&prefilled, Agent::Aurora, &self_logins);
+        assert!(line.contains(" GrokBot (self): "), "got: {line}");
+        let line = format_entry_line(&prefilled, Agent::Grok, &self_logins);
+        assert!(line.contains(" GrokBot (self): "), "got: {line}");
+
+        // A real viewer stays a third party.
+        let viewer = ChatHistoryEntry {
+            username: "someviewer".into(),
+            ..prefilled.clone()
+        };
+        let line = format_entry_line(&viewer, Agent::Aurora, &self_logins);
+        assert!(line.ends_with(" someviewer: nuh uh"), "got: {line}");
+
+        // An empty list is the pre-mouths behavior: nothing is self.
+        let line = format_entry_line(&prefilled, Agent::Aurora, &[]);
+        assert!(line.ends_with(" GrokBot: nuh uh"), "got: {line}");
     }
 
     fn test_handle() -> crate::settings::SettingsHandle {
@@ -624,8 +709,8 @@ mod tests {
             ai_channel_history: None,
             ai_channel_login: None,
             invocation_channel: InvocationChannel::Primary,
-            bot_login: "bot".into(),
-            persona_name: "Aurora".into(),
+            current_agent: Agent::Aurora,
+            self_logins: Vec::new(),
             speaker_login: speaker_login.into(),
         }
     }
@@ -997,8 +1082,8 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
-                bot_login: "bot".into(),
-                persona_name: "Aurora".into(),
+                current_agent: Agent::Aurora,
+                self_logins: Vec::new(),
                 speaker_login: String::new(),
             },
         )
@@ -1046,8 +1131,8 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
-                bot_login: "bot".into(),
-                persona_name: "Aurora".into(),
+                current_agent: Agent::Aurora,
+                self_logins: Vec::new(),
                 // Empty speaker + None history: dreamer-style path, no
                 // chat-window scope filter is applied, so the byte-budget
                 // ordering this test exercises remains in force.
@@ -1093,8 +1178,8 @@ mod tests {
                 ai_channel_history: Some(ai.clone()),
                 ai_channel_login: Some("ai_chan".into()),
                 invocation_channel: InvocationChannel::AiChannel,
-                bot_login: "bot".into(),
-                persona_name: "Aurora".into(),
+                current_agent: Agent::Aurora,
+                self_logins: Vec::new(),
                 speaker_login: String::new(),
             },
         )
@@ -1146,8 +1231,8 @@ mod tests {
                 ai_channel_history: Some(ai),
                 ai_channel_login: Some("ai_chan".into()),
                 invocation_channel: InvocationChannel::Primary,
-                bot_login: "bot".into(),
-                persona_name: "Aurora".into(),
+                current_agent: Agent::Aurora,
+                self_logins: Vec::new(),
                 speaker_login: String::new(),
             },
         )
@@ -1189,8 +1274,8 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
-                bot_login: "bot".into(),
-                persona_name: "Aurora".into(),
+                current_agent: Agent::Aurora,
+                self_logins: Vec::new(),
                 speaker_login: String::new(),
             },
         )
@@ -1267,8 +1352,8 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
-                bot_login: "bot".into(),
-                persona_name: "Aurora".into(),
+                current_agent: Agent::Aurora,
+                self_logins: Vec::new(),
                 speaker_login: "alice".into(),
             },
         )
@@ -1323,8 +1408,8 @@ mod tests {
                 ai_channel_history: None,
                 ai_channel_login: None,
                 invocation_channel: InvocationChannel::Primary,
-                bot_login: "bot".into(),
-                persona_name: "Aurora".into(),
+                current_agent: Agent::Aurora,
+                self_logins: Vec::new(),
                 speaker_login: "carol".into(),
             },
         )
@@ -1468,8 +1553,8 @@ mod tests {
             ai_channel_history: None,
             ai_channel_login: None,
             invocation_channel: InvocationChannel::Primary,
-            bot_login: "bot".into(),
-            persona_name: "Aurora".into(),
+            current_agent: Agent::Aurora,
+            self_logins: Vec::new(),
             speaker_login: String::new(),
         };
 

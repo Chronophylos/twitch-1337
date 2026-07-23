@@ -25,6 +25,20 @@ client_secret = "your_client_secret"
 # (admin_channel, ai_channel), and expected_latency now live in the
 # dashboard (`/settings → Twitch · Permissions` and `Twitch · Channels`).
 
+# Optional: distinct Twitch accounts for the AI agents' outbound chat (Helix
+# speak-only; they do NOT join IRC). Omit a section to fall back to the utility
+# bot's IRC voice for that agent. Each mouth needs a user access token authorized
+# against the SAME Twitch app (shared client_id/client_secret) with scope
+# `user:write:chat` ONLY. Refreshed tokens are persisted per mouth to
+# $DATA_DIR/token-aurora.ron and $DATA_DIR/token-grok.ron. Adding or removing a
+# mouth takes effect on the next bot restart.
+# [twitch.mouths.aurora]
+# username = "aurora_bot"
+# refresh_token = "..."
+# [twitch.mouths.grok]
+# username = "grok_bot"
+# refresh_token = "..."
+
 # Optional: Aviationstack metadata enrichment for !track.
 # The api_key is a secret and stays in config.toml. Enable + base_url +
 # timeout_secs are managed in the dashboard (`/settings → Aviationstack`).
