@@ -189,6 +189,11 @@ pub(crate) async fn wait_until_schedule(clock: &dyn Clock, hour: u32, minute: u3
 
 /// Sleeps until a specific time today in Europe/Berlin timezone.
 ///
+/// When `expected_latency > 0`, wakes that many milliseconds early so an
+/// immediately following outbound `say()` tends to land on the wall-clock
+/// target in chat. Pass `0` when the wake closes an inbound scoring window —
+/// latency compensation must not truncate collection.
+///
 /// If the target time has already passed, returns immediately.
 #[instrument(skip(clock))]
 pub(crate) async fn sleep_until_hms(
@@ -210,8 +215,12 @@ pub(crate) async fn sleep_until_hms(
     let now_utc = clock.now_utc();
     if target > now_utc {
         info!(
+            hour,
+            minute,
+            second,
+            expected_latency,
             wait_seconds = (target - now_utc).num_seconds(),
-            "Waiting until 13:38 to post stats"
+            "Waiting until scheduled HMS"
         );
         clock.sleep_until(target).await;
     }
@@ -557,15 +566,11 @@ pub async fn run_1337_handler<T, L>(
         info!("Posting reminder to channel");
         sender.say(channel.clone(), "PausersHype").await;
 
-        // Wait until 13:38 to post stats
-        sleep_until_hms(
-            clock.as_ref(),
-            TARGET_HOUR,
-            TARGET_MINUTE + 1,
-            0,
-            latency.load(Ordering::Relaxed),
-        )
-        .await;
+        // Close the scoring window at exact 13:38:00 wall — do not subtract
+        // latency. Compensated early wake is only for outbound appearance
+        // (reminder above); cutting the monitor early drops late qualifying
+        // messages (e.g. hall-of-shame finishes in the last EMA ms of :37).
+        sleep_until_hms(clock.as_ref(), TARGET_HOUR, TARGET_MINUTE + 1, 0, 0).await;
 
         // Abort the monitor and wait for it to fully stop before reading results
         monitor_handle.abort();
