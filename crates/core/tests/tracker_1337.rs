@@ -459,3 +459,57 @@ async fn tracker_1337_zero_users_posts_erm_or_fuh() {
 
     bot.shutdown().await;
 }
+
+/// Regression: latency compensation must not close the scoring window early.
+///
+/// With expected_latency=200 the compensated wake is 13:37:59.800. A message
+/// stamped at 13:37:59.900 (still inside :37) that arrives after that wake
+/// must still count — otherwise hall-of-shame finishes get dropped.
+#[tokio::test]
+async fn tracker_1337_counts_message_after_compensated_wake_before_true_138() {
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .with_settings(|o| {
+            o.twitch.expected_latency = Some(200);
+        })
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    // 13:36:30 → 13:37:59.800 (past compensated 13:38−200ms, before true :00).
+    bot.clock.advance(ChronoDuration::milliseconds(89_800));
+    yield_a_bit().await;
+
+    let msg_late = privmsg_at(
+        &bot.channel,
+        "chronophylos",
+        "1337 DANKIES",
+        TMI_TS_13_37_BERLIN + 59_900,
+    );
+    bot.transport
+        .inject
+        .send(msg_late)
+        .await
+        .expect("inject late window message");
+    yield_a_bit().await;
+
+    // Reach true 13:38:00 — scoring window closes, stats post.
+    bot.clock.advance(ChronoDuration::milliseconds(200));
+    yield_a_bit().await;
+
+    let stats = bot.expect_say(Duration::from_secs(3)).await;
+    assert!(
+        stats.contains("chronophylos"),
+        "late-window chatter must be counted despite latency compensation, got: {stats}"
+    );
+    assert!(
+        stats.contains("Am langsamsten war chronophylos"),
+        "expected hall-of-shame-eligible slowest announce, got: {stats}"
+    );
+
+    bot.shutdown().await;
+}
