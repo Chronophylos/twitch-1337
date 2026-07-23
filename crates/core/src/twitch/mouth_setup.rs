@@ -133,8 +133,11 @@ async fn resolve_user_id<L: LoginCredentials>(
         .token
         .ok_or_else(|| eyre::eyre!("missing access token"))?;
 
+    // build_mouths is awaited inline in run_bot before any handler is spawned:
+    // an untimed GET here would hang startup with no handlers and no log line.
     let http = reqwest::Client::builder()
         .user_agent(crate::util::APP_USER_AGENT)
+        .timeout(crate::twitch::mouth::HELIX_TIMEOUT)
         .build()
         .wrap_err("failed to build Twitch Get Users HTTP client")?;
 

@@ -4,7 +4,7 @@
 
 use twitch_1337_core::twitch::mouth::{HelixMouth, Mouth, SpeakError, SpeakRequest};
 use twitch_irc::login::StaticLoginCredentials;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 async fn build_test_helix_mouth(base_url: &str) -> HelixMouth<StaticLoginCredentials> {
@@ -48,8 +48,68 @@ async fn helix_send_success_returns_message_id() {
     assert_eq!(spoken.login, "aurora_bot");
 }
 
+/// Reply threading is the whole point of a mouth answering a viewer, and it
+/// only exists on the wire — nothing downstream reads it back.
 #[tokio::test]
-async fn helix_send_not_sent_yields_no_message_id() {
+async fn helix_send_puts_reply_parent_and_ids_on_the_wire() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/helix/chat/messages"))
+        .and(body_partial_json(serde_json::json!({
+            "broadcaster_id": "1",
+            "sender_id": "9001",
+            "message": "hi",
+            "reply_parent_message_id": "parent-42"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{ "message_id": "abc123", "is_sent": true }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mouth = build_test_helix_mouth(&server.uri()).await;
+    let spoken = mouth
+        .speak(SpeakRequest {
+            reply_parent_message_id: Some("parent-42".into()),
+            ..req()
+        })
+        .await
+        .expect("speak");
+    assert_eq!(spoken.message_id.as_deref(), Some("abc123"));
+}
+
+/// Helix answers 200 but drops the message (AutoMod hold, channel
+/// restriction, banned sender). Chat never saw it, so it must surface as an
+/// error — otherwise the caller writes a history + transcript row for a
+/// message that was never spoken, and the dreamer reads it back as a memory.
+#[tokio::test]
+async fn helix_send_not_sent_is_dropped_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/helix/chat/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{
+                "message_id": "abc123",
+                "is_sent": false,
+                "drop_reason": { "code": "channel_settings", "message": "follower mode" }
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let mouth = build_test_helix_mouth(&server.uri()).await;
+    let error = mouth.speak(req()).await.unwrap_err();
+    let SpeakError::Dropped { code, message } = error else {
+        panic!("expected Dropped, got {error:?}");
+    };
+    assert_eq!(code.as_deref(), Some("channel_settings"));
+    assert_eq!(message.as_deref(), Some("follower mode"));
+}
+
+/// Twitch omits `drop_reason` on some drops; the error must still fire.
+#[tokio::test]
+async fn helix_send_not_sent_without_reason_is_still_dropped() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/helix/chat/messages"))
@@ -60,8 +120,10 @@ async fn helix_send_not_sent_yields_no_message_id() {
         .await;
 
     let mouth = build_test_helix_mouth(&server.uri()).await;
-    let spoken = mouth.speak(req()).await.unwrap();
-    assert!(spoken.message_id.is_none());
+    assert!(matches!(
+        mouth.speak(req()).await.unwrap_err(),
+        SpeakError::Dropped { code: None, .. }
+    ));
 }
 
 #[tokio::test]

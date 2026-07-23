@@ -6,6 +6,7 @@
 use std::{
     fmt::{self, Display},
     sync::Arc,
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -14,6 +15,10 @@ use serde::Serialize;
 use twitch_irc::login::LoginCredentials;
 
 use crate::util::APP_USER_AGENT;
+
+/// Ceiling on any single Helix call made by a mouth. Without it a hung
+/// connection blocks the caller forever.
+pub(crate) const HELIX_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -30,6 +35,7 @@ pub struct SpeakRequest<'a> {
     pub reply_parent_message_id: Option<String>,
 }
 
+#[derive(Debug)]
 pub struct SpokenMessage {
     pub message_id: Option<String>,
     pub login: String,
@@ -48,6 +54,14 @@ pub enum SpeakError {
         status: reqwest::StatusCode,
         body: String,
     },
+    /// Helix accepted the request (HTTP 200) but did not deliver the message:
+    /// `is_sent: false`, typically an AutoMod hold, a channel restriction, or
+    /// the mouth account being banned/timed out. Chat never saw it, so this is
+    /// a failure — callers must not record history or transcript rows.
+    Dropped {
+        code: Option<String>,
+        message: Option<String>,
+    },
     Http(reqwest::Error),
 }
 
@@ -59,6 +73,12 @@ impl Display for SpeakError {
             Self::Api { status, body } => {
                 write!(f, "Twitch chat-send API returned {status}: {body}")
             }
+            Self::Dropped { code, message } => write!(
+                f,
+                "Twitch dropped the chat message: {} ({})",
+                message.as_deref().unwrap_or("no reason given"),
+                code.as_deref().unwrap_or("no code")
+            ),
             Self::Http(e) => write!(f, "Twitch chat-send request failed: {e}"),
         }
     }
@@ -121,8 +141,11 @@ impl<L: LoginCredentials> HelixMouth<L> {
         login: String,
         base_url: String,
     ) -> Result<Self> {
+        // Commands run inline in the dispatcher loop: an untimed POST here
+        // would wedge every command, not just this one.
         let http = reqwest::Client::builder()
             .user_agent(APP_USER_AGENT)
+            .timeout(HELIX_TIMEOUT)
             .build()
             .wrap_err("failed to build Twitch chat-send HTTP client")?;
 
@@ -198,12 +221,20 @@ impl<L: LoginCredentials> Mouth for HelixMouth<L> {
         }
 
         let parsed: SendChatResponse = response.json().await?;
-        let sent = parsed.data.into_iter().next();
-        let message_id = sent
-            .filter(|datum| datum.is_sent)
-            .and_then(|datum| datum.message_id);
+        let Some(datum) = parsed.data.into_iter().next() else {
+            return Err(SpeakError::Dropped {
+                code: None,
+                message: Some("empty data array".into()),
+            });
+        };
+        if !datum.is_sent {
+            let (code, message) = datum
+                .drop_reason
+                .map_or((None, None), |r| (Some(r.code), r.message));
+            return Err(SpeakError::Dropped { code, message });
+        }
         Ok(SpokenMessage {
-            message_id,
+            message_id: datum.message_id,
             login: self.login.clone(),
         })
     }
@@ -223,6 +254,14 @@ struct SendChatDatum {
     message_id: Option<String>,
     #[serde(default)]
     is_sent: bool,
+    #[serde(default)]
+    drop_reason: Option<DropReason>,
+}
+
+#[derive(serde::Deserialize)]
+struct DropReason {
+    code: String,
+    message: Option<String>,
 }
 
 #[cfg(test)]
