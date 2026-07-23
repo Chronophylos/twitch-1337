@@ -126,6 +126,19 @@ log` on `main` is the release history. The workspace version stays at
 
 `[twitch]` holds OAuth credentials (`refresh_token`, `client_id`, `client_secret`), `channel`, `username`, and `owner` (optional Twitch user ID with full dashboard access). `owner` is bootstrap-only and lives here because it gates the settings page — it must not be editable from the thing it controls. Permission lists (`hidden_admins`, `viewer_allowlist`), channel pointers (`admin_channel`, `ai_channel`), and `expected_latency` live in `settings.ron`, managed via `/settings → Twitch · Permissions` and `Twitch · Channels`. `admin_channel` and `ai_channel` changes require a bot restart. Mods always pass the dashboard auth check; `viewer_allowlist` grants read-only access to non-mods.
 
+`[twitch.mouths.aurora]` and `[twitch.mouths.grok]` are optional bootstrap
+sections giving the two AI agents their own Twitch accounts for outbound chat.
+Each holds `username` + `refresh_token` (`SecretString`, `Deserialize`-only like
+the rest of config.toml). Both use the bot's `client_id`/`client_secret`, so the
+tokens must be authorized against the same Twitch app, with scope
+`user:write:chat` and nothing else. Refreshed tokens persist per mouth to
+`$DATA_DIR/token-aurora.ron` and `$DATA_DIR/token-grok.ron`. The router is built
+once at startup, so adding or removing a mouth needs a bot restart. A mouth that
+is absent or fails to build is skipped and that agent replies through the
+utility bot's IRC connection instead. The persona name each agent speaks under
+lives in `settings.ron`: `ai.behavior.persona_name` (default `"Aurora"`) and
+`ai.grok.persona_name` (default `"Grok"`).
+
 `[ai]` carries only the API key. Backend, model, base URL, memory caps,
 dreamer schedule, web/emote/media tool toggles, history caps, and every
 other runtime knob live in the dashboard (`/settings`, owner only) and
@@ -170,7 +183,7 @@ OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config
 
 ## Data dir
 
-All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `pings.ron`, `leaderboard.ron`, `hall_of_shame.ron`, `flights.ron`, `feedback.txt`. Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/scratch/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt templates are *not* here — they're baked into the binary from `crates/data/assets/prompts/` (`include_str!` via `twitch-1337-data`, single source of truth; see `docs/ai-prompts.md`).
+All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `token-aurora.ron`, `token-grok.ron` (per-mouth, only when that mouth is configured), `pings.ron`, `leaderboard.ron`, `hall_of_shame.ron`, `flights.ron`, `feedback.txt`. Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/scratch/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt templates are *not* here — they're baked into the binary from `crates/data/assets/prompts/` (`include_str!` via `twitch-1337-data`, single source of truth; see `docs/ai-prompts.md`).
 
 Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `flight_tracker.rs`.
 
@@ -196,6 +209,7 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - Latency monitor: PING/PONG every 5min, EMA alpha=0.2, shared `Arc<AtomicU32>`. Read by 1337 handler for precise wake-up.
 - Flight tracker: `Arc<mpsc::Sender<TrackerCommand>>` from commands to long task. Adaptive poll 30/60/120s based on phase mix. adsb.lol v2; fallback aggregators in memory `reference_adsb_aggregators.md`.
 - AI memory (v2): per-user character sheets + chat LORE + bot SOUL as markdown under $DATA_DIR/memories/. Single-loop !ai turn drives the model with write_file/write_scratch/delete_scratch tools (run_agent in the llm crate); the model's final assistant text is sent to chat verbatim. Daily dreamer ritual rewrites files from yesterday's transcript at the dashboard-configured `ai.dreamer.run_at` (Berlin local). Per ADR-0003, Memory (SOUL/LORE/users) and Scratch (`memories/scratch/`) are siblings, not tiers of one thing; see CONTEXT.md. Bodies are byte-capped (SOUL/user 4 KiB, LORE 12 KiB, scratch 2 KiB by default; tunable via the dashboard `AI · Memory` card). `@grok` uses a separate baked prompt (`grok.md`) instead of `system.md` and gets no injected memory bodies: its system message carries a paths-only manifest plus a grok-only `read_memory(path)` tool, allowlisted against the manifest paths. SOUL.md stays dreamer-only for both agents: it's never in grok's manifest, and no chat turn on either alias can write it.
+- AI mouths speak over Helix `POST /helix/chat/messages` and never join IRC, so their messages come back in over the normal broadcast channel. `EchoGuard` (`crates/core/src/twitch/echo.rs`) keeps them out of the bot's own input. Two mechanisms, both needed: the Helix `message_id` of every sent reply is registered and peeked on the way back (30s TTL, 512 cap, peeked not removed — the transcript tap and the command dispatcher each check the same id), plus a mouth login/user-id identity backstop for when the id doesn't match. History and transcript writes use `is_echo` (both mechanisms); command dispatch, the 1337 tracker, and emote counting use `is_mouth` (identity only) so a viewer can never be filtered by a stale pending id. Neither is dead code.
 - Scheduled messages: list loaded from `settings.ron` into `ScheduleCache`; the `run_schedule_settings_sync` task subscribes to `SettingsStore`'s change-`Notify` and updates the cache when the dashboard saves. The message handler polls the cache every 30s. On Ctrl+C, main notifies `Arc<Notify>`; children finish in-flight `say()` then exit; main awaits handler with 5s timeout.
 
 ## Gotchas
