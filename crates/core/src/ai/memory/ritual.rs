@@ -136,6 +136,7 @@ pub async fn run_ritual(
             ai_channel_history: None,
             ai_channel_login: None,
             invocation_channel: InvocationChannel::Primary,
+            self_logins: Vec::new(),
             // Dreamer never renders recent_chat (no history buffers supplied),
             // so this is never read; the value is arbitrary.
             current_agent: Agent::Aurora,

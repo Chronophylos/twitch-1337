@@ -27,7 +27,7 @@ use crate::ai::model_catalog::ModelCatalog;
 use crate::commands::{Command, CommandContext};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
-use crate::twitch::mouth::Agent;
+use crate::twitch::mouth::{Agent, SpeakError};
 use crate::twitch::seventv::SevenTvEmoteProvider;
 
 /// Chat history buffers and channel logins for `!ai`. Both buffers share the
@@ -474,6 +474,11 @@ where
             ai_channel_login: cc.and_then(|c| c.ai_channel_login.clone()),
             invocation_channel,
             current_agent: agent,
+            // Every login the bot speaks under. Only used to rescue `(self)` on
+            // prefilled rows, which carry no agent tag.
+            self_logins: std::iter::once(self.bot_username.to_ascii_lowercase())
+                .chain(self.echo.mouth_logins().iter().cloned())
+                .collect(),
             speaker_login: ctx.privmsg.sender.login.clone(),
         };
 
@@ -644,6 +649,12 @@ where
                     Err(e) => {
                         error!(error = ?e, agent = ?agent, "mouth speak failed");
                         // Out of v1: no auto-fallback resend (double-speak risk). No history write.
+                        // A short notice is not a resend — Err means chat saw nothing — and the
+                        // realistic failure (mouth timed out, channel-restricted) is persistent,
+                        // so without this the command is a black hole for every user.
+                        ctx.sender
+                            .reply(ctx.privmsg, user_facing_mouth_message(&e))
+                            .await;
                         return Ok(());
                     }
                 };
@@ -671,6 +682,21 @@ where
         }
 
         Ok(())
+    }
+}
+
+/// Map a mouth send failure to a short German chat reply, sent over the
+/// utility bot's IRC connection.
+///
+/// Unlike the LLM mapper below there is no silent case: a mouth failure means
+/// the answer exists but chat never saw it, and the common causes (the mouth
+/// account timed out, or a channel restriction) persist until someone
+/// intervenes. Staying quiet would make `!ai` and `@grok` look broken with no
+/// signal outside the logs.
+fn user_facing_mouth_message(err: &SpeakError) -> &'static str {
+    match err {
+        SpeakError::Dropped { .. } => "Twitch hat die Antwort verschluckt Stare",
+        _ => "KI-Account kann gerade nicht reden FeelsBadMan",
     }
 }
 
