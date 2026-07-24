@@ -36,10 +36,12 @@ channel-REST-only semantics path). Active Catalog write SoR and global-REST
 membership rules from ADR-0004/0005 otherwise stand. ADR-0004’s path name is
 superseded by `emotes.db`.
 
-**Deprecated bridges** (filename rename-on-open, dual gitignore, TOML as seed-only
-input) follow [ADR-0009](0009-migrations-and-deprecations.md): mark with
+**Deprecated bridges** (filename rename-on-open, dual gitignore) follow
+[ADR-0009](0009-migrations-and-deprecations.md): mark with
 `DEPRECATED(emote-meanings)` / `MIGRATION(emote-meanings)` and feature exit
 criteria in the design spec table. Cleanup PRs delete by grep once criteria hold.
+The one-shot TOML→SQLite seed and baked `7tv_emotes.toml` were removed after the
+prod seed landed (exit criteria met).
 
 ## Consequences
 
@@ -48,5 +50,7 @@ criteria in the design spec table. Cleanup PRs delete by grep once criteria hold
 - **+** Filename matches the store’s broader role; existing installs migrate via
   rename-on-open.
 - **+** Globals can have meaning rows without polluting the channel catalog.
-- **−** AI emotes are unavailable when the tracker is down or unseeded.
-- **−** Operators must run the one-shot seed (and later curation) per environment.
+- **−** AI emotes are unavailable when the tracker is down or `emote_meanings` is
+  empty.
+- **−** New meaning rows need curation (or a future importer); the bake-file seed
+  path is gone.
