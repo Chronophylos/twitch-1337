@@ -74,17 +74,26 @@ pub struct TestBot {
     bot_task: Option<JoinHandle<EyreResult<()>>>,
 }
 
+#[derive(Clone)]
+pub struct EmoteMeaningSeed {
+    pub emote_id: String,
+    pub appearance: String,
+    pub meaning: Option<String>,
+    pub usage: Option<String>,
+    pub avoid: Option<String>,
+}
+
 pub struct TestBotBuilder {
     config: Configuration,
     now: DateTime<Utc>,
     seeded_leaderboard: Option<HashMap<String, PersonalBest>>,
     seeded_hall_of_shame: Option<HashMap<String, PersonalWorst>>,
     whisper_failure: bool,
-    emote_glossary_override: Option<String>,
     doener_base_url: Option<String>,
     settings_overrides: Option<twitch_1337::settings::SettingsOverrides>,
     open_emote_tracker: bool,
     emote_catalog_seed: Vec<(String, String)>,
+    emote_meanings_seed: Vec<EmoteMeaningSeed>,
     emote_set_event_seed: Vec<twitch_1337::emote_tracker::NewSetEvent>,
     mouth_identity: Option<(String, String)>,
     fake_mouths: Vec<(Agent, FakeMouth)>,
@@ -98,22 +107,22 @@ impl TestBotBuilder {
             seeded_leaderboard: None,
             seeded_hall_of_shame: None,
             whisper_failure: false,
-            emote_glossary_override: None,
             doener_base_url: None,
             settings_overrides: None,
             open_emote_tracker: false,
             emote_catalog_seed: Vec::new(),
+            emote_meanings_seed: Vec::new(),
             emote_set_event_seed: Vec::new(),
             mouth_identity: None,
             fake_mouths: Vec::new(),
         }
     }
 
-    /// Inject a custom 7TV emote glossary TOML for this test run instead of
-    /// the baked production glossary. Lets tests assert on bespoke fixtures
-    /// (KEKW/LocalEmote/MissingEmote, etc.) without touching disk.
-    pub fn with_emote_glossary(mut self, toml: impl Into<String>) -> Self {
-        self.emote_glossary_override = Some(toml.into());
+    /// Seed `emote_meanings` rows for integration tests. Implies
+    /// [`Self::with_emote_tracker`].
+    pub fn with_emote_meanings(mut self, entries: &[EmoteMeaningSeed]) -> Self {
+        self.open_emote_tracker = true;
+        self.emote_meanings_seed = entries.to_vec();
         self
     }
 
@@ -425,6 +434,19 @@ impl TestBotBuilder {
                     .await
                     .expect("seed catalog");
             }
+            for meaning in &self.emote_meanings_seed {
+                handle
+                    .upsert_emote_meaning(
+                        &meaning.emote_id,
+                        &meaning.appearance,
+                        meaning.meaning.as_deref(),
+                        meaning.usage.as_deref(),
+                        meaning.avoid.as_deref(),
+                        0,
+                    )
+                    .await
+                    .expect("seed emote meaning");
+            }
             for event in &self.emote_set_event_seed {
                 handle
                     .insert_set_event(event.clone())
@@ -453,7 +475,6 @@ impl TestBotBuilder {
             data_dir: data_dir.path().to_path_buf(),
             settings: settings_handle.clone(),
             settings_store: settings_store.clone(),
-            emote_glossary_override: self.emote_glossary_override,
             irc_connected: irc_connected.clone(),
             web_spawner,
             ping_actor_tx,

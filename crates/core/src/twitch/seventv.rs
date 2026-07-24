@@ -1,7 +1,7 @@
-//! 7TV emote catalog + manual glossary support for AI prompt grounding.
+//! 7TV emote catalog + SQLite meanings for AI prompt grounding.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -12,7 +12,9 @@ use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 use crate::{
-    APP_USER_AGENT, emote_tracker::EmoteTrackerHandle, settings::SettingsHandle,
+    APP_USER_AGENT,
+    emote_tracker::{EmoteMeaningRow, EmoteTrackerHandle},
+    settings::SettingsHandle,
     settings::ai::AiEmotes,
 };
 
@@ -24,18 +26,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// catalog without bloating every prompt.
 pub const SEARCH_EMOTES_LIMIT: usize = 20;
 
-/// Manual glossary baked into the binary at build time. Curated alongside the
-/// rest of the codebase; updates ship with the binary, not as a runtime file.
-pub const BAKED_GLOSSARY_TOML: &str = twitch_1337_data::raw::SEVENTV_EMOTES_TOML;
-
 /// Lazily refreshes the available 7TV catalog and builds an LLM prompt block
-/// from the intersection with a manual glossary.
+/// from the tracker active catalog and global REST set joined to SQLite meanings.
 pub struct SevenTvEmoteProvider {
     settings: SettingsHandle,
     http: reqwest::Client,
     base_url: String,
-    glossary: Vec<GlossaryEmote>,
-    emote_tracker: Option<Arc<EmoteTrackerHandle>>,
+    emote_tracker: Arc<EmoteTrackerHandle>,
     cache: Mutex<PromptCache>,
 }
 
@@ -54,34 +51,13 @@ struct PromptCache {
     emotes: Option<Vec<PromptEmote>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct Glossary {
-    #[serde(default)]
-    emotes: Vec<GlossaryEmote>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct GlossaryEmote {
-    name: String,
-    meaning: String,
-    #[serde(default)]
-    usage: Option<String>,
-    #[serde(default)]
-    avoid: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PromptEmote {
     name: String,
-    meaning: String,
+    appearance: String,
+    meaning: Option<String>,
     usage: Option<String>,
     avoid: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct SevenTvUser {
-    #[serde(default)]
-    emote_set: Option<SevenTvEmoteSet>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -92,6 +68,7 @@ struct SevenTvEmoteSet {
 
 #[derive(Debug, Clone, Deserialize)]
 struct SevenTvEmote {
+    id: String,
     name: String,
 }
 
@@ -123,34 +100,21 @@ fn live_caps_from_handle(settings: &SettingsHandle) -> EmotesLiveCaps {
 }
 
 impl SevenTvEmoteProvider {
-    /// Build a provider from a [`SettingsHandle`], a TOML glossary string, and
-    /// an optional emote-tracker handle.
+    /// Build a provider from a [`SettingsHandle`] and the emote-tracker handle.
     ///
-    /// Production code passes [`BAKED_GLOSSARY_TOML`]; integration tests pass
-    /// a custom fixture. The glossary is parsed eagerly so malformed TOML
-    /// fails the bot at startup instead of silently disabling emotes.
-    ///
-    /// When `emote_tracker` is present and its active catalog is non-empty,
-    /// channel emote names are read from SQLite; otherwise the provider falls
-    /// back to the REST channel-set fetch. Globals always use REST.
+    /// Channel emote names come from the tracker's active catalog joined to
+    /// `emote_meanings`; globals are REST global ids ∩ meanings by id.
     ///
     /// `base_url` is resolved once at startup from the current snapshot;
     /// changing it requires a restart. All other emote knobs are read live
     /// per-call via [`Self::live_caps`].
-    pub fn new(
-        settings: SettingsHandle,
-        glossary_toml: &str,
-        emote_tracker: Option<Arc<EmoteTrackerHandle>>,
-    ) -> Result<Self> {
+    pub fn new(settings: SettingsHandle, emote_tracker: Arc<EmoteTrackerHandle>) -> Result<Self> {
         let snap = settings.load();
         let cfg = snap
             .ai
             .emotes
             .as_ref()
             .ok_or_else(|| eyre!("emotes not configured"))?;
-
-        let glossary: Glossary =
-            toml::from_str(glossary_toml).wrap_err("Failed to parse 7TV emote glossary")?;
 
         let http = reqwest::Client::builder()
             .user_agent(APP_USER_AGENT)
@@ -165,26 +129,10 @@ impl SevenTvEmoteProvider {
             .trim_end_matches('/')
             .to_string();
 
-        // Drop-with-warning: pins absent from the baked glossary can never
-        // appear in the prompt block (they're not catalog-backed entries), so
-        // surface them once at startup. Pins that ARE in the glossary but not
-        // in the live channel/global catalog this turn are handled silently at
-        // selection time — that's an expected, dynamic condition. The pinned
-        // set is live-rebindable, so a typo added later via the dashboard is
-        // caught on the next restart.
-        let missing = pins_missing_from_glossary(&cfg.pinned_emotes, &glossary.emotes);
-        if !missing.is_empty() {
-            warn!(
-                missing = ?missing,
-                "pinned 7TV emotes absent from the glossary; they will never appear in the prompt block"
-            );
-        }
-
         Ok(Self {
             settings,
             http,
             base_url,
-            glossary: glossary.emotes,
             emote_tracker,
             cache: Mutex::new(PromptCache::default()),
         })
@@ -270,31 +218,22 @@ impl SevenTvEmoteProvider {
 
     async fn refresh_prompt_emotes(
         &self,
-        twitch_channel_id: &str,
+        _twitch_channel_id: &str,
         caps: &EmotesLiveCaps,
     ) -> Result<Option<Vec<PromptEmote>>> {
-        if self.glossary.is_empty() {
-            debug!("7TV emote glossary is empty");
-            return Ok(None);
-        }
-
-        let available = self.fetch_available_emotes(twitch_channel_id, caps).await?;
-        let emotes = build_available_prompt_emotes(&self.glossary, &available);
-        Ok(emotes)
-    }
-
-    async fn fetch_available_emotes(
-        &self,
-        twitch_channel_id: &str,
-        caps: &EmotesLiveCaps,
-    ) -> Result<HashSet<String>> {
-        let mut global = Vec::new();
-        let mut channel = Vec::new();
         let mut had_error = false;
+        let mut emotes = match self.fetch_channel_prompt_emotes().await {
+            Ok(channel) => channel,
+            Err(e) => {
+                warn!(error = ?e, "Failed to read channel emote catalog from tracker");
+                had_error = true;
+                Vec::new()
+            }
+        };
 
         if caps.include_global {
-            match self.fetch_global_emotes().await {
-                Ok(emotes) => global = emotes,
+            match self.fetch_global_prompt_emotes().await {
+                Ok(global) => merge_prompt_emotes(&mut emotes, global),
                 Err(e) => {
                     warn!(error = ?e, "Failed to fetch global 7TV emotes");
                     had_error = true;
@@ -302,66 +241,81 @@ impl SevenTvEmoteProvider {
             }
         }
 
-        let mut used_tracker = false;
-        if let Some(tracker) = &self.emote_tracker {
-            match tracker.list_active_emotes().await {
-                Ok(active) if !active.is_empty() => {
-                    channel = active
-                        .into_iter()
-                        .filter_map(|row| {
-                            let name = row.name.trim().to_string();
-                            if name.is_empty() {
-                                None
-                            } else {
-                                Some(SevenTvEmote { name })
-                            }
-                        })
-                        .collect();
-                    used_tracker = true;
-                }
-                Ok(_) => {
-                    debug!("emote tracker catalog empty; falling back to REST channel fetch");
-                }
-                Err(e) => {
-                    warn!(
-                        error = ?e,
-                        "Failed to read emote tracker catalog; falling back to REST channel fetch"
-                    );
-                }
+        if emotes.is_empty() {
+            if had_error {
+                bail!("7TV emote catalog refresh failed and no entries are available");
+            }
+            debug!("7TV emote pool is empty after joining catalog with meanings");
+            return Ok(None);
+        }
+
+        Ok(Some(emotes))
+    }
+
+    async fn fetch_channel_prompt_emotes(&self) -> Result<Vec<PromptEmote>> {
+        let active = self.emote_tracker.list_active_emotes().await?;
+        if active.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let ids: Vec<String> = active.iter().map(|row| row.emote_id.clone()).collect();
+        let meanings = self.emote_tracker.list_emote_meanings_for_ids(&ids).await?;
+        let meaning_by_id: HashMap<&str, &EmoteMeaningRow> = meanings
+            .iter()
+            .map(|row| (row.emote_id.as_str(), row))
+            .collect();
+
+        let mut emotes = Vec::new();
+        for row in active {
+            let name = row.name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            let Some(meaning) = meaning_by_id.get(row.emote_id.as_str()) else {
+                continue;
+            };
+            if let Some(prompt) = prompt_emote_from_meaning(name, meaning) {
+                emotes.push(prompt);
             }
         }
 
-        if !used_tracker {
-            match self.fetch_channel_emotes(twitch_channel_id).await {
-                Ok(emotes) => channel = emotes,
-                Err(e) => {
-                    warn!(
-                        error = ?e,
-                        twitch_channel_id,
-                        "Failed to fetch channel 7TV emotes"
-                    );
-                    had_error = true;
-                }
+        Ok(emotes)
+    }
+
+    async fn fetch_global_prompt_emotes(&self) -> Result<Vec<PromptEmote>> {
+        let global = self.fetch_global_emotes().await?;
+        if global.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let ids: Vec<String> = global.iter().map(|emote| emote.id.clone()).collect();
+        let meanings = self.emote_tracker.list_emote_meanings_for_ids(&ids).await?;
+        let meaning_by_id: HashMap<&str, &EmoteMeaningRow> = meanings
+            .iter()
+            .map(|row| (row.emote_id.as_str(), row))
+            .collect();
+
+        let mut emotes = Vec::new();
+        for emote in global {
+            let name = emote.name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            let Some(meaning) = meaning_by_id.get(emote.id.as_str()) else {
+                continue;
+            };
+            if let Some(prompt) = prompt_emote_from_meaning(name, meaning) {
+                emotes.push(prompt);
             }
         }
 
-        if global.is_empty() && channel.is_empty() && had_error {
-            bail!("all configured 7TV catalog fetches failed");
-        }
-
-        Ok(merge_emote_sets(global, channel))
+        Ok(emotes)
     }
 
     async fn fetch_global_emotes(&self) -> Result<Vec<SevenTvEmote>> {
         let url = format!("{}/emote-sets/global", self.base_url);
         let set: SevenTvEmoteSet = self.get_json(&url).await?;
         Ok(set.emotes)
-    }
-
-    async fn fetch_channel_emotes(&self, twitch_channel_id: &str) -> Result<Vec<SevenTvEmote>> {
-        let url = format!("{}/users/twitch/{}", self.base_url, twitch_channel_id);
-        let user: SevenTvUser = self.get_json(&url).await?;
-        Ok(user.emote_set.map(|set| set.emotes).unwrap_or_default())
     }
 
     async fn get_json<T>(&self, url: &str) -> Result<T>
@@ -388,85 +342,56 @@ impl SevenTvEmoteProvider {
     }
 }
 
-fn merge_emote_sets(global: Vec<SevenTvEmote>, channel: Vec<SevenTvEmote>) -> HashSet<String> {
-    let mut available = HashSet::new();
-
-    for emote in global {
-        insert_available(&mut available, emote);
-    }
-    for emote in channel {
-        insert_available(&mut available, emote);
-    }
-
-    available
-}
-
-fn insert_available(available: &mut HashSet<String>, emote: SevenTvEmote) {
-    if emote.name.trim().is_empty() {
-        return;
-    }
-
-    available.insert(emote.name);
-}
-
-fn build_available_prompt_emotes(
-    glossary: &[GlossaryEmote],
-    available: &HashSet<String>,
-) -> Option<Vec<PromptEmote>> {
-    let mut seen = HashSet::new();
-    let mut emotes = Vec::new();
-    let mut stale_count = 0usize;
-
-    for emote in glossary {
-        let name = emote.name.trim();
-        if name.is_empty() || !seen.insert(name.to_string()) {
-            continue;
-        }
-
-        if !available.contains(name) {
-            stale_count += 1;
-            continue;
-        }
-
-        let meaning = normalize_prompt_field(&emote.meaning);
-        if meaning.is_empty() {
-            warn!(
-                emote = name,
-                "Skipping 7TV emote glossary entry with empty meaning"
-            );
-            continue;
-        }
-
-        let usage = emote
+fn is_usable_meaning(row: &EmoteMeaningRow) -> bool {
+    !normalize_prompt_field(&row.appearance).is_empty()
+        || row
+            .meaning
+            .as_deref()
+            .is_some_and(|value| !normalize_prompt_field(value).is_empty())
+        || row
             .usage
             .as_deref()
-            .map(normalize_prompt_field)
-            .filter(|s| !s.is_empty());
-        let avoid = emote
-            .avoid
-            .as_deref()
-            .map(normalize_prompt_field)
-            .filter(|s| !s.is_empty());
-        emotes.push(PromptEmote {
-            name: name.to_string(),
-            meaning,
-            usage,
-            avoid,
-        });
-    }
+            .is_some_and(|value| !normalize_prompt_field(value).is_empty())
+}
 
-    if stale_count > 0 {
-        debug!(
-            missing_count = stale_count,
-            "7TV emote glossary contains entries not present in the loaded catalog"
-        );
-    }
-
-    if emotes.is_empty() {
+fn prompt_emote_from_meaning(name: &str, row: &EmoteMeaningRow) -> Option<PromptEmote> {
+    if !is_usable_meaning(row) {
         return None;
     }
 
-    Some(emotes)
+    let appearance = normalize_prompt_field(&row.appearance);
+    let meaning = row
+        .meaning
+        .as_deref()
+        .map(normalize_prompt_field)
+        .filter(|value| !value.is_empty());
+    let usage = row
+        .usage
+        .as_deref()
+        .map(normalize_prompt_field)
+        .filter(|value| !value.is_empty());
+    let avoid = row
+        .avoid
+        .as_deref()
+        .map(normalize_prompt_field)
+        .filter(|value| !value.is_empty());
+
+    Some(PromptEmote {
+        name: name.to_string(),
+        appearance,
+        meaning,
+        usage,
+        avoid,
+    })
+}
+
+fn merge_prompt_emotes(channel: &mut Vec<PromptEmote>, global: Vec<PromptEmote>) {
+    let mut seen: HashSet<String> = channel.iter().map(|emote| emote.name.clone()).collect();
+    for emote in global {
+        if seen.insert(emote.name.clone()) {
+            channel.push(emote);
+        }
+    }
 }
 
 fn build_prompt_block(
@@ -508,13 +433,13 @@ fn build_prompt_block(
 ///    reflex emotes; only those present in the available set are injected
 ///    (absent pins are dropped). This guarantees soul-reflex emotes are always
 ///    in-window when they exist in the catalog.
-/// 2. **Scored** — anything seen in recent chat, or whose meaning/usage shares
-///    4+ char terms with the current instruction.
-/// 3. **Baseline fill** — glossary-order fallbacks, until at least
+/// 2. **Scored** — anything seen in recent chat, or whose name/appearance/meaning/usage
+///    shares 4+ char terms with the current instruction.
+/// 3. **Baseline fill** — pool-order fallbacks, until at least
 ///    `min_baseline_emotes` total are present, so the model always has a
 ///    baseline vocabulary.
 ///
-/// No emote appears in more than one layer (deduped by glossary index).
+/// No emote appears in more than one layer (deduped by pool index).
 fn select_prompt_emotes<'a>(
     emotes: &'a [PromptEmote],
     max_prompt_emotes: usize,
@@ -587,17 +512,6 @@ fn select_prompt_emotes<'a>(
     picked
 }
 
-/// Pinned names absent from the glossary — these can never be catalog-backed,
-/// so they are reported once at startup and skipped at selection time.
-fn pins_missing_from_glossary(pinned: &[String], glossary: &[GlossaryEmote]) -> Vec<String> {
-    let names: HashSet<&str> = glossary.iter().map(|g| g.name.trim()).collect();
-    pinned
-        .iter()
-        .filter(|p| !names.contains(p.trim()))
-        .cloned()
-        .collect()
-}
-
 /// Render the `search_emotes` tool result: up to `limit` ranked matches in the
 /// prompt-line format, or a graceful note when nothing matches.
 fn build_search_block(emotes: &[PromptEmote], query: &str, limit: usize) -> String {
@@ -620,9 +534,9 @@ fn build_search_block(emotes: &[PromptEmote], query: &str, limit: usize) -> Stri
 
 /// Rank the full available set against a free-text query, returning the top
 /// `limit` matches. Reuses the prompt-block term scorer (`searchable_terms` +
-/// `terms_match`) over name + meaning + usage, plus a strong bonus for a
-/// case-insensitive partial name match so the model can look an emote up by
-/// code. Zero-score entries are dropped (graceful empty when nothing matches).
+/// `terms_match`) over name + appearance + meaning + usage, plus a strong bonus
+/// for a case-insensitive partial name match so the model can look an emote up
+/// by code. Zero-score entries are dropped (graceful empty when nothing matches).
 fn select_search_emotes<'a>(
     emotes: &'a [PromptEmote],
     query: &str,
@@ -650,14 +564,7 @@ fn search_match_score(emote: &PromptEmote, query_terms: &[String], query_lc: &st
         score += 10;
     }
     if !query_terms.is_empty() {
-        let mut fields = emote.name.clone();
-        fields.push(' ');
-        fields.push_str(&emote.meaning);
-        if let Some(usage) = emote.usage.as_deref() {
-            fields.push(' ');
-            fields.push_str(usage);
-        }
-        let emote_terms = searchable_terms(&fields);
+        let emote_terms = searchable_terms(&searchable_fields(emote));
         score += query_terms
             .iter()
             .filter(|query| emote_terms.iter().any(|term| terms_match(query, term)))
@@ -667,7 +574,15 @@ fn search_match_score(emote: &PromptEmote, query_terms: &[String], query_lc: &st
 }
 
 fn format_prompt_emote_line(emote: &PromptEmote) -> String {
-    let mut line = format!("- {}: meaning={}", emote.name, emote.meaning);
+    let mut line = format!("- {}", emote.name);
+    if !emote.appearance.is_empty() {
+        line.push_str("; appearance=");
+        line.push_str(&emote.appearance);
+    }
+    if let Some(meaning) = emote.meaning.as_deref() {
+        line.push_str("; meaning=");
+        line.push_str(meaning);
+    }
     if let Some(usage) = emote.usage.as_deref() {
         line.push_str("; use=");
         line.push_str(usage);
@@ -704,17 +619,29 @@ fn context_match_score(emote: &PromptEmote, context_terms: &[String]) -> usize {
         return 0;
     }
 
-    let mut fields = emote.meaning.clone();
-    if let Some(usage) = emote.usage.as_deref() {
-        fields.push(' ');
-        fields.push_str(usage);
-    }
-    let emote_terms = searchable_terms(&fields);
+    let emote_terms = searchable_terms(&searchable_fields(emote));
 
     context_terms
         .iter()
         .filter(|query| emote_terms.iter().any(|term| terms_match(query, term)))
         .count()
+}
+
+fn searchable_fields(emote: &PromptEmote) -> String {
+    let mut fields = emote.name.clone();
+    if !emote.appearance.is_empty() {
+        fields.push(' ');
+        fields.push_str(&emote.appearance);
+    }
+    if let Some(meaning) = emote.meaning.as_deref() {
+        fields.push(' ');
+        fields.push_str(meaning);
+    }
+    if let Some(usage) = emote.usage.as_deref() {
+        fields.push(' ');
+        fields.push_str(usage);
+    }
+    fields
 }
 
 fn searchable_terms(text: &str) -> Vec<String> {
@@ -776,203 +703,100 @@ mod tests {
         let parsed: SevenTvEmoteSet = serde_json::from_value(json).unwrap();
 
         assert_eq!(parsed.emotes.len(), 2);
+        assert_eq!(parsed.emotes[0].id, "1");
         assert_eq!(parsed.emotes[0].name, "KEKW");
         assert_eq!(parsed.emotes[1].name, "peepoHappy");
     }
 
-    #[test]
-    fn parses_user_response_with_missing_emote_set() {
-        let json = serde_json::json!({
-            "id": "user",
-            "emote_set": null
-        });
+    fn prompt_emote(name: &str, appearance: &str) -> PromptEmote {
+        PromptEmote {
+            name: name.into(),
+            appearance: appearance.into(),
+            meaning: None,
+            usage: None,
+            avoid: None,
+        }
+    }
 
-        let parsed: SevenTvUser = serde_json::from_value(json).unwrap();
-
-        assert!(parsed.emote_set.is_none());
+    fn prompt_emote_full(
+        name: &str,
+        appearance: &str,
+        meaning: Option<&str>,
+        usage: Option<&str>,
+        avoid: Option<&str>,
+    ) -> PromptEmote {
+        PromptEmote {
+            name: name.into(),
+            appearance: appearance.into(),
+            meaning: meaning.map(str::to_string),
+            usage: usage.map(str::to_string),
+            avoid: avoid.map(str::to_string),
+        }
     }
 
     #[test]
-    fn merge_deduplicates_global_and_channel_emotes() {
-        let global = vec![SevenTvEmote {
-            name: "KEKW".into(),
-        }];
-        let channel = vec![SevenTvEmote {
-            name: "KEKW".into(),
-        }];
-
-        let merged = merge_emote_sets(global, channel);
-
-        assert_eq!(merged.len(), 1);
-        assert!(merged.contains("KEKW"));
-    }
-
-    #[test]
-    fn prompt_contains_only_glossary_entries_available_in_catalog() {
-        let glossary = vec![
-            GlossaryEmote {
-                name: "KEKW".into(),
-                meaning: "lachen".into(),
-                usage: Some("wenn etwas lustig ist".into()),
-                avoid: Some("ernste Themen".into()),
-            },
-            GlossaryEmote {
-                name: "Missing".into(),
-                meaning: "not available".into(),
-                usage: None,
-                avoid: None,
-            },
-        ];
-        let available = merge_emote_sets(
-            vec![SevenTvEmote {
-                name: "KEKW".into(),
-            }],
-            Vec::new(),
+    fn merge_prompt_emotes_deduplicates_by_name() {
+        let mut channel = vec![prompt_emote("KEKW", "laughing")];
+        merge_prompt_emotes(
+            &mut channel,
+            vec![
+                prompt_emote("KEKW", "duplicate"),
+                prompt_emote("Local", "insider"),
+            ],
         );
+        assert_eq!(channel.len(), 2);
+        assert_eq!(channel[0].name, "KEKW");
+        assert_eq!(channel[1].name, "Local");
+    }
 
-        let emotes = build_available_prompt_emotes(&glossary, &available).unwrap();
+    #[test]
+    fn usable_meaning_requires_non_empty_semantic_field() {
+        let row = EmoteMeaningRow {
+            emote_id: "e1".into(),
+            appearance: "   ".into(),
+            meaning: None,
+            usage: None,
+            avoid: Some("never".into()),
+            updated_at: 1,
+        };
+        assert!(!is_usable_meaning(&row));
+        assert!(prompt_emote_from_meaning("KEKW", &row).is_none());
+    }
+
+    #[test]
+    fn prompt_line_emits_only_non_empty_fields() {
+        let line = format_prompt_emote_line(&prompt_emote_full(
+            "KEKW",
+            "laughing face",
+            Some("lachen"),
+            Some("bei witzen"),
+            Some("ernste themen"),
+        ));
+        assert!(line.contains("- KEKW; appearance=laughing face"));
+        assert!(line.contains("meaning=lachen"));
+        assert!(line.contains("use=bei witzen"));
+        assert!(line.contains("avoid=ernste themen"));
+    }
+
+    #[test]
+    fn prompt_contains_only_catalog_backed_entries() {
+        let emotes = vec![prompt_emote_full(
+            "KEKW",
+            "lachen",
+            None,
+            Some("wenn etwas lustig ist"),
+            Some("ernste Themen"),
+        )];
         let prompt = build_prompt_block(&emotes, 40, 40, &[], "", "").unwrap();
 
         assert!(prompt.contains("KEKW"));
-        assert!(prompt.contains("meaning=lachen"));
+        assert!(prompt.contains("appearance=lachen"));
         assert!(!prompt.contains("Missing"));
     }
 
     #[test]
-    fn stale_glossary_entries_emit_one_debug_summary() {
-        use std::sync::{Arc, Mutex};
-        use tracing::{
-            Event, Level, Subscriber,
-            field::{Field, Visit},
-        };
-        use tracing_subscriber::{
-            layer::{Context, Layer},
-            prelude::*,
-        };
-
-        #[derive(Clone, Default)]
-        struct CaptureLayer {
-            events: Arc<Mutex<Vec<CapturedEvent>>>,
-        }
-
-        #[derive(Debug)]
-        struct CapturedEvent {
-            level: Level,
-            fields: Vec<(String, String)>,
-        }
-
-        #[derive(Default)]
-        struct FieldVisitor {
-            fields: Vec<(String, String)>,
-        }
-
-        impl Visit for FieldVisitor {
-            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                self.fields
-                    .push((field.name().to_string(), format!("{value:?}")));
-            }
-        }
-
-        impl<S> Layer<S> for CaptureLayer
-        where
-            S: Subscriber,
-        {
-            fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-                let mut visitor = FieldVisitor::default();
-                event.record(&mut visitor);
-                self.events.lock().unwrap().push(CapturedEvent {
-                    level: *event.metadata().level(),
-                    fields: visitor.fields,
-                });
-            }
-        }
-
-        let glossary = vec![
-            GlossaryEmote {
-                name: "KEKW".into(),
-                meaning: "laughter".into(),
-                usage: None,
-                avoid: None,
-            },
-            GlossaryEmote {
-                name: "MissingA".into(),
-                meaning: "missing".into(),
-                usage: None,
-                avoid: None,
-            },
-            GlossaryEmote {
-                name: "MissingB".into(),
-                meaning: "missing".into(),
-                usage: None,
-                avoid: None,
-            },
-        ];
-        let available = merge_emote_sets(
-            vec![SevenTvEmote {
-                name: "KEKW".into(),
-            }],
-            Vec::new(),
-        );
-        let capture = CaptureLayer::default();
-        let events = Arc::clone(&capture.events);
-        let subscriber = tracing_subscriber::registry().with(capture);
-
-        tracing::subscriber::with_default(subscriber, || {
-            let emotes = build_available_prompt_emotes(&glossary, &available).unwrap();
-            let prompt = build_prompt_block(&emotes, 40, 40, &[], "", "").unwrap();
-            assert!(prompt.contains("KEKW"));
-            assert!(!prompt.contains("MissingA"));
-            assert!(!prompt.contains("MissingB"));
-        });
-
-        let events = events.lock().unwrap();
-        let stale_events = events
-            .iter()
-            .filter(|event| {
-                event.fields.iter().any(|(name, value)| {
-                    name == "message"
-                        && value.contains(
-                            "7TV emote glossary contains entries not present in the loaded catalog",
-                        )
-                })
-            })
-            .collect::<Vec<_>>();
-
-        assert_eq!(stale_events.len(), 1);
-        assert_eq!(stale_events[0].level, Level::DEBUG);
-        assert!(
-            stale_events[0]
-                .fields
-                .iter()
-                .any(|(name, value)| name == "missing_count" && value == "2")
-        );
-    }
-
-    #[test]
     fn prompt_respects_max_prompt_emotes() {
-        let glossary = vec![
-            GlossaryEmote {
-                name: "A".into(),
-                meaning: "first".into(),
-                usage: None,
-                avoid: None,
-            },
-            GlossaryEmote {
-                name: "B".into(),
-                meaning: "second".into(),
-                usage: None,
-                avoid: None,
-            },
-        ];
-        let available = merge_emote_sets(
-            vec![
-                SevenTvEmote { name: "A".into() },
-                SevenTvEmote { name: "B".into() },
-            ],
-            Vec::new(),
-        );
-
-        let emotes = build_available_prompt_emotes(&glossary, &available).unwrap();
+        let emotes = vec![prompt_emote("A", "first"), prompt_emote("B", "second")];
         let prompt = build_prompt_block(&emotes, 1, 1, &[], "", "").unwrap();
 
         assert!(prompt.contains("A"));
@@ -981,32 +805,16 @@ mod tests {
 
     #[test]
     fn prompt_prioritizes_emotes_seen_in_recent_chat() {
-        let glossary = vec![
-            GlossaryEmote {
-                name: "KEKW".into(),
-                meaning: "lachen".into(),
-                usage: Some("wenn etwas lustig ist".into()),
-                avoid: None,
-            },
-            GlossaryEmote {
-                name: "LocalEmote".into(),
-                meaning: "lokaler Channel-Insider".into(),
-                usage: Some("wenn der Chat den Insider anspricht".into()),
-                avoid: None,
-            },
+        let emotes = vec![
+            prompt_emote_full("KEKW", "lachen", None, Some("wenn etwas lustig ist"), None),
+            prompt_emote_full(
+                "LocalEmote",
+                "lokaler Channel-Insider",
+                None,
+                Some("wenn der Chat den Insider anspricht"),
+                None,
+            ),
         ];
-        let available = merge_emote_sets(
-            vec![
-                SevenTvEmote {
-                    name: "KEKW".into(),
-                },
-                SevenTvEmote {
-                    name: "LocalEmote".into(),
-                },
-            ],
-            Vec::new(),
-        );
-        let emotes = build_available_prompt_emotes(&glossary, &available).unwrap();
 
         let prompt = build_prompt_block(
             &emotes,
@@ -1018,8 +826,8 @@ mod tests {
         )
         .unwrap();
 
-        let local_pos = prompt.find("- LocalEmote:").unwrap();
-        let kekw_pos = prompt.find("- KEKW:").unwrap();
+        let local_pos = prompt.find("- LocalEmote;").unwrap();
+        let kekw_pos = prompt.find("- KEKW;").unwrap();
         assert!(
             local_pos < kekw_pos,
             "recent chat emote should rank first:\n{prompt}"
@@ -1028,187 +836,87 @@ mod tests {
 
     #[test]
     fn prompt_prioritizes_context_matches_when_chat_is_neutral() {
-        let glossary = vec![
-            GlossaryEmote {
-                name: "LocalEmote".into(),
-                meaning: "lokaler Channel-Insider".into(),
-                usage: Some("wenn der Chat den Insider anspricht".into()),
-                avoid: None,
-            },
-            GlossaryEmote {
-                name: "KEKW".into(),
-                meaning: "lachen, etwas ist lustig".into(),
-                usage: Some("bei Witzen oder Fail-Momenten".into()),
-                avoid: None,
-            },
+        let emotes = vec![
+            prompt_emote_full(
+                "LocalEmote",
+                "lokaler Channel-Insider",
+                None,
+                Some("wenn der Chat den Insider anspricht"),
+                None,
+            ),
+            prompt_emote_full(
+                "KEKW",
+                "lachen",
+                Some("etwas ist lustig"),
+                Some("bei Witzen oder Fail-Momenten"),
+                None,
+            ),
         ];
-        let available = merge_emote_sets(
-            vec![
-                SevenTvEmote {
-                    name: "LocalEmote".into(),
-                },
-                SevenTvEmote {
-                    name: "KEKW".into(),
-                },
-            ],
-            Vec::new(),
-        );
-        let emotes = build_available_prompt_emotes(&glossary, &available).unwrap();
 
         let prompt = build_prompt_block(&emotes, 2, 2, &[], "sag etwas lustiges", "").unwrap();
 
-        let local_pos = prompt.find("- LocalEmote:").unwrap();
-        let kekw_pos = prompt.find("- KEKW:").unwrap();
+        let local_pos = prompt.find("- LocalEmote;").unwrap();
+        let kekw_pos = prompt.find("- KEKW;").unwrap();
         assert!(
             kekw_pos < local_pos,
-            "context-matching emote should outrank TOML order:\n{prompt}"
+            "context-matching emote should outrank pool order:\n{prompt}"
         );
     }
 
     #[test]
     fn prompt_drops_zero_score_emotes_when_baseline_is_zero() {
-        let glossary = vec![
-            GlossaryEmote {
-                name: "Hit".into(),
-                meaning: "lustig".into(),
-                usage: None,
-                avoid: None,
-            },
-            GlossaryEmote {
-                name: "Idle".into(),
-                meaning: "nichts dergleichen".into(),
-                usage: None,
-                avoid: None,
-            },
+        let emotes = vec![
+            prompt_emote("Hit", "lustig"),
+            prompt_emote("Idle", "nichts dergleichen"),
         ];
-        let available = merge_emote_sets(
-            vec![
-                SevenTvEmote { name: "Hit".into() },
-                SevenTvEmote {
-                    name: "Idle".into(),
-                },
-            ],
-            Vec::new(),
-        );
-        let emotes = build_available_prompt_emotes(&glossary, &available).unwrap();
 
-        // "lustig" matches the instruction terms; "Idle" scores zero.
         let prompt = build_prompt_block(&emotes, 8, 0, &[], "etwas lustiges", "").unwrap();
 
-        assert!(prompt.contains("- Hit:"));
+        assert!(prompt.contains("- Hit;"));
         assert!(
-            !prompt.contains("- Idle:"),
+            !prompt.contains("- Idle;"),
             "zero-score emote leaked through:\n{prompt}"
         );
     }
 
     #[test]
-    fn prompt_baseline_floor_fills_in_glossary_order_when_no_scoring_hits() {
-        let glossary = vec![
-            GlossaryEmote {
-                name: "First".into(),
-                meaning: "platzhalter".into(),
-                usage: None,
-                avoid: None,
-            },
-            GlossaryEmote {
-                name: "Second".into(),
-                meaning: "platzhalter".into(),
-                usage: None,
-                avoid: None,
-            },
-            GlossaryEmote {
-                name: "Third".into(),
-                meaning: "platzhalter".into(),
-                usage: None,
-                avoid: None,
-            },
+    fn prompt_baseline_floor_fills_in_pool_order_when_no_scoring_hits() {
+        let emotes = vec![
+            prompt_emote("First", "platzhalter"),
+            prompt_emote("Second", "platzhalter"),
+            prompt_emote("Third", "platzhalter"),
         ];
-        let available = merge_emote_sets(
-            vec![
-                SevenTvEmote {
-                    name: "First".into(),
-                },
-                SevenTvEmote {
-                    name: "Second".into(),
-                },
-                SevenTvEmote {
-                    name: "Third".into(),
-                },
-            ],
-            Vec::new(),
-        );
-        let emotes = build_available_prompt_emotes(&glossary, &available).unwrap();
 
-        // No instruction terms ≥4 chars and no recent chat → nothing scores.
         let prompt = build_prompt_block(&emotes, 8, 2, &[], "hi", "").unwrap();
 
-        // Exactly the baseline floor, in glossary order.
-        assert!(prompt.contains("- First:"));
-        assert!(prompt.contains("- Second:"));
+        assert!(prompt.contains("- First;"));
+        assert!(prompt.contains("- Second;"));
         assert!(
-            !prompt.contains("- Third:"),
+            !prompt.contains("- Third;"),
             "baseline floor exceeded:\n{prompt}"
         );
     }
 
     #[test]
     fn prompt_block_returns_none_when_max_prompt_emotes_is_zero() {
-        let glossary = vec![GlossaryEmote {
-            name: "A".into(),
-            meaning: "x".into(),
-            usage: None,
-            avoid: None,
-        }];
-        let available = merge_emote_sets(vec![SevenTvEmote { name: "A".into() }], Vec::new());
-        let emotes = build_available_prompt_emotes(&glossary, &available).unwrap();
-
+        let emotes = vec![prompt_emote("A", "x")];
         assert!(build_prompt_block(&emotes, 0, 0, &[], "hi", "").is_none());
-    }
-
-    // -----------------------------------------------------------------------
-    // Pinned-core tests
-    // -----------------------------------------------------------------------
-
-    fn glossary_emote(name: &str, meaning: &str) -> GlossaryEmote {
-        GlossaryEmote {
-            name: name.into(),
-            meaning: meaning.into(),
-            usage: None,
-            avoid: None,
-        }
-    }
-
-    fn available_prompt_emotes(glossary: &[GlossaryEmote]) -> Vec<PromptEmote> {
-        let available = merge_emote_sets(
-            glossary
-                .iter()
-                .map(|g| SevenTvEmote {
-                    name: g.name.clone(),
-                })
-                .collect(),
-            Vec::new(),
-        );
-        build_available_prompt_emotes(glossary, &available).unwrap()
     }
 
     #[test]
     fn pinned_emote_always_present_and_leads_even_without_scoring() {
-        let glossary = vec![
-            glossary_emote("First", "platzhalter"),
-            glossary_emote("Second", "platzhalter"),
-            glossary_emote("PinnedReflex", "lacht"),
+        let emotes = vec![
+            prompt_emote("First", "platzhalter"),
+            prompt_emote("Second", "platzhalter"),
+            prompt_emote("PinnedReflex", "lacht"),
         ];
-        let emotes = available_prompt_emotes(&glossary);
-        // No scoring hits, baseline floor = 2 → without pinning only First+Second
-        // would appear. Pinning PinnedReflex must inject it anyway, first.
         let pinned = vec!["PinnedReflex".to_string()];
         let prompt = build_prompt_block(&emotes, 8, 2, &pinned, "hi", "").unwrap();
 
         let pinned_pos = prompt
-            .find("- PinnedReflex:")
+            .find("- PinnedReflex;")
             .expect("pinned emote must be present");
-        let first_pos = prompt.find("- First:").expect("baseline fill present");
+        let first_pos = prompt.find("- First;").expect("baseline fill present");
         assert!(
             pinned_pos < first_pos,
             "pinned core must lead the block:\n{prompt}"
@@ -1217,97 +925,71 @@ mod tests {
 
     #[test]
     fn pinned_emote_absent_from_catalog_is_dropped() {
-        let glossary = vec![glossary_emote("First", "platzhalter")];
-        let emotes = available_prompt_emotes(&glossary);
-        let pinned = vec!["Ghost".to_string()]; // not in the available set
+        let emotes = vec![prompt_emote("First", "platzhalter")];
+        let pinned = vec!["Ghost".to_string()];
         let prompt = build_prompt_block(&emotes, 8, 1, &pinned, "hi", "").unwrap();
         assert!(
             !prompt.contains("Ghost"),
             "absent pin must be dropped:\n{prompt}"
         );
         assert!(
-            prompt.contains("- First:"),
+            prompt.contains("- First;"),
             "baseline still fills:\n{prompt}"
         );
     }
 
     #[test]
     fn no_emote_appears_twice_across_pinned_scored_baseline() {
-        // KEKW is pinned AND matches the instruction (would also score) AND is a
-        // baseline candidate — it must appear exactly once.
-        let glossary = vec![
-            glossary_emote("KEKW", "lustig lachen"),
-            glossary_emote("Filler", "platzhalter"),
+        let emotes = vec![
+            prompt_emote("KEKW", "lustig lachen"),
+            prompt_emote("Filler", "platzhalter"),
         ];
-        let emotes = available_prompt_emotes(&glossary);
         let pinned = vec!["KEKW".to_string()];
         let prompt =
             build_prompt_block(&emotes, 8, 4, &pinned, "etwas lustig", "KEKW KEKW").unwrap();
-        let occurrences = prompt.matches("- KEKW:").count();
+        let occurrences = prompt.matches("- KEKW;").count();
         assert_eq!(occurrences, 1, "KEKW must not be duplicated:\n{prompt}");
     }
 
     #[test]
     fn pinned_core_capped_by_max_prompt_emotes() {
-        let glossary = vec![
-            glossary_emote("A", "x"),
-            glossary_emote("B", "y"),
-            glossary_emote("C", "z"),
+        let emotes = vec![
+            prompt_emote("A", "x"),
+            prompt_emote("B", "y"),
+            prompt_emote("C", "z"),
         ];
-        let emotes = available_prompt_emotes(&glossary);
         let pinned = vec!["A".to_string(), "B".to_string(), "C".to_string()];
-        // max=2: only the first two pins fit; the window stays capped.
         let prompt = build_prompt_block(&emotes, 2, 0, &pinned, "hi", "").unwrap();
-        assert!(prompt.contains("- A:"));
-        assert!(prompt.contains("- B:"));
+        assert!(prompt.contains("- A;"));
+        assert!(prompt.contains("- B;"));
         assert!(
-            !prompt.contains("- C:"),
+            !prompt.contains("- C;"),
             "window must stay capped at 2:\n{prompt}"
         );
     }
 
-    // -----------------------------------------------------------------------
-    // pins_missing_from_glossary
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn pins_missing_from_glossary_reports_only_unknown_names() {
-        let glossary = vec![
-            glossary_emote("PepeLa", "lacht"),
-            glossary_emote("okjj", "ok"),
-        ];
-        let pinned = vec!["PepeLa".to_string(), "Typo".to_string(), "okjj".to_string()];
-        let missing = pins_missing_from_glossary(&pinned, &glossary);
-        assert_eq!(missing, vec!["Typo".to_string()]);
-    }
-
-    // -----------------------------------------------------------------------
-    // search_emotes ranking
-    // -----------------------------------------------------------------------
-
     #[test]
     fn search_ranks_name_match_above_term_match() {
-        let glossary = vec![
-            glossary_emote("SomethingFunny", "ein lustiger Moment"),
-            glossary_emote("Pepe", "irgendwas"),
+        let emotes = vec![
+            prompt_emote("SomethingFunny", "ein lustiger Moment"),
+            prompt_emote("Pepe", "irgendwas"),
         ];
-        let emotes = available_prompt_emotes(&glossary);
-        // Query "pepe" hits the name of "Pepe" (bonus) but only a weak/no term
-        // match on the other entry → "Pepe" ranks first.
         let ranked = select_search_emotes(&emotes, "pepe", 10);
         assert_eq!(ranked.first().map(|e| e.name.as_str()), Some("Pepe"));
     }
 
     #[test]
-    fn search_matches_meaning_terms() {
-        let glossary = vec![
-            glossary_emote("KEKW", "lachen wenn etwas lustig ist"),
-            glossary_emote("Sadge", "traurig sein"),
+    fn search_matches_appearance_and_meaning_terms() {
+        let emotes = vec![
+            prompt_emote_full("KEKW", "lachen wenn etwas lustig ist", None, None, None),
+            prompt_emote("Sadge", "traurig sein"),
         ];
-        let emotes = available_prompt_emotes(&glossary);
         let ranked = select_search_emotes(&emotes, "lustig", 10);
         let names: Vec<&str> = ranked.iter().map(|e| e.name.as_str()).collect();
-        assert!(names.contains(&"KEKW"), "meaning match expected: {names:?}");
+        assert!(
+            names.contains(&"KEKW"),
+            "appearance match expected: {names:?}"
+        );
         assert!(
             !names.contains(&"Sadge"),
             "non-match must be excluded: {names:?}"
@@ -1316,43 +998,36 @@ mod tests {
 
     #[test]
     fn search_respects_limit() {
-        let glossary: Vec<GlossaryEmote> = (0..25)
-            .map(|i| glossary_emote(&format!("Laugh{i}"), "lachen lustig moment"))
+        let emotes: Vec<PromptEmote> = (0..25)
+            .map(|i| prompt_emote(&format!("Laugh{i}"), "lachen lustig moment"))
             .collect();
-        let emotes = available_prompt_emotes(&glossary);
         let ranked = select_search_emotes(&emotes, "lachen", SEARCH_EMOTES_LIMIT);
         assert_eq!(ranked.len(), SEARCH_EMOTES_LIMIT, "must cap at the limit");
     }
 
     #[test]
     fn search_block_is_graceful_when_nothing_matches() {
-        let glossary = vec![glossary_emote("KEKW", "lachen")];
-        let emotes = available_prompt_emotes(&glossary);
+        let emotes = vec![prompt_emote("KEKW", "lachen")];
         let block = build_search_block(&emotes, "zzzzqqqq", SEARCH_EMOTES_LIMIT);
         assert!(block.contains("No emotes matched"), "got: {block}");
+        assert!(block.contains("this turn's context"), "got: {block}");
     }
 
     #[test]
     fn search_block_renders_matches_in_prompt_line_format() {
-        let glossary = vec![GlossaryEmote {
-            name: "KEKW".into(),
-            meaning: "lachen".into(),
-            usage: Some("bei witzen".into()),
-            avoid: Some("ernste themen".into()),
-        }];
-        let emotes = available_prompt_emotes(&glossary);
+        let emotes = vec![prompt_emote_full(
+            "KEKW",
+            "lachen",
+            None,
+            Some("bei witzen"),
+            Some("ernste themen"),
+        )];
         let block = build_search_block(&emotes, "lachen", SEARCH_EMOTES_LIMIT);
-        assert!(block.contains("- KEKW: meaning=lachen"), "got: {block}");
+        assert!(block.contains("- KEKW; appearance=lachen"), "got: {block}");
         assert!(block.contains("use=bei witzen"), "got: {block}");
         assert!(block.contains("avoid=ernste themen"), "got: {block}");
     }
 
-    // -----------------------------------------------------------------------
-    // Live-rebinding tests
-    // -----------------------------------------------------------------------
-
-    /// Build a [`SettingsHandle`] with the given `max_prompt_emotes` set in the
-    /// emotes section.
     fn make_emotes_handle(max_prompt_emotes: usize) -> crate::settings::SettingsHandle {
         use std::sync::Arc;
 
@@ -1363,71 +1038,29 @@ mod tests {
         let mut s = Settings::compiled_defaults();
         s.ai.emotes = Some(AiEmotes {
             max_prompt_emotes,
-            min_baseline_emotes: 0, // no baseline padding so count is deterministic
+            min_baseline_emotes: 0,
             ..AiEmotes::default()
         });
         Arc::new(ArcSwap::from_pointee(s))
     }
 
-    /// Verify that [`live_caps_from_handle`] returns updated values after the
-    /// handle is mutated — i.e. that emote knobs are truly live-readable.
-    ///
-    /// This test deliberately avoids constructing a full [`SevenTvEmoteProvider`]
-    /// (which requires a TLS-enabled `reqwest::Client`) and instead calls the
-    /// extracted free function directly.
     #[test]
     fn live_caps_max_prompt_emotes_respected_and_live_rebindable() {
         use std::sync::Arc;
 
-        // Build a glossary with 5 emotes
-        let glossary_toml = r#"
-[[emotes]]
-name = "A"
-meaning = "first"
+        let emotes: Vec<PromptEmote> = ["A", "B", "C", "D", "E"]
+            .into_iter()
+            .map(|name| prompt_emote(name, "entry"))
+            .collect();
 
-[[emotes]]
-name = "B"
-meaning = "second"
-
-[[emotes]]
-name = "C"
-meaning = "third"
-
-[[emotes]]
-name = "D"
-meaning = "fourth"
-
-[[emotes]]
-name = "E"
-meaning = "fifth"
-"#;
-
-        let available = merge_emote_sets(
-            vec![
-                SevenTvEmote { name: "A".into() },
-                SevenTvEmote { name: "B".into() },
-                SevenTvEmote { name: "C".into() },
-                SevenTvEmote { name: "D".into() },
-                SevenTvEmote { name: "E".into() },
-            ],
-            Vec::new(),
-        );
-        let emotes = build_available_prompt_emotes(
-            &toml::from_str::<Glossary>(glossary_toml).unwrap().emotes,
-            &available,
-        )
-        .unwrap();
-
-        // --- Phase 1: max = 5, baseline = 5 → all five emotes present ---
         let handle = make_emotes_handle(5);
         let caps = live_caps_from_handle(&handle);
         assert_eq!(caps.max_prompt_emotes, 5);
         let prompt5 =
             build_prompt_block(&emotes, caps.max_prompt_emotes, 5, &[], "hi", "").unwrap();
-        assert!(prompt5.contains("- A:"));
-        assert!(prompt5.contains("- E:"));
+        assert!(prompt5.contains("- A;"));
+        assert!(prompt5.contains("- E;"));
 
-        // --- Phase 2: mutate the handle; live_caps_from_handle must reflect the change ---
         let mut s = (*handle.load_full()).clone();
         s.ai.emotes.as_mut().unwrap().max_prompt_emotes = 2;
         s.ai.emotes.as_mut().unwrap().min_baseline_emotes = 2;
@@ -1444,27 +1077,13 @@ meaning = "fifth"
             "",
         )
         .unwrap();
-        assert!(prompt2.contains("- A:"));
-        assert!(prompt2.contains("- B:"));
+        assert!(prompt2.contains("- A;"));
+        assert!(prompt2.contains("- B;"));
         assert!(
-            !prompt2.contains("- C:"),
+            !prompt2.contains("- C;"),
             "prompt should be capped at 2:\n{prompt2}"
         );
     }
-
-    // -----------------------------------------------------------------------
-    // Tracker catalog prefer / REST fallback
-    // -----------------------------------------------------------------------
-
-    const TRACKER_GLOSSARY_TOML: &str = r#"
-[[emotes]]
-name = "TrackerOnly"
-meaning = "from the SQLite catalog"
-
-[[emotes]]
-name = "RestOnly"
-meaning = "from the REST channel set"
-"#;
 
     fn tracker_test_settings(
         mock_uri: &str,
@@ -1486,17 +1105,33 @@ meaning = "from the REST channel set"
         Arc::new(ArcSwap::from_pointee(s))
     }
 
+    async fn seed_tracker_emote(
+        handle: &EmoteTrackerHandle,
+        emote_id: &str,
+        name: &str,
+        appearance: &str,
+        meaning: Option<&str>,
+        usage: Option<&str>,
+        avoid: Option<&str>,
+    ) {
+        handle.upsert_emote(emote_id, name, true, 1).await.unwrap();
+        handle
+            .upsert_emote_meaning(emote_id, appearance, meaning, usage, avoid, 1)
+            .await
+            .unwrap();
+    }
+
     async fn tracker_test_provider(
         mock_uri: &str,
-        tracker: Option<Arc<EmoteTrackerHandle>>,
+        tracker: Arc<EmoteTrackerHandle>,
         include_global: bool,
     ) -> SevenTvEmoteProvider {
         let settings = tracker_test_settings(mock_uri, include_global);
-        SevenTvEmoteProvider::new(settings, TRACKER_GLOSSARY_TOML, tracker).unwrap()
+        SevenTvEmoteProvider::new(settings, tracker).unwrap()
     }
 
     #[tokio::test]
-    async fn prefers_tracker_channel_names_when_catalog_non_empty() {
+    async fn tracker_channel_names_join_meanings_without_rest_fallback() {
         crate::install_crypto_provider();
 
         let mock = wiremock::MockServer::start().await;
@@ -1519,78 +1154,61 @@ meaning = "from the REST channel set"
             .await;
 
         let dir = tempfile::tempdir().unwrap();
-        let handle =
-            Arc::new(EmoteTrackerHandle::open(&dir.path().join("emote_tracker.sqlite")).unwrap());
-        handle
-            .upsert_emote("tracker-1", "TrackerOnly", true, 1)
-            .await
-            .unwrap();
+        let handle = Arc::new(
+            EmoteTrackerHandle::open(&dir.path().join(crate::emote_tracker::DB_FILENAME)).unwrap(),
+        );
+        seed_tracker_emote(
+            &handle,
+            "tracker-1",
+            "TrackerOnly",
+            "from the SQLite catalog",
+            None,
+            None,
+            None,
+        )
+        .await;
 
-        let provider = tracker_test_provider(&mock.uri(), Some(handle), false).await;
+        let provider = tracker_test_provider(&mock.uri(), handle, false).await;
         let prompt = provider
             .prompt_block_for_turn(channel_id, "hi", "")
             .await
             .expect("prompt block should be available");
 
         assert!(
-            prompt.contains("- TrackerOnly:"),
+            prompt.contains("- TrackerOnly;"),
             "tracker catalog emote missing:\n{prompt}"
         );
         assert!(
-            !prompt.contains("- RestOnly:"),
-            "REST channel emote must not appear when tracker catalog is warm:\n{prompt}"
+            !prompt.contains("RestOnly"),
+            "REST channel emote must not appear:\n{prompt}"
         );
 
         mock.verify().await;
     }
 
     #[tokio::test]
-    async fn empty_tracker_catalog_falls_back_to_rest_channel_fetch() {
+    async fn empty_tracker_catalog_yields_no_prompt_block() {
         crate::install_crypto_provider();
 
         let mock = wiremock::MockServer::start().await;
         let channel_id = "12345";
 
-        wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .and(wiremock::matchers::path(format!(
-                "/users/twitch/{channel_id}"
-            )))
-            .respond_with(
-                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "id": "user",
-                    "emote_set": {
-                        "emotes": [{"id": "rest", "name": "RestOnly"}]
-                    }
-                })),
-            )
-            .expect(1)
-            .mount(&mock)
-            .await;
-
         let dir = tempfile::tempdir().unwrap();
-        let handle =
-            Arc::new(EmoteTrackerHandle::open(&dir.path().join("emote_tracker.sqlite")).unwrap());
-
-        let provider = tracker_test_provider(&mock.uri(), Some(handle), false).await;
-        let prompt = provider
-            .prompt_block_for_turn(channel_id, "hi", "")
-            .await
-            .expect("prompt block should be available");
-
-        assert!(
-            prompt.contains("- RestOnly:"),
-            "REST fallback emote missing:\n{prompt}"
-        );
-        assert!(
-            !prompt.contains("- TrackerOnly:"),
-            "tracker-only emote must not appear on empty catalog:\n{prompt}"
+        let handle = Arc::new(
+            EmoteTrackerHandle::open(&dir.path().join(crate::emote_tracker::DB_FILENAME)).unwrap(),
         );
 
-        mock.verify().await;
+        let provider = tracker_test_provider(&mock.uri(), handle, false).await;
+        assert!(
+            provider
+                .prompt_block_for_turn(channel_id, "hi", "")
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
-    async fn globals_still_fetch_from_rest_when_tracker_catalog_is_warm() {
+    async fn globals_rest_intersect_meanings_by_id() {
         crate::install_crypto_provider();
 
         let mock = wiremock::MockServer::start().await;
@@ -1601,61 +1219,88 @@ meaning = "from the REST channel set"
             .respond_with(
                 wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "id": "global",
-                    "emotes": [{"id": "global-kekw", "name": "KEKW"}]
+                    "emotes": [
+                        {"id": "global-kekw", "name": "KEKW"},
+                        {"id": "global-peepo", "name": "peepoHappy"}
+                    ]
                 })),
             )
             .expect(1)
             .mount(&mock)
             .await;
 
-        wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .and(wiremock::matchers::path(format!(
-                "/users/twitch/{channel_id}"
-            )))
-            .respond_with(
-                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "id": "user",
-                    "emote_set": { "emotes": [] }
-                })),
-            )
-            .expect(0)
-            .mount(&mock)
-            .await;
-
-        let glossary = r#"
-[[emotes]]
-name = "TrackerOnly"
-meaning = "from the SQLite catalog"
-
-[[emotes]]
-name = "KEKW"
-meaning = "global emote"
-"#;
-
         let dir = tempfile::tempdir().unwrap();
-        let handle =
-            Arc::new(EmoteTrackerHandle::open(&dir.path().join("emote_tracker.sqlite")).unwrap());
-        handle
-            .upsert_emote("tracker-1", "TrackerOnly", true, 1)
-            .await
-            .unwrap();
+        let handle = Arc::new(
+            EmoteTrackerHandle::open(&dir.path().join(crate::emote_tracker::DB_FILENAME)).unwrap(),
+        );
+        seed_tracker_emote(
+            &handle,
+            "tracker-1",
+            "TrackerOnly",
+            "from the SQLite catalog",
+            None,
+            None,
+            None,
+        )
+        .await;
+        seed_tracker_emote(
+            &handle,
+            "global-kekw",
+            "KEKW",
+            "global emote",
+            None,
+            None,
+            None,
+        )
+        .await;
 
-        let settings = tracker_test_settings(&mock.uri(), true);
-        let provider = SevenTvEmoteProvider::new(settings, glossary, Some(handle)).unwrap();
+        let provider = tracker_test_provider(&mock.uri(), handle, true).await;
         let prompt = provider
             .prompt_block_for_turn(channel_id, "hi", "")
             .await
             .expect("prompt block should be available");
 
         assert!(
-            prompt.contains("- TrackerOnly:"),
+            prompt.contains("- TrackerOnly;"),
             "tracker channel emote missing:\n{prompt}"
         );
         assert!(
-            prompt.contains("- KEKW:"),
+            prompt.contains("- KEKW;"),
             "global REST emote missing:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains("peepoHappy"),
+            "global without meaning row must be omitted:\n{prompt}"
         );
 
         mock.verify().await;
+    }
+
+    #[tokio::test]
+    async fn active_emote_without_usable_meaning_is_excluded() {
+        crate::install_crypto_provider();
+
+        let mock = wiremock::MockServer::start().await;
+        let channel_id = "12345";
+        let dir = tempfile::tempdir().unwrap();
+        let handle = Arc::new(
+            EmoteTrackerHandle::open(&dir.path().join(crate::emote_tracker::DB_FILENAME)).unwrap(),
+        );
+        handle
+            .upsert_emote("tracker-1", "SilentEmote", true, 1)
+            .await
+            .unwrap();
+        handle
+            .upsert_emote_meaning("tracker-1", "   ", None, None, Some("never"), 1)
+            .await
+            .unwrap();
+
+        let provider = tracker_test_provider(&mock.uri(), handle, false).await;
+        assert!(
+            provider
+                .prompt_block_for_turn(channel_id, "hi", "")
+                .await
+                .is_none()
+        );
     }
 }

@@ -24,7 +24,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use eyre::{Result, WrapErr as _};
+use eyre::Result;
 use llm::LlmClient;
 use tokio::sync::{mpsc::UnboundedReceiver, oneshot};
 use tracing::info;
@@ -92,10 +92,6 @@ pub struct Services {
     /// POST handler calls `.apply()` / `.reset()`); the bot itself only
     /// reads via the handle.
     pub settings_store: Arc<crate::settings::SettingsStore>,
-    /// Optional override for the 7TV emote glossary TOML. Production leaves
-    /// this `None` so the baked glossary is used; integration tests inject
-    /// custom fixtures.
-    pub emote_glossary_override: Option<String>,
     /// Shared connectivity flag flipped by the latency monitor. Read by the
     /// web dashboard's `/healthz` endpoint.
     pub irc_connected: Arc<std::sync::atomic::AtomicBool>,
@@ -210,7 +206,6 @@ where
         data_dir,
         settings,
         settings_store,
-        emote_glossary_override,
         irc_connected,
         web_spawner,
         ping_actor_tx,
@@ -258,24 +253,38 @@ where
     .await?;
     let transcript = ai_memory_v2.as_ref().map(|m| m.transcript.clone());
 
-    // 7TV emote provider: built once at startup so malformed glossary TOML
-    // (baked or test-injected) fails fast instead of silently disabling emotes.
-    // Presence of [ai.emotes] is checked here; all live knobs are re-read per
-    // call via SettingsHandle inside the provider.
+    // 7TV emote provider: built once at startup when AI + emotes + tracker are
+    // all present. If ai.emotes is on but the tracker failed to open, emote
+    // grounding is disabled and the bot continues.
     let emote_provider = match (llm.as_ref(), config.ai.as_ref()) {
         (Some(_), Some(_)) => {
             if settings.load().ai.emotes.is_some() {
-                let glossary_toml = emote_glossary_override
-                    .as_deref()
-                    .unwrap_or(crate::twitch::seventv::BAKED_GLOSSARY_TOML);
-                let provider = crate::twitch::seventv::SevenTvEmoteProvider::new(
-                    settings.clone(),
-                    glossary_toml,
-                    emote_tracker.clone(),
-                )
-                .wrap_err("Failed to initialize 7TV emote provider")?;
-                tracing::info!("7TV emote glossary prompt grounding enabled");
-                Some(Arc::new(provider))
+                match emote_tracker.clone() {
+                    Some(tracker) => {
+                        match crate::twitch::seventv::SevenTvEmoteProvider::new(
+                            settings.clone(),
+                            tracker,
+                        ) {
+                            Ok(provider) => {
+                                tracing::info!("7TV emote meanings prompt grounding enabled");
+                                Some(Arc::new(provider))
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    ?error,
+                                    "Failed to initialize 7TV emote provider; emote grounding disabled"
+                                );
+                                None
+                            }
+                        }
+                    }
+                    None => {
+                        tracing::warn!(
+                            "ai.emotes is enabled but the emote tracker is unavailable; 7TV emote grounding disabled"
+                        );
+                        None
+                    }
+                }
             } else {
                 None
             }

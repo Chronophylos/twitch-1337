@@ -323,7 +323,6 @@ pub async fn main() -> Result<()> {
         data_dir: get_data_dir(),
         settings: settings_handle,
         settings_store,
-        emote_glossary_override: None,
         irc_connected,
         web_spawner,
         ping_actor_tx,
