@@ -20,18 +20,21 @@ use super::{
         seed_flight_aliases,
     },
     phase::detect_phase,
-    schedule::{PollReadiness, poll_readiness},
+    schedule::poll_readiness,
     state::save_tracker_state,
 };
 
-use super::{MAX_FLIGHTS_PER_USER, MAX_TRACKED_FLIGHTS, POLL_TIMEOUT, ROUTE_FETCH_TIMEOUT};
+use super::{MAX_FLIGHTS_PER_USER, MAX_TRACKED_FLIGHTS, POLL_TIMEOUT};
 
 use super::advance::{
-    Followup, Observation, PollOutcome, RemovalReason, RouteOutcome, apply_route_outcome,
-    candidate_callsign_matches_flight, format_emit, identifier_callsign, last_seen_age_secs,
-    seed_from_observation,
+    Observation, RemovalReason, apply_route_outcome, candidate_callsign_matches_flight,
+    format_emit, identifier_callsign, last_seen_age_secs, seed_from_observation,
 };
-use super::poll_decision::{PollPlan, decide_poll, poll_plan};
+use super::poll_cycle::{
+    callsign_poll_candidates, complete_poll_cycle, fetch_observation, fetch_route,
+    plan_adsb_lookup, poll_aircraft_by_callsign_aliases, should_poll_by_hex,
+};
+use super::poll_decision::{PollPlan, poll_plan};
 
 fn find_index_by_identifier(
     flights: &[TrackedFlight],
@@ -40,54 +43,6 @@ fn find_index_by_identifier(
     flights
         .iter()
         .position(|flight| &flight.identifier == identifier)
-}
-
-fn callsign_poll_candidates(flight: &TrackedFlight) -> Vec<String> {
-    let mut candidates = Vec::new();
-    let mut push = |value: &str| {
-        let value = value.trim();
-        if value.is_empty() {
-            return;
-        }
-        let value = value.to_uppercase();
-        if candidates
-            .iter()
-            .any(|existing: &String| existing.eq_ignore_ascii_case(&value))
-        {
-            return;
-        }
-        candidates.push(value);
-    };
-
-    if let Some(callsign) = flight.callsign.as_deref() {
-        push(callsign);
-    }
-    if let FlightIdentifier::Callsign(identifier) = &flight.identifier {
-        push(identifier);
-    }
-    for alias in &flight.alias_callsigns {
-        push(alias);
-    }
-    candidates
-}
-
-async fn poll_aircraft_by_callsign_aliases<P: AdsbProvider>(
-    aviation_client: &P,
-    candidates: &[String],
-) -> Result<Result<Option<NearbyAircraft>, eyre::Report>, tokio::time::error::Elapsed> {
-    let mut last = Ok(Ok(None));
-    for callsign in candidates {
-        let result = tokio::time::timeout(
-            POLL_TIMEOUT,
-            aviation_client.get_aircraft_by_callsign(callsign),
-        )
-        .await;
-        if matches!(&result, Ok(Ok(Some(_)))) {
-            return result;
-        }
-        last = result;
-    }
-    last
 }
 
 pub(crate) fn find_flight_index(flights: &[TrackedFlight], query: &str) -> Option<usize> {
@@ -115,11 +70,6 @@ pub(crate) fn aircraft_matches_tracked_callsign(
 
     matches!(&flight.identifier, FlightIdentifier::Hex(_))
         || aircraft_callsign(ac).is_some_and(|actual| flight_matches_callsign(flight, actual))
-}
-
-fn should_poll_by_hex(flight: &TrackedFlight) -> bool {
-    matches!(&flight.identifier, FlightIdentifier::Hex(_))
-        || (flight.hex.is_some() && (flight.hex_source.is_some() || flight.last_seen.is_some()))
 }
 
 fn should_skip_adsb_for_strict_chill(flight: &TrackedFlight, now: DateTime<Utc>) -> bool {
@@ -1002,26 +952,6 @@ async fn handle_status<T, L>(
     sender.reply(reply_to, response).await;
 }
 
-/// Thin async shell over the route provider: one `get_flight_route` call with a
-/// timeout, mapped to a pure `RouteOutcome`. The apply + journalling live in
-/// `apply_route_outcome`.
-async fn fetch_route<P: AdsbProvider>(aviation_client: &P, callsign: &str) -> RouteOutcome {
-    match tokio::time::timeout(
-        ROUTE_FETCH_TIMEOUT,
-        aviation_client.get_flight_route(callsign),
-    )
-    .await
-    {
-        Ok(Ok(Some(route))) => RouteOutcome::Found {
-            origin: route.origin.iata_code.clone(),
-            dest: route.destination.iata_code.clone(),
-        },
-        Ok(Ok(None)) => RouteOutcome::Miss,
-        Ok(Err(_)) => RouteOutcome::Error,
-        Err(_) => RouteOutcome::Timeout,
-    }
-}
-
 /// On the `!track` initial poll: if the flight has a callsign and no route yet,
 /// resolve it. Keyed on `flight.callsign` so it covers both a callsign the Seed
 /// just resolved (hex track) and one known from the request.
@@ -1061,9 +991,7 @@ where
     let mut messages: Vec<String> = Vec::new();
     let mut deferred_commands = Vec::new();
 
-    type PollResult =
-        Result<Result<Option<NearbyAircraft>, eyre::Report>, tokio::time::error::Elapsed>;
-    type PollAttempt = (FlightIdentifier, bool, PollResult);
+    type PollAttempt = (FlightIdentifier, Observation);
 
     let mut join_set = tokio::task::JoinSet::new();
     let mut fetch_results: Vec<PollAttempt> = Vec::new();
@@ -1109,27 +1037,10 @@ where
 
         let ac = aviation_client.clone();
         let id = flight.identifier.clone();
-        let hex = flight.hex.clone();
-        let callsign_candidates = callsign_poll_candidates(flight);
-        let poll_by_hex = should_poll_by_hex(flight);
+        let plan = plan_adsb_lookup(flight);
         join_set.spawn(async move {
-            let result: PollAttempt = if poll_by_hex {
-                let lookup_hex = hex.as_deref().unwrap_or_else(|| id.as_str());
-                (
-                    id.clone(),
-                    true,
-                    tokio::time::timeout(POLL_TIMEOUT, ac.get_aircraft_by_hex(lookup_hex)).await,
-                )
-            } else if callsign_candidates.is_empty() {
-                (id.clone(), false, Ok(Ok(None)))
-            } else {
-                (
-                    id.clone(),
-                    false,
-                    poll_aircraft_by_callsign_aliases(&ac, &callsign_candidates).await,
-                )
-            };
-            result
+            let observation = fetch_observation(plan, &ac).await;
+            (id, observation)
         });
     }
 
@@ -1138,8 +1049,8 @@ where
         while !join_set.is_empty() {
             tokio::select! {
                 res = join_set.join_next() => {
-                    if let Some(Ok((identifier, used_hex, poll_result))) = res {
-                        fetch_results.push((identifier, used_hex, poll_result));
+                    if let Some(Ok((identifier, observation))) = res {
+                        fetch_results.push((identifier, observation));
                     }
                 }
                 cmd = cmd_rx.recv(), if command_channel_open => {
@@ -1165,13 +1076,13 @@ where
         }
     } else {
         while let Some(res) = join_set.join_next().await {
-            if let Ok((identifier, used_hex, poll_result)) = res {
-                fetch_results.push((identifier, used_hex, poll_result));
+            if let Ok((identifier, observation)) = res {
+                fetch_results.push((identifier, observation));
             }
         }
     }
 
-    for (identifier, used_hex, ac_result) in fetch_results {
+    for (identifier, observation) in fetch_results {
         drain_latency_sensitive_commands(
             &mut cmd_rx,
             state,
@@ -1185,23 +1096,9 @@ where
             continue;
         };
 
-        let outcome = match ac_result {
-            Ok(Ok(Some(ac))) => PollOutcome::Hit(Box::new(ac)),
-            Ok(Ok(None)) => PollOutcome::Miss,
-            Ok(Err(e)) => {
-                warn!(error = ?e, identifier = %identifier, "ADS-B poll failed");
-                PollOutcome::Error
-            }
-            Err(_) => {
-                warn!(identifier = %identifier, "ADS-B poll timed out");
-                PollOutcome::Timeout
-            }
-        };
-        let obs = Observation { used_hex, outcome };
-
         let Some(update) = ({
             let flight = &mut state.flights[idx];
-            decide_poll(flight, PollReadiness::Due, Some(&obs), now)
+            complete_poll_cycle(flight, observation, now, aviation_client).await
         }) else {
             continue;
         };
@@ -1210,15 +1107,10 @@ where
         for event in update.debug {
             append_debug_event(data_dir, now, event).await;
         }
-
-        for followup in update.followups {
-            let Followup::FetchRoute { callsign } = followup;
-            let outcome = fetch_route(aviation_client, &callsign).await;
-            let flight = &mut state.flights[idx];
-            for event in apply_route_outcome(flight, &callsign, outcome) {
-                append_debug_event(data_dir, now, event).await;
-            }
-        }
+        debug_assert!(
+            update.followups.is_empty(),
+            "Poll Cycle must resolve Route Resolution followups"
+        );
 
         for emit in &update.emits {
             let msg = format_emit(&state.flights[idx], emit, now);
