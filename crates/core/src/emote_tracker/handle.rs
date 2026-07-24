@@ -8,14 +8,14 @@ use rusqlite::Connection;
 use tokio::sync::{mpsc, oneshot};
 
 use super::db::{
-    apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, insert_set_event,
-    insert_usage_events, list_active_emotes, list_set_events, list_usage_events,
-    resolve_active_name, upsert_emote,
+    apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, get_emote_meaning,
+    insert_set_event, insert_usage_events, list_active_emotes, list_emote_meanings_for_ids,
+    list_set_events, list_usage_events, resolve_active_name, upsert_emote, upsert_emote_meaning,
 };
 use super::migrate;
 use super::types::{
-    EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch, SetEventListFilter, SetEventRow,
-    UsageEventListFilter, UsageEventRow,
+    EmoteMeaningRow, EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch, SetEventListFilter,
+    SetEventRow, UsageEventListFilter, UsageEventRow,
 };
 
 enum StoreCmd {
@@ -72,6 +72,23 @@ enum StoreCmd {
     ListUsageEvents {
         filter: UsageEventListFilter,
         reply: oneshot::Sender<Result<Vec<UsageEventRow>>>,
+    },
+    UpsertEmoteMeaning {
+        emote_id: String,
+        appearance: String,
+        meaning: Option<String>,
+        usage: Option<String>,
+        avoid: Option<String>,
+        updated_at: i64,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    GetEmoteMeaning {
+        emote_id: String,
+        reply: oneshot::Sender<Result<Option<EmoteMeaningRow>>>,
+    },
+    ListEmoteMeaningsForIds {
+        ids: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<EmoteMeaningRow>>>,
     },
 }
 
@@ -209,6 +226,47 @@ impl EmoteTrackerHandle {
         self.send(|reply| StoreCmd::ListUsageEvents { filter, reply })
             .await
     }
+
+    pub async fn upsert_emote_meaning(
+        &self,
+        emote_id: &str,
+        appearance: &str,
+        meaning: Option<&str>,
+        usage: Option<&str>,
+        avoid: Option<&str>,
+        updated_at: i64,
+    ) -> Result<()> {
+        let emote_id = emote_id.to_owned();
+        let appearance = appearance.to_owned();
+        let meaning = meaning.map(str::to_owned);
+        let usage = usage.map(str::to_owned);
+        let avoid = avoid.map(str::to_owned);
+        self.send(|reply| StoreCmd::UpsertEmoteMeaning {
+            emote_id,
+            appearance,
+            meaning,
+            usage,
+            avoid,
+            updated_at,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn get_emote_meaning(&self, emote_id: &str) -> Result<Option<EmoteMeaningRow>> {
+        let emote_id = emote_id.to_owned();
+        self.send(|reply| StoreCmd::GetEmoteMeaning { emote_id, reply })
+            .await
+    }
+
+    pub async fn list_emote_meanings_for_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<EmoteMeaningRow>> {
+        let ids = ids.to_vec();
+        self.send(|reply| StoreCmd::ListEmoteMeaningsForIds { ids, reply })
+            .await
+    }
 }
 
 fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
@@ -262,6 +320,31 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
             }
             StoreCmd::ListUsageEvents { filter, reply } => {
                 let _ = reply.send(list_usage_events(&conn, &filter));
+            }
+            StoreCmd::UpsertEmoteMeaning {
+                emote_id,
+                appearance,
+                meaning,
+                usage,
+                avoid,
+                updated_at,
+                reply,
+            } => {
+                let _ = reply.send(upsert_emote_meaning(
+                    &conn,
+                    &emote_id,
+                    &appearance,
+                    meaning.as_deref(),
+                    usage.as_deref(),
+                    avoid.as_deref(),
+                    updated_at,
+                ));
+            }
+            StoreCmd::GetEmoteMeaning { emote_id, reply } => {
+                let _ = reply.send(get_emote_meaning(&conn, &emote_id));
+            }
+            StoreCmd::ListEmoteMeaningsForIds { ids, reply } => {
+                let _ = reply.send(list_emote_meanings_for_ids(&conn, &ids));
             }
         }
     }
@@ -345,6 +428,28 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn handle_round_trips_emote_meanings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DB_FILENAME);
+        let h = EmoteTrackerHandle::open(&path).unwrap();
+        h.upsert_emote_meaning(
+            "e1",
+            "pepega",
+            None,
+            Some("when chat is being dense"),
+            None,
+            42,
+        )
+        .await
+        .unwrap();
+        let row = h.get_emote_meaning("e1").await.unwrap().unwrap();
+        assert_eq!(row.appearance, "pepega");
+        assert_eq!(row.usage.as_deref(), Some("when chat is being dense"));
+        let listed = h.list_emote_meanings_for_ids(&["e1".into()]).await.unwrap();
+        assert_eq!(listed.len(), 1);
     }
 
     #[tokio::test]

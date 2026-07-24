@@ -174,6 +174,17 @@ pub struct UsageEventListFilter {
     pub offset: u32,
 }
 
+/// One row from `emote_meanings` (curated semantics; no FK to `emotes`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmoteMeaningRow {
+    pub emote_id: String,
+    pub appearance: String,
+    pub meaning: Option<String>,
+    pub usage: Option<String>,
+    pub avoid: Option<String>,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewUsageEvent {
     /// Observation time (UTC unix ms).
