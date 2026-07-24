@@ -1,4 +1,5 @@
-# 7TV emote glossary for !ai.
+# DEPRECATED(emote-meanings): seed-only input for scripts/seed-emote-meanings.py — not a runtime glossary.
+# 7TV emote glossary for !ai (historical; semantics live in $DATA_DIR/emotes.db after seed).
 # Source: https://7tv.app/users/01FZKKA0A8000FP66RDQP75B9A
 # Twitch connection: euterheissgetraenk (784681545)
 # Active emote set: euterheissgetraenk's Emotes (01FZKKA0A8000FP66RDQP75B9A)

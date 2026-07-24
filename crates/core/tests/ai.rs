@@ -3,7 +3,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::TestBotBuilder;
+use common::{EmoteMeaningSeed, TestBotBuilder};
 use llm::{Role, ToolCall, ToolChatCompletionResponse};
 use twitch_1337::ChatHistorySource;
 use wiremock::matchers::{method, path, query_param};
@@ -134,7 +134,7 @@ async fn ai_command_empty_shows_usage() {
 }
 
 #[tokio::test]
-async fn ai_command_injects_7tv_emote_glossary() {
+async fn ai_command_injects_7tv_emote_meanings() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
         .with_settings(|o| {
@@ -142,24 +142,30 @@ async fn ai_command_injects_7tv_emote_glossary() {
             o.ai.emotes.enabled = Some(true);
             o.ai.emotes.include_global = Some(true);
         })
-        .with_emote_glossary(
-            r#"
-[[emotes]]
-name = "KEKW"
-meaning = "lachen, etwas ist lustig"
-usage = "bei Witzen oder Fail-Momenten"
-avoid = "bei ernsten Themen"
-
-[[emotes]]
-name = "LocalEmote"
-meaning = "lokaler Channel-Insider"
-usage = "wenn der Chat den Insider anspricht"
-
-[[emotes]]
-name = "MissingEmote"
-meaning = "steht nicht im aktuellen 7TV-Katalog"
-"#,
-        )
+        .with_emote_catalog(&[("channel-local", "LocalEmote"), ("channel-kekw", "KEKW")])
+        .with_emote_meanings(&[
+            EmoteMeaningSeed {
+                emote_id: "channel-local".into(),
+                appearance: "lokaler Channel-Insider".into(),
+                meaning: None,
+                usage: Some("wenn der Chat den Insider anspricht".into()),
+                avoid: None,
+            },
+            EmoteMeaningSeed {
+                emote_id: "channel-kekw".into(),
+                appearance: "lachen, etwas ist lustig".into(),
+                meaning: None,
+                usage: Some("bei Witzen oder Fail-Momenten".into()),
+                avoid: Some("bei ernsten Themen".into()),
+            },
+            EmoteMeaningSeed {
+                emote_id: "global-kekw".into(),
+                appearance: "lachen, etwas ist lustig".into(),
+                meaning: None,
+                usage: Some("bei Witzen oder Fail-Momenten".into()),
+                avoid: Some("bei ernsten Themen".into()),
+            },
+        ])
         .spawn()
         .await;
 
@@ -175,21 +181,6 @@ meaning = "steht nicht im aktuellen 7TV-Katalog"
         .mount(&bot.seventv_mock)
         .await;
 
-    Mock::given(method("GET"))
-        .and(path("/users/twitch/12345"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": "user",
-            "emote_set": {
-                "id": "channel-set",
-                "emotes": [
-                    {"id": "channel-local", "name": "LocalEmote"},
-                    {"id": "channel-kekw", "name": "KEKW"}
-                ]
-            }
-        })))
-        .mount(&bot.seventv_mock)
-        .await;
-
     bot.send("bob", "LocalEmote heute stark").await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -200,8 +191,6 @@ meaning = "steht nicht im aktuellen 7TV-Katalog"
 
     let calls = bot.llm.tool_calls();
     assert_eq!(calls.len(), 1, "expected exactly one LLM call");
-    // Emote block is volatile (varies per turn), so it lives in the user
-    // message — keeping the system message as a stable cache prefix.
     let user_msg = calls[0]
         .messages
         .iter()
@@ -209,11 +198,11 @@ meaning = "steht nicht im aktuellen 7TV-Katalog"
         .expect("request has a user message");
     assert!(user_msg.content.contains("7TV emotes available"));
     assert!(user_msg.content.contains("KEKW"));
-    assert!(user_msg.content.contains("meaning=lachen"));
+    assert!(user_msg.content.contains("appearance=lachen"));
     assert!(user_msg.content.contains("LocalEmote"));
     assert!(!user_msg.content.contains("MissingEmote"));
-    let local_pos = user_msg.content.find("- LocalEmote:").unwrap();
-    let kekw_pos = user_msg.content.find("- KEKW:").unwrap();
+    let local_pos = user_msg.content.find("- LocalEmote;").unwrap();
+    let kekw_pos = user_msg.content.find("- KEKW;").unwrap();
     assert!(
         local_pos < kekw_pos,
         "recent chat emote should rank before generic context match:\n{}",
@@ -231,23 +220,12 @@ async fn ai_command_continues_when_7tv_unavailable() {
             o.ai.history.length = Some(0);
             o.ai.emotes.enabled = Some(true);
         })
-        .with_emote_glossary(
-            r#"
-[[emotes]]
-name = "KEKW"
-meaning = "lachen"
-"#,
-        )
+        .with_emote_tracker()
         .spawn()
         .await;
 
     Mock::given(method("GET"))
         .and(path("/emote-sets/global"))
-        .respond_with(ResponseTemplate::new(500))
-        .mount(&bot.seventv_mock)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/users/twitch/12345"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&bot.seventv_mock)
         .await;
@@ -265,6 +243,38 @@ meaning = "lachen"
         .find(|m| m.role == Role::System)
         .expect("request has a system message");
     assert!(!system_msg.content.contains("7TV emotes available"));
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn ai_command_skips_emote_grounding_when_tracker_unavailable() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+            o.ai.emotes.enabled = Some(true);
+        })
+        .spawn()
+        .await;
+
+    bot.llm.push_tool_message("ohne tracker");
+    bot.send("alice", "!ai ping").await;
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
+    assert_eq!(body, "ohne tracker");
+
+    let calls = bot.llm.tool_calls();
+    assert_eq!(calls.len(), 1, "expected exactly one LLM call");
+    let user_msg = calls[0]
+        .messages
+        .iter()
+        .find(|m| m.role == Role::User)
+        .expect("request has a user message");
+    assert!(
+        !user_msg.content.contains("7TV emotes available"),
+        "emote provider must not be wired when tracker is None:\n{}",
+        user_msg.content
+    );
 
     bot.shutdown().await;
 }

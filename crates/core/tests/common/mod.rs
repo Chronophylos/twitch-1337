@@ -8,7 +8,7 @@ pub mod irc_line;
 pub mod test_bot;
 
 #[allow(unused_imports)]
-pub use test_bot::{TestBot, TestBotBuilder};
+pub use test_bot::{EmoteMeaningSeed, TestBot, TestBotBuilder};
 
 /// Generous failure deadline for the "poll until a condition holds" and
 /// "wait for output" waits scattered across the integration tests. These loops

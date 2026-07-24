@@ -45,9 +45,13 @@ leaderboard.ron
 hall_of_shame.ron
 pings.ron
 ai_memory.ron
+# MIGRATION(emote-meanings): legacy DB filename — remove when all envs on emotes.db
 emote_tracker.sqlite
 emote_tracker.sqlite-wal
 emote_tracker.sqlite-shm
+emotes.db
+emotes.db-wal
+emotes.db-shm
 
 # Caveman compression backups
 *.original.md

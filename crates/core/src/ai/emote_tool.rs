@@ -22,9 +22,9 @@ pub fn search_emotes_tool() -> ToolDefinition {
     ToolDefinition {
         name: SEARCH_EMOTES_TOOL_NAME.into(),
         description: "Search the channel's full 7TV emote set by meaning or by partial code and \
-            return the best matches (exact code + meaning + usage). Call this when you want an \
-            emote for a feeling or moment that is not among the emotes listed in the system \
-            prompt — never invent emote codes. Returns up to 20 ranked matches."
+            return the best matches (exact code + appearance + meaning + usage). Call this when you \
+            want an emote for a feeling or moment that is not among the emotes listed in this \
+            turn's context — never invent emote codes. Returns up to 20 ranked matches."
             .into(),
         parameters: json!({
             "type": "object",

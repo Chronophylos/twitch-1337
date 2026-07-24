@@ -2,9 +2,74 @@ use eyre::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::types::{
-    EmoteRow, NewSetEvent, NewUsageEvent, SetEventKind, SetEventListFilter, SetEventRow,
-    UsageEventListFilter, UsageEventRow,
+    EmoteMeaningRow, EmoteRow, NewSetEvent, NewUsageEvent, SetEventKind, SetEventListFilter,
+    SetEventRow, UsageEventListFilter, UsageEventRow,
 };
+
+/// Insert or update a curated emote meaning row.
+///
+/// On conflict, `meaning` is preserved when the upsert passes `NULL` so seed
+/// re-runs do not wipe dashboard-curated meanings.
+pub fn upsert_emote_meaning(
+    conn: &Connection,
+    emote_id: &str,
+    appearance: &str,
+    meaning: Option<&str>,
+    usage: Option<&str>,
+    avoid: Option<&str>,
+    updated_at: i64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO emote_meanings (emote_id, appearance, meaning, usage, avoid, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(emote_id) DO UPDATE SET
+           appearance = excluded.appearance,
+           meaning = COALESCE(excluded.meaning, emote_meanings.meaning),
+           usage = excluded.usage,
+           avoid = excluded.avoid,
+           updated_at = excluded.updated_at",
+        params![emote_id, appearance, meaning, usage, avoid, updated_at],
+    )?;
+    Ok(())
+}
+
+/// Fetch one emote meaning row by 7TV id.
+pub fn get_emote_meaning(conn: &Connection, emote_id: &str) -> Result<Option<EmoteMeaningRow>> {
+    conn.query_row(
+        "SELECT emote_id, appearance, meaning, usage, avoid, updated_at
+         FROM emote_meanings WHERE emote_id = ?1",
+        params![emote_id],
+        map_emote_meaning_row,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+/// Fetch meaning rows for the given ids (empty input → empty vec).
+pub fn list_emote_meanings_for_ids(
+    conn: &Connection,
+    ids: &[String],
+) -> Result<Vec<EmoteMeaningRow>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = std::iter::repeat_n("?", ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT emote_id, appearance, meaning, usage, avoid, updated_at
+         FROM emote_meanings WHERE emote_id IN ({placeholders})
+         ORDER BY emote_id"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> = ids
+        .iter()
+        .map(|id| id as &dyn rusqlite::types::ToSql)
+        .collect();
+    let rows = stmt.query_map(params.as_slice(), map_emote_meaning_row)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
 
 /// Insert or update an emote catalog row.
 pub fn upsert_emote(
@@ -298,6 +363,17 @@ pub fn list_usage_events(
         .map_err(Into::into)
 }
 
+fn map_emote_meaning_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EmoteMeaningRow> {
+    Ok(EmoteMeaningRow {
+        emote_id: row.get(0)?,
+        appearance: row.get(1)?,
+        meaning: row.get(2)?,
+        usage: row.get(3)?,
+        avoid: row.get(4)?,
+        updated_at: row.get(5)?,
+    })
+}
+
 fn map_emote_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EmoteRow> {
     let active: i32 = row.get(2)?;
     Ok(EmoteRow {
@@ -340,6 +416,71 @@ mod tests {
         CatalogMutation, SetChangeBatch, SetEventKind, SetEventListFilter, UsageEventListFilter,
     };
     use rusqlite::Connection;
+
+    #[test]
+    fn upsert_get_and_list_emote_meanings() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        upsert_emote_meaning(
+            &conn,
+            "e1",
+            "wide eyes",
+            None,
+            Some("hype"),
+            Some("sad moments"),
+            100,
+        )
+        .unwrap();
+        upsert_emote_meaning(&conn, "e2", "spinning", Some("chaos"), None, None, 101).unwrap();
+
+        let row = get_emote_meaning(&conn, "e1").unwrap().unwrap();
+        assert_eq!(row.emote_id, "e1");
+        assert_eq!(row.appearance, "wide eyes");
+        assert_eq!(row.meaning, None);
+        assert_eq!(row.usage.as_deref(), Some("hype"));
+        assert_eq!(row.avoid.as_deref(), Some("sad moments"));
+        assert_eq!(row.updated_at, 100);
+
+        let listed = list_emote_meanings_for_ids(&conn, &["e2".into(), "e1".into()]).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].emote_id, "e1");
+        assert_eq!(listed[1].emote_id, "e2");
+        assert_eq!(listed[1].meaning.as_deref(), Some("chaos"));
+        assert!(list_emote_meanings_for_ids(&conn, &[]).unwrap().is_empty());
+        assert!(get_emote_meaning(&conn, "missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn upsert_emote_meaning_preserves_meaning_when_seed_passes_null() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        upsert_emote_meaning(
+            &conn,
+            "e1",
+            "old look",
+            Some("curated"),
+            Some("old usage"),
+            None,
+            1,
+        )
+        .unwrap();
+        upsert_emote_meaning(
+            &conn,
+            "e1",
+            "new look",
+            None,
+            Some("new usage"),
+            Some("doomer hours"),
+            2,
+        )
+        .unwrap();
+        let row = get_emote_meaning(&conn, "e1").unwrap().unwrap();
+        assert_eq!(row.appearance, "new look");
+        assert_eq!(row.meaning.as_deref(), Some("curated"));
+        assert_eq!(row.usage.as_deref(), Some("new usage"));
+        assert_eq!(row.avoid.as_deref(), Some("doomer hours"));
+        assert_eq!(row.updated_at, 2);
+    }
 
     #[test]
     fn apply_set_changes_is_atomic_catalog_and_audit() {

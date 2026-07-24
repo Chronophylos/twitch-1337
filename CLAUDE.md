@@ -183,7 +183,7 @@ OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config
 
 ## Data dir
 
-All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `token-aurora.ron`, `token-grok.ron` (per-mouth, only when that mouth is configured), `pings.ron`, `leaderboard.ron`, `hall_of_shame.ron`, `flights.ron`, `feedback.txt`. Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/scratch/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt templates are *not* here — they're baked into the binary from `crates/data/assets/prompts/` (`include_str!` via `twitch-1337-data`, single source of truth; see `docs/ai-prompts.md`).
+All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `token-aurora.ron`, `token-grok.ron` (per-mouth, only when that mouth is configured), `pings.ron`, `leaderboard.ron`, `hall_of_shame.ron`, `flights.ron`, `feedback.txt`, `emotes.db` (+ `-wal`/`-shm` when WAL mode) — emote tracker catalog, set audit, usage events, and sibling `emote_meanings` for AI grounding (see ADR-0008). On first open, legacy `emote_tracker.sqlite` (+ wal/shm) is renamed to `emotes.db` when the new name is absent (`MIGRATION(emote-meanings)` bridge — dual gitignore until all envs migrated). Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/scratch/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt templates are *not* here — they're baked into the binary from `crates/data/assets/prompts/` (`include_str!` via `twitch-1337-data`, single source of truth; see `docs/ai-prompts.md`).
 
 Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `flight_tracker.rs`.
 
@@ -192,11 +192,11 @@ Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `fli
 `twitch-1337-data` owns all baked assets under `crates/data/assets/`:
 
 - `location/` — `plz.csv`, `airports.csv`, `airlines.csv` (refreshed weekly by `data-refresh.yml`)
-- `emotes/` — `7tv_emotes.toml`
+- `emotes/` — `7tv_emotes.toml` (seed-only input for `just seed-emote-meanings`; `DEPRECATED(emote-meanings)` — not a runtime AI glossary)
 - `prompts/` — AI prompt templates
 - `flight/` — aircraft profiles + OurAirports CSVs for flight-plan DB generation (OurAirports CSVs refreshed by `data-refresh.yml` / `just data-refresh`; `build.rs` bakes from committed files only — no network at compile time)
 
-Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endian blobs (`location_airports.bin`, `plz.bin` via `include_bytes!`) to avoid PIE reloc bloat from `&str`-heavy static structs; flight-plan tables still emit generated Rust slices. Airlines CSV, 7tv TOML, and prompts stay `include_str!`. Zero runtime data-file dep (important for `FROM scratch` musl image).
+Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endian blobs (`location_airports.bin`, `plz.bin` via `include_bytes!`) to avoid PIE reloc bloat from `&str`-heavy static structs; flight-plan tables still emit generated Rust slices. Airlines CSV, 7tv seed TOML, and prompts stay `include_str!`. Zero runtime data-file dep for prod image semantics (important for `FROM scratch` musl image); emote meanings live in `$DATA_DIR/emotes.db` after seed.
 
 ## Architecture invariants
 

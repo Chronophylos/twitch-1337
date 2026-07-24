@@ -128,7 +128,13 @@ _Avoid_: key, id, filename, dated slug.
 **Active Catalog:**
 Channel 7TV emotes currently on the set (`emotes.active = 1`). Names here are
 what chat usage matching sees.
-_Avoid_: glossary (AI prompt list), global emotes.
+_Avoid_: glossary, global emotes, Emote Meaning (semantics are a sibling).
+
+**Emote Meaning:**
+Curated semantic annotation for a 7TV emote, keyed by `emote_id`, holding
+appearance (what it looks like), meaning (what it signals in chat), and optional
+usage/avoid guidance. Lives beside the Active Catalog; not membership.
+_Avoid_: glossary, description (alone), prompt list.
 
 **Emote Tombstone:**
 An `emotes` row with `active = 0` kept after removal so history foreign keys and
