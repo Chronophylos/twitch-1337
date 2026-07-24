@@ -5,7 +5,15 @@
 
 MIGRATION(emote-meanings): import baked 7tv_emotes.toml into emotes.db — remove when bake file retired.
 
+Prerequisite: start the bot (or otherwise open emotes.db via EmoteTracker) once so schema
+v3 migration runs. This script does not call migrate(); seeding against an unmigrated DB
+will fail.
+
 Maps TOML `meaning` → SQL `appearance`; leaves SQL `meaning` NULL so curated values survive re-runs.
+
+Fail-closed: exits 1 when any name is unresolved or collides, but successful upserts are
+committed before that check. Re-run is idempotent (appearance/usage/avoid refresh; curated
+`meaning` preserved via COALESCE).
 """
 
 from __future__ import annotations
