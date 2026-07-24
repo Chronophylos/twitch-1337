@@ -58,7 +58,11 @@ pub(crate) enum Emit {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RemovalReason {
-    TrackingLost { secs: i64 },
+    TrackingLost {
+        secs: i64,
+    },
+    /// Produced by Poll Decision when readiness is Expired — never by Advance.
+    PendingExpired,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -76,7 +80,7 @@ pub(crate) enum RouteOutcome {
     Timeout,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct FlightUpdate {
     pub emits: Vec<Emit>,
     pub debug: Vec<FlightTrackerDebugEvent>,

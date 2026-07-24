@@ -5,6 +5,8 @@ pub(crate) mod format;
 pub(crate) mod loop_run;
 pub(crate) mod metadata;
 pub(crate) mod phase;
+pub(crate) mod poll_cycle;
+pub(crate) mod poll_decision;
 pub(crate) mod schedule;
 pub(crate) mod state;
 #[cfg(test)]
