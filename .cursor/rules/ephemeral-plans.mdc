@@ -1,0 +1,23 @@
+---
+description: Implementation plans are ephemeral — never commit; delete after use
+alwaysApply: true
+---
+
+# Ephemeral implementation plans
+
+`docs/superpowers/plans/` may hold a **local** working plan while implementing. Treat it as scratch, not product history.
+
+## Do
+
+- Write plans locally when using the writing-plans / executing-plans flow
+- Keep the plan untracked (`git status` should not show it staged)
+- **Delete the plan file** once the feature is implemented (or the PR is open and you no longer need the checklist)
+- Put durable decisions in `docs/superpowers/specs/` and `docs/adr/` instead
+
+## Don't
+
+- Never `git add` or commit a new plan under `docs/superpowers/plans/`
+- Never force-add a plan around `.gitignore`
+- Do not treat plans as the long-term source of truth (specs/ADRs are)
+
+Historical plans already on `main` stay; this rule applies to **new** plans going forward.

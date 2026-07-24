@@ -11,8 +11,10 @@ Already in `.gitignore` — do not force-add:
 - `config.toml` (local copy with secrets — use `config.toml.example` as template)
 - `token.ron`, `*.ron` runtime data (`pings.ron`, `leaderboard.ron`, etc.)
 - `emote_tracker.sqlite`, `emote_tracker.sqlite-wal`, `emote_tracker.sqlite-shm`
+- `emotes.db`, `emotes.db-wal`, `emotes.db-shm`
+- New files under `docs/superpowers/plans/` (ephemeral working plans — see `ephemeral-plans.mdc`; do not add)
 - `./dev-data/`, `./prod-data/`, `/data/`
 - `.worktrees/`
 - `token.ron`, schedule/leaderboard/ping/memory caches at repo root
 
-Before committing, verify `git status` has no secret-bearing or runtime data files staged.
+Before committing, verify `git status` has no secret-bearing, runtime data, or local plan files staged.
