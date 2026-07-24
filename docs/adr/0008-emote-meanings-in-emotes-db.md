@@ -36,6 +36,11 @@ channel-REST-only semantics path). Active Catalog write SoR and global-REST
 membership rules from ADR-0004/0005 otherwise stand. ADR-0004’s path name is
 superseded by `emotes.db`.
 
+**Deprecated bridges** (filename rename-on-open, dual gitignore, TOML as seed-only
+input) must be marked `DEPRECATED(emote-meanings)` /
+`MIGRATION(emote-meanings)` in code and docs so a later cleanup PR can delete
+them by grep. See the design spec § Deprecation & removable migrations.
+
 ## Consequences
 
 - **+** Rename-safe semantics; one SQLite for set + meanings; `active = 1` is the

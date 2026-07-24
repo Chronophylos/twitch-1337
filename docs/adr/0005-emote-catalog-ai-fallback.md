@@ -1,6 +1,6 @@
 # ADR-0005: Tracker owns channel emote catalog; AI falls back to REST
 
-**Status:** Accepted (2026-07-17)
+**Status:** Accepted (2026-07-17); **partially superseded by [ADR-0008](0008-emote-meanings-in-emotes-db.md)** for meanings-backed AI grounding (no baked-TOML / no channel-REST-only semantics path; DB file is now `emotes.db`)
 **Relates to:** [CONTEXT.md](../../CONTEXT.md) § Emote tracking; ADR-0004;
 `docs/superpowers/specs/2026-07-17-emote-tracker-design.md`
 
