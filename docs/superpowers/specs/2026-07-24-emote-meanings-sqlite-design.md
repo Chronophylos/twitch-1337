@@ -3,11 +3,11 @@
 Status: approved for planning
 Date: 2026-07-24
 Branch: `feature/emote-meanings-sqlite`
-Related: [CONTEXT.md](../../../CONTEXT.md) § Emote tracking; [ADR-0004](../../adr/0004-sqlite-for-emote-tracker.md); [ADR-0005](../../adr/0005-emote-catalog-ai-fallback.md); [ADR-0008](../../adr/0008-emote-meanings-in-tracker-sqlite.md); [ADR-0001](../../adr/0001-emote-breadth-lookup-tool-over-subagent.md); parent epic [2026-07-17-emote-tracker-design.md](./2026-07-17-emote-tracker-design.md)
+Related: [CONTEXT.md](../../../CONTEXT.md) § Emote tracking; [ADR-0004](../../adr/0004-sqlite-for-emote-tracker.md); [ADR-0005](../../adr/0005-emote-catalog-ai-fallback.md); [ADR-0008](../../adr/0008-emote-meanings-in-emotes-db.md); [ADR-0001](../../adr/0001-emote-breadth-lookup-tool-over-subagent.md); parent epic [2026-07-17-emote-tracker-design.md](./2026-07-17-emote-tracker-design.md)
 
 ## Goal
 
-Replace the name-keyed baked 7TV glossary TOML as the live AI semantics source with an **ID-keyed** sibling table in `emote_tracker.sqlite`. Split today’s overloaded `meaning` into **appearance** vs **meaning**, seed from the current TOML via a one-shot **uv** Python script, and cut the AI provider / `search_emotes` over to SQLite.
+Replace the name-keyed baked 7TV glossary TOML as the live AI semantics source with an **ID-keyed** sibling table in `$DATA_DIR/emotes.db` (renamed from `emote_tracker.sqlite`). Split today’s overloaded `meaning` into **appearance** vs **meaning**, seed from the current TOML via a one-shot **uv** Python script, and cut the AI provider / `search_emotes` over to SQLite.
 
 ## Background
 
@@ -30,7 +30,9 @@ Replace the name-keyed baked 7TV glossary TOML as the live AI semantics source w
 
 | Topic | Choice |
 |---|---|
-| Storage | Sibling table `emote_meanings` in `emote_tracker.sqlite` (not a separate DB file) |
+| Storage | Sibling table `emote_meanings` in `$DATA_DIR/emotes.db` (not a separate DB file) |
+| DB filename | Rename `emote_tracker.sqlite` → `emotes.db` (module path may stay `emote_tracker` in v1) |
+| DB migrate-on-open | If `emotes.db` missing and `emote_tracker.sqlite` exists → rename file (+ `-wal`/`-shm` if present), then open |
 | Identity | Primary key = 7TV `emote_id` |
 | FK to `emotes` | **No hard FK** — global IDs must exist without channel membership rows |
 | Tracker dependency | AI emote grounding **requires** `EmoteTrackerHandle`; no baked-TOML runtime fallback |
@@ -50,10 +52,12 @@ Replace the name-keyed baked 7TV glossary TOML as the live AI semantics source w
 ## Architecture
 
 ```
-7tv_emotes.toml ──(uv seed script)──► emote_meanings (SQLite)
+7tv_emotes.toml ──(uv seed script)──► emote_meanings ($DATA_DIR/emotes.db)
                                             ▲
                      emotes.active=1 ───────┘  channel pool
                      REST /emote-sets/global ──┘  global IDs ∩ meanings
+
+On open: emote_tracker.sqlite (+ wal/shm) ──rename──► emotes.db if needed
 
 SevenTvEmoteProvider
   ├─ prompt_block_for_turn → select window (pinned / scored / baseline)
@@ -77,7 +81,7 @@ Path: `scripts/seed-emote-meanings.py` (PEP 723 / `uv run --script`), recipe e.g
 
 Inputs:
 
-- Path to `emote_tracker.sqlite`
+- Path to `emotes.db` (callers may still pass a legacy `emote_tracker.sqlite` path; script should accept either and prefer `emotes.db` when both exist)
 - Path to glossary TOML (default: `crates/data/assets/emotes/7tv_emotes.toml`)
 - Optional 7TV API base URL (default `https://7tv.io/v3`)
 
@@ -102,13 +106,16 @@ Steps:
 
 ### ADR relationship
 
-- Extends `ADR-0004` (SQLite ledger grows a semantics sibling)
+- Extends `ADR-0004` (SQLite ledger grows a semantics sibling; path renamed to `emotes.db`)
 - Partially supersedes `ADR-0005` for AI channel grounding: meanings-backed AI emotes no longer soft-fallback to REST-only channel sets without the tracker. Globals remain REST for membership IDs. See `ADR-0008`.
 
 ## Error handling
 
 | Case | Behavior |
 |------|----------|
+| Legacy DB present, new name absent | Rename `emote_tracker.sqlite` → `emotes.db` (and wal/shm); then open |
+| Both legacy and new DB exist | Open `emotes.db`; leave legacy file untouched; log a warning |
+| Rename fails | Log error; treat as tracker open failure (`None`) |
 | Seed unresolved name | Listed in report; non-zero exit; no partial “success” silence |
 | Seed name collision in tracker | Fail that name (report); non-zero exit |
 | Tracker open failure at bot start with `ai.emotes` on | Emote provider disabled; bot continues |
@@ -119,7 +126,8 @@ Steps:
 ## Testing
 
 - Schema migrate v2→v3; handle upsert/get/list-by-ids
-- Provider unit/integration tests use temp tracker DB + meaning fixtures (no TOML load)
+- DB path: rename-on-open from legacy filename; both-present warning; fresh `emotes.db` create
+- Provider unit/integration tests use temp `emotes.db` + meaning fixtures (no TOML load)
 - Preserve ranking / pin / search / include_global behaviors under ID-backed semantics
 - Seed script: manual/documented dry-run expectations (map fields, fail closed); not required in `cargo nextest` for v1
 
@@ -129,6 +137,7 @@ Steps:
 - `ADR-0008`
 - `CONTEXT.md`: **Emote Meaning**; adjust Active Catalog “avoid glossary” note
 - `docs/ai-prompts.md`: prompt field names / user-message emote block
+- Update gitignore / never-commit / CLAUDE `$DATA_DIR` mentions: `emotes.db*` (keep legacy names ignored too during transition)
 
 ## Follow-ups (explicitly later)
 
@@ -137,3 +146,4 @@ Steps:
 - Optionally remove baked TOML once all envs seeded
 - Optional: usage-based ranking using the usage ledger
 - Optional: persist global membership snapshot (rejected for v1; see decision table)
+- Optional: rename Rust module `emote_tracker` → something broader (not required for filename change)
