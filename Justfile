@@ -92,12 +92,6 @@ check-no-aws-lc:
   fi
   echo "ok: no aws-lc-sys in workspace graph"
 
-# MIGRATION(emote-meanings): one-shot TOML→SQLite seed — remove when bake file retired
-# Prerequisite: open emotes.db via the bot once (schema v3 migrate); seed does not migrate.
-# Fail-closed exit may leave partial upserts committed — re-run is idempotent.
-seed-emote-meanings db:
-  uv run scripts/seed-emote-meanings.py --db {{db}}
-
 # Regenerate committed public-dataset CSVs (location + flight OurAirports).
 # Requires network + `uv` (for the Python update scripts). Same steps as
 # `.github/workflows/data-refresh.yml`.

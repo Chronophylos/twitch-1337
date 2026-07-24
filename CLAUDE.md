@@ -192,11 +192,10 @@ Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `fli
 `twitch-1337-data` owns all baked assets under `crates/data/assets/`:
 
 - `location/` — `plz.csv`, `airports.csv`, `airlines.csv` (refreshed weekly by `data-refresh.yml`)
-- `emotes/` — `7tv_emotes.toml` (seed-only input for `just seed-emote-meanings`; `DEPRECATED(emote-meanings)` — not a runtime AI glossary)
 - `prompts/` — AI prompt templates
 - `flight/` — aircraft profiles + OurAirports CSVs for flight-plan DB generation (OurAirports CSVs refreshed by `data-refresh.yml` / `just data-refresh`; `build.rs` bakes from committed files only — no network at compile time)
 
-Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endian blobs (`location_airports.bin`, `plz.bin` via `include_bytes!`) to avoid PIE reloc bloat from `&str`-heavy static structs; flight-plan tables still emit generated Rust slices. Airlines CSV, 7tv seed TOML, and prompts stay `include_str!`. Zero runtime data-file dep for prod image semantics (important for `FROM scratch` musl image); emote meanings live in `$DATA_DIR/emotes.db` after seed.
+Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endian blobs (`location_airports.bin`, `plz.bin` via `include_bytes!`) to avoid PIE reloc bloat from `&str`-heavy static structs; flight-plan tables still emit generated Rust slices. Airlines CSV and prompts stay `include_str!`. Zero runtime data-file dep for prod image semantics (important for `FROM scratch` musl image); emote meanings live in `$DATA_DIR/emotes.db` (`emote_meanings`).
 
 ## Architecture invariants
 
