@@ -134,7 +134,7 @@ async fn ai_command_empty_shows_usage() {
 }
 
 #[tokio::test]
-async fn ai_command_injects_7tv_emote_glossary() {
+async fn ai_command_injects_7tv_emote_meanings() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
         .with_settings(|o| {
@@ -243,6 +243,38 @@ async fn ai_command_continues_when_7tv_unavailable() {
         .find(|m| m.role == Role::System)
         .expect("request has a system message");
     assert!(!system_msg.content.contains("7TV emotes available"));
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn ai_command_skips_emote_grounding_when_tracker_unavailable() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+            o.ai.emotes.enabled = Some(true);
+        })
+        .spawn()
+        .await;
+
+    bot.llm.push_tool_message("ohne tracker");
+    bot.send("alice", "!ai ping").await;
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
+    assert_eq!(body, "ohne tracker");
+
+    let calls = bot.llm.tool_calls();
+    assert_eq!(calls.len(), 1, "expected exactly one LLM call");
+    let user_msg = calls[0]
+        .messages
+        .iter()
+        .find(|m| m.role == Role::User)
+        .expect("request has a user message");
+    assert!(
+        !user_msg.content.contains("7TV emotes available"),
+        "emote provider must not be wired when tracker is None:\n{}",
+        user_msg.content
+    );
 
     bot.shutdown().await;
 }

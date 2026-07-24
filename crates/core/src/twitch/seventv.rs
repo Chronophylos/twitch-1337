@@ -149,7 +149,7 @@ impl SevenTvEmoteProvider {
 
     /// Return a turn-specific prompt block for the Twitch channel id.
     ///
-    /// The backing catalog + glossary are refreshed at most once per
+    /// The backing catalog + meanings are refreshed at most once per
     /// configured interval, but ranking happens per turn so current chat emotes
     /// and the user instruction can influence which entries the model sees.
     pub async fn prompt_block_for_turn(
@@ -208,7 +208,7 @@ impl SevenTvEmoteProvider {
                 cache.last_refresh = Some(now);
                 warn!(
                     error = ?e,
-                    "Failed to refresh 7TV emote glossary; using cached entries if available"
+                    "Failed to refresh 7TV emote meanings; using cached entries if available"
                 );
             }
         }
