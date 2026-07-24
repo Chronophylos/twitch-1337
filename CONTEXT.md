@@ -19,8 +19,21 @@ _Avoid_: poll result, sample, reading.
 **Advance**:
 The pure transition of a Tracked Flight by one Observation: it updates the
 flight's state and decides what announcements, removals, and follow-up lookups
-the cycle should perform. Carries no side effects of its own.
+the caller should perform. Carries no side effects of its own. Does not decide
+Pending Expired — that is Poll Decision's job when readiness is expired.
 _Avoid_: step, tick, update, process.
+
+**Poll Decision**:
+The pure outcome for one Tracked Flight given poll readiness and, when due, an
+Observation: either Pending Expired or Advance. Carries no I/O.
+_Avoid_: tick, step, process, cycle (reserve “cycle” for Poll Cycle).
+
+**Poll Cycle**:
+The I/O-bearing poll of one Due Tracked Flight: build an Observation from an
+ADS-B lookup, run Poll Decision, and perform Route Resolution. Pending Expired
+is decided without a Poll Cycle — readiness alone feeds Poll Decision.
+_Avoid_: sweep, batch poll, tick (parallelism over many flights is orchestration,
+not this term).
 
 **Seed**:
 The shared sub-transition both Advance and the initial `!track` poll apply when

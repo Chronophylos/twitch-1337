@@ -27,10 +27,11 @@ use super::{
 use super::{MAX_FLIGHTS_PER_USER, MAX_TRACKED_FLIGHTS, POLL_TIMEOUT, ROUTE_FETCH_TIMEOUT};
 
 use super::advance::{
-    Emit, Followup, Observation, PollOutcome, RemovalReason, RouteOutcome, advance_flight,
-    apply_route_outcome, candidate_callsign_matches_flight, format_emit, identifier_callsign,
-    last_seen_age_secs, seed_from_observation,
+    Followup, Observation, PollOutcome, RemovalReason, RouteOutcome, apply_route_outcome,
+    candidate_callsign_matches_flight, format_emit, identifier_callsign, last_seen_age_secs,
+    seed_from_observation,
 };
+use super::poll_decision::{PollPlan, decide_poll, poll_plan};
 
 fn find_index_by_identifier(
     flights: &[TrackedFlight],
@@ -1068,25 +1069,42 @@ where
     let mut fetch_results: Vec<PollAttempt> = Vec::new();
 
     for flight in state.flights.iter() {
-        match poll_readiness(flight, now) {
-            PollReadiness::Due => {}
-            PollReadiness::NotDue(_) => continue,
-            PollReadiness::Expired => {
-                info!(
-                    identifier = %flight.identifier,
-                    "Removing pending flight: ADS-B never appeared"
+        let readiness = poll_readiness(flight, now);
+        match poll_plan(flight, readiness, now) {
+            PollPlan::Skip => continue,
+            PollPlan::Apply(update) => {
+                let identifier = flight.identifier.clone();
+                for event in update.debug {
+                    append_debug_event(data_dir, now, event).await;
+                }
+                debug_assert!(
+                    update.followups.is_empty(),
+                    "Pending Expired must not queue Route Resolution"
                 );
-                append_debug_event(
-                    data_dir,
-                    now,
-                    FlightTrackerDebugEvent::tracking_removal(flight, "pending_expired", None),
-                )
-                .await;
-                messages.push(format_emit(flight, &Emit::PendingExpired, now));
-                removals.push(flight.identifier.clone());
+                for emit in &update.emits {
+                    messages.push(format_emit(flight, emit, now));
+                }
+                if let Some(reason) = update.removal {
+                    match reason {
+                        RemovalReason::PendingExpired => {
+                            info!(
+                                identifier = %identifier,
+                                "Removing pending flight: ADS-B never appeared"
+                            );
+                        }
+                        RemovalReason::TrackingLost { secs } => {
+                            info!(
+                                identifier = %identifier,
+                                "Removing flight: tracking lost for {secs}s"
+                            );
+                        }
+                    }
+                    removals.push(identifier);
+                }
                 changed = true;
                 continue;
             }
+            PollPlan::Due => {}
         }
 
         let ac = aviation_client.clone();
@@ -1181,9 +1199,11 @@ where
         };
         let obs = Observation { used_hex, outcome };
 
-        let update = {
+        let Some(update) = ({
             let flight = &mut state.flights[idx];
-            advance_flight(flight, &obs, now)
+            decide_poll(flight, PollReadiness::Due, Some(&obs), now)
+        }) else {
+            continue;
         };
         changed = true;
 
@@ -1209,6 +1229,12 @@ where
             match reason {
                 RemovalReason::TrackingLost { secs } => {
                     info!(identifier = %identifier, "Removing flight: tracking lost for {secs}s");
+                }
+                RemovalReason::PendingExpired => {
+                    info!(
+                        identifier = %identifier,
+                        "Removing pending flight: ADS-B never appeared"
+                    );
                 }
             }
             removals.push(identifier.clone());
