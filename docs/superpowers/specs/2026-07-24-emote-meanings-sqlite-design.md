@@ -3,7 +3,7 @@
 Status: approved for planning
 Date: 2026-07-24
 Branch: `feature/emote-meanings-sqlite`
-Related: [CONTEXT.md](../../../CONTEXT.md) § Emote tracking; [ADR-0004](../../adr/0004-sqlite-for-emote-tracker.md); [ADR-0005](../../adr/0005-emote-catalog-ai-fallback.md); [ADR-0008](../../adr/0008-emote-meanings-in-emotes-db.md); [ADR-0001](../../adr/0001-emote-breadth-lookup-tool-over-subagent.md); parent epic [2026-07-17-emote-tracker-design.md](./2026-07-17-emote-tracker-design.md)
+Related: [CONTEXT.md](../../../CONTEXT.md) § Emote tracking; [ADR-0004](../../adr/0004-sqlite-for-emote-tracker.md); [ADR-0005](../../adr/0005-emote-catalog-ai-fallback.md); [ADR-0008](../../adr/0008-emote-meanings-in-emotes-db.md); [ADR-0009](../../adr/0009-migrations-and-deprecations.md); [ADR-0001](../../adr/0001-emote-breadth-lookup-tool-over-subagent.md); parent epic [2026-07-17-emote-tracker-design.md](./2026-07-17-emote-tracker-design.md)
 
 ## Goal
 
@@ -48,60 +48,30 @@ Replace the name-keyed baked 7TV glossary TOML as the live AI semantics source w
 | Usable row | At least one of appearance / meaning / usage non-empty |
 | Handle API | Extend `EmoteTrackerHandle` (same writer thread); no second handle |
 | Schema | Bump emote_tracker to **v3** |
-| Deprecation marking | Old runtime glossary path + legacy DB filename + AI channel-REST semantics fallback are **deprecated**; migrations use a single grep-able tag (below) so they are easy to delete later |
+| Deprecation marking | Follow [ADR-0009](../../adr/0009-migrations-and-deprecations.md); slug `emote-meanings` (table below) |
 
-## Deprecation & removable migrations
+## Deprecation & migrations (feature table)
 
-Everything below is **temporary scaffolding**. Implementation must mark it so a future cleanup PR can delete by tag without archaeology.
+Process: [ADR-0009](../../adr/0009-migrations-and-deprecations.md). Slug: `emote-meanings`.
 
-### Grep tag
+| Item | Class | Marking | Exit criterion |
+|------|-------|---------|----------------|
+| Runtime TOML / `BAKED_GLOSSARY_TOML` in provider | Compat (delete) | Remove from hot path; tag any leftover | No runtime refs; tests use SQLite fixtures |
+| `emote_glossary_override` / TOML ctor arg | Compat (delete) | Prefer delete | No callers |
+| AI channel-REST semantics fallback (ADR-0005 soft path) | Compat (delete) | Unused for meanings-backed AI | No code path left |
+| `LEGACY_DB_FILENAME` + rename-on-open (+ wal/shm) | Compat bridge | `#[deprecated]` on legacy const → `DB_FILENAME`; `MIGRATION(emote-meanings)` on helper/tests | All known envs on `emotes.db`; no rename logs in recent starts |
+| Dual gitignore / never-commit for `emote_tracker.sqlite*` | Compat bridge | Tag next to `emotes.db*` entries | Same as filename |
+| Seed accepts legacy DB path | Compat bridge | Tag in script | Just/docs only mention `emotes.db` |
+| `scripts/seed-emote-meanings.py` + Just recipe | One-shot import | Tag script/recipe | Bake file retired / seed rewritten |
+| `7tv_emotes.toml` in repo | One-shot input | Header: seed-only, `DEPRECATED(emote-meanings)` | Envs seeded; seed retired |
+| Schema v2→v3 `emote_meanings` | Schema upgrade | **No** disposable `MIGRATION` tag | Keep; squash only with min-version gate (ADR-0009) |
 
-Use this exact substring in code comments, Rust `deprecated` notes, Python seed comments, Justfile notes, and gitignore transition lines:
+### Implementation checklist (PR)
 
-```text
-DEPRECATED(emote-meanings)
-```
-
-Migrations that exist only to bridge old → new add a second tag on the same line or the next:
-
-```text
-MIGRATION(emote-meanings): <what> — remove when <exit criterion>
-```
-
-### Deprecated (do not extend; remove when exit criterion met)
-
-| Item | Status after this feature | Exit criterion (safe to delete) |
-|------|---------------------------|----------------------------------|
-| Runtime load of `7tv_emotes.toml` / `BAKED_GLOSSARY_TOML` in `SevenTvEmoteProvider` | **Removed from hot path**; any leftover helper kept only for tests/seed must be tagged | No runtime references; tests use SQLite fixtures only |
-| `emote_glossary_override` / TOML constructor arg on the provider | **Deleted** (or `#[deprecated]` stub for one release if tests need a bridge — prefer delete) | No callers |
-| AI channel-set REST fallback when tracker catalog empty/missing (`ADR-0005` soft path for **semantics**) | **Deprecated / unused** for meanings-backed AI; channel pool is Active Catalog ⋈ meanings only | No code path remains; ADR-0005 note left historical |
-| On-disk name `emote_tracker.sqlite` (+ `-wal`/`-shm`) | **Legacy**; rename-on-open only | All known envs (`dev-data`, prod, worktrees) already on `emotes.db`; no rename log lines in recent starts |
-| gitignore / never-commit entries for `emote_tracker.sqlite*` | Keep **alongside** `emotes.db*` during transition, tagged | Same as filename exit criterion |
-| Seed accepting a legacy DB path argument | Allowed, tagged | Seed docs/Just recipe only mention `emotes.db` |
-| Baked `crates/data/assets/emotes/7tv_emotes.toml` in the repo | **Seed input only** (not live AI source); header comment must say deprecated as runtime glossary | All envs seeded + meanings curated enough; seed script deleted or rewritten against another source |
-
-### Migrations (keep small, keep tagged)
-
-| Migration | Where | Behavior | Remove when |
-|-----------|--------|----------|-------------|
-| File rename-on-open | `emote_tracker` open path (`DB_FILENAME` / `LEGACY_DB_FILENAME`) | If `emotes.db` absent and legacy present → rename (+ wal/shm); if both exist → open new, warn, leave legacy | All envs migrated; then delete `LEGACY_DB_FILENAME` + rename helper + tests |
-| Schema v2 → v3 | `schema.rs` (`MIGRATE_2_TO_3` / `SCHEMA_VERSION = 3`) | Create `emote_meanings` | **Do not delete** historical migrate steps while old DBs may open; freeze as permanent upgrade path (same as v1→v2). Only remove if the project ever squashes minimum supported version |
-| One-shot TOML → SQLite seed | `scripts/seed-emote-meanings.py` + Just recipe | Operator-run import | After bake file retired (see table above) |
-
-Schema migrations are **not** “temporary” in the same sense as rename-on-open: keep them. The removable ones are **filename bridge**, **gitignore dual entries**, **seed script**, and **any leftover TOML runtime shims**.
-
-### Implementation checklist (must land in the PR)
-
-1. `pub const DB_FILENAME: &str = "emotes.db";`
-2. `pub const LEGACY_DB_FILENAME: &str = "emote_tracker.sqlite";` with `DEPRECATED(emote-meanings)` / `MIGRATION(emote-meanings)` on the const and rename helper
-3. Unit tests for rename-on-open and both-present warning, also tagged so they delete with the helper
-4. TOML asset header: “Deprecated as runtime AI glossary; seed input only (`DEPRECATED(emote-meanings)`)”
-5. ADR-0005: add a short **Superseded in part by ADR-0008** note at the top (do not rewrite history)
-6. `docs/ai-prompts.md` / CLAUDE data-dir: document `emotes.db`; mention legacy name as transitional only
-
-### Removal PR (later)
-
-Search the repo for `DEPRECATED(emote-meanings)` and `MIGRATION(emote-meanings)`, delete matches whose exit criteria are met, drop legacy gitignore lines, and optionally delete the seed script + baked TOML in the same or a follow-up PR.
+1. `DB_FILENAME = "emotes.db"`; `LEGACY_DB_FILENAME` deprecated + tagged rename helper + tests  
+2. TOML header: seed-only / deprecated as runtime glossary  
+3. ADR-0005 status already notes ADR-0008 supersession  
+4. `docs/ai-prompts.md` / CLAUDE / gitignore: `emotes.db*`; legacy names tagged transitional  
 
 ## Architecture
 
@@ -197,7 +167,7 @@ Steps:
 
 - Curate `meaning` values
 - Add/edit UI or CLI for new emotes
-- Removal PR for tagged `DEPRECATED(emote-meanings)` / `MIGRATION(emote-meanings)` items once exit criteria are met (legacy filename bridge, dual gitignore, seed + baked TOML)
+- Cleanup PR per ADR-0009 once `emote-meanings` exit criteria hold
 - Optional: usage-based ranking using the usage ledger
 - Optional: persist global membership snapshot (rejected for v1; see decision table)
 - Optional: rename Rust module `emote_tracker` → something broader (not required for filename change)

@@ -37,9 +37,9 @@ membership rules from ADR-0004/0005 otherwise stand. ADR-0004’s path name is
 superseded by `emotes.db`.
 
 **Deprecated bridges** (filename rename-on-open, dual gitignore, TOML as seed-only
-input) must be marked `DEPRECATED(emote-meanings)` /
-`MIGRATION(emote-meanings)` in code and docs so a later cleanup PR can delete
-them by grep. See the design spec § Deprecation & removable migrations.
+input) follow [ADR-0009](0009-migrations-and-deprecations.md): mark with
+`DEPRECATED(emote-meanings)` / `MIGRATION(emote-meanings)` and feature exit
+criteria in the design spec table. Cleanup PRs delete by grep once criteria hold.
 
 ## Consequences
 
