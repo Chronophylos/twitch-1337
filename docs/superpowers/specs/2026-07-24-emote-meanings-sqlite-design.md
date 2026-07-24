@@ -97,7 +97,7 @@ SevenTvEmoteProvider
 | `meaning` | TEXT NULL | what it signals in chat (empty after seed) |
 | `usage` | TEXT NULL | when to use |
 | `avoid` | TEXT NULL | when not to |
-| `updated_at` | INTEGER NOT NULL | unix seconds |
+| `updated_at` | INTEGER NOT NULL | unix milliseconds (matches `emotes.updated_at`) |
 
 ### Seed script
 

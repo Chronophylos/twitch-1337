@@ -7,10 +7,10 @@ The bot's prompts live as Markdown files in the repo at `crates/data/assets/prom
 | File | Used by | Role |
 |---|---|---|
 | `system.md` | `!ai` chat-turn loop | System prompt for the per-turn LLM session. |
-| `ai_instructions.md` | `!ai` chat-turn loop | Preamble prepended to the user message before the relevant-emotes block, volatile state, recent chat, and the new message. |
+| `ai_instructions.md` | `!ai` chat-turn loop | Preamble in the user message after the relevant-emotes block, scratch, and recent chat; carries `{speaker_*}` tokens. |
 | `dreamer.md` | nightly ritual | System prompt for the dreamer LLM. |
 
-The chat turn injects `system.md` as the system prompt, then `ai_instructions.md` + speaker metadata + relevant-emotes block + volatile state + recent chat + the new message as the user message. The ritual injects `dreamer.md` as the system prompt, then memory + transcript as the user message.
+The chat turn injects `system.md` as the system prompt, then assembles the user message in order: relevant-emotes block → scratch fences → recent chat → substituted `ai_instructions.md` → the turn instruction. The ritual injects `dreamer.md` as the system prompt, then memory + transcript as the user message.
 
 ## Substitution tokens
 
@@ -43,7 +43,9 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 
 **Length nudge**. The final reply is truncated app-side at `MAX_RESPONSE_LENGTH` chars. Asking for "≤3 sentences" in the prompt keeps lines tidy.
 
-**Prefix stability (caching).** The chat-turn system message is built to be a byte-stable cache prefix so Gemini's implicit prompt cache hits (cached tokens bill at 0.25x). `build_chat_turn_messages` in `inject.rs` enforces the split: stable content (substituted `system.md`, the tool appendices, and durable SOUL/LORE/user memory) goes in the system message; everything per-turn (the relevant-emotes block, volatile state, recent chat, the instruction) goes in the user message. Two rules keep the prefix stable: do not interpolate per-speaker tokens into `system.md`, and do not append per-turn content to the system message. Both reintroduce a cache miss every turn.
+**Prefix stability (caching).** The chat-turn system message is built to be a byte-stable cache prefix so Gemini's implicit prompt cache hits (cached tokens bill at 0.25x). `build_chat_turn_messages` in `inject.rs` enforces the split: stable content (substituted `system.md`, the tool appendices, and durable SOUL/LORE/user memory) goes in the system message; everything per-turn (the relevant-emotes block, scratch, recent chat, `ai_instructions.md`, the instruction) goes in the user message. Two rules keep the prefix stable: do not interpolate per-speaker tokens into `system.md`, and do not append per-turn content to the system message. Both reintroduce a cache miss every turn.
+
+**Relevant-emotes block.** Built per turn by `SevenTvEmoteProvider::prompt_block_for_turn` from `$DATA_DIR/emotes.db` (`emote_meanings` ⋈ active channel catalog; optional globals via REST ∩ meanings). Not a prompt template — runtime text only. Lands first in the user message so it never disturbs the cached system prefix. Each line is `- {name}` plus only non-empty fields: `appearance=`, `meaning=`, `use=`, `avoid=` (semicolon-separated). Selection is pinned core → scored (recent chat + instruction terms) → baseline fill, capped by `ai.emotes.max_prompt_emotes`. When the block is present, `search_emotes` is registered so the model can look up codes beyond the window. If the emote tracker is unavailable, the block is omitted entirely (no baked-TOML fallback). Seed curated rows with `just seed-emote-meanings` (see ADR-0008).
 
 **Refusal**. The bot refuses by returning empty final text — nothing is sent to chat. Encourage the model to stay silent on harassment, off-topic, or low-signal prompts rather than producing a defensive reply.
 
@@ -63,7 +65,7 @@ File caps (SOUL 4 KiB, LORE 12 KiB, user 4 KiB, scratch 2 KiB) are enforced by t
 
 ## grok.md
 
-`@grok` selects `grok.md` instead of `system.md` as the chat-turn system head, gated on the existing `grok_alias` bool in `command.rs`. Every other injection point (`ai_instructions.md`, speaker metadata, relevant-emotes block, volatile state, recent chat) is unchanged.
+`@grok` selects `grok.md` instead of `system.md` as the chat-turn system head, gated on the existing `grok_alias` bool in `command.rs`. Every other injection point (relevant-emotes block, scratch, recent chat, `ai_instructions.md`) is unchanged.
 
 `grok.md` is a full separate baked prompt, not an appendix stacked on `system.md`. The earlier design appended `GROK_SYSTEM_APPENDIX` after the substituted `system.md`, so every override it wanted (English-only replies, no sentence cap, no lowercase default) had to contradict German prose already sitting above it in the same message. Models follow a trailing contradiction unreliably, so the appendix approach stopped scaling once the persona needed more than a couple of overrides. A second head states its own rules once, with nothing above it to argue against.
 
