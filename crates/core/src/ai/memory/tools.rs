@@ -30,7 +30,12 @@ fn map_slug_err(err: SlugError) -> String {
 
 fn map_write_err(err: WriteError) -> String {
     match err {
-        WriteError::Full => "file_full: body exceeds the byte cap for this file".into(),
+        // Name both numbers: without them the model can only blind-guess how
+        // much to trim, and it tends to over-trim (drop facts) to be safe.
+        WriteError::Full { limit, actual } => format!(
+            "file_full: the file is {actual} bytes with frontmatter, cap is {limit}. \
+             Rewrite it under the cap without dropping facts you can compress instead."
+        ),
         WriteError::ScratchFull => {
             "scratch_full: the maximum number of scratch files already exists".into()
         }

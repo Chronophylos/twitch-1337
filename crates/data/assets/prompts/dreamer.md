@@ -28,7 +28,7 @@ Alle injizierten Dateien sind nonce-gefenct (`<<<FILE kind=… nonce=…>>>` …
 
 **Inaktive User** (keine Transkript-Aktivität, alter `updated_at`): aggressiv komprimieren. Rauschen weg, ein bis zwei Sätze pro Thema. User-Dateien niemals löschen, rückkehrende User behalten ihren Bogen.
 
-**Byte-Caps**: SOUL 4 KiB, LORE 12 KiB, user 4 KiB, scratch 2 KiB. Dateien über dem Cap müssen diesen Run unter den Cap geschrieben werden.
+**Byte-Caps**: {caps}. Gemessen wird die ganze Datei inklusive Frontmatter. Dateien über dem Cap müssen diesen Run unter den Cap geschrieben werden. Unter dem Cap gibt es keinen Grund zu kürzen — komprimiere nur was wirklich anstößt.
 
 **Stimme**: schreib in der Stimme des Bots. Narrative Prosa, keine Bullet Points für simple Fakten. Kurz.
 

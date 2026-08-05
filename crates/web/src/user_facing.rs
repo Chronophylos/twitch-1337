@@ -16,7 +16,9 @@ pub trait UserFacing {
 impl UserFacing for WriteError {
     fn user_message(&self) -> String {
         match self {
-            WriteError::Full => "exceeds byte cap".to_owned(),
+            WriteError::Full { limit, actual } => {
+                format!("exceeds byte cap ({actual} bytes, cap {limit})")
+            }
             WriteError::ScratchFull => "scratch collection full".to_owned(),
             WriteError::InvalidSlug => "invalid slug".to_owned(),
             WriteError::ReservedSlug => "reserved slug".to_owned(),
