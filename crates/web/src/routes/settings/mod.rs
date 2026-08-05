@@ -341,16 +341,19 @@ async fn save(
             // Preserve the user's submitted (raw) values so they can correct
             // the invalid field without having to retype every other input.
             // Spec §7.2: "previously entered values are preserved".
+            //
+            // Everything not echoed back falls back to the *stored* settings,
+            // never to compiled defaults: the whole page posts as one form, so
+            // a card rendered at its default here would be submitted as an
+            // explicit "set to default" on the next save and silently wipe
+            // settings the user never touched.
+            // ponytail: only cooldowns/pings echo the raw submission; the rest
+            // lose in-flight edits on a validation error. Echo the AI cards too
+            // if that retyping ever becomes annoying.
             let submitted = Settings {
-                schema_version: twitch_1337_core::settings::SCHEMA_VERSION,
                 cooldowns: cooldowns_settings,
                 pings: pings_settings,
-                // AI submitted-value preservation is left as a follow-up:
-                // it requires the per-card templates (Task 19) to read echoed
-                // values rather than the live `current.ai`. Until then, the
-                // re-render falls back to compiled defaults for the AI section.
-                ai: AiSettings::default(),
-                ..Settings::compiled_defaults()
+                ..before
             };
             let defaults = state.settings_store.defaults().clone();
             render_with(

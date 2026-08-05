@@ -122,7 +122,13 @@ pub async fn run_ritual(
     let inject_byte_budget = ai.memory.inject_byte_budget;
     drop(snap);
 
+    // Rotate first, then bail: a misconfigured model must not leave today.md
+    // growing forever without a date boundary.
     let dated = transcript.rotate_to(rotate_to).await?;
+    if model.trim().is_empty() {
+        warn!("dreamer skipped, AI model is empty in settings");
+        return Ok(());
+    }
     let transcript_text = tokio::fs::read_to_string(&dated).await.unwrap_or_default();
     let nonce = fresh_nonce();
 
@@ -347,6 +353,78 @@ mod tests {
         assert_eq!(
             models[1], "model-v2",
             "second call should pick up live change to model-v2"
+        );
+    }
+
+    /// An empty model makes every request fail with `No models provided`, so
+    /// the ritual skips the LLM entirely — but it must still rotate, or
+    /// today.md grows forever with no date boundary.
+    #[tokio::test]
+    async fn run_ritual_with_empty_model_still_rotates() {
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        use arc_swap::ArcSwap;
+        use async_trait::async_trait;
+        use llm::{
+            ChatCompletionRequest, LlmClient, LlmError, ToolChatCompletionRequest,
+            ToolChatCompletionResponse,
+        };
+        use tempfile::TempDir;
+
+        use crate::settings::{Settings, SettingsHandle};
+
+        struct Exploding(Mutex<usize>);
+        #[async_trait]
+        impl LlmClient for Exploding {
+            async fn chat_completion(&self, _req: ChatCompletionRequest) -> llm::Result<String> {
+                unreachable!("empty model must not reach the provider");
+            }
+            async fn chat_completion_with_tools(
+                &self,
+                _req: ToolChatCompletionRequest,
+            ) -> llm::Result<ToolChatCompletionResponse> {
+                *self.0.lock().unwrap() += 1;
+                Err(LlmError::Provider {
+                    status: 400,
+                    body: "No models provided".into(),
+                })
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        // compiled_defaults already carries an empty connection.model.
+        let settings: SettingsHandle =
+            Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()));
+        let store = crate::ai::memory::store::MemoryStore::open(dir.path(), settings.clone())
+            .await
+            .unwrap();
+        let transcript =
+            crate::ai::memory::transcript::TranscriptWriter::open(store.memories_dir())
+                .await
+                .unwrap();
+
+        let client = Arc::new(Exploding(Mutex::new(0)));
+        let yesterday = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
+        run_ritual(
+            client.as_ref(),
+            &store,
+            &transcript,
+            &settings,
+            "testchan",
+            yesterday,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            *client.0.lock().unwrap(),
+            0,
+            "empty model must not issue an LLM call",
+        );
+        assert!(
+            transcript.dated_path_for(yesterday).exists(),
+            "transcript must still rotate when the ritual skips the LLM",
         );
     }
 }
