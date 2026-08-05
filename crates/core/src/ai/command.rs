@@ -406,6 +406,11 @@ where
                 connection.service_tier.clone(),
             )
         };
+        if model.trim().is_empty() {
+            // Log only: a config problem is not the chatter's business.
+            error!("AI command skipped, model is empty in settings");
+            return Ok(());
+        }
         let persona_name = snap.ai.behavior.persona_name.clone();
         let display_name = if grok_alias {
             snap.ai.grok.persona_name.clone()

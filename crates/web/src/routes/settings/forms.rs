@@ -138,7 +138,12 @@ impl AiConnectionForm {
             base_url: self
                 .ai_connection_base_url
                 .map(|s| if s.trim().is_empty() { None } else { Some(s) }),
-            model: self.ai_connection_model,
+            // A blank model box means "unchanged", never "clear it": an empty
+            // model makes every request fail with `No models provided`.
+            model: self
+                .ai_connection_model
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             timeout: self.ai_connection_timeout,
             reasoning_effort: segmented_tri_state(self.ai_connection_reasoning_effort),
             service_tier: segmented_tri_state(self.ai_connection_service_tier),

@@ -1246,3 +1246,92 @@ async fn settings_page_renders_new_cards() {
         );
     }
 }
+
+/// A validation error must re-render untouched cards from the *stored*
+/// settings, not from compiled defaults: the whole page posts as one form,
+/// so a card echoed at its default gets submitted as an explicit
+/// "set to default" on the corrective save and wipes settings silently.
+#[tokio::test]
+async fn validation_error_preserves_stored_ai_settings() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+    let defaults = state.settings_store.defaults().clone();
+
+    // Store a model, the way the owner would have.
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_connection_model", "gpt-5")]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = build_router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+    // Now fail validation on a different card: the inject budget must cover
+    // SOUL + LORE, and 1024 bytes does not.
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[("ai_memory_inject_byte_budget", "1024")],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = build_router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::BAD_REQUEST,
+        "too-small inject budget must fail validation",
+    );
+    let html = body_string(res).await;
+    assert!(
+        html.contains("inject_byte_budget"),
+        "response must surface the failing field; got: {html}",
+    );
+    assert!(
+        html.contains("gpt-5"),
+        "stored AI model must survive the validation re-render; got: {html}",
+    );
+    assert_eq!(
+        state.settings.load().ai.connection.model,
+        "gpt-5",
+        "validation rejection must not mutate stored settings",
+    );
+}
+
+/// A blank model input means "unchanged", never "clear it": an empty model
+/// makes every LLM request fail with `No models provided`.
+#[tokio::test]
+async fn blank_model_input_does_not_clear_stored_model() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+    let defaults = state.settings_store.defaults().clone();
+
+    for (value, expected) in [("gpt-5", "gpt-5"), ("", "gpt-5"), ("   ", "gpt-5")] {
+        let body = save_form_body(&bare_csrf, &defaults, &[("ai_connection_model", value)]);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/settings")
+            .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = build_router(state.clone()).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            state.settings.load().ai.connection.model,
+            expected,
+            "submitting model={value:?} must leave the stored model at {expected:?}",
+        );
+    }
+}
