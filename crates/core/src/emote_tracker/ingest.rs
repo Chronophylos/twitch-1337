@@ -118,6 +118,8 @@ pub async fn run_set_ingest(
     let mut gap_started_at: Option<i64> = None;
 
     loop {
+        // A server-requested reconnect is routine; only unexpected exits warn.
+        let mut expected = false;
         match startup_reconcile_once(&handle, &http, &cfg, gap_started_at).await {
             Ok(result) => {
                 debug!(
@@ -157,6 +159,7 @@ pub async fn run_set_ingest(
                         if code == 4007 {
                             backoff = MAINTENANCE_BACKOFF;
                         }
+                        expected = true;
                     }
                     Err(error) => {
                         error!(?error, "emote set ingest EventAPI session ended");
@@ -174,10 +177,17 @@ pub async fn run_set_ingest(
             }
         }
 
-        warn!(
-            backoff_secs = backoff.as_secs(),
-            "emote set ingest backing off before reconnect"
-        );
+        if expected {
+            debug!(
+                backoff_secs = backoff.as_secs(),
+                "emote set ingest soft reconnect"
+            );
+        } else {
+            warn!(
+                backoff_secs = backoff.as_secs(),
+                "emote set ingest backing off before reconnect"
+            );
+        }
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
     }

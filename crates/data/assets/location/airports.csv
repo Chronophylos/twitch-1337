@@ -11185,7 +11185,6 @@ AT03,,Concordia Skyway,-75.103278,123.35825
 AT13,,Zucchelli Ice Runway,-74.68109,164.12756
 AT25,,Showa Station Skiway,-69.006167,39.59
 AT28,,Vostok Skiway,-78.466139,106.84825
-AT98,WFR,[Duplicate] Wolf's Fang Runway,-71.5264,8.799459
 ATUA,,(Duplicate) Utai Airstrip,-3.386,141.5868
 AU-0001,,Hopetoun Airfield,-33.90850067138672,120.14700317382812
 AU-0002,,Dwellingup Airstrip,-32.6926994324,116.074996948
@@ -11210,7 +11209,7 @@ AU-0020,,Kukerin,-33.17490005493164,118.08499908447266
 AU-0021,,Karijini National Park,-22.487101,118.468002
 AU-0022,,Cardabia Homestead Airstrip,-23.106024,113.805229
 AU-0023,,Woodbury Airfield,-42.162421,147.45011
-AU-0024,,Port Fairy,-38.36196517944336,142.26422119140625
+AU-0024,,Port Fairy Airstrip,-38.360626,142.267893
 AU-0025,,Northcliffe Airstrip,-34.660026,116.140803
 AU-0026,,Yuin Station,-27.983333587646484,116.03333282470703
 AU-0027,,Boobyalla Airfield,-40.89821,147.86132
@@ -11302,7 +11301,6 @@ AU-0112,,Aileron Airstrip,-22.652908,133.347244
 AU-0113,,Overlander Airport,-26.407707,114.45385
 AU-0114,,Denman Farm Strip,-32.379816,150.695005
 AU-0115,,Swan Reach Airport,-34.556053,139.592156
-AU-0116,,[Duplicate] Alcoota Station Airport,-22.801963,134.4036
 AU-0117,,Balma Airfield,-13.247423,135.848699
 AU-0118,,Ban Ban Airfield,-13.376886,131.495318
 AU-0119,,Banka Banka Airstrip,-18.79853,134.039619
@@ -11990,6 +11988,7 @@ AU-0804,,Mount Duneed Airfield,-38.260113,144.320795
 AU-0805,,Buckley Road South Airstrip,-38.222243,144.10146
 AU-0806,,Clondrisse Airfield (private),-38.48918,144.93305
 AU-0807,,McLeod Airstrip,-38.355822,145.445069
+AU-0808,,Penrith Speedway-Aerodrome,-33.748128,150.697832
 AU-AGW,AGW,Agnew Airport,-12.1456,142.149369
 AU-AYD,AYD,Alroy Downs Airport,-19.2908,136.078995
 AU-BYX,BYX,Baniyala Airport,-13.1981,136.227005
@@ -16296,7 +16295,7 @@ BR-3188,,Mayrowy Airport,-7.958802,-57.839962
 BR-3189,,Fazenda Galiléia Airport,-9.104538,-45.416674
 BR-3190,,Fazenda Bandeirantes Airport,-13.706015,-50.649874
 BR-3191,,Fazenda Santa Izabel Airport,-14.265278,-47.0275
-BR-3192,,Fazenda Pirapitinga Airport,-18.777439,-49.229372
+BR-3192,,Canápolis Açúcar & Etanol S.A. Airport,-18.777439,-49.229372
 BR-3193,,Fazenda Mata Assombrada Airport,-21.727222,-56.509167
 BR-3194,,Fazenda Santíssima Trindade Airport,-23.286944,-54.841111
 BR-3195,,Aldeia Piaracu Airport,-10.780518,-53.07022
@@ -16576,6 +16575,7 @@ BY-9937,,Ross Air Base,53.303,24.369
 BY-9938,,Shchuchyn Airport,53.598205,24.763224
 BY-9939,,Parakhonsk Airfield,52.214531,26.425787
 BY-9940,,Brest-1 Airport,52.113578,23.659262
+BY-9941,,Haradok Airfield,55.490565,29.95326
 BYA,BYA,Boundary Airport,64.077678,-141.122088
 BYL,BYL,Bella Yella Airport,7.36916666667,-9.99372222222
 BYV,BYV,Beira Lake Seaplane Base,6.9294444444400005,79.85416666670001
@@ -19935,6 +19935,7 @@ CN-0501,,Hancheng Heyang Airport,35.329133,110.3829
 CN-0502,,Dulata Border Heliport,43.67436,80.6277
 CN-0503,,Foshan Gaoming International Airport (Under construction),22.882068,112.574149
 CN-0504,,Arun Banner Airport,48.352649,123.289846
+CN-0505,,Yinchuan Xihuayuan Airport,38.501964,106.144544
 CN-JNZ,,Sanshilipu Air Base,39.289671,121.762195
 CN01,,Mendocino Coast District Hospital Heliport,39.431876,-123.799621
 CN02,,San Francisco VA Medical Center Heliport,37.783331,-122.506389
@@ -31991,6 +31992,7 @@ IE-0086,,Ballymoney Airfield,52.93241,-6.08221
 IE-0087,,Oranmore Aerodrome,53.283056,-8.918889
 IE-0088,,Executive Helicopters Ireland Helipad,53.12475,-8.47096
 IE-0089,,Coill an tSíáin Airstrip,53.60779,-9.45045
+IE-0090,,Cooley,53.98797,-6.221581
 IG00,,Cameron Hospital Heliport,41.6338996887207,-84.99469757080078
 IG01,,Iwc Heliport,39.78369903564453,-87.18360137939453
 IG03,,Bluebird Airport,39.391348,-86.597103
@@ -34039,10 +34041,14 @@ IT-0985,,Elisuperficie Casalvolone,45.404269,8.463399
 IT-0986,,Elisuperficie di Recetto,45.461613,8.439828
 IT-0987,,Elisuperficie di Formigliana,45.430338,8.287312
 IT-0988,,ELI VAL MAIRA,44.472296,7.394637
-IT-0989,,LU TAZ,44.213035,7.568266
+IT-0989,,Lu Taz Heliport,44.213035,7.568266
 IT-0990,,Santa Croce & Carle Hospital Heliport,44.388641,7.522471
 IT-0991,,Ospedale di Mondovì,44.391363,7.803803
 IT-0992,,Pietro & Michele Ferrero Hospital Heliport,44.675018,7.931635
+IT-0993,,Casteldelfino Heliport,44.586098,7.077385
+IT-0994,,Cortemilia Heliport,44.594955,8.194797
+IT-0995,,Monforte d'Alba Heliport,44.591265,7.974085
+IT-0996,,Millesimo Heliport,44.3758,8.198716
 IT-TQR,TQR,San Domino Island Heliport,42.117775,15.490655
 ITK,ITK,Itokama Airport,-9.201527,148.264261
 IVI,IVI,Viveros Island Airport,8.4693,-79.0016
@@ -43724,7 +43730,7 @@ LFBF,,Toulouse-Francazal (BA 101) Air Base,43.545601,1.3675
 LFBG,CNG,Cognac-Châteaubernard (BA 709) Air Base,45.658298,-0.3175
 LFBH,LRH,La Rochelle Île de Ré Airport,46.179199,-1.19528
 LFBI,PIS,Poitiers-Biard Airport,46.5877,0.306666
-LFBJ,,Aérodrome de Saint-Junien,45.903301,0.92
+LFBJ,,Aérodrome de Saint-Junien,45.902234,0.918225
 LFBK,MCU,Montluçon-Guéret Airport,46.222599,2.36396
 LFBL,LIG,Limoges Airport,45.862801,1.17944
 LFBM,,Mont-de-Marsan (BA 118) Air Base,43.911701,-0.5075
@@ -43732,13 +43738,13 @@ LFBN,NIT,Niort - Marais Poitevin Airport,46.313477,-0.394529
 LFBO,TLS,Toulouse-Blagnac Airport,43.629101,1.36382
 LFBP,PUF,Pau Pyrénées Airport,43.380001,-0.418611
 LFBR,,Aérodrome de Muret - Lherm,43.448898,1.26333
-LFBS,,Biscarrosse Parentis airfield,44.3694,-1.13056
+LFBS,,Biscarrosse Parentis Airfield,44.36756,-1.133903
 LFBT,LDE,Tarbes-Lourdes-Pyrénées Airport,43.178699,-0.006439
 LFBU,ANG,Angoulême Brie-Champniers airport,45.729198,0.221456
 LFBX,PGX,Périgueux-Bassillac Airport,45.198101,0.815556
 LFBY,,Dax Seyresse Airfield,43.689201,-1.06889
 LFBZ,BIQ,Biarritz Pays Basque airport,43.468372,-1.523223
-LFCA,,Aérodrome de Châtellerault-Targé,46.781399,0.551944
+LFCA,,Aérodrome de Châtellerault-Targé,46.782644,0.550485
 LFCB,,Aérodrome de Bagnères de Luchon,42.799999,0.6
 LFCC,ZAO,Cahors Lalbenque airport,44.351398,1.47528
 LFCD,,Aérodrome d'Andernos,44.755,-1.065
@@ -51394,7 +51400,7 @@ NZNF,,Norfolk Airport,-39.205122,174.222565
 NZNH,,Nelson Hospital Heliport,-41.288299560546875,173.27200317382812
 NZNP,NPL,New Plymouth Airport,-39.00859832763672,174.1790008544922
 NZNR,NPE,Hawke's Bay Airport,-39.465801,176.869995
-NZNS,NSN,Nelson Airport,-41.298302,173.220993
+NZNS,NSN,Nelson Airport,-41.296709,173.224323
 NZNV,IVC,Invercargill Airport,-46.41239929199219,168.31300354003906
 NZOA,,Omarama Glider Airport,-44.486698150634766,169.98599243164062
 NZOB,,Ocean Beach Heliport,-46.589481,168.305798
@@ -56685,7 +56691,7 @@ RU-10129,,Pobeda Airstrip,49.044727,134.31702
 RU-1013,,KS-9 Maloperanskaya,64.258736,54.893339
 RU-10130,,Koslan Airport,63.474207,48.845987
 RU-10131,,Troitsko-Pechorsk Airport,62.7319,56.19629
-RU-10132,,Yagodnoye,62.54574,149.52257
+RU-10132,,Yagodnoye Airfield,62.54574,149.52257
 RU-10133,,Batushkovo Airfield,56.234781,37.555211
 RU-10134,,Valunistoe (airport),66.421687,177.582464
 RU-10135,,Valunistoe Mining Complex Airport,66.766633,164.319284
@@ -56733,6 +56739,8 @@ RU-10172,,Molodo HLS,69.400932,122.510468
 RU-10173,,Stadukhino Airfield,66.965897,166.82135
 RU-10174,,Keptin HLS,62.346352,124.442352
 RU-10175,,Siktyakh HLS,69.912345,125.108014
+RU-10176,,Teryut Airfield,64.245684,142.052253
+RU-10177,,Nizhne-Kvakchinskoye Gas Field Helipad,54.689449,155.854202
 RU-1018,,Chaika Coal Terminal Helipad,73.379354,80.59003
 RU-1019,,Khralov junction Helipad,68.486875,69.521978
 RU-1020,,Roman Trebs field,68.624032,57.891887
@@ -59631,6 +59639,11 @@ SI4W,,Comercial Scardua LTDA Heliport,-20.204152,-40.271815
 SI4X,,Fazenda Calções Airstrip,-15.457928,-41.59385
 SI4Y,,Fazenda Laudejá Airport,-21.15087,-56.795467
 SI4Z,,Toledo Aviação Airport,-24.638918,-53.6549
+SI51,,Colina 29 Helipad,-21.22481,-47.792825
+SI52,,Morro da Águia Airstrip,-26.537219,-53.004394
+SI53,,BPX 2 Heliport,-7.202061,-35.875175
+SI54,,Fazenda Gabriela Airstrip,-13.938031,-51.666119
+SI56,,Úbere Agropecuária Airport,-13.426644,-52.975636
 SI5A,,Fazenda Isa - Agropecuária WVS Airport,-6.659883,-56.196381
 SI5R,,Fazenda Recanto Airstrip,-9.098301,-49.668026
 SI62,,Fazenda Monte Líbano Airport,-14.865671,-53.881941
@@ -59883,6 +59896,7 @@ SIFZ,,Hungria 1100 Heliport,-23.577813,-46.69435
 SIG2,,Pandorga Airport,-23.013259,-45.679296
 SIG3,,Rancho Veneza Airport,-14.8357,-40.7611
 SIG4,,Fazenda Rainha do Curuá Airport,-6.487057,-54.897358
+SIG5,,Boi na Grota Airport,-4.263992,-49.943194
 SIG6,,Fazenda Vale da Serra Airport,2.593325,-61.441247
 SIG7,,Fazenda Alvorada Airport,-8.564425,-49.108272
 SIG8,,Fazenda Portugal Airport,-8.304505,-45.556082
@@ -66495,6 +66509,9 @@ UA-9887,,Kiev - Gora Heliport,50.365525,30.838816
 UA-9888,,"VPP ""Grishino"" Airfield",48.302987,37.097583
 UA-9889,,Volnovakha Forest Park Heliport,47.664945,37.435319
 UA-9890,,Rovenky Airfield,48.084484,39.44265
+UA-9891,,Krasnopolka Airfield,48.820271,29.771836
+UA-9892,,Dzhulinka  Airfield,48.455776,29.766087
+UA-9893,,Zadunaivka Airfield,45.855072,29.11952
 UA30,,Batken Airport,40.042899,70.83784
 UA34,,Chardara Airport,41.2765007019043,67.97100067138672
 UA36,,Lugovoy Airport,42.972565,72.728051
@@ -66704,6 +66721,7 @@ UHEI,,Ilirney Airport,67.255278,167.949167
 UHEK,,Kupol Airport,66.901667,169.56
 UHGB,,Yamsk Airfield,59.581555,154.15393
 UHGL,,Glukharinoye Airfield,64.999872,153.096328
+UHGQ,,Pionernaya Heliport,59.60107,150.76815
 UHHG,,Bomnak Airfield,54.71275,128.8577
 UHHH,KHV,Khabarovsk Novy Airport,48.528338,135.188588
 UHHO,,Troitskoye Airport,49.444833,136.571033
@@ -71217,7 +71235,7 @@ US-1293,,George Washington University Hospital Heliport,38.900903,-77.051132
 US-12930,,Michigan Helicopters Helideck,42.778497,-83.260752
 US-12931,,Silvertree Heliport,46.841598,-90.660309
 US-12932,,Camp Pendleton HLZ,33.433608,-117.558764
-US-12933,,Bright Hour Ranch Airport,27.19532,-81.928894
+US-12933,,(delete),27.19532,-81.928894
 US-12934,,Bright Hour Ranch Airport,27.188308,-81.750104
 US-12935,,HD Farm & Ranch Airport,30.849273,-98.202923
 US-12936,,H2oztec Seaplane Base,28.598868,-81.814355
@@ -83125,7 +83143,7 @@ YBEG,,Bening Field Airport,-19.653334,146.293671
 YBEL,,Bothwell Airport,-42.369482,147.029538
 YBEO,BTX,Betoota Airport,-25.694791,140.738339
 YBEU,,Beulah 1 Airport,-35.95000076293945,142.41700744628906
-YBEV,,Beverley Airport,-32.13330078125,116.94999694824219
+YBEV,,Beverley Airport,-32.125341,116.949625
 YBEW,,Beechworth Airstrip,-31.916678,144.645553
 YBFR,,Balfour Airport,-41.259033262799996,144.886064529
 YBFT,,Beaufort,-37.495,143.43
@@ -83958,7 +83976,7 @@ YLOY,,Longwarry Airport,-38.108299,145.778
 YLP,YLP,Mingan Airport,50.2869,-64.1528
 YLRA,LUU,Laura Airport,-15.560495,144.451418
 YLRD,LHG,Lightning Ridge Airport,-29.452857,147.977146
-YLRE,LRE,Longreach Airport,-23.4342,144.279999
+YLRE,LRE,Longreach Airport,-23.43202,144.277492
 YLRG,,Lorna Glen Homestead Airport,-26.231386,121.558549
 YLRN,,Lorraine Station Airport,-22.533300399780273,143.51699829101562
 YLRS,LUT,New Laura Airport,-15.182758,144.345535
@@ -84719,9 +84737,9 @@ YWLH,,Wallara Ranch Airport,-24.649999618530273,132.31700134277344
 YWLM,NTL,Newcastle Airport,-32.796114,151.835025
 YWLN,,Wooltana Airport,-30.42169952392578,139.43600463867188
 YWLP,,Wilsons Promontory Airport (Yanakie Airport),-38.949897,146.28383
-YWLU,WUN,Wiluna Airport,-26.629199981689453,120.22100067138672
+YWLU,WUN,Wiluna Airport,-26.632691,120.221906
 YWMA,,Wonnaminta Stat Airport,-30.651100158691406,142.3419952392578
-YWMC,,William Creek Aerodrome,-28.905854,136.3406
+YWMC,,William Creek Aerodrome,-28.909989,136.340266
 YWMG,,Weilmoringle Airport,-29.235668,146.922092
 YWML,,Westmoreland Airport,-17.32098,138.238134
 YWMM,,Wollomombi Airport,-30.491214,152.083822
