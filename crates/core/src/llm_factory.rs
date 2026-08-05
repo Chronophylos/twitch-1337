@@ -31,6 +31,12 @@ pub fn build_llm_client(
     };
 
     let conn = &settings.ai.connection;
+    if conn.model.trim().is_empty() {
+        error!(
+            "AI model is empty in settings, AI disabled (set it at /settings -> AI · Connection)"
+        );
+        return Ok(None);
+    }
     let result = match conn.backend {
         AiBackendKind::OpenAi => OpenAiClient::new(
             ai_boot.api_key.expose_secret(),
