@@ -590,7 +590,7 @@ where
             Vec::new()
         };
         let req = ToolChatCompletionRequest {
-            model,
+            model: model.clone(),
             messages: vec![system_msg, user_msg],
             tools,
             reasoning_effort,
@@ -618,7 +618,15 @@ where
                 None
             }
             Ok(AgentOutcome::Timeout { round }) => {
-                warn!(round, "AI per-round timeout");
+                warn!(
+                    round,
+                    timeout_s = mem.turn_timeout.as_secs(),
+                    model = %model,
+                    "AI per-round timeout"
+                );
+                ctx.sender
+                    .reply(ctx.privmsg, "hat zu hart gedacht, nochmal probieren Stare")
+                    .await;
                 None
             }
             Err(e) => {
