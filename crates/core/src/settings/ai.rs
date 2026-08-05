@@ -269,7 +269,9 @@ impl Default for AiPrefill {
 impl Default for AiWeb {
     fn default() -> Self {
         Self {
-            base_url: "http://localhost:8080/search".into(),
+            // SearXNG's own default port. 8080 is the bot's dashboard, so that
+            // default could only ever 404 against ourselves.
+            base_url: "http://localhost:8888/search".into(),
             timeout: 15,
             max_results: 5,
             max_rounds: 3,
