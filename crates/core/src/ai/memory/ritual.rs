@@ -120,6 +120,13 @@ pub async fn run_ritual(
     let max_rounds = ai.dreamer.max_rounds;
     let max_writes_per_turn = ai.dreamer.max_writes_per_turn;
     let inject_byte_budget = ai.memory.inject_byte_budget;
+    // Caps are dashboard-tunable, so the prompt has to carry the live numbers.
+    // Hardcoding them in dreamer.md made every raise a no-op: the model kept
+    // compressing to the stale figures.
+    let caps_line = format!(
+        "SOUL {} B, LORE {} B, user {} B, scratch {} B",
+        ai.memory.soul_bytes, ai.memory.lore_bytes, ai.memory.user_bytes, ai.memory.scratch_bytes
+    );
     drop(snap);
 
     // Rotate first, then bail: a misconfigured model must not leave today.md
@@ -178,7 +185,8 @@ pub async fn run_ritual(
             model: "",
             model_id: "",
         },
-    );
+    )
+    .replace("{caps}", &caps_line);
     // The dreamer wants every file in one shot, so glue memory + scratch
     // blocks back together for its system prompt. The cache-hygiene
     // split only matters for the chat-turn loop.
@@ -354,6 +362,86 @@ mod tests {
             models[1], "model-v2",
             "second call should pick up live change to model-v2"
         );
+    }
+
+    /// The byte caps in `dreamer.md` used to be hardcoded text, so raising
+    /// them in the dashboard did nothing and the dreamer kept compressing to
+    /// the stale numbers. The prompt must carry the live values.
+    #[tokio::test]
+    async fn dreamer_prompt_carries_live_byte_caps() {
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        use arc_swap::ArcSwap;
+        use async_trait::async_trait;
+        use llm::{
+            ChatCompletionRequest, LlmClient, LlmError, Role, ToolChatCompletionRequest,
+            ToolChatCompletionResponse,
+        };
+        use tempfile::TempDir;
+
+        use crate::settings::{Settings, SettingsHandle};
+
+        struct SystemRecorder(Mutex<String>);
+        #[async_trait]
+        impl LlmClient for SystemRecorder {
+            async fn chat_completion(&self, _req: ChatCompletionRequest) -> llm::Result<String> {
+                Err(LlmError::Provider {
+                    status: 0,
+                    body: "not used".into(),
+                })
+            }
+            async fn chat_completion_with_tools(
+                &self,
+                req: ToolChatCompletionRequest,
+            ) -> llm::Result<ToolChatCompletionResponse> {
+                if let Some(m) = req.messages.iter().find(|m| m.role == Role::System) {
+                    self.0.lock().unwrap().clone_from(&m.content);
+                }
+                Ok(ToolChatCompletionResponse::Message("done".into()))
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let mut s = Settings::compiled_defaults();
+        s.ai.connection.model = "model-v1".into();
+        s.ai.memory.soul_bytes = 9001;
+        s.ai.memory.lore_bytes = 40_000;
+        s.ai.memory.user_bytes = 12_345;
+        s.ai.memory.scratch_bytes = 4321;
+        s.ai.memory.inject_byte_budget = 131_072;
+        let settings: SettingsHandle = Arc::new(ArcSwap::from_pointee(s));
+        let store = crate::ai::memory::store::MemoryStore::open(dir.path(), settings.clone())
+            .await
+            .unwrap();
+        let transcript =
+            crate::ai::memory::transcript::TranscriptWriter::open(store.memories_dir())
+                .await
+                .unwrap();
+
+        let rec = Arc::new(SystemRecorder(Mutex::new(String::new())));
+        run_ritual(
+            rec.as_ref(),
+            &store,
+            &transcript,
+            &settings,
+            "testchan",
+            NaiveDate::from_ymd_opt(2026, 4, 17).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let prompt = rec.0.lock().unwrap().clone();
+        assert!(
+            !prompt.contains("{caps}"),
+            "placeholder left unsubstituted in dreamer prompt"
+        );
+        for n in ["9001", "40000", "12345", "4321"] {
+            assert!(
+                prompt.contains(n),
+                "live cap {n} missing from dreamer prompt:\n{prompt}"
+            );
+        }
     }
 
     /// An empty model makes every request fail with `No models provided`, so

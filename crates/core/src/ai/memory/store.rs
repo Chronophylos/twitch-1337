@@ -283,7 +283,16 @@ impl MemoryStore {
         };
         let raw = frontmatter::emit(&fm, body);
         if raw.len() > limit {
-            return Err(WriteError::Full);
+            tracing::warn!(
+                path = %rel.display(),
+                limit,
+                actual = raw.len(),
+                "memory write rejected, over byte cap"
+            );
+            return Err(WriteError::Full {
+                limit,
+                actual: raw.len(),
+            });
         }
 
         if let Some(parent) = abs.parent() {
@@ -351,7 +360,16 @@ impl MemoryStore {
         };
         let raw = frontmatter::emit(&fm, body);
         if raw.len() > limit {
-            return Err(WriteError::Full);
+            tracing::warn!(
+                path = %rel.display(),
+                limit,
+                actual = raw.len(),
+                "memory write rejected, over byte cap"
+            );
+            return Err(WriteError::Full {
+                limit,
+                actual: raw.len(),
+            });
         }
 
         // For new files only, serialise the count-check + write through the
@@ -538,7 +556,7 @@ impl MemoryStore {
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError {
     #[error("file_full")]
-    Full,
+    Full { limit: usize, actual: usize },
     #[error("scratch_full")]
     ScratchFull,
     #[error("invalid_slug")]
