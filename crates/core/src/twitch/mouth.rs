@@ -2,6 +2,9 @@
 //! an absent mouth returns `NoMouth` and the caller falls back to utility IRC.
 //! ponytail: the utility fallback stays at the call site (it needs the live
 //! `ctx` privmsg + generic ChatSender) rather than being a generic router arm.
+//! Outbound text is sanitized in [`MouthRouter::speak`] — mouths speak over
+//! Helix, so they never touch `ChatSender` and would otherwise skip the
+//! control-char strip and the length clamp.
 
 use std::{
     fmt::{self, Display},
@@ -105,8 +108,11 @@ impl MouthRouter {
     pub async fn speak(
         &self,
         agent: Agent,
-        req: SpeakRequest<'_>,
+        mut req: SpeakRequest<'_>,
     ) -> Result<SpeakOutcome, SpeakError> {
+        // Helix rejects anything over 500 chars with a 422, same ceiling IRC
+        // has. Mouths bypass `ChatSender`, so the sanitizer runs here instead.
+        req.text = crate::twitch::chat_sender::sanitize_outbound(&req.text);
         let mouth = match agent {
             Agent::Aurora => self.aurora.as_ref(),
             Agent::Grok => self.grok.as_ref(),
@@ -322,5 +328,58 @@ mod tests {
             router.speak(Agent::Utility, req()).await.unwrap(),
             SpeakOutcome::NoMouth
         ));
+    }
+
+    /// Helix answers >500 chars with `422 The message is too large`, and a
+    /// mouth never passes through `ChatSender`, so the router must clamp.
+    #[tokio::test]
+    async fn over_long_text_is_clamped_before_helix() {
+        use std::sync::Mutex;
+
+        struct Recorder(Mutex<Vec<String>>);
+        #[async_trait::async_trait]
+        impl Mouth for Recorder {
+            async fn speak(&self, req: SpeakRequest<'_>) -> Result<SpokenMessage, SpeakError> {
+                self.0.lock().unwrap().push(req.text);
+                Ok(SpokenMessage {
+                    message_id: None,
+                    login: "rec".into(),
+                })
+            }
+            fn login(&self) -> &str {
+                "rec"
+            }
+        }
+
+        let rec = Arc::new(Recorder(Mutex::new(Vec::new())));
+        let router = MouthRouter {
+            aurora: Some(rec.clone()),
+            grok: None,
+        };
+        // Multibyte on purpose: clamping must land on a char boundary.
+        let long = "ä".repeat(600);
+        router
+            .speak(
+                Agent::Aurora,
+                SpeakRequest {
+                    broadcaster_id: "1",
+                    channel_login: "chan",
+                    text: format!("{long}\r\ntail"),
+                    reply_parent_message_id: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let sent = rec.0.lock().unwrap()[0].clone();
+        assert!(
+            sent.chars().count() <= 500,
+            "Helix caps messages at 500 chars, got {}",
+            sent.chars().count(),
+        );
+        assert!(
+            !sent.contains('\r') && !sent.contains('\n'),
+            "control chars must be stripped: {sent:?}",
+        );
     }
 }
