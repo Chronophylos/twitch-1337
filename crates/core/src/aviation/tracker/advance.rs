@@ -5,7 +5,7 @@
 //! and is deterministic given `(flight, observation, now)`.
 
 use chrono::{DateTime, TimeDelta, Utc};
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 use super::debug_journal::{
     AdsbPollDebugInput, DebugHttpOutcome, DiversionDebugInput, FlightTrackerDebugEvent,
@@ -332,6 +332,32 @@ pub(super) fn seed_from_observation(
     let phase_sample_confirmed =
         direct_target_confirmed || (sticky_confirmation && aircraft_callsign(ac).is_none());
     let became_target_confirmed = !was_target_confirmed && direct_target_confirmed;
+
+    if !was_target_confirmed
+        && confirmation == TargetConfirmation::InferredByAssignedHex
+        && let Some(observed) = aircraft_callsign(ac)
+    {
+        info!(
+            identifier = %flight.identifier,
+            aliases = ?flight.alias_callsigns,
+            observed_callsign = observed,
+            hex = flight.hex.as_deref().unwrap_or(""),
+            "ADS-B ATC callsign on assigned hex; inferring target"
+        );
+    }
+    if flight.target_confirmation != TargetConfirmation::AircraftVisible
+        && confirmation == TargetConfirmation::AircraftVisible
+        && let Some(observed) = aircraft_callsign(ac)
+        && is_commercial_flight_number_shape(observed)
+    {
+        warn!(
+            identifier = %flight.identifier,
+            aliases = ?flight.alias_callsigns,
+            observed_callsign = observed,
+            hex = flight.hex.as_deref().unwrap_or(""),
+            "ADS-B commercial callsign conflicts with tracked flight; not confirming"
+        );
+    }
 
     // Built before `last_seen` is bumped, so `last_seen_age_secs` reports the
     // pre-observation age exactly as the inline code did.
