@@ -579,6 +579,88 @@ async fn aviationstack_mismatched_adsb_callsign_observes_aircraft_without_confir
 }
 
 #[tokio::test]
+async fn aviationstack_atc_callsign_on_assigned_hex_is_inferred_in_window() {
+    let bot = TestBotBuilder::new()
+        .with_config(enable_aviationstack)
+        .with_settings(set_aviationstack_enabled)
+        .spawn()
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/flights"))
+        .and(query_param("access_key", "test-key"))
+        .and(query_param("flight_iata", "EW9573"))
+        .and(query_param("limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{
+                "flight": { "iata": "EW9573", "icao": "EWG9573", "number": "9573" },
+                "airline": { "iata": "EW", "icao": "EWG", "name": "Eurowings" },
+                "departure": {
+                    "iata": "PMI",
+                    "icao": "LEPA",
+                    "scheduled": "2026-04-18T11:30:00+00:00",
+                    "actual": null,
+                    "actual_runway": null
+                },
+                "arrival": {
+                    "iata": "DUS",
+                    "icao": "EDDL",
+                    "estimated": "2026-04-18T13:10:00+00:00",
+                    "actual": null
+                },
+                "aircraft": { "icao24": "3c56ea", "icao": "A320" }
+            }]
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/hex/3C56EA"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ac": [{
+                "hex": "3C56EA",
+                "flight": "EWG3PV",
+                "alt_baro": 3500,
+                "gs": 215.9,
+                "baro_rate": 2240,
+                "lat": 39.60,
+                "lon": 2.86,
+                "squawk": "1000"
+            }],
+            "ctime": 0,
+            "now": 0,
+            "total": 1
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    let mut bot = bot;
+    bot.send("alice", "!track EW9573").await;
+    let ack = bot.expect_say(Duration::from_secs(5)).await;
+    assert!(ack.contains("EWG9573"), "got: {ack}");
+
+    let state_path = bot.data_dir.path().join("flights.ron");
+    let persisted = tokio::fs::read_to_string(state_path).await.unwrap();
+    let state: twitch_1337::aviation::tracker::FlightTrackerState =
+        ron::from_str(&persisted).unwrap();
+    let flight = state.flights.first().expect("persisted flight");
+    assert_eq!(
+        flight.target_confirmation,
+        TargetConfirmation::InferredByAssignedHex
+    );
+    assert!(flight.last_seen.is_some());
+    assert_eq!(flight.callsign.as_deref(), Some("EWG9573"));
+    assert!(
+        flight.alias_callsigns.iter().any(|a| a == "EWG3PV"),
+        "aliases: {:?}",
+        flight.alias_callsigns
+    );
+    assert_eq!(flight.observed_callsign.as_deref(), Some("EWG3PV"));
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
 async fn aviationstack_codeshare_confirms_operating_callsign_alias() {
     let bot = TestBotBuilder::new()
         .with_config(enable_aviationstack)
