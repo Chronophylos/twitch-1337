@@ -184,6 +184,11 @@ pub(crate) fn identifier_callsign(identifier: &FlightIdentifier) -> Option<&str>
     }
 }
 
+fn is_commercial_flight_number_shape(callsign: &str) -> bool {
+    crate::aviation::is_iata_flight_number(callsign)
+        || crate::aviation::is_icao_flight_number(callsign)
+}
+
 fn inferred_by_hex_window(flight: &TrackedFlight, now: DateTime<Utc>) -> bool {
     if matches!(&flight.identifier, FlightIdentifier::Hex(_)) {
         return true;
@@ -236,6 +241,10 @@ pub(crate) fn target_confirmation_for_aircraft(
         } else {
             Some(TargetConfirmation::AircraftVisible)
         }
+    } else if inferred_by_hex_window(flight, now)
+        && aircraft_callsign(ac).is_some_and(|cs| !is_commercial_flight_number_shape(cs))
+    {
+        Some(TargetConfirmation::InferredByAssignedHex)
     } else {
         Some(TargetConfirmation::AircraftVisible)
     }
@@ -348,6 +357,12 @@ pub(super) fn seed_from_observation(
         && flight.route.is_none()
     {
         followups.push(Followup::FetchRoute { callsign: cs });
+    }
+
+    if confirmation == TargetConfirmation::InferredByAssignedHex
+        && let Some(observed) = flight.observed_callsign.clone()
+    {
+        add_alias_callsign(flight, &observed);
     }
 
     Some(Seed {
@@ -844,6 +859,76 @@ mod tests {
         assert!(seed.is_none());
         assert_eq!(f.last_visible_at, None);
         assert_eq!(f.target_confirmation, TargetConfirmation::Pending);
+    }
+
+    fn ewg9573_hex_flight() -> TrackedFlight {
+        let mut f = tracked_flight();
+        f.identifier = FlightIdentifier::Callsign("EW9573".to_string());
+        f.callsign = Some("EWG9573".to_string());
+        f.alias_callsigns = vec!["EW9573".to_string(), "EWG9573".to_string()];
+        f.hex = Some("3C56EA".to_string());
+        f.hex_source = Some(HexSource::AviationStack);
+        f.scheduled_departure_at = Some(dt("2026-08-13T07:50:00Z"));
+        f
+    }
+
+    fn aircraft_ewg3pv() -> NearbyAircraft {
+        let mut ac = aircraft();
+        ac.hex = Some("3C56EA".to_string());
+        ac.flight = Some("EWG3PV".to_string());
+        ac
+    }
+
+    #[test]
+    fn hex_hit_atc_callsign_in_window_is_inferred() {
+        let f = ewg9573_hex_flight();
+        let ac = aircraft_ewg3pv();
+        let now = dt("2026-08-13T08:18:00Z");
+        assert_eq!(
+            target_confirmation_for_aircraft(&f, &ac, true, now),
+            Some(TargetConfirmation::InferredByAssignedHex)
+        );
+    }
+
+    #[test]
+    fn hex_hit_conflicting_icao_flight_number_stays_visible() {
+        let f = ewg9573_hex_flight();
+        let mut ac = aircraft_ewg3pv();
+        ac.flight = Some("EWG9999".to_string());
+        let now = dt("2026-08-13T08:18:00Z");
+        assert_eq!(
+            target_confirmation_for_aircraft(&f, &ac, true, now),
+            Some(TargetConfirmation::AircraftVisible)
+        );
+    }
+
+    #[test]
+    fn hex_hit_atc_callsign_outside_window_stays_visible() {
+        let f = ewg9573_hex_flight();
+        let ac = aircraft_ewg3pv();
+        let now = dt("2026-08-13T11:00:00Z"); // dep 07:50 + 3h = 10:50
+        assert_eq!(
+            target_confirmation_for_aircraft(&f, &ac, true, now),
+            Some(TargetConfirmation::AircraftVisible)
+        );
+    }
+
+    #[test]
+    fn seed_infers_atc_callsign_adds_alias_keeps_commercial_callsign() {
+        let mut f = ewg9573_hex_flight();
+        let ac = aircraft_ewg3pv();
+        let now = dt("2026-08-13T08:18:00Z");
+        let seed = seed_from_observation(&mut f, &ac, true, now).expect("inferred");
+        assert!(seed.direct_target_confirmed);
+        assert!(seed.became_target_confirmed);
+        assert_eq!(
+            f.target_confirmation,
+            TargetConfirmation::InferredByAssignedHex
+        );
+        assert_eq!(f.callsign.as_deref(), Some("EWG9573"));
+        assert!(f.alias_callsigns.iter().any(|a| a == "EWG3PV"));
+        assert_eq!(f.last_seen, Some(now));
+        assert_eq!(f.observed_callsign.as_deref(), Some("EWG3PV"));
     }
 
     #[test]

@@ -26,3 +26,7 @@ pub(crate) use location::iata_to_coords;
 pub(crate) fn is_iata_flight_number(s: &str) -> bool {
     location::is_iata_flight_number(s)
 }
+
+pub(crate) fn is_icao_flight_number(s: &str) -> bool {
+    location::is_icao_flight_number(s)
+}
