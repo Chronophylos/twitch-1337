@@ -463,3 +463,76 @@ async fn ai_response_with_crlf_is_sanitized_to_single_line() {
 
     bot.shutdown().await;
 }
+
+/// A 490-character ASCII agent reply must not go through the 480-byte IRC
+/// clamp used for commands and schedules. Utility fallback is the send path
+/// here (no mouth configured).
+#[tokio::test]
+async fn ai_reply_at_char_limit_is_not_byte_clamped() {
+    let draft = "a".repeat(490);
+    let bot = TestBotBuilder::new().with_ai().spawn().await;
+    bot.llm.push_tool_message(&draft);
+
+    let mut bot = bot;
+    bot.send("alice", "!ai ping").await;
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
+    assert_eq!(body, draft);
+    assert!(
+        bot.llm.chat_calls().is_empty(),
+        "at-limit replies must not trigger a rewrite"
+    );
+
+    bot.shutdown().await;
+}
+
+/// Over 490 characters: exactly one no-tools completion rewrites the line,
+/// and that rewrite is what chat and history see.
+#[tokio::test]
+async fn overlong_ai_reply_is_rewritten_once() {
+    let draft = "x".repeat(491);
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
+        })
+        .spawn()
+        .await;
+    bot.llm.push_tool_message(&draft);
+    bot.llm.push_chat("rewritten short");
+
+    let mut bot = bot;
+    bot.send("alice", "!ai ping").await;
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
+    assert_eq!(body, "rewritten short");
+    assert_eq!(bot.llm.tool_calls().len(), 1);
+    assert_eq!(bot.llm.chat_calls().len(), 1);
+
+    let snap = bot.primary_history_snapshot().await;
+    let bot_entry = snap
+        .iter()
+        .rev()
+        .find(|e| e.source == ChatHistorySource::Bot)
+        .expect("bot history entry");
+    assert_eq!(bot_entry.text, "rewritten short");
+
+    bot.shutdown().await;
+}
+
+/// Reword failure keeps the original draft and clamps it to 490 characters.
+#[tokio::test]
+async fn overlong_ai_reply_clamps_when_rewrite_fails() {
+    let draft = "y".repeat(500);
+    let bot = TestBotBuilder::new().with_ai().spawn().await;
+    bot.llm.push_tool_message(&draft);
+    // No chat response queued → FakeLlm returns a provider error.
+
+    let mut bot = bot;
+    bot.send("alice", "!ai ping").await;
+    let body = bot.expect_reply(Duration::from_secs(2)).await;
+    assert_eq!(body.chars().count(), 490);
+    assert!(body.starts_with('y'));
+    assert!(body.ends_with('…'));
+    assert_eq!(bot.llm.chat_calls().len(), 1);
+
+    bot.shutdown().await;
+}

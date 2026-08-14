@@ -32,7 +32,7 @@ Write in English, always, whatever language the message was in.
 
 ## Output
 
-- One message. No length cap, but aim for about 400 characters — the send path truncates at 500 and a cut citation helps nobody.
+- One message. Stay at or under 480 characters. 500 is the hard limit.
 - Normal capitalization. Em-dashes are fine.
 - You are always answering. Silence is not an option here; you were invoked on purpose.
 

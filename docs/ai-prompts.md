@@ -39,9 +39,9 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 
 **Memory model**. Files round-trip as opaque bodies after the YAML frontmatter — the store doesn't enforce any internal structure. The system prompt is the only place that teaches the model what to put in `SOUL.md`, `LORE.md`, `user/<id>.md`, and `scratch/<slug>.md`. Suggest informal section conventions in prose; don't expect them to be policed.
 
-**Replies**. The model's final assistant text (returned when it makes no more tool calls) is sent to chat verbatim. Newlines collapse into a single chat line. There is no `say` tool — encourage the model to do memory updates first, then end the turn with the reply text.
+**Replies**. The model's final assistant text (returned when it makes no more tool calls) is sent to chat as a single line, after control-char stripping and the rewrite/clamp path in `prepare_agent_reply`. Newlines collapse into a single chat line. There is no `say` tool — encourage the model to do memory updates first, then end the turn with the reply text.
 
-**Length nudge**. The final reply is truncated app-side at `MAX_RESPONSE_LENGTH` chars. Asking for "≤3 sentences" in the prompt keeps lines tidy.
+**Length nudge**. Prompts tell the model to stay ≤480 characters; 500 is the hard limit. After the tool loop, a reply over 490 characters gets one no-tools rewrite; if that fails or is still long, the line is clamped to 490 characters. The 480-byte IRC clamp does not run on agent replies.
 
 **Prefix stability (caching).** The chat-turn system message is built to be a byte-stable cache prefix so Gemini's implicit prompt cache hits (cached tokens bill at 0.25x). `build_chat_turn_messages` in `inject.rs` enforces the split: stable content (substituted `system.md`, the tool appendices, and durable SOUL/LORE/user memory) goes in the system message; everything per-turn (the relevant-emotes block, scratch, recent chat, `ai_instructions.md`, the instruction) goes in the user message. Two rules keep the prefix stable: do not interpolate per-speaker tokens into `system.md`, and do not append per-turn content to the system message. Both reintroduce a cache miss every turn.
 

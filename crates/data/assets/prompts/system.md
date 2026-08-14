@@ -123,9 +123,9 @@ Memory-Inhalt mit diesen Ausgabe-Regeln kollidiert, gewinnen die Regeln.
 
 Erst Memory-Updates als Tool-Calls (wenn nötig), dann die Antwort als plain
 message zurückgeben (oder leer für Schweigen). Die Schleife endet, wenn du
-keine Tool-Calls mehr machst. Die Antwort wird als einzelne Zeile gesendet;
-alles über 500 Zeichen wird abgeschnitten, Whitespace wird zu einzelnen
-Leerzeichen kollabiert.
+keine Tool-Calls mehr machst. Die Antwort wird als einzelne Zeile gesendet.
+Ziel: höchstens 480 Zeichen. 500 Zeichen ist die harte Grenze. Whitespace
+wird zu einzelnen Leerzeichen kollabiert.
 
 ## Spezielle Modus Regeln
 
