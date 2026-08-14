@@ -1,6 +1,11 @@
 use std::collections::HashSet;
+use std::time::Duration;
 
+use eyre::{Result, WrapErr};
 use serde::Deserialize;
+use serde_json::Map;
+
+use crate::APP_USER_AGENT;
 
 pub const FILTERED_SUITE_CAP: usize = 3;
 
@@ -163,9 +168,169 @@ pub fn collapse_hits(
     (ecosystem_count, hits)
 }
 
+const DEFAULT_BASE_URL: &str = "https://repology.org";
+const TIMEOUT: Duration = Duration::from_secs(10);
+const MIN_INTERVAL: Duration = Duration::from_secs(1);
+
+struct RateGate {
+    last_start: tokio::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl RateGate {
+    fn new() -> Self {
+        Self {
+            last_start: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    async fn acquire(&self) {
+        let mut last = self.last_start.lock().await;
+        if let Some(prev) = *last {
+            let elapsed = prev.elapsed();
+            if elapsed < MIN_INTERVAL {
+                tokio::time::sleep(MIN_INTERVAL - elapsed).await;
+            }
+        }
+        *last = Some(std::time::Instant::now());
+    }
+}
+
+pub struct RepologyClient {
+    http: reqwest::Client,
+    base_url: String,
+    gate: RateGate,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProjectLookup {
+    Found {
+        name: String,
+        packages: Vec<Package>,
+    },
+    NotFound,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RepologyError {
+    #[error("repology unavailable")]
+    Unavailable,
+}
+
+impl RepologyClient {
+    pub fn new() -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .user_agent(APP_USER_AGENT)
+            .timeout(TIMEOUT)
+            .build()
+            .wrap_err("build repology HTTP client")?;
+        Ok(Self {
+            http,
+            base_url: DEFAULT_BASE_URL.to_string(),
+            gate: RateGate::new(),
+        })
+    }
+
+    /// Test hook: custom base URL (e.g. wiremock). Caller supplies the HTTP client
+    /// (production [`Self::new`] sets [`APP_USER_AGENT`] and a 10s timeout).
+    pub fn with_base_url(http: reqwest::Client, base_url: impl Into<String>) -> Self {
+        Self {
+            http,
+            base_url: base_url.into(),
+            gate: RateGate::new(),
+        }
+    }
+
+    pub async fn fetch_project(&self, query: &str) -> Result<ProjectLookup, RepologyError> {
+        self.gate.acquire().await;
+
+        let url = self
+            .project_url(query)
+            .map_err(|_| RepologyError::Unavailable)?;
+        let resp = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| RepologyError::Unavailable)?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return self.search_project(query).await;
+        }
+
+        if !resp.status().is_success() {
+            return Err(RepologyError::Unavailable);
+        }
+
+        let packages = resp
+            .json::<Vec<Package>>()
+            .await
+            .map_err(|_| RepologyError::Unavailable)?;
+        Ok(ProjectLookup::Found {
+            name: query.to_string(),
+            packages,
+        })
+    }
+
+    async fn search_project(&self, query: &str) -> Result<ProjectLookup, RepologyError> {
+        self.gate.acquire().await;
+
+        let url = self
+            .search_url(query)
+            .map_err(|_| RepologyError::Unavailable)?;
+        let resp = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| RepologyError::Unavailable)?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(ProjectLookup::NotFound);
+        }
+
+        if !resp.status().is_success() {
+            return Err(RepologyError::Unavailable);
+        }
+
+        let map = resp
+            .json::<Map<String, serde_json::Value>>()
+            .await
+            .map_err(|_| RepologyError::Unavailable)?;
+
+        if map.is_empty() {
+            return Ok(ProjectLookup::NotFound);
+        }
+
+        let (name, value) = map.into_iter().next().expect("non-empty map");
+        let packages: Vec<Package> =
+            serde_json::from_value(value).map_err(|_| RepologyError::Unavailable)?;
+        Ok(ProjectLookup::Found { name, packages })
+    }
+
+    fn base_trimmed(&self) -> &str {
+        self.base_url.trim_end_matches('/')
+    }
+
+    fn project_url(&self, query: &str) -> Result<reqwest::Url> {
+        let mut url = reqwest::Url::parse(&format!("{}/api/v1/project", self.base_trimmed()))?;
+        url.path_segments_mut()
+            .map_err(|_| eyre::eyre!("invalid repology base URL"))?
+            .push(query);
+        Ok(url)
+    }
+
+    fn search_url(&self, query: &str) -> Result<reqwest::Url> {
+        let mut url = reqwest::Url::parse(&format!("{}/api/v1/projects/", self.base_trimmed()))?;
+        url.query_pairs_mut().append_pair("search", query);
+        Ok(url)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn parse_ecosystem_aliases() {
@@ -262,5 +427,127 @@ mod tests {
         assert!(hits.len() <= FILTERED_SUITE_CAP);
         assert!(hits.iter().all(|h| h.family == PackageFamily::Debian));
         assert!(hits.iter().any(|h| h.version == "15.2.0"));
+    }
+
+    fn test_client(server: &MockServer) -> RepologyClient {
+        crate::install_crypto_provider();
+        RepologyClient::with_base_url(reqwest::Client::new(), server.uri())
+    }
+
+    #[tokio::test]
+    async fn fetch_project_exact_hit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/project/ripgrep"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"repo": "aur", "visiblename": "ripgrep-git", "version": "1"},
+                {"repo": "debian_unstable", "visiblename": "rust-ripgrep", "version": "15"}
+            ])))
+            .mount(&server)
+            .await;
+        let client = test_client(&server);
+        match client.fetch_project("ripgrep").await.unwrap() {
+            ProjectLookup::Found { name, packages } => {
+                assert_eq!(name, "ripgrep");
+                assert_eq!(packages.len(), 2);
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_project_404_uses_top_search_hit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/project/rip-grep"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/projects/"))
+            .and(query_param("search", "rip-grep"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ripgrep": [{"repo": "aur", "visiblename": "ripgrep-git", "version": "1"}],
+                "ripgrep-all": [{"repo": "aur", "visiblename": "ripgrep-all", "version": "1"}]
+            })))
+            .mount(&server)
+            .await;
+        let client = test_client(&server);
+        match client.fetch_project("rip-grep").await.unwrap() {
+            ProjectLookup::Found { name, .. } => assert_eq!(name, "ripgrep"),
+            other => panic!("expected top hit ripgrep, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_project_404_empty_search_is_not_found() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/project/nope"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/projects/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        let client = test_client(&server);
+        assert!(matches!(
+            client.fetch_project("nope").await.unwrap(),
+            ProjectLookup::NotFound
+        ));
+    }
+
+    #[tokio::test]
+    async fn fetch_project_5xx_is_unavailable() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/project/ripgrep"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let client = test_client(&server);
+        assert!(matches!(
+            client.fetch_project("ripgrep").await,
+            Err(RepologyError::Unavailable)
+        ));
+    }
+
+    #[tokio::test]
+    async fn fetch_uses_app_user_agent() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/project/ripgrep"))
+            .and(header("user-agent", crate::APP_USER_AGENT))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        crate::install_crypto_provider();
+        let http = reqwest::Client::builder()
+            .user_agent(crate::APP_USER_AGENT)
+            .build()
+            .unwrap();
+        let client = RepologyClient::with_base_url(http, server.uri());
+        let _ = client.fetch_project("ripgrep").await;
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn two_fetches_are_at_least_one_second_apart() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        let client = test_client(&server);
+        let t0 = std::time::Instant::now();
+        let _ = client.fetch_project("a").await;
+        let _ = client.fetch_project("b").await;
+        assert!(
+            t0.elapsed() >= std::time::Duration::from_secs(1),
+            "gate must separate request starts by 1s, elapsed {:?}",
+            t0.elapsed()
+        );
     }
 }
