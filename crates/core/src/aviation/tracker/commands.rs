@@ -29,7 +29,7 @@ use super::{
 use super::{MAX_FLIGHTS_PER_USER, MAX_TRACKED_FLIGHTS};
 
 use super::advance::{
-    FlightUpdate, Observation, PollOutcome, RemovalReason, apply_route_outcome,
+    Emit, FlightUpdate, Observation, PollOutcome, RemovalReason, apply_route_outcome,
     candidate_callsign_matches_flight, format_emit, identifier_callsign, last_seen_age_secs,
 };
 use super::poll_cycle::{complete_poll_cycle, fetch_observation, fetch_route, plan_adsb_lookup};
@@ -106,6 +106,23 @@ fn track_started_response(
         response.push_str(" | AviationStack nix, ADS-B-only");
     }
     response
+}
+
+fn append_consumed_emits(
+    response: &mut String,
+    flight: &TrackedFlight,
+    emits: &[Emit],
+    now: DateTime<Utc>,
+) {
+    for emit in emits {
+        match emit {
+            Emit::AdsbVisible | Emit::TrackingLost | Emit::PendingExpired => {}
+            other => {
+                response.push_str(" | ");
+                response.push_str(&format_emit(flight, other, now));
+            }
+        }
+    }
 }
 
 struct AviationstackLookup {
@@ -710,19 +727,17 @@ async fn handle_track<T, L>(
 
     resolve_route_if_needed(&mut flight, aviation_client, data_dir, now).await;
 
-    if let Some(update) = first_cycle {
-        for event in update.debug {
-            append_debug_event(data_dir, now, event).await;
-        }
-        // Task 4 will append non-swallowed emits onto `response`.
-        let _ = update.emits;
-    }
-
-    let response = track_started_response(
+    let mut response = track_started_response(
         &flight,
         aviationstack_info.as_deref(),
         aviationstack_fallback,
     );
+    if let Some(update) = first_cycle {
+        for event in update.debug {
+            append_debug_event(data_dir, now, event).await;
+        }
+        append_consumed_emits(&mut response, &flight, &update.emits, now);
+    }
     append_debug_event(
         data_dir,
         now,
@@ -1049,4 +1064,33 @@ where
     }
 
     deferred_commands
+}
+
+#[cfg(test)]
+mod consume_emits_tests {
+    use super::*;
+    use crate::aviation::tracker::advance::Emit;
+    use crate::aviation::tracker::test_support::{dt, tracked_flight};
+
+    #[test]
+    fn append_consumed_emits_swallows_adsb_visible_and_appends_takeoff() {
+        let flight = tracked_flight();
+        let now = dt("2026-04-18T12:00:00Z");
+        let mut response = "Tracke DLH1929 Okayge".to_string();
+        append_consumed_emits(
+            &mut response,
+            &flight,
+            &[Emit::AdsbVisible, Emit::Takeoff],
+            now,
+        );
+        assert!(
+            !response.contains("ADS-B sichtbar"),
+            "AdsbVisible must be swallowed: {response}"
+        );
+        assert!(
+            response.contains("ist gestartet"),
+            "Takeoff must be appended: {response}"
+        );
+        assert!(response.starts_with("Tracke DLH1929 Okayge | "));
+    }
 }

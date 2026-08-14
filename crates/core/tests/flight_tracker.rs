@@ -315,6 +315,56 @@ async fn track_command_by_hex_promotes_observed_callsign_and_route() {
 }
 
 #[tokio::test]
+async fn track_ack_appends_takeoff_and_does_not_say_adsb_visible() {
+    let bot = TestBotBuilder::new().spawn().await;
+
+    Mock::given(method("GET"))
+        .and(path("/hex/3C6589"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ac": [{
+                "hex": "3C6589",
+                "flight": "DLH1234",
+                "alt_baro": 800,
+                "gs": 80.0,
+                "baro_rate": 1200,
+                "lat": 50.0,
+                "lon": 8.5,
+                "squawk": "1000"
+            }],
+            "ctime": 0,
+            "now": 0,
+            "total": 1
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    let mut bot = bot;
+    bot.send("alice", "!track 3C6589").await;
+    let ack = bot.expect_say(Duration::from_secs(5)).await;
+    assert!(
+        ack.contains("Tracke") || ack.contains("DLH1234"),
+        "got: {ack}"
+    );
+    assert!(
+        ack.contains("ist gestartet"),
+        "Takeoff must be on the ack: {ack}"
+    );
+    assert!(
+        !ack.contains("ADS-B sichtbar"),
+        "AdsbVisible must be swallowed: {ack}"
+    );
+
+    let extra = tokio::time::timeout(
+        Duration::from_millis(400),
+        bot.expect_say(Duration::from_secs(1)),
+    )
+    .await;
+    assert!(extra.is_err(), "first-cycle emits must not be a second say");
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
 async fn aviationstack_resolved_future_flight_strict_chills_without_adsb_lookup() {
     let bot = TestBotBuilder::new()
         .with_config(enable_aviationstack)
