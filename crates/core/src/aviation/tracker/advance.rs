@@ -91,6 +91,10 @@ pub(crate) struct FlightUpdate {
 /// What Advance's Seed sub-transition produced. Advance announces and detects
 /// Flight Phase transitions after Seed runs. See CONTEXT.md "Seed".
 pub(crate) struct Seed {
+    #[allow(
+        dead_code,
+        reason = "asserted by advance.rs unit tests as part of Seed's documented shape"
+    )]
     pub direct_target_confirmed: bool,
     pub phase_sample_confirmed: bool,
     pub became_target_confirmed: bool,
@@ -249,8 +253,8 @@ pub(crate) fn target_confirmation_for_aircraft(
 }
 
 /// Seed a flight's identity and telemetry from a confirming observation's
-/// aircraft. Shared by [`advance_flight`] (the per-cycle transition) and the
-/// `!track` command's initial poll, which previously duplicated this mutation.
+/// aircraft. Used by Advance's Seed sub-transition ([`seed_from_observation`]).
+/// `!track` runs Poll Cycle which calls Advance; it does not call this directly.
 ///
 /// Assigns the confirmation, observed callsign, resolved callsign/hex, aircraft
 /// type, and position/velocity telemetry, and returns the callsign newly
@@ -524,7 +528,7 @@ pub(crate) fn advance_flight(
         }
     }
 
-    if seed.direct_target_confirmed && became_target_confirmed {
+    if became_target_confirmed {
         update.emits.push(Emit::AdsbVisible);
         if was_pending {
             flight.phase = FlightPhase::Unknown;
