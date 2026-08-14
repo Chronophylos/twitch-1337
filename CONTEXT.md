@@ -39,7 +39,7 @@ not this term).
 Advance's sub-transition when an Observation confirms the target: it resolves
 Target Confirmation, applies the observed aircraft's identity and telemetry, and
 queues Route Resolution. It does not announce or detect Flight Phase — Advance
-does that after Seed. Pure.
+does that after Seed. Pure. `!track` does not call Seed. Advance does.
 _Avoid_: init, hydrate, enrich.
 
 **Route Resolution**:

@@ -88,11 +88,13 @@ pub(crate) struct FlightUpdate {
     pub removal: Option<RemovalReason>,
 }
 
-/// What the shared Seed produced. The caller turns these into per-context side
-/// effects: Advance announces and detects Flight Phase transitions; the
-/// `!track` initial poll stays silent and snapshots the phase. See CONTEXT.md
-/// "Seed".
+/// What Advance's Seed sub-transition produced. Advance announces and detects
+/// Flight Phase transitions after Seed runs. See CONTEXT.md "Seed".
 pub(crate) struct Seed {
+    #[allow(
+        dead_code,
+        reason = "asserted by advance.rs unit tests as part of Seed's documented shape"
+    )]
     pub direct_target_confirmed: bool,
     pub phase_sample_confirmed: bool,
     pub became_target_confirmed: bool,
@@ -251,8 +253,8 @@ pub(crate) fn target_confirmation_for_aircraft(
 }
 
 /// Seed a flight's identity and telemetry from a confirming observation's
-/// aircraft. Shared by [`advance_flight`] (the per-cycle transition) and the
-/// `!track` command's initial poll, which previously duplicated this mutation.
+/// aircraft. Used by Advance's Seed sub-transition ([`seed_from_observation`]).
+/// `!track` runs Poll Cycle which calls Advance; it does not call this directly.
 ///
 /// Assigns the confirmation, observed callsign, resolved callsign/hex, aircraft
 /// type, and position/velocity telemetry, and returns the callsign newly
@@ -303,11 +305,11 @@ pub(super) fn apply_observed_aircraft(
     newly_resolved
 }
 
-/// The shared Seed: confirm the target, apply the observed aircraft's identity
-/// and telemetry, and queue Route Resolution. Pure; no announcements, no phase
-/// detection. Returns `None` when the observed aircraft does not confirm the
-/// target — the caller decides what that means. Shared by `advance_flight`
-/// (per-cycle) and the `!track` initial poll.
+/// Advance's Seed sub-transition: confirm the target, apply the observed
+/// aircraft's identity and telemetry, and queue Route Resolution. Pure; no
+/// announcements, no phase detection. Returns `None` when the observed aircraft
+/// does not confirm the target — the caller decides what that means. `!track`
+/// runs Poll Cycle which calls Advance; it does not call Seed directly.
 pub(super) fn seed_from_observation(
     flight: &mut TrackedFlight,
     ac: &NearbyAircraft,
