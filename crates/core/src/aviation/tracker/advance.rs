@@ -93,6 +93,10 @@ pub(crate) struct FlightUpdate {
 /// `!track` initial poll stays silent and snapshots the phase. See CONTEXT.md
 /// "Seed".
 pub(crate) struct Seed {
+    #[allow(
+        dead_code,
+        reason = "read by advance.rs unit tests only now that handle_track no longer consumes Seed directly; a later task revisits Seed's rustdoc/shape"
+    )]
     pub direct_target_confirmed: bool,
     pub phase_sample_confirmed: bool,
     pub became_target_confirmed: bool,

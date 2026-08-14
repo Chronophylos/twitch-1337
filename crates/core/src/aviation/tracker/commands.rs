@@ -3,38 +3,38 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
-use crate::aviation::{AdsbProvider, AviationClient, AviationstackFlightMetadata, NearbyAircraft};
+#[cfg(test)]
+use crate::aviation::NearbyAircraft;
+use crate::aviation::{AdsbProvider, AviationClient, AviationstackFlightMetadata};
 use crate::twitch::ChatSender;
 use crate::util::clock::Clock;
 
+#[cfg(test)]
+use super::metadata::aircraft_callsign;
 use super::{
     CachedFlightInfo, FlightIdentifier, FlightPhase, FlightTrackerState, HexSource,
     TargetConfirmation, TrackedFlight, TrackerCommand, build_flight_view,
     debug_journal::{DebugHttpOutcome, FlightTrackerDebugEvent, append_debug_event},
     format::{msg_aviationstack_info, msg_flight_status, msg_flights_list, msg_track_started},
     metadata::{
-        aircraft_callsign, apply_aviationstack_metadata, metadata_callsign, normalize_flight_code,
-        seed_flight_aliases,
+        apply_aviationstack_metadata, metadata_callsign, normalize_flight_code, seed_flight_aliases,
     },
-    phase::detect_phase,
     schedule::poll_readiness,
     state::save_tracker_state,
 };
 
-use super::{MAX_FLIGHTS_PER_USER, MAX_TRACKED_FLIGHTS, POLL_TIMEOUT};
+use super::{MAX_FLIGHTS_PER_USER, MAX_TRACKED_FLIGHTS};
 
 use super::advance::{
-    Observation, RemovalReason, apply_route_outcome, candidate_callsign_matches_flight,
-    format_emit, identifier_callsign, last_seen_age_secs, seed_from_observation,
+    FlightUpdate, Observation, PollOutcome, RemovalReason, apply_route_outcome,
+    candidate_callsign_matches_flight, format_emit, identifier_callsign, last_seen_age_secs,
 };
-use super::poll_cycle::{
-    callsign_poll_candidates, complete_poll_cycle, fetch_observation, fetch_route,
-    plan_adsb_lookup, poll_aircraft_by_callsign_aliases, should_poll_by_hex,
-};
+use super::poll_cycle::{complete_poll_cycle, fetch_observation, fetch_route, plan_adsb_lookup};
 use super::poll_decision::{PollPlan, poll_plan};
+use super::schedule::PollReadiness;
 
 fn find_index_by_identifier(
     flights: &[TrackedFlight],
@@ -70,13 +70,6 @@ pub(crate) fn aircraft_matches_tracked_callsign(
 
     matches!(&flight.identifier, FlightIdentifier::Hex(_))
         || aircraft_callsign(ac).is_some_and(|actual| flight_matches_callsign(flight, actual))
-}
-
-fn should_skip_adsb_for_strict_chill(flight: &TrackedFlight, now: DateTime<Utc>) -> bool {
-    let Some(scheduled_departure_at) = flight.scheduled_departure_at else {
-        return false;
-    };
-    scheduled_departure_at.signed_duration_since(now) > TimeDelta::hours(3)
 }
 
 fn duplicate_tracking_exists(
@@ -634,140 +627,36 @@ async fn handle_track<T, L>(
         return;
     }
 
-    let keep_pending_on_adsb_absence = matches!(&identifier, FlightIdentifier::Callsign(_))
+    let keep_pending = matches!(&identifier, FlightIdentifier::Callsign(_))
         && aviation_client.aviationstack_enabled();
-    if !should_skip_adsb_for_strict_chill(&flight, now) {
-        type PollResult =
-            Result<Result<Option<NearbyAircraft>, eyre::Report>, tokio::time::error::Elapsed>;
 
-        let mut used_hex = should_poll_by_hex(&flight);
-        let mut ac_result: Option<PollResult> = if used_hex {
-            if let Some(hex) = flight.hex.clone() {
-                Some(
-                    tokio::time::timeout(POLL_TIMEOUT, aviation_client.get_aircraft_by_hex(&hex))
-                        .await,
-                )
-            } else {
-                used_hex = false;
-                None
-            }
-        } else {
-            let candidates = callsign_poll_candidates(&flight);
-            if candidates.is_empty() {
-                None
-            } else {
-                Some(poll_aircraft_by_callsign_aliases(aviation_client, &candidates).await)
-            }
-        };
-
-        if let Some(ref result) = ac_result
-            && matches!(result, Ok(Ok(None)))
-            && !used_hex
-            && let FlightIdentifier::Callsign(input) = &identifier
-            && FlightIdentifier::is_valid_icao24_hex(input)
-        {
-            used_hex = true;
-            ac_result = Some(
-                tokio::time::timeout(POLL_TIMEOUT, aviation_client.get_aircraft_by_hex(input))
-                    .await,
-            );
-        }
-
-        if let Some(ac_result) = ac_result {
-            flight.last_adsb_poll_at = Some(now);
-            match ac_result {
-                Ok(Ok(Some(ac))) => {
-                    if used_hex && flight.hex.is_none() {
-                        used_hex = false;
-                    }
-
-                    match seed_from_observation(&mut flight, &ac, used_hex, now) {
-                        None => {
-                            // Aircraft did not confirm the target.
-                            if !keep_pending_on_adsb_absence {
-                                sender
-                                    .reply(
-                                        reply_to,
-                                        format!("{identifier} nicht gefunden im ADS-B FDM"),
-                                    )
-                                    .await;
-                                return;
-                            }
-                            debug!(
-                                identifier = %identifier,
-                                aircraft_callsign = aircraft_callsign(&ac).unwrap_or("<missing>"),
-                                "Ignoring ADS-B aircraft that does not confirm target"
-                            );
-                            flight.polls_since_change = flight.polls_since_change.saturating_add(1);
-                            resolve_route_if_needed(&mut flight, aviation_client, data_dir, now)
-                                .await;
-                            let response = track_started_response(
-                                &flight,
-                                aviationstack_info.as_deref(),
-                                aviationstack_fallback,
-                            );
-                            append_debug_event(
-                                data_dir,
-                                now,
-                                FlightTrackerDebugEvent::track_started(&flight),
-                            )
-                            .await;
-                            state.flights.push(flight);
-                            save_tracker_state(data_dir, state).await;
-                            info!(
-                                identifier = %identifier,
-                                requested_by = %requested_by,
-                                "Flight tracking started"
-                            );
-                            sender.reply(reply_to, response).await;
-                            return;
-                        }
-                        Some(seed) => {
-                            // Confirmed/visible: the Seed applied identity +
-                            // telemetry. Drain its journal event, snapshot the
-                            // phase (the ack announces; no Emits), then fall
-                            // through to aviationstack + route below.
-                            for event in seed.debug {
-                                append_debug_event(data_dir, now, event).await;
-                            }
-                            if seed.direct_target_confirmed {
-                                flight.phase = detect_phase(&flight, &ac);
-                            }
-                            // seed.followups intentionally unused; the route
-                            // fetch below (resolve_route_if_needed) keys on the
-                            // now-resolved callsign and covers it.
-                        }
-                    }
+    let mut first_cycle: Option<FlightUpdate> = None;
+    match poll_readiness(&flight, now) {
+        PollReadiness::NotDue(_) => {}
+        PollReadiness::Due | PollReadiness::Expired => {
+            let plan = plan_adsb_lookup(&flight);
+            let observation = fetch_observation(plan, aviation_client).await;
+            let discard_reply = match &observation.outcome {
+                PollOutcome::Hit(_) | PollOutcome::Miss => {
+                    format!("{identifier} nicht gefunden im ADS-B FDM")
                 }
-                Ok(Ok(None)) => {
-                    if !keep_pending_on_adsb_absence {
-                        sender
-                            .reply(
-                                reply_to,
-                                format!("{identifier} nicht gefunden im ADS-B FDM"),
-                            )
-                            .await;
+                PollOutcome::Error => "ADS-B Anfrage fehlgeschlagen FDM".to_string(),
+                PollOutcome::Timeout => "ADS-B Anfrage Timeout FDM".to_string(),
+            };
+            match complete_poll_cycle(&mut flight, observation, now, aviation_client).await {
+                Some(update) => {
+                    let seed_applied = flight.last_visible_at.is_some();
+                    if !seed_applied && !keep_pending {
+                        sender.reply(reply_to, discard_reply).await;
                         return;
                     }
+                    first_cycle = Some(update);
                 }
-                Ok(Err(e)) => {
-                    error!(error = ?e, identifier = %identifier, "ADS-B lookup failed");
-                    if !keep_pending_on_adsb_absence {
-                        sender
-                            .reply(reply_to, "ADS-B Anfrage fehlgeschlagen FDM")
-                            .await;
+                None => {
+                    if !keep_pending {
+                        sender.reply(reply_to, discard_reply).await;
                         return;
                     }
-                }
-                Err(_) => {
-                    if !keep_pending_on_adsb_absence {
-                        sender.reply(reply_to, "ADS-B Anfrage Timeout FDM").await;
-                        return;
-                    }
-                    warn!(
-                        identifier = %identifier,
-                        "Initial ADS-B lookup timed out; keeping pending track"
-                    );
                 }
             }
         }
@@ -820,6 +709,14 @@ async fn handle_track<T, L>(
     }
 
     resolve_route_if_needed(&mut flight, aviation_client, data_dir, now).await;
+
+    if let Some(update) = first_cycle {
+        for event in update.debug {
+            append_debug_event(data_dir, now, event).await;
+        }
+        // Task 4 will append non-swallowed emits onto `response`.
+        let _ = update.emits;
+    }
 
     let response = track_started_response(
         &flight,
