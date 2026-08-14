@@ -520,7 +520,10 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/api/v1/project/ripgrep"))
             .and(header("user-agent", crate::APP_USER_AGENT))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"repo": "aur", "visiblename": "ripgrep-git", "version": "1"}
+            ])))
+            .expect(1)
             .mount(&server)
             .await;
         crate::install_crypto_provider();
@@ -529,7 +532,13 @@ mod tests {
             .build()
             .unwrap();
         let client = RepologyClient::with_base_url(http, server.uri());
-        let _ = client.fetch_project("ripgrep").await;
+        match client.fetch_project("ripgrep").await.unwrap() {
+            ProjectLookup::Found { name, packages } => {
+                assert_eq!(name, "ripgrep");
+                assert_eq!(packages.len(), 1);
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
         server.verify().await;
     }
 
