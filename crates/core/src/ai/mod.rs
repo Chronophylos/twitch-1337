@@ -5,6 +5,7 @@ pub mod doener_tool;
 pub mod emote_tool;
 pub mod memory;
 pub mod model_catalog;
+pub mod packages_tool;
 pub mod prefill;
 pub mod session;
 pub mod tarot_tool;
