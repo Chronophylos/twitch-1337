@@ -88,15 +88,9 @@ pub(crate) struct FlightUpdate {
     pub removal: Option<RemovalReason>,
 }
 
-/// What the shared Seed produced. The caller turns these into per-context side
-/// effects: Advance announces and detects Flight Phase transitions; the
-/// `!track` initial poll stays silent and snapshots the phase. See CONTEXT.md
-/// "Seed".
+/// What Advance's Seed sub-transition produced. Advance announces and detects
+/// Flight Phase transitions after Seed runs. See CONTEXT.md "Seed".
 pub(crate) struct Seed {
-    #[allow(
-        dead_code,
-        reason = "read by advance.rs unit tests only now that handle_track no longer consumes Seed directly; a later task revisits Seed's rustdoc/shape"
-    )]
     pub direct_target_confirmed: bool,
     pub phase_sample_confirmed: bool,
     pub became_target_confirmed: bool,
@@ -307,11 +301,11 @@ pub(super) fn apply_observed_aircraft(
     newly_resolved
 }
 
-/// The shared Seed: confirm the target, apply the observed aircraft's identity
-/// and telemetry, and queue Route Resolution. Pure; no announcements, no phase
-/// detection. Returns `None` when the observed aircraft does not confirm the
-/// target — the caller decides what that means. Shared by `advance_flight`
-/// (per-cycle) and the `!track` initial poll.
+/// Advance's Seed sub-transition: confirm the target, apply the observed
+/// aircraft's identity and telemetry, and queue Route Resolution. Pure; no
+/// announcements, no phase detection. Returns `None` when the observed aircraft
+/// does not confirm the target — the caller decides what that means. `!track`
+/// runs Poll Cycle which calls Advance; it does not call Seed directly.
 pub(super) fn seed_from_observation(
     flight: &mut TrackedFlight,
     ac: &NearbyAircraft,
@@ -530,7 +524,7 @@ pub(crate) fn advance_flight(
         }
     }
 
-    if became_target_confirmed {
+    if seed.direct_target_confirmed && became_target_confirmed {
         update.emits.push(Emit::AdsbVisible);
         if was_pending {
             flight.phase = FlightPhase::Unknown;
