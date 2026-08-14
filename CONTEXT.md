@@ -36,12 +36,10 @@ _Avoid_: sweep, batch poll, tick (parallelism over many flights is orchestration
 not this term).
 
 **Seed**:
-The shared sub-transition both Advance and the initial `!track` poll apply when
-an Observation confirms the target — it resolves Target Confirmation, applies
-the observed aircraft's identity and telemetry, and queues Route Resolution. It
-neither announces nor detects Flight Phase; those stay with the caller (Advance
-announces and detects transitions, the initial poll announces via its ack and
-snapshots the phase). Pure.
+Advance's sub-transition when an Observation confirms the target: it resolves
+Target Confirmation, applies the observed aircraft's identity and telemetry, and
+queues Route Resolution. It does not announce or detect Flight Phase — Advance
+does that after Seed. Pure.
 _Avoid_: init, hydrate, enrich.
 
 **Route Resolution**:
@@ -135,6 +133,31 @@ The only legal name for a Scratch note. It must not be pinned to a calendar day
 — a dated name stops the Dreamer from consolidating the note. Every read,
 write, or delete of Scratch by name requires a Stable Slug.
 _Avoid_: key, id, filename, dated slug.
+
+## AI mouths
+
+**Mouth**:
+A speak-only Twitch account that posts one agent's chat replies. It never
+joins IRC and never runs commands.
+_Avoid_: second bot, AI account, Helix sender.
+
+**Utility**:
+The bot's primary Twitch identity: the IRC connection that reads chat and
+speaks commands, schedules, and staff-facing notices. Not a Mouth. When an
+agent has no Mouth, its replies fall back to Utility.
+_Avoid_: main bot, IRC bot.
+
+**Turn**:
+One agent invocation: a fresh completion with Memory, Recent Chat, and this
+instruction. Continuity comes from those, not from the previous model's
+transcript.
+_Avoid_: thread, session (the per-call `session_id` is a tracing nonce),
+conversation.
+
+**Follow-up**:
+A Twitch reply whose parent is an agent line. It starts a new Turn for that
+agent without `!ai` or `@grok`.
+_Avoid_: thread, continuation, reply turn.
 
 ## Emote tracking
 
