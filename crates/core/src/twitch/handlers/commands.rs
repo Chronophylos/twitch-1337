@@ -308,6 +308,8 @@ where
                 .build()
                 .expect("build model catalog HTTP client"),
         ));
+        let repology =
+            Arc::new(crate::repology::RepologyClient::new().expect("build repology HTTP client"));
 
         cmd_list.push(Box::new(ai::command::AiCommand::new(
             ai::command::AiCommandDeps {
@@ -319,6 +321,7 @@ where
                 emotes: emote_provider,
                 bot_username: bot_username.clone(),
                 doener: doener.clone(),
+                repology,
                 model_catalog,
                 mouths: mouths.clone(),
                 echo: echo.clone(),

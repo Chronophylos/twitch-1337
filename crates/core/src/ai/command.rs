@@ -111,6 +111,7 @@ pub struct AiCommand {
     emotes: Option<Arc<SevenTvEmoteProvider>>,
     bot_username: String,
     doener: Arc<crate::doener::DoeneratlasClient>,
+    repology: Arc<crate::repology::RepologyClient>,
     model_catalog: Arc<ModelCatalog>,
     mouths: Arc<crate::twitch::mouth::MouthRouter>,
     echo: Arc<crate::twitch::echo::EchoGuard>,
@@ -129,6 +130,7 @@ pub struct AiCommandDeps {
     pub emotes: Option<Arc<SevenTvEmoteProvider>>,
     pub bot_username: String,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
+    pub repology: Arc<crate::repology::RepologyClient>,
     pub model_catalog: Arc<ModelCatalog>,
     pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
     pub echo: Arc<crate::twitch::echo::EchoGuard>,
@@ -154,6 +156,12 @@ When you want a 7TV emote for a feeling or moment that is not among the emotes p
 turn's context, call search_emotes with a short description (or a partial code) to pull matches \
 from the full channel set. Use only the exact codes that are provided in this turn or returned \
 by search_emotes — never invent or alter emote codes.";
+const PACKAGE_TOOLS_SYSTEM_APPENDIX: &str = "\
+\n\n## Package search\n\
+When the question is whether something is packaged, or which version lives in a distro or \
+package repository (AUR, winget, Debian, Ubuntu), call search_packages. Do not invent \
+packages or versions. This tool is for distro/repo packages, not language libraries or \
+container images.";
 
 fn ai_cooldown_duration(s: &Settings) -> Duration {
     Duration::from_secs(s.cooldowns.ai)
@@ -172,6 +180,7 @@ impl AiCommand {
             emotes: deps.emotes,
             bot_username: deps.bot_username,
             doener: deps.doener,
+            repology: deps.repology,
             model_catalog: deps.model_catalog,
             mouths: deps.mouths,
             echo: deps.echo,
@@ -184,13 +193,15 @@ impl AiCommand {
 /// executor (write_file/write_scratch/delete_scratch), the web search executor
 /// (web_search/read_url) when web tools are configured, the on-demand
 /// `search_emotes` tool when the emote provider is active, the always-on
-/// doener_index tool, or the Aurora-only draw_tarot tool.
+/// doener_index tool, the Aurora-only draw_tarot tool, or the Aurora-only
+/// search_packages tool.
 struct V2Executor<'a> {
     chat: &'a ChatTurnExecutor,
     web: Option<&'a content::ContentToolExecutor>,
     emotes: Option<&'a SevenTvEmoteProvider>,
     emote_channel_id: &'a str,
     doener: &'a crate::doener::DoeneratlasClient,
+    repology: &'a crate::repology::RepologyClient,
     trace: &'a TraceIds,
 }
 
@@ -202,6 +213,9 @@ impl ToolExecutor for V2Executor<'_> {
         }
         if call.name == crate::ai::tarot_tool::TAROT_TOOL_NAME {
             return crate::ai::tarot_tool::execute_draw_tarot(call).await;
+        }
+        if call.name == crate::ai::packages_tool::SEARCH_PACKAGES_TOOL_NAME {
+            return crate::ai::packages_tool::execute_search_packages(self.repology, call).await;
         }
         if call.name == crate::ai::emote_tool::SEARCH_EMOTES_TOOL_NAME {
             return match self.emotes {
@@ -531,6 +545,9 @@ where
         if self.emotes.is_some() {
             appendices.push(EMOTE_TOOLS_SYSTEM_APPENDIX.to_string());
         }
+        if !grok_alias {
+            appendices.push(PACKAGE_TOOLS_SYSTEM_APPENDIX.to_string());
+        }
         if grok_alias {
             if self.web.is_some() {
                 appendices.push(GROK_WEB_SYSTEM_APPENDIX.to_string());
@@ -573,6 +590,7 @@ where
         tools.push(crate::ai::doener_tool::doener_tool());
         if !grok_alias {
             tools.push(crate::ai::tarot_tool::tarot_tool());
+            tools.push(crate::ai::packages_tool::search_packages_tool());
         }
         if self.web.is_some() {
             tools.extend(content::ai_tools());
@@ -609,6 +627,7 @@ where
             emotes: self.emotes.as_deref(),
             emote_channel_id: &ctx.privmsg.channel_id,
             doener: self.doener.as_ref(),
+            repology: self.repology.as_ref(),
             trace: &trace,
         };
         let final_text = match run_agent(&*self.llm_client, req, &combined_exec, opts).await {

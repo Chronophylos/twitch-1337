@@ -149,7 +149,7 @@ pub fn collapse_hits(
             .into_iter()
             .collect();
 
-        repos.sort_by(|a, b| suite_rank(b, family).cmp(&suite_rank(a, family)));
+        repos.sort_by_key(|b| std::cmp::Reverse(suite_rank(b, family)));
         repos.truncate(cap_per_family);
 
         for repo in repos {
