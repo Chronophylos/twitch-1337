@@ -13,6 +13,7 @@ pub mod doener;
 pub mod emote_tracker;
 pub mod llm_factory;
 pub mod ping;
+pub mod repology;
 pub mod schedule;
 pub mod settings;
 pub mod suspend;

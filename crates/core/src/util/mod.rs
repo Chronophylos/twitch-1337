@@ -8,7 +8,12 @@ use chrono::MappedLocalTime;
 use eyre::Result;
 
 /// Application user-agent string used in HTTP requests.
-pub static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+pub static APP_USER_AGENT: &str = concat!(
+    env!("CARGO_PKG_NAME"),
+    "/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/Chronophylos/twitch-1337)",
+);
 
 /// Returns the data directory path, resolved from `$DATA_DIR` env var.
 ///
@@ -124,4 +129,17 @@ pub fn parse_flight_duration(s: &str) -> Option<std::time::Duration> {
 /// [`CryptoProvider`]: rustls::crypto::CryptoProvider
 pub fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::APP_USER_AGENT;
+
+    #[test]
+    fn app_user_agent_includes_repo_url() {
+        assert!(
+            APP_USER_AGENT.contains("https://github.com/Chronophylos/twitch-1337"),
+            "APP_USER_AGENT must identify the source repo: {APP_USER_AGENT}"
+        );
+    }
 }
