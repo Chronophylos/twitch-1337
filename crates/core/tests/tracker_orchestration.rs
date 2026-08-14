@@ -135,3 +135,56 @@ async fn poll_all_flights_applies_position_and_route_from_fake_provider() {
             .is_some_and(|hex| hex.eq_ignore_ascii_case("3C6589"))
     );
 }
+
+#[tokio::test]
+async fn poll_all_retries_hex_when_iata_callsign_misses() {
+    let now = dt("2026-04-18T12:00:00Z");
+    let clock = FakeClock::new(now);
+    let data_dir = TempDir::new().unwrap();
+
+    let mut flight = tracked_flight(now);
+    flight.identifier = FlightIdentifier::Callsign("DE1513".to_string());
+    flight.callsign = Some("DE1513".to_string());
+    flight.alias_callsigns = vec!["DE1513".to_string()];
+    flight.hex = None;
+    flight.hex_source = None;
+    flight.target_confirmation = TargetConfirmation::Pending;
+    flight.last_seen = None;
+    flight.last_visible_at = None;
+    flight.last_adsb_poll_at = None;
+    flight.phase = FlightPhase::Unknown;
+
+    let mut state = FlightTrackerState {
+        flights: vec![flight],
+        flight_info_cache: Vec::new(),
+    };
+
+    let mut ac = cruise_aircraft();
+    ac.hex = Some("DE1513".to_string());
+    ac.flight = Some("CFG1513".to_string());
+    let provider = FakeAdsbProvider::new().insert_hex("DE1513", ac);
+    let sender = chat_sender().await;
+
+    poll_all_flights_with_commands(
+        &mut state,
+        &sender,
+        "test_channel",
+        &provider,
+        data_dir.path(),
+        clock.as_ref(),
+        None,
+    )
+    .await;
+
+    let flight = &state.flights[0];
+    assert!(
+        flight.last_visible_at.is_some(),
+        "hex fallback must Seed on a callsign miss"
+    );
+    assert!(
+        flight
+            .hex
+            .as_deref()
+            .is_some_and(|h| h.eq_ignore_ascii_case("DE1513"))
+    );
+}
