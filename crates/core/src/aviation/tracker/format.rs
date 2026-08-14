@@ -323,7 +323,11 @@ pub(crate) fn msg_flights_list(flights: &[TrackedFlight]) -> String {
             format!("{name} ({phase} {alt})")
         })
         .collect();
-    format!("Getrackte Fl\u{00fc}ge: {}", parts.join(" | "))
+    let mut msg = format!("Getrackte Fl\u{00fc}ge: {}", parts.join(" | "));
+    if flights.len() == 1 {
+        msg.push_str(&format_adsb_link_suffix(flights[0].hex.as_deref()));
+    }
+    msg
 }
 
 #[cfg(test)]
@@ -412,5 +416,44 @@ mod tests {
             msg,
             "DLH1929 | Cruise FL120 | 280kts | Squawk 1000 | seit 30m getrackt"
         );
+    }
+
+    #[test]
+    fn msg_flights_list_includes_adsb_link_for_single_flight_with_hex() {
+        let msg = msg_flights_list(&[status_flight(Some("3C6589"))]);
+
+        assert_eq!(
+            msg,
+            "Getrackte Fl\u{00fc}ge: DLH1929 (Cruise FL120) | https://globe.adsbexchange.com/?icao=3c6589"
+        );
+    }
+
+    #[test]
+    fn msg_flights_list_omits_adsb_link_for_single_flight_without_hex() {
+        let msg = msg_flights_list(&[status_flight(None)]);
+
+        assert_eq!(msg, "Getrackte Fl\u{00fc}ge: DLH1929 (Cruise FL120)");
+    }
+
+    #[test]
+    fn msg_flights_list_omits_adsb_links_for_multiple_flights() {
+        let second = TrackedFlight {
+            callsign: Some("BAW123".to_string()),
+            hex: Some("400123".to_string()),
+            target_confirmation: TargetConfirmation::ConfirmedByCallsign,
+            ..tracked_flight()
+        };
+
+        let msg = msg_flights_list(&[status_flight(Some("3C6589")), second]);
+
+        assert_eq!(
+            msg,
+            "Getrackte Fl\u{00fc}ge: DLH1929 (Cruise FL120) | BAW123 (Cruise FL120)"
+        );
+    }
+
+    #[test]
+    fn msg_flights_list_empty_is_unchanged() {
+        assert_eq!(msg_flights_list(&[]), "Keine Fl\u{00fc}ge getrackt");
     }
 }
