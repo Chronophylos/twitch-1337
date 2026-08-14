@@ -4,7 +4,8 @@
 //! `ctx` privmsg + generic ChatSender) rather than being a generic router arm.
 //! Outbound text is sanitized in [`MouthRouter::speak`] — mouths speak over
 //! Helix, so they never touch `ChatSender` and would otherwise skip the
-//! control-char strip and the length clamp.
+//! control-char strip. Length clamping for agent replies happens before
+//! `speak`, so the router must not apply the 480-byte IRC ceiling.
 
 use std::{
     fmt::{self, Display},
@@ -110,9 +111,11 @@ impl MouthRouter {
         agent: Agent,
         mut req: SpeakRequest<'_>,
     ) -> Result<SpeakOutcome, SpeakError> {
-        // Helix rejects anything over 500 chars with a 422, same ceiling IRC
-        // has. Mouths bypass `ChatSender`, so the sanitizer runs here instead.
-        req.text = crate::twitch::chat_sender::sanitize_outbound(&req.text);
+        // Helix rejects anything over 500 chars with a 422. Agent replies are
+        // already character-clamped to 490 before they reach the router; only
+        // the control-char strip runs here. The 480-byte IRC clamp would cut
+        // a 490-character ASCII line.
+        req.text = crate::twitch::chat_sender::collapse_control_and_whitespace(&req.text);
         let mouth = match agent {
             Agent::Aurora => self.aurora.as_ref(),
             Agent::Grok => self.grok.as_ref(),
@@ -330,10 +333,11 @@ mod tests {
         ));
     }
 
-    /// Helix answers >500 chars with `422 The message is too large`, and a
-    /// mouth never passes through `ChatSender`, so the router must clamp.
+    /// Agent replies are character-clamped to 490 before they reach the
+    /// router. The 480-byte IRC clamp must not run here: a 490-character
+    /// ASCII line is over 480 bytes and would be cut.
     #[tokio::test]
-    async fn over_long_text_is_clamped_before_helix() {
+    async fn agent_line_is_not_byte_clamped() {
         use std::sync::Mutex;
 
         struct Recorder(Mutex<Vec<String>>);
@@ -356,8 +360,7 @@ mod tests {
             aurora: Some(rec.clone()),
             grok: None,
         };
-        // Multibyte on purpose: clamping must land on a char boundary.
-        let long = "ä".repeat(600);
+        let long = "a".repeat(490);
         router
             .speak(
                 Agent::Aurora,
@@ -372,9 +375,10 @@ mod tests {
             .unwrap();
 
         let sent = rec.0.lock().unwrap()[0].clone();
-        assert!(
-            sent.chars().count() <= 500,
-            "Helix caps messages at 500 chars, got {}",
+        assert_eq!(
+            sent.chars().count(),
+            495, // 490 + space (collapsed \r\n) + "tail"
+            "490-char ASCII must not be cut by the 480-byte clamp, got {}",
             sent.chars().count(),
         );
         assert!(

@@ -24,6 +24,7 @@ use crate::ai::memory::tools::{
 use crate::ai::memory::transcript::TranscriptWriter;
 use crate::ai::memory::types::Role;
 use crate::ai::model_catalog::ModelCatalog;
+use crate::ai::reply::{RewordOpts, prepare_agent_reply};
 use crate::commands::{Command, CommandContext};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
@@ -266,29 +267,6 @@ fn is_grok_alias(trigger: &str) -> bool {
 /// non-lowercase invocations.
 pub fn is_ai_trigger(word: &str) -> bool {
     word.eq_ignore_ascii_case("!ai") || word.eq_ignore_ascii_case(GROK_ALIAS_TRIGGER)
-}
-
-fn clean_user_facing_ai_response(text: &str) -> &str {
-    let trimmed = text.trim_start();
-    for marker in ["thought", "analysis", "final"] {
-        let Some(prefix) = trimmed.get(..marker.len()) else {
-            continue;
-        };
-        if !prefix.eq_ignore_ascii_case(marker) {
-            continue;
-        }
-
-        let rest = &trimmed[marker.len()..];
-        if !rest.starts_with(char::is_whitespace) {
-            continue;
-        }
-
-        if let Some((_, message)) = rest.trim_start().split_once('|') {
-            return message.trim_start();
-        }
-    }
-
-    text
 }
 
 fn instruction_with_reply_context<T, L>(
@@ -611,8 +589,8 @@ where
             model: model.clone(),
             messages: vec![system_msg, user_msg],
             tools,
-            reasoning_effort,
-            service_tier,
+            reasoning_effort: reasoning_effort.clone(),
+            service_tier: service_tier.clone(),
             prior_rounds,
             trace: trace.clone(),
         };
@@ -658,7 +636,18 @@ where
         };
 
         if let Some(text) = final_text {
-            let line = clean_user_facing_ai_response(&text).to_string();
+            let line = prepare_agent_reply(
+                &*self.llm_client,
+                &text,
+                &RewordOpts {
+                    model: model.clone(),
+                    timeout: mem.turn_timeout,
+                    reasoning_effort: reasoning_effort.clone(),
+                    service_tier: service_tier.clone(),
+                    trace: trace.clone(),
+                },
+            )
+            .await;
             if !line.is_empty() {
                 let ts = Utc::now();
                 let req = crate::twitch::mouth::SpeakRequest {
@@ -675,7 +664,9 @@ where
                         (spoken.login, spoken.message_id)
                     }
                     Ok(crate::twitch::mouth::SpeakOutcome::NoMouth) => {
-                        ctx.sender.reply(ctx.privmsg, line.clone()).await;
+                        ctx.sender
+                            .reply_no_byte_clamp(ctx.privmsg, line.clone())
+                            .await;
                         (self.bot_username.clone(), None)
                     }
                     Err(e) => {

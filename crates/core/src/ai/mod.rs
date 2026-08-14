@@ -7,5 +7,6 @@ pub mod memory;
 pub mod model_catalog;
 pub mod packages_tool;
 pub mod prefill;
+pub mod reply;
 pub mod session;
 pub mod tarot_tool;

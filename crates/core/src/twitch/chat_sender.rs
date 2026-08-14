@@ -1,9 +1,11 @@
 //! Single sanitizing wrapper around outbound chat sends.
 //!
 //! Every PRIVMSG the bot emits goes through [`ChatSender`]. The sanitizer
-//! strips control characters (so a stray `\r\n` cannot split the IRC line),
-//! collapses the resulting whitespace runs, and byte-clamps the payload
-//! below Twitch's 500-byte limit with a `…` suffix when truncated.
+//! strips control characters (so a stray `\r\n` cannot split the IRC line)
+//! and collapses the resulting whitespace runs. Non-agent chat is also
+//! byte-clamped below Twitch's 500-byte limit with a `…` suffix when
+//! truncated. Agent replies skip that byte clamp (see
+//! [`ChatSender::reply_no_byte_clamp`]).
 //! Send errors are logged and swallowed: a chat hiccup must not abort the
 //! caller's task.
 
@@ -19,13 +21,13 @@ use twitch_irc::{
 /// framing tags injected by `say_in_reply_to`.
 const MAX_OUTBOUND_BYTES: usize = 480;
 
-/// Strip control characters, collapse whitespace runs, and byte-clamp to
-/// [`MAX_OUTBOUND_BYTES`] with a `…` (U+2026) suffix on truncation.
+/// Strip control characters and collapse whitespace runs. Does not trim
+/// leading/trailing whitespace and does not length-clamp — callers that
+/// need the 480-byte IRC ceiling go through [`sanitize_outbound`].
 ///
-/// Idempotent: `sanitize_outbound(sanitize_outbound(x)) == sanitize_outbound(x)`.
-/// Always truncates on a UTF-8 char boundary. Does not trim leading/trailing
-/// whitespace — callers handle that semantically; only collapse is performed here.
-pub fn sanitize_outbound(input: &str) -> String {
+/// Idempotent. Agent replies use this plus a 490-character clamp so a
+/// 490-character ASCII line is not cut by the byte ceiling.
+pub fn collapse_control_and_whitespace(input: &str) -> String {
     let mut collapsed = String::with_capacity(input.len());
     let mut prev_space = false;
     for ch in input.chars() {
@@ -40,6 +42,17 @@ pub fn sanitize_outbound(input: &str) -> String {
             prev_space = false;
         }
     }
+    collapsed
+}
+
+/// Strip control characters, collapse whitespace runs, and byte-clamp to
+/// [`MAX_OUTBOUND_BYTES`] with a `…` (U+2026) suffix on truncation.
+///
+/// Idempotent: `sanitize_outbound(sanitize_outbound(x)) == sanitize_outbound(x)`.
+/// Always truncates on a UTF-8 char boundary. Does not trim leading/trailing
+/// whitespace — callers handle that semantically; only collapse is performed here.
+pub fn sanitize_outbound(input: &str) -> String {
+    let collapsed = collapse_control_and_whitespace(input);
 
     if collapsed.len() <= MAX_OUTBOUND_BYTES {
         return collapsed;
@@ -100,7 +113,22 @@ where
     /// Reply to `privmsg` with `message`. Sanitizes the payload, drops empty
     /// results, and logs (does not propagate) IRC send errors.
     pub async fn reply(&self, privmsg: &PrivmsgMessage, message: impl Into<String>) {
-        let cleaned = sanitize_outbound(&message.into());
+        self.send_reply(privmsg, sanitize_outbound(&message.into()))
+            .await;
+    }
+
+    /// Like [`reply`], but skips the 480-byte clamp. Agent replies are
+    /// character-clamped to 490 before they reach here; applying the byte
+    /// ceiling would cut a 490-character ASCII line. A 490-character
+    /// multibyte line can still exceed IRC's 500-byte PRIVMSG limit — that
+    /// is the trade-off issue #417 accepted so Helix and IRC share one
+    /// character policy.
+    pub async fn reply_no_byte_clamp(&self, privmsg: &PrivmsgMessage, message: impl Into<String>) {
+        self.send_reply(privmsg, collapse_control_and_whitespace(&message.into()))
+            .await;
+    }
+
+    async fn send_reply(&self, privmsg: &PrivmsgMessage, cleaned: String) {
         if cleaned.is_empty() {
             warn!(channel = %privmsg.channel_login, "outbound reply empty after sanitize, dropping");
             return;
@@ -174,5 +202,14 @@ mod tests {
         let out = sanitize_outbound(&input);
         assert_eq!(out.len(), MAX_OUTBOUND_BYTES);
         assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn collapse_does_not_byte_clamp() {
+        // Agent replies need the control-char strip without the 480-byte
+        // ceiling; a 490-character ASCII line must survive this step.
+        let input = "a".repeat(600);
+        let out = collapse_control_and_whitespace(&input);
+        assert_eq!(out, input);
     }
 }

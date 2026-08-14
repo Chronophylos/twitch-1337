@@ -187,3 +187,35 @@ async fn helix_reply_records_once_and_suppresses_echo() {
 
     bot.shutdown().await;
 }
+
+/// Mouth sends skip the 480-byte clamp the same way utility fallback does:
+/// an overlong draft is rewritten, and history records the rewrite.
+#[tokio::test]
+async fn overlong_mouth_reply_is_rewritten_once() {
+    let draft = "x".repeat(491);
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(10);
+        })
+        .with_fake_mouth(Agent::Aurora, "aurora_bot", "42", "spoken-id-2")
+        .spawn()
+        .await;
+    bot.llm.push_tool_message(&draft);
+    bot.llm.push_chat("mouth rewrite");
+
+    bot.send("viewer", "!ai sag was").await;
+
+    let entries = wait_history_len(&bot, 2).await;
+    let entry = entries
+        .iter()
+        .rev()
+        .find(|e| e.source == ChatHistorySource::Bot)
+        .expect("bot history entry");
+    assert_eq!(entry.text, "mouth rewrite");
+    assert_eq!(entry.username, "aurora_bot");
+    assert_eq!(bot.llm.tool_calls().len(), 1);
+    assert_eq!(bot.llm.chat_calls().len(), 1);
+
+    bot.shutdown().await;
+}
