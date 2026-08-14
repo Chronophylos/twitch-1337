@@ -31,6 +31,7 @@ pub(crate) enum AdsbLookup {
     },
     Callsigns {
         candidates: Vec<String>,
+        hex_fallback: Option<String>,
     },
     /// No hex plan and no callsign candidates — Observation is a Miss.
     None,
@@ -49,7 +50,16 @@ pub(crate) fn plan_adsb_lookup(flight: &TrackedFlight) -> AdsbLookup {
         if candidates.is_empty() {
             AdsbLookup::None
         } else {
-            AdsbLookup::Callsigns { candidates }
+            let hex_fallback = match &flight.identifier {
+                FlightIdentifier::Callsign(id) if FlightIdentifier::is_valid_icao24_hex(id) => {
+                    Some(id.clone())
+                }
+                _ => None,
+            };
+            AdsbLookup::Callsigns {
+                candidates,
+                hex_fallback,
+            }
         }
     }
 }
@@ -69,11 +79,24 @@ pub(crate) async fn fetch_observation<P: AdsbProvider>(
                 outcome: poll_result_to_outcome(result, "hex"),
             }
         }
-        AdsbLookup::Callsigns { candidates } => {
+        AdsbLookup::Callsigns {
+            candidates,
+            hex_fallback,
+        } => {
             let result = poll_aircraft_by_callsign_aliases(provider, &candidates).await;
-            Observation {
-                used_hex: false,
-                outcome: poll_result_to_outcome(result, "callsign"),
+            let callsign_miss = matches!(&result, Ok(Ok(None)));
+            if callsign_miss && let Some(hex) = hex_fallback {
+                let hex_result =
+                    tokio::time::timeout(POLL_TIMEOUT, provider.get_aircraft_by_hex(&hex)).await;
+                Observation {
+                    used_hex: true,
+                    outcome: poll_result_to_outcome(hex_result, "hex"),
+                }
+            } else {
+                Observation {
+                    used_hex: false,
+                    outcome: poll_result_to_outcome(result, "callsign"),
+                }
             }
         }
         AdsbLookup::None => Observation {
@@ -192,6 +215,71 @@ mod tests {
     use super::*;
     use crate::aviation::tracker::test_support::dt;
     use crate::aviation::tracker::{FlightIdentifier, FlightPhase, HexSource, TargetConfirmation};
+    use crate::aviation::{AdsbProvider, AltBaro, NearbyAircraft};
+    use async_trait::async_trait;
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct TestAdsb {
+        by_hex: HashMap<String, NearbyAircraft>,
+        by_callsign: HashMap<String, NearbyAircraft>,
+        callsign_err: bool,
+    }
+
+    #[async_trait]
+    impl AdsbProvider for TestAdsb {
+        async fn get_aircraft_by_hex(&self, hex: &str) -> eyre::Result<Option<NearbyAircraft>> {
+            Ok(self.by_hex.get(&hex.to_uppercase()).cloned())
+        }
+        async fn get_aircraft_by_callsign(
+            &self,
+            callsign: &str,
+        ) -> eyre::Result<Option<NearbyAircraft>> {
+            if self.callsign_err {
+                eyre::bail!("callsign lookup failed");
+            }
+            Ok(self.by_callsign.get(&callsign.to_uppercase()).cloned())
+        }
+        async fn get_flight_route(
+            &self,
+            _callsign: &str,
+        ) -> eyre::Result<Option<crate::aviation::FlightRoute>> {
+            Ok(None)
+        }
+        async fn resolve_callsign(&self, input: &str) -> String {
+            input.to_string()
+        }
+        fn aviationstack_enabled(&self) -> bool {
+            false
+        }
+    }
+
+    fn hex_shaped_iata_flight() -> TrackedFlight {
+        let mut flight = pending_callsign_flight();
+        flight.identifier = FlightIdentifier::Callsign("DE1513".to_string());
+        flight.callsign = Some("DE1513".to_string());
+        flight.alias_callsigns = vec!["DE1513".to_string()];
+        flight
+    }
+
+    fn aircraft_on_hex(hex: &str, callsign: &str) -> NearbyAircraft {
+        NearbyAircraft {
+            hex: Some(hex.to_string()),
+            flight: Some(callsign.to_string()),
+            r: None,
+            t: None,
+            alt_baro: Some(AltBaro::Feet(35_000)),
+            lat: Some(50.0),
+            lon: Some(8.5),
+            gs: Some(450.0),
+            baro_rate: Some(0),
+            geom_rate: None,
+            squawk: None,
+            nav_modes: None,
+            rssi: None,
+            seen_pos: None,
+        }
+    }
 
     fn pending_callsign_flight() -> TrackedFlight {
         TrackedFlight {
@@ -254,7 +342,10 @@ mod tests {
     fn plan_pending_callsign_uses_callsign_candidates() {
         let flight = pending_callsign_flight();
         match plan_adsb_lookup(&flight) {
-            AdsbLookup::Callsigns { candidates } => {
+            AdsbLookup::Callsigns {
+                candidates,
+                hex_fallback: None,
+            } => {
                 assert_eq!(candidates, vec!["DLH1234".to_string()]);
             }
             other => panic!("expected Callsigns, got {other:?}"),
@@ -273,5 +364,59 @@ mod tests {
             AdsbLookup::None => {}
             other => panic!("expected None, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn plan_iata_that_is_also_valid_hex_sets_hex_fallback() {
+        let flight = hex_shaped_iata_flight();
+        match plan_adsb_lookup(&flight) {
+            AdsbLookup::Callsigns {
+                candidates,
+                hex_fallback,
+            } => {
+                assert!(candidates.iter().any(|c| c == "DE1513"));
+                assert_eq!(hex_fallback.as_deref(), Some("DE1513"));
+            }
+            other => panic!("expected Callsigns, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_plain_callsign_has_no_hex_fallback() {
+        let flight = pending_callsign_flight();
+        match plan_adsb_lookup(&flight) {
+            AdsbLookup::Callsigns { hex_fallback, .. } => assert_eq!(hex_fallback, None),
+            other => panic!("expected Callsigns, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_observation_callsign_miss_retries_hex_fallback() {
+        let flight = hex_shaped_iata_flight();
+        let plan = plan_adsb_lookup(&flight);
+        let provider = TestAdsb {
+            by_hex: HashMap::from([("DE1513".to_string(), aircraft_on_hex("DE1513", "CFG1513"))]),
+            ..TestAdsb::default()
+        };
+        let obs = fetch_observation(plan, &provider).await;
+        assert!(obs.used_hex, "hex retry must set used_hex");
+        match obs.outcome {
+            PollOutcome::Hit(ac) => assert_eq!(ac.flight.as_deref(), Some("CFG1513")),
+            other => panic!("expected Hit, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_observation_callsign_error_does_not_retry_hex() {
+        let flight = hex_shaped_iata_flight();
+        let plan = plan_adsb_lookup(&flight);
+        let provider = TestAdsb {
+            callsign_err: true,
+            by_hex: HashMap::from([("DE1513".to_string(), aircraft_on_hex("DE1513", "CFG1513"))]),
+            ..TestAdsb::default()
+        };
+        let obs = fetch_observation(plan, &provider).await;
+        assert!(!obs.used_hex);
+        assert!(matches!(obs.outcome, PollOutcome::Error));
     }
 }
