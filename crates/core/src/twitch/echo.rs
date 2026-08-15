@@ -4,11 +4,13 @@
 //! the way back in.
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     time::{Duration, Instant},
 };
 
 use tokio::sync::Mutex;
+
+use crate::twitch::mouth::Agent;
 
 const PENDING_TTL: Duration = Duration::from_secs(30);
 const PENDING_CAP: usize = 512;
@@ -19,6 +21,24 @@ pub struct MouthIdentities {
     /// Lowercased logins.
     pub logins: HashSet<String>,
     pub user_ids: HashSet<String>,
+    agent_by_login: HashMap<String, Agent>,
+    agent_by_user_id: HashMap<String, Agent>,
+}
+
+impl MouthIdentities {
+    /// Record a mouth under `agent` so replies to that identity can start a
+    /// Follow-up Turn for the right speaker. Login is stored lowercased.
+    /// `user_id` is optional: production still registers the login when Helix
+    /// user-id resolve fails.
+    pub fn register(&mut self, agent: Agent, login: &str, user_id: Option<&str>) {
+        let login = login.to_ascii_lowercase();
+        self.logins.insert(login.clone());
+        self.agent_by_login.insert(login, agent);
+        if let Some(id) = user_id {
+            self.user_ids.insert(id.to_string());
+            self.agent_by_user_id.insert(id.to_string(), agent);
+        }
+    }
 }
 
 struct PendingIds {
@@ -94,6 +114,22 @@ impl EchoGuard {
                 .contains(&sender_login.to_ascii_lowercase())
     }
 
+    /// Which agent owns this mouth identity, if any. Login/user-id only —
+    /// never the pending outgoing-id set, so a Follow-up still resolves after
+    /// the 30s echo TTL and a stale pending id can never pick an agent.
+    pub fn agent_for(&self, sender_id: &str, sender_login: &str) -> Option<Agent> {
+        self.identities
+            .agent_by_user_id
+            .get(sender_id)
+            .copied()
+            .or_else(|| {
+                self.identities
+                    .agent_by_login
+                    .get(&sender_login.to_ascii_lowercase())
+                    .copied()
+            })
+    }
+
     /// Lowercased mouth logins, for the emote deny-list.
     pub fn mouth_logins(&self) -> &HashSet<String> {
         &self.identities.logins
@@ -127,13 +163,45 @@ mod tests {
 
     #[tokio::test]
     async fn mouth_identity_is_backstop_for_history_and_only_filter_for_commands() {
-        let ids = MouthIdentities {
-            logins: ["aurora_bot".to_string()].into(),
-            user_ids: ["42".to_string()].into(),
-        };
+        let mut ids = MouthIdentities::default();
+        ids.register(
+            crate::twitch::mouth::Agent::Aurora,
+            "aurora_bot",
+            Some("42"),
+        );
         let guard = EchoGuard::new(ids);
         assert!(guard.is_echo("42", "aurora_bot", "unknown-id").await); // backstop
         assert!(guard.is_mouth("42", "whatever"));
         assert!(!guard.is_mouth("7", "viewer"));
+    }
+
+    #[test]
+    fn agent_for_maps_aurora_and_grok_by_id_or_login() {
+        let mut ids = MouthIdentities::default();
+        ids.register(
+            crate::twitch::mouth::Agent::Aurora,
+            "aurora_bot",
+            Some("42"),
+        );
+        ids.register(crate::twitch::mouth::Agent::Grok, "grok_bot", Some("77"));
+        let guard = EchoGuard::new(ids);
+
+        assert_eq!(
+            guard.agent_for("42", "whatever"),
+            Some(crate::twitch::mouth::Agent::Aurora)
+        );
+        assert_eq!(
+            guard.agent_for("999", "GROK_BOT"),
+            Some(crate::twitch::mouth::Agent::Grok)
+        );
+        assert_eq!(guard.agent_for("7", "viewer"), None);
+    }
+
+    #[tokio::test]
+    async fn agent_for_does_not_use_pending_message_ids() {
+        let guard = EchoGuard::disabled();
+        guard.register("mid1").await;
+        assert!(guard.is_echo("999", "someone", "mid1").await);
+        assert_eq!(guard.agent_for("999", "someone"), None);
     }
 }

@@ -19,7 +19,7 @@ use crate::{
     config::{Configuration, MouthConfig},
     twitch::{
         echo::{EchoGuard, MouthIdentities},
-        mouth::{HelixMouth, Mouth, MouthRouter},
+        mouth::{Agent, HelixMouth, Mouth, MouthRouter},
         token_storage::FileBasedTokenStorage,
     },
 };
@@ -37,6 +37,7 @@ pub async fn build_mouths(
         config,
         data_dir,
         "token-aurora.ron",
+        Agent::Aurora,
         config.twitch.mouths.aurora.as_ref(),
         &mut identities,
     )
@@ -45,6 +46,7 @@ pub async fn build_mouths(
         config,
         data_dir,
         "token-grok.ron",
+        Agent::Grok,
         config.twitch.mouths.grok.as_ref(),
         &mut identities,
     )
@@ -59,6 +61,7 @@ async fn build_one(
     config: &Configuration,
     data_dir: &Path,
     file: &str,
+    agent: Agent,
     cfg: Option<&MouthConfig>,
     identities: &mut MouthIdentities,
 ) -> Option<Arc<dyn Mouth>> {
@@ -66,7 +69,7 @@ async fn build_one(
     // Store side must lowercase to match `EchoGuard::is_mouth`'s compare side
     // (`sender_login.to_ascii_lowercase()`), or identity matching silently
     // breaks whenever config casing differs from what Twitch sends back.
-    identities.logins.insert(cfg.username.to_ascii_lowercase());
+    identities.register(agent, &cfg.username, None);
 
     let creds: AuthenticatedLoginCredentials = RefreshingLoginCredentials::init_with_username(
         Some(cfg.username.clone()),
@@ -88,7 +91,7 @@ async fn build_one(
             return None;
         }
     };
-    identities.user_ids.insert(user_id.clone());
+    identities.register(agent, &cfg.username, Some(&user_id));
 
     match HelixMouth::new(
         creds,

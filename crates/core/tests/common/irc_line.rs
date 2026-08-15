@@ -13,6 +13,17 @@ pub fn reply_privmsg(
     parent_user: &str,
     parent_text: &str,
 ) -> String {
+    reply_privmsg_with_parent_id(channel, user, text, parent_user, "22222", parent_text)
+}
+
+pub fn reply_privmsg_with_parent_id(
+    channel: &str,
+    user: &str,
+    text: &str,
+    parent_user: &str,
+    parent_user_id: &str,
+    parent_text: &str,
+) -> String {
     privmsg_with(
         channel,
         user,
@@ -22,7 +33,7 @@ pub fn reply_privmsg(
                 "reply-parent-msg-id",
                 "11111111-1111-1111-1111-111111111111",
             ),
-            ("reply-parent-user-id", "22222"),
+            ("reply-parent-user-id", parent_user_id),
             ("reply-parent-user-login", parent_user),
             ("reply-parent-display-name", parent_user),
             ("reply-parent-msg-body", &escape_tag_value(parent_text)),

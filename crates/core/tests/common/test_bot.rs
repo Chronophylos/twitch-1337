@@ -36,7 +36,7 @@ use super::fake_llm::FakeLlm;
 use super::fake_transport::{self, FakeTransport, TransportHandle};
 use super::irc_line::{
     parse_privmsg_text, privmsg, privmsg_as_broadcaster, privmsg_as_mod, privmsg_at, privmsg_with,
-    reply_privmsg,
+    reply_privmsg, reply_privmsg_with_parent_id,
 };
 
 /// Minimum wall-clock budget for the "wait for bot output" helpers
@@ -577,6 +577,46 @@ impl TestBot {
         self.transport.inject.send(line).await.expect("inject");
     }
 
+    /// Reply whose parent identity is a known mouth (login + user id).
+    pub async fn send_reply_to_mouth(
+        &self,
+        user: &str,
+        text: &str,
+        parent_user: &str,
+        parent_user_id: &str,
+        parent_text: &str,
+    ) {
+        self.send_reply_to_mouth_in(
+            &self.channel,
+            user,
+            text,
+            parent_user,
+            parent_user_id,
+            parent_text,
+        )
+        .await;
+    }
+
+    pub async fn send_reply_to_mouth_in(
+        &self,
+        channel: &str,
+        user: &str,
+        text: &str,
+        parent_user: &str,
+        parent_user_id: &str,
+        parent_text: &str,
+    ) {
+        let line = reply_privmsg_with_parent_id(
+            channel,
+            user,
+            text,
+            parent_user,
+            parent_user_id,
+            parent_text,
+        );
+        self.transport.inject.send(line).await.expect("inject");
+    }
+
     pub async fn send_at(&self, user: &str, text: &str, tmi_ts_ms: i64) {
         let line = privmsg_at(&self.channel, user, text, tmi_ts_ms);
         self.transport.inject.send(line).await.expect("inject");
@@ -877,15 +917,14 @@ fn build_mouths_override(
     }
 
     let mut identities = MouthIdentities::default();
-    let mut register = |login: &str, user_id: &str| {
+    if let Some((login, user_id)) = &identity {
+        // Echo-only identity: still filtered by `is_mouth`, but no agent
+        // mapping so a reply to it cannot start a Follow-up.
         identities.logins.insert(login.to_ascii_lowercase());
         identities.user_ids.insert(user_id.to_owned());
-    };
-    if let Some((login, user_id)) = &identity {
-        register(login, user_id);
     }
-    for (_, mouth) in &fake_mouths {
-        register(&mouth.login, &mouth.user_id);
+    for (agent, mouth) in &fake_mouths {
+        identities.register(*agent, &mouth.login, Some(&mouth.user_id));
     }
 
     let mut router = MouthRouter {

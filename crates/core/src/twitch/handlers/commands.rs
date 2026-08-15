@@ -20,7 +20,7 @@ use crate::{
     ping::{PingCommand, PingHandle},
     settings::SettingsHandle,
     suspend::SuspensionManager,
-    twitch::{ChatSender, seventv::SevenTvEmoteProvider, whisper::WhisperSender},
+    twitch::{ChatSender, mouth::Agent, seventv::SevenTvEmoteProvider, whisper::WhisperSender},
 };
 
 /// Configuration for the generic command handler.
@@ -409,6 +409,59 @@ fn is_twitch_login_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
+/// Synthetic `!ai` / `@grok` trigger for a Mouth-parent Follow-up. Utility
+/// has no mouth and never starts a Follow-up.
+fn followup_trigger(agent: Agent) -> Option<&'static str> {
+    match agent {
+        Agent::Aurora => Some("!ai"),
+        Agent::Grok => Some(GROK_ALIAS_TRIGGER),
+        Agent::Utility => None,
+    }
+}
+
+async fn dispatch_command<T, L>(
+    cmd: &dyn crate::commands::Command<T, L>,
+    privmsg: &twitch_irc::message::PrivmsgMessage,
+    sender: &Arc<ChatSender<T, L>>,
+    trigger: &str,
+    args: Vec<&str>,
+    suspension_manager: &SuspensionManager,
+) where
+    T: Transport,
+    L: LoginCredentials,
+{
+    // Contract: `SuspendCommand` normalizes user input via
+    // `normalize_command_name`; commands expose `suspend_key()`
+    // that must match. The trigger word is fed in so commands
+    // whose `name()` is a placeholder (e.g. `PingTriggerCommand`
+    // returns `!<ping>`) can still produce the right key.
+    let suspend_key = cmd.suspend_key(trigger);
+    if suspension_manager
+        .is_suspended(&suspend_key)
+        .await
+        .is_some()
+    {
+        debug!(command = %trigger, "Skipping suspended command");
+        return;
+    }
+
+    let ctx = crate::commands::CommandContext {
+        privmsg,
+        sender,
+        trigger,
+        args,
+    };
+
+    if let Err(e) = cmd.execute(ctx).await {
+        error!(
+            error = ?e,
+            user = %privmsg.sender.login,
+            command = %trigger,
+            "Error handling command"
+        );
+    }
+}
+
 /// Main dispatch loop for trait-based commands.
 // Two separate history buffers (primary + ai_channel) push this over the 7-arg limit;
 // wrapping them in a struct would add noise without clarity gain.
@@ -482,54 +535,69 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                     continue;
                 }
 
-                let Some(invocation) = command_invocation(&privmsg.message_text) else {
-                    continue;
-                };
+                let invocation = command_invocation(&privmsg.message_text);
+                let matched = invocation.as_ref().and_then(|inv| {
+                    commands
+                        .iter()
+                        .find(|c| c.enabled() && c.matches(inv.trigger))
+                });
 
-                // In the ai channel, only `!ai` is reachable. Drop everything else so the
-                // channel stays free of unrelated bot output.
-                if is_ai_channel && !is_ai_trigger(invocation.trigger) {
-                    continue;
-                }
-
-                let Some(cmd) = commands
-                    .iter()
-                    .find(|c| c.enabled() && c.matches(invocation.trigger))
-                else {
-                    continue;
-                };
-
-                // Contract: `SuspendCommand` normalizes user input via
-                // `normalize_command_name`; commands expose `suspend_key()`
-                // that must match. The trigger word is fed in so commands
-                // whose `name()` is a placeholder (e.g. `PingTriggerCommand`
-                // returns `!<ping>`) can still produce the right key.
-                let suspend_key = cmd.suspend_key(invocation.trigger);
-                if suspension_manager
-                    .is_suspended(&suspend_key)
-                    .await
-                    .is_some()
+                if let Some(inv) = invocation.as_ref()
+                    && let Some(cmd) = matched
                 {
-                    debug!(command = %invocation.trigger, "Skipping suspended command");
+                    // In the ai channel, only `!ai` / `@grok` are reachable as
+                    // commands. Follow-ups are handled below, after no command
+                    // matched, so they still get through.
+                    if is_ai_channel && !is_ai_trigger(inv.trigger) {
+                        continue;
+                    }
+                    dispatch_command(
+                        cmd.as_ref(),
+                        &privmsg,
+                        &sender,
+                        inv.trigger,
+                        inv.args.clone(),
+                        &suspension_manager,
+                    )
+                    .await;
                     continue;
                 }
 
-                let trigger = invocation.trigger;
-                let ctx = crate::commands::CommandContext {
-                    privmsg: &privmsg,
-                    sender: &sender,
-                    trigger,
-                    args: invocation.args,
+                // No command matched. A reply whose direct parent is a Mouth
+                // starts a Follow-up Turn for that agent.
+                let Some(parent) = privmsg.reply_parent.as_ref() else {
+                    continue;
                 };
-
-                if let Err(e) = cmd.execute(ctx).await {
-                    error!(
-                        error = ?e,
-                        user = %privmsg.sender.login,
-                        command = %trigger,
-                        "Error handling command"
-                    );
+                let Some(agent) = echo.agent_for(
+                    &parent.reply_parent_user.id,
+                    &parent.reply_parent_user.login,
+                ) else {
+                    continue;
+                };
+                let Some(trigger) = followup_trigger(agent) else {
+                    continue;
+                };
+                let args: Vec<&str> = privmsg.message_text.split_whitespace().collect();
+                if args.is_empty() {
+                    continue;
                 }
+                let Some(cmd) = commands.iter().find(|c| c.enabled() && c.matches(trigger)) else {
+                    continue;
+                };
+                debug!(
+                    parent_agent = ?agent,
+                    user = %privmsg.sender.login,
+                    "Mouth-parent reply starting Follow-up Turn"
+                );
+                dispatch_command(
+                    cmd.as_ref(),
+                    &privmsg,
+                    &sender,
+                    trigger,
+                    args,
+                    &suspension_manager,
+                )
+                .await;
             }
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
                 error!(skipped, "Command handler lagged, skipped messages");
@@ -631,5 +699,12 @@ mod tests {
             "hyphen is not a login char"
         );
         assert!(!is_twitch_mention("@white space"), "space splits the word");
+    }
+
+    #[test]
+    fn followup_trigger_maps_mouth_agents_only() {
+        assert_eq!(followup_trigger(Agent::Aurora), Some("!ai"));
+        assert_eq!(followup_trigger(Agent::Grok), Some(GROK_ALIAS_TRIGGER));
+        assert_eq!(followup_trigger(Agent::Utility), None);
     }
 }
