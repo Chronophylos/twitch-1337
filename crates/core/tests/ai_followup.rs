@@ -96,6 +96,13 @@ async fn reply_to_aurora_mouth_starts_aurora_turn() {
     );
     let user = user_content(&calls[0]);
     assert!(user.contains("was meinst du"), "instruction is reply text");
+    let idx = user
+        .rfind("was meinst du")
+        .expect("instruction in user message");
+    assert!(
+        !user[..idx].ends_with("@aurora_bot "),
+        "Twitch @parent prefix must not pollute the instruction: {user}"
+    );
     assert!(user.contains("das war ein witz"), "parent injected");
     assert!(user.contains(AURORA_LOGIN), "parent author injected");
     assert!(
@@ -155,6 +162,13 @@ async fn reply_to_grok_mouth_starts_grok_turn() {
     );
     let user = user_content(&calls[0]);
     assert!(user.contains("is that true"), "instruction is reply text");
+    let idx = user
+        .rfind("is that true")
+        .expect("instruction in user message");
+    assert!(
+        !user[..idx].ends_with("@grok_bot "),
+        "Twitch @parent prefix must not pollute the instruction: {user}"
+    );
     assert!(user.contains("the sky is green"), "parent injected");
     assert!(user.contains(GROK_LOGIN), "parent author injected");
 
@@ -200,6 +214,26 @@ async fn lb_reply_to_mouth_runs_command_only() {
     assert!(
         bot.llm.tool_calls().is_empty(),
         "no AI Turn when a command matches"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn unknown_bang_reply_to_mouth_is_not_a_followup() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_fake_mouth(Agent::Aurora, AURORA_LOGIN, AURORA_ID, "spoken-aurora")
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("should not run");
+
+    bot.send_reply_to_mouth("alice", "!lbb", AURORA_LOGIN, AURORA_ID, "hallo")
+        .await;
+    bot.expect_silent(Duration::from_millis(400)).await;
+    assert!(
+        bot.llm.tool_calls().is_empty(),
+        "unknown !command must not start a Follow-up"
     );
 
     bot.shutdown().await;

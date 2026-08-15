@@ -606,10 +606,13 @@ impl TestBot {
         parent_user_id: &str,
         parent_text: &str,
     ) {
+        // Twitch reply UI prefixes the body with `@parent`. Tests must send
+        // that shape or they hide command-vs-follow-up bugs.
+        let body = format!("@{parent_user} {text}");
         let line = reply_privmsg_with_parent_id(
             channel,
             user,
-            text,
+            &body,
             parent_user,
             parent_user_id,
             parent_text,

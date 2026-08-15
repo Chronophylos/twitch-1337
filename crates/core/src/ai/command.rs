@@ -138,6 +138,7 @@ pub struct AiCommandDeps {
 }
 
 pub const GROK_ALIAS_TRIGGER: &str = "@grok";
+pub const AI_TRIGGER: &str = "!ai";
 const GROK_REPLY_DEFAULT_INSTRUCTION: &str =
     "Check the replied-to message, work out what it claims, and answer briefly.";
 const GROK_WEB_SYSTEM_APPENDIX: &str = "\
@@ -266,7 +267,7 @@ fn is_grok_alias(trigger: &str) -> bool {
 /// this helper, otherwise the gate and the matcher would silently disagree on
 /// non-lowercase invocations.
 pub fn is_ai_trigger(word: &str) -> bool {
-    word.eq_ignore_ascii_case("!ai") || word.eq_ignore_ascii_case(GROK_ALIAS_TRIGGER)
+    word.eq_ignore_ascii_case(AI_TRIGGER) || word.eq_ignore_ascii_case(GROK_ALIAS_TRIGGER)
 }
 
 fn instruction_with_reply_context<T, L>(
@@ -772,11 +773,11 @@ pub async fn build_ai_memory_v2(
 
 #[cfg(test)]
 mod ai_trigger_tests {
-    use super::{GROK_ALIAS_TRIGGER, is_ai_trigger};
+    use super::{AI_TRIGGER, GROK_ALIAS_TRIGGER, is_ai_trigger};
 
     #[test]
     fn matches_bang_ai_case_insensitive() {
-        assert!(is_ai_trigger("!ai"));
+        assert!(is_ai_trigger(AI_TRIGGER));
         assert!(is_ai_trigger("!AI"));
         assert!(is_ai_trigger("!Ai"));
         assert!(is_ai_trigger("!aI"));
