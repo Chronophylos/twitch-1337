@@ -14,13 +14,13 @@ use twitch_irc::{
 use crate::{
     ChatHistory, ChatHistoryBuffer, PersonalBest, PersonalWorst, ai,
     ai::chat_history::{ai_channel_history_capacity, primary_history_capacity},
-    ai::command::{GROK_ALIAS_TRIGGER, is_ai_trigger},
+    ai::command::{AI_TRIGGER, GROK_ALIAS_TRIGGER, is_ai_trigger},
     aviation, commands,
     config::AiBootstrap,
     ping::{PingCommand, PingHandle},
     settings::SettingsHandle,
     suspend::SuspensionManager,
-    twitch::{ChatSender, seventv::SevenTvEmoteProvider, whisper::WhisperSender},
+    twitch::{ChatSender, mouth::Agent, seventv::SevenTvEmoteProvider, whisper::WhisperSender},
 };
 
 /// Configuration for the generic command handler.
@@ -380,8 +380,13 @@ struct CommandInvocation<'a> {
     args: Vec<&'a str>,
 }
 
+#[cfg(test)]
 fn command_invocation(message_text: &str) -> Option<CommandInvocation<'_>> {
-    let words = message_text.split_whitespace().collect::<Vec<_>>();
+    let words: Vec<&str> = message_text.split_whitespace().collect();
+    invocation_from_words(&words)
+}
+
+fn invocation_from_words<'a>(words: &[&'a str]) -> Option<CommandInvocation<'a>> {
     let first_word = *words.first()?;
 
     if let Some((idx, trigger)) = words.iter().enumerate().find(|(idx, word)| {
@@ -400,6 +405,33 @@ fn command_invocation(message_text: &str) -> Option<CommandInvocation<'_>> {
     })
 }
 
+/// Twitch's reply UI prefixes the PRIVMSG body with `@parent_login`.
+fn skip_leading_mentions<'a, 'b>(words: &'a [&'b str]) -> &'a [&'b str] {
+    let n = words
+        .iter()
+        .position(|w| !is_twitch_mention(w))
+        .unwrap_or(words.len());
+    &words[n..]
+}
+
+fn find_enabled_command<'a, 'w, T, L>(
+    commands: &'a [Box<dyn crate::commands::Command<T, L>>],
+    words: &[&'w str],
+) -> Option<(
+    &'a dyn crate::commands::Command<T, L>,
+    CommandInvocation<'w>,
+)>
+where
+    T: Transport,
+    L: LoginCredentials,
+{
+    let inv = invocation_from_words(words)?;
+    let cmd = commands
+        .iter()
+        .find(|c| c.enabled() && c.matches(inv.trigger))?;
+    Some((cmd.as_ref(), inv))
+}
+
 fn is_twitch_mention(word: &str) -> bool {
     word.strip_prefix('@')
         .is_some_and(|name| !name.is_empty() && name.chars().all(is_twitch_login_char))
@@ -407,6 +439,59 @@ fn is_twitch_mention(word: &str) -> bool {
 
 fn is_twitch_login_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+/// Synthetic `!ai` / `@grok` trigger for a Mouth-parent Follow-up. Utility
+/// has no mouth and never starts a Follow-up.
+fn followup_trigger(agent: Agent) -> Option<&'static str> {
+    match agent {
+        Agent::Aurora => Some(AI_TRIGGER),
+        Agent::Grok => Some(GROK_ALIAS_TRIGGER),
+        Agent::Utility => None,
+    }
+}
+
+async fn dispatch_command<T, L>(
+    cmd: &dyn crate::commands::Command<T, L>,
+    privmsg: &twitch_irc::message::PrivmsgMessage,
+    sender: &Arc<ChatSender<T, L>>,
+    trigger: &str,
+    args: Vec<&str>,
+    suspension_manager: &SuspensionManager,
+) where
+    T: Transport,
+    L: LoginCredentials,
+{
+    // Contract: `SuspendCommand` normalizes user input via
+    // `normalize_command_name`; commands expose `suspend_key()`
+    // that must match. The trigger word is fed in so commands
+    // whose `name()` is a placeholder (e.g. `PingTriggerCommand`
+    // returns `!<ping>`) can still produce the right key.
+    let suspend_key = cmd.suspend_key(trigger);
+    if suspension_manager
+        .is_suspended(&suspend_key)
+        .await
+        .is_some()
+    {
+        debug!(command = %trigger, "Skipping suspended command");
+        return;
+    }
+
+    let ctx = crate::commands::CommandContext {
+        privmsg,
+        sender,
+        trigger,
+        args,
+    };
+
+    if let Err(e) = cmd.execute(ctx).await {
+        error!(
+            error = ?e,
+            user = %privmsg.sender.login,
+            command = %trigger,
+            "Error handling command"
+        );
+    }
 }
 
 /// Main dispatch loop for trait-based commands.
@@ -482,54 +567,83 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                     continue;
                 }
 
-                let Some(invocation) = command_invocation(&privmsg.message_text) else {
-                    continue;
-                };
-
-                // In the ai channel, only `!ai` is reachable. Drop everything else so the
-                // channel stays free of unrelated bot output.
-                if is_ai_channel && !is_ai_trigger(invocation.trigger) {
+                let words: Vec<&str> = privmsg.message_text.split_whitespace().collect();
+                if let Some((cmd, inv)) = find_enabled_command(&commands, &words) {
+                    // In the ai channel, only `!ai` / `@grok` are reachable as
+                    // commands. Follow-ups are handled below, after no command
+                    // matched, so they still get through.
+                    if is_ai_channel && !is_ai_trigger(inv.trigger) {
+                        continue;
+                    }
+                    dispatch_command(
+                        cmd,
+                        &privmsg,
+                        &sender,
+                        inv.trigger,
+                        inv.args,
+                        &suspension_manager,
+                    )
+                    .await;
                     continue;
                 }
 
-                let Some(cmd) = commands
-                    .iter()
-                    .find(|c| c.enabled() && c.matches(invocation.trigger))
-                else {
-                    continue;
-                };
-
-                // Contract: `SuspendCommand` normalizes user input via
-                // `normalize_command_name`; commands expose `suspend_key()`
-                // that must match. The trigger word is fed in so commands
-                // whose `name()` is a placeholder (e.g. `PingTriggerCommand`
-                // returns `!<ping>`) can still produce the right key.
-                let suspend_key = cmd.suspend_key(invocation.trigger);
-                if suspension_manager
-                    .is_suspended(&suspend_key)
-                    .await
-                    .is_some()
+                // Twitch reply bodies start with `@parent`. Strip that and
+                // retry so `!lb` / `!ai` still win over a Follow-up. Only
+                // replies get this retry — a plain `@bob !lb` is just chat.
+                let rest = skip_leading_mentions(&words);
+                if privmsg.reply_parent.is_some()
+                    && rest.len() != words.len()
+                    && let Some((cmd, inv)) = find_enabled_command(&commands, rest)
                 {
-                    debug!(command = %invocation.trigger, "Skipping suspended command");
+                    if is_ai_channel && !is_ai_trigger(inv.trigger) {
+                        continue;
+                    }
+                    dispatch_command(
+                        cmd,
+                        &privmsg,
+                        &sender,
+                        inv.trigger,
+                        inv.args,
+                        &suspension_manager,
+                    )
+                    .await;
                     continue;
                 }
 
-                let trigger = invocation.trigger;
-                let ctx = crate::commands::CommandContext {
-                    privmsg: &privmsg,
-                    sender: &sender,
-                    trigger,
-                    args: invocation.args,
+                // No command matched. A reply whose direct parent is a Mouth
+                // starts a Follow-up Turn for that agent.
+                let Some(parent) = privmsg.reply_parent.as_ref() else {
+                    continue;
                 };
-
-                if let Err(e) = cmd.execute(ctx).await {
-                    error!(
-                        error = ?e,
-                        user = %privmsg.sender.login,
-                        command = %trigger,
-                        "Error handling command"
-                    );
+                let Some(agent) = echo.agent_for(
+                    &parent.reply_parent_user.id,
+                    &parent.reply_parent_user.login,
+                ) else {
+                    continue;
+                };
+                let Some(trigger) = followup_trigger(agent) else {
+                    continue;
+                };
+                if rest.is_empty() || rest[0].starts_with('!') {
+                    continue;
                 }
+                let Some(cmd) = commands.iter().find(|c| c.enabled() && c.matches(trigger)) else {
+                    continue;
+                };
+                debug!(
+                    parent_agent = ?agent,
+                    user = %privmsg.sender.login,
+                    "Mouth-parent reply starting Follow-up Turn"
+                );
+                dispatch_command(
+                    cmd.as_ref(),
+                    &privmsg,
+                    &sender,
+                    trigger,
+                    rest.to_vec(),
+                    &suspension_manager,
+                )
+                .await;
             }
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
                 error!(skipped, "Command handler lagged, skipped messages");
@@ -631,5 +745,30 @@ mod tests {
             "hyphen is not a login char"
         );
         assert!(!is_twitch_mention("@white space"), "space splits the word");
+    }
+
+    #[test]
+    fn followup_trigger_maps_mouth_agents_only() {
+        assert_eq!(followup_trigger(Agent::Aurora), Some(AI_TRIGGER));
+        assert_eq!(followup_trigger(Agent::Grok), Some(GROK_ALIAS_TRIGGER));
+        assert_eq!(followup_trigger(Agent::Utility), None);
+    }
+
+    #[test]
+    fn skip_leading_mentions_drops_parent_prefix() {
+        let words = ["@aurora_bot", "!lb"];
+        assert_eq!(skip_leading_mentions(&words), &["!lb"][..]);
+    }
+
+    #[test]
+    fn skip_leading_mentions_keeps_plain_text() {
+        let words = ["was", "meinst", "du"];
+        assert_eq!(skip_leading_mentions(&words), &words[..]);
+    }
+
+    #[test]
+    fn skip_leading_mentions_all_mentions_yields_empty() {
+        let words = ["@aurora_bot"];
+        assert!(skip_leading_mentions(&words).is_empty());
     }
 }
