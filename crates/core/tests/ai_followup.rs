@@ -220,6 +220,18 @@ async fn lb_reply_to_mouth_runs_command_only() {
 }
 
 #[tokio::test]
+async fn plain_mention_prefix_does_not_run_commands() {
+    let mut bot = TestBotBuilder::new().spawn().await;
+
+    // Twitch reply bodies start with `@parent`, but a viewer pinging
+    // another viewer in ordinary chat is not a reply.
+    bot.send("alice", "@bob !lb").await;
+    bot.expect_silent(Duration::from_millis(400)).await;
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
 async fn unknown_bang_reply_to_mouth_is_not_a_followup() {
     let mut bot = TestBotBuilder::new()
         .with_ai()

@@ -588,9 +588,11 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                 }
 
                 // Twitch reply bodies start with `@parent`. Strip that and
-                // retry so `!lb` / `!ai` still win over a Follow-up.
+                // retry so `!lb` / `!ai` still win over a Follow-up. Only
+                // replies get this retry — a plain `@bob !lb` is just chat.
                 let rest = skip_leading_mentions(&words);
-                if rest.len() != words.len()
+                if privmsg.reply_parent.is_some()
+                    && rest.len() != words.len()
                     && let Some((cmd, inv)) = find_enabled_command(&commands, rest)
                 {
                     if is_ai_channel && !is_ai_trigger(inv.trigger) {
