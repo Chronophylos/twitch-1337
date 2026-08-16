@@ -13,6 +13,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
+use twitch_1337_core::ai::memory::store::UserIdentity;
 use twitch_1337_core::ai::memory::types::FileKind;
 use twitch_1337_web::WebState;
 use twitch_1337_web::build_router;
@@ -74,8 +75,7 @@ async fn tree_renders_section_counts() {
                 user_id: "1".into(),
             },
             "user body",
-            Some("alice"),
-            Some("Alice"),
+            UserIdentity::of("alice", "Alice"),
         )
         .await
         .unwrap();
@@ -112,7 +112,7 @@ async fn view_soul_renders_body() {
     // coupled to seed_soul.md content.
     state
         .memory_store
-        .write(&FileKind::Soul, "MARKER-SOUL-BODY", None, None)
+        .write(&FileKind::Soul, "MARKER-SOUL-BODY", UserIdentity::default())
         .await
         .unwrap();
 
@@ -223,8 +223,7 @@ async fn view_user_round_trip() {
                 user_id: "12345".into(),
             },
             "user-marker-body",
-            Some("alice"),
-            Some("Alice"),
+            UserIdentity::of("alice", "Alice"),
         )
         .await
         .unwrap();

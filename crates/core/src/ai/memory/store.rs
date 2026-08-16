@@ -59,6 +59,28 @@ pub struct FrontmatterOverride {
     pub links: Option<BTreeMap<String, String>>,
 }
 
+/// Identity fields a caller can stamp on a user file. Every field is
+/// preserve-on-`None`: a mod or the dreamer writing someone else's sheet
+/// supplies only what it actually knows and can't clobber the rest.
+/// Ignored entirely for SOUL/LORE/scratch, which have no subject.
+#[derive(Default, Debug, Clone, Copy)]
+pub struct UserIdentity<'a> {
+    pub username: Option<&'a str>,
+    pub display_name: Option<&'a str>,
+    /// Display form ("He/Him"), resolved from pronouns.alejo.io by the caller.
+    pub pronouns: Option<&'a str>,
+}
+
+impl<'a> UserIdentity<'a> {
+    pub fn of(username: &'a str, display_name: &'a str) -> Self {
+        Self {
+            username: Some(username),
+            display_name: Some(display_name),
+            pronouns: None,
+        }
+    }
+}
+
 const SOUL_SEED: &str = twitch_1337_data::prompts::SEED_SOUL;
 
 #[derive(Clone)]
@@ -137,6 +159,7 @@ impl MemoryStore {
                 username: None,
                 display_name: None,
                 created_by: None,
+                pronouns: None,
                 links: BTreeMap::new(),
             };
             let raw = frontmatter::emit(&fm, SOUL_SEED);
@@ -152,6 +175,7 @@ impl MemoryStore {
                 username: None,
                 display_name: None,
                 created_by: None,
+                pronouns: None,
                 links: BTreeMap::new(),
             };
             atomic_write_bytes_async(frontmatter::emit(&fm, "").as_bytes(), &lore_path)
@@ -226,6 +250,7 @@ impl MemoryStore {
                     username: None,
                     display_name: None,
                     created_by: None,
+                    pronouns: None,
                     links: BTreeMap::new(),
                 },
                 body: String::new(),
@@ -234,19 +259,15 @@ impl MemoryStore {
         }
     }
 
-    /// Write a SOUL/LORE/user file. For user files, `username` (Twitch login)
-    /// and `display_name` (cased) are persisted in the frontmatter. Either
-    /// `None` arg preserves the existing value on disk so the dreamer or
-    /// moderators writing other people's user files don't clobber identity.
+    /// Write a SOUL/LORE/user file. For user files, [`UserIdentity`] is
+    /// persisted in the frontmatter, preserve-on-`None` per field.
     pub async fn write(
         &self,
         kind: &FileKind,
         body: &str,
-        username: Option<&str>,
-        display_name: Option<&str>,
+        ident: UserIdentity<'_>,
     ) -> Result<(), WriteError> {
-        self.write_inner(kind, body, username, display_name, None)
-            .await
+        self.write_inner(kind, body, ident, None).await
     }
 
     /// `links_override`: `Some` replaces the whole `links` map (an empty map
@@ -256,8 +277,7 @@ impl MemoryStore {
         &self,
         kind: &FileKind,
         body: &str,
-        username: Option<&str>,
-        display_name: Option<&str>,
+        ident: UserIdentity<'_>,
         links_override: Option<BTreeMap<String, String>>,
     ) -> Result<(), WriteError> {
         let limit = self.caps().limit_for(kind);
@@ -271,9 +291,14 @@ impl MemoryStore {
         // on-disk content (frontmatter + body). Doing this before acquiring
         // the lock would let two concurrent writes both pass a body-only cap
         // check and then race the actual write.
-        let (username, display_name, links) = if matches!(kind, FileKind::User { .. }) {
-            let username = username.map(str::to_string).filter(|s| !s.is_empty());
-            let display_name = display_name
+        let (username, display_name, pronouns, links) = if matches!(kind, FileKind::User { .. }) {
+            let username = ident.username.map(str::to_string).filter(|s| !s.is_empty());
+            let display_name = ident
+                .display_name
+                .map(normalize_display_name)
+                .filter(|s| !s.is_empty());
+            let pronouns = ident
+                .pronouns
                 .map(normalize_display_name)
                 .filter(|s| !s.is_empty());
             // For user files, preserve any prior field the caller didn't
@@ -296,10 +321,14 @@ impl MemoryStore {
                 display_name
                     .or_else(|| prior.as_ref().and_then(|fm| fm.display_name.clone()))
                     .or_else(|| Some(String::new())),
+                // Pronouns get no blank placeholder: an empty `pronouns:` key
+                // would read as a claim that the user declared none, when it
+                // only means the service was never asked.
+                pronouns.or_else(|| prior.as_ref().and_then(|fm| fm.pronouns.clone())),
                 links_override.unwrap_or_else(|| prior.map(|fm| fm.links).unwrap_or_default()),
             )
         } else {
-            (None, None, BTreeMap::new())
+            (None, None, None, BTreeMap::new())
         };
 
         let fm = Frontmatter {
@@ -307,6 +336,7 @@ impl MemoryStore {
             username,
             display_name,
             created_by: None,
+            pronouns,
             links,
         };
         let raw = frontmatter::emit(&fm, body);
@@ -388,6 +418,7 @@ impl MemoryStore {
             username: None,
             display_name: None,
             created_by,
+            pronouns: None,
             links: BTreeMap::new(),
         };
         let raw = frontmatter::emit(&fm, body);
@@ -519,14 +550,18 @@ impl MemoryStore {
                 self.write_inner(
                     &kind,
                     body,
-                    fm_override.username.as_deref(),
-                    fm_override.display_name.as_deref(),
+                    UserIdentity {
+                        username: fm_override.username.as_deref(),
+                        display_name: fm_override.display_name.as_deref(),
+                        // Pronouns are service-sourced, never dashboard-typed.
+                        pronouns: None,
+                    },
                     fm_override.links,
                 )
                 .await?;
             }
             FileKind::Soul | FileKind::Lore => {
-                self.write(&kind, body, None, None).await?;
+                self.write(&kind, body, UserIdentity::default()).await?;
             }
         }
         let new_mtime = self.current_mtime(&kind).await?;
@@ -770,7 +805,11 @@ mod tests {
         };
 
         store
-            .write(&kind, "small body", Some("alicepleb"), Some("AlicePleb"))
+            .write(
+                &kind,
+                "small body",
+                UserIdentity::of("alicepleb", "AlicePleb"),
+            )
             .await
             .unwrap();
         let mf = store.read_kind(&kind).await.unwrap();
@@ -780,7 +819,7 @@ mod tests {
 
         let huge = "x".repeat(4096);
         let err = store
-            .write(&kind, &huge, Some("alicepleb"), Some("AlicePleb"))
+            .write(&kind, &huge, UserIdentity::of("alicepleb", "AlicePleb"))
             .await
             .unwrap_err();
         assert_eq!(err.to_string(), "file_full");
@@ -842,7 +881,7 @@ mod tests {
         };
         let dirty = "ali\u{200B}ce\nx";
         store
-            .write(&kind, "body", Some("alicex"), Some(dirty))
+            .write(&kind, "body", UserIdentity::of("alicex", dirty))
             .await
             .unwrap();
         let mf = store.read_kind(&kind).await.unwrap();
@@ -860,12 +899,12 @@ mod tests {
             user_id: "2".into(),
         };
         store
-            .write(&a, "first", Some("a"), Some("A"))
+            .write(&a, "first", UserIdentity::of("a", "A"))
             .await
             .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         store
-            .write(&b, "second", Some("b"), Some("B"))
+            .write(&b, "second", UserIdentity::of("b", "B"))
             .await
             .unwrap();
         let list = store.list_users().await.unwrap();
@@ -945,7 +984,7 @@ mod tests {
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         // Bump SOUL.md so we have a known mtime to test against.
         store
-            .write(&FileKind::Soul, "first", None, None)
+            .write(&FileKind::Soul, "first", UserIdentity::default())
             .await
             .unwrap();
         let mt1 = store.current_mtime(&FileKind::Soul).await.unwrap();
@@ -1000,7 +1039,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         store
-            .write(&FileKind::Lore, "before", None, None)
+            .write(&FileKind::Lore, "before", UserIdentity::default())
             .await
             .unwrap();
         let outcome = store
@@ -1025,7 +1064,10 @@ mod tests {
         let kind = FileKind::User {
             user_id: "7".into(),
         };
-        store.write(&kind, "body", None, None).await.unwrap();
+        store
+            .write(&kind, "body", UserIdentity::default())
+            .await
+            .unwrap();
         let raw = tokio::fs::read_to_string(store.memories_dir().join("users/7.md"))
             .await
             .unwrap();
@@ -1035,7 +1077,7 @@ mod tests {
         let mf = store.read_kind(&kind).await.unwrap();
         assert_eq!(mf.frontmatter.username, None);
         store
-            .write(&kind, "body", Some("late"), Some("Late"))
+            .write(&kind, "body", UserIdentity::of("late", "Late"))
             .await
             .unwrap();
         let mf = store.read_kind(&kind).await.unwrap();
@@ -1050,7 +1092,7 @@ mod tests {
             user_id: "42".into(),
         };
         store
-            .write(&kind, "body", Some("alice"), Some("Alice"))
+            .write(&kind, "body", UserIdentity::of("alice", "Alice"))
             .await
             .unwrap();
         let mt = store.current_mtime(&kind).await.unwrap();
@@ -1071,7 +1113,7 @@ mod tests {
 
         // A chat-turn write passes no links at all; they must not vanish.
         store
-            .write(&kind, "new body", Some("alice"), Some("Alice"))
+            .write(&kind, "new body", UserIdentity::of("alice", "Alice"))
             .await
             .unwrap();
         assert_eq!(
@@ -1113,7 +1155,7 @@ mod tests {
             user_id: "42".into(),
         };
         store
-            .write(&kind, "body", Some("oldlogin"), Some("OldDisplay"))
+            .write(&kind, "body", UserIdentity::of("oldlogin", "OldDisplay"))
             .await
             .unwrap();
         let mt = store.current_mtime(&kind).await.unwrap();

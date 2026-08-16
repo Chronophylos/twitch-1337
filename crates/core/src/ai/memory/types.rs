@@ -61,6 +61,10 @@ pub struct Frontmatter {
     /// SOUL/LORE/scratch.
     pub display_name: Option<String>,
     pub created_by: Option<String>,
+    /// Self-declared pronouns, display form ("He/Him"). Stamped from
+    /// pronouns.alejo.io when a write resolves the subject's login; nobody
+    /// types these by hand. User files only.
+    pub pronouns: Option<String>,
     /// Social/profile links, `platform -> url` (steam, github, ...). Free-form
     /// keys so a new platform needs no code change. User files only; empty map
     /// means none. Written from the dashboard, read-only to the model.

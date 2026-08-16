@@ -115,6 +115,7 @@ pub struct AiCommand {
     bot_username: String,
     doener: Arc<crate::doener::DoeneratlasClient>,
     repology: Arc<crate::repology::RepologyClient>,
+    pronouns: Arc<crate::pronouns::PronounsClient>,
     model_catalog: Arc<ModelCatalog>,
     mouths: Arc<crate::twitch::mouth::MouthRouter>,
     echo: Arc<crate::twitch::echo::EchoGuard>,
@@ -134,6 +135,7 @@ pub struct AiCommandDeps {
     pub bot_username: String,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
     pub repology: Arc<crate::repology::RepologyClient>,
+    pub pronouns: Arc<crate::pronouns::PronounsClient>,
     pub model_catalog: Arc<ModelCatalog>,
     pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
     pub echo: Arc<crate::twitch::echo::EchoGuard>,
@@ -185,6 +187,7 @@ impl AiCommand {
             bot_username: deps.bot_username,
             doener: deps.doener,
             repology: deps.repology,
+            pronouns: deps.pronouns,
             model_catalog: deps.model_catalog,
             mouths: deps.mouths,
             echo: deps.echo,
@@ -587,6 +590,7 @@ where
             readable_paths,
             inject_nonce: self.prompt_nonce.clone(),
             known_identities,
+            pronouns: Some(self.pronouns.clone()),
         });
 
         let mut tools = if grok_alias {

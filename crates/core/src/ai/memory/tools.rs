@@ -1,6 +1,7 @@
 //! Tool args + definitions for the v2 chat-turn and dreamer loops.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
@@ -14,8 +15,9 @@ use crate::ai::memory::sanitize::{
     PathError, SlugError, WritePath, check_body, parse_read_path, parse_write_path,
     validate_scratch_slug, write_path_to_kind,
 };
-use crate::ai::memory::store::{MemoryStore, WriteError};
+use crate::ai::memory::store::{MemoryStore, UserIdentity, WriteError};
 use crate::ai::memory::types::{FileKind, Role};
+use crate::pronouns::PronounsClient;
 
 /// Canonical LLM string for Stable Slug charset / length / date failures.
 const INVALID_SLUG_MSG: &str = "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars, and must not end in a -YYYY-MM-DD date suffix";
@@ -144,6 +146,10 @@ pub struct ChatTurnExecutorOpts {
     /// otherwise a sheet first created for a third party is born nameless and
     /// stays that way, since every later write only ever preserves.
     pub known_identities: HashMap<String, (String, String)>,
+    /// Pronouns lookup, consulted only when a write resolves the subject's
+    /// login. `None` (dreamer, tests) skips the lookup and preserves whatever
+    /// is on disk.
+    pub pronouns: Option<Arc<PronounsClient>>,
 }
 
 pub struct ChatTurnExecutor {
@@ -238,12 +244,19 @@ impl ChatTurnExecutor {
             },
             _ => (None, None),
         };
-        match self
-            .opts
-            .store
-            .write(&kind, &args.body, login, display)
-            .await
-        {
+        // Only ask the pronouns service when we actually resolved a login, so
+        // the call rides along with the (rare) writes rather than every turn.
+        // Unreachable service or unset pronouns → `None` → prior value kept.
+        let pronouns = match (&self.opts.pronouns, login) {
+            (Some(client), Some(login)) => client.lookup(login).await,
+            _ => None,
+        };
+        let ident = UserIdentity {
+            username: login,
+            display_name: display,
+            pronouns: pronouns.as_deref(),
+        };
+        match self.opts.store.write(&kind, &args.body, ident).await {
             Ok(()) => "ok".into(),
             Err(e) => map_write_err(e),
         }
@@ -350,6 +363,7 @@ impl ChatTurnExecutor {
                 id: user_id,
                 login: file.frontmatter.username.as_deref(),
                 display_name: file.frontmatter.display_name.as_deref(),
+                pronouns: file.frontmatter.pronouns.as_deref(),
             },
             FileKind::Scratch { slug } => FenceLabel::Scratch { slug },
         };
@@ -398,6 +412,7 @@ impl DreamerExecutor {
                 readable_paths: BTreeSet::new(),
                 inject_nonce: String::new(),
                 known_identities: HashMap::new(),
+                pronouns: None,
             }),
         }
     }
@@ -490,6 +505,7 @@ mod exec_tests {
             readable_paths: Default::default(),
             inject_nonce: "n0".into(),
             known_identities: HashMap::new(),
+            pronouns: None,
         })
     }
 
@@ -506,6 +522,7 @@ mod exec_tests {
             max_writes_per_turn: 8,
             readable_paths: Default::default(),
             inject_nonce: "n0".into(),
+            pronouns: None,
             known_identities: HashMap::from([(
                 "99".to_string(),
                 ("bobby".to_string(), "BobbyTables".to_string()),
@@ -526,6 +543,87 @@ mod exec_tests {
             .unwrap();
         assert_eq!(mf.frontmatter.username.as_deref(), Some("bobby"));
         assert_eq!(mf.frontmatter.display_name.as_deref(), Some("BobbyTables"));
+    }
+
+    #[tokio::test]
+    async fn own_sheet_write_stamps_pronouns_and_a_dead_service_preserves_them() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        crate::install_crypto_provider();
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        let kind = FileKind::User {
+            user_id: "12345".into(),
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/pronouns"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sheher": {"name": "sheher", "subject": "She", "object": "Her", "singular": false},
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "12345", "login": "alice", "pronoun_id": "sheher"}),
+            ))
+            .mount(&server)
+            .await;
+
+        let make = |base: String| {
+            ChatTurnExecutor::new(ChatTurnExecutorOpts {
+                store: store.clone(),
+                speaker_user_id: "12345".into(),
+                speaker_login: "alice".into(),
+                speaker_display_name: "Alice".into(),
+                speaker_role: Role::Regular,
+                max_writes_per_turn: 8,
+                readable_paths: Default::default(),
+                inject_nonce: "n0".into(),
+                known_identities: HashMap::new(),
+                pronouns: Some(Arc::new(PronounsClient::with_base_url(
+                    reqwest::Client::new(),
+                    base,
+                ))),
+            })
+        };
+        let write = serde_json::json!({"path": "users/12345.md", "body": "hi"});
+
+        let r = make(server.uri())
+            .execute(&call("write_file", write.clone()))
+            .await;
+        assert_eq!(r.content, "ok");
+        assert_eq!(
+            store
+                .read_kind(&kind)
+                .await
+                .unwrap()
+                .frontmatter
+                .pronouns
+                .as_deref(),
+            Some("She/Her")
+        );
+
+        // Service unreachable on the next write: the stamped value stays put
+        // rather than being blanked by a failed lookup.
+        drop(server);
+        let r = make("http://127.0.0.1:1/v1".to_string())
+            .execute(&call("write_file", write))
+            .await;
+        assert_eq!(r.content, "ok");
+        assert_eq!(
+            store
+                .read_kind(&kind)
+                .await
+                .unwrap()
+                .frontmatter
+                .pronouns
+                .as_deref(),
+            Some("She/Her")
+        );
     }
 
     #[tokio::test]
@@ -757,7 +855,11 @@ mod exec_tests {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         store
-            .write(&FileKind::Lore, "the channel hates mondays", None, None)
+            .write(
+                &FileKind::Lore,
+                "the channel hates mondays",
+                UserIdentity::default(),
+            )
             .await
             .unwrap();
 
@@ -771,6 +873,7 @@ mod exec_tests {
             readable_paths: ["LORE.md".to_string()].into_iter().collect(),
             inject_nonce: "cafebabecafebabe".into(),
             known_identities: HashMap::new(),
+            pronouns: None,
         });
 
         let out = exec
@@ -790,7 +893,11 @@ mod exec_tests {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         store
-            .write(&FileKind::Soul, "aurora self description", None, None)
+            .write(
+                &FileKind::Soul,
+                "aurora self description",
+                UserIdentity::default(),
+            )
             .await
             .unwrap();
 
@@ -804,6 +911,7 @@ mod exec_tests {
             readable_paths: ["LORE.md".to_string()].into_iter().collect(),
             inject_nonce: "n0".into(),
             known_identities: HashMap::new(),
+            pronouns: None,
         });
 
         let out = exec
@@ -820,7 +928,7 @@ mod exec_tests {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         store
-            .write(&FileKind::Lore, "body", None, None)
+            .write(&FileKind::Lore, "body", UserIdentity::default())
             .await
             .unwrap();
 
@@ -834,6 +942,7 @@ mod exec_tests {
             readable_paths: ["LORE.md".to_string()].into_iter().collect(),
             inject_nonce: "n0".into(),
             known_identities: HashMap::new(),
+            pronouns: None,
         });
 
         for _ in 0..3 {

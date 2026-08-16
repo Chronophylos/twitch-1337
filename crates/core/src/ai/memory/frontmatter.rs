@@ -1,7 +1,7 @@
 //! Hand-rolled YAML-ish frontmatter parser. Schema is fixed:
 //! `updated_at` (RFC3339, required), `username` (optional), `display_name`
-//! (optional), `created_by` (optional), `links` (optional indented
-//! `platform: url` block).
+//! (optional), `created_by` (optional), `pronouns` (optional), `links`
+//! (optional indented `platform: url` block).
 
 use std::collections::BTreeMap;
 
@@ -34,6 +34,7 @@ pub fn parse(raw: &str) -> Result<(Frontmatter, String), FrontmatterError> {
     let mut username = None;
     let mut display_name = None;
     let mut created_by = None;
+    let mut pronouns = None;
     let mut links = BTreeMap::new();
     // `links:` opens an indented block; the first unindented line closes it.
     let mut in_links = false;
@@ -64,6 +65,7 @@ pub fn parse(raw: &str) -> Result<(Frontmatter, String), FrontmatterError> {
             "username" if !v.is_empty() => username = Some(v.to_string()),
             "display_name" if !v.is_empty() => display_name = Some(v.to_string()),
             "created_by" if !v.is_empty() => created_by = Some(v.to_string()),
+            "pronouns" if !v.is_empty() => pronouns = Some(v.to_string()),
             _ => {}
         }
     }
@@ -74,6 +76,7 @@ pub fn parse(raw: &str) -> Result<(Frontmatter, String), FrontmatterError> {
             username,
             display_name,
             created_by,
+            pronouns,
             links,
         },
         raw[body_start..].to_string(),
@@ -104,6 +107,7 @@ pub fn emit(fm: &Frontmatter, body: &str) -> String {
     kv("username", fm.username.as_ref());
     kv("display_name", fm.display_name.as_ref());
     kv("created_by", fm.created_by.as_ref());
+    kv("pronouns", fm.pronouns.as_ref());
     if !fm.links.is_empty() {
         s.push_str("links:\n");
         for (k, v) in &fm.links {
@@ -150,6 +154,7 @@ mod tests {
             username: Some("alice".into()),
             display_name: Some("Alice".into()),
             created_by: None,
+            pronouns: None,
             links: BTreeMap::new(),
         };
         let raw = emit(&fm, "body line\n");
@@ -165,6 +170,7 @@ mod tests {
             username: Some("alice".into()),
             display_name: Some("Alice".into()),
             created_by: None,
+            pronouns: Some("They/Them".into()),
             links: BTreeMap::from([
                 ("steam".into(), "https://steamcommunity.com/id/alice".into()),
                 ("github".into(), "https://github.com/alice".into()),
