@@ -197,6 +197,16 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
             format!("must be 1..=20 (got {})", ai.behavior.max_turn_rounds),
         );
     }
+    if ai.behavior.min_response_delay_ms > 60_000 {
+        err(
+            errs,
+            "ai.behavior.min_response_delay_ms",
+            format!(
+                "must be 0..=60000 (got {})",
+                ai.behavior.min_response_delay_ms
+            ),
+        );
+    }
     if !(1..=64).contains(&ai.behavior.max_writes_per_turn) {
         err(
             errs,

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -67,6 +67,8 @@ pub struct AiMemoryV2 {
     pub max_turn_rounds: usize,
     pub max_writes_per_turn: usize,
     pub turn_timeout: Duration,
+    /// Artificial floor on turn wall time before the reply is spoken.
+    pub min_response_delay: Duration,
 }
 
 /// Classify the speaker role from Twitch IRC badge list.
@@ -325,6 +327,7 @@ where
 
     #[instrument(skip(self, ctx))]
     async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+        let turn_started = Instant::now();
         let user = &ctx.privmsg.sender.login;
         let grok_alias = is_grok_alias(ctx.trigger);
         // Which logical agent is speaking this turn. Drives chat-history
@@ -656,6 +659,11 @@ where
             )
             .await;
             if !line.is_empty() {
+                // Pad the tail so a sub-second turn still reads as thinking.
+                if let Some(pad) = mem.min_response_delay.checked_sub(turn_started.elapsed()) {
+                    debug!(pad_ms = pad.as_millis(), "padding AI response delay");
+                    tokio::time::sleep(pad).await;
+                }
                 let ts = Utc::now();
                 let req = crate::twitch::mouth::SpeakRequest {
                     broadcaster_id: &ctx.privmsg.channel_id,
@@ -774,6 +782,7 @@ pub async fn build_ai_memory_v2(
         max_turn_rounds: settings.ai.behavior.max_turn_rounds,
         max_writes_per_turn: settings.ai.behavior.max_writes_per_turn,
         turn_timeout: Duration::from_secs(settings.ai.connection.timeout),
+        min_response_delay: Duration::from_millis(settings.ai.behavior.min_response_delay_ms),
     }))
 }
 

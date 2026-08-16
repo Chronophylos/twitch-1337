@@ -89,6 +89,8 @@ struct SaveForm {
     ai_behavior_max_writes_per_turn: Option<usize>,
     #[serde(default)]
     ai_behavior_persona_name: Option<String>,
+    #[serde(default)]
+    ai_behavior_min_response_delay_ms: Option<u64>,
 
     // ---- AI history card ----
     #[serde(default)]

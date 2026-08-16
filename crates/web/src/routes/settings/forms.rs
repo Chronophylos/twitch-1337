@@ -159,6 +159,8 @@ struct AiBehaviorForm {
     ai_behavior_max_writes_per_turn: Option<usize>,
     #[serde(default)]
     ai_behavior_persona_name: Option<String>,
+    #[serde(default)]
+    ai_behavior_min_response_delay_ms: Option<u64>,
 }
 
 impl AiBehaviorForm {
@@ -170,6 +172,7 @@ impl AiBehaviorForm {
                 .ai_behavior_persona_name
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
+            min_response_delay_ms: self.ai_behavior_min_response_delay_ms,
         }
     }
 }
@@ -598,6 +601,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
                 ai_behavior_max_turn_rounds: form.ai_behavior_max_turn_rounds,
                 ai_behavior_max_writes_per_turn: form.ai_behavior_max_writes_per_turn,
                 ai_behavior_persona_name: form.ai_behavior_persona_name,
+                ai_behavior_min_response_delay_ms: form.ai_behavior_min_response_delay_ms,
             }
             .into_overrides(),
             history: AiHistoryForm {
