@@ -162,6 +162,10 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .persona_name
                 .clone()
                 .unwrap_or_else(|| defaults.behavior.persona_name.clone()),
+            min_response_delay_ms: o
+                .behavior
+                .min_response_delay_ms
+                .unwrap_or(defaults.behavior.min_response_delay_ms),
         },
         history: AiHistory {
             length: o.history.length.unwrap_or(defaults.history.length),

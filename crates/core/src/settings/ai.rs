@@ -63,6 +63,12 @@ pub struct AiBehavior {
     /// compatible without a new migration sentinel.
     #[serde(default = "default_persona_name")]
     pub persona_name: String,
+    /// Artificial floor on how long a turn takes before the reply is spoken.
+    /// The model usually answers faster than a human would type, which reads
+    /// as a bot; padding the tail makes it look like it thought about it.
+    /// `0` disables the padding.
+    #[serde(default)]
+    pub min_response_delay_ms: u64,
 }
 
 fn default_persona_name() -> String {
@@ -216,6 +222,7 @@ impl Default for AiBehavior {
             max_turn_rounds: 4,
             max_writes_per_turn: 8,
             persona_name: default_persona_name(),
+            min_response_delay_ms: 0,
         }
     }
 }

@@ -56,6 +56,9 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = &patch.ai.behavior.persona_name {
         into.ai.behavior.persona_name = Some(v.clone());
     }
+    if let Some(v) = patch.ai.behavior.min_response_delay_ms {
+        into.ai.behavior.min_response_delay_ms = Some(v);
+    }
     // AI history
     if let Some(v) = patch.ai.history.length {
         into.ai.history.length = Some(v);

@@ -127,6 +127,8 @@ pub struct AiBehaviorOverrides {
     pub max_writes_per_turn: Option<usize>,
     #[serde(default)]
     pub persona_name: Option<String>,
+    #[serde(default)]
+    pub min_response_delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
