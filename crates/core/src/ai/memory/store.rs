@@ -1,7 +1,7 @@
 //! Filesystem layer for v2 memory: read/write/list under per-path mutex,
 //! atomic tmp+rename, byte caps, soul seeding, v1 disposal.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -54,6 +54,9 @@ pub struct FrontmatterOverride {
     pub username: Option<String>,
     pub display_name: Option<String>,
     pub created_by: Option<String>,
+    /// `Some` replaces the whole links map (empty clears it), `None` preserves.
+    /// User files only.
+    pub links: Option<BTreeMap<String, String>>,
 }
 
 const SOUL_SEED: &str = twitch_1337_data::prompts::SEED_SOUL;
@@ -134,6 +137,7 @@ impl MemoryStore {
                 username: None,
                 display_name: None,
                 created_by: None,
+                links: BTreeMap::new(),
             };
             let raw = frontmatter::emit(&fm, SOUL_SEED);
             atomic_write_bytes_async(raw.as_bytes(), &soul_path)
@@ -148,6 +152,7 @@ impl MemoryStore {
                 username: None,
                 display_name: None,
                 created_by: None,
+                links: BTreeMap::new(),
             };
             atomic_write_bytes_async(frontmatter::emit(&fm, "").as_bytes(), &lore_path)
                 .await
@@ -221,6 +226,7 @@ impl MemoryStore {
                     username: None,
                     display_name: None,
                     created_by: None,
+                    links: BTreeMap::new(),
                 },
                 body: String::new(),
             }),
@@ -239,6 +245,21 @@ impl MemoryStore {
         username: Option<&str>,
         display_name: Option<&str>,
     ) -> Result<(), WriteError> {
+        self.write_inner(kind, body, username, display_name, None)
+            .await
+    }
+
+    /// `links_override`: `Some` replaces the whole `links` map (an empty map
+    /// clears it), `None` preserves what's on disk. Only the dashboard sets
+    /// it — no chat-turn tool can reach links.
+    async fn write_inner(
+        &self,
+        kind: &FileKind,
+        body: &str,
+        username: Option<&str>,
+        display_name: Option<&str>,
+        links_override: Option<BTreeMap<String, String>>,
+    ) -> Result<(), WriteError> {
         let limit = self.caps().limit_for(kind);
 
         let rel = kind.relative_path();
@@ -250,41 +271,35 @@ impl MemoryStore {
         // on-disk content (frontmatter + body). Doing this before acquiring
         // the lock would let two concurrent writes both pass a body-only cap
         // check and then race the actual write.
-        let (username, display_name) = if matches!(kind, FileKind::User { .. }) {
+        let (username, display_name, links) = if matches!(kind, FileKind::User { .. }) {
             let username = username.map(str::to_string).filter(|s| !s.is_empty());
             let display_name = display_name
                 .map(normalize_display_name)
                 .filter(|s| !s.is_empty());
-            // For user files, preserve any prior identity fields the caller
-            // didn't supply — protects mod/dreamer writes from clobbering
-            // display info they don't have on hand. Skip the disk read when
-            // the caller already supplied both fields.
-            if username.is_some() && display_name.is_some() {
-                (username, display_name)
-            } else {
-                let prior = tokio::fs::read_to_string(&abs)
-                    .await
-                    .ok()
-                    .and_then(|raw| frontmatter::parse(&raw).ok().map(|(fm, _)| fm));
-                (
-                    username.or_else(|| prior.as_ref().and_then(|fm| fm.username.clone())),
-                    display_name.or_else(|| prior.as_ref().and_then(|fm| fm.display_name.clone())),
-                )
-            }
-        } else {
-            (None, None)
-        };
-        // User files always emit both identity keys, blank when still unknown,
-        // so a sheet the dreamer created for a third party shows an empty slot
-        // to fill later instead of no slot at all. `parse` maps "" back to
-        // `None`, so a blank round-trips as "unknown" and never clobbers.
-        let (username, display_name) = if matches!(kind, FileKind::User { .. }) {
+            // For user files, preserve any prior field the caller didn't
+            // supply — protects mod/dreamer writes from clobbering identity or
+            // links they don't have on hand. Links are never passed by a
+            // chat-turn write, so this read is what keeps them alive.
+            let prior = tokio::fs::read_to_string(&abs)
+                .await
+                .ok()
+                .and_then(|raw| frontmatter::parse(&raw).ok().map(|(fm, _)| fm));
             (
-                username.or_else(|| Some(String::new())),
-                display_name.or_else(|| Some(String::new())),
+                // Both identity keys are always emitted, blank when still
+                // unknown, so a sheet the dreamer created for a third party
+                // shows an empty slot to fill later instead of no slot at all.
+                // `parse` maps "" back to `None`, so a blank round-trips as
+                // "unknown" and never clobbers.
+                username
+                    .or_else(|| prior.as_ref().and_then(|fm| fm.username.clone()))
+                    .or_else(|| Some(String::new())),
+                display_name
+                    .or_else(|| prior.as_ref().and_then(|fm| fm.display_name.clone()))
+                    .or_else(|| Some(String::new())),
+                links_override.unwrap_or_else(|| prior.map(|fm| fm.links).unwrap_or_default()),
             )
         } else {
-            (username, display_name)
+            (None, None, BTreeMap::new())
         };
 
         let fm = Frontmatter {
@@ -292,6 +307,7 @@ impl MemoryStore {
             username,
             display_name,
             created_by: None,
+            links,
         };
         let raw = frontmatter::emit(&fm, body);
         if raw.len() > limit {
@@ -372,6 +388,7 @@ impl MemoryStore {
             username: None,
             display_name: None,
             created_by,
+            links: BTreeMap::new(),
         };
         let raw = frontmatter::emit(&fm, body);
         if raw.len() > limit {
@@ -499,11 +516,12 @@ impl MemoryStore {
                 .await?;
             }
             FileKind::User { .. } => {
-                self.write(
+                self.write_inner(
                     &kind,
                     body,
                     fm_override.username.as_deref(),
                     fm_override.display_name.as_deref(),
+                    fm_override.links,
                 )
                 .await?;
             }
@@ -1025,6 +1043,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn links_survive_a_chat_turn_write_and_clear_only_on_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        let kind = FileKind::User {
+            user_id: "42".into(),
+        };
+        store
+            .write(&kind, "body", Some("alice"), Some("Alice"))
+            .await
+            .unwrap();
+        let mt = store.current_mtime(&kind).await.unwrap();
+        let links = BTreeMap::from([("steam".to_string(), "https://s.example/alice".to_string())]);
+        store
+            .write_with_guard(
+                kind.clone(),
+                "42",
+                "body",
+                Some(mt),
+                FrontmatterOverride {
+                    links: Some(links.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        // A chat-turn write passes no links at all; they must not vanish.
+        store
+            .write(&kind, "new body", Some("alice"), Some("Alice"))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.read_kind(&kind).await.unwrap().frontmatter.links,
+            links
+        );
+
+        // Only an explicit empty override clears them.
+        let mt = store.current_mtime(&kind).await.unwrap();
+        store
+            .write_with_guard(
+                kind.clone(),
+                "42",
+                "body",
+                Some(mt),
+                FrontmatterOverride {
+                    links: Some(BTreeMap::new()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            store
+                .read_kind(&kind)
+                .await
+                .unwrap()
+                .frontmatter
+                .links
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn write_with_guard_override_replaces_user_identity() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
@@ -1040,6 +1121,7 @@ mod tests {
             username: Some("newlogin".into()),
             display_name: Some("NewDisplay".into()),
             created_by: None,
+            links: None,
         };
         let outcome = store
             .write_with_guard(kind.clone(), "42", "body2", Some(mt), fm)

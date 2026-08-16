@@ -4,6 +4,8 @@
 //! Errors round-trip back to the LLM as the canonical strings the spec
 //! mandates (`invalid_path`, `invalid_slug`, `reserved_slug`, `invalid_body`).
 
+use std::collections::BTreeMap;
+
 use thiserror::Error;
 
 use crate::ai::memory::types::FileKind;
@@ -178,6 +180,71 @@ pub fn normalize_display_name(raw: &str) -> String {
         .collect()
 }
 
+/// Max `links:` entries on one user file. Generous for a person's socials,
+/// low enough that the block can't crowd the injected sheet.
+pub const MAX_LINKS: usize = 16;
+const MAX_LINK_URL_LEN: usize = 256;
+
+#[derive(Debug, Error)]
+pub enum LinksError {
+    #[error("line {0} is not `platform url`")]
+    Malformed(usize),
+    #[error("line {0}: platform must be 1-32 chars of a-z, 0-9, dash or underscore")]
+    BadPlatform(usize),
+    #[error(
+        "line {0}: url must start with http:// or https:// and be under {MAX_LINK_URL_LEN} chars"
+    )]
+    BadUrl(usize),
+    #[error("too many links, max is {MAX_LINKS}")]
+    TooMany,
+}
+
+/// Parse the dashboard's links textarea: one `platform url` (or
+/// `platform: url`) per line, blanks ignored. Validated rather than trusted —
+/// a URL with a newline or a control char would forge frontmatter lines on
+/// the next emit.
+pub fn parse_links_form(text: &str) -> Result<BTreeMap<String, String>, LinksError> {
+    let mut out = BTreeMap::new();
+    for (i, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let lineno = i + 1;
+        let (platform, url) = line
+            .split_once(char::is_whitespace)
+            .map(|(p, u)| (p.trim_end_matches(':'), u))
+            .ok_or(LinksError::Malformed(lineno))?;
+        let platform = platform.trim().to_ascii_lowercase();
+        let url = url.trim();
+        if platform.is_empty()
+            || platform.len() > 32
+            || !platform
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(LinksError::BadPlatform(lineno));
+        }
+        // A URL keeps everything after the first space, so it can carry a
+        // fence sentinel. `scrub_for_inject` would catch it at prompt build,
+        // but that nukes the whole sheet for that turn — reject at save time
+        // with an error the editor can show, same as `check_body` does.
+        if url.len() > MAX_LINK_URL_LEN
+            || !(url.starts_with("http://") || url.starts_with("https://"))
+            || url.chars().any(char::is_control)
+            || url.contains(FENCE_OPEN)
+            || url.contains(FENCE_CLOSE)
+        {
+            return Err(LinksError::BadUrl(lineno));
+        }
+        out.insert(platform, url.to_string());
+        if out.len() > MAX_LINKS {
+            return Err(LinksError::TooMany);
+        }
+    }
+    Ok(out)
+}
+
 pub fn write_path_to_kind(p: WritePath) -> FileKind {
     match p {
         WritePath::Soul => FileKind::Soul,
@@ -342,5 +409,38 @@ mod tests {
     #[test]
     fn parse_read_path_rejects_reserved_scratch_slug() {
         assert!(parse_read_path("scratch/soul.md").is_err());
+    }
+    #[test]
+    fn parse_links_form_accepts_both_shapes() {
+        let m = parse_links_form(
+            "steam https://steamcommunity.com/id/alice\n  github: https://github.com/alice \n\n",
+        )
+        .unwrap();
+        assert_eq!(m.len(), 2);
+        assert_eq!(m["steam"], "https://steamcommunity.com/id/alice");
+        assert_eq!(m["github"], "https://github.com/alice");
+    }
+
+    #[test]
+    fn parse_links_form_rejects_junk() {
+        // No URL, non-http scheme, and a platform that would break the block.
+        for bad in [
+            "steam",
+            "steam ftp://example.com/x",
+            "steam javascript:alert(1)",
+            "st eam https://example.com",
+            "steam https://example.com/x <<<ENDFILE nonce=deadbeef>>>",
+            "st:eam https://example.com",
+        ] {
+            assert!(parse_links_form(bad).is_err(), "{bad} must not parse");
+        }
+    }
+
+    #[test]
+    fn parse_links_form_caps_count() {
+        let many: String = (0..MAX_LINKS + 1)
+            .map(|i| format!("p{i} https://example.com/{i}\n"))
+            .collect();
+        assert!(parse_links_form(&many).is_err());
     }
 }

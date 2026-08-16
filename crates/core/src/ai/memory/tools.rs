@@ -353,7 +353,8 @@ impl ChatTurnExecutor {
             },
             FileKind::Scratch { slug } => FenceLabel::Scratch { slug },
         };
-        fence_block(label, &self.opts.inject_nonce, &file.body)
+        let body = crate::ai::memory::inject::body_with_links(&file.frontmatter, &file.body);
+        fence_block(label, &self.opts.inject_nonce, &body)
     }
 }
 

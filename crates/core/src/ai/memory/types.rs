@@ -1,5 +1,6 @@
 //! Public types shared across the v2 memory module.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -60,6 +61,10 @@ pub struct Frontmatter {
     /// SOUL/LORE/scratch.
     pub display_name: Option<String>,
     pub created_by: Option<String>,
+    /// Social/profile links, `platform -> url` (steam, github, ...). Free-form
+    /// keys so a new platform needs no code change. User files only; empty map
+    /// means none. Written from the dashboard, read-only to the model.
+    pub links: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]

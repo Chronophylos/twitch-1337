@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 
 use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry};
 use crate::ai::memory::store::MemoryStore;
-use crate::ai::memory::types::FileKind;
+use crate::ai::memory::types::{FileKind, Frontmatter};
 use crate::twitch::mouth::Agent;
 
 const FENCE_OPEN: &str = "<<<FILE";
@@ -64,6 +64,23 @@ pub fn fresh_nonce() -> String {
     let mut bytes = [0u8; 8];
     rand::rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Body as the model should see it: the `links` frontmatter rendered as a
+/// leading line, then the prose. Links are dashboard-managed and read-only to
+/// the model — it never writes this line back, and a body write can't forge
+/// one because `check_body` runs on the prose alone.
+pub fn body_with_links(fm: &Frontmatter, body: &str) -> String {
+    if fm.links.is_empty() {
+        return body.to_string();
+    }
+    let links = fm
+        .links
+        .iter()
+        .map(|(k, v)| format!("{k}: {v}"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    format!("Links — {links}\n\n{body}")
 }
 
 pub fn fence_block(label: FenceLabel<'_>, nonce: &str, body: &str) -> String {
@@ -313,7 +330,11 @@ pub async fn build_chat_turn_context(
             login: f.frontmatter.username.as_deref(),
             display_name: f.frontmatter.display_name.as_deref(),
         };
-        let block = fence_block(label, &opts.nonce, &f.body);
+        let block = fence_block(
+            label,
+            &opts.nonce,
+            &body_with_links(&f.frontmatter, &f.body),
+        );
         if total + block.len() + 1 > opts.inject_byte_budget {
             break;
         }
