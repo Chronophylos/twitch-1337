@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -115,6 +115,7 @@ pub struct AiCommand {
     bot_username: String,
     doener: Arc<crate::doener::DoeneratlasClient>,
     repology: Arc<crate::repology::RepologyClient>,
+    pronouns: Arc<crate::pronouns::PronounsClient>,
     model_catalog: Arc<ModelCatalog>,
     mouths: Arc<crate::twitch::mouth::MouthRouter>,
     echo: Arc<crate::twitch::echo::EchoGuard>,
@@ -134,6 +135,7 @@ pub struct AiCommandDeps {
     pub bot_username: String,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
     pub repology: Arc<crate::repology::RepologyClient>,
+    pub pronouns: Arc<crate::pronouns::PronounsClient>,
     pub model_catalog: Arc<ModelCatalog>,
     pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
     pub echo: Arc<crate::twitch::echo::EchoGuard>,
@@ -185,6 +187,7 @@ impl AiCommand {
             bot_username: deps.bot_username,
             doener: deps.doener,
             repology: deps.repology,
+            pronouns: deps.pronouns,
             model_catalog: deps.model_catalog,
             mouths: deps.mouths,
             echo: deps.echo,
@@ -553,6 +556,24 @@ where
             },
         );
 
+        // Identity for anyone whose sheet the model might write this turn.
+        // Last writer wins per id, so a rename lands on the newest casing.
+        let mut known_identities: HashMap<String, (String, String)> = HashMap::new();
+        for h in [
+            cc.map(|c| &c.primary_history),
+            cc.and_then(|c| c.ai_channel_history.as_ref()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for e in h.lock().await.snapshot() {
+                if let Some(id) = e.user_id {
+                    let display = e.display_name.unwrap_or_else(|| e.username.clone());
+                    known_identities.insert(id, (e.username, display));
+                }
+            }
+        }
+
         let exec = ChatTurnExecutor::new(ChatTurnExecutorOpts {
             store: mem.store.clone(),
             speaker_user_id: ctx.privmsg.sender.id.clone(),
@@ -568,6 +589,8 @@ where
             },
             readable_paths,
             inject_nonce: self.prompt_nonce.clone(),
+            known_identities,
+            pronouns: Some(self.pronouns.clone()),
         });
 
         let mut tools = if grok_alias {

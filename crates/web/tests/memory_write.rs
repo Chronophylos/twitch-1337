@@ -11,6 +11,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
+use twitch_1337_core::ai::memory::store::UserIdentity;
 use twitch_1337_core::ai::memory::types::FileKind;
 use twitch_1337_web::WebState;
 use twitch_1337_web::build_router;
@@ -93,7 +94,7 @@ async fn save_soul_409_on_stale_mtime() {
     // pretending the user opened the page when SOUL.md didn't exist (mtime=0).
     state
         .memory_store
-        .write(&FileKind::Soul, "current-on-disk", None, None)
+        .write(&FileKind::Soul, "current-on-disk", UserIdentity::default())
         .await
         .unwrap();
     let body = format!(
@@ -251,7 +252,7 @@ async fn edit_user_form_renders_frontmatter_fields() {
     };
     state
         .memory_store
-        .write(&kind, "body", Some("oldlogin"), Some("OldDisplay"))
+        .write(&kind, "body", UserIdentity::of("oldlogin", "OldDisplay"))
         .await
         .unwrap();
     let app = build_router(state);
@@ -283,7 +284,11 @@ async fn save_user_with_frontmatter_override_persists() {
     };
     state
         .memory_store
-        .write(&kind, "old body", Some("oldlogin"), Some("OldDisplay"))
+        .write(
+            &kind,
+            "old body",
+            UserIdentity::of("oldlogin", "OldDisplay"),
+        )
         .await
         .unwrap();
     let mtime = state.memory_store.current_mtime(&kind).await.unwrap();
@@ -457,7 +462,7 @@ async fn conflict_writes_audit_line() {
     let (state, sid, csrf, bare_csrf, _tdp, td_memory) = authed_setup().await;
     state
         .memory_store
-        .write(&FileKind::Soul, "current-on-disk", None, None)
+        .write(&FileKind::Soul, "current-on-disk", UserIdentity::default())
         .await
         .unwrap();
     let body = format!(

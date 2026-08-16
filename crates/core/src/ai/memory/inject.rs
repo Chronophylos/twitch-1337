@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 
 use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry};
 use crate::ai::memory::store::MemoryStore;
-use crate::ai::memory::types::FileKind;
+use crate::ai::memory::types::{FileKind, Frontmatter};
 use crate::twitch::mouth::Agent;
 
 const FENCE_OPEN: &str = "<<<FILE";
@@ -39,6 +39,9 @@ pub enum FenceLabel<'a> {
         id: &'a str,
         login: Option<&'a str>,
         display_name: Option<&'a str>,
+        /// Self-declared, from the pronouns service. Rendered as an attr so
+        /// the model can't mistake it for something it may rewrite.
+        pronouns: Option<&'a str>,
     },
     Scratch {
         slug: &'a str,
@@ -66,6 +69,23 @@ pub fn fresh_nonce() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Body as the model should see it: the `links` frontmatter rendered as a
+/// leading line, then the prose. Links are dashboard-managed and read-only to
+/// the model — it never writes this line back, and a body write can't forge
+/// one because `check_body` runs on the prose alone.
+pub fn body_with_links(fm: &Frontmatter, body: &str) -> String {
+    if fm.links.is_empty() {
+        return body.to_string();
+    }
+    let links = fm
+        .links
+        .iter()
+        .map(|(k, v)| format!("{k}: {v}"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    format!("Links — {links}\n\n{body}")
+}
+
 pub fn fence_block(label: FenceLabel<'_>, nonce: &str, body: &str) -> String {
     let safe = scrub_for_inject(body);
     let attrs = render_label_attrs(&label);
@@ -82,6 +102,7 @@ fn render_label_attrs(label: &FenceLabel<'_>) -> String {
             id,
             login,
             display_name,
+            pronouns,
         } => {
             let mut s = format!("kind=user id={id}");
             if let Some(l) = login.filter(|l| !l.is_empty()) {
@@ -89,6 +110,9 @@ fn render_label_attrs(label: &FenceLabel<'_>) -> String {
             }
             if let Some(n) = display_name.filter(|n| !n.is_empty()) {
                 s.push_str(&format!(" name=\"{}\"", sanitize_attr_value(n)));
+            }
+            if let Some(p) = pronouns.filter(|p| !p.is_empty()) {
+                s.push_str(&format!(" pronouns=\"{}\"", sanitize_attr_value(p)));
             }
             s
         }
@@ -312,8 +336,13 @@ pub async fn build_chat_turn_context(
             id: user_id,
             login: f.frontmatter.username.as_deref(),
             display_name: f.frontmatter.display_name.as_deref(),
+            pronouns: f.frontmatter.pronouns.as_deref(),
         };
-        let block = fence_block(label, &opts.nonce, &f.body);
+        let block = fence_block(
+            label,
+            &opts.nonce,
+            &body_with_links(&f.frontmatter, &f.body),
+        );
         if total + block.len() + 1 > opts.inject_byte_budget {
             break;
         }
@@ -576,6 +605,7 @@ mod tests {
     use super::*;
     use crate::ai::chat_history::ChatHistorySource;
     use crate::ai::memory::store::MemoryStore;
+    use crate::ai::memory::store::UserIdentity;
     use crate::ai::memory::types::FileKind;
     use crate::settings::Settings;
 
@@ -719,7 +749,7 @@ mod tests {
     async fn grok_manifest_lists_paths_without_bodies() {
         let (store, _tmp) = test_store().await;
         store
-            .write(&FileKind::Lore, "lore body text", None, None)
+            .write(&FileKind::Lore, "lore body text", UserIdentity::default())
             .await
             .unwrap();
         store
@@ -728,8 +758,7 @@ mod tests {
                     user_id: "111".into(),
                 },
                 "alice body text",
-                Some("alice"),
-                Some("Alice"),
+                UserIdentity::of("alice", "Alice"),
             )
             .await
             .unwrap();
@@ -778,7 +807,7 @@ mod tests {
     async fn grok_manifest_scopes_users_to_speaker_and_reply_target() {
         let (store, _tmp) = test_store().await;
         store
-            .write(&FileKind::Lore, "lore", None, None)
+            .write(&FileKind::Lore, "lore", UserIdentity::default())
             .await
             .unwrap();
         for (id, login) in [("111", "alice"), ("222", "bob"), ("333", "carol")] {
@@ -786,8 +815,7 @@ mod tests {
                 .write(
                     &FileKind::User { user_id: id.into() },
                     "body",
-                    Some(login),
-                    Some(login),
+                    UserIdentity::of(login, login),
                 )
                 .await
                 .unwrap();
@@ -815,7 +843,11 @@ mod tests {
     async fn grok_manifest_never_lists_soul() {
         let (store, _tmp) = test_store().await;
         store
-            .write(&FileKind::Soul, "aurora self description", None, None)
+            .write(
+                &FileKind::Soul,
+                "aurora self description",
+                UserIdentity::default(),
+            )
             .await
             .unwrap();
 
@@ -841,12 +873,13 @@ mod tests {
                 id: "12",
                 login: Some("alicepleb"),
                 display_name: Some("Alice Pleb"),
+                pronouns: Some("They/Them"),
             },
             "abc123abc123abc1",
             "body\n",
         );
         assert!(s.starts_with(
-            "<<<FILE kind=user id=12 login=alicepleb name=\"Alice Pleb\" nonce=abc123abc123abc1>>>"
+            "<<<FILE kind=user id=12 login=alicepleb name=\"Alice Pleb\" pronouns=\"They/Them\" nonce=abc123abc123abc1>>>"
         ));
         assert!(s.ends_with("<<<ENDFILE nonce=abc123abc123abc1>>>"));
         assert!(s.contains("body\n"));
@@ -859,6 +892,7 @@ mod tests {
                 id: "12",
                 login: None,
                 display_name: None,
+                pronouns: None,
             },
             "n",
             "x",
@@ -891,6 +925,7 @@ mod tests {
                 id: "1",
                 login: Some("a"),
                 display_name: Some("we\"ird>guy"),
+                pronouns: None,
             },
             "n",
             "x",
@@ -1056,8 +1091,7 @@ mod tests {
                     user_id: "42".into(),
                 },
                 "alice body",
-                Some("alice"),
-                Some("Alice"),
+                UserIdentity::of("alice", "Alice"),
             )
             .await
             .unwrap();
@@ -1111,8 +1145,7 @@ mod tests {
                 .write(
                     &FileKind::User { user_id: id.into() },
                     &"x".repeat(500),
-                    Some("u"),
-                    Some("U"),
+                    UserIdentity::of("u", "U"),
                 )
                 .await
                 .unwrap();
@@ -1529,8 +1562,7 @@ mod tests {
                     user_id: "42".into(),
                 },
                 "alice body",
-                Some("alice"),
-                Some("Alice"),
+                UserIdentity::of("alice", "Alice"),
             )
             .await
             .unwrap();

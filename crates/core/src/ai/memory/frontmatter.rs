@@ -1,6 +1,9 @@
 //! Hand-rolled YAML-ish frontmatter parser. Schema is fixed:
 //! `updated_at` (RFC3339, required), `username` (optional), `display_name`
-//! (optional), `created_by` (optional).
+//! (optional), `created_by` (optional), `pronouns` (optional), `links`
+//! (optional indented `platform: url` block).
+
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use thiserror::Error;
@@ -31,12 +34,28 @@ pub fn parse(raw: &str) -> Result<(Frontmatter, String), FrontmatterError> {
     let mut username = None;
     let mut display_name = None;
     let mut created_by = None;
+    let mut pronouns = None;
+    let mut links = BTreeMap::new();
+    // `links:` opens an indented block; the first unindented line closes it.
+    let mut in_links = false;
     for line in yaml.lines() {
+        let indented = line.starts_with([' ', '\t']);
+        if in_links && indented {
+            if let Some((k, v)) = line.split_once(':') {
+                let (k, v) = (k.trim(), v.trim());
+                if !k.is_empty() && !v.is_empty() {
+                    links.insert(k.to_string(), v.to_string());
+                }
+            }
+            continue;
+        }
+        in_links = false;
         let Some((k, v)) = line.split_once(':') else {
             continue;
         };
         let v = v.trim();
         match k.trim() {
+            "links" => in_links = true,
             "updated_at" => {
                 let dt = DateTime::parse_from_rfc3339(v)
                     .map_err(|e| FrontmatterError::BadTimestamp(e.to_string()))?
@@ -46,6 +65,7 @@ pub fn parse(raw: &str) -> Result<(Frontmatter, String), FrontmatterError> {
             "username" if !v.is_empty() => username = Some(v.to_string()),
             "display_name" if !v.is_empty() => display_name = Some(v.to_string()),
             "created_by" if !v.is_empty() => created_by = Some(v.to_string()),
+            "pronouns" if !v.is_empty() => pronouns = Some(v.to_string()),
             _ => {}
         }
     }
@@ -56,6 +76,8 @@ pub fn parse(raw: &str) -> Result<(Frontmatter, String), FrontmatterError> {
             username,
             display_name,
             created_by,
+            pronouns,
+            links,
         },
         raw[body_start..].to_string(),
     ))
@@ -69,14 +91,28 @@ pub fn emit(fm: &Frontmatter, body: &str) -> String {
         fm.updated_at
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
     ));
-    if let Some(ref u) = fm.username {
-        s.push_str(&format!("username: {u}\n"));
-    }
-    if let Some(ref n) = fm.display_name {
-        s.push_str(&format!("display_name: {n}\n"));
-    }
-    if let Some(ref c) = fm.created_by {
-        s.push_str(&format!("created_by: {c}\n"));
+    // `Some("")` emits a bare `key:` placeholder (no trailing space) so an
+    // unknown-but-expected field is visible for later backfill; `parse` reads
+    // it straight back as `None`.
+    let mut kv = |k: &str, v: Option<&String>| {
+        if let Some(v) = v {
+            s.push_str(k);
+            if v.is_empty() {
+                s.push_str(":\n");
+            } else {
+                s.push_str(&format!(": {v}\n"));
+            }
+        }
+    };
+    kv("username", fm.username.as_ref());
+    kv("display_name", fm.display_name.as_ref());
+    kv("created_by", fm.created_by.as_ref());
+    kv("pronouns", fm.pronouns.as_ref());
+    if !fm.links.is_empty() {
+        s.push_str("links:\n");
+        for (k, v) in &fm.links {
+            s.push_str(&format!("  {k}: {v}\n"));
+        }
     }
     s.push_str("---\n");
     s.push_str(body);
@@ -118,11 +154,45 @@ mod tests {
             username: Some("alice".into()),
             display_name: Some("Alice".into()),
             created_by: None,
+            pronouns: None,
+            links: BTreeMap::new(),
         };
         let raw = emit(&fm, "body line\n");
         let (fm2, body2) = parse(&raw).unwrap();
         assert_eq!(fm, fm2);
         assert_eq!(body2, "body line\n");
+    }
+
+    #[test]
+    fn links_block_round_trips() {
+        let fm = Frontmatter {
+            updated_at: ts(),
+            username: Some("alice".into()),
+            display_name: Some("Alice".into()),
+            created_by: None,
+            pronouns: Some("They/Them".into()),
+            links: BTreeMap::from([
+                ("steam".into(), "https://steamcommunity.com/id/alice".into()),
+                ("github".into(), "https://github.com/alice".into()),
+            ]),
+        };
+        let raw = emit(&fm, "body\n");
+        // URLs contain colons; the block must survive the naive line splitter.
+        assert!(
+            raw.contains("links:\n  github: https://github.com/alice\n  steam: https://steamcommunity.com/id/alice\n"),
+            "{raw}"
+        );
+        let (fm2, body2) = parse(&raw).unwrap();
+        assert_eq!(fm, fm2);
+        assert_eq!(body2, "body\n");
+    }
+
+    #[test]
+    fn links_block_ends_at_the_next_unindented_key() {
+        let raw = "---\nupdated_at: 2026-04-28T18:42:00Z\nlinks:\n  steam: https://s.example/1\ndisplay_name: Alice\n---\nbody\n";
+        let (fm, _) = parse(raw).unwrap();
+        assert_eq!(fm.links.len(), 1);
+        assert_eq!(fm.display_name.as_deref(), Some("Alice"));
     }
 
     #[test]

@@ -310,6 +310,8 @@ where
         ));
         let repology =
             Arc::new(crate::repology::RepologyClient::new().expect("build repology HTTP client"));
+        let pronouns =
+            Arc::new(crate::pronouns::PronounsClient::new().expect("build pronouns HTTP client"));
 
         cmd_list.push(Box::new(ai::command::AiCommand::new(
             ai::command::AiCommandDeps {
@@ -322,6 +324,7 @@ where
                 bot_username: bot_username.clone(),
                 doener: doener.clone(),
                 repology,
+                pronouns,
                 model_catalog,
                 mouths: mouths.clone(),
                 echo: echo.clone(),

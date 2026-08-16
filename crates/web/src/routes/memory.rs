@@ -20,10 +20,11 @@ use axum::routing::{get, post};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tower_cookies::Cookies;
+use twitch_1337_core::ai::memory::sanitize::parse_links_form;
 use twitch_1337_core::ai::memory::store::{
     FrontmatterOverride, Mtime, WriteOutcome, validate_scratch_slug,
 };
-use twitch_1337_core::ai::memory::types::{FileKind, MemoryFile};
+use twitch_1337_core::ai::memory::types::{FileKind, Frontmatter, MemoryFile};
 use twitch_1337_core::settings::audit::berlin_now;
 
 use crate::auth::csrf;
@@ -102,6 +103,9 @@ struct EditorTpl<'a> {
     fm_username: &'a str,
     fm_display_name: &'a str,
     fm_created_by: &'a str,
+    /// User-only: one `platform url` per line. Authoritative on save — an
+    /// empty textarea clears every link.
+    fm_links: &'a str,
 }
 
 struct ScratchRow {
@@ -225,6 +229,16 @@ fn fmt_mtime_ms(ms: u64) -> String {
     DateTime::<Utc>::from_timestamp_millis(signed)
         .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| "—".to_owned())
+}
+
+/// Frontmatter links rendered for the editor textarea: one `platform url`
+/// per line, the same shape `parse_links_form` reads back.
+fn links_form_text(fm: &Frontmatter) -> String {
+    fm.links
+        .iter()
+        .map(|(k, v)| format!("{k} {v}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `(used * 100 / cap).min(100)` as a `u8`. Clamps to 100 on `cap == 0`.
@@ -351,6 +365,7 @@ async fn view_kind(
     let byte_cap = state.memory_store.caps().limit_for(&kind);
     let csrf_hex = csrf::encode(&session.csrf_value);
     let pct = pct_of(mf.body.len(), byte_cap);
+    let links = links_form_text(&mf.frontmatter);
     render(&EditorTpl {
         title: &title,
         subtitle: subtitle_for_kind(&kind),
@@ -376,6 +391,7 @@ async fn view_kind(
         fm_username: mf.frontmatter.username.as_deref().unwrap_or(""),
         fm_display_name: mf.frontmatter.display_name.as_deref().unwrap_or(""),
         fm_created_by: mf.frontmatter.created_by.as_deref().unwrap_or(""),
+        fm_links: &links,
     })
 }
 
@@ -646,6 +662,8 @@ struct SaveForm {
     fm_display_name: String,
     #[serde(default)]
     fm_created_by: String,
+    #[serde(default)]
+    fm_links: String,
 }
 
 #[derive(Deserialize)]
@@ -758,10 +776,54 @@ async fn save_kind(
     }
     let current_page = nav_slug_for(&kind);
     let cancel_url = list_url_for(&kind);
+    // Links are the one field where the textarea is authoritative rather than
+    // preserve-on-empty: it round-trips the full list, so clearing it clears
+    // them. Non-user kinds carry no links, so don't touch theirs.
+    let links = if matches!(&kind, FileKind::User { .. }) {
+        match parse_links_form(&form.fm_links) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                let csrf_hex = csrf::encode(&session.csrf_value);
+                return render_with(
+                    StatusCode::BAD_REQUEST,
+                    &EditorTpl {
+                        title: &label,
+                        subtitle: subtitle_for_kind(&kind),
+                        meta_path: meta_path_for(&kind),
+                        body: &form.body,
+                        csrf: &csrf_hex,
+                        mtime: form.mtime,
+                        mtime_display: fmt_mtime_ms(form.mtime),
+                        byte_cap: cap,
+                        pct: pct_of(form.body.len(), cap),
+                        save_url: &redirect_to,
+                        cancel_url,
+                        delete_url: delete_url.as_deref(),
+                        error: Some(format!("links: {e}")),
+                        user_login: &session.user_login,
+                        user_avatar_url: session.avatar_url.as_deref(),
+                        current_page,
+                        is_mod: session.is_mod(),
+                        is_broadcaster: session.is_broadcaster,
+                        is_owner: matches!(session.role, crate::auth::Role::Owner),
+                        show_user_fm: true,
+                        show_scratch_fm: false,
+                        fm_username: &form.fm_username,
+                        fm_display_name: &form.fm_display_name,
+                        fm_created_by: &form.fm_created_by,
+                        fm_links: &form.fm_links,
+                    },
+                );
+            }
+        }
+    } else {
+        None
+    };
     let fm_override = FrontmatterOverride {
         username: Some(form.fm_username.clone()),
         display_name: Some(form.fm_display_name.clone()),
         created_by: Some(form.fm_created_by.clone()),
+        links,
     };
     let outcome = state
         .memory_store
@@ -883,6 +945,7 @@ async fn save_kind(
                     fm_username: &form.fm_username,
                     fm_display_name: &form.fm_display_name,
                     fm_created_by: &form.fm_created_by,
+                    fm_links: &form.fm_links,
                 },
             )
         }
@@ -1130,6 +1193,7 @@ fn render_scratch_create(
             fm_username: "",
             fm_display_name: "",
             fm_created_by: "",
+            fm_links: "",
         },
     )
 }
