@@ -92,16 +92,15 @@ pub fn chat_turn_tools() -> Vec<ToolDefinition> {
     ]
 }
 
-/// Chat-turn tools plus `read_memory`, for the grok alias. Grok gets a paths-only
-/// manifest instead of injected bodies, so it needs a way to pull one; Aurora
-/// already has every body in her prompt and would only burn a round-trip.
+/// Grok's tools: `read_memory` only. Grok gets a paths-only manifest instead of
+/// injected bodies, so it needs a way to pull one; Aurora already has every body
+/// in her prompt and would only burn a round-trip. Memory is read-only for grok
+/// — writes belong to Aurora and the dreamer.
 pub fn grok_chat_turn_tools() -> Vec<ToolDefinition> {
-    let mut tools = chat_turn_tools();
-    tools.push(ToolDefinition::derived::<ReadMemoryArgs>(
+    vec![ToolDefinition::derived::<ReadMemoryArgs>(
         "read_memory",
         "Read one memory file listed in this turn's memory index. path is an exact path from that index (LORE.md, users/<id>.md, or scratch/<slug>.md). Returns the fenced body. Paths outside the index are refused.",
-    ));
-    tools
+    )]
 }
 
 pub fn dreamer_tools() -> Vec<ToolDefinition> {
@@ -422,11 +421,9 @@ mod schema_tests {
     }
 
     #[test]
-    fn grok_tools_add_read_memory_to_the_chat_turn_set() {
+    fn grok_tools_are_read_only() {
         let names: Vec<_> = grok_chat_turn_tools().into_iter().map(|t| t.name).collect();
-        assert!(names.contains(&"read_memory".to_string()));
-        assert!(names.contains(&"write_file".to_string()));
-        assert_eq!(names.len(), chat_turn_tools().len() + 1);
+        assert_eq!(names, vec!["read_memory"]);
     }
 
     #[test]

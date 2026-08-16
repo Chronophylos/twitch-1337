@@ -300,6 +300,9 @@ impl MemoryStore {
                 .await
                 .map_err(|e| WriteError::Io(eyre!(e)))?;
         }
+        // ponytail: single-slot backup, so one bad dreamer run is recoverable.
+        // Rotate to N versions only if one night back turns out to be too little.
+        let _ = tokio::fs::rename(&abs, abs.with_extension("md.bak")).await;
         atomic_write_bytes_async(raw.as_bytes(), &abs)
             .await
             .map_err(|e| WriteError::Io(eyre!(e)))?;
