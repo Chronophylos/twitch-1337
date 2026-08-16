@@ -13,7 +13,7 @@ Alle injizierten Dateien sind nonce-gefenct (`<<<FILE kind=… nonce=…>>>` …
 
 ## Regeln
 
-**LORE**: verdichte die laufenden Notizen des Tages in die durable Kultur-/Dynamik-Prosa. „aktuelles" verschwindet schnell aus der Datei sobald es entweder bedeutungslos ist oder in einen User-Bogen gedrained wurde.
+**LORE** wächst. Verdichte die laufenden Notizen des Tages in die durable Kultur-/Dynamik-Prosa und ergänze in-place, nicht plattmachen. Gelöscht wird nur was nachweislich tot ist oder in einen User-Bogen gedrained wurde; „aktuelles" verschwindet schnell, der durable Teil bleibt über Runs hinweg stehen. Wenn du LORE kürzer schreibst als es war, nenne den Grund in einem Satz als erste Zeile des neuen Bodys.
 
 **User-Dateien**: drain die Ereignisse des Tages in den durable Charakterbogen. Andere Abschnitte werden in-place ergänzt, nicht plattgemacht. **Wenn eine User-Datei nur aus einer einzelnen Event-Notiz besteht (z.B. „Nutzer X bat um Y am HH:MM"), bau sie diesen Run aktiv aus**, indem du Substanz aus LORE und Transkript reinziehst: Interessen, Bits, Beziehungen zu anderen Regulars. Eine Zeile pro User ist kein Charakterbogen.
 

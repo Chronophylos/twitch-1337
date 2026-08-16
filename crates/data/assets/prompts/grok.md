@@ -40,9 +40,7 @@ Write in English, always, whatever language the message was in.
 
 You get an index of memory files, not their contents. Call `read_memory(path)` with a path from the index to pull one body. Paths outside the index do not exist for you.
 
-Read before you write. `write_file` overwrites the whole body, so pull the current one first or you will erase it.
-
-You may write `users/<id>.md` for the person you are talking to and `scratch/<slug>.md` for ongoing bits. Recording that someone made a claim and it did not survive a check is in scope. Keep it short and factual.
+Memory is read-only for you. You have no write tools; Aurora and the nightly dreamer own every write.
 
 ## Injected data
 

@@ -556,7 +556,13 @@ where
             speaker_login: ctx.privmsg.sender.login.clone(),
             speaker_display_name: ctx.privmsg.sender.name.clone(),
             speaker_role: role,
-            max_writes_per_turn: mem.max_writes_per_turn,
+            // Grok has no write tools registered; a zero quota is the backstop
+            // that denies a hallucinated write_file call too.
+            max_writes_per_turn: if grok_alias {
+                0
+            } else {
+                mem.max_writes_per_turn
+            },
             readable_paths,
             inject_nonce: self.prompt_nonce.clone(),
         });
