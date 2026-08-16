@@ -274,6 +274,18 @@ impl MemoryStore {
         } else {
             (None, None)
         };
+        // User files always emit both identity keys, blank when still unknown,
+        // so a sheet the dreamer created for a third party shows an empty slot
+        // to fill later instead of no slot at all. `parse` maps "" back to
+        // `None`, so a blank round-trips as "unknown" and never clobbers.
+        let (username, display_name) = if matches!(kind, FileKind::User { .. }) {
+            (
+                username.or_else(|| Some(String::new())),
+                display_name.or_else(|| Some(String::new())),
+            )
+        } else {
+            (username, display_name)
+        };
 
         let fm = Frontmatter {
             updated_at: Utc::now(),
@@ -986,6 +998,30 @@ mod tests {
         assert!(matches!(outcome, WriteOutcome::Written { .. }));
         let mf = store.read_kind(&FileKind::Lore).await.unwrap();
         assert!(mf.body.contains("after"));
+    }
+
+    #[tokio::test]
+    async fn user_file_written_without_identity_keeps_blank_placeholders() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        let kind = FileKind::User {
+            user_id: "7".into(),
+        };
+        store.write(&kind, "body", None, None).await.unwrap();
+        let raw = tokio::fs::read_to_string(store.memories_dir().join("users/7.md"))
+            .await
+            .unwrap();
+        assert!(raw.contains("\nusername:\n"), "{raw}");
+        assert!(raw.contains("\ndisplay_name:\n"), "{raw}");
+        // Blank round-trips as unknown, so a later write can still fill it.
+        let mf = store.read_kind(&kind).await.unwrap();
+        assert_eq!(mf.frontmatter.username, None);
+        store
+            .write(&kind, "body", Some("late"), Some("Late"))
+            .await
+            .unwrap();
+        let mf = store.read_kind(&kind).await.unwrap();
+        assert_eq!(mf.frontmatter.username.as_deref(), Some("late"));
     }
 
     #[tokio::test]

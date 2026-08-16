@@ -1,6 +1,6 @@
 //! Tool args + definitions for the v2 chat-turn and dreamer loops.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
@@ -139,6 +139,11 @@ pub struct ChatTurnExecutorOpts {
     /// Nonce for fencing `read_memory` results. Same nonce as the turn's
     /// injected blocks so the model sees one consistent fence scheme.
     pub inject_nonce: String,
+    /// `user_id -> (login, display_name)` for everyone in this turn's chat
+    /// history. Lets a write to *someone else's* sheet still stamp identity —
+    /// otherwise a sheet first created for a third party is born nameless and
+    /// stays that way, since every later write only ever preserves.
+    pub known_identities: HashMap<String, (String, String)>,
 }
 
 pub struct ChatTurnExecutor {
@@ -219,16 +224,19 @@ impl ChatTurnExecutor {
         }
 
         let kind = write_path_to_kind(path);
-        // Pass identity only for the speaker's own user file. For other user
-        // files, `None` lets the store preserve whatever's already on disk.
-        let (login, display) = if matches!(&kind, FileKind::User { user_id } if user_id == &self.opts.speaker_user_id)
-        {
-            (
+        // Identity for the sheet's *subject*: the speaker for their own file,
+        // otherwise whatever this turn's chat history knows about that id.
+        // Still `None` for a stranger, which lets the store preserve disk.
+        let (login, display) = match &kind {
+            FileKind::User { user_id } if user_id == &self.opts.speaker_user_id => (
                 Some(self.opts.speaker_login.as_str()),
                 Some(self.opts.speaker_display_name.as_str()),
-            )
-        } else {
-            (None, None)
+            ),
+            FileKind::User { user_id } => match self.opts.known_identities.get(user_id) {
+                Some((l, d)) => (Some(l.as_str()), Some(d.as_str())),
+                None => (None, None),
+            },
+            _ => (None, None),
         };
         match self
             .opts
@@ -388,6 +396,7 @@ impl DreamerExecutor {
                 max_writes_per_turn: opts.max_writes_per_turn,
                 readable_paths: BTreeSet::new(),
                 inject_nonce: String::new(),
+                known_identities: HashMap::new(),
             }),
         }
     }
@@ -479,7 +488,43 @@ mod exec_tests {
             max_writes_per_turn: max_writes,
             readable_paths: Default::default(),
             inject_nonce: "n0".into(),
+            known_identities: HashMap::new(),
         })
+    }
+
+    #[tokio::test]
+    async fn mod_write_to_third_party_sheet_stamps_identity_from_chat_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        let exec = ChatTurnExecutor::new(ChatTurnExecutorOpts {
+            store: store.clone(),
+            speaker_user_id: "12345".into(),
+            speaker_login: "alice".into(),
+            speaker_display_name: "Alice".into(),
+            speaker_role: Role::Moderator,
+            max_writes_per_turn: 8,
+            readable_paths: Default::default(),
+            inject_nonce: "n0".into(),
+            known_identities: HashMap::from([(
+                "99".to_string(),
+                ("bobby".to_string(), "BobbyTables".to_string()),
+            )]),
+        });
+        let r = exec
+            .execute(&call(
+                "write_file",
+                serde_json::json!({"path": "users/99.md", "body": "hi"}),
+            ))
+            .await;
+        assert_eq!(r.content, "ok");
+        let mf = store
+            .read_kind(&FileKind::User {
+                user_id: "99".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(mf.frontmatter.username.as_deref(), Some("bobby"));
+        assert_eq!(mf.frontmatter.display_name.as_deref(), Some("BobbyTables"));
     }
 
     #[tokio::test]
@@ -724,6 +769,7 @@ mod exec_tests {
             max_writes_per_turn: 4,
             readable_paths: ["LORE.md".to_string()].into_iter().collect(),
             inject_nonce: "cafebabecafebabe".into(),
+            known_identities: HashMap::new(),
         });
 
         let out = exec
@@ -756,6 +802,7 @@ mod exec_tests {
             max_writes_per_turn: 4,
             readable_paths: ["LORE.md".to_string()].into_iter().collect(),
             inject_nonce: "n0".into(),
+            known_identities: HashMap::new(),
         });
 
         let out = exec
@@ -785,6 +832,7 @@ mod exec_tests {
             max_writes_per_turn: 1,
             readable_paths: ["LORE.md".to_string()].into_iter().collect(),
             inject_nonce: "n0".into(),
+            known_identities: HashMap::new(),
         });
 
         for _ in 0..3 {

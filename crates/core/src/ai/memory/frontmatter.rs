@@ -69,15 +69,22 @@ pub fn emit(fm: &Frontmatter, body: &str) -> String {
         fm.updated_at
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
     ));
-    if let Some(ref u) = fm.username {
-        s.push_str(&format!("username: {u}\n"));
-    }
-    if let Some(ref n) = fm.display_name {
-        s.push_str(&format!("display_name: {n}\n"));
-    }
-    if let Some(ref c) = fm.created_by {
-        s.push_str(&format!("created_by: {c}\n"));
-    }
+    // `Some("")` emits a bare `key:` placeholder (no trailing space) so an
+    // unknown-but-expected field is visible for later backfill; `parse` reads
+    // it straight back as `None`.
+    let mut kv = |k: &str, v: Option<&String>| {
+        if let Some(v) = v {
+            s.push_str(k);
+            if v.is_empty() {
+                s.push_str(":\n");
+            } else {
+                s.push_str(&format!(": {v}\n"));
+            }
+        }
+    };
+    kv("username", fm.username.as_ref());
+    kv("display_name", fm.display_name.as_ref());
+    kv("created_by", fm.created_by.as_ref());
     s.push_str("---\n");
     s.push_str(body);
     s
