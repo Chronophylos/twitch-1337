@@ -24,7 +24,10 @@ pub fn ai_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition::derived::<super::executor::ReadUrlArgs>(
             "read_url",
-            "Fetch a URL and return a textual answer. Pass an optional `instruction` to focus the answer; without one a full description is returned. Handles HTML, plain text, JSON, images, PDFs, audio, and video.",
+            "Open a URL and see what is there: images, video, audio, PDFs, web pages, JSON. \
+Use it whenever someone posts a link, including short links like kappa.lol or i.nuuls.com \
+whose contents you cannot guess from the URL. Pass an optional `instruction` to ask something \
+specific about the content; without one you get a full description.",
         ),
     ]
 }
