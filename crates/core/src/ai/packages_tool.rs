@@ -21,21 +21,22 @@ pub fn search_packages_tool() -> ToolDefinition {
     ToolDefinition {
         name: SEARCH_PACKAGES_TOOL_NAME.into(),
         description:
-            "Look up a software package across Linux package managers (AUR, Debian, Ubuntu, \
-            winget). Returns version and upstream links — never invent install commands. Use when \
-            viewers ask what version is in repos, whether something is packaged, or how to find a \
-            package. Optional ecosystem narrows to aur, debian, ubuntu, winget, arch, or apt."
+            "Schlag ein Software-Paket über die Linux-Paketmanager nach (AUR, Debian, Ubuntu, \
+            winget). Liefert Version und Upstream-Links — erfind niemals Install-Befehle. Nutz das, \
+            wenn Leute fragen, welche Version in den Repos liegt, ob es etwas überhaupt als Paket \
+            gibt, oder wie ein Paket heißt. Optional grenzt ecosystem auf aur, debian, ubuntu, \
+            winget, arch oder apt ein."
                 .into(),
         parameters: json!({
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Package or project name to look up (e.g. ripgrep, firefox).",
+                    "description": "Name des Pakets oder Projekts (z.B. ripgrep, firefox).",
                 },
                 "ecosystem": {
                     "type": "string",
-                    "description": "Optional filter: aur, arch, debian, ubuntu, winget, or apt. Omit to search all v1 families.",
+                    "description": "Optionaler Filter: aur, arch, debian, ubuntu, winget oder apt. Weglassen, um alle v1-Families zu durchsuchen.",
                 }
             },
             "required": ["query"]

@@ -81,15 +81,15 @@ pub fn chat_turn_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition::derived::<WriteFileArgs>(
             "write_file",
-            "Overwrite a memory file (SOUL.md, LORE.md, or users/<id>.md). Body is the new full prose body; frontmatter is store-managed. Permission-gated by speaker role.",
+            "Überschreib eine Memory-Datei (SOUL.md, LORE.md oder users/<id>.md). body ist der komplette neue Fließtext, kein Diff; das Frontmatter macht der Store. Rechte hängen an der Rolle der sprechenden Person.",
         ),
         ToolDefinition::derived::<WriteScratchArgs>(
             "write_scratch",
-            "Create or overwrite a scratch file at scratch/<slug>.md. slug is lowercase a–z 0–9 dashes, ≤64 chars.",
+            "Leg eine Scratch-Datei unter scratch/<slug>.md an oder überschreib sie. slug ist klein a–z, 0–9 und Bindestriche, maximal 64 Zeichen.",
         ),
         ToolDefinition::derived::<DeleteScratchArgs>(
             "delete_scratch",
-            "Remove a scratch file. Regulars may only delete scratch files they created.",
+            "Lösch eine Scratch-Datei. Regulars dürfen nur Scratch-Dateien löschen, die sie selbst angelegt haben.",
         ),
     ]
 }
@@ -101,7 +101,7 @@ pub fn chat_turn_tools() -> Vec<ToolDefinition> {
 pub fn grok_chat_turn_tools() -> Vec<ToolDefinition> {
     vec![ToolDefinition::derived::<ReadMemoryArgs>(
         "read_memory",
-        "Read one memory file listed in this turn's memory index. path is an exact path from that index (LORE.md, users/<id>.md, or scratch/<slug>.md). Returns the fenced body. Paths outside the index are refused.",
+        "Lies eine Memory-Datei aus dem Memory-Index dieses Turns. path ist ein exakter Pfad aus diesem Index (LORE.md, users/<id>.md oder scratch/<slug>.md). Gibt den Body als Fence zurück. Pfade außerhalb des Index werden abgelehnt.",
     )]
 }
 
@@ -109,15 +109,15 @@ pub fn dreamer_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition::derived::<WriteFileArgs>(
             "write_file",
-            "Overwrite SOUL.md / LORE.md / users/<id>.md.",
+            "Überschreib SOUL.md / LORE.md / users/<id>.md.",
         ),
         ToolDefinition::derived::<WriteScratchArgs>(
             "write_scratch",
-            "Overwrite scratch/<slug>.md.",
+            "Überschreib scratch/<slug>.md.",
         ),
         ToolDefinition::derived::<DeleteScratchArgs>(
             "delete_scratch",
-            "Remove a stale scratch file.",
+            "Lösch eine veraltete Scratch-Datei.",
         ),
     ]
 }

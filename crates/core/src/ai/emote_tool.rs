@@ -21,17 +21,18 @@ struct SearchEmotesArgs {
 pub fn search_emotes_tool() -> ToolDefinition {
     ToolDefinition {
         name: SEARCH_EMOTES_TOOL_NAME.into(),
-        description: "Search the channel's full 7TV emote set by meaning or by partial code and \
-            return the best matches (exact code + appearance + meaning + usage). Call this when you \
-            want an emote for a feeling or moment that is not among the emotes listed in this \
-            turn's context — never invent emote codes. Returns up to 20 ranked matches."
+        description: "Durchsuch das komplette 7TV-Set des Channels nach Bedeutung oder nach \
+            Code-Fragment und krieg die besten Treffer zurück (exakter Code + Aussehen + Bedeutung \
+            + Verwendung). Ruf das auf, wenn du ein Emote für ein Gefühl oder einen Moment willst, \
+            das nicht in den Emotes dieses Turns steht — erfind niemals Emote-Codes. Maximal 20 \
+            Treffer, nach Relevanz sortiert."
             .into(),
         parameters: json!({
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Free-text description of the emote you want (e.g. \"laughing\", \"agreement\", \"sarcastic clap\") or a partial emote code.",
+                    "description": "Freitext für das gesuchte Emote (z.B. \"lachen\", \"zustimmung\", \"sarkastischer applaus\") oder ein Teil eines Emote-Codes.",
                 }
             },
             "required": ["query"]
