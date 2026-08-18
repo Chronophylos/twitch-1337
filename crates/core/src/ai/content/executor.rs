@@ -22,10 +22,10 @@ struct WebSearchArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(super) struct ReadUrlArgs {
-    /// HTTP(S) URL to fetch.
+    /// HTTP(S)-URL, die geöffnet werden soll.
     pub url: String,
-    /// Optional natural-language instruction. If omitted, the sub-agent returns
-    /// a generic description.
+    /// Optionale Frage zum Inhalt. Ohne diese kommt eine allgemeine
+    /// Beschreibung zurück.
     #[serde(default)]
     pub instruction: Option<String>,
 }

@@ -17,9 +17,11 @@ use serde_json::{Value, json};
 
 use crate::ai::content::client::Payload;
 
-const SYSTEM_PROMPT: &str = "You analyze URLs on behalf of a Twitch chat bot. \
-Answer the user's instruction strictly from the provided content. Be concise. \
-If the instruction is empty, describe the contents.";
+// German: the answer is fed straight back into the bot's German turn, so an
+// English one would force a translation round the model does not always make.
+const SYSTEM_PROMPT: &str = "Du analysierst URLs für einen Twitch-Chatbot. \
+Beantworte die Anweisung ausschließlich aus dem gelieferten Inhalt. Fass dich kurz. \
+Ohne Anweisung beschreibst du den Inhalt. Antworte auf Deutsch.";
 
 pub struct MediaClient {
     http: reqwest::Client,
@@ -198,7 +200,7 @@ mod tests {
             req["messages"][0]["content"]
                 .as_str()
                 .expect("system content")
-                .contains("Twitch chat bot"),
+                .contains("Twitch-Chatbot"),
         );
     }
 

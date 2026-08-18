@@ -10,24 +10,26 @@ pub fn ai_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "web_search".into(),
-            description:
-                "Search the web for current information and return concise results with URLs."
-                    .into(),
+            description: "Websuche für alles, was du nicht sicher weißt: aktuelles Geschehen, \
+Zahlen, Releases, Preise, oder Leute und Projekte, die dir nichts sagen. Lieber suchen als raten \
+— dein Wissen hat einen Stichtag, der Chat redet über heute. Liefert kurze Treffer mit URLs; \
+zum Reinschauen dann read_url."
+                .into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                    "max_results": {"type": "integer", "minimum": 1, "maximum": 10}
+                    "query": {"type": "string", "description": "Suchanfrage."},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Anzahl Treffer (1–10). Weglassen für den Default."}
                 },
                 "required": ["query"]
             }),
         },
         ToolDefinition::derived::<super::executor::ReadUrlArgs>(
             "read_url",
-            "Open a URL and see what is there: images, video, audio, PDFs, web pages, JSON. \
-Use it whenever someone posts a link, including short links like kappa.lol or i.nuuls.com \
-whose contents you cannot guess from the URL. Pass an optional `instruction` to ask something \
-specific about the content; without one you get a full description.",
+            "Öffne eine URL und schau nach, was da ist: Bilder, Video, Audio, PDFs, Webseiten, \
+JSON. Nutz das immer, wenn jemand einen Link postet — gerade bei Kurzlinks wie kappa.lol oder \
+i.nuuls.com, deren Inhalt du der URL nicht ansiehst. Optional `instruction` für eine konkrete \
+Frage zum Inhalt; ohne bekommst du eine vollständige Beschreibung.",
         ),
     ]
 }

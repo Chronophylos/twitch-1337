@@ -16,14 +16,14 @@ pub(crate) struct DoenerArgs {
 pub fn doener_tool() -> ToolDefinition {
     ToolDefinition {
         name: DOENER_TOOL_NAME.into(),
-        description: "Use when viewers ask about Döner or kebab prices in Germany: typical averages, cheaper or pricier areas, or what things cost compared to elsewhere. Nationwide context if nothing more specific helps; naming a German city narrows results to matching places. City figures come from Döneratlas public city aggregates when enrichment succeeds."
+        description: "Nutz das, wenn Leute nach Dönerpreisen in Deutschland fragen: übliche Schnitte, wo es günstiger oder teurer ist, oder wie sich ein Ort im Vergleich schlägt. Ohne Stadt kommt der bundesweite Kontext; mit einer deutschen Stadt werden die Ergebnisse auf passende Läden eingegrenzt. Stadtwerte kommen aus den öffentlichen Döneratlas-Aggregaten, sofern die Anreicherung klappt."
             .into(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
                 "city": {
                     "type": "string",
-                    "description": "City name or short prefix when the question is about a specific German place (e.g. Cologne, München). Omit for Germany-wide. Per-city aggregates come from Döneratlas when available.",
+                    "description": "Stadtname oder kurzes Präfix, wenn es um einen konkreten deutschen Ort geht (z.B. Köln, München). Weglassen für bundesweit. Stadtwerte kommen aus dem Döneratlas, wenn verfügbar.",
                 }
             }
         }),
