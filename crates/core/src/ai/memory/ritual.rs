@@ -2,6 +2,7 @@
 //! rotates the transcript, and runs the dreamer LLM against every memory file
 //! plus yesterday's transcript inside nonce-fenced blocks.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,6 +21,7 @@ use crate::ai::memory::inject::{
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::{DreamerExecutor, DreamerExecutorOpts, dreamer_tools};
 use crate::ai::memory::transcript::TranscriptWriter;
+use crate::ai::memory::types::FileKind;
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
 
@@ -88,6 +90,22 @@ pub fn spawn_ritual(
             }
         }
     })
+}
+
+/// Twitch user ids the transcript itself carries (`HH:MM:SS  login#<id>: …`).
+/// These come from IRC tags, so a sheet may be created for them even though no
+/// file exists yet — unlike a bare login, which is not an id and never becomes
+/// one by guessing.
+fn transcript_user_ids(text: &str) -> BTreeSet<String> {
+    text.lines()
+        .filter_map(|line| {
+            // Past the fixed-width "HH:MM:SS  " stamp, then up to the
+            // login/message separator.
+            let (head, _) = line.get(11..)?.split_once(": ")?;
+            let (_, id) = head.rsplit_once('#')?;
+            (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then(|| id.to_string())
+        })
+        .collect()
 }
 
 pub async fn run_ritual(
@@ -197,11 +215,36 @@ pub async fn run_ritual(
         }
         mem_block.push_str(&mem_ctx.scratch);
     }
-    let system_prompt = format!("{head}\n\n{mem_block}\n{transcript_block}");
+    // Roster of every user sheet, listed independently of the byte budget that
+    // packed `mem_block`. A sheet dropped for space used to read as "this
+    // regular has no file yet", and the dreamer answered that by inventing an
+    // id for the login it saw in the transcript.
+    let users = store.list_users().await?;
+    let mut roster_lines: Vec<String> = Vec::with_capacity(users.len());
+    let mut writable_ids: BTreeSet<String> = BTreeSet::new();
+    for f in &users {
+        let FileKind::User { user_id } = &f.kind else {
+            continue;
+        };
+        writable_ids.insert(user_id.clone());
+        match f.frontmatter.username.as_deref().filter(|l| !l.is_empty()) {
+            Some(login) => roster_lines.push(format!("- users/{user_id}.md ({login})")),
+            None => roster_lines.push(format!("- users/{user_id}.md")),
+        }
+    }
+    // Ids seen in the transcript are real (IRC tags), so the dreamer may open a
+    // sheet for a newcomer. Everything outside roster ∪ transcript is invented.
+    writable_ids.extend(transcript_user_ids(&transcript_text));
+    let roster = format!(
+        "## User-Index\n\nGenau diese User-Dateien existieren. Für jemanden ohne Datei ist die id die Zahl hinter dem `#` im Transkript. Jede andere id lehnt `write_file` mit `unknown_user_id` ab.\n\n{}",
+        roster_lines.join("\n")
+    );
+    let system_prompt = format!("{head}\n\n{roster}\n\n{mem_block}\n{transcript_block}");
 
     let exec = DreamerExecutor::new(DreamerExecutorOpts {
         store: store.clone(),
         max_writes_per_turn,
+        known_user_ids: writable_ids,
     });
 
     let req = ToolChatCompletionRequest {
@@ -234,6 +277,23 @@ mod tests {
     use chrono::Timelike as _;
 
     use super::*;
+
+    #[test]
+    fn transcript_user_ids_reads_ids_and_ignores_bare_logins() {
+        let text = "\
+13:37:00  alice#123: hi
+13:37:01  bob: no id here
+13:37:02  aurora#456: yo: with a colon
+not a transcript line
+13:38:00  weird#abc: id must be numeric
+";
+        let ids = transcript_user_ids(text);
+        assert_eq!(
+            ids,
+            BTreeSet::from(["123".to_string(), "456".to_string()]),
+            "got {ids:?}"
+        );
+    }
 
     #[test]
     fn resolve_berlin_run_at_handles_dst_gap() {

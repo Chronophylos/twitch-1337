@@ -26,7 +26,12 @@ pub async fn run_transcript_tap(
                     continue;
                 }
                 if let Err(e) = writer
-                    .append_line(p.server_timestamp, &p.sender.login, &p.message_text)
+                    .append_line(
+                        p.server_timestamp,
+                        &p.sender.login,
+                        Some(&p.sender.id),
+                        &p.message_text,
+                    )
                     .await
                 {
                     error!(error = ?e, "transcript append failed");

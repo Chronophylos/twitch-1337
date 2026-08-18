@@ -504,7 +504,8 @@ async fn transcript_captures_normal_chat() {
     let bot_ref = &bot;
     bot_ref.send("bob", "kek").await;
 
-    bot.wait_until_transcript_contains("bob: kek", Duration::from_secs(3))
+    // The id suffix is what lets the dreamer map a login onto users/<id>.md.
+    bot.wait_until_transcript_contains("bob#67890: kek", Duration::from_secs(3))
         .await;
 
     bot.shutdown().await;

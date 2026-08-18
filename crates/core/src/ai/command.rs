@@ -591,6 +591,9 @@ where
             inject_nonce: self.prompt_nonce.clone(),
             known_identities,
             pronouns: Some(self.pronouns.clone()),
+            // Existing sheets stay writable even when the subject is not in
+            // this turn's chat window; an id that is in neither is invented.
+            writable_user_ids: mem.store.list_user_ids().await.unwrap_or_default(),
         });
 
         let mut tools = if grok_alias {
@@ -735,7 +738,10 @@ where
                 let is_primary_source =
                     !cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));
                 if is_primary_source
-                    && let Err(e) = mem.transcript.append_line(ts, &recorded_login, &line).await
+                    && let Err(e) = mem
+                        .transcript
+                        .append_line(ts, &recorded_login, None, &line)
+                        .await
                 {
                     error!(error = ?e, "transcript bot-reply append failed");
                 }

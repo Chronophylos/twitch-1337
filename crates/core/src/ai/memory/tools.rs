@@ -150,6 +150,11 @@ pub struct ChatTurnExecutorOpts {
     /// login. `None` (dreamer, tests) skips the lookup and preserves whatever
     /// is on disk.
     pub pronouns: Option<Arc<PronounsClient>>,
+    /// User ids that already have a sheet on disk. Together with the speaker's
+    /// own id and `known_identities`, this is the full set `write_file` may
+    /// target. Anything else is an id the model made up: nothing in the turn
+    /// carries a Twitch id for it, so it cannot be real.
+    pub writable_user_ids: BTreeSet<String>,
 }
 
 pub struct ChatTurnExecutor {
@@ -190,6 +195,21 @@ impl ChatTurnExecutor {
         }
     }
 
+    /// `Some(id)` when `path` targets a user sheet whose id appears nowhere
+    /// this turn: not the speaker, not in the chat history, and no file on
+    /// disk. The dreamer reads logins out of the transcript and used to mint
+    /// plausible-looking numbers for them, which produced duplicate sheets
+    /// under ids no Twitch account owns.
+    fn unknown_user_id<'a>(&self, path: &'a WritePath) -> Option<&'a str> {
+        let WritePath::User { user_id } = path else {
+            return None;
+        };
+        let known = user_id == &self.opts.speaker_user_id
+            || self.opts.known_identities.contains_key(user_id)
+            || self.opts.writable_user_ids.contains(user_id);
+        (!known).then_some(user_id.as_str())
+    }
+
     /// Attempt to consume one write from the per-turn quota.
     /// Returns `true` if the write is allowed, `false` when the quota is
     /// already exhausted.
@@ -221,6 +241,12 @@ impl ChatTurnExecutor {
         };
         if let Some(reason) = self.deny_reason_for_write_path(&path) {
             return format!("permission_denied: {reason}");
+        }
+        if let Some(user_id) = self.unknown_user_id(&path) {
+            return format!(
+                "unknown_user_id: {user_id} has no memory file and is not a Twitch id from this turn. \
+                 Never invent a user id; write only to ids you were given."
+            );
         }
         if check_body(&args.body).is_err() {
             return "invalid_body: body contains a reserved marker (frontmatter fence, path header, or carriage return)".into();
@@ -393,6 +419,9 @@ impl ToolExecutor for ChatTurnExecutor {
 pub struct DreamerExecutorOpts {
     pub store: MemoryStore,
     pub max_writes_per_turn: usize,
+    /// Every user sheet that exists on disk. The dreamer has no speaker and no
+    /// chat history, so this is the whole set of sheets it may rewrite.
+    pub known_user_ids: BTreeSet<String>,
 }
 
 pub struct DreamerExecutor {
@@ -413,6 +442,7 @@ impl DreamerExecutor {
                 inject_nonce: String::new(),
                 known_identities: HashMap::new(),
                 pronouns: None,
+                writable_user_ids: opts.known_user_ids,
             }),
         }
     }
@@ -506,6 +536,7 @@ mod exec_tests {
             inject_nonce: "n0".into(),
             known_identities: HashMap::new(),
             pronouns: None,
+            writable_user_ids: BTreeSet::from(["12345".to_string()]),
         })
     }
 
@@ -527,6 +558,7 @@ mod exec_tests {
                 "99".to_string(),
                 ("bobby".to_string(), "BobbyTables".to_string()),
             )]),
+            writable_user_ids: BTreeSet::new(),
         });
         let r = exec
             .execute(&call(
@@ -543,6 +575,37 @@ mod exec_tests {
             .unwrap();
         assert_eq!(mf.frontmatter.username.as_deref(), Some("bobby"));
         assert_eq!(mf.frontmatter.display_name.as_deref(), Some("BobbyTables"));
+    }
+
+    #[tokio::test]
+    async fn write_to_an_id_from_nowhere_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        // Moderator: role is not what stops this write, the unknown id is.
+        let exec = ChatTurnExecutor::new(ChatTurnExecutorOpts {
+            store: store.clone(),
+            speaker_user_id: "12345".into(),
+            speaker_login: "alice".into(),
+            speaker_display_name: "Alice".into(),
+            speaker_role: Role::Moderator,
+            max_writes_per_turn: 8,
+            readable_paths: Default::default(),
+            inject_nonce: "n0".into(),
+            known_identities: HashMap::new(),
+            pronouns: None,
+            writable_user_ids: BTreeSet::new(),
+        });
+        let r = exec
+            .execute(&call(
+                "write_file",
+                serde_json::json!({"path": "users/10000000.md", "body": "hi"}),
+            ))
+            .await;
+        assert!(
+            r.content.starts_with("unknown_user_id:"),
+            "got {}",
+            r.content
+        );
     }
 
     #[tokio::test]
@@ -588,6 +651,7 @@ mod exec_tests {
                     reqwest::Client::new(),
                     base,
                 ))),
+                writable_user_ids: BTreeSet::new(),
             })
         };
         let write = serde_json::json!({"path": "users/12345.md", "body": "hi"});
@@ -874,6 +938,7 @@ mod exec_tests {
             inject_nonce: "cafebabecafebabe".into(),
             known_identities: HashMap::new(),
             pronouns: None,
+            writable_user_ids: BTreeSet::new(),
         });
 
         let out = exec
@@ -912,6 +977,7 @@ mod exec_tests {
             inject_nonce: "n0".into(),
             known_identities: HashMap::new(),
             pronouns: None,
+            writable_user_ids: BTreeSet::new(),
         });
 
         let out = exec
@@ -943,6 +1009,7 @@ mod exec_tests {
             inject_nonce: "n0".into(),
             known_identities: HashMap::new(),
             pronouns: None,
+            writable_user_ids: BTreeSet::new(),
         });
 
         for _ in 0..3 {
@@ -987,12 +1054,60 @@ mod exec_tests {
     }
 
     #[tokio::test]
+    async fn dreamer_refuses_a_user_id_with_no_sheet_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        store
+            .write(
+                &FileKind::User {
+                    user_id: "77".into(),
+                },
+                "existing sheet",
+                UserIdentity::of("bob", "Bob"),
+            )
+            .await
+            .unwrap();
+        let exec = DreamerExecutor::new(DreamerExecutorOpts {
+            store: store.clone(),
+            max_writes_per_turn: 32,
+            known_user_ids: store.list_user_ids().await.unwrap(),
+        });
+
+        // Invented id: nothing on disk, no chat context to vouch for it.
+        let r = exec
+            .execute(&call(
+                "write_file",
+                serde_json::json!({"path": "users/10000000.md", "body": "x"}),
+            ))
+            .await;
+        assert!(
+            r.content.starts_with("unknown_user_id:"),
+            "got {}",
+            r.content
+        );
+        assert!(
+            !dir.path().join("memories/users/10000000.md").exists(),
+            "refused write must not create the file"
+        );
+
+        // The real sheet still writes.
+        let r = exec
+            .execute(&call(
+                "write_file",
+                serde_json::json!({"path": "users/77.md", "body": "x"}),
+            ))
+            .await;
+        assert_eq!(r.content, "ok");
+    }
+
+    #[tokio::test]
     async fn dreamer_can_write_soul_lore_any_user() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = DreamerExecutor::new(DreamerExecutorOpts {
             store: store.clone(),
             max_writes_per_turn: 32,
+            known_user_ids: BTreeSet::from(["77".to_string()]),
         });
         for path in ["SOUL.md", "LORE.md", "users/77.md"] {
             let r = exec

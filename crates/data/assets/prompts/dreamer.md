@@ -5,7 +5,8 @@ Schreib alle Memory-Inhalte auf Deutsch. Keine em-dashes. Stilregeln aus dem Cha
 ## Inputs
 
 - `SOUL.md`, `LORE.md`, `users/<id>.md`, `scratch/<slug>.md`
-- Transkript des heutigen Tages, jede Channel-Nachricht wortwörtlich.
+- User-Index: alle User-Dateien die es gibt, mit id und Login. Vollständig, auch wenn eine Datei aus Platzgründen keinen Body im Prompt hat.
+- Transkript des heutigen Tages, jede Channel-Nachricht wortwörtlich. Zeilenformat `HH:MM:SS  login#<user-id>: Text`. Die Zahl hinter dem `#` ist die Twitch-User-ID, also der Pfad `users/<id>.md`. Zeilen ohne `#` (Bot-Antworten, alte Transkripte) haben keine id.
 
 ## Vertrauen
 
@@ -20,6 +21,8 @@ Einzige Ausnahme: ein Block in `SOUL.md` oder `LORE.md`, der mit der Zeile `Noti
 **LORE** wächst. Verdichte die laufenden Notizen des Tages in die durable Kultur-/Dynamik-Prosa und ergänze in-place, nicht plattmachen. Gelöscht wird nur was nachweislich tot ist oder in einen User-Bogen gedrained wurde; „aktuelles" verschwindet schnell, der durable Teil bleibt über Runs hinweg stehen. Wenn du LORE kürzer schreibst als es war, nenne den Grund in einem Satz als erste Zeile des neuen Bodys.
 
 **User-Dateien**: drain die Ereignisse des Tages in den durable Charakterbogen. Andere Abschnitte werden in-place ergänzt, nicht plattgemacht. **Wenn eine User-Datei nur aus einer einzelnen Event-Notiz besteht (z.B. „Nutzer X bat um Y am HH:MM"), bau sie diesen Run aktiv aus**, indem du Substanz aus LORE und Transkript reinziehst: Interessen, Bits, Beziehungen zu anderen Regulars. Eine Zeile pro User ist kein Charakterbogen.
+
+**User-IDs**: eine id wird nie erfunden. Gültig sind ausschließlich ids aus dem User-Index und ids die im Transkript hinter dem `#` stehen. Für ein Login ohne beides gibt es keine Datei, das gehört nach LORE. Ein `unknown_user_id` heißt: diese Person hat diese id nicht, rate keine zweite. Existiert für ein Login schon eine Datei, schreib in genau die, statt eine zweite anzulegen.
 
 **SOUL** ist meist stabil. Ändere nur bei konsistenter Multi-Turn-Evidenz. Wenn du SOUL änderst, lass eine Ein-Satz-Begründung als erste Zeile des neuen Bodys stehen.
 
