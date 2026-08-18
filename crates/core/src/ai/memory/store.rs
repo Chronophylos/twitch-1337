@@ -589,6 +589,27 @@ impl MemoryStore {
         .await
     }
 
+    /// Ids of every user sheet on disk, from directory entries only — no file
+    /// is opened or parsed. Callers use it as the write allowlist for
+    /// `users/<id>.md`, which runs on every chat turn and must stay cheap.
+    pub async fn list_user_ids(&self) -> Result<std::collections::BTreeSet<String>> {
+        let dir = self.inner.memories_dir.join("users");
+        let mut out = std::collections::BTreeSet::new();
+        let mut entries = tokio::fs::read_dir(&dir)
+            .await
+            .wrap_err_with(|| format!("read_dir {}", dir.display()))?;
+        while let Some(e) = entries.next_entry().await.wrap_err("next_entry")? {
+            let path = e.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
+            }
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                out.insert(stem.to_string());
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn list_scratch(&self) -> Result<Vec<MemoryFile>> {
         self.list_in_subdir("scratch", |stem| FileKind::Scratch { slug: stem.into() })
             .await
