@@ -56,6 +56,14 @@ pub struct AviationstackBootstrap {
     pub api_key: SecretString,
 }
 
+/// Bootstrap-only DHL configuration. The api_key is the whole surface:
+/// its presence is the enable switch. Unlike aviationstack there is no
+/// settings-store section — AI tools have no per-tool dashboard toggles.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DhlBootstrap {
+    pub api_key: SecretString,
+}
+
 /// Bootstrap-only AI configuration. The secret api_key stays in
 /// config.toml; every other knob lives in the dashboard settings
 /// store and is read from the SettingsHandle at runtime.
@@ -101,6 +109,8 @@ pub struct Configuration {
     #[serde(default)]
     pub aviationstack: Option<AviationstackBootstrap>,
     #[serde(default)]
+    pub dhl: Option<DhlBootstrap>,
+    #[serde(default)]
     pub ai: Option<AiBootstrap>,
     #[serde(default)]
     pub web: WebConfig,
@@ -123,6 +133,7 @@ impl Configuration {
                 mouths: Mouths::default(),
             },
             aviationstack: None,
+            dhl: None,
             ai: None,
             web: WebConfig::default(),
         }
@@ -176,6 +187,14 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         .is_some_and(|av| av.api_key.expose_secret().trim().is_empty())
     {
         bail!("aviationstack.api_key cannot be empty when aviationstack is configured");
+    }
+
+    if config
+        .dhl
+        .as_ref()
+        .is_some_and(|d| d.api_key.expose_secret().trim().is_empty())
+    {
+        bail!("dhl.api_key cannot be empty when dhl is configured");
     }
 
     if let Some(ref ai) = config.ai
@@ -325,5 +344,50 @@ client_secret = "cs"
 "#;
         let cfg: super::TwitchConfiguration = toml::from_str(toml).unwrap();
         assert!(cfg.mouths.aurora.is_none() && cfg.mouths.grok.is_none());
+    }
+
+    #[test]
+    fn dhl_section_parses_api_key() {
+        let toml = r#"
+[twitch]
+channel = "chan"
+username = "bot"
+refresh_token = "r"
+client_id = "c"
+client_secret = "s"
+
+[dhl]
+api_key = "abc123"
+"#;
+        let cfg: Configuration = toml::from_str(toml).expect("parse");
+        let dhl = cfg.dhl.expect("dhl section present");
+        assert_eq!(dhl.api_key.expose_secret(), "abc123");
+    }
+
+    #[test]
+    fn dhl_section_is_optional() {
+        let toml = r#"
+[twitch]
+channel = "chan"
+username = "bot"
+refresh_token = "r"
+client_id = "c"
+client_secret = "s"
+"#;
+        let cfg: Configuration = toml::from_str(toml).expect("parse");
+        assert!(cfg.dhl.is_none());
+    }
+
+    #[test]
+    fn empty_dhl_api_key_is_rejected() {
+        let mut cfg = Configuration::test_default();
+        cfg.dhl = Some(DhlBootstrap {
+            api_key: SecretString::new("   ".into()),
+        });
+        let err = validate_config(&cfg).expect_err("empty key must fail");
+        assert!(
+            err.to_string().contains("dhl.api_key"),
+            "unexpected error: {err}"
+        );
     }
 }
