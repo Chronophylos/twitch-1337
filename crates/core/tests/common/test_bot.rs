@@ -465,6 +465,7 @@ impl TestBotBuilder {
                 .is_some()
                 .then(|| llm.clone() as Arc<dyn LlmClient>),
             aviation: Some(aviation),
+            dhl: None,
             doener: Arc::new(twitch_1337::doener::DoeneratlasClient::with_base_url(
                 reqwest::Client::new(),
                 self.doener_base_url
