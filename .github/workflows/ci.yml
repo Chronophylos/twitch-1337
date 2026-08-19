@@ -77,7 +77,7 @@ jobs:
           toolchain: ${{ steps.rust-toolchain.outputs.channel }}
           components: clippy
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
 
       # ADR-0007: ring-only rustls. aws-lc-sys must stay out of the graph
       # (including test/dev deps) so musl/`FROM scratch` stays cmake-free and
@@ -116,7 +116,7 @@ jobs:
           toolchain: ${{ steps.rust-toolchain.outputs.channel }}
           components: llvm-tools-preview
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov # zizmor: ignore[unpinned-uses]
@@ -158,7 +158,7 @@ jobs:
         with:
           toolchain: ${{ steps.rust-toolchain.outputs.channel }}
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest # zizmor: ignore[unpinned-uses]
@@ -207,7 +207,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
 
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
