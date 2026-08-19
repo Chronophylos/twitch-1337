@@ -17,6 +17,7 @@
 - Run tests with `cargo nextest run --show-progress=none --cargo-quiet --status-level=fail`.
 - Config structs are `Deserialize`-only. Do **not** derive `Serialize` on anything holding a secret.
 - Secrets use `secrecy::SecretString`. Never log `api_key`, never include it in an error message.
+- Construct secrets as `SecretString::new("x".into())` (secrecy 0.10 = `SecretBox<str>`), matching `config.rs:119` and `main.rs:580`. `SecretString::from(&str)` does not exist.
 - Log errors with `?error`, not `%error`.
 - No `#[allow]` / `#[expect]` without a one-line reason.
 - Commit messages: Conventional Commits, unhinged genz subject line, sober body, ending with `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
@@ -95,7 +96,7 @@ client_secret = "s"
 fn empty_dhl_api_key_is_rejected() {
     let mut cfg = Configuration::test_default();
     cfg.dhl = Some(DhlBootstrap {
-        api_key: SecretString::from("   "),
+        api_key: SecretString::new("   ".into()),
     });
     let err = validate(&cfg).expect_err("empty key must fail");
     assert!(
@@ -247,7 +248,7 @@ mod tests {
         DhlClient::with_base_url(
             reqwest::Client::new(),
             server.uri(),
-            SecretString::from("test-key"),
+            SecretString::new("test-key".into()),
         )
     }
 
@@ -714,7 +715,7 @@ mod tests {
         DhlClient::with_base_url(
             reqwest::Client::new(),
             server.uri(),
-            SecretString::from("test-key"),
+            SecretString::new("test-key".into()),
         )
     }
 
