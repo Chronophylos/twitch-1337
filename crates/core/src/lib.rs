@@ -9,6 +9,7 @@ pub mod aviation;
 pub mod commands;
 pub mod config;
 pub mod cooldown;
+pub mod dhl;
 pub mod doener;
 pub mod emote_tracker;
 pub mod llm_factory;
