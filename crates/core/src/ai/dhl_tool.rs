@@ -73,7 +73,7 @@ pub async fn execute_track_shipment(client: &DhlClient, call: &ToolCall) -> Tool
             call,
             json!({
                 "error": "invalid_arguments",
-                "details": "tracking_number must be 8-39 alphanumeric characters",
+                "details": "tracking_number must be 8-39 alphanumeric characters and include at least one digit",
             })
             .to_string(),
         );

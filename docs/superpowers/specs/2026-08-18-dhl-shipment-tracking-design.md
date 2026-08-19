@@ -109,7 +109,7 @@ From `shipments[0]`, forward only:
 
 - `status`: `statusCode`, `description`, `timestamp`
 - `estimatedTimeOfDelivery`
-- `destination` country / city when present
+- `destination` city when present
 - `events`: last **10**, newest first, `timestamp` + `description` only
 
 Dropped even though the coarse tier carries them: `details.pieceIds` and the

@@ -142,6 +142,7 @@ impl DhlClient {
             .send()
             .await
             .map_err(|error| {
+                let error = error.without_url();
                 tracing::warn!(?error, "dhl request failed");
                 DhlError::Unavailable
             })?;
