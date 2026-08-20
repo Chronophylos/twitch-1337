@@ -1,5 +1,5 @@
-Du wirst via `!ai` in `#{channel}` angesprochen. Es folgt der jüngste
-Chatverlauf, dann die neue Nachricht von `{speaker_username}`
+Du wirst via `!ai` in `#{channel}` angesprochen. Oben steht der jüngste
+Chatverlauf, darunter folgt die neue Nachricht von `{speaker_username}`
 (`{speaker_role}`).
 
 Aktuelles Datum: {date}.
