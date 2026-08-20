@@ -96,8 +96,10 @@ impl AiProvider {
 | `OpenAiCompatible` | `OpenAiClient` | FreeText | no | none — `base_url` required |
 | `Ollama` | `OllamaClient` | None | no | `http://localhost:11434` |
 
-The Fixed lists carry over exactly what `settings/cards/ai_connection.html`
-renders today; they are one `const fn` to correct when a provider changes.
+The `OpenRouter` list is exactly what `settings/cards/ai_connection.html`
+renders today for the `openai` backend; `OpenAi` is that list minus `xhigh`,
+which is the one place the tables assert something the current code does not.
+They are one `const fn` to correct when a provider changes.
 `FreeText` is the escape hatch for a provider with its own vocabulary (xAI's
 `low`/`high`, say) so adding one needs no code change. Only a provider with a
 new *wire* quirk touches Rust.
