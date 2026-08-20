@@ -8,6 +8,10 @@ use crate::settings::{Settings, SettingsHandle};
 use crate::twitch::mouth::Agent;
 
 pub const MAX_HISTORY_LENGTH: u64 = 5_000;
+/// `render_recent_section` also caps the rendered block at
+/// `RECENT_CHAT_PRIMARY_BYTES`, which is sized to fit this many lines of
+/// average length. Raising this without raising that cap buys retention the
+/// model never sees.
 pub const DEFAULT_HISTORY_LENGTH: u64 = 200;
 pub const MAX_TOOL_RESULT_MESSAGES: usize = 200;
 const DEFAULT_TOOL_RESULT_MESSAGES: usize = 50;
