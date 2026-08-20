@@ -246,6 +246,22 @@ pub async fn main() -> Result<()> {
         build_aviation_client(config.aviationstack.as_ref(), &av_settings)
     };
 
+    // DHL needs no settings lookup, only the config key. Match the aviation
+    // invariant: log and disable on failure, never abort startup.
+    let dhl_client = match config.dhl.as_ref() {
+        Some(d) => match twitch_1337_core::dhl::DhlClient::new(d.api_key.clone()) {
+            Ok(c) => Some(Arc::new(c)),
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    "failed to build DHL client, track_shipment disabled"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
     let llm_client = llm_factory::build_llm_client(config.ai.as_ref(), &settings_handle.load())?;
 
     // Memory v2 store opens unconditionally so the dashboard editor has a
@@ -318,6 +334,7 @@ pub async fn main() -> Result<()> {
         ai_bootstrap: config.ai.clone(),
         llm: llm_client,
         aviation: aviation_client,
+        dhl: dhl_client,
         doener: doener_client,
         whisper: Some(whisper),
         data_dir: get_data_dir(),

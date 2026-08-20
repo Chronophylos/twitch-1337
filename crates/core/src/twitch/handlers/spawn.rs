@@ -91,6 +91,7 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     // Flight tracker.
     pub aviation: Option<AviationClient>,
     pub aviation_for_commands: Option<AviationClient>,
+    pub dhl: Option<Arc<crate::dhl::DhlClient>>,
     /// Pre-created sender half of the flight-tracker channel. Must be `Some`
     /// when `aviation` is `Some`, and `None` otherwise.
     pub aviation_tracker_tx: Option<mpsc::Sender<aviation::TrackerCommand>>,
@@ -167,6 +168,7 @@ where
         whisper,
         aviation,
         aviation_for_commands,
+        dhl,
         aviation_tracker_tx,
         aviation_tracker_rx,
         emote_provider,
@@ -336,6 +338,7 @@ where
                 settings: settings.clone(),
                 tracker_tx,
                 aviation_client: aviation_for_commands,
+                dhl,
                 whisper,
                 admin_channel,
                 ai_channel,
