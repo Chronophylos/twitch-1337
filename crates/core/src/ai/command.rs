@@ -119,6 +119,7 @@ pub struct AiCommand {
     model_catalog: Arc<ModelCatalog>,
     mouths: Arc<crate::twitch::mouth::MouthRouter>,
     echo: Arc<crate::twitch::echo::EchoGuard>,
+    dhl: Option<Arc<crate::dhl::DhlClient>>,
     /// Per-process nonce stamped into memory fences. Stable across
     /// turns so the memory block is a byte-stable cache prefix; the real
     /// fence-injection guard is `scrub_for_inject`, not nonce freshness.
@@ -139,6 +140,7 @@ pub struct AiCommandDeps {
     pub model_catalog: Arc<ModelCatalog>,
     pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
     pub echo: Arc<crate::twitch::echo::EchoGuard>,
+    pub dhl: Option<Arc<crate::dhl::DhlClient>>,
 }
 
 pub const GROK_ALIAS_TRIGGER: &str = "@grok";
@@ -168,6 +170,13 @@ When the question is whether something is packaged, or which version lives in a 
 package repository (AUR, winget, Debian, Ubuntu), call search_packages. Do not invent \
 packages or versions. This tool is for distro/repo packages, not language libraries or \
 container images.";
+const SHIPMENT_TOOLS_SYSTEM_APPENDIX: &str = "\
+\n\n## Sendungsverfolgung\n\
+Wenn jemand fragt, wo ein Paket ist, ruf track_shipment mit der Sendungsnummer auf. Das geht \
+nur für DHL — bei DPD, Hermes, GLS oder UPS sag offen, dass du da nicht nachschauen kannst. \
+Kein Treffer heißt: noch nicht erfasst oder kein DHL-Paket, nicht dass es die Sendung nicht \
+gibt. Erfind niemals einen Status oder ein Zustelldatum. Schreib Sendungsnummern nicht in \
+Memory-Dateien.";
 
 fn ai_cooldown_duration(s: &Settings) -> Duration {
     Duration::from_secs(s.cooldowns.ai)
@@ -191,6 +200,7 @@ impl AiCommand {
             model_catalog: deps.model_catalog,
             mouths: deps.mouths,
             echo: deps.echo,
+            dhl: deps.dhl,
             prompt_nonce: inject::fresh_nonce(),
         }
     }
@@ -209,6 +219,7 @@ struct V2Executor<'a> {
     emote_channel_id: &'a str,
     doener: &'a crate::doener::DoeneratlasClient,
     repology: &'a crate::repology::RepologyClient,
+    dhl: Option<&'a crate::dhl::DhlClient>,
     trace: &'a TraceIds,
 }
 
@@ -223,6 +234,12 @@ impl ToolExecutor for V2Executor<'_> {
         }
         if call.name == crate::ai::packages_tool::SEARCH_PACKAGES_TOOL_NAME {
             return crate::ai::packages_tool::execute_search_packages(self.repology, call).await;
+        }
+        if call.name == crate::ai::dhl_tool::TRACK_SHIPMENT_TOOL_NAME {
+            return match self.dhl {
+                Some(c) => crate::ai::dhl_tool::execute_track_shipment(c, call).await,
+                None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
+            };
         }
         if call.name == crate::ai::emote_tool::SEARCH_EMOTES_TOOL_NAME {
             return match self.emotes {
@@ -533,6 +550,9 @@ where
         if !grok_alias {
             appendices.push(PACKAGE_TOOLS_SYSTEM_APPENDIX.to_string());
         }
+        if !grok_alias && self.dhl.is_some() {
+            appendices.push(SHIPMENT_TOOLS_SYSTEM_APPENDIX.to_string());
+        }
         if grok_alias {
             if self.web.is_some() {
                 appendices.push(GROK_WEB_SYSTEM_APPENDIX.to_string());
@@ -605,6 +625,9 @@ where
         if !grok_alias {
             tools.push(crate::ai::tarot_tool::tarot_tool());
             tools.push(crate::ai::packages_tool::search_packages_tool());
+            if self.dhl.is_some() {
+                tools.push(crate::ai::dhl_tool::track_shipment_tool());
+            }
         }
         if self.web.is_some() {
             tools.extend(content::ai_tools());
@@ -642,6 +665,7 @@ where
             emote_channel_id: &ctx.privmsg.channel_id,
             doener: self.doener.as_ref(),
             repology: self.repology.as_ref(),
+            dhl: self.dhl.as_deref(),
             trace: &trace,
         };
         let final_text = match run_agent(&*self.llm_client, req, &combined_exec, opts).await {
