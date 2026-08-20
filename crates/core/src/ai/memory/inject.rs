@@ -53,8 +53,12 @@ pub enum FenceLabel<'a> {
 
 /// Per-section byte caps for rolling chat injected into the v2 prompt.
 /// Independent of `inject_byte_budget`, which covers SOUL/LORE/users/scratch.
-const RECENT_CHAT_PRIMARY_BYTES: usize = 2048;
-const RECENT_CHAT_AI_CHANNEL_BYTES: usize = 1024;
+// Sized to fit the default history lengths (200 primary, 50 ai_channel) at an
+// average `[HH:MM] Name: text` line of ~55 bytes, with headroom for longer
+// ones. These stay a hard bound, not a target: a burst of max-length messages
+// still gets trimmed oldest-first rather than blowing up the turn.
+const RECENT_CHAT_PRIMARY_BYTES: usize = 12_288;
+const RECENT_CHAT_AI_CHANNEL_BYTES: usize = 3_072;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InvocationChannel {
