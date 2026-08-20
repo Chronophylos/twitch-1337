@@ -553,6 +553,7 @@ async fn aurora_registers_draw_tarot_and_grok_does_not() {
 async fn aurora_registers_search_packages_and_grok_does_not() {
     let bot = TestBotBuilder::new()
         .with_ai()
+        .with_dhl_base_url("http://127.0.0.1:1")
         .with_settings(|o| {
             o.ai.history.length = Some(0);
         })
@@ -578,6 +579,42 @@ async fn aurora_registers_search_packages_and_grok_does_not() {
     assert!(
         !grok_tools.contains(&"search_packages"),
         "grok must not get search_packages: {grok_tools:?}"
+    );
+    assert!(
+        ai_tools.contains(&"track_shipment"),
+        "aurora should expose track_shipment: {ai_tools:?}"
+    );
+    assert!(
+        !grok_tools.contains(&"track_shipment"),
+        "grok must not get track_shipment: {grok_tools:?}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn track_shipment_is_absent_when_dhl_is_unconfigured() {
+    // No .with_dhl_base_url(): an absent key must hide the tool entirely
+    // rather than register one that always fails.
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+        })
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("ok");
+
+    let mut bot = bot;
+    bot.send("bob", "!ai sag hallo").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+
+    let calls = bot.llm.tool_calls();
+    let ai_tools: Vec<_> = calls[0].tools.iter().map(|t| t.name.as_str()).collect();
+
+    assert!(
+        !ai_tools.contains(&"track_shipment"),
+        "unconfigured dhl must hide track_shipment: {ai_tools:?}"
     );
 
     bot.shutdown().await;

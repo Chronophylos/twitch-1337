@@ -90,6 +90,7 @@ pub struct TestBotBuilder {
     seeded_hall_of_shame: Option<HashMap<String, PersonalWorst>>,
     whisper_failure: bool,
     doener_base_url: Option<String>,
+    dhl_base_url: Option<String>,
     settings_overrides: Option<twitch_1337::settings::SettingsOverrides>,
     open_emote_tracker: bool,
     emote_catalog_seed: Vec<(String, String)>,
@@ -108,6 +109,7 @@ impl TestBotBuilder {
             seeded_hall_of_shame: None,
             whisper_failure: false,
             doener_base_url: None,
+            dhl_base_url: None,
             settings_overrides: None,
             open_emote_tracker: false,
             emote_catalog_seed: Vec::new(),
@@ -195,6 +197,14 @@ impl TestBotBuilder {
     /// Override the Döneratlas API base URL (wiremock) for `!dpi` / `!döner` / AI tool.
     pub fn with_doener_base_url(mut self, base: impl Into<String>) -> Self {
         self.doener_base_url = Some(base.into());
+        self
+    }
+
+    /// Enables `track_shipment` against a stub base URL. Registration does
+    /// not perform a request, so an unreachable URL is fine for tool-list
+    /// assertions.
+    pub fn with_dhl_base_url(mut self, base: impl Into<String>) -> Self {
+        self.dhl_base_url = Some(base.into());
         self
     }
 
@@ -465,6 +475,13 @@ impl TestBotBuilder {
                 .is_some()
                 .then(|| llm.clone() as Arc<dyn LlmClient>),
             aviation: Some(aviation),
+            dhl: self.dhl_base_url.as_ref().map(|base| {
+                std::sync::Arc::new(twitch_1337::dhl::DhlClient::with_base_url(
+                    reqwest::Client::new(),
+                    base.clone(),
+                    secrecy::SecretString::new("test".into()),
+                ))
+            }),
             doener: Arc::new(twitch_1337::doener::DoeneratlasClient::with_base_url(
                 reqwest::Client::new(),
                 self.doener_base_url

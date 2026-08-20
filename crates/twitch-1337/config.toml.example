@@ -45,6 +45,14 @@ client_secret = "your_client_secret"
 # [aviationstack]
 # api_key = "your_aviationstack_api_key_here"
 
+# Optional: DHL Shipment Tracking - Unified API, backing Aurora's
+# track_shipment tool. The api_key is a secret and is the entire config
+# surface — its presence enables the tool, its absence hides the tool
+# from the model completely. There is no dashboard toggle.
+# Get a key at https://developer.dhl.com (free tier: 250 calls/day).
+# [dhl]
+# api_key = "your_dhl_api_key_here"
+
 # Suspend defaults now live in the dashboard (`/settings → Suspend`).
 
 # Optional: AI configuration for the !ai command

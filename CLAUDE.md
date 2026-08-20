@@ -4,7 +4,7 @@ Guide Claude Code work repo.
 
 ## Project
 
-Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, OpenAI/Ollama), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), feedback (`!fb`), version (`!v`).
+Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, OpenAI/Ollama), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), feedback (`!fb`), version (`!v`).
 
 Single persistent IRC connection, broadcast channel routes to independent handler tasks.
 
@@ -151,6 +151,12 @@ edits to those legacy keys are ignored.
 and `timeout_secs` live in `settings.ron` (restart-required for connection
 changes), managed via `/settings → Aviationstack`.
 
+`[dhl]` holds only `api_key` and is optional. Its presence enables Aurora's
+`track_shipment` tool; absent, the tool is never registered with the model.
+There is no `settings.ron` section and no dashboard toggle — AI tools have no
+per-tool toggles, unlike Aviationstack, which backs commands. Adding or
+removing the key needs a bot restart.
+
 `[suspend]` is removed from config.toml entirely. `default_duration_secs`
 lives in `settings.ron`, managed via `/settings → Suspend`.
 
@@ -205,6 +211,11 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - Handlers independent. Errors in one don't crash others (`bail!` on startup only).
 - Ping templates: reject control chars on create/edit (CR/LF would split PRIVMSG).
 - Aviation client init failure: log + disable `!up`/`!fl`/flight tracker + track commands. Don't abort.
+- DHL tracking: coarse tier only — `recipientPostalCode` is never sent, so DHL
+  withholds address, sender/recipient and transit cities. Tracking numbers are
+  guessable and the bot speaks in public chat; the postal code challenge is
+  DHL's own mitigation and the tool stands behind it. No rate limiter: the free
+  tier is 250 calls/day at 1 call per 5s and a single channel reaches neither.
 - Latency monitor: PING/PONG every 5min, EMA alpha=0.2, shared `Arc<AtomicU32>`. Read by 1337 handler for precise wake-up.
 - Flight tracker: `Arc<mpsc::Sender<TrackerCommand>>` from commands to long task. Adaptive poll 30/60/120s based on phase mix. adsb.lol v2; fallback aggregators in memory `reference_adsb_aggregators.md`.
 - AI memory (v2): per-user character sheets + chat LORE + bot SOUL as markdown under $DATA_DIR/memories/. Single-loop !ai turn drives the model with write_file/write_scratch/delete_scratch tools (run_agent in the llm crate); the model's final assistant text is sent to chat verbatim. Daily dreamer ritual rewrites files from yesterday's transcript at the dashboard-configured `ai.dreamer.run_at` (Berlin local). Per ADR-0003, Memory (SOUL/LORE/users) and Scratch (`memories/scratch/`) are siblings, not tiers of one thing; see CONTEXT.md. Bodies are byte-capped (SOUL/user 4 KiB, LORE 12 KiB, scratch 2 KiB by default; tunable via the dashboard `AI · Memory` card). `@grok` uses a separate baked prompt (`grok.md`) instead of `system.md` and gets no injected memory bodies: its system message carries a paths-only manifest plus a grok-only `read_memory(path)` tool, allowlisted against the manifest paths. SOUL.md stays dreamer-only for both agents: it's never in grok's manifest, and no chat turn on either alias can write it. `users/<id>.md` ids are never minted by the model: `write_file` refuses an id that is neither the speaker's, in this turn's chat history, nor an existing sheet (the dreamer additionally accepts ids carried by the transcript, whose lines are `HH:MM:SS  login#<user-id>: text`). Without that guard the dreamer invented plausible ids for logins it read in the transcript, producing duplicate sheets under ids no Twitch account owns.

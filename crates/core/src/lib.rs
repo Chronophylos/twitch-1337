@@ -9,6 +9,7 @@ pub mod aviation;
 pub mod commands;
 pub mod config;
 pub mod cooldown;
+pub mod dhl;
 pub mod doener;
 pub mod emote_tracker;
 pub mod llm_factory;
@@ -83,6 +84,9 @@ pub struct Services {
     pub ai_bootstrap: Option<crate::config::AiBootstrap>,
     pub llm: Option<Arc<dyn LlmClient>>,
     pub aviation: Option<AviationClient>,
+    /// DHL tracking client backing Aurora's `track_shipment`. `None` when
+    /// `[dhl]` is absent from config.toml, which hides the tool entirely.
+    pub dhl: Option<Arc<crate::dhl::DhlClient>>,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
     pub whisper: Option<Arc<dyn WhisperSender>>,
     pub data_dir: PathBuf,
@@ -203,6 +207,7 @@ where
         ai_bootstrap: _,
         llm,
         aviation,
+        dhl,
         doener,
         whisper,
         data_dir,
@@ -328,6 +333,7 @@ where
         whisper,
         aviation,
         aviation_for_commands,
+        dhl,
         aviation_tracker_tx: aviation_tracker_tx_inner,
         aviation_tracker_rx,
         emote_provider,
