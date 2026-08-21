@@ -421,4 +421,52 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].name, "keep");
     }
+
+    fn make_profile(name: &str, model: &str) -> crate::settings::AiProfile {
+        crate::settings::AiProfile {
+            name: name.to_string(),
+            model: model.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// The patch list is deliberately *shorter* than the stored one: deleting
+    /// a profile is the operation a wrong merge shape would silently undo.
+    #[test]
+    fn merge_replaces_profiles_wholesale() {
+        let mut into = SettingsOverrides::default();
+        into.ai.profiles = Some(vec![
+            make_profile("old1", "a"),
+            make_profile("old2", "b"),
+            make_profile("old3", "c"),
+        ]);
+        let mut patch = SettingsOverrides::default();
+        patch.ai.profiles = Some(vec![make_profile("kept", "z")]);
+
+        merge_into(&mut into, &patch);
+
+        let v = into.ai.profiles.expect("Some");
+        assert_eq!(
+            v.len(),
+            1,
+            "the two dropped rows must not survive the merge"
+        );
+        assert_eq!(v[0].name, "kept");
+        assert_eq!(v[0].model, "z");
+    }
+
+    #[test]
+    fn merge_skips_profiles_when_patch_is_none() {
+        let mut into = SettingsOverrides::default();
+        into.ai.profiles = Some(vec![make_profile("keep", "m")]);
+        into.ai.active_profile = Some("keep".to_string());
+        let patch = SettingsOverrides::default();
+
+        merge_into(&mut into, &patch);
+
+        let v = into.ai.profiles.expect("Some");
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "keep");
+        assert_eq!(into.ai.active_profile.as_deref(), Some("keep"));
+    }
 }
