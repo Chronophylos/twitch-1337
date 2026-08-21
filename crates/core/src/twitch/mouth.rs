@@ -126,6 +126,17 @@ impl MouthRouter {
             None => Ok(SpeakOutcome::NoMouth),
         }
     }
+
+    /// Speaking login for `agent` when that Mouth adapter exists.
+    /// `Agent::Utility` and a missing adapter are `None` — callers fall back
+    /// to the utility bot login for prompt copy, matching `SpeakOutcome::NoMouth`.
+    pub fn login_for(&self, agent: Agent) -> Option<&str> {
+        match agent {
+            Agent::Aurora => self.aurora.as_ref().map(|m| m.login()),
+            Agent::Grok => self.grok.as_ref().map(|m| m.login()),
+            Agent::Utility => None,
+        }
+    }
 }
 
 /// Helix `POST /helix/chat/messages` adapter. Mirrors `HelixWhisperSender`
@@ -301,6 +312,32 @@ mod tests {
             text: "hi".into(),
             reply_parent_message_id: None,
         }
+    }
+
+    #[test]
+    fn login_for_returns_configured_adapter_login() {
+        let router = MouthRouter {
+            aurora: Some(Arc::new(FakeMouth {
+                login: "aurora_bot".into(),
+            })),
+            grok: Some(Arc::new(FakeMouth {
+                login: "grok_bot".into(),
+            })),
+        };
+        assert_eq!(router.login_for(Agent::Aurora), Some("aurora_bot"));
+        assert_eq!(router.login_for(Agent::Grok), Some("grok_bot"));
+    }
+
+    #[test]
+    fn login_for_absent_or_utility_is_none() {
+        let router = MouthRouter {
+            aurora: Some(Arc::new(FakeMouth {
+                login: "aurora_bot".into(),
+            })),
+            grok: None,
+        };
+        assert_eq!(router.login_for(Agent::Grok), None);
+        assert_eq!(router.login_for(Agent::Utility), None);
     }
 
     #[tokio::test]
