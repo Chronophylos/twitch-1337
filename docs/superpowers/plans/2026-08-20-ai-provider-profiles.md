@@ -62,7 +62,7 @@
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `AiProvider` (`OpenRouter | OpenAi | OpenAiCompatible | Ollama`, `Serialize + Deserialize` with `#[serde(rename_all = "snake_case")]`, `Copy`), `AiProvider::as_str(self) -> &'static str`, `AiProvider::caps(self) -> ProviderCaps`, `AiProvider::ALL: [AiProvider; 4]`, `ProviderCaps { efforts: Efforts, service_tier: bool, default_base_url: Option<&'static str> }`, `Efforts::{Fixed(&'static [&'static str]), FreeText, None}`, `ProviderCaps::allows_effort(&self, &str) -> bool`.
+- Produces: `AiProvider` (`OpenRouter | OpenAi | OpenAiCompatible | Ollama`, `Serialize + Deserialize` with `#[serde(rename_all = "snake_case")]`, `Copy`), `AiProvider::as_str(self) -> &'static str`, `AiProvider::caps(self) -> ProviderCaps`, `AiProvider::ALL: [AiProvider; 4]`, `ProviderCaps { efforts: Efforts, service_tier: bool, default_base_url: Option<&'static str> }`, `Efforts::{Fixed(&'static [&'static str]), FreeText, None}`, `ProviderCaps::allows_effort(&self, &str) -> bool`, `AiProvider::openai_compat_base_url(self) -> Option<&'static str>` (added in Task 3's fix round: Ollama serves its native API at `{host}/api/chat` but its OpenAI-compatible shim at `{host}/v1/...`, so a single `default_base_url` cannot serve both — this accessor returns `http://localhost:11434/v1` for Ollama and defers to `caps().default_base_url` for the rest).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -702,7 +702,7 @@ grep -rn "ai\.connection" crates/ --include=*.rs --include=*.html
 Expected sites: `crates/core/src/llm_factory.rs`, `crates/core/src/ai/model_catalog.rs`, `crates/core/src/twitch/handlers/commands.rs`, `crates/core/src/ai/ritual.rs`, `crates/core/src/settings/validation.rs`, `crates/web/src/routes/settings/forms.rs`, `crates/web/templates/settings/cards/ai_connection.html`. For this task, take the *smallest* edit that compiles at each site — Tasks 4, 5, 6, 7 and 9 rewrite them properly. In particular:
 
 - `llm_factory.rs`: `let conn = settings.ai.active();` then `match conn.provider { p if p.uses_openai_client() => OpenAiClient::new(…, p.is_openrouter()), _ => OllamaClient::new(…) }`.
-- `commands.rs` L242-280: the `provider_base_url` fallback becomes `ai_conn.base_url.clone().or_else(|| ai_conn.provider.caps().default_base_url.map(str::to_string)).unwrap_or_default()`.
+- `commands.rs` L242-280: the `provider_base_url` fallback becomes `ai_conn.base_url.clone().or_else(|| ai_conn.provider.openai_compat_base_url().map(str::to_string))`, and when that resolves to `None` the media client is left unbuilt (log the profile name) rather than constructed with an empty base URL.
 - `validation.rs`: `"ai.connection.reasoning_effort"` → `"ai.profiles[0].reasoning_effort"` reading `ai.active()` — rewritten properly in Task 4.
 - `ai_connection.html` and `forms.rs`: swap `current.ai.connection.X` → `current.ai.active().X` and `backend` → `provider`, using `provider.as_str()`/`provider.label()`. The card is replaced in Task 9.
 
@@ -1250,7 +1250,7 @@ impl LlmRegistry {
                 secret.expose_secret(),
                 prof.base_url
                     .as_deref()
-                    .or(prof.provider.caps().default_base_url),
+                    .or(prof.provider.openai_compat_base_url()),
                 APP_USER_AGENT,
                 prof.provider.is_openrouter(),
             )
@@ -1441,7 +1441,10 @@ In `executor.rs`, replace the `media: Arc<MediaClient>` field with `http: reqwes
         let base_url = profile
             .base_url
             .clone()
-            .or_else(|| profile.provider.caps().default_base_url.map(str::to_string))?;
+            .or_else(|| profile.provider.openai_compat_base_url().map(str::to_string))?;
+        // NOT `caps().default_base_url` — that is the *native* client's host shape.
+        // `MediaClient` posts to `{base}/chat/completions`, so Ollama needs the `/v1`
+        // shim path. Getting this wrong 404s every media call on an Ollama profile.
         Some(MediaClient::new(
             self.http.clone(),
             base_url,
