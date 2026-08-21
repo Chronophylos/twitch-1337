@@ -541,8 +541,8 @@ pub struct SystemParts {
     /// only `{channel}`, so it is identical for every speaker.
     pub head: String,
     /// Stable per-mode appendices, appended to `head` in order. Each carries
-    /// its own leading separator (the consts are `\n\n…`-prefixed): emote-tools,
-    /// then grok/web.
+    /// its own leading separator (the consts are `\n\n…`-prefixed): Konten/
+    /// Accounts (mouth mapping), then emote-tools, packages/shipment, grok/web.
     pub appendices: Vec<String>,
     /// SOUL/LORE/user fences from [`build_chat_turn_context`]. Stable while the
     /// memory content and the (per-process) nonce are unchanged.
