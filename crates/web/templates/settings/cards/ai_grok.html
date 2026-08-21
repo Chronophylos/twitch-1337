@@ -51,8 +51,7 @@
       </div>
     </div>
 
-    {% let grok_base_url = current.ai.connection.base_url.as_deref().unwrap_or("") %}
-    {% let grok_or = current.ai.connection.backend.as_str() == "openai" && (grok_base_url.is_empty() || grok_base_url.contains("openrouter.ai")) %}
+        {% let grok_or = current.ai.active().provider.caps().service_tier %}
     {% if grok_or %}
     {% let grok_tier = current.ai.grok.service_tier.as_deref().unwrap_or("none") %}
     <div class="settings-row" data-section="ai_grok">

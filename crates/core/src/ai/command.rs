@@ -495,7 +495,7 @@ where
         // Snapshot connection knobs once per turn so dashboard edits take
         // effect on the next invocation without a bot restart.
         let snap = self.settings.load();
-        let connection = snap.ai.connection.clone();
+        let connection = snap.ai.active().clone();
         let (model, reasoning_effort, service_tier) = if grok_alias {
             (
                 snap.ai
@@ -973,7 +973,7 @@ pub async fn build_ai_memory_v2(
         inject_byte_budget: settings.ai.memory.inject_byte_budget,
         max_turn_rounds: settings.ai.behavior.max_turn_rounds,
         max_writes_per_turn: settings.ai.behavior.max_writes_per_turn,
-        turn_timeout: Duration::from_secs(settings.ai.connection.timeout),
+        turn_timeout: Duration::from_secs(settings.ai.active().timeout),
         min_response_delay: Duration::from_millis(settings.ai.behavior.min_response_delay_ms),
     }))
 }

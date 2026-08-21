@@ -11,50 +11,54 @@
   </header>
   <div class="settings-rows">
     {# Inlined segmented row — `segmented_row` macro takes a list-of-dicts
-       which askama 0.16 can't construct inline. The `AiBackendKind::as_str`
-       helper makes the comparisons cheap and stringly-typed in one place. #}
+       which askama 0.16 can't construct inline.
+       MIGRATION(ai-profiles): the card still reads the active profile and
+       submits the legacy `ai_connection_*` form fields; the profiles editor
+       replaces this file wholesale in a later task. #}
+    {% let conn = current.ai.active() %}
+    {% let default_conn = defaults.ai.active() %}
     <div class="settings-row" data-section="ai_connection">
       {% call m::row_head("backend", "Which LLM backend the bot talks to.") %}{% endcall %}
       <div class="row-control-cell">
         <div class="segmented" role="radiogroup" aria-label="backend">
-          <label class="segment{% if current.ai.connection.backend.as_str() == "ollama" %} is-active{% endif %}">
+          <label class="segment{% if !conn.provider.uses_openai_client() %} is-active{% endif %}">
             <input type="radio" name="ai_connection_backend" value="ollama"
-                   data-default="{{ defaults.ai.connection.backend.as_str() }}" data-key="ai.connection.backend"
-                   {% if current.ai.connection.backend.as_str() == "ollama" %}checked{% endif %}>
+                   data-default="{% if default_conn.provider.uses_openai_client() %}openai{% else %}ollama{% endif %}" data-key="ai.connection.backend"
+                   {% if !conn.provider.uses_openai_client() %}checked{% endif %}>
             <span>Ollama</span>
           </label>
-          <label class="segment{% if current.ai.connection.backend.as_str() == "openai" %} is-active{% endif %}">
+          <label class="segment{% if conn.provider.uses_openai_client() %} is-active{% endif %}">
             <input type="radio" name="ai_connection_backend" value="openai"
-                   data-default="{{ defaults.ai.connection.backend.as_str() }}" data-key="ai.connection.backend"
-                   {% if current.ai.connection.backend.as_str() == "openai" %}checked{% endif %}>
+                   data-default="{% if default_conn.provider.uses_openai_client() %}openai{% else %}ollama{% endif %}" data-key="ai.connection.backend"
+                   {% if conn.provider.uses_openai_client() %}checked{% endif %}>
             <span>OpenAI</span>
           </label>
         </div>
       </div>
       <div class="row-right">
         {% call m::row_reset("ai.connection.backend") %}{% endcall %}
-        <span class="row-default">default <span class="mono">{{ defaults.ai.connection.backend.as_str() }}</span></span>
+        <span class="row-default">default <span class="mono">{% if default_conn.provider.uses_openai_client() %}openai{% else %}ollama{% endif %}</span></span>
       </div>
     </div>
 
-    {% let conn_base_url = current.ai.connection.base_url.as_deref().unwrap_or("") %}
+    {% let conn_base_url = conn.base_url.as_deref().unwrap_or("") %}
     {% call m::text_row("ai_connection", "ai_connection_base_url", "base_url",
        "Override the provider's API base URL. Empty = provider default.",
        conn_base_url, "", "https://api.openai.com/v1") %}{% endcall %}
 
     {% call m::model_row("ai_connection", "ai_connection_model", "model",
        "Model used for !ai chat turns.",
-       current.ai.connection.model, defaults.ai.connection.model) %}{% endcall %}
+       conn.model, default_conn.model) %}{% endcall %}
 
     {% call m::num_row_bounded("ai_connection", "ai_connection_timeout", "timeout",
        "Per-request timeout for chat completions.",
-       current.ai.connection.timeout, defaults.ai.connection.timeout, "s", 1, 600) %}{% endcall %}
+       conn.timeout, default_conn.timeout, "s", 1, 600) %}{% endcall %}
 
-    {% if current.ai.connection.backend.as_str() == "openai" %}
+    {% if conn.provider.uses_openai_client() %}
     {# Resolve the active effort value once as a &str so the segments below
        can do plain &str == &str comparisons (askama can't compare `&String`
        to a `&str` literal directly). #}
-    {% let effort = current.ai.connection.reasoning_effort.as_deref().unwrap_or("none") %}
+    {% let effort = conn.reasoning_effort.as_deref().unwrap_or("none") %}
     <div class="settings-row" data-section="ai_connection">
       {% call m::row_head("reasoning_effort", "Hint for reasoning-capable OpenAI/OpenRouter models.") %}{% endcall %}
       <div class="row-control-cell">
@@ -72,9 +76,9 @@
       </div>
     </div>
     {% endif %}
-    {% let conn_or = current.ai.connection.backend.as_str() == "openai" && (conn_base_url.is_empty() || conn_base_url.contains("openrouter.ai")) %}
+    {% let conn_or = conn.provider.caps().service_tier %}
     {% if conn_or %}
-    {% let tier = current.ai.connection.service_tier.as_deref().unwrap_or("none") %}
+    {% let tier = conn.service_tier.as_deref().unwrap_or("none") %}
     <div class="settings-row" data-section="ai_connection">
       {% call m::row_head("service_tier", "OpenRouter pricing tier. Default 1×, Flex 0.5× (slower/availability-tradeoff), Priority 1.8× (faster).") %}{% endcall %}
       <div class="row-control-cell">

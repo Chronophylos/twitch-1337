@@ -124,8 +124,8 @@ where
     let llm_client: Option<(Arc<dyn LlmClient>, AiBootstrap)> = match (llm, ai_config) {
         (Some(llm_arc), Some(ai_boot)) => {
             info!(
-                backend = ?snapshot.ai.connection.backend,
-                model = %snapshot.ai.connection.model,
+                provider = snapshot.ai.active().provider.as_str(),
+                model = %snapshot.ai.active().model,
                 "AI command enabled"
             );
             Some((llm_arc, ai_boot))
@@ -240,7 +240,7 @@ where
     }
 
     if let (Some((llm, ai_boot)), Some(ai_memory_v2)) = (llm_client, ai_memory_v2) {
-        let ai_conn = &snapshot.ai.connection;
+        let ai_conn = snapshot.ai.active();
         let ai_media = &snapshot.ai.media;
         let web = if let Some(web_cfg) = snapshot.ai.web.as_ref() {
             let search = match ai::content::SearchClient::new(
@@ -258,18 +258,11 @@ where
                 .user_agent(crate::APP_USER_AGENT)
                 .build()
                 .expect("build media HTTP client");
-            let provider_base_url =
-                ai_conn
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| match ai_conn.backend {
-                        crate::settings::ai::AiBackendKind::OpenAi => {
-                            "https://api.openai.com/v1".to_string()
-                        }
-                        crate::settings::ai::AiBackendKind::Ollama => {
-                            "http://localhost:11434/v1".to_string()
-                        }
-                    });
+            let provider_base_url = ai_conn
+                .base_url
+                .clone()
+                .or_else(|| ai_conn.provider.caps().default_base_url.map(str::to_string))
+                .unwrap_or_default();
             let media = Arc::new(ai::content::MediaClient::new(
                 media_http,
                 provider_base_url,

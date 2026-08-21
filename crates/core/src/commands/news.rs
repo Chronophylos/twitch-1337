@@ -237,8 +237,8 @@ where
         // Snapshot connection knobs once per turn so dashboard edits take
         // effect on the next invocation without a bot restart.
         let snap = self.settings.load();
-        let model = snap.ai.connection.model.clone();
-        let timeout = Duration::from_secs(snap.ai.connection.timeout);
+        let model = snap.ai.active().model.clone();
+        let timeout = Duration::from_secs(snap.ai.active().timeout);
         drop(snap);
 
         let user_message = format!(

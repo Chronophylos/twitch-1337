@@ -259,14 +259,12 @@ struct SaveForm {
 /// process restart, so the dashboard can surface a "restart bot to apply"
 /// hint in the flash. The rest of the AI knobs are read live via
 /// `SettingsHandle` and require no restart.
+///
+/// Provider and base URL used to be listed here. Under profiles they are
+/// per-profile knobs and switching profiles is a live dashboard action, so
+/// the restart hint no longer applies to them.
 fn restart_required(before: &AiSettings, after: &AiSettings) -> Vec<String> {
     let mut out = Vec::new();
-    if before.connection.backend != after.connection.backend {
-        out.push("ai.connection.backend".into());
-    }
-    if before.connection.base_url != after.connection.base_url {
-        out.push("ai.connection.base_url".into());
-    }
     if before.prefill.is_none() && after.prefill.is_some() {
         out.push("ai.prefill (enabling requires restart)".into());
     }

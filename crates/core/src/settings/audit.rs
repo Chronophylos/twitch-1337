@@ -242,11 +242,12 @@ mod tests {
     fn diff_emits_service_tier_changes() {
         let prior = Settings::compiled_defaults();
         let mut next = Settings::compiled_defaults();
-        next.ai.connection.service_tier = Some("flex".to_string());
+        next.ai.profiles[0].service_tier = Some("flex".to_string());
         next.ai.dreamer.service_tier = Some("priority".to_string());
         let changes = diff_changes(&prior, &next);
         let keys: Vec<&str> = changes.iter().map(|c| c.key.as_str()).collect();
-        assert!(keys.contains(&"ai.connection.service_tier"), "got {keys:?}");
+        // Profiles diff as a whole list (arrays are not recursed into).
+        assert!(keys.contains(&"ai.profiles"), "got {keys:?}");
         assert!(keys.contains(&"ai.dreamer.service_tier"), "got {keys:?}");
     }
 

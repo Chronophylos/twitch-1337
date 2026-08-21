@@ -243,14 +243,14 @@ async fn post_settings_applies_ai_connection_model() {
         "model change is live; restart hint must NOT appear; got {flash:?}",
     );
     assert_eq!(
-        state.settings.load().ai.connection.model,
+        state.settings.load().ai.active().model,
         "gpt-5",
         "live handle must reflect saved AI model",
     );
 }
 
 #[tokio::test]
-async fn post_settings_flags_backend_restart_required() {
+async fn post_settings_backend_swap_no_longer_flags_restart() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     set_owner(&state, Some("123"));
@@ -272,21 +272,18 @@ async fn post_settings_flags_backend_restart_required() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    // MIGRATION(ai-profiles): provider and base URL are per-profile knobs now
+    // and switching profiles is a live dashboard action, so the backend swap
+    // no longer carries a restart hint.
     let flash = read_flash(&res).expect("save must emit a flash cookie");
     assert!(
-        flash.contains("Restart bot to apply"),
-        "backend swap must surface the restart hint; got {flash:?}",
+        !flash.contains("Restart bot"),
+        "provider swap is live; restart hint must NOT appear; got {flash:?}",
     );
-    assert!(
-        flash.contains("ai.connection.backend"),
-        "restart hint must name the field; got {flash:?}",
-    );
-    assert!(
-        matches!(
-            state.settings.load().ai.connection.backend,
-            twitch_1337_core::settings::AiBackendKind::Ollama,
-        ),
-        "the value still applies — the restart hint is advisory",
+    assert_eq!(
+        state.settings.load().ai.active().provider,
+        twitch_1337_core::settings::AiProvider::Ollama,
+        "the swapped provider must apply to the active profile",
     );
 }
 
@@ -615,7 +612,7 @@ async fn settings_page_shows_openrouter_tiers_for_default_base_url() {
     let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     assert!(
-        state.settings.load().ai.connection.base_url.is_none(),
+        state.settings.load().ai.active().base_url.is_none(),
         "fixture must exercise the provider-default base URL path"
     );
 
@@ -1407,7 +1404,7 @@ async fn validation_error_preserves_stored_ai_settings() {
         "stored AI model must survive the validation re-render; got: {html}",
     );
     assert_eq!(
-        state.settings.load().ai.connection.model,
+        state.settings.load().ai.active().model,
         "gpt-5",
         "validation rejection must not mutate stored settings",
     );
@@ -1435,7 +1432,7 @@ async fn blank_model_input_does_not_clear_stored_model() {
         let res = build_router(state.clone()).oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         assert_eq!(
-            state.settings.load().ai.connection.model,
+            state.settings.load().ai.active().model,
             expected,
             "submitting model={value:?} must leave the stored model at {expected:?}",
         );

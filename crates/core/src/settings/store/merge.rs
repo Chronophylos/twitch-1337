@@ -27,7 +27,15 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.pings.public {
         into.pings.public = Some(v);
     }
-    // AI connection
+    // AI profiles (whole-list, like schedules)
+    if patch.ai.profiles.is_some() {
+        into.ai.profiles = patch.ai.profiles.clone();
+    }
+    if let Some(v) = patch.ai.active_profile.as_ref() {
+        into.ai.active_profile = Some(v.clone());
+    }
+    // MIGRATION(ai-profiles): legacy connection block, still merged so an
+    // existing settings.ron keeps resolving until it is rewritten.
     if let Some(v) = patch.ai.connection.backend {
         into.ai.connection.backend = Some(v);
     }
@@ -98,6 +106,9 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.ai.dreamer.enabled {
         into.ai.dreamer.enabled = Some(v);
     }
+    if patch.ai.dreamer.profile.is_some() {
+        into.ai.dreamer.profile = patch.ai.dreamer.profile.clone();
+    }
     if patch.ai.dreamer.model.is_some() {
         into.ai.dreamer.model = patch.ai.dreamer.model.clone();
     }
@@ -120,6 +131,9 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
         into.ai.dreamer.max_writes_per_turn = Some(v);
     }
     // AI grok
+    if patch.ai.grok.profile.is_some() {
+        into.ai.grok.profile = patch.ai.grok.profile.clone();
+    }
     if patch.ai.grok.model.is_some() {
         into.ai.grok.model = patch.ai.grok.model.clone();
     }
@@ -184,6 +198,9 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
         into.ai.emotes.base_url = patch.ai.emotes.base_url.clone();
     }
     // AI media
+    if patch.ai.media.profile.is_some() {
+        into.ai.media.profile = patch.ai.media.profile.clone();
+    }
     if let Some(v) = patch.ai.media.model.as_ref() {
         into.ai.media.model = Some(v.clone());
     }

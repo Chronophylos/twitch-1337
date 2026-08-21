@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::settings::ai::{AiBackendKind, AiConnection};
+use crate::settings::ai::AiProfile;
 use eyre::{Result, WrapErr as _};
 use reqwest::Client;
 use tracing::warn;
@@ -59,14 +59,9 @@ impl ModelCatalog {
         }
     }
 
-    /// `true` when the connection uses OpenRouter (default OpenAI base or
-    /// explicit `openrouter.ai` URL).
-    pub fn is_openrouter(conn: &AiConnection) -> bool {
-        conn.backend == AiBackendKind::OpenAi
-            && conn
-                .base_url
-                .as_ref()
-                .is_none_or(|u| u.contains("openrouter.ai"))
+    /// `true` when the profile points at OpenRouter.
+    pub fn is_openrouter(conn: &AiProfile) -> bool {
+        conn.provider.is_openrouter()
     }
 
     /// Turn an upstream OpenRouter `name` into a dashboard / prompt display label.
@@ -77,7 +72,7 @@ impl ModelCatalog {
     }
 
     /// Pretty display name for `model_id`, or the raw id on miss / failure.
-    pub async fn display_name(&self, conn: &AiConnection, model_id: &str) -> String {
+    pub async fn display_name(&self, conn: &AiProfile, model_id: &str) -> String {
         if !Self::is_openrouter(conn) {
             return model_id.to_owned();
         }
@@ -203,25 +198,23 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn openrouter_conn() -> AiConnection {
-        AiConnection {
-            backend: AiBackendKind::OpenAi,
+    fn openrouter_conn() -> AiProfile {
+        AiProfile {
+            provider: crate::settings::AiProvider::OpenRouter,
             base_url: Some("https://openrouter.ai/api/v1".into()),
             model: "google/gemma-3-4b-it".into(),
             timeout: 60,
-            reasoning_effort: None,
-            service_tier: None,
+            ..AiProfile::default()
         }
     }
 
-    fn ollama_conn() -> AiConnection {
-        AiConnection {
-            backend: AiBackendKind::Ollama,
+    fn ollama_conn() -> AiProfile {
+        AiProfile {
+            provider: crate::settings::AiProvider::Ollama,
             base_url: Some("http://localhost:11434".into()),
             model: "gemma3:4b".into(),
             timeout: 60,
-            reasoning_effort: None,
-            service_tier: None,
+            ..AiProfile::default()
         }
     }
 

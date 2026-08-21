@@ -296,8 +296,8 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
     }
     for (field, val) in [
         (
-            "ai.connection.reasoning_effort",
-            ai.connection.reasoning_effort.as_deref(),
+            "ai.profiles[0].reasoning_effort",
+            ai.active().reasoning_effort.as_deref(),
         ),
         (
             "ai.dreamer.reasoning_effort",
@@ -316,8 +316,8 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
     }
     for (field, val) in [
         (
-            "ai.connection.service_tier",
-            ai.connection.service_tier.as_deref(),
+            "ai.profiles[0].service_tier",
+            ai.active().service_tier.as_deref(),
         ),
         (
             "ai.dreamer.service_tier",
@@ -338,17 +338,17 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
             }
         }
     }
-    if let Some(url) = ai.connection.base_url.as_deref()
+    if let Some(url) = ai.active().base_url.as_deref()
         && reqwest::Url::parse(url).is_err()
     {
         err(
             errs,
-            "ai.connection.base_url",
+            "ai.profiles[0].base_url",
             format!("must be a valid URL (got {url:?})"),
         );
     }
-    if ai.connection.timeout == 0 {
-        err(errs, "ai.connection.timeout", "must be > 0".into());
+    if ai.active().timeout == 0 {
+        err(errs, "ai.profiles[0].timeout", "must be > 0".into());
     }
     if let Some(prefill) = &ai.prefill {
         if reqwest::Url::parse(&prefill.base_url).is_err() {
@@ -586,13 +586,13 @@ mod tests {
     #[test]
     fn validate_rejects_invalid_connection_base_url() {
         let mut s = Settings::compiled_defaults();
-        s.ai.connection.base_url = Some("not a url".into());
+        s.ai.profiles[0].base_url = Some("not a url".into());
         let errs = s
             .validate(&ValidationContext {
                 channel: "test".into(),
             })
             .expect_err("must fail");
-        assert!(errs.iter().any(|e| e.field == "ai.connection.base_url"));
+        assert!(errs.iter().any(|e| e.field == "ai.profiles[0].base_url"));
     }
 
     #[test]
@@ -625,15 +625,15 @@ mod tests {
     #[test]
     fn validate_rejects_unknown_service_tier_value() {
         let mut s = Settings::compiled_defaults();
-        s.ai.connection.service_tier = Some("turbo".to_string());
+        s.ai.profiles[0].service_tier = Some("turbo".to_string());
         let err = s
             .validate(&ValidationContext {
                 channel: "test".into(),
             })
             .expect_err("'turbo' must be rejected");
         assert!(
-            err.iter().any(|e| e.field == "ai.connection.service_tier"),
-            "expected field error for ai.connection.service_tier, got {err:?}"
+            err.iter().any(|e| e.field == "ai.profiles[0].service_tier"),
+            "expected field error for ai.profiles[0].service_tier, got {err:?}"
         );
     }
 

@@ -10,13 +10,12 @@ use tracing::{debug, error, info};
 use crate::APP_USER_AGENT;
 use crate::config::AiBootstrap;
 use crate::settings::Settings;
-use crate::settings::ai::AiBackendKind;
 
 /// Build an [`LlmClient`] from the AI bootstrap + the current settings snapshot.
 ///
 /// Returns `Ok(None)` when no AI bootstrap is provided. The connection knobs
-/// (backend, base_url, model) come from the dashboard settings — Task 8
-/// fleshes out call-site plumbing; this signature is the migration target.
+/// (provider, base_url, model) come from the active profile in the dashboard
+/// settings.
 ///
 /// Returns `Ok(Some(client))` when the client is successfully built.
 /// Returns `Err` only when the configuration is invalid (not when the backend
@@ -30,30 +29,28 @@ pub fn build_llm_client(
         return Ok(None);
     };
 
-    let conn = &settings.ai.connection;
+    let conn = settings.ai.active();
     if conn.model.trim().is_empty() {
-        error!(
-            "AI model is empty in settings, AI disabled (set it at /settings -> AI · Connection)"
-        );
+        error!("AI model is empty in settings, AI disabled (set it at /settings -> AI · Profiles)");
         return Ok(None);
     }
-    let result = match conn.backend {
-        AiBackendKind::OpenAi => OpenAiClient::new(
+    let provider = conn.provider;
+    let result = if provider.uses_openai_client() {
+        OpenAiClient::new(
             ai_boot.api_key.expose_secret(),
             conn.base_url.as_deref(),
             APP_USER_AGENT,
-            conn.base_url
-                .as_deref()
-                .is_none_or(|u| u.contains("openrouter.ai")),
+            provider.is_openrouter(),
         )
-        .map(|c| Arc::new(c) as Arc<dyn LlmClient>),
-        AiBackendKind::Ollama => OllamaClient::new(conn.base_url.as_deref(), APP_USER_AGENT)
-            .map(|c| Arc::new(c) as Arc<dyn LlmClient>),
+        .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
+    } else {
+        OllamaClient::new(conn.base_url.as_deref(), APP_USER_AGENT)
+            .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
     };
 
     match result {
         Ok(client) => {
-            info!(backend = ?conn.backend, model = %conn.model, "LLM client initialized");
+            info!(provider = conn.provider.as_str(), model = %conn.model, "LLM client initialized");
             Ok(Some(client))
         }
         Err(e) => {

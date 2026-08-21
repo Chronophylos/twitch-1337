@@ -123,17 +123,17 @@ pub async fn run_ritual(
         .dreamer
         .model
         .clone()
-        .unwrap_or_else(|| ai.connection.model.clone());
+        .unwrap_or_else(|| ai.active().model.clone());
     let reasoning_effort = ai
         .dreamer
         .reasoning_effort
         .clone()
-        .or_else(|| ai.connection.reasoning_effort.clone());
+        .or_else(|| ai.active().reasoning_effort.clone());
     let service_tier = ai
         .dreamer
         .service_tier
         .clone()
-        .or_else(|| ai.connection.service_tier.clone());
+        .or_else(|| ai.active().service_tier.clone());
     let timeout_secs = ai.dreamer.timeout_secs;
     let max_rounds = ai.dreamer.max_rounds;
     let max_writes_per_turn = ai.dreamer.max_writes_per_turn;
@@ -379,7 +379,7 @@ not a transcript line
         // compiled_defaults has an empty connection.model; set it explicitly.
         {
             let mut s = (*settings.load_full()).clone();
-            s.ai.connection.model = "model-v1".into();
+            s.ai.profiles[0].model = "model-v1".into();
             settings.store(Arc::new(s));
         }
         run_ritual(
@@ -396,7 +396,7 @@ not a transcript line
         // ── Second call: change model in settings (simulates a live dashboard edit) ──
         {
             let mut s = (*settings.load_full()).clone();
-            s.ai.connection.model = "model-v2".into();
+            s.ai.profiles[0].model = "model-v2".into();
             settings.store(Arc::new(s));
         }
         // Use a different date so rotate_to doesn't conflict with the already-rotated file.
@@ -466,7 +466,7 @@ not a transcript line
 
         let dir = TempDir::new().unwrap();
         let mut s = Settings::compiled_defaults();
-        s.ai.connection.model = "model-v1".into();
+        s.ai.profiles[0].model = "model-v1".into();
         s.ai.memory.soul_bytes = 9001;
         s.ai.memory.lore_bytes = 40_000;
         s.ai.memory.user_bytes = 12_345;

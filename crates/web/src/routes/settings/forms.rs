@@ -255,6 +255,8 @@ struct AiDreamerForm {
 impl AiDreamerForm {
     fn into_overrides(self) -> AiDreamerOverrides {
         AiDreamerOverrides {
+            // Rewritten in a later task; the card has no profile picker yet.
+            profile: None,
             // Dreamer card always renders, so checkbox semantics mirror
             // `ping_public`: missing key = false, present = true.
             enabled: Some(self.ai_dreamer_enabled.is_some()),
@@ -284,6 +286,7 @@ struct AiGrokForm {
 impl AiGrokForm {
     fn into_overrides(self) -> AiGrokOverrides {
         AiGrokOverrides {
+            profile: None,
             model: self
                 .ai_grok_model
                 .map(|v| if v.is_empty() { None } else { Some(v) }),
@@ -420,6 +423,7 @@ struct AiMediaForm {
 impl AiMediaForm {
     fn into_overrides(self) -> AiMediaOverrides {
         AiMediaOverrides {
+            profile: None,
             model: self.ai_media_model,
             timeout: self.ai_media_timeout,
             max_image_size: self
@@ -597,6 +601,10 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
         }
         .into_overrides(),
         ai: AiOverrides {
+            // MIGRATION(ai-profiles): the connection card still submits the
+            // legacy block; the profiles editor arrives in a later task.
+            profiles: None,
+            active_profile: None,
             connection: AiConnectionForm {
                 ai_connection_backend: form.ai_connection_backend,
                 ai_connection_base_url: form.ai_connection_base_url,

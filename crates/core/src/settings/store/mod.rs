@@ -179,7 +179,13 @@ impl SettingsStore {
         match section {
             SettingsSection::Cooldowns => current.cooldowns = Default::default(),
             SettingsSection::Pings => current.pings = Default::default(),
-            SettingsSection::AiConnection => current.ai.connection = Default::default(),
+            SettingsSection::AiProfiles => {
+                current.ai.profiles = None;
+                current.ai.active_profile = None;
+                // MIGRATION(ai-profiles): resetting the section must also drop
+                // the legacy block, or it folds straight back in on resolve.
+                current.ai.connection = Default::default();
+            }
             SettingsSection::AiBehavior => current.ai.behavior = Default::default(),
             SettingsSection::AiHistory => current.ai.history = Default::default(),
             SettingsSection::AiMemory => current.ai.memory = Default::default(),
@@ -335,7 +341,7 @@ mod tests {
             user_login: "tester".into(),
         };
         store.apply(patch, actor).await.expect("apply");
-        assert_eq!(handle.load().ai.connection.model, "o5-pro");
+        assert_eq!(handle.load().ai.active().model, "o5-pro");
         let reopened = SettingsStore::open(
             store.path.parent().unwrap(),
             Arc::new(crate::settings::audit::MemoryAuditLog::new()),
@@ -343,7 +349,7 @@ mod tests {
         )
         .expect("reopen")
         .1;
-        assert_eq!(reopened.load().ai.connection.model, "o5-pro");
+        assert_eq!(reopened.load().ai.active().model, "o5-pro");
         let _ = handle;
     }
 
