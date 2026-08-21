@@ -104,7 +104,22 @@ async fn reply_to_aurora_mouth_starts_aurora_turn() {
         "Twitch @parent prefix must not pollute the instruction: {user}"
     );
     assert!(user.contains("das war ein witz"), "parent injected");
-    assert!(user.contains(AURORA_LOGIN), "parent author injected");
+    assert!(
+        user.contains("Reply parent author: Aurora (self)"),
+        "mouth parent must be self, not login: {user}"
+    );
+    assert!(
+        !user.contains("untrusted user content"),
+        "mouth parent is not a viewer: {user}"
+    );
+    assert!(
+        !user.contains("Reply parent author: aurora_bot"),
+        "login belongs in the system appendix: {user}"
+    );
+    assert!(
+        system_content(&calls[0]).contains("aurora_bot"),
+        "system appendix must name the mouth login"
+    );
     assert!(
         calls[0].prior_rounds.is_empty(),
         "follow-up is a fresh Turn, not a continuation"
@@ -170,7 +185,18 @@ async fn reply_to_grok_mouth_starts_grok_turn() {
         "Twitch @parent prefix must not pollute the instruction: {user}"
     );
     assert!(user.contains("the sky is green"), "parent injected");
-    assert!(user.contains(GROK_LOGIN), "parent author injected");
+    assert!(
+        user.contains("Replied-to author: Grok (self)"),
+        "grok mouth parent must be self: {user}"
+    );
+    assert!(
+        !user.contains("untrusted user content"),
+        "mouth parent is not a viewer: {user}"
+    );
+    assert!(
+        system_content(&calls[0]).contains("grok_bot"),
+        "system appendix must name the grok mouth login"
+    );
 
     bot.shutdown().await;
 }
@@ -277,6 +303,15 @@ async fn explicit_ai_trigger_on_mouth_reply_runs_once() {
         "!ai wins over the Grok parent: {sys}",
         sys = system_content(&calls[0])
     );
+    let user = user_content(&calls[0]);
+    assert!(
+        user.contains("Reply parent author: Grok\nReply parent message:"),
+        "other agent named without self: {user}"
+    );
+    assert!(
+        !user.contains("Reply parent author: Grok (self)"),
+        "other agent is not self: {user}"
+    );
 
     bot.shutdown().await;
 }
@@ -306,6 +341,12 @@ async fn explicit_grok_trigger_on_mouth_reply_runs_once() {
         system_content(&calls[0]).contains("You are grok"),
         "@grok wins over the Aurora parent"
     );
+    let user = user_content(&calls[0]);
+    assert!(
+        user.contains("Replied-to author: Aurora\nReplied-to message:"),
+        "aurora parent named without self: {user}"
+    );
+    assert!(!user.contains("Replied-to author: Aurora (self)"));
 
     bot.shutdown().await;
 }
