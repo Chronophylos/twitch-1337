@@ -292,6 +292,12 @@ pub fn is_ai_trigger(word: &str) -> bool {
     word.eq_ignore_ascii_case(AI_TRIGGER) || word.eq_ignore_ascii_case(GROK_ALIAS_TRIGGER)
 }
 
+/// Build the user-message instruction block when the viewer's `!ai` / `@grok`
+/// turn includes a Twitch reply parent.
+///
+/// Utility parents stay on the viewer path (`parent_agent == None` after
+/// filtering `Agent::Utility`). Mouth parents use the agent's settings
+/// persona in the author label, not the Mouth login.
 fn format_reply_context(
     instruction: &str,
     current: Agent,
@@ -368,6 +374,12 @@ fn format_reply_context(
     }
 }
 
+/// Stable system-message appendix naming both agents' Twitch accounts.
+///
+/// Logins come from [`MouthRouter::login_for`]; when `None`, the copy states
+/// that replies currently go through the utility bot login without denying
+/// the agent has an account. `Agent::Utility` in the match arm folds into
+/// Aurora's German copy only for exhaustiveness.
 fn mouths_system_appendix(
     current: Agent,
     aurora_persona: &str,
@@ -380,15 +392,11 @@ fn mouths_system_appendix(
         Agent::Grok => {
             let you = match grok_login {
                 Some(login) => format!("You (grok) post as {grok_persona} (login {login})."),
-                None => format!(
-                    "You (grok) have no account of your own; AI replies go through {utility_login}."
-                ),
+                None => format!("You (grok) currently post through {utility_login}."),
             };
             let other = match aurora_login {
                 Some(login) => format!("Aurora posts as {aurora_persona} (login {login})."),
-                None => format!(
-                    "Aurora has no account of her own; AI replies go through {utility_login}."
-                ),
+                None => format!("Aurora currently posts through {utility_login}."),
             };
             format!(
                 "\n\n## Accounts\n\
@@ -401,15 +409,11 @@ fn mouths_system_appendix(
                 Some(login) => {
                     format!("Du (Aurora) postest als {aurora_persona} (Login {login}).")
                 }
-                None => format!(
-                    "Du (Aurora) hast keinen eigenen Account; KI-Antworten gehen über {utility_login}."
-                ),
+                None => format!("Du (Aurora) postest aktuell über {utility_login}."),
             };
             let other = match grok_login {
                 Some(login) => format!("Grok postet als {grok_persona} (Login {login})."),
-                None => format!(
-                    "Grok hat keinen eigenen Account; KI-Antworten gehen über {utility_login}."
-                ),
+                None => format!("Grok postet aktuell über {utility_login}."),
             };
             format!(
                 "\n\n## Konten\n\
@@ -445,7 +449,8 @@ where
         let user = &ctx.privmsg.sender.login;
         let grok_alias = is_grok_alias(ctx.trigger);
         // Which logical agent is speaking this turn. Drives chat-history
-        // `(self)` tagging; Task 4 threads this into mouth selection too.
+        // `(self)` tagging, mouth selection, reply-parent copy, and the
+        // Konten/Accounts system appendix.
         let agent = if grok_alias {
             Agent::Grok
         } else {
@@ -1169,19 +1174,18 @@ mod mouths_appendix_tests {
             Some("grok_bot"),
             "chronophylosbot",
         );
-        assert!(s.contains(
-            "Du (Aurora) hast keinen eigenen Account; KI-Antworten gehen über chronophylosbot."
-        ));
+        assert!(s.contains("Du (Aurora) postest aktuell über chronophylosbot."));
         assert!(s.contains("Grok postet als Grok (Login grok_bot)."));
-        assert!(!s.contains("postest als"));
+        assert!(!s.contains("postest als Aurora"));
+        assert!(!s.contains("keinen eigenen Account"));
     }
 
     #[test]
     fn both_missing_uses_utility_twice() {
         let s = mouths_system_appendix(Agent::Grok, "Aurora", None, "Grok", None, "utility");
-        assert!(
-            s.contains("You (grok) have no account of your own; AI replies go through utility.")
-        );
-        assert!(s.contains("Aurora has no account of her own; AI replies go through utility."));
+        assert!(s.contains("You (grok) currently post through utility."));
+        assert!(s.contains("Aurora currently posts through utility."));
+        assert!(!s.contains("have no account"));
+        assert!(!s.contains("has no account"));
     }
 }
