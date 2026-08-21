@@ -42,6 +42,9 @@ pub fn build_llm_client(
             ai_boot.api_key.expose_secret(),
             conn.base_url.as_deref(),
             APP_USER_AGENT,
+            conn.base_url
+                .as_deref()
+                .is_none_or(|u| u.contains("openrouter.ai")),
         )
         .map(|c| Arc::new(c) as Arc<dyn LlmClient>),
         AiBackendKind::Ollama => OllamaClient::new(conn.base_url.as_deref(), APP_USER_AGENT)
