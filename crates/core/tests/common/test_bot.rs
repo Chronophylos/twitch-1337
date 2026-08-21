@@ -135,6 +135,7 @@ impl TestBotBuilder {
             // store and are read from SettingsHandle at runtime.
             self.config.ai = Some(AiBootstrap {
                 api_key: secrecy::SecretString::new("test".into()),
+                keys: std::collections::HashMap::new(),
             });
             // Bake a recognizable test model name into the default settings
             // override so tests that assert on `calls[0].model` get a stable
