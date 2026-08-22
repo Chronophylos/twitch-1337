@@ -127,6 +127,15 @@ impl FormState {
 struct ListTpl {
     rows: Vec<CardView>,
     edit_form: Option<FormState>,
+    /// The persisted name the edit form's POST must target — always the
+    /// name the row was opened under, never whatever the user has typed
+    /// into the rename field. `edit_form.name` is restored from the
+    /// user's submission (so a rejected rename isn't lost from the input),
+    /// but the form `action` must keep pointing at the row that actually
+    /// exists; deriving it from the submitted name instead sends the fix-up
+    /// POST to a profile that was never created, and the mutate closure
+    /// silently no-ops (see `update`'s regression test).
+    edit_target: Option<String>,
     new_form: Option<FormState>,
     row_errors: Vec<RowError>,
     global_errors: Vec<(String, String)>,
@@ -223,6 +232,7 @@ async fn list(
             .find(|p| p.name == *name)
             .map(form_state_from_profile)
     });
+    let edit_target = edit_form.is_some().then(|| q.edit.clone()).flatten();
     let new_form = if q.new.unwrap_or(false) {
         Some(FormState::new_default())
     } else {
@@ -233,6 +243,7 @@ async fn list(
     render(&ListTpl {
         rows: cards,
         edit_form,
+        edit_target,
         new_form,
         row_errors: Vec::new(),
         global_errors: Vec::new(),
@@ -359,8 +370,8 @@ async fn update(
             );
         }
     };
-    let new_name = edited.name.clone();
     let target = name.clone();
+    let edit_on_error = name.clone();
     let settings = state.settings.load();
     let current_profiles = settings.ai.profiles.clone();
     let active_now = settings.ai.active_profile.clone();
@@ -389,7 +400,7 @@ async fn update(
             }
             o.ai.profiles = Some(next);
         }),
-        Some(new_name),
+        Some(edit_on_error),
         Some(submitted),
     )
     .await
@@ -560,6 +571,10 @@ fn render_validation(
     let total = rows.len();
     let cards: Vec<CardView> = rows.iter().map(|p| card_view(p, &active)).collect();
 
+    // The edit form's POST target must stay pinned to the row this edit
+    // actually opened against, regardless of what name the user typed into
+    // the rename field — `edit_on_error` carries that original name.
+    let edit_target = edit_on_error.clone();
     let (edit_form, new_form) = match (edit_on_error, submitted) {
         (Some(_), Some(fs)) => (Some(fs), None),
         (Some(name), None) => (
@@ -576,6 +591,7 @@ fn render_validation(
     let resp = ListTpl {
         rows: cards,
         edit_form,
+        edit_target,
         new_form,
         row_errors,
         global_errors,

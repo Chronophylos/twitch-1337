@@ -274,3 +274,76 @@ async fn delete_clears_dangling_sub_agent_pointers() {
     assert_eq!(settings.ai.profiles.len(), 1);
     assert_eq!(settings.ai.dreamer.profile, None);
 }
+
+/// A rename that also trips store-level validation (an unsupported
+/// `reasoning_effort` here) must re-render the edit form pointed at the
+/// ORIGINAL name, not the rejected rename — otherwise the user's fix-up
+/// resubmit POSTs to a profile that was never created and the store's
+/// `find(|p| p.name == target)` silently matches nothing, "succeeding"
+/// without ever renaming anything.
+#[tokio::test]
+async fn edit_rename_with_rejected_field_reopens_under_the_original_name_then_succeeds() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("old")], "old").await;
+    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let app = build_router(state.clone());
+
+    // Step 1: rename "old" -> "renamed" while also picking an effort the
+    // provider (ollama, which allows none) does not support. The store
+    // rejects this; the re-rendered form must still target "old".
+    let bad_body = format!(
+        "_csrf={csrf}&name=renamed&provider=ollama&model=qwen3%3A8b&timeout=30&reasoning_effort=high",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/ai-profiles/old/edit")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(bad_body))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "validation error re-renders");
+    let html = body_string(res).await;
+    assert!(
+        html.contains("action=\"/ai-profiles/old/edit\""),
+        "re-rendered edit form must still target the original name, not the \
+         rejected rename; body was: {html}"
+    );
+    assert!(
+        !html.contains("action=\"/ai-profiles/renamed/edit\""),
+        "must not target the nonexistent renamed profile"
+    );
+    let settings = state.settings.load();
+    assert_eq!(settings.ai.profiles.len(), 1);
+    assert_eq!(
+        settings.ai.profiles[0].name, "old",
+        "rejected rename must not persist"
+    );
+    assert_eq!(settings.ai.active_profile, "old");
+
+    // Step 2: resubmit the corrected edit to the action the page actually
+    // rendered (still "/ai-profiles/old/edit") — the rename must land, and
+    // since "old" was the active profile, the pointer must follow it.
+    let good_body = format!(
+        "_csrf={csrf}&name=renamed&provider=ollama&model=qwen3%3A8b&timeout=30",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/ai-profiles/old/edit")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(good_body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let settings = state.settings.load();
+    assert_eq!(settings.ai.profiles.len(), 1);
+    assert_eq!(
+        settings.ai.profiles[0].name, "renamed",
+        "rename must actually land"
+    );
+    assert_eq!(settings.ai.active_profile, "renamed");
+}
