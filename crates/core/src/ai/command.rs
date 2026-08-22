@@ -10,8 +10,8 @@ use tracing::{debug, error, instrument, warn};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use llm::{
-    AgentOpts, AgentOutcome, LlmClient, LlmError, ToolCall, ToolCallRound,
-    ToolChatCompletionRequest, ToolExecutor, ToolResultMessage, TraceIds, run_agent,
+    AgentOpts, AgentOutcome, LlmError, ToolCall, ToolCallRound, ToolChatCompletionRequest,
+    ToolExecutor, ToolResultMessage, TraceIds, run_agent,
 };
 
 use crate::ai::chat_history::ChatHistory;
@@ -105,7 +105,7 @@ impl AiWeb {
 }
 
 pub struct AiCommand {
-    llm_client: Arc<dyn LlmClient>,
+    registry: Arc<crate::llm_factory::LlmRegistry>,
     settings: SettingsHandle,
     cooldown: PerUserCooldown,
     chat_ctx: Option<ChatContext>,
@@ -127,7 +127,7 @@ pub struct AiCommand {
 }
 
 pub struct AiCommandDeps {
-    pub llm_client: Arc<dyn LlmClient>,
+    pub registry: Arc<crate::llm_factory::LlmRegistry>,
     pub settings: SettingsHandle,
     pub chat_ctx: Option<ChatContext>,
     pub memory: AiMemoryV2,
@@ -186,7 +186,7 @@ impl AiCommand {
     pub fn new(deps: AiCommandDeps) -> Self {
         let cooldown = PerUserCooldown::live(deps.settings.clone(), ai_cooldown_duration);
         Self {
-            llm_client: deps.llm_client,
+            registry: deps.registry,
             settings: deps.settings,
             cooldown,
             chat_ctx: deps.chat_ctx,
@@ -495,7 +495,19 @@ where
         // Snapshot connection knobs once per turn so dashboard edits take
         // effect on the next invocation without a bot restart.
         let snap = self.settings.load();
-        let connection = snap.ai.active().clone();
+        // Each agent resolves its own profile at turn time: `@grok` follows
+        // `ai.grok.profile`, `!ai` follows the active profile. A dashboard
+        // switch therefore lands on the very next turn.
+        let profile_name = if grok_alias {
+            snap.ai.grok.profile.clone()
+        } else {
+            None
+        };
+        let Some((llm_client, connection)) = self.registry.resolve(profile_name.as_deref()) else {
+            // Log only: a config problem is not the chatter's business.
+            error!("AI command skipped, no usable LLM profile");
+            return Ok(());
+        };
         let (model, reasoning_effort, service_tier) = if grok_alias {
             (
                 snap.ai
@@ -802,7 +814,7 @@ where
             dhl: self.dhl.as_deref(),
             trace: &trace,
         };
-        let final_text = match run_agent(&*self.llm_client, req, &combined_exec, opts).await {
+        let final_text = match run_agent(&*llm_client, req, &combined_exec, opts).await {
             Ok(AgentOutcome::Text(text)) => Some(text),
             Ok(AgentOutcome::MaxRoundsExceeded) => {
                 warn!("AI max_turn_rounds exceeded");
@@ -831,7 +843,7 @@ where
 
         if let Some(text) = final_text {
             let line = prepare_agent_reply(
-                &*self.llm_client,
+                &*llm_client,
                 &text,
                 &RewordOpts {
                     model: model.clone(),

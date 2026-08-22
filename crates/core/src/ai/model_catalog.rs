@@ -59,11 +59,6 @@ impl ModelCatalog {
         }
     }
 
-    /// `true` when the profile points at OpenRouter.
-    pub fn is_openrouter(conn: &AiProfile) -> bool {
-        conn.provider.is_openrouter()
-    }
-
     /// Turn an upstream OpenRouter `name` into a dashboard / prompt display label.
     pub fn normalize_name(raw: &str) -> String {
         let trimmed = raw.trim();
@@ -72,8 +67,8 @@ impl ModelCatalog {
     }
 
     /// Pretty display name for `model_id`, or the raw id on miss / failure.
-    pub async fn display_name(&self, conn: &AiProfile, model_id: &str) -> String {
-        if !Self::is_openrouter(conn) {
+    pub async fn display_name(&self, profile: &AiProfile, model_id: &str) -> String {
+        if !profile.provider.is_openrouter() {
             return model_id.to_owned();
         }
         match self.load_openrouter_catalog().await {

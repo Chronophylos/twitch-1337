@@ -14,7 +14,6 @@ use std::{
     },
 };
 
-use llm::LlmClient;
 use tokio::{
     sync::{Notify, RwLock, broadcast, mpsc, oneshot, watch},
     task::JoinHandle,
@@ -83,7 +82,7 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     pub ping_names_tx: watch::Sender<std::collections::HashSet<String>>,
     pub ping_names_rx: watch::Receiver<std::collections::HashSet<String>>,
     pub suspension_manager: Arc<SuspensionManager>,
-    pub llm: Option<Arc<dyn LlmClient>>,
+    pub llm: Arc<crate::llm_factory::LlmRegistry>,
     pub ai_memory_v2: Option<ai::command::AiMemoryV2>,
     pub transcript: Option<crate::ai::memory::transcript::TranscriptWriter>,
     pub whisper: Option<Arc<dyn WhisperSender>>,

@@ -469,12 +469,10 @@ impl TestBotBuilder {
 
         let services = Services {
             clock: clock.clone(),
-            ai_bootstrap: self.config.ai.clone(),
-            llm: self
-                .config
-                .ai
-                .is_some()
-                .then(|| llm.clone() as Arc<dyn LlmClient>),
+            llm: Arc::new(twitch_1337::llm_factory::LlmRegistry::fixed(
+                llm.clone() as Arc<dyn LlmClient>,
+                settings_handle.clone(),
+            )),
             aviation: Some(aviation),
             dhl: self.dhl_base_url.as_ref().map(|base| {
                 std::sync::Arc::new(twitch_1337::dhl::DhlClient::with_base_url(
@@ -886,9 +884,12 @@ impl TestBot {
             .await
             .expect("open transcript for ritual");
 
-        let llm_ref: &dyn llm::LlmClient = self.llm.as_ref();
+        let registry = twitch_1337::llm_factory::LlmRegistry::fixed(
+            self.llm.clone() as Arc<dyn llm::LlmClient>,
+            self.settings.clone(),
+        );
         run_ritual(
-            llm_ref,
+            &registry,
             &store,
             &transcript,
             &self.settings,

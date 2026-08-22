@@ -262,7 +262,10 @@ pub async fn main() -> Result<()> {
         None => None,
     };
 
-    let llm_client = llm_factory::build_llm_client(config.ai.as_ref(), &settings_handle.load())?;
+    let llm = Arc::new(llm_factory::LlmRegistry::new(
+        config.ai.as_ref(),
+        settings_handle.clone(),
+    ));
 
     // Memory v2 store opens unconditionally so the dashboard editor has a
     // handle even when `[ai]` is disabled. The same `Arc`-backed store is
@@ -331,8 +334,7 @@ pub async fn main() -> Result<()> {
 
     let services = Services {
         clock: Arc::new(SystemClock),
-        ai_bootstrap: config.ai.clone(),
-        llm: llm_client,
+        llm,
         aviation: aviation_client,
         dhl: dhl_client,
         doener: doener_client,
