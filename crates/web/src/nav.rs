@@ -16,6 +16,7 @@ pub const MEMORY_LORE: &str = "memory_lore";
 pub const MEMORY_USERS: &str = "memory_users";
 pub const MEMORY_SCRATCH: &str = "memory_scratch";
 pub const SCHEDULES: &str = "schedules";
+pub const AI_PROFILES: &str = "ai_profiles";
 pub const FLIGHTS: &str = "flights";
 pub const EMOTES: &str = "emotes";
 pub const EMOTES_AUDIT: &str = "emotes_audit";

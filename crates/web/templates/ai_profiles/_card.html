@@ -1,0 +1,39 @@
+{# Single AI profile card. `card: &CardView` and `csrf: &str` must be in scope. #}
+<article class="schedule-card{% if card.is_active %} active-profile{% endif %}">
+  <header class="card-head">
+    <span class="card-title">{{ card.name }}</span>
+    {% if card.is_active %}
+      <span class="chip active">ACTIVE</span>
+    {% else %}
+      <form method="post" action="/ai-profiles/{{ card.name|urlencode }}/activate" class="card-toggle">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <button class="chip" type="submit">activate</button>
+      </form>
+    {% endif %}
+  </header>
+  <div class="card-badges">
+    <span class="chip trigger">{{ card.provider_label }}</span>
+    <span class="chip window">{{ card.model }}</span>
+  </div>
+  <footer class="card-footer">
+    {% if let Some(base_url) = card.base_url.as_ref() %}
+      <span class="chip last">{{ base_url }}</span>
+    {% endif %}
+    {% if let Some(key) = card.key.as_ref() %}
+      <span class="chip last">key: {{ key }}</span>
+    {% endif %}
+    {% if let Some(effort) = card.reasoning_effort.as_ref() %}
+      <span class="chip today">effort: {{ effort }}</span>
+    {% endif %}
+    {% if let Some(tier) = card.service_tier.as_ref() %}
+      <span class="chip today">tier: {{ tier }}</span>
+    {% endif %}
+    <span class="chip today">{{ card.timeout }}s</span>
+    <a class="chip edit-link" href="/ai-profiles?edit={{ card.name|urlencode }}">edit</a>
+    <form method="post" action="/ai-profiles/{{ card.name|urlencode }}/delete"
+          class="js-delete-profile" data-name="{{ card.name }}">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <button class="chip danger" type="submit">delete</button>
+    </form>
+  </footer>
+</article>
