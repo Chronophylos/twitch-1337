@@ -11,6 +11,7 @@ use llm::{ToolCall, ToolResultMessage, TraceIds};
 use super::cache::TtlCache;
 use super::client::{SearchClient, SearchResult};
 use super::media::MediaClient;
+use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 use crate::settings::ai::AiMedia;
 
@@ -32,7 +33,8 @@ pub(super) struct ReadUrlArgs {
 
 pub struct ContentToolExecutor {
     client: SearchClient,
-    media: Arc<MediaClient>,
+    http: reqwest::Client,
+    registry: Arc<LlmRegistry>,
     settings: SettingsHandle,
     search_cache: Arc<Mutex<TtlCache<Vec<SearchResult>>>>,
     read_cache: Arc<Mutex<TtlCache<ReadCacheEntry>>>,
@@ -47,14 +49,16 @@ struct ReadCacheEntry {
 impl ContentToolExecutor {
     pub fn new(
         client: SearchClient,
-        media: Arc<MediaClient>,
+        http: reqwest::Client,
+        registry: Arc<LlmRegistry>,
         settings: SettingsHandle,
         cache_ttl: Duration,
         cache_capacity: usize,
     ) -> Self {
         Self {
             client,
-            media,
+            http,
+            registry,
             settings,
             search_cache: Arc::new(Mutex::new(TtlCache::new(cache_ttl, cache_capacity))),
             read_cache: Arc::new(Mutex::new(TtlCache::new(cache_ttl, cache_capacity))),
@@ -63,6 +67,32 @@ impl ContentToolExecutor {
 
     fn live_media(&self) -> AiMedia {
         self.settings.load().ai.media.clone()
+    }
+
+    /// Build a media client for this call.
+    ///
+    /// Built per call rather than at startup so `ai.media.profile` and
+    /// `ai.media.model` edits apply live, the way every other settings knob
+    /// does. `reqwest::Client` is an `Arc` internally, so the clone is cheap.
+    fn media_client(&self) -> Option<MediaClient> {
+        let media = self.live_media();
+        let (_, profile) = self.registry.resolve(media.profile.as_deref())?;
+        let base_url = profile.base_url.clone().or_else(|| {
+            profile
+                .provider
+                .openai_compat_base_url()
+                .map(str::to_string)
+        })?;
+        // NOT `caps().default_base_url` — that is the *native* client's host shape.
+        // `MediaClient` posts to `{base}/chat/completions`, so Ollama needs the `/v1`
+        // shim path. Getting this wrong 404s every media call on an Ollama profile.
+        Some(MediaClient::new(
+            self.http.clone(),
+            base_url,
+            self.registry.secret_for(&profile),
+            media.model.clone(),
+            Duration::from_secs(media.timeout),
+        ))
     }
 
     fn current_max_results(&self) -> usize {
@@ -201,8 +231,19 @@ impl ContentToolExecutor {
             Err(err) => return Self::map_fetch_err(&err, &args.url),
         };
 
-        let answer = match self
-            .media
+        let Some(media) = self.media_client() else {
+            error!(
+                url = %args.url,
+                "read_url media analysis unavailable: media profile could not resolve a client"
+            );
+            return json!({
+                "error": "media_unavailable",
+                "details": "media analysis is not configured or its profile is unavailable",
+            })
+            .to_string();
+        };
+
+        let answer = match media
             .analyze(
                 &fetched.content_type,
                 &fetched.payload,
@@ -284,27 +325,101 @@ fn normalize_url(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use llm::ToolArgsError;
+    use llm::{ChatCompletionRequest, LlmClient, ToolArgsError, ToolChatCompletionRequest};
+
     use std::time::Duration;
 
     use super::*;
+    use crate::llm_factory::LlmRegistry;
+    use crate::settings::AiProvider;
+    use crate::settings::ai::AiProfile;
     use crate::settings::test_handle;
 
-    fn test_executor() -> ContentToolExecutor {
+    /// Never actually invoked: `media_client()` only needs the profile that
+    /// `LlmRegistry::resolve` returns alongside it, not a working client.
+    struct DummyClient;
+
+    #[async_trait::async_trait]
+    impl LlmClient for DummyClient {
+        async fn chat_completion(&self, _request: ChatCompletionRequest) -> llm::Result<String> {
+            unimplemented!("DummyClient is never called in these tests")
+        }
+
+        async fn chat_completion_with_tools(
+            &self,
+            _request: ToolChatCompletionRequest,
+        ) -> llm::Result<llm::ToolChatCompletionResponse> {
+            unimplemented!("DummyClient is never called in these tests")
+        }
+    }
+
+    fn registry(settings: SettingsHandle) -> Arc<LlmRegistry> {
+        Arc::new(LlmRegistry::fixed(Arc::new(DummyClient), settings))
+    }
+
+    fn test_executor(settings: SettingsHandle) -> ContentToolExecutor {
         crate::install_crypto_provider();
         let client = SearchClient::new_with_client(
             "http://127.0.0.1:65535/search".to_string(),
             Duration::from_secs(1),
             reqwest::Client::new(),
         );
-        let media = Arc::new(MediaClient::new(
+        ContentToolExecutor::new(
+            client,
             reqwest::Client::new(),
-            "http://127.0.0.1:65535/v1".to_string(),
-            None,
-            "test-model".into(),
-            Duration::from_secs(1),
-        ));
-        ContentToolExecutor::new(client, media, test_handle(), Duration::from_secs(300), 32)
+            registry(settings.clone()),
+            settings,
+            Duration::from_secs(300),
+            32,
+        )
+    }
+
+    fn profile(name: &str, provider: AiProvider, model: &str) -> AiProfile {
+        AiProfile {
+            name: name.into(),
+            key: None,
+            provider,
+            base_url: Some("https://example.test/v1".into()),
+            model: model.into(),
+            timeout: 30,
+            reasoning_effort: None,
+            service_tier: None,
+        }
+    }
+
+    fn handle_with(profiles: Vec<AiProfile>, active: &str) -> SettingsHandle {
+        let mut s = crate::settings::Settings::compiled_defaults();
+        s.ai.profiles = profiles;
+        s.ai.active_profile = active.to_string();
+        crate::settings::SettingsHandle::new(arc_swap::ArcSwap::from_pointee(s))
+    }
+
+    #[test]
+    fn media_client_follows_the_media_profile_and_live_model_edits() {
+        crate::install_crypto_provider();
+        let handle = handle_with(
+            vec![
+                profile("vision", AiProvider::OpenRouter, "vision-model"),
+                profile("chat", AiProvider::OpenRouter, "chat-model"),
+            ],
+            "chat",
+        );
+        {
+            let mut s = (*handle.load_full()).clone();
+            s.ai.media.profile = Some("vision".into());
+            s.ai.media.model = "override-model".into();
+            handle.store(Arc::new(s));
+        }
+        let ex = test_executor(handle.clone());
+        let mc = ex.media_client().unwrap();
+        assert_eq!(mc.model(), "override-model");
+        assert_eq!(mc.base_url(), "https://example.test/v1");
+
+        // A live edit is picked up without rebuilding the executor.
+        let mut s = (*handle.load_full()).clone();
+        s.ai.media.model = "second-model".into();
+        handle.store(Arc::new(s));
+        assert_eq!(ex.media_client().unwrap().model(), "second-model");
     }
 
     #[test]
@@ -330,15 +445,14 @@ mod tests {
             Duration::from_secs(1),
             reqwest::Client::new(),
         );
-        let media = Arc::new(MediaClient::new(
+        let executor = ContentToolExecutor::new(
+            client,
             reqwest::Client::new(),
-            "http://127.0.0.1:65535/v1".to_string(),
-            None,
-            "test-model".into(),
-            Duration::from_secs(1),
-        ));
-        let executor =
-            ContentToolExecutor::new(client, media, handle.clone(), Duration::from_secs(300), 32);
+            registry(handle.clone()),
+            handle.clone(),
+            Duration::from_secs(300),
+            32,
+        );
 
         assert_eq!(
             executor.max_results(),
@@ -381,15 +495,14 @@ mod tests {
             Duration::from_secs(1),
             reqwest::Client::new(),
         );
-        let media = Arc::new(MediaClient::new(
+        let executor = ContentToolExecutor::new(
+            client,
             reqwest::Client::new(),
-            "http://127.0.0.1:65535/v1".to_string(),
-            None,
-            "test-model".into(),
-            Duration::from_secs(1),
-        ));
-        let executor =
-            ContentToolExecutor::new(client, media, handle.clone(), Duration::from_secs(300), 32);
+            registry(handle.clone()),
+            handle.clone(),
+            Duration::from_secs(300),
+            32,
+        );
 
         // Default image cap should be the compiled default.
         let default_cap = executor.live_media().max_image_size;
@@ -412,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_unknown_tool_name() {
-        let executor = test_executor();
+        let executor = test_executor(test_handle());
         let call = ToolCall {
             id: "c1".into(),
             name: "save_memory".into(),
@@ -431,7 +544,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_url_surfaces_arguments_parse_error() {
-        let executor = test_executor();
+        let executor = test_executor(test_handle());
         let call = ToolCall {
             id: "c1".into(),
             name: "read_url".into(),
@@ -453,7 +566,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_url_returns_fetch_failed_for_unreachable_host() {
-        let executor = test_executor();
+        let executor = test_executor(test_handle());
         let call = ToolCall {
             id: "c1".into(),
             name: "read_url".into(),

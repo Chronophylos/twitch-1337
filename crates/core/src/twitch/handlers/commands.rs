@@ -241,9 +241,9 @@ where
         cmd_list.push(Box::new(commands::emote::EmoteCommand::new(tracker)));
     }
 
-    if let (Some(ai_boot), Some(ai_memory_v2)) = (ai_boot, ai_memory_v2) {
-        let ai_conn = snapshot.ai.active();
-        let ai_media = &snapshot.ai.media;
+    // `ai_boot` only gates whether `!ai` is enabled at all now; the media
+    // client resolves its own key per call via `LlmRegistry::secret_for`.
+    if let (Some(_ai_boot), Some(ai_memory_v2)) = (ai_boot, ai_memory_v2) {
         let web = if let Some(web_cfg) = snapshot.ai.web.as_ref() {
             let search = match ai::content::SearchClient::new(
                 &web_cfg.base_url,
@@ -256,44 +256,20 @@ where
                 }
             };
 
-            // The media client is an OpenAI-compat consumer, so it wants the
-            // compat host shape, not the provider's native one.
-            let provider_base_url = ai_conn.base_url.clone().or_else(|| {
-                ai_conn
-                    .provider
-                    .openai_compat_base_url()
-                    .map(str::to_string)
-            });
-            let media = match provider_base_url {
-                Some(base_url) => {
-                    let media_http = reqwest::Client::builder()
-                        .user_agent(crate::APP_USER_AGENT)
-                        .build()
-                        .expect("build media HTTP client");
-                    Some(Arc::new(ai::content::MediaClient::new(
-                        media_http,
-                        base_url,
-                        Some(ai_boot.api_key.clone()),
-                        ai_media.model.clone(),
-                        Duration::from_secs(ai_media.timeout),
-                    )))
-                }
-                None => {
-                    // An empty base URL would send every media call to a
-                    // hostless `/chat/completions`. Better to say so than to
-                    // ship a client that can only ever fail.
-                    error!(
-                        profile = %ai_conn.name,
-                        provider = ai_conn.provider.as_str(),
-                        "AI profile has no base_url and its provider has no default; disabling web + media tools"
-                    );
-                    None
-                }
-            };
-            search.zip(media).map(|(client, media)| ai::command::AiWeb {
+            // The media client used to be built here once at startup, which
+            // meant an unresolvable media base URL took web search down with
+            // it too. It is now built per call inside the executor (see
+            // `ContentToolExecutor::media_client`), so search stays up
+            // regardless of whether media can currently resolve.
+            let media_http = reqwest::Client::builder()
+                .user_agent(crate::APP_USER_AGENT)
+                .build()
+                .expect("build media HTTP client");
+            search.map(|client| ai::command::AiWeb {
                 executor: Arc::new(ai::content::ContentToolExecutor::new(
                     client,
-                    media,
+                    media_http,
+                    llm.clone(),
                     settings.clone(),
                     Duration::from_secs(web_cfg.cache_ttl_secs),
                     web_cfg.cache_capacity,

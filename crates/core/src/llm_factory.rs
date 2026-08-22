@@ -85,6 +85,37 @@ impl LlmRegistry {
         Some((client, prof))
     }
 
+    /// The API key a profile should use: a named `[ai.keys]` entry, else the
+    /// bare `[ai].api_key`. `Err` means a named key was requested but has no
+    /// `[ai.keys]` entry (a hard failure); `Ok(None)` means no key is
+    /// configured at all, which is fine for providers that don't need one
+    /// (e.g. Ollama). Shared by `client_for` and [`Self::secret_for`] so the
+    /// two lookups cannot drift.
+    fn key_for(&self, prof: &AiProfile) -> Result<Option<&SecretString>, ()> {
+        match &prof.key {
+            Some(name) => match self.keys.get(name) {
+                Some(s) => Ok(Some(s)),
+                None => {
+                    error!(
+                        profile = %prof.name,
+                        key = %name,
+                        "profile names a key with no [ai.keys] entry in config.toml"
+                    );
+                    Err(())
+                }
+            },
+            None => Ok(self.api_key.as_ref()),
+        }
+    }
+
+    /// The API key a profile should use, by the same rules `client_for`
+    /// applies: a named `[ai.keys]` entry, else the bare `[ai].api_key`.
+    /// `MediaClient` needs the raw secret because it posts to
+    /// `/chat/completions` itself rather than going through `LlmClient`.
+    pub fn secret_for(&self, prof: &AiProfile) -> Option<SecretString> {
+        self.key_for(prof).ok().flatten().cloned()
+    }
+
     fn client_for(&self, prof: &AiProfile) -> Option<Arc<dyn LlmClient>> {
         if let Some(fixed) = &self.fixed {
             return Some(fixed.clone());
@@ -95,20 +126,7 @@ impl LlmRegistry {
             return Some(hit.clone());
         }
 
-        let secret = match &prof.key {
-            Some(name) => match self.keys.get(name) {
-                Some(s) => Some(s),
-                None => {
-                    error!(
-                        profile = %prof.name,
-                        key = %name,
-                        "profile names a key with no [ai.keys] entry in config.toml"
-                    );
-                    return None;
-                }
-            },
-            None => self.api_key.as_ref(),
-        };
+        let secret = self.key_for(prof).ok()?;
 
         let built = if prof.provider.uses_openai_client() {
             let secret = secret.or_else(|| {
