@@ -20,7 +20,7 @@ Einzige Ausnahme: ein Block in `SOUL.md` oder `LORE.md`, der mit der Zeile `Noti
 
 **LORE** wächst. Verdichte die laufenden Notizen des Tages in die durable Kultur-/Dynamik-Prosa und ergänze in-place, nicht plattmachen. Gelöscht wird nur was nachweislich tot ist oder in einen User-Bogen gedrained wurde; „aktuelles" verschwindet schnell, der durable Teil bleibt über Runs hinweg stehen. Wenn du LORE kürzer schreibst als es war, nenne den Grund in einem Satz als erste Zeile des neuen Bodys.
 
-**User-Dateien**: drain die Ereignisse des Tages in den durable Charakterbogen. Andere Abschnitte werden in-place ergänzt, nicht plattgemacht. **Wenn eine User-Datei nur aus einer einzelnen Event-Notiz besteht (z.B. „Nutzer X bat um Y am HH:MM"), bau sie diesen Run aktiv aus**, indem du Substanz aus LORE und Transkript reinziehst: Interessen, Bits, Beziehungen zu anderen Regulars. Eine Zeile pro User ist kein Charakterbogen.
+**User-Dateien**: drain die Ereignisse des Tages in den durable Charakterbogen. Form: erste Zeile = ein Satz Zusammenfassung (keine Überschrift, keine Liste); dann `# Steckbrief` (Instanzen: Name, Verein, Spiele, Bits, Job, Ort; kein `Stil:`); `# Beziehungen`; `# Interessen`; `# Aktuelles` (1-3 Sätze). Login/username/id nie in den Body; `- Login:`-Zeilen streichen. Anzeigename oder bekannter Vorname im Text. Instanz, nicht Gattung: nicht „Fußball", sondern der Verein. Unbekanntes weglassen, nichts erfinden. Was in zwei Wochen noch gilt, aus Aktuelles nach Steckbrief oder Interessen heben. Spezifische Fakten aus LORE und Transkript in den passenden Bogen ziehen. Diesen Run bestehende Bögen in diese Form bringen, auch wenn sie mit `# Steckbrief` oder `## Infos & Aktuelles` anfangen. Eine Zeile pro User ist kein Charakterbogen.
 
 **User-IDs**: eine id wird nie erfunden. Gültig sind ausschließlich ids aus dem User-Index und ids die im Transkript hinter dem `#` stehen. Für ein Login ohne beides gibt es keine Datei, das gehört nach LORE. Ein `unknown_user_id` heißt: diese Person hat diese id nicht, rate keine zweite. Existiert für ein Login schon eine Datei, schreib in genau die, statt eine zweite anzulegen.
 
@@ -33,11 +33,11 @@ Einzige Ausnahme: ein Block in `SOUL.md` oder `LORE.md`, der mit der Zeile `Noti
 - Scratch-Dateien älter als 7 Tage ohne Bezug zum heutigen Transkript: löschen, sofern nichts substantielles drinsteht das nicht woanders hingehört.
 - Behalte nur Scratch-Dateien die: laufende Bits (Quiz, Umfragen, Reminders), strukturierte Daten die wirklich ephemer sind, oder User-pinned Inhalte („merk dir das") betreffen.
 
-**Inaktive User** (keine Transkript-Aktivität, alter `updated_at`): aggressiv komprimieren. Rauschen weg, ein bis zwei Sätze pro Thema. User-Dateien niemals löschen, rückkehrende User behalten ihren Bogen.
+**Inaktive User** (keine Transkript-Aktivität, alter `updated_at`): Aktuelles und Rauschen wegkomprimieren. Steckbrief-Instanzen (Verein, Name, Spiele, Bits) behalten. User-Dateien niemals löschen, rückkehrende User behalten ihren Bogen.
 
 **Byte-Caps**: {caps}. Gemessen wird die ganze Datei inklusive Frontmatter. Dateien über dem Cap müssen diesen Run unter den Cap geschrieben werden. Unter dem Cap gibt es keinen Grund zu kürzen — komprimiere nur was wirklich anstößt.
 
-**Stimme**: schreib in der Stimme des Bots. Narrative Prosa, keine Bullet Points für simple Fakten. Kurz.
+**Stimme**: schreib in der Stimme des Bots. Steckbrief als knappe Instanz-Bullets; Beziehungen, Interessen und Aktuelles als kurze Prosa. Keine Persönlichkeitsadjektive. Kurz.
 
 ## Slug-Regel
 
