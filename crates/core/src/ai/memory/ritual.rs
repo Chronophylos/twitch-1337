@@ -202,6 +202,8 @@ pub async fn run_ritual(
             date: &now_str,
             model: "",
             model_id: "",
+            reply_target: "",
+            reply_hard: "",
         },
     )
     .replace("{caps}", &caps_line);

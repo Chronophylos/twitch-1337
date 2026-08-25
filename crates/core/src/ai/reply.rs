@@ -1,8 +1,8 @@
 //! Prepare a user-facing agent chat line.
 //!
 //! After the tool loop, the final text is sanitized, rewritten once if it
-//! exceeds [`AGENT_REPLY_CHAR_LIMIT`], and clamped to that limit only as a
-//! fallback. The 480-byte IRC clamp must not run on this path.
+//! exceeds [`ReplyLimits::soft`], and clamped to [`ReplyLimits::hard`] only as
+//! a fallback. The 480-byte IRC clamp must not run on this path.
 
 use std::time::Duration;
 
@@ -11,9 +11,23 @@ use tracing::{debug, warn};
 
 use crate::twitch::chat_sender::collapse_control_and_whitespace;
 
-/// Character ceiling for Aurora and Grok chat replies. Over this, one
-/// no-tools rewrite is attempted; anything still longer is clamped here.
-pub const AGENT_REPLY_CHAR_LIMIT: usize = 490;
+/// Character ceilings for one agent reply: reword above `soft`, trim above `hard`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplyLimits {
+    /// Rewrite once if the cleaned draft is longer than this.
+    pub soft: usize,
+    /// Ellipsis-clamp if the line is still longer after the rewrite (or if it failed).
+    pub hard: usize,
+}
+
+impl ReplyLimits {
+    /// Grok keeps today's shared 490/490 reword-and-clamp. Aurora reads
+    /// `ai.behavior.reply_{soft,hard}_chars` instead.
+    pub const GROK: Self = Self {
+        soft: 490,
+        hard: 490,
+    };
+}
 
 pub struct RewordOpts {
     pub model: String,
@@ -32,25 +46,32 @@ fn collapse_user_facing_line(draft: &str) -> String {
         .to_string()
 }
 
-/// Sanitize `draft`, optionally rewrite it once if it is over
-/// [`AGENT_REPLY_CHAR_LIMIT`] characters, then clamp to that limit.
-pub async fn prepare_agent_reply(llm: &dyn LlmClient, draft: &str, opts: &RewordOpts) -> String {
+/// Sanitize `draft`, optionally rewrite it once if it is over `limits.soft`
+/// characters, then clamp to `limits.hard`.
+pub async fn prepare_agent_reply(
+    llm: &dyn LlmClient,
+    draft: &str,
+    opts: &RewordOpts,
+    limits: &ReplyLimits,
+) -> String {
     let cleaned = collapse_user_facing_line(draft);
-    if cleaned.chars().count() <= AGENT_REPLY_CHAR_LIMIT {
+    if cleaned.chars().count() <= limits.soft {
         return cleaned;
     }
 
     debug!(
         chars = cleaned.chars().count(),
-        limit = AGENT_REPLY_CHAR_LIMIT,
-        "agent reply over limit, requesting one rewrite"
+        soft = limits.soft,
+        hard = limits.hard,
+        "agent reply over soft limit, requesting one rewrite"
     );
 
     let request = ChatCompletionRequest {
         model: opts.model.clone(),
         messages: vec![
             Message::system(format!(
-                "Rewrite the following Twitch chat message so it is at most {AGENT_REPLY_CHAR_LIMIT} characters. Keep the meaning and language. Reply with only the rewritten message, as a single line."
+                "Rewrite the following Twitch chat message so it is at most {} characters. Keep the meaning and language. Reply with only the rewritten message, as a single line.",
+                limits.soft
             )),
             Message::user(cleaned.clone()),
         ],
@@ -83,10 +104,10 @@ pub async fn prepare_agent_reply(llm: &dyn LlmClient, draft: &str, opts: &Reword
     };
 
     let to_send = rewritten.unwrap_or(cleaned);
-    if to_send.chars().count() <= AGENT_REPLY_CHAR_LIMIT {
+    if to_send.chars().count() <= limits.hard {
         to_send
     } else {
-        clamp_chars(&to_send, AGENT_REPLY_CHAR_LIMIT)
+        clamp_chars(&to_send, limits.hard)
     }
 }
 
@@ -214,7 +235,7 @@ mod tests {
     #[tokio::test]
     async fn short_reply_is_returned_without_a_rewrite_call() {
         let llm = ScriptedClient::new(vec![]);
-        let out = prepare_agent_reply(&llm, "hello chat", &opts()).await;
+        let out = prepare_agent_reply(&llm, "hello chat", &opts(), &ReplyLimits::GROK).await;
         assert_eq!(out, "hello chat");
         assert!(llm.chat_calls().is_empty());
         assert_eq!(llm.tool_call_count(), 0);
@@ -223,24 +244,24 @@ mod tests {
     #[tokio::test]
     async fn surrounding_whitespace_is_trimmed() {
         let llm = ScriptedClient::new(vec![]);
-        let out = prepare_agent_reply(&llm, "  hello chat  ", &opts()).await;
+        let out = prepare_agent_reply(&llm, "  hello chat  ", &opts(), &ReplyLimits::GROK).await;
         assert_eq!(out, "hello chat");
     }
 
     #[tokio::test]
     async fn exactly_limit_does_not_reword() {
-        let draft = "x".repeat(AGENT_REPLY_CHAR_LIMIT);
+        let draft = "x".repeat(ReplyLimits::GROK.hard);
         let llm = ScriptedClient::new(vec![]);
-        let out = prepare_agent_reply(&llm, &draft, &opts()).await;
+        let out = prepare_agent_reply(&llm, &draft, &opts(), &ReplyLimits::GROK).await;
         assert_eq!(out, draft);
         assert!(llm.chat_calls().is_empty());
     }
 
     #[tokio::test]
     async fn overlong_reply_is_replaced_by_one_rewrite() {
-        let draft = "x".repeat(AGENT_REPLY_CHAR_LIMIT + 1);
+        let draft = "x".repeat(ReplyLimits::GROK.hard + 1);
         let llm = ScriptedClient::new(vec![Scripted::Text("short rewrite".into())]);
-        let out = prepare_agent_reply(&llm, &draft, &opts()).await;
+        let out = prepare_agent_reply(&llm, &draft, &opts(), &ReplyLimits::GROK).await;
         assert_eq!(out, "short rewrite");
         assert_eq!(llm.chat_calls().len(), 1);
         assert_eq!(llm.tool_call_count(), 0);
@@ -257,10 +278,10 @@ mod tests {
 
     #[tokio::test]
     async fn rewrite_error_clamps_original() {
-        let draft = "y".repeat(AGENT_REPLY_CHAR_LIMIT + 20);
+        let draft = "y".repeat(ReplyLimits::GROK.hard + 20);
         let llm = ScriptedClient::new(vec![Scripted::Error]);
-        let out = prepare_agent_reply(&llm, &draft, &opts()).await;
-        assert_eq!(out.chars().count(), AGENT_REPLY_CHAR_LIMIT);
+        let out = prepare_agent_reply(&llm, &draft, &opts(), &ReplyLimits::GROK).await;
+        assert_eq!(out.chars().count(), ReplyLimits::GROK.hard);
         assert!(out.ends_with('…'));
         assert!(out.starts_with('y'));
         assert_eq!(llm.chat_calls().len(), 1);
@@ -268,30 +289,30 @@ mod tests {
 
     #[tokio::test]
     async fn empty_rewrite_clamps_original() {
-        let draft = "z".repeat(AGENT_REPLY_CHAR_LIMIT + 5);
+        let draft = "z".repeat(ReplyLimits::GROK.hard + 5);
         let llm = ScriptedClient::new(vec![Scripted::Text(String::new())]);
-        let out = prepare_agent_reply(&llm, &draft, &opts()).await;
-        assert_eq!(out.chars().count(), AGENT_REPLY_CHAR_LIMIT);
+        let out = prepare_agent_reply(&llm, &draft, &opts(), &ReplyLimits::GROK).await;
+        assert_eq!(out.chars().count(), ReplyLimits::GROK.hard);
         assert!(out.starts_with('z'));
         assert!(out.ends_with('…'));
     }
 
     #[tokio::test]
     async fn whitespace_only_rewrite_clamps_original() {
-        let draft = "w".repeat(AGENT_REPLY_CHAR_LIMIT + 5);
+        let draft = "w".repeat(ReplyLimits::GROK.hard + 5);
         let llm = ScriptedClient::new(vec![Scripted::Text("  \n\t  ".into())]);
-        let out = prepare_agent_reply(&llm, &draft, &opts()).await;
+        let out = prepare_agent_reply(&llm, &draft, &opts(), &ReplyLimits::GROK).await;
         assert!(out.starts_with('w'));
-        assert_eq!(out.chars().count(), AGENT_REPLY_CHAR_LIMIT);
+        assert_eq!(out.chars().count(), ReplyLimits::GROK.hard);
     }
 
     #[tokio::test]
     async fn rewrite_that_is_still_overlong_is_clamped() {
-        let original = "a".repeat(AGENT_REPLY_CHAR_LIMIT + 50);
-        let rewrite = "b".repeat(AGENT_REPLY_CHAR_LIMIT + 10);
+        let original = "a".repeat(ReplyLimits::GROK.hard + 50);
+        let rewrite = "b".repeat(ReplyLimits::GROK.hard + 10);
         let llm = ScriptedClient::new(vec![Scripted::Text(rewrite)]);
-        let out = prepare_agent_reply(&llm, &original, &opts()).await;
-        assert_eq!(out.chars().count(), AGENT_REPLY_CHAR_LIMIT);
+        let out = prepare_agent_reply(&llm, &original, &opts(), &ReplyLimits::GROK).await;
+        assert_eq!(out.chars().count(), ReplyLimits::GROK.hard);
         assert!(out.starts_with('b'), "clamp the rewrite, not the original");
         assert!(out.ends_with('…'));
         assert!(!out.contains('a'));
@@ -299,15 +320,15 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_clamps_original() {
-        let draft = "t".repeat(AGENT_REPLY_CHAR_LIMIT + 5);
+        let draft = "t".repeat(ReplyLimits::GROK.hard + 5);
         let llm = ScriptedClient::new(vec![Scripted::Sleep(Duration::from_secs(5))]);
         let opts = RewordOpts {
             timeout: Duration::from_millis(20),
             ..opts()
         };
-        let out = prepare_agent_reply(&llm, &draft, &opts).await;
+        let out = prepare_agent_reply(&llm, &draft, &opts, &ReplyLimits::GROK).await;
         assert!(out.starts_with('t'));
-        assert_eq!(out.chars().count(), AGENT_REPLY_CHAR_LIMIT);
+        assert_eq!(out.chars().count(), ReplyLimits::GROK.hard);
         assert!(out.ends_with('…'));
     }
 
@@ -315,9 +336,9 @@ mod tests {
     async fn control_chars_are_collapsed_before_the_length_check() {
         // Raw length is well over the limit; after collapsing newlines it
         // is a short line and must not trigger a rewrite.
-        let draft = format!("hello{}\nworld", "\n".repeat(AGENT_REPLY_CHAR_LIMIT));
+        let draft = format!("hello{}\nworld", "\n".repeat(ReplyLimits::GROK.hard));
         let llm = ScriptedClient::new(vec![]);
-        let out = prepare_agent_reply(&llm, &draft, &opts()).await;
+        let out = prepare_agent_reply(&llm, &draft, &opts(), &ReplyLimits::GROK).await;
         assert_eq!(out, "hello world");
         assert!(llm.chat_calls().is_empty());
     }
@@ -325,7 +346,13 @@ mod tests {
     #[tokio::test]
     async fn thought_marker_prefix_is_stripped() {
         let llm = ScriptedClient::new(vec![]);
-        let out = prepare_agent_reply(&llm, "thought scratch | hello there", &opts()).await;
+        let out = prepare_agent_reply(
+            &llm,
+            "thought scratch | hello there",
+            &opts(),
+            &ReplyLimits::GROK,
+        )
+        .await;
         assert_eq!(out, "hello there");
         assert!(llm.chat_calls().is_empty());
     }
@@ -336,18 +363,75 @@ mod tests {
     #[tokio::test]
     async fn whitespace_only_draft_is_empty() {
         let llm = ScriptedClient::new(vec![]);
-        let out = prepare_agent_reply(&llm, "  \n\t  ", &opts()).await;
+        let out = prepare_agent_reply(&llm, "  \n\t  ", &opts(), &ReplyLimits::GROK).await;
         assert_eq!(out, "");
         assert!(llm.chat_calls().is_empty());
     }
 
     #[tokio::test]
     async fn clamp_lands_on_a_char_boundary() {
-        let draft = "ä".repeat(AGENT_REPLY_CHAR_LIMIT + 10);
+        let draft = "ä".repeat(ReplyLimits::GROK.hard + 10);
         let llm = ScriptedClient::new(vec![Scripted::Error]);
-        let out = prepare_agent_reply(&llm, &draft, &opts()).await;
-        assert_eq!(out.chars().count(), AGENT_REPLY_CHAR_LIMIT);
+        let out = prepare_agent_reply(&llm, &draft, &opts(), &ReplyLimits::GROK).await;
+        assert_eq!(out.chars().count(), ReplyLimits::GROK.hard);
         assert!(out.ends_with('…'));
         assert!(out.is_char_boundary(out.len()));
+    }
+
+    fn split_limits() -> ReplyLimits {
+        ReplyLimits {
+            soft: 100,
+            hard: 200,
+        }
+    }
+
+    #[test]
+    fn grok_limits_stay_at_490() {
+        assert_eq!(ReplyLimits::GROK.soft, 490);
+        assert_eq!(ReplyLimits::GROK.hard, 490);
+    }
+
+    #[tokio::test]
+    async fn over_soft_triggers_one_rewrite_aimed_at_soft() {
+        let draft = "x".repeat(101);
+        let llm = ScriptedClient::new(vec![Scripted::Text("short".into())]);
+        let out = prepare_agent_reply(&llm, &draft, &opts(), &split_limits()).await;
+        assert_eq!(out, "short");
+        assert_eq!(llm.chat_calls().len(), 1);
+        let prompt = &llm.chat_calls()[0].messages[0].content;
+        assert!(
+            prompt.contains("at most 100 characters"),
+            "rewrite must aim at soft, got {prompt:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rewrite_between_soft_and_hard_is_sent_without_clamp() {
+        let draft = "a".repeat(150);
+        let rewrite = "b".repeat(150);
+        let llm = ScriptedClient::new(vec![Scripted::Text(rewrite.clone())]);
+        let out = prepare_agent_reply(&llm, &draft, &opts(), &split_limits()).await;
+        assert_eq!(out, rewrite);
+        assert!(!out.ends_with('…'));
+        assert_eq!(out.chars().count(), 150);
+    }
+
+    #[tokio::test]
+    async fn failed_rewrite_over_hard_is_clamped_to_hard() {
+        let draft = "c".repeat(250);
+        let llm = ScriptedClient::new(vec![Scripted::Error]);
+        let out = prepare_agent_reply(&llm, &draft, &opts(), &split_limits()).await;
+        assert_eq!(out.chars().count(), 200);
+        assert!(out.starts_with('c'));
+        assert!(out.ends_with('…'));
+    }
+
+    #[tokio::test]
+    async fn at_soft_does_not_reword() {
+        let draft = "x".repeat(100);
+        let llm = ScriptedClient::new(vec![]);
+        let out = prepare_agent_reply(&llm, &draft, &opts(), &split_limits()).await;
+        assert_eq!(out, draft);
+        assert!(llm.chat_calls().is_empty());
     }
 }

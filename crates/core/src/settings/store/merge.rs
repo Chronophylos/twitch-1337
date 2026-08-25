@@ -59,6 +59,15 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.ai.behavior.min_response_delay_ms {
         into.ai.behavior.min_response_delay_ms = Some(v);
     }
+    if let Some(v) = patch.ai.behavior.reply_target_chars {
+        into.ai.behavior.reply_target_chars = Some(v);
+    }
+    if let Some(v) = patch.ai.behavior.reply_soft_chars {
+        into.ai.behavior.reply_soft_chars = Some(v);
+    }
+    if let Some(v) = patch.ai.behavior.reply_hard_chars {
+        into.ai.behavior.reply_hard_chars = Some(v);
+    }
     // AI history
     if let Some(v) = patch.ai.history.length {
         into.ai.history.length = Some(v);

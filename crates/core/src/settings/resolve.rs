@@ -166,6 +166,18 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .behavior
                 .min_response_delay_ms
                 .unwrap_or(defaults.behavior.min_response_delay_ms),
+            reply_target_chars: o
+                .behavior
+                .reply_target_chars
+                .unwrap_or(defaults.behavior.reply_target_chars),
+            reply_soft_chars: o
+                .behavior
+                .reply_soft_chars
+                .unwrap_or(defaults.behavior.reply_soft_chars),
+            reply_hard_chars: o
+                .behavior
+                .reply_hard_chars
+                .unwrap_or(defaults.behavior.reply_hard_chars),
         },
         history: AiHistory {
             length: o.history.length.unwrap_or(defaults.history.length),

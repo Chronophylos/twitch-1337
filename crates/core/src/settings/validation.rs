@@ -217,6 +217,38 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
     if ai.behavior.persona_name.trim().is_empty() {
         err(errs, "ai.behavior.persona_name", "must not be empty".into());
     }
+    for (field, value) in [
+        (
+            "ai.behavior.reply_target_chars",
+            ai.behavior.reply_target_chars,
+        ),
+        ("ai.behavior.reply_soft_chars", ai.behavior.reply_soft_chars),
+        ("ai.behavior.reply_hard_chars", ai.behavior.reply_hard_chars),
+    ] {
+        if !(1..=500).contains(&value) {
+            err(errs, field, format!("must be 1..=500 (got {value})"));
+        }
+    }
+    if ai.behavior.reply_target_chars > ai.behavior.reply_soft_chars {
+        err(
+            errs,
+            "ai.behavior.reply_target_chars",
+            format!(
+                "must be <= reply_soft_chars ({} > {})",
+                ai.behavior.reply_target_chars, ai.behavior.reply_soft_chars
+            ),
+        );
+    }
+    if ai.behavior.reply_soft_chars > ai.behavior.reply_hard_chars {
+        err(
+            errs,
+            "ai.behavior.reply_soft_chars",
+            format!(
+                "must be <= reply_hard_chars ({} > {})",
+                ai.behavior.reply_soft_chars, ai.behavior.reply_hard_chars
+            ),
+        );
+    }
     if ai.history.length > crate::ai::chat_history::MAX_HISTORY_LENGTH {
         err(
             errs,
@@ -464,6 +496,61 @@ mod tests {
         assert!(
             errs.iter()
                 .any(|e| e.field == "ai.behavior.max_turn_rounds")
+        );
+    }
+
+    fn reply_len_err(s: Settings) -> Vec<crate::settings::FieldError> {
+        s.validate(&ValidationContext {
+            channel: "test".into(),
+        })
+        .expect_err("must fail")
+    }
+
+    #[test]
+    fn validate_rejects_reply_target_out_of_range() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.behavior.reply_target_chars = 0;
+        let errs = reply_len_err(s);
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.behavior.reply_target_chars")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_reply_hard_above_helix() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.behavior.reply_hard_chars = 501;
+        let errs = reply_len_err(s);
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.behavior.reply_hard_chars")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_target_greater_than_soft() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.behavior.reply_target_chars = 400;
+        s.ai.behavior.reply_soft_chars = 300;
+        s.ai.behavior.reply_hard_chars = 490;
+        let errs = reply_len_err(s);
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.behavior.reply_target_chars")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_soft_greater_than_hard() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.behavior.reply_target_chars = 200;
+        s.ai.behavior.reply_soft_chars = 400;
+        s.ai.behavior.reply_hard_chars = 300;
+        let errs = reply_len_err(s);
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.behavior.reply_soft_chars")
         );
     }
 

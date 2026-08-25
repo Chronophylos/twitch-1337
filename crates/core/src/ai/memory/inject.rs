@@ -21,7 +21,7 @@ const FENCE_CLOSE: &str = "<<<ENDFILE";
 // runtime by the !ai handler and the dreamer ritual. The repo copy
 // (`crates/data/assets/prompts/`) is the single source of truth — no on-disk
 // override, no drift. Substitution of `{speaker_*}`/`{date}`/`{model}`/`{channel}`
-// happens in `substitute` below.
+// / `{reply_target}`/`{reply_hard}` happens in `substitute` below.
 pub(crate) const PROMPT_SYSTEM: &str = twitch_1337_data::prompts::SYSTEM;
 pub(crate) const PROMPT_GROK: &str = twitch_1337_data::prompts::GROK;
 pub(crate) const PROMPT_INSTRUCTIONS: &str = twitch_1337_data::prompts::AI_INSTRUCTIONS;
@@ -151,6 +151,8 @@ pub struct SubstitutionVars<'a> {
     pub date: &'a str,
     pub model: &'a str,
     pub model_id: &'a str,
+    pub reply_target: &'a str,
+    pub reply_hard: &'a str,
 }
 
 pub fn substitute(template: &str, v: SubstitutionVars<'_>) -> String {
@@ -163,6 +165,8 @@ pub fn substitute(template: &str, v: SubstitutionVars<'_>) -> String {
         .replace("{date}", v.date)
         .replace("{model}", v.model)
         .replace("{model_id}", v.model_id)
+        .replace("{reply_target}", v.reply_target)
+        .replace("{reply_hard}", v.reply_hard)
 }
 
 pub struct BuildOpts {
@@ -950,6 +954,8 @@ mod tests {
                 date: "2026-04-30",
                 model: "Google Gemma 3 4B",
                 model_id: "google/gemma-3-4b-it",
+                reply_target: "480",
+                reply_hard: "490",
             },
         );
         assert_eq!(s, "hi alice on ch 2026-04-30 regular {unknown}");
@@ -971,6 +977,8 @@ mod tests {
                 date: "2026-05-16",
                 model: "Google Gemma 3 4B",
                 model_id: "google/gemma-3-4b-it",
+                reply_target: "480",
+                reply_hard: "490",
             },
         );
         assert!(out.contains(
@@ -991,16 +999,38 @@ mod tests {
                 date: "2026-05-16",
                 model: "Google Gemma 3 4B",
                 model_id: "google/gemma-3-4b-it",
+                reply_target: "480",
+                reply_hard: "490",
             },
         );
         assert_eq!(out, "model=Google Gemma 3 4B id=google/gemma-3-4b-it");
     }
 
-    /// The 8 substitution tokens `substitute` knows about. None may survive in
+    #[test]
+    fn substitute_replaces_reply_length_tokens() {
+        let out = substitute(
+            "Ziel: {reply_target}. Hard: {reply_hard}. leftover {unknown}",
+            SubstitutionVars {
+                speaker_username: "a",
+                speaker_display: "A",
+                speaker_user_id: "1",
+                speaker_role: "regular",
+                channel: "ch",
+                date: "2026-05-16",
+                model: "m",
+                model_id: "m",
+                reply_target: "200",
+                reply_hard: "400",
+            },
+        );
+        assert_eq!(out, "Ziel: 200. Hard: 400. leftover {unknown}");
+    }
+
+    /// The substitution tokens `substitute` knows about. None may survive in
     /// a bundled prompt's rendered output — a leak means a typo'd token in the
     /// template or a renamed var. (`{0,63}` and other literal braces in the
     /// prompts are not in this set and are left as-is by design.)
-    const KNOWN_TOKENS: [&str; 8] = [
+    const KNOWN_TOKENS: [&str; 10] = [
         "{speaker_username}",
         "{speaker_display}",
         "{speaker_user_id}",
@@ -1009,6 +1039,8 @@ mod tests {
         "{date}",
         "{model}",
         "{model_id}",
+        "{reply_target}",
+        "{reply_hard}",
     ];
 
     fn sample_vars() -> SubstitutionVars<'static> {
@@ -1021,6 +1053,8 @@ mod tests {
             date: "2026-05-16",
             model: "Google Gemma 3 4B",
             model_id: "google/gemma-3-4b-it",
+            reply_target: "480",
+            reply_hard: "490",
         }
     }
 
@@ -1051,8 +1085,12 @@ mod tests {
         // (interpolating it would split the stable cache prefix three ways).
         let out = substitute(PROMPT_SYSTEM, sample_vars());
         assert!(
-            out.contains("#euterheissgetraenk"),
-            "channel did not substitute:\n{out}"
+            out.contains("höchstens 480 Zeichen"),
+            "reply_target did not substitute:\n{out}"
+        );
+        assert!(
+            out.contains("490 Zeichen ist die harte Grenze"),
+            "reply_hard did not substitute:\n{out}"
         );
         // {speaker_role} must not live in system.md — interpolating it splits
         // the cache prefix three ways (regular/moderator/broadcaster).
@@ -1075,6 +1113,22 @@ mod tests {
         assert!(
             !PROMPT_GROK.contains("{speaker_role}"),
             "grok.md must not interpolate {{speaker_role}}"
+        );
+    }
+
+    #[test]
+    fn grok_prompt_keeps_baked_length_copy() {
+        assert!(
+            PROMPT_GROK.contains("Stay at or under 480 characters"),
+            "grok.md must keep the baked 480 target"
+        );
+        assert!(
+            PROMPT_GROK.contains("500 is the hard limit"),
+            "grok.md must keep the baked 500 hard limit"
+        );
+        assert!(
+            !PROMPT_GROK.contains("{reply_target}") && !PROMPT_GROK.contains("{reply_hard}"),
+            "grok.md must not interpolate Aurora length tokens"
         );
     }
 

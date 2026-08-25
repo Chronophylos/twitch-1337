@@ -26,10 +26,12 @@ The loader runs a simple `str::replace` pass before sending. Available tokens:
 | `{date}` | Today's Berlin-local date, `YYYY-MM-DD` | all |
 | `{model}` | Display name. OpenRouter: from provider catalog (normalized). Otherwise: same as `{model_id}`. | `system.md` |
 | `{model_id}` | Raw model id sent to the API (`ai.connection.model`). | `system.md` |
+| `{reply_target}` | Aurora's target reply length (`ai.behavior.reply_target_chars`, default 480). | `system.md` |
+| `{reply_hard}` | Aurora's hard trim ceiling (`ai.behavior.reply_hard_chars`, default 490). | `system.md` |
 
 Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no error, no warning. Check spelling.
 
-**Cache prefix constraint.** `{speaker_*}` tokens must not appear in `system.md`: interpolating them would split the stable cache prefix once per speaker role. They belong in `ai_instructions.md` (the user message). `{model}` and `{model_id}` in `system.md` are intentional; model identity changes rarely and is not per-user.
+**Cache prefix constraint.** `{speaker_*}` tokens must not appear in `system.md`: interpolating them would split the stable cache prefix once per speaker role. They belong in `ai_instructions.md` (the user message). `{model}`, `{model_id}`, `{reply_target}`, and `{reply_hard}` in `system.md` are intentional; they change only when the owner saves settings, not per user.
 
 ## Authoring guidelines
 
@@ -41,7 +43,7 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 
 **Replies**. The model's final assistant text (returned when it makes no more tool calls) is sent to chat as a single line, after control-char stripping and the rewrite/clamp path in `prepare_agent_reply`. Newlines collapse into a single chat line. There is no `say` tool — encourage the model to do memory updates first, then end the turn with the reply text.
 
-**Length nudge**. Prompts tell the model to stay ≤480 characters; 500 is the hard limit. After the tool loop, a reply over 490 characters gets one no-tools rewrite; if that fails or is still long, the line is clamped to 490 characters. The 480-byte IRC clamp does not run on agent replies.
+**Length nudge**. Aurora's `system.md` interpolates `{reply_target}` / `{reply_hard}` from `ai.behavior` (defaults 480 / 490), managed at `/settings → AI · Behavior`. After the tool loop, a reply over `reply_soft_chars` (default 490) gets one no-tools rewrite aimed at the soft limit; if that fails or the line is still over `reply_hard_chars`, it is clamped there. `@grok` keeps the baked "≤480, hard 500" copy in `grok.md` and still rewords/clamps at 490. The 480-byte IRC clamp does not run on agent replies.
 
 **Prefix stability (caching).** The chat-turn system message is built to be a byte-stable cache prefix so Gemini's implicit prompt cache hits (cached tokens bill at 0.25x). `build_chat_turn_messages` in `inject.rs` enforces the split: stable content (substituted `system.md`, the tool appendices, and durable SOUL/LORE/user memory) goes in the system message; everything per-turn (the relevant-emotes block, scratch, recent chat, `ai_instructions.md`, the instruction) goes in the user message. Two rules keep the prefix stable: do not interpolate per-speaker tokens into `system.md`, and do not append per-turn content to the system message. Both reintroduce a cache miss every turn.
 

@@ -91,6 +91,12 @@ struct SaveForm {
     ai_behavior_persona_name: Option<String>,
     #[serde(default)]
     ai_behavior_min_response_delay_ms: Option<u64>,
+    #[serde(default)]
+    ai_behavior_reply_target_chars: Option<usize>,
+    #[serde(default)]
+    ai_behavior_reply_soft_chars: Option<usize>,
+    #[serde(default)]
+    ai_behavior_reply_hard_chars: Option<usize>,
 
     // ---- AI history card ----
     #[serde(default)]
@@ -404,6 +410,7 @@ async fn reset(
         "suspend" => SettingsSection::Suspend,
         "emote_tracker_potat" => SettingsSection::EmoteTrackerPotat,
         "web_runtime" => SettingsSection::WebRuntime,
+        "ai_behavior" => SettingsSection::AiBehavior,
         other => {
             return Err(WebError::Validation {
                 field: "section".into(),
