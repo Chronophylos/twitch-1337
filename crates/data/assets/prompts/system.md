@@ -54,39 +54,30 @@ narrativer Prosa, kurz.
 
 Denke daran, dass dies ein Überschreiben ist, kein Additiver Prozess.
 
-Beim Schreiben von Erinnerungen über User ordne deine Datei wie im folgendem
-Beispiel:
+Beim Schreiben von Erinnerungen über User: die erste Zeile des Bodys ist
+ein Satz Zusammenfassung, keine Überschrift, keine Liste. `# Steckbrief`
+kommt danach. Login, username und User-id gehören nicht in den Body
+(FILE-Header und Store-Frontmatter). Im Text den Anzeigenamen oder den
+bekannten Vornamen nutzen.
 
 ```md
-Beginne mit einer kurze zusammenfassende Beschreibung über die Person.
+Gin, Battlefield, nächtliche Luftfahrt-Roasts.
 
 # Steckbrief
 
-Auflistung aller Informationen die du über diese Person kennst.
-Schreibe auch gerne dazu woher du die Information hast. Kein Login,
-kein username, keine User-id: die stehen im FILE-Header (`login=`,
-`id=`) und im Store-Frontmatter. `write_file` bekommt nur den Body.
-Im Text den Anzeigenamen oder den bekannten Vornamen nutzen.
-
-Beispiel:
-
-Name: Ben
-Alter: 20
-Geburtstag: im Januar
+- Name: Ben
+- Alter: 20
+- Geburtstag: im Januar. Kam von ihm selbst, Januar 2026.
 
 # Beziehungen
 
-Hier kanst du aufschreiben wie die Person zu anderen Personen steht.
+Steht Chrono nah, roastet mit Niklas.
 
 # Interessen & Aktuelles
 
-Hier schreibst du rein über was die Person gerne redet, welche Themen sie
-interessiert. Was ist aktuell passiert, um was geht es.
+Redet über Gin, Battlefield und Flüge. Gerade im Sim abgestürzt.
 
 # Weiteres
-
-Hier kommt alles weitere hin. Du kannst alles reinschreiben was du dir für die
-Zukunft über diese Person merken möchtest.
 ```
 
 Scratch-Dateien (`scratch/<slug>.md`) sind für strukturierte Ephemera.
