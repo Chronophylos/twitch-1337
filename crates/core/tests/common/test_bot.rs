@@ -910,10 +910,11 @@ pub struct FakeMouth {
 
 #[async_trait]
 impl Mouth for FakeMouth {
-    async fn speak(
-        &self,
-        _req: SpeakRequest<'_>,
-    ) -> std::result::Result<SpokenMessage, SpeakError> {
+    async fn speak(&self, req: SpeakRequest<'_>) -> std::result::Result<SpokenMessage, SpeakError> {
+        // Mirror HelixMouth: a trim-empty payload never hits the wire.
+        if req.text.trim().is_empty() {
+            return Err(SpeakError::Empty);
+        }
         Ok(SpokenMessage {
             message_id: Some(self.message_id.clone()),
             login: self.login.clone(),

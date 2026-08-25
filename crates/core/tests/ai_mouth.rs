@@ -219,3 +219,28 @@ async fn overlong_mouth_reply_is_rewritten_once() {
 
     bot.shutdown().await;
 }
+
+/// A whitespace-only model reply used to reach Helix as a single space
+/// (`collapse` does not trim). Helix then returned `SpeakError::Empty`,
+/// which Debug-logs as `error=Empty` and told chat the mouth account was
+/// broken. Same as a truly empty reply: stay silent.
+#[tokio::test]
+async fn whitespace_only_mouth_reply_is_silent() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_fake_mouth(Agent::Aurora, "aurora_bot", "42", "spoken-id-empty")
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("  \n\t  ");
+
+    bot.send("viewer", "!ai sag was").await;
+    bot.expect_silent(Duration::from_millis(600)).await;
+
+    let entries = bot.primary_history_snapshot().await;
+    assert!(
+        !entries.iter().any(|e| e.source == ChatHistorySource::Bot),
+        "whitespace-only reply must not be spoken or recorded: {entries:?}"
+    );
+
+    bot.shutdown().await;
+}

@@ -23,10 +23,19 @@ pub struct RewordOpts {
     pub trace: TraceIds,
 }
 
+/// Collapse control chars, then trim. Whitespace-only drafts become empty
+/// so the caller can stay silent instead of sending a single space to Helix
+/// (which rejects it as [`crate::twitch::mouth::SpeakError::Empty`]).
+fn collapse_user_facing_line(draft: &str) -> String {
+    collapse_control_and_whitespace(clean_user_facing_ai_response(draft))
+        .trim()
+        .to_string()
+}
+
 /// Sanitize `draft`, optionally rewrite it once if it is over
 /// [`AGENT_REPLY_CHAR_LIMIT`] characters, then clamp to that limit.
 pub async fn prepare_agent_reply(llm: &dyn LlmClient, draft: &str, opts: &RewordOpts) -> String {
-    let cleaned = collapse_control_and_whitespace(clean_user_facing_ai_response(draft));
+    let cleaned = collapse_user_facing_line(draft);
     if cleaned.chars().count() <= AGENT_REPLY_CHAR_LIMIT {
         return cleaned;
     }
@@ -52,8 +61,8 @@ pub async fn prepare_agent_reply(llm: &dyn LlmClient, draft: &str, opts: &Reword
 
     let rewritten = match tokio::time::timeout(opts.timeout, llm.chat_completion(request)).await {
         Ok(Ok(text)) => {
-            let line = collapse_control_and_whitespace(clean_user_facing_ai_response(&text));
-            if line.trim().is_empty() {
+            let line = collapse_user_facing_line(&text);
+            if line.is_empty() {
                 warn!("agent rewrite returned empty, clamping original");
                 None
             } else {
@@ -212,6 +221,13 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn surrounding_whitespace_is_trimmed() {
+        let llm = ScriptedClient::new(vec![]);
+        let out = prepare_agent_reply(&llm, "  hello chat  ", &opts()).await;
+        assert_eq!(out, "hello chat");
+    }
+
+    #[tokio::test]
     async fn exactly_limit_does_not_reword() {
         let draft = "x".repeat(AGENT_REPLY_CHAR_LIMIT);
         let llm = ScriptedClient::new(vec![]);
@@ -311,6 +327,17 @@ mod tests {
         let llm = ScriptedClient::new(vec![]);
         let out = prepare_agent_reply(&llm, "thought scratch | hello there", &opts()).await;
         assert_eq!(out, "hello there");
+        assert!(llm.chat_calls().is_empty());
+    }
+
+    /// Collapse turns a whitespace-only draft into a single space. That is
+    /// not `str::is_empty`, so the command path used to hand it to Helix,
+    /// which then failed with `SpeakError::Empty` and logged `error=Empty`.
+    #[tokio::test]
+    async fn whitespace_only_draft_is_empty() {
+        let llm = ScriptedClient::new(vec![]);
+        let out = prepare_agent_reply(&llm, "  \n\t  ", &opts()).await;
+        assert_eq!(out, "");
         assert!(llm.chat_calls().is_empty());
     }
 
