@@ -427,6 +427,112 @@ async fn settings_page_renders_all_ai_cards() {
 }
 
 #[tokio::test]
+async fn settings_page_renders_aurora_reply_length_rows() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let app = build_router(state);
+    let req = Request::builder()
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    for name in [
+        "ai_behavior_reply_target_chars",
+        "ai_behavior_reply_soft_chars",
+        "ai_behavior_reply_hard_chars",
+    ] {
+        assert!(
+            html.contains(&format!("name=\"{name}\"")),
+            "behavior card is missing input {name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn owner_can_save_aurora_reply_length() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[
+            ("ai_behavior_reply_target_chars", "200"),
+            ("ai_behavior_reply_soft_chars", "300"),
+            ("ai_behavior_reply_hard_chars", "400"),
+        ],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let snap = state.settings.load();
+    assert_eq!(snap.ai.behavior.reply_target_chars, 200);
+    assert_eq!(snap.ai.behavior.reply_soft_chars, 300);
+    assert_eq!(snap.ai.behavior.reply_hard_chars, 400);
+}
+
+#[tokio::test]
+async fn reset_ai_behavior_restores_reply_length_defaults() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[
+            ("ai_behavior_reply_target_chars", "200"),
+            ("ai_behavior_reply_soft_chars", "300"),
+            ("ai_behavior_reply_hard_chars", "400"),
+        ],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+    let app = build_router(state.clone());
+    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings/reset/ai_behavior")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let snap = state.settings.load();
+    assert_eq!(snap.ai.behavior.reply_target_chars, 480);
+    assert_eq!(snap.ai.behavior.reply_soft_chars, 490);
+    assert_eq!(snap.ai.behavior.reply_hard_chars, 490);
+}
+
+#[tokio::test]
 async fn permissions_lists_render_pretty_resting_display() {
     // hidden_admins / viewer_allowlist / emote_usage_deny_list are the
     // multi-line (textarea) rows. Like every other settings row they must

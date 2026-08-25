@@ -161,6 +161,12 @@ struct AiBehaviorForm {
     ai_behavior_persona_name: Option<String>,
     #[serde(default)]
     ai_behavior_min_response_delay_ms: Option<u64>,
+    #[serde(default)]
+    ai_behavior_reply_target_chars: Option<usize>,
+    #[serde(default)]
+    ai_behavior_reply_soft_chars: Option<usize>,
+    #[serde(default)]
+    ai_behavior_reply_hard_chars: Option<usize>,
 }
 
 impl AiBehaviorForm {
@@ -173,6 +179,9 @@ impl AiBehaviorForm {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
             min_response_delay_ms: self.ai_behavior_min_response_delay_ms,
+            reply_target_chars: self.ai_behavior_reply_target_chars,
+            reply_soft_chars: self.ai_behavior_reply_soft_chars,
+            reply_hard_chars: self.ai_behavior_reply_hard_chars,
         }
     }
 }
@@ -602,6 +611,9 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
                 ai_behavior_max_writes_per_turn: form.ai_behavior_max_writes_per_turn,
                 ai_behavior_persona_name: form.ai_behavior_persona_name,
                 ai_behavior_min_response_delay_ms: form.ai_behavior_min_response_delay_ms,
+                ai_behavior_reply_target_chars: form.ai_behavior_reply_target_chars,
+                ai_behavior_reply_soft_chars: form.ai_behavior_reply_soft_chars,
+                ai_behavior_reply_hard_chars: form.ai_behavior_reply_hard_chars,
             }
             .into_overrides(),
             history: AiHistoryForm {
