@@ -59,11 +59,13 @@ client_secret = "your_client_secret"
 # If absent, the !ai command is disabled.
 #
 # Only credentials are read from this file: api_key plus an optional [ai.keys]
-# table of named keys. Provider, base URL, model, memory caps, dreamer
-# schedule, web/emote/media tools and every other AI knob live in named
-# profiles, managed at /ai-profiles (owner only) and persisted to
-# $DATA_DIR/settings.ron. A profile stores a key *name*, never the secret, so
-# switching providers from the dashboard never touches this file. Legacy
+# table of named keys. A profile stores a key *name*, never the secret, so
+# switching providers from the dashboard never touches this file.
+#
+# Provider, base URL, model, timeout, reasoning effort and service tier live
+# in named profiles, managed at /ai-profiles (mod-gated). Memory caps,
+# dreamer schedule, and web/emote/media tool toggles live in the dashboard at
+# /settings (owner only). Both persist to $DATA_DIR/settings.ron. Legacy
 # [ai].* keys from earlier versions are migrated into settings.ron once on
 # first v2 launch (sentinel: $DATA_DIR/.ai_migrated_v2).
 #
