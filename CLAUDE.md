@@ -137,7 +137,10 @@ once at startup, so adding or removing a mouth needs a bot restart. A mouth that
 is absent or fails to build is skipped and that agent replies through the
 utility bot's IRC connection instead. The persona name each agent speaks under
 lives in `settings.ron`: `ai.behavior.persona_name` (default `"Aurora"`) and
-`ai.grok.persona_name` (default `"Grok"`).
+`ai.grok.persona_name` (default `"Grok"`). Aurora's chat-reply length
+(`ai.behavior.reply_target_chars` / `reply_soft_chars` / `reply_hard_chars`,
+defaults 480/490/490) is live-tunable on `/settings → AI · Behavior`; Grok
+keeps a baked 480/500 prompt and a 490/490 reword-clamp.
 
 `[ai]` carries only the API key. Backend, model, base URL, memory caps,
 dreamer schedule, web/emote/media tool toggles, history caps, and every
@@ -181,8 +184,9 @@ the legacy section are ignored.
 Backend and connection `base_url` changes from the dashboard require a
 bot restart (UI shows a "restart required" badge). Everything else
 applies live via `SettingsHandle` (model, timeout, reasoning_effort,
-behavior limits, history caps, memory byte budgets, dreamer schedule,
-web tools, emotes, media). Model fields are plain text inputs — type the
+behavior limits including Aurora reply target/soft/hard character caps,
+history caps, memory byte budgets, dreamer schedule, web tools, emotes,
+media). Model fields are plain text inputs — type the
 upstream model id exactly.
 
 OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config structs are `Deserialize`-only; do NOT add `Serialize` derive (closes credential-leak via debug dump).
