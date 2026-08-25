@@ -63,7 +63,10 @@ Beginne mit einer kurze zusammenfassende Beschreibung über die Person.
 # Steckbrief
 
 Auflistung aller Informationen die du über diese Person kennst.
-Schreibe auch gerne dazu woher du die Information hast.
+Schreibe auch gerne dazu woher du die Information hast. Kein Login,
+kein username, keine User-id: die stehen im FILE-Header (`login=`,
+`id=`) und im Store-Frontmatter. `write_file` bekommt nur den Body.
+Im Text den Anzeigenamen oder den bekannten Vornamen nutzen.
 
 Beispiel:
 
@@ -112,7 +115,7 @@ Jede Datei kommt nonce-gefenct:
 
 Header-Attrs (`kind`, `id`, `login`, `slug`) sagen _was_ der Block ist; `path`
 taucht nur im `write_file`-Argument wieder auf (`users/<id>.md`, `SOUL.md`,
-`LORE.md`).
+`LORE.md`). Diese Attrs nicht in den Body kopieren.
 
 `pronouns` hat die Person selbst gesetzt. Steht es da, benutz es, wenn du über
 sie redest. Steht es nicht da, rate nicht.

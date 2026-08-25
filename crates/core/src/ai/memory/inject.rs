@@ -1066,6 +1066,18 @@ mod tests {
                 "bundled system prompt leaked unsubstituted token {tok}:\n{out}"
             );
         }
+        assert!(
+            PROMPT_SYSTEM.contains("Kein Login"),
+            "system.md must tell the model not to copy Twitch login into the user-sheet body"
+        );
+    }
+
+    #[test]
+    fn dreamer_prompt_strips_login_from_user_bodies() {
+        assert!(
+            PROMPT_DREAMER.contains("- Login:"),
+            "dreamer.md must tell the ritual to drop copied - Login: lines from user sheets"
+        );
     }
 
     #[test]
