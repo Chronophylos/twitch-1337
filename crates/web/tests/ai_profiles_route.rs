@@ -1,4 +1,6 @@
-//! Integration tests for /ai-profiles CRUD (mod-gated).
+//! Integration tests for /ai-profiles CRUD (owner-gated — issue I1: a
+//! profile carries `base_url`/`key`, the same credential surface that was
+//! owner-only on `main`).
 
 use std::sync::Arc;
 
@@ -10,8 +12,7 @@ use twitch_1337_web::build_router;
 
 mod helpers;
 use helpers::{
-    FakeHelix, build_state_with_all_dirs, cookie_header, insert_session, insert_session_as,
-    install_crypto,
+    FakeHelix, build_state_with_all_dirs, cookie_header, insert_session_as, install_crypto,
 };
 
 fn empty_helix() -> Arc<FakeHelix> {
@@ -67,7 +68,8 @@ async fn activate_switches_the_active_profile() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
-    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let (sid, csrf_cookie, bare_csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
 
     let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
@@ -88,7 +90,8 @@ async fn delete_refuses_to_remove_the_last_profile() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     seed_profiles(&state, vec![profile("only")], "only").await;
-    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let (sid, csrf_cookie, bare_csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
 
     let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
@@ -109,7 +112,8 @@ async fn delete_refuses_to_remove_the_active_profile() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     seed_profiles(&state, vec![profile("a"), profile("b")], "b").await;
-    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let (sid, csrf_cookie, bare_csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
 
     let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
@@ -127,21 +131,79 @@ async fn delete_refuses_to_remove_the_active_profile() {
     assert_eq!(settings.ai.active_profile, "b");
 }
 
+/// I1: `/ai-profiles` moved from mod-gated to owner-gated because a profile
+/// carries `base_url` and `key`, the same credential surface `/settings`
+/// kept owner-only on `main`. A mod (who was admitted here before this fix)
+/// must now be refused; an owner must still be admitted.
 #[tokio::test]
-async fn the_page_is_mod_gated() {
+async fn the_page_is_owner_gated() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+
     let (sid, csrf_cookie, _bare_csrf) =
         insert_session_as(&state, "111", "viewer", twitch_1337_web::auth::Role::Viewer);
     let app = build_router(state.clone());
-
     let req = Request::builder()
         .uri("/ai-profiles")
         .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
         .body(Body::empty())
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "a viewer must be refused"
+    );
+
+    let (sid, csrf_cookie, _bare_csrf) =
+        insert_session_as(&state, "999", "mod", twitch_1337_web::auth::Role::Mod);
+    let app = build_router(state.clone());
+    let req = Request::builder()
+        .uri("/ai-profiles")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN, "a mod must be refused");
+
+    let (sid, csrf_cookie, _bare_csrf) =
+        insert_session_as(&state, "123", "owner", twitch_1337_web::auth::Role::Owner);
+    let app = build_router(state.clone());
+    let req = Request::builder()
+        .uri("/ai-profiles")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "an owner must be admitted");
+}
+
+/// I1, mutating side: a mod's POST must be refused before it ever reaches
+/// the handler, not just the page GET.
+#[tokio::test]
+async fn mod_cannot_activate_a_profile() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
+    let (sid, csrf_cookie, bare_csrf) =
+        insert_session_as(&state, "999", "mod", twitch_1337_web::auth::Role::Mod);
+    let app = build_router(state.clone());
+
+    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
+    let req = Request::builder()
+        .method("POST")
+        .uri("/ai-profiles/b/activate")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        state.settings.load().ai.active_profile,
+        "a",
+        "a mod's activate must not take effect"
+    );
 }
 
 #[tokio::test]
@@ -149,7 +211,8 @@ async fn add_rejects_an_effort_the_provider_does_not_support() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     seed_profiles(&state, vec![profile("a")], "a").await;
-    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let (sid, csrf_cookie, bare_csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
 
     let body = format!(
@@ -173,7 +236,8 @@ async fn add_profile_persists_and_renders() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     seed_profiles(&state, vec![profile("a")], "a").await;
-    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let (sid, csrf_cookie, bare_csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
 
     let body = format!(
@@ -210,7 +274,8 @@ async fn edit_renaming_active_profile_carries_the_pointer() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     seed_profiles(&state, vec![profile("old")], "old").await;
-    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let (sid, csrf_cookie, bare_csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
 
     let body = format!(
@@ -257,7 +322,8 @@ async fn delete_clears_dangling_sub_agent_pointers() {
         )
         .await
         .expect("seed dreamer pointer");
-    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let (sid, csrf_cookie, bare_csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
 
     let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
@@ -286,7 +352,8 @@ async fn edit_rename_with_rejected_field_reopens_under_the_original_name_then_su
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     seed_profiles(&state, vec![profile("old")], "old").await;
-    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let (sid, csrf_cookie, bare_csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
 
     // Step 1: rename "old" -> "renamed" while also picking an effort the

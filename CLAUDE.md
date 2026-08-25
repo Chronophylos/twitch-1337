@@ -146,7 +146,9 @@ keeps a baked 480/500 prompt and a 490/490 reword-clamp.
 of named keys. A profile stores a key *name*, never the secret, so switching
 providers from the dashboard never touches config.toml. Provider, base URL,
 model, timeout, reasoning effort and service tier live in **profiles** — a
-named list (`ai.profiles`) CRUD'd at `/ai-profiles` (mod-gated). `ai.active_profile`
+named list (`ai.profiles`) CRUD'd at `/ai-profiles` (owner only — a profile
+carries `base_url`/`key`, the same credential surface `/settings` keeps
+owner-only). `ai.active_profile`
 names the profile `!ai` uses; dreamer, grok and media each take an optional
 per-profile override at `/settings`, falling back to the active profile when
 unset. Every AI client is resolved per call through `LlmRegistry`

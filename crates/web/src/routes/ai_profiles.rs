@@ -1,4 +1,5 @@
-//! `/ai-profiles` CRUD (mod-gated).
+//! `/ai-profiles` CRUD (owner only — a profile carries `base_url`/`key`, the
+//! same credential surface `/settings` keeps owner-only; see issue I1).
 //!
 //! Same shape as `/schedules`: a card grid plus an add/edit form, with
 //! validation errors re-rendered against the *persisted* rows and the
