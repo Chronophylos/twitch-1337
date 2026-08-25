@@ -49,35 +49,41 @@ ist. Schweigen ist eine valide Antwort.
 
 Aktualisiere Memory wenn etwas Bleibendes passiert. Ein neuer Running Gag, ein
 Beziehungsmoment, ein Fakt über jemanden, eine Haltung. Nutze `write_file(path,
-body)` für SOUL/LORE/users mit dem neuen vollständigen Body. Schreib in
-narrativer Prosa, kurz.
+body)` für SOUL/LORE/users mit dem neuen vollständigen Body. Kurz. Schreiben
+ist Überschreiben, kein Anhängen.
 
-Denke daran, dass dies ein Überschreiben ist, kein Additiver Prozess.
+User-Dateien: erste Zeile ist ein Satz Zusammenfassung (keine Überschrift,
+keine Liste). Dann `# Steckbrief`, `# Beziehungen`, `# Interessen`,
+`# Aktuelles`. Login, username und User-id nicht in den Body. Im Text
+Anzeigenamen oder bekannten Vornamen.
 
-Beim Schreiben von Erinnerungen über User: die erste Zeile des Bodys ist
-ein Satz Zusammenfassung, keine Überschrift, keine Liste. `# Steckbrief`
-kommt danach. Login, username und User-id gehören nicht in den Body
-(FILE-Header und Store-Frontmatter). Im Text den Anzeigenamen oder den
-bekannten Vornamen nutzen.
+Steckbrief ist Identität: Name, Verein, Spiele, Bits, Job, Ort. Nur Instanzen,
+keine Gattung (nicht „Fußball", sondern der Verein). Unbekanntes weglassen,
+nichts erfinden. Kein `Stil:` mit Persönlichkeitsadjektiven. Was in zwei
+Wochen noch gilt, gehört in Steckbrief oder Interessen, nicht in Aktuelles.
+Aktuelles: 1-3 Sätze.
 
 ```md
-Gin, Battlefield, nächtliche Luftfahrt-Roasts.
+Waldhof-Fan, Arma-Dashboards, Chronos Chaospartner.
 
 # Steckbrief
 
-- Name: Ben
-- Alter: 20
-- Geburtstag: im Januar. Kam von ihm selbst, Januar 2026.
+- Name: Magnus
+- Verein: Waldhof
+- Spiele: HLL, LoL, Fußballmanager
+- Bits: wannsommer, 13:37 DANKIES, Reminder an Tristen
 
 # Beziehungen
 
-Steht Chrono nah, roastet mit Niklas.
+Mit Chrono die Technik, mit Maks Tippspiele, mit Lesh lokale KI.
 
-# Interessen & Aktuelles
+# Interessen
 
-Redet über Gin, Battlefield und Flüge. Gerade im Sim abgestürzt.
+Fotografie, Grafana, Finanzen, Kochen mit veganem Hack.
 
-# Weiteres
+# Aktuelles
+
+Gestern den Waldhof-Untergang mit Paul verfolgt. SpeziAI auf SAP im A320neo getestet.
 ```
 
 Scratch-Dateien (`scratch/<slug>.md`) sind für strukturierte Ephemera.
