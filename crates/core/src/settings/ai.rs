@@ -5,11 +5,20 @@
 //! pre-hoist behavior so existing deployments see no drift after
 //! the schema bump.
 
+use std::sync::LazyLock;
+
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+use super::provider::AiProvider;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiSettings {
-    pub connection: AiConnection,
+    /// Named provider configurations. Switching the active one is a
+    /// dashboard action; no restart, no config.toml edit.
+    pub profiles: Vec<AiProfile>,
+    /// Name of the profile used for `!ai` turns and for any sub-agent
+    /// that does not override it.
+    pub active_profile: String,
     pub behavior: AiBehavior,
     pub history: AiHistory,
     pub memory: AiMemory,
@@ -21,19 +30,116 @@ pub struct AiSettings {
     pub media: AiMedia,
 }
 
+/// One named provider configuration.
+///
+/// `key` names an entry in config.toml's `[ai.keys]`; the secret itself
+/// never touches settings.ron. `None` means "the bare `[ai].api_key`".
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AiConnection {
-    pub backend: AiBackendKind,
+pub struct AiProfile {
+    pub name: String,
+    #[serde(default)]
+    pub key: Option<String>,
+    pub provider: AiProvider,
     pub base_url: Option<String>,
     pub model: String,
     pub timeout: u64,
     pub reasoning_effort: Option<String>,
-    /// OpenRouter service tier hint. `None` = default tier (no field sent).
-    /// Documented values: `"flex"`, `"priority"`. Only honored when the
-    /// connection points at OpenRouter; stripped at serialize time otherwise.
+    /// Service tier hint. Only honored when `provider.caps().service_tier`.
     pub service_tier: Option<String>,
 }
 
+impl Default for AiProfile {
+    fn default() -> Self {
+        Self {
+            name: "default".to_string(),
+            key: None,
+            provider: AiProvider::OpenRouter,
+            base_url: None,
+            model: String::new(),
+            timeout: 30,
+            reasoning_effort: None,
+            service_tier: None,
+        }
+    }
+}
+
+/// Last-resort profile handed out when the list is empty. A borrow has to
+/// come from somewhere and returning `Option` here would push a `.unwrap()`
+/// into every call site; an empty-model profile is already treated as
+/// "AI disabled" by the registry.
+static FALLBACK_PROFILE: LazyLock<AiProfile> = LazyLock::new(AiProfile::default);
+
+/// The profile a sub-agent actually runs on: `agent_profile` (its own
+/// `profile` override) when it names a row in `profiles`, otherwise
+/// `active_profile`'s row, falling back to the first profile in the list.
+/// Standalone (rather than an `AiSettings` method) so `resolve.rs` can call
+/// it while still assembling the `AiSettings` it would otherwise need
+/// `&self` for. `AiSettings::resolved_profile` and `settings::validation`'s
+/// `dreamer_caps`/`grok_caps` both funnel through this one lookup so the
+/// dashboard's caps-gated rows and save validation never disagree about
+/// which profile's caps apply — see MIGRATION(ai-provider-profiles) issue I2.
+pub fn resolved_profile_in<'a>(
+    profiles: &'a [AiProfile],
+    active_profile: &str,
+    agent_profile: Option<&str>,
+) -> &'a AiProfile {
+    agent_profile
+        .and_then(|name| profiles.iter().find(|p| p.name == name))
+        .or_else(|| profiles.iter().find(|p| p.name == active_profile))
+        .or_else(|| profiles.first())
+        .unwrap_or(&FALLBACK_PROFILE)
+}
+
+impl AiSettings {
+    pub fn by_name(&self, name: &str) -> Option<&AiProfile> {
+        self.profiles.iter().find(|p| p.name == name)
+    }
+
+    /// The profile `active_profile` names, or the first one if the name is
+    /// stale (a deleted profile leaves a dangling pointer until the next save).
+    pub fn active(&self) -> &AiProfile {
+        resolved_profile_in(&self.profiles, &self.active_profile, None)
+    }
+
+    /// The profile a sub-agent (dreamer, grok, media) actually runs on: the
+    /// profile its own `profile` override names, falling back to
+    /// [`active`](Self::active) when unset or when the name is stale.
+    pub fn resolved_profile(&self, agent_profile: Option<&str>) -> &AiProfile {
+        resolved_profile_in(&self.profiles, &self.active_profile, agent_profile)
+    }
+
+    /// The profile the dreamer pass will actually run on.
+    pub fn dreamer_profile(&self) -> &AiProfile {
+        self.resolved_profile(self.dreamer.profile.as_deref())
+    }
+
+    /// The profile `@grok` turns will actually run on.
+    pub fn grok_profile(&self) -> &AiProfile {
+        self.resolved_profile(self.grok.profile.as_deref())
+    }
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self {
+            profiles: vec![AiProfile::default()],
+            active_profile: "default".to_string(),
+            behavior: AiBehavior::default(),
+            history: AiHistory::default(),
+            memory: AiMemory::default(),
+            dreamer: AiDreamer::default(),
+            grok: AiGrok::default(),
+            prefill: None,
+            web: None,
+            emotes: None,
+            media: AiMedia::default(),
+        }
+    }
+}
+
+/// MIGRATION(ai-profiles): only reachable through the legacy
+/// `ai.connection` override block in pre-schema-6 settings.ron files.
+/// New code uses [`AiProvider`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AiBackendKind {
@@ -120,6 +226,9 @@ pub struct AiMemory {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiDreamer {
     pub enabled: bool,
+    /// Profile name to run this agent on. `None` = the active profile.
+    #[serde(default)]
+    pub profile: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     /// OpenRouter service tier hint for the dreamer pass. Falls back to
@@ -138,6 +247,9 @@ pub struct AiDreamer {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiGrok {
+    /// Profile name to run this agent on. `None` = the active profile.
+    #[serde(default)]
+    pub profile: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     /// OpenRouter service tier hint for `@grok` turns. Falls back to
@@ -154,6 +266,7 @@ pub struct AiGrok {
 impl Default for AiGrok {
     fn default() -> Self {
         Self {
+            profile: None,
             model: None,
             reasoning_effort: None,
             service_tier: None,
@@ -215,6 +328,9 @@ fn default_pinned_emotes() -> Vec<String> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiMedia {
+    /// Profile name to run this agent on. `None` = the active profile.
+    #[serde(default)]
+    pub profile: Option<String>,
     pub model: String,
     pub timeout: u64,
     pub max_image_size: bytesize::ByteSize,
@@ -222,19 +338,6 @@ pub struct AiMedia {
     pub max_audio_size: bytesize::ByteSize,
     pub max_video_size: bytesize::ByteSize,
     pub max_text_size: bytesize::ByteSize,
-}
-
-impl Default for AiConnection {
-    fn default() -> Self {
-        Self {
-            backend: AiBackendKind::OpenAi,
-            base_url: None,
-            model: String::new(),
-            timeout: 30,
-            reasoning_effort: None,
-            service_tier: None,
-        }
-    }
 }
 
 impl Default for AiBehavior {
@@ -277,6 +380,7 @@ impl Default for AiDreamer {
     fn default() -> Self {
         Self {
             enabled: true,
+            profile: None,
             model: None,
             reasoning_effort: None,
             service_tier: None,
@@ -328,6 +432,7 @@ impl Default for AiEmotes {
 impl Default for AiMedia {
     fn default() -> Self {
         Self {
+            profile: None,
             model: "~google/gemini-flash-latest".into(),
             timeout: 60,
             max_image_size: bytesize::ByteSize::mib(10),
@@ -447,8 +552,8 @@ mod tests {
     #[test]
     fn defaults_match_legacy_ai_config_defaults() {
         let s = AiSettings::default();
-        assert_eq!(s.connection.timeout, 30);
-        assert!(s.connection.base_url.is_none());
+        assert_eq!(s.active().timeout, 30);
+        assert!(s.active().base_url.is_none());
         assert_eq!(s.behavior.max_turn_rounds, 4);
         assert_eq!(s.behavior.max_writes_per_turn, 8);
         assert_eq!(s.behavior.reply_target_chars, 480);
@@ -476,7 +581,7 @@ mod tests {
         assert_eq!(s.media.model, "~google/gemini-flash-latest");
         assert_eq!(s.media.timeout, 60);
         assert_eq!(s.media.max_image_size.as_u64(), 10 * 1024 * 1024);
-        assert!(s.connection.service_tier.is_none());
+        assert!(s.active().service_tier.is_none());
         assert!(s.dreamer.service_tier.is_none());
         assert!(s.grok.model.is_none());
         assert!(s.grok.reasoning_effort.is_none());

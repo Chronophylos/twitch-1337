@@ -79,8 +79,20 @@ pub struct PingsOverrides {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiOverrides {
+    /// MIGRATION(ai-profiles): pre-schema-6 files carry a single
+    /// `connection` block. It is read-only — folded into a profile named
+    /// "default" at resolve time and never written back. Deleting this
+    /// field would make serde silently drop a live deployment's connection
+    /// override and revert the bot to compiled defaults on next start.
     #[serde(default)]
     pub connection: AiConnectionOverrides,
+    /// Whole-list override, same shape as `SettingsOverrides::schedules`:
+    /// per-field sparseness makes no sense for rows that can be added and
+    /// removed.
+    #[serde(default)]
+    pub profiles: Option<Vec<crate::settings::ai::AiProfile>>,
+    #[serde(default)]
+    pub active_profile: Option<String>,
     #[serde(default)]
     pub behavior: AiBehaviorOverrides,
     #[serde(default)]
@@ -167,6 +179,8 @@ pub struct AiDreamerOverrides {
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
+    pub profile: Option<Option<String>>,
+    #[serde(default)]
     pub model: Option<Option<String>>,
     #[serde(default)]
     pub reasoning_effort: Option<Option<String>>,
@@ -184,6 +198,8 @@ pub struct AiDreamerOverrides {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiGrokOverrides {
+    #[serde(default)]
+    pub profile: Option<Option<String>>,
     #[serde(default)]
     pub model: Option<Option<String>>,
     #[serde(default)]
@@ -257,6 +273,8 @@ pub struct AiEmotesOverrides {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiMediaOverrides {
+    #[serde(default)]
+    pub profile: Option<Option<String>>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]

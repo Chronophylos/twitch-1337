@@ -1,5 +1,8 @@
 //! Per-field validation for a resolved `Settings` snapshot.
 
+use std::collections::BTreeSet;
+
+use super::provider::Efforts;
 use super::{AiSettings, FieldError, Settings};
 
 /// Bootstrap-side context required for cross-field validation. `channel`
@@ -294,41 +297,173 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
             format!("must be HH:MM (got {:?})", ai.dreamer.run_at),
         );
     }
-    for (field, val) in [
-        (
-            "ai.connection.reasoning_effort",
-            ai.connection.reasoning_effort.as_deref(),
-        ),
+    if ai.profiles.is_empty() {
+        err(
+            errs,
+            "ai.profiles",
+            "at least one profile is required".into(),
+        );
+    }
+    if !ai.profiles.is_empty() && ai.by_name(&ai.active_profile).is_none() {
+        err(
+            errs,
+            "ai.active_profile",
+            format!("no profile named {:?}", ai.active_profile),
+        );
+    }
+
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for (idx, p) in ai.profiles.iter().enumerate() {
+        let at = |f: &str| format!("ai.profiles[{idx}].{f}");
+        let caps = p.provider.caps();
+
+        if p.name.trim().is_empty() {
+            err(errs, &at("name"), "must not be blank".into());
+        } else if !seen.insert(p.name.as_str()) {
+            err(
+                errs,
+                &at("name"),
+                format!("duplicate profile name {:?}", p.name),
+            );
+        }
+        if p.timeout == 0 || p.timeout > 600 {
+            err(errs, &at("timeout"), "must be between 1 and 600".into());
+        }
+        match p.base_url.as_deref().map(str::trim) {
+            None | Some("") => {
+                if caps.default_base_url.is_none() {
+                    err(
+                        errs,
+                        &at("base_url"),
+                        format!(
+                            "required for provider {:?} (no default)",
+                            p.provider.as_str()
+                        ),
+                    );
+                }
+            }
+            Some(u) => {
+                if reqwest::Url::parse(u).is_err() {
+                    err(errs, &at("base_url"), format!("not a valid URL: {u:?}"));
+                }
+            }
+        }
+        if let Some(k) = p.key.as_deref()
+            && k.trim().is_empty()
+        {
+            err(errs, &at("key"), "must be non-empty when set".into());
+        }
+        if let Some(v) = p.reasoning_effort.as_deref() {
+            if v.trim().is_empty() {
+                err(
+                    errs,
+                    &at("reasoning_effort"),
+                    "must be non-empty when set".into(),
+                );
+            } else if !caps.allows_effort(v.trim()) {
+                err(
+                    errs,
+                    &at("reasoning_effort"),
+                    match caps.efforts {
+                        Efforts::Fixed(list) => format!(
+                            "{:?} does not accept {v:?} (allowed: {})",
+                            p.provider.as_str(),
+                            list.join(", ")
+                        ),
+                        Efforts::None | Efforts::FreeText => {
+                            format!("{:?} has no reasoning effort setting", p.provider.as_str())
+                        }
+                    },
+                );
+            }
+        }
+        if let Some(v) = p.service_tier.as_deref() {
+            let trimmed = v.trim();
+            if !caps.service_tier {
+                err(
+                    errs,
+                    &at("service_tier"),
+                    format!("{:?} has no service tier setting", p.provider.as_str()),
+                );
+            } else if !matches!(trimmed, "flex" | "priority") {
+                err(
+                    errs,
+                    &at("service_tier"),
+                    format!("must be one of 'flex' | 'priority' (got {v:?})"),
+                );
+            }
+        }
+    }
+
+    for (field, sel) in [
+        ("ai.dreamer.profile", ai.dreamer.profile.as_deref()),
+        ("ai.grok.profile", ai.grok.profile.as_deref()),
+        ("ai.media.profile", ai.media.profile.as_deref()),
+    ] {
+        if let Some(name) = sel
+            && ai.by_name(name).is_none()
+        {
+            err(errs, field, format!("no profile named {name:?}"));
+        }
+    }
+
+    // Sub-agent overrides validate against the caps of the profile that
+    // agent will actually run on (its own `profile` pointer, or the active
+    // profile when unset) — not the profile list's index-0 entry. Same
+    // lookup the dashboard cards use to gate their reasoning_effort /
+    // service_tier rows (`AiSettings::dreamer_profile`/`grok_profile`), so
+    // the two never disagree (issue I2).
+    let dreamer_caps = ai.dreamer_profile().provider.caps();
+    let grok_caps = ai.grok_profile().provider.caps();
+    for (field, val, caps) in [
         (
             "ai.dreamer.reasoning_effort",
             ai.dreamer.reasoning_effort.as_deref(),
+            dreamer_caps,
         ),
         (
             "ai.grok.reasoning_effort",
             ai.grok.reasoning_effort.as_deref(),
+            grok_caps,
         ),
     ] {
-        if let Some(v) = val
-            && v.trim().is_empty()
-        {
-            err(errs, field, "must be non-empty when set".into());
+        if let Some(v) = val {
+            if v.trim().is_empty() {
+                err(errs, field, "must be non-empty when set".into());
+            } else if !caps.allows_effort(v.trim()) {
+                err(
+                    errs,
+                    field,
+                    match caps.efforts {
+                        Efforts::Fixed(list) => {
+                            format!("does not accept {v:?} (allowed: {})", list.join(", "))
+                        }
+                        Efforts::None | Efforts::FreeText => {
+                            "provider has no reasoning effort setting".into()
+                        }
+                    },
+                );
+            }
         }
     }
-    for (field, val) in [
-        (
-            "ai.connection.service_tier",
-            ai.connection.service_tier.as_deref(),
-        ),
+    for (field, val, caps) in [
         (
             "ai.dreamer.service_tier",
             ai.dreamer.service_tier.as_deref(),
+            dreamer_caps,
         ),
-        ("ai.grok.service_tier", ai.grok.service_tier.as_deref()),
+        (
+            "ai.grok.service_tier",
+            ai.grok.service_tier.as_deref(),
+            grok_caps,
+        ),
     ] {
         if let Some(v) = val {
             let trimmed = v.trim();
             if trimmed.is_empty() {
                 err(errs, field, "must be non-empty when set".into());
+            } else if !caps.service_tier {
+                err(errs, field, "provider has no service tier setting".into());
             } else if !matches!(trimmed, "flex" | "priority") {
                 err(
                     errs,
@@ -337,18 +472,6 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
                 );
             }
         }
-    }
-    if let Some(url) = ai.connection.base_url.as_deref()
-        && reqwest::Url::parse(url).is_err()
-    {
-        err(
-            errs,
-            "ai.connection.base_url",
-            format!("must be a valid URL (got {url:?})"),
-        );
-    }
-    if ai.connection.timeout == 0 {
-        err(errs, "ai.connection.timeout", "must be > 0".into());
     }
     if let Some(prefill) = &ai.prefill {
         if reqwest::Url::parse(&prefill.base_url).is_err() {
@@ -447,6 +570,119 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::{AiProfile, AiProvider};
+
+    fn ctx() -> ValidationContext {
+        ValidationContext {
+            channel: "test".into(),
+        }
+    }
+
+    fn profile(provider: AiProvider) -> AiProfile {
+        AiProfile {
+            name: "p".into(),
+            key: None,
+            provider,
+            base_url: Some("https://example.test/v1".into()),
+            model: "m".into(),
+            timeout: 30,
+            reasoning_effort: None,
+            service_tier: None,
+        }
+    }
+
+    fn with_profiles(list: Vec<AiProfile>, active: &str) -> Settings {
+        let mut s = Settings::compiled_defaults();
+        s.ai.profiles = list;
+        s.ai.active_profile = active.to_string();
+        s
+    }
+
+    #[test]
+    fn rejects_xhigh_on_stock_openai() {
+        let mut p = profile(AiProvider::OpenAi);
+        p.reasoning_effort = Some("xhigh".into());
+        let errs = with_profiles(vec![p], "p").validate(&ctx()).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.profiles[0].reasoning_effort")
+        );
+    }
+
+    #[test]
+    fn accepts_a_vendor_specific_effort_on_a_compatible_endpoint() {
+        let mut p = profile(AiProvider::OpenAiCompatible);
+        p.reasoning_effort = Some("turbo-brain".into());
+        assert!(with_profiles(vec![p], "p").validate(&ctx()).is_ok());
+    }
+
+    #[test]
+    fn rejects_any_effort_on_ollama() {
+        let mut p = profile(AiProvider::Ollama);
+        p.reasoning_effort = Some("medium".into());
+        let errs = with_profiles(vec![p], "p").validate(&ctx()).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.profiles[0].reasoning_effort")
+        );
+    }
+
+    #[test]
+    fn rejects_service_tier_where_the_provider_has_none() {
+        let mut p = profile(AiProvider::OpenAi);
+        p.service_tier = Some("flex".into());
+        let errs = with_profiles(vec![p], "p").validate(&ctx()).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.profiles[0].service_tier")
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_and_blank_names() {
+        let mut a = profile(AiProvider::OpenAi);
+        a.name = "dup".into();
+        let mut b = profile(AiProvider::OpenAi);
+        b.name = "dup".into();
+        let errs = with_profiles(vec![a, b], "dup")
+            .validate(&ctx())
+            .unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "ai.profiles[1].name"));
+
+        let mut blank = profile(AiProvider::OpenAi);
+        blank.name = "   ".into();
+        let errs = with_profiles(vec![blank], "   ")
+            .validate(&ctx())
+            .unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "ai.profiles[0].name"));
+    }
+
+    #[test]
+    fn rejects_an_empty_profile_list_and_a_dangling_active_pointer() {
+        let errs = with_profiles(vec![], "x").validate(&ctx()).unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "ai.profiles"));
+
+        let errs = with_profiles(vec![profile(AiProvider::OpenAi)], "nope")
+            .validate(&ctx())
+            .unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "ai.active_profile"));
+    }
+
+    #[test]
+    fn requires_a_base_url_where_the_provider_has_no_default() {
+        let mut p = profile(AiProvider::OpenAiCompatible);
+        p.base_url = None;
+        let errs = with_profiles(vec![p], "p").validate(&ctx()).unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "ai.profiles[0].base_url"));
+    }
+
+    #[test]
+    fn rejects_a_subagent_profile_that_does_not_exist() {
+        let mut s = with_profiles(vec![profile(AiProvider::OpenAi)], "p");
+        s.ai.dreamer.profile = Some("ghost".into());
+        let errs = s.validate(&ctx()).unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "ai.dreamer.profile"));
+    }
 
     #[test]
     fn validate_collects_multiple_errors() {
@@ -586,13 +822,13 @@ mod tests {
     #[test]
     fn validate_rejects_invalid_connection_base_url() {
         let mut s = Settings::compiled_defaults();
-        s.ai.connection.base_url = Some("not a url".into());
+        s.ai.profiles[0].base_url = Some("not a url".into());
         let errs = s
             .validate(&ValidationContext {
                 channel: "test".into(),
             })
             .expect_err("must fail");
-        assert!(errs.iter().any(|e| e.field == "ai.connection.base_url"));
+        assert!(errs.iter().any(|e| e.field == "ai.profiles[0].base_url"));
     }
 
     #[test]
@@ -625,15 +861,15 @@ mod tests {
     #[test]
     fn validate_rejects_unknown_service_tier_value() {
         let mut s = Settings::compiled_defaults();
-        s.ai.connection.service_tier = Some("turbo".to_string());
+        s.ai.profiles[0].service_tier = Some("turbo".to_string());
         let err = s
             .validate(&ValidationContext {
                 channel: "test".into(),
             })
             .expect_err("'turbo' must be rejected");
         assert!(
-            err.iter().any(|e| e.field == "ai.connection.service_tier"),
-            "expected field error for ai.connection.service_tier, got {err:?}"
+            err.iter().any(|e| e.field == "ai.profiles[0].service_tier"),
+            "expected field error for ai.profiles[0].service_tier, got {err:?}"
         );
     }
 

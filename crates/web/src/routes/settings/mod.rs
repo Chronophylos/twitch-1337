@@ -68,20 +68,6 @@ struct SaveForm {
     #[serde(default)]
     ping_public: Option<String>,
 
-    // ---- AI connection card ----
-    #[serde(default)]
-    ai_connection_backend: Option<String>,
-    #[serde(default)]
-    ai_connection_base_url: Option<String>,
-    #[serde(default)]
-    ai_connection_model: Option<String>,
-    #[serde(default)]
-    ai_connection_timeout: Option<u64>,
-    #[serde(default)]
-    ai_connection_reasoning_effort: Option<String>,
-    #[serde(default)]
-    ai_connection_service_tier: Option<String>,
-
     // ---- AI behavior card ----
     #[serde(default)]
     ai_behavior_max_turn_rounds: Option<usize>,
@@ -120,6 +106,8 @@ struct SaveForm {
 
     // ---- AI dreamer card ----
     #[serde(default)]
+    ai_dreamer_profile: String,
+    #[serde(default)]
     ai_dreamer_enabled: Option<String>,
     #[serde(default)]
     ai_dreamer_model: Option<String>,
@@ -137,6 +125,8 @@ struct SaveForm {
     ai_dreamer_max_writes_per_turn: Option<usize>,
 
     // ---- AI grok card ----
+    #[serde(default)]
+    ai_grok_profile: String,
     #[serde(default)]
     ai_grok_model: Option<String>,
     #[serde(default)]
@@ -193,6 +183,8 @@ struct SaveForm {
     ai_emotes_base_url: Option<String>,
 
     // ---- AI media card ----
+    #[serde(default)]
+    ai_media_profile: String,
     #[serde(default)]
     ai_media_model: Option<String>,
     #[serde(default)]
@@ -259,14 +251,12 @@ struct SaveForm {
 /// process restart, so the dashboard can surface a "restart bot to apply"
 /// hint in the flash. The rest of the AI knobs are read live via
 /// `SettingsHandle` and require no restart.
+///
+/// Provider and base URL used to be listed here. Under profiles they are
+/// per-profile knobs and switching profiles is a live dashboard action, so
+/// the restart hint no longer applies to them.
 fn restart_required(before: &AiSettings, after: &AiSettings) -> Vec<String> {
     let mut out = Vec::new();
-    if before.connection.backend != after.connection.backend {
-        out.push("ai.connection.backend".into());
-    }
-    if before.connection.base_url != after.connection.base_url {
-        out.push("ai.connection.base_url".into());
-    }
     if before.prefill.is_none() && after.prefill.is_some() {
         out.push("ai.prefill (enabling requires restart)".into());
     }

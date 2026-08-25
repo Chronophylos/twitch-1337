@@ -28,7 +28,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use eyre::Result;
-use llm::LlmClient;
 use tokio::sync::{mpsc::UnboundedReceiver, oneshot};
 use tracing::info;
 use twitch_irc::{
@@ -79,10 +78,9 @@ pub use util::{
 /// Production wires real implementations; integration tests wire fakes.
 pub struct Services {
     pub clock: Arc<dyn Clock>,
-    /// Bootstrap-only AI credentials from `config.toml`. Presence gates the
-    /// AI feature; all knobs come from the settings store.
-    pub ai_bootstrap: Option<crate::config::AiBootstrap>,
-    pub llm: Option<Arc<dyn LlmClient>>,
+    /// Resolves an AI profile name to a live client on every turn, so a
+    /// dashboard profile switch applies without a restart.
+    pub llm: Arc<crate::llm_factory::LlmRegistry>,
     pub aviation: Option<AviationClient>,
     /// DHL tracking client backing Aurora's `track_shipment`. `None` when
     /// `[dhl]` is absent from config.toml, which hides the tool entirely.
@@ -204,7 +202,6 @@ where
 {
     let Services {
         clock,
-        ai_bootstrap: _,
         llm,
         aviation,
         dhl,
@@ -263,8 +260,8 @@ where
     // 7TV emote provider: built once at startup when AI + emotes + tracker are
     // all present. If ai.emotes is on but the tracker failed to open, emote
     // grounding is disabled and the bot continues.
-    let emote_provider = match (llm.as_ref(), config.ai.as_ref()) {
-        (Some(_), Some(_)) => {
+    let emote_provider = match (llm.is_usable(), config.ai.as_ref()) {
+        (true, Some(_)) => {
             if settings.load().ai.emotes.is_some() {
                 match emote_tracker.clone() {
                     Some(tracker) => {
@@ -357,11 +354,11 @@ where
 
     // Daily dreamer ritual. Re-reads settings each loop iteration so dashboard
     // edits to ai.dreamer.* apply on the next scheduled run without a restart.
-    if let (Some(llm), Some(mem)) = (llm_for_ritual.as_ref(), &ai_memory_v2_for_ritual)
+    if let Some(mem) = &ai_memory_v2_for_ritual
         && ai_present_for_ritual
     {
         crate::ai::memory::ritual::spawn_ritual(
-            llm.clone(),
+            llm_for_ritual.clone(),
             mem.store.clone(),
             mem.transcript.clone(),
             settings_for_ritual.clone(),

@@ -6,11 +6,11 @@ use eyre::Result;
 use tracing::{debug, error, instrument};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use llm::{ChatCompletionRequest, LlmClient, Message, TraceIds};
+use llm::{ChatCompletionRequest, Message, TraceIds};
 
 use crate::ai::command::ChatContext;
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
-use crate::settings::SettingsHandle;
+use crate::llm_factory::LlmRegistry;
 
 use super::{Command, CommandContext};
 
@@ -23,22 +23,19 @@ const LLM_ERROR_MESSAGE: &str = "Da ist was schiefgelaufen FDM";
 const LLM_TIMEOUT_MESSAGE: &str = "Das hat zu lange gedauert Waiting";
 
 pub struct HaikuCommand {
-    llm_client: Arc<dyn LlmClient>,
-    settings: SettingsHandle,
+    registry: Arc<LlmRegistry>,
     cooldown: Arc<PerUserCooldown>,
     chat_ctx: Option<ChatContext>,
 }
 
 impl HaikuCommand {
     pub fn new(
-        llm_client: Arc<dyn LlmClient>,
-        settings: SettingsHandle,
+        registry: Arc<LlmRegistry>,
         chat_ctx: Option<ChatContext>,
         cooldown: Arc<PerUserCooldown>,
     ) -> Self {
         Self {
-            llm_client,
-            settings,
+            registry,
             cooldown,
             chat_ctx,
         }
@@ -151,10 +148,13 @@ where
 
         self.cooldown.record(user).await;
 
-        let snap = self.settings.load();
-        let model = snap.ai.connection.model.clone();
-        let timeout = Duration::from_secs(snap.ai.connection.timeout);
-        drop(snap);
+        let Some((llm_client, profile)) = self.registry.resolve(None) else {
+            error!("Haiku AI skipped, no usable LLM profile");
+            ctx.sender.reply(ctx.privmsg, LLM_ERROR_MESSAGE).await;
+            return Ok(());
+        };
+        let model = profile.model.clone();
+        let timeout = Duration::from_secs(profile.timeout);
 
         let user_message = format!(
             "Schreibe ein Haiku zu einem Thema aus diesem Twitch-Chat.\n{}",
@@ -175,7 +175,7 @@ where
             },
         };
 
-        let result = tokio::time::timeout(timeout, self.llm_client.chat_completion(request)).await;
+        let result = tokio::time::timeout(timeout, llm_client.chat_completion(request)).await;
 
         let response = match result {
             Ok(Ok(text)) => match format_haiku_for_chat(text.trim()) {

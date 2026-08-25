@@ -16,6 +16,7 @@ pub mod aviationstack;
 pub mod emote_tracker;
 pub mod migrate;
 pub mod overrides;
+pub mod provider;
 mod resolve;
 pub mod schedules;
 pub mod store;
@@ -26,8 +27,8 @@ mod validation;
 pub mod web;
 
 pub use ai::{
-    AiBackendKind, AiBehavior, AiConnection, AiDreamer, AiEmotes, AiGrok, AiHistory, AiMedia,
-    AiMemory, AiPrefill, AiSettings, AiWeb,
+    AiBackendKind, AiBehavior, AiDreamer, AiEmotes, AiGrok, AiHistory, AiMedia, AiMemory,
+    AiPrefill, AiProfile, AiSettings, AiWeb,
 };
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
@@ -35,6 +36,7 @@ pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
 pub use aviationstack::AviationstackSettings;
 pub use emote_tracker::{EmoteTrackerSettings, PotatAttributionSettings};
 pub use overrides::{AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides};
+pub use provider::{AiProvider, Efforts, ProviderCaps};
 pub use schedules::Schedule;
 pub use store::{Actor, SettingsStore};
 pub use suspend::SuspendSettings;
@@ -50,7 +52,7 @@ use thiserror::Error;
 
 pub type SettingsHandle = Arc<ArcSwap<Settings>>;
 
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Settings {
@@ -85,7 +87,7 @@ pub struct PingsSettings {
 pub enum SettingsSection {
     Cooldowns,
     Pings,
-    AiConnection,
+    AiProfiles,
     AiBehavior,
     AiHistory,
     AiMemory,
@@ -164,10 +166,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compiled_defaults_v5_layout() {
+    fn compiled_defaults_v6_layout() {
         let s = Settings::compiled_defaults();
-        assert_eq!(s.schema_version, 5);
+        assert_eq!(s.schema_version, 6);
         assert_eq!(s.ai, AiSettings::default());
+        assert_eq!(s.ai.profiles.len(), 1);
+        assert_eq!(s.ai.active_profile, "default");
+        assert_eq!(s.ai.active().provider, AiProvider::OpenRouter);
         assert_eq!(s.twitch, TwitchRuntime::default());
         assert_eq!(s.aviationstack, AviationstackSettings::default());
         assert_eq!(s.suspend, SuspendSettings::default());

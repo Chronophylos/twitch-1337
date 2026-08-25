@@ -288,11 +288,18 @@ impl OpenAiClient {
         if self.is_openrouter { tier } else { None }
     }
 
-    /// Creates a new OpenAI-compatible API client.
+    /// `is_openrouter` selects the reasoning/service-tier dialect. It is an
+    /// explicit argument rather than a URL sniff because a self-hosted proxy
+    /// can speak OpenRouter's dialect from any hostname, and because the
+    /// caller (a settings profile) already knows which provider it picked.
     #[instrument(skip(api_key))]
-    pub fn new(api_key: &str, base_url: Option<&str>, user_agent: &str) -> Result<Self> {
+    pub fn new(
+        api_key: &str,
+        base_url: Option<&str>,
+        user_agent: &str,
+        is_openrouter: bool,
+    ) -> Result<Self> {
         let base_url = base_url.unwrap_or(DEFAULT_BASE_URL).trim_end_matches('/');
-        let is_openrouter = base_url.contains("openrouter.ai");
 
         let mut headers = header::HeaderMap::new();
         headers.insert(
@@ -546,11 +553,7 @@ mod tests {
 
     fn test_client(is_openrouter: bool) -> OpenAiClient {
         ensure_crypto_provider();
-        OpenAiClient {
-            http: reqwest::Client::new(),
-            base_url: "https://example.test".to_string(),
-            is_openrouter,
-        }
+        OpenAiClient::new("k", None, "ua", is_openrouter).unwrap()
     }
 
     fn req_with_rounds(rounds: Vec<ToolCallRound>) -> ToolChatCompletionRequest {
@@ -894,6 +897,31 @@ mod tests {
     fn map_service_tier_omitted_when_none() {
         let client = test_client(true);
         assert!(client.map_service_tier(None).is_none());
+    }
+
+    #[test]
+    fn openrouter_dialect_is_explicit_not_sniffed() {
+        ensure_crypto_provider();
+        // A self-hosted OpenRouter-compatible proxy has no "openrouter.ai" in
+        // its URL but still speaks the reasoning-object dialect.
+        let c = OpenAiClient::new("k", Some("https://proxy.internal/v1"), "ua", true).unwrap();
+        let (flat, obj) = c.map_reasoning(Some("high".into()));
+        assert!(flat.is_none());
+        assert_eq!(obj.map(|r| r.effort), Some("high".to_string()));
+        assert_eq!(
+            c.map_service_tier(Some("flex".into())),
+            Some("flex".to_string())
+        );
+    }
+
+    #[test]
+    fn plain_openai_dialect_even_on_an_openrouter_url() {
+        ensure_crypto_provider();
+        let c = OpenAiClient::new("k", Some("https://openrouter.ai/api/v1"), "ua", false).unwrap();
+        let (flat, obj) = c.map_reasoning(Some("high".into()));
+        assert_eq!(flat, Some("high".to_string()));
+        assert!(obj.is_none());
+        assert_eq!(c.map_service_tier(Some("flex".into())), None);
     }
 
     #[test]

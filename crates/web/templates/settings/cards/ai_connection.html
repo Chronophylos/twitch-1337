@@ -1,94 +1,25 @@
 {# crates/web/templates/settings/cards/ai_connection.html #}
 {% import "settings/_macros.html" as m %}
 
+{# Signpost only: provider, base URL and model live in `AiProfile` rows now,
+   managed wholesale on /ai-profiles. This card has no form fields of its
+   own, so there's nothing here for the dashboard's dirty-tracking JS to
+   watch. #}
 <section id="sec-ai-connection" class="settings-card" data-section="ai_connection">
   <header class="settings-card-head">
     <div>
       <h2>AI · Connection</h2>
-      <p>How the bot reaches the LLM. Backend and base URL changes need a restart.</p>
+      <p>Provider, base URL and model live in profiles now. Switching applies immediately — no restart.</p>
     </div>
-    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
   <div class="settings-rows">
-    {# Inlined segmented row — `segmented_row` macro takes a list-of-dicts
-       which askama 0.16 can't construct inline. The `AiBackendKind::as_str`
-       helper makes the comparisons cheap and stringly-typed in one place. #}
-    <div class="settings-row" data-section="ai_connection">
-      {% call m::row_head("backend", "Which LLM backend the bot talks to.") %}{% endcall %}
+    <div class="settings-row">
+      {% call m::row_head("active_profile", "The profile used for !ai turns and any sub-agent that doesn't override it.") %}{% endcall %}
       <div class="row-control-cell">
-        <div class="segmented" role="radiogroup" aria-label="backend">
-          <label class="segment{% if current.ai.connection.backend.as_str() == "ollama" %} is-active{% endif %}">
-            <input type="radio" name="ai_connection_backend" value="ollama"
-                   data-default="{{ defaults.ai.connection.backend.as_str() }}" data-key="ai.connection.backend"
-                   {% if current.ai.connection.backend.as_str() == "ollama" %}checked{% endif %}>
-            <span>Ollama</span>
-          </label>
-          <label class="segment{% if current.ai.connection.backend.as_str() == "openai" %} is-active{% endif %}">
-            <input type="radio" name="ai_connection_backend" value="openai"
-                   data-default="{{ defaults.ai.connection.backend.as_str() }}" data-key="ai.connection.backend"
-                   {% if current.ai.connection.backend.as_str() == "openai" %}checked{% endif %}>
-            <span>OpenAI</span>
-          </label>
-        </div>
+        <span class="mono">{{ current.ai.active().name }}</span>
+        <span class="row-hint">{{ current.ai.active().provider.label() }} · {{ current.ai.active().model }}</span>
       </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.connection.backend") %}{% endcall %}
-        <span class="row-default">default <span class="mono">{{ defaults.ai.connection.backend.as_str() }}</span></span>
-      </div>
+      <div class="row-right"><a class="btn" href="/ai-profiles">Manage profiles</a></div>
     </div>
-
-    {% let conn_base_url = current.ai.connection.base_url.as_deref().unwrap_or("") %}
-    {% call m::text_row("ai_connection", "ai_connection_base_url", "base_url",
-       "Override the provider's API base URL. Empty = provider default.",
-       conn_base_url, "", "https://api.openai.com/v1") %}{% endcall %}
-
-    {% call m::model_row("ai_connection", "ai_connection_model", "model",
-       "Model used for !ai chat turns.",
-       current.ai.connection.model, defaults.ai.connection.model) %}{% endcall %}
-
-    {% call m::num_row_bounded("ai_connection", "ai_connection_timeout", "timeout",
-       "Per-request timeout for chat completions.",
-       current.ai.connection.timeout, defaults.ai.connection.timeout, "s", 1, 600) %}{% endcall %}
-
-    {% if current.ai.connection.backend.as_str() == "openai" %}
-    {# Resolve the active effort value once as a &str so the segments below
-       can do plain &str == &str comparisons (askama can't compare `&String`
-       to a `&str` literal directly). #}
-    {% let effort = current.ai.connection.reasoning_effort.as_deref().unwrap_or("none") %}
-    <div class="settings-row" data-section="ai_connection">
-      {% call m::row_head("reasoning_effort", "Hint for reasoning-capable OpenAI/OpenRouter models.") %}{% endcall %}
-      <div class="row-control-cell">
-        <div class="segmented" role="radiogroup" aria-label="reasoning_effort">
-          {% call m::effort_segment("ai_connection_reasoning_effort", "ai.connection.reasoning_effort", "none", effort) %}{% endcall %}
-          {% call m::effort_segment("ai_connection_reasoning_effort", "ai.connection.reasoning_effort", "minimal", effort) %}{% endcall %}
-          {% call m::effort_segment("ai_connection_reasoning_effort", "ai.connection.reasoning_effort", "medium", effort) %}{% endcall %}
-          {% call m::effort_segment("ai_connection_reasoning_effort", "ai.connection.reasoning_effort", "high", effort) %}{% endcall %}
-          {% call m::effort_segment("ai_connection_reasoning_effort", "ai.connection.reasoning_effort", "xhigh", effort) %}{% endcall %}
-        </div>
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.connection.reasoning_effort") %}{% endcall %}
-        <span class="row-default">default <span class="mono">none</span></span>
-      </div>
-    </div>
-    {% endif %}
-    {% let conn_or = current.ai.connection.backend.as_str() == "openai" && (conn_base_url.is_empty() || conn_base_url.contains("openrouter.ai")) %}
-    {% if conn_or %}
-    {% let tier = current.ai.connection.service_tier.as_deref().unwrap_or("none") %}
-    <div class="settings-row" data-section="ai_connection">
-      {% call m::row_head("service_tier", "OpenRouter pricing tier. Default 1×, Flex 0.5× (slower/availability-tradeoff), Priority 1.8× (faster).") %}{% endcall %}
-      <div class="row-control-cell">
-        <div class="segmented" role="radiogroup" aria-label="service_tier">
-          {% call m::tier_segment("ai_connection_service_tier", "ai.connection.service_tier", "none", "Default", tier) %}{% endcall %}
-          {% call m::tier_segment("ai_connection_service_tier", "ai.connection.service_tier", "flex", "Flex", tier) %}{% endcall %}
-          {% call m::tier_segment("ai_connection_service_tier", "ai.connection.service_tier", "priority", "Priority", tier) %}{% endcall %}
-        </div>
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.connection.service_tier") %}{% endcall %}
-        <span class="row-default">default <span class="mono">Default</span></span>
-      </div>
-    </div>
-    {% endif %}
   </div>
 </section>

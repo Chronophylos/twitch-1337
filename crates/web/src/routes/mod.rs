@@ -4,6 +4,7 @@ use axum::response::{Html, IntoResponse, Response};
 
 use crate::error::WebError;
 
+pub mod ai_profiles;
 pub mod assets;
 pub mod emotes;
 pub mod flights;

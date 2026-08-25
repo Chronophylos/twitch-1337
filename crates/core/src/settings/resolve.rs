@@ -1,7 +1,9 @@
 //! Override → effective `Settings` resolution. Each field falls through to the
 //! compile-time default when the sparse override leaves it unset.
 
+use super::ai::{AiBackendKind, AiProfile};
 use super::overrides;
+use super::provider::AiProvider;
 use super::{
     AiEmotes, AiPrefill, AiSettings, AiWeb, AviationstackSettings, Cooldowns, EmoteTrackerSettings,
     PingsSettings, PotatAttributionSettings, SCHEMA_VERSION, Settings, SuspendSettings,
@@ -125,29 +127,47 @@ impl Settings {
 }
 
 fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
-    use super::ai::{AiBehavior, AiConnection, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory};
+    use super::ai::{
+        AiBehavior, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory, resolved_profile_in,
+    };
+
+    let profiles = resolve_profiles(defaults, o);
+    let active_profile = o
+        .active_profile
+        .clone()
+        .or_else(|| {
+            // MIGRATION(ai-profiles): a legacy connection block always
+            // lands under the name "default".
+            legacy_profile(o).map(|p| p.name)
+        })
+        .unwrap_or_else(|| defaults.active_profile.clone());
+    let dreamer_profile = match &o.dreamer.profile {
+        Some(v) => v.clone(),
+        None => defaults.dreamer.profile.clone(),
+    };
+    let grok_profile = match &o.grok.profile {
+        Some(v) => v.clone(),
+        None => defaults.grok.profile.clone(),
+    };
+    // Same trap as the connection-block fold: the pre-profiles dashboard
+    // gated the dreamer/grok service_tier row on the connection's backend
+    // and URL rather than the sub-agent's own profile, and never gated
+    // reasoning_effort at all. A stored value that outlived a since-changed
+    // backend now hits the caps-checked validation added on this branch and
+    // would quarantine settings.ron. Resolve the caps of whichever profile
+    // the sub-agent will actually run on — the same lookup `validation.rs`
+    // and the dashboard cards use (`resolved_profile_in`, issue I2) — and
+    // drop what that profile can't accept.
+    let dreamer_caps = resolved_profile_in(&profiles, &active_profile, dreamer_profile.as_deref())
+        .provider
+        .caps();
+    let grok_caps = resolved_profile_in(&profiles, &active_profile, grok_profile.as_deref())
+        .provider
+        .caps();
+
     AiSettings {
-        connection: AiConnection {
-            backend: o.connection.backend.unwrap_or(defaults.connection.backend),
-            base_url: match &o.connection.base_url {
-                Some(v) => v.clone(),
-                None => defaults.connection.base_url.clone(),
-            },
-            model: o
-                .connection
-                .model
-                .clone()
-                .unwrap_or_else(|| defaults.connection.model.clone()),
-            timeout: o.connection.timeout.unwrap_or(defaults.connection.timeout),
-            reasoning_effort: match &o.connection.reasoning_effort {
-                Some(v) => v.clone(),
-                None => defaults.connection.reasoning_effort.clone(),
-            },
-            service_tier: match &o.connection.service_tier {
-                Some(v) => v.clone(),
-                None => defaults.connection.service_tier.clone(),
-            },
-        },
+        profiles,
+        active_profile,
         behavior: AiBehavior {
             max_turn_rounds: o
                 .behavior
@@ -205,6 +225,7 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
         },
         dreamer: AiDreamer {
             enabled: o.dreamer.enabled.unwrap_or(defaults.dreamer.enabled),
+            profile: dreamer_profile,
             model: match &o.dreamer.model {
                 Some(v) => v.clone(),
                 None => defaults.dreamer.model.clone(),
@@ -212,11 +233,13 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
             reasoning_effort: match &o.dreamer.reasoning_effort {
                 Some(v) => v.clone(),
                 None => defaults.dreamer.reasoning_effort.clone(),
-            },
+            }
+            .filter(|v| dreamer_caps.allows_effort(v.trim())),
             service_tier: match &o.dreamer.service_tier {
                 Some(v) => v.clone(),
                 None => defaults.dreamer.service_tier.clone(),
-            },
+            }
+            .filter(|_| dreamer_caps.service_tier),
             run_at: o
                 .dreamer
                 .run_at
@@ -233,6 +256,7 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .unwrap_or(defaults.dreamer.max_writes_per_turn),
         },
         grok: AiGrok {
+            profile: grok_profile,
             model: match &o.grok.model {
                 Some(v) => v.clone(),
                 None => defaults.grok.model.clone(),
@@ -240,11 +264,13 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
             reasoning_effort: match &o.grok.reasoning_effort {
                 Some(v) => v.clone(),
                 None => defaults.grok.reasoning_effort.clone(),
-            },
+            }
+            .filter(|v| grok_caps.allows_effort(v.trim())),
             service_tier: match &o.grok.service_tier {
                 Some(v) => v.clone(),
                 None => defaults.grok.service_tier.clone(),
-            },
+            }
+            .filter(|_| grok_caps.service_tier),
             // No override plumbing in v1 — baked default only (brief: dashboard
             // field is optional / not yet wired).
             persona_name: defaults.grok.persona_name.clone(),
@@ -253,6 +279,10 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
         web: resolve_web(defaults.web.as_ref(), &o.web),
         emotes: resolve_emotes(defaults.emotes.as_ref(), &o.emotes),
         media: AiMedia {
+            profile: match &o.media.profile {
+                Some(v) => v.clone(),
+                None => defaults.media.profile.clone(),
+            },
             model: o
                 .media
                 .model
@@ -278,6 +308,73 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .unwrap_or(defaults.media.max_text_size),
         },
     }
+}
+
+/// MIGRATION(ai-profiles): fold a pre-schema-6 `ai.connection` override into
+/// a single profile named "default". Returns `None` when the legacy block is
+/// entirely empty (a fresh install, or a file already on the new shape).
+fn legacy_profile(o: &overrides::AiOverrides) -> Option<AiProfile> {
+    let c = &o.connection;
+    if c.backend.is_none()
+        && c.base_url.is_none()
+        && c.model.is_none()
+        && c.timeout.is_none()
+        && c.reasoning_effort.is_none()
+        && c.service_tier.is_none()
+    {
+        return None;
+    }
+    let base_url = c.base_url.clone().flatten();
+    // Reproduces the pre-profiles sniff exactly: an empty base_url meant
+    // OpenRouter's default, and only "openrouter.ai" in the URL unlocked
+    // the reasoning-object + service-tier dialect.
+    let provider = match c.backend.unwrap_or(AiBackendKind::OpenAi) {
+        AiBackendKind::Ollama => AiProvider::Ollama,
+        AiBackendKind::OpenAi => match base_url.as_deref() {
+            None | Some("") => AiProvider::OpenRouter,
+            Some(u) if u.contains("openrouter.ai") => AiProvider::OpenRouter,
+            Some(_) => AiProvider::OpenAiCompatible,
+        },
+    };
+    let caps = provider.caps();
+    Some(AiProfile {
+        name: "default".to_string(),
+        key: None,
+        provider,
+        base_url: base_url.filter(|u| !u.is_empty()),
+        model: c.model.clone().unwrap_or_default(),
+        timeout: c.timeout.unwrap_or(30),
+        // The old dashboard hid these rows for backends that couldn't use
+        // them rather than clearing the stored value (a hidden row is
+        // absent from the POST, which the tri-state merge reads as
+        // "unchanged"). Drop what the mapped provider can't accept so a
+        // stale value from a since-abandoned backend can't fail the new,
+        // stricter caps validation and quarantine the whole file — the
+        // client already dropped these on the wire under the old caps-blind
+        // validation (`OllamaClient` never serialises either field,
+        // `OpenAiClient::map_service_tier` returns `None` off OpenRouter),
+        // so this changes nothing an operator could observe.
+        reasoning_effort: c
+            .reasoning_effort
+            .clone()
+            .flatten()
+            .filter(|v| caps.allows_effort(v.trim())),
+        service_tier: c
+            .service_tier
+            .clone()
+            .flatten()
+            .filter(|_| caps.service_tier),
+    })
+}
+
+fn resolve_profiles(defaults: &AiSettings, o: &overrides::AiOverrides) -> Vec<AiProfile> {
+    if let Some(list) = &o.profiles {
+        return list.clone();
+    }
+    if let Some(legacy) = legacy_profile(o) {
+        return vec![legacy];
+    }
+    defaults.profiles.clone()
 }
 
 fn resolve_prefill(
@@ -409,11 +506,8 @@ mod tests {
             ..SettingsOverrides::default()
         };
         let resolved = Settings::resolve(&defaults, &overrides);
-        assert_eq!(resolved.ai.connection.model, "gpt-5");
-        assert_eq!(
-            resolved.ai.connection.timeout,
-            defaults.ai.connection.timeout
-        );
+        assert_eq!(resolved.ai.active().model, "gpt-5");
+        assert_eq!(resolved.ai.active().timeout, defaults.ai.active().timeout);
     }
 
     #[test]
@@ -422,7 +516,7 @@ mod tests {
         overrides.ai.connection.service_tier = Some(Some("flex".to_string()));
         overrides.ai.dreamer.service_tier = Some(Some("priority".to_string()));
         let s = Settings::resolve(&Settings::compiled_defaults(), &overrides);
-        assert_eq!(s.ai.connection.service_tier.as_deref(), Some("flex"));
+        assert_eq!(s.ai.active().service_tier.as_deref(), Some("flex"));
         assert_eq!(s.ai.dreamer.service_tier.as_deref(), Some("priority"));
     }
 
@@ -430,11 +524,11 @@ mod tests {
     fn service_tier_explicit_clear_resolves_to_none() {
         // Set a non-None default to prove `Some(None)` clears it.
         let mut defaults = Settings::compiled_defaults();
-        defaults.ai.connection.service_tier = Some("flex".to_string());
+        defaults.ai.profiles[0].service_tier = Some("flex".to_string());
         let mut overrides = overrides::SettingsOverrides::default();
         overrides.ai.connection.service_tier = Some(None);
         let s = Settings::resolve(&defaults, &overrides);
-        assert!(s.ai.connection.service_tier.is_none());
+        assert!(s.ai.active().service_tier.is_none());
     }
 
     #[test]
@@ -602,5 +696,79 @@ mod tests {
         ovr.ai.dreamer.max_writes_per_turn = Some(50);
         let s = Settings::resolve(&Settings::compiled_defaults(), &ovr);
         assert_eq!(s.ai.dreamer.max_writes_per_turn, 50);
+    }
+
+    #[test]
+    fn legacy_connection_override_folds_into_a_default_profile() {
+        let mut o = SettingsOverrides::default();
+        o.ai.connection.backend = Some(AiBackendKind::OpenAi);
+        o.ai.connection.base_url = Some(Some("https://openrouter.ai/api/v1".into()));
+        o.ai.connection.model = Some("z-ai/glm-4.6".into());
+        o.ai.connection.reasoning_effort = Some(Some("high".into()));
+
+        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
+
+        assert_eq!(s.ai.active_profile, "default");
+        let p = s.ai.active();
+        assert_eq!(p.name, "default");
+        assert_eq!(p.provider, AiProvider::OpenRouter);
+        assert_eq!(p.model, "z-ai/glm-4.6");
+        assert_eq!(p.reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn legacy_ollama_backend_folds_to_the_ollama_provider() {
+        let mut o = SettingsOverrides::default();
+        o.ai.connection.backend = Some(AiBackendKind::Ollama);
+        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
+        assert_eq!(s.ai.active().provider, AiProvider::Ollama);
+    }
+
+    #[test]
+    fn legacy_openai_with_a_third_party_url_folds_to_compatible() {
+        let mut o = SettingsOverrides::default();
+        o.ai.connection.backend = Some(AiBackendKind::OpenAi);
+        o.ai.connection.base_url = Some(Some("https://api.deepseek.com/v1".into()));
+        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
+        assert_eq!(s.ai.active().provider, AiProvider::OpenAiCompatible);
+    }
+
+    #[test]
+    fn explicit_profiles_win_over_the_legacy_connection_block() {
+        let mut o = SettingsOverrides::default();
+        o.ai.connection.model = Some("legacy-model".into());
+        o.ai.profiles = Some(vec![AiProfile {
+            name: "local".into(),
+            key: None,
+            provider: AiProvider::Ollama,
+            base_url: None,
+            model: "qwen3:8b".into(),
+            timeout: 30,
+            reasoning_effort: None,
+            service_tier: None,
+        }]);
+        o.ai.active_profile = Some("local".into());
+
+        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
+        assert_eq!(s.ai.profiles.len(), 1);
+        assert_eq!(s.ai.active().model, "qwen3:8b");
+    }
+
+    #[test]
+    fn active_falls_back_to_the_first_profile_when_the_name_is_stale() {
+        let mut o = SettingsOverrides::default();
+        o.ai.profiles = Some(vec![AiProfile {
+            name: "a".into(),
+            key: None,
+            provider: AiProvider::Ollama,
+            base_url: None,
+            model: "m".into(),
+            timeout: 30,
+            reasoning_effort: None,
+            service_tier: None,
+        }]);
+        o.ai.active_profile = Some("gone".into());
+        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
+        assert_eq!(s.ai.active().name, "a");
     }
 }

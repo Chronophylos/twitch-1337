@@ -10,7 +10,7 @@ use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone as _};
 use chrono_tz::Europe::Berlin;
 use chrono_tz::Tz;
 use eyre::Result;
-use llm::{AgentOpts, AgentOutcome, LlmClient, Message, ToolChatCompletionRequest, run_agent};
+use llm::{AgentOpts, AgentOutcome, Message, ToolChatCompletionRequest, run_agent};
 use tokio::sync::Notify;
 use tracing::{error, info, warn};
 
@@ -22,6 +22,7 @@ use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::{DreamerExecutor, DreamerExecutorOpts, dreamer_tools};
 use crate::ai::memory::transcript::TranscriptWriter;
 use crate::ai::memory::types::FileKind;
+use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
 
@@ -41,7 +42,7 @@ fn resolve_berlin_run_at(date: NaiveDate, time: NaiveTime) -> Option<DateTime<Tz
 }
 
 pub fn spawn_ritual(
-    llm: Arc<dyn LlmClient>,
+    registry: Arc<LlmRegistry>,
     store: MemoryStore,
     transcript: TranscriptWriter,
     settings: SettingsHandle,
@@ -83,8 +84,15 @@ pub fn spawn_ritual(
                 _ = shutdown.notified() => return,
             }
             let yesterday = next.date_naive().pred_opt().expect("valid prev day");
-            if let Err(e) =
-                run_ritual(&*llm, &store, &transcript, &settings, &channel, yesterday).await
+            if let Err(e) = run_ritual(
+                &registry,
+                &store,
+                &transcript,
+                &settings,
+                &channel,
+                yesterday,
+            )
+            .await
             {
                 warn!(error = ?e, "dreamer ritual failed");
             }
@@ -109,7 +117,7 @@ fn transcript_user_ids(text: &str) -> BTreeSet<String> {
 }
 
 pub async fn run_ritual(
-    llm: &dyn LlmClient,
+    registry: &LlmRegistry,
     store: &MemoryStore,
     transcript: &TranscriptWriter,
     settings: &SettingsHandle,
@@ -119,21 +127,10 @@ pub async fn run_ritual(
     // Snapshot once at top; build local config from live settings values.
     let snap = settings.load_full();
     let ai = &snap.ai;
-    let model = ai
-        .dreamer
-        .model
-        .clone()
-        .unwrap_or_else(|| ai.connection.model.clone());
-    let reasoning_effort = ai
-        .dreamer
-        .reasoning_effort
-        .clone()
-        .or_else(|| ai.connection.reasoning_effort.clone());
-    let service_tier = ai
-        .dreamer
-        .service_tier
-        .clone()
-        .or_else(|| ai.connection.service_tier.clone());
+    let dreamer_profile = ai.dreamer.profile.clone();
+    let dreamer_model = ai.dreamer.model.clone();
+    let dreamer_reasoning_effort = ai.dreamer.reasoning_effort.clone();
+    let dreamer_service_tier = ai.dreamer.service_tier.clone();
     let timeout_secs = ai.dreamer.timeout_secs;
     let max_rounds = ai.dreamer.max_rounds;
     let max_writes_per_turn = ai.dreamer.max_writes_per_turn;
@@ -150,6 +147,15 @@ pub async fn run_ritual(
     // Rotate first, then bail: a misconfigured model must not leave today.md
     // growing forever without a date boundary.
     let dated = transcript.rotate_to(rotate_to).await?;
+    // Resolve fresh on every run, not once at spawn, so a dashboard profile
+    // switch (or an edit to ai.dreamer.profile) applies to the next run.
+    let Some((llm, base_profile)) = registry.resolve(dreamer_profile.as_deref()) else {
+        warn!("dreamer skipped, no usable LLM profile");
+        return Ok(());
+    };
+    let model = dreamer_model.unwrap_or(base_profile.model);
+    let reasoning_effort = dreamer_reasoning_effort.or(base_profile.reasoning_effort);
+    let service_tier = dreamer_service_tier.or(base_profile.service_tier);
     if model.trim().is_empty() {
         warn!("dreamer skipped, AI model is empty in settings");
         return Ok(());
@@ -265,7 +271,7 @@ pub async fn run_ritual(
         max_rounds,
         per_round_timeout: Some(Duration::from_secs(timeout_secs)),
     };
-    match run_agent(llm, req, &exec, opts).await {
+    match run_agent(&*llm, req, &exec, opts).await {
         Ok(AgentOutcome::Text(_)) => info!(rotated = %dated.display(), "dreamer ritual finished"),
         Ok(AgentOutcome::MaxRoundsExceeded) => warn!("dreamer max_rounds reached"),
         Ok(AgentOutcome::Timeout { round }) => warn!(round, "dreamer per-round timeout"),
@@ -379,11 +385,15 @@ not a transcript line
         // compiled_defaults has an empty connection.model; set it explicitly.
         {
             let mut s = (*settings.load_full()).clone();
-            s.ai.connection.model = "model-v1".into();
+            s.ai.profiles[0].model = "model-v1".into();
             settings.store(Arc::new(s));
         }
+        let registry = crate::llm_factory::LlmRegistry::fixed(
+            recorder.clone() as Arc<dyn LlmClient>,
+            settings.clone(),
+        );
         run_ritual(
-            recorder.as_ref(),
+            &registry,
             &store,
             &transcript,
             &settings,
@@ -396,13 +406,13 @@ not a transcript line
         // ── Second call: change model in settings (simulates a live dashboard edit) ──
         {
             let mut s = (*settings.load_full()).clone();
-            s.ai.connection.model = "model-v2".into();
+            s.ai.profiles[0].model = "model-v2".into();
             settings.store(Arc::new(s));
         }
         // Use a different date so rotate_to doesn't conflict with the already-rotated file.
         let yesterday2 = NaiveDate::from_ymd_opt(2026, 4, 16).unwrap();
         run_ritual(
-            recorder.as_ref(),
+            &registry,
             &store,
             &transcript,
             &settings,
@@ -466,7 +476,7 @@ not a transcript line
 
         let dir = TempDir::new().unwrap();
         let mut s = Settings::compiled_defaults();
-        s.ai.connection.model = "model-v1".into();
+        s.ai.profiles[0].model = "model-v1".into();
         s.ai.memory.soul_bytes = 9001;
         s.ai.memory.lore_bytes = 40_000;
         s.ai.memory.user_bytes = 12_345;
@@ -482,8 +492,12 @@ not a transcript line
                 .unwrap();
 
         let rec = Arc::new(SystemRecorder(Mutex::new(String::new())));
+        let registry = crate::llm_factory::LlmRegistry::fixed(
+            rec.clone() as Arc<dyn LlmClient>,
+            settings.clone(),
+        );
         run_ritual(
-            rec.as_ref(),
+            &registry,
             &store,
             &transcript,
             &settings,
@@ -555,9 +569,13 @@ not a transcript line
                 .unwrap();
 
         let client = Arc::new(Exploding(Mutex::new(0)));
+        let registry = crate::llm_factory::LlmRegistry::fixed(
+            client.clone() as Arc<dyn LlmClient>,
+            settings.clone(),
+        );
         let yesterday = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
         run_ritual(
-            client.as_ref(),
+            &registry,
             &store,
             &transcript,
             &settings,

@@ -3,6 +3,8 @@
 //! These are kept in the library so that handler modules (and integration
 //! tests) can reference them without going through the binary entry point.
 
+use std::collections::HashMap;
+
 use eyre::{Result, WrapErr, bail};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
@@ -64,12 +66,19 @@ pub struct DhlBootstrap {
     pub api_key: SecretString,
 }
 
-/// Bootstrap-only AI configuration. The secret api_key stays in
-/// config.toml; every other knob lives in the dashboard settings
-/// store and is read from the SettingsHandle at runtime.
+/// Bootstrap-only AI configuration. Secrets only — every other AI knob
+/// lives in the dashboard settings store and is read from the
+/// SettingsHandle at runtime.
+///
+/// Deserialize-only on purpose: a `Serialize` derive here would let a debug
+/// dump round-trip the API keys out of the process.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AiBootstrap {
     pub api_key: SecretString,
+    /// `[ai.keys]` — named credentials a profile can point at by name, so a
+    /// profile in settings.ron holds a name and never a secret.
+    #[serde(default)]
+    pub keys: HashMap<String, SecretString>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

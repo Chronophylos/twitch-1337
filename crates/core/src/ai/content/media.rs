@@ -48,6 +48,14 @@ impl MediaClient {
         }
     }
 
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     pub async fn analyze(
         &self,
         content_type: &str,

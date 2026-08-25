@@ -4,7 +4,6 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use llm::LlmClient;
 use tokio::{sync::broadcast, time::Duration};
 use tracing::{debug, error, info};
 use twitch_irc::{
@@ -33,9 +32,11 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     /// Bootstrap AI config (api_key only). `None` disables `!ai`. All other
     /// AI knobs are read from the dashboard settings snapshot at startup.
     pub ai_config: Option<AiBootstrap>,
-    /// Pre-built LLM client. When `None`, `!ai` is disabled regardless of `ai_config`.
-    /// Injected so tests can supply a fake and production can call [`crate::llm_factory::build_llm_client`].
-    pub llm: Option<Arc<dyn LlmClient>>,
+    /// Resolves an AI profile to a client per turn. When it cannot produce a
+    /// client for the active profile, `!ai` is disabled regardless of
+    /// `ai_config`. Injected so tests can supply a fake via
+    /// [`crate::llm_factory::LlmRegistry::fixed`].
+    pub llm: Arc<crate::llm_factory::LlmRegistry>,
     /// Pre-built memory v2 bundle. `None` disables v2 memory for `!ai`.
     pub ai_memory_v2: Option<ai::command::AiMemoryV2>,
     pub leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
@@ -120,15 +121,16 @@ where
     // these values; Tasks 6+ make selected commands consume the handle live.
     let snapshot = settings.load_full();
 
-    // Combine pre-built LLM client with AI bootstrap; both must be present to enable !ai.
-    let llm_client: Option<(Arc<dyn LlmClient>, AiBootstrap)> = match (llm, ai_config) {
-        (Some(llm_arc), Some(ai_boot)) => {
+    // The registry must be able to serve the active profile and the bootstrap
+    // key must be present; both gate !ai.
+    let ai_boot: Option<AiBootstrap> = match (llm.is_usable(), ai_config) {
+        (true, Some(ai_boot)) => {
             info!(
-                backend = ?snapshot.ai.connection.backend,
-                model = %snapshot.ai.connection.model,
+                provider = snapshot.ai.active().provider.as_str(),
+                model = %snapshot.ai.active().model,
                 "AI command enabled"
             );
-            Some((llm_arc, ai_boot))
+            Some(ai_boot)
         }
         _ => {
             debug!("AI not configured or LLM client unavailable, AI command disabled");
@@ -140,7 +142,7 @@ where
     // the settings handle on every push; the initial snapshot is only used to
     // decide whether to allocate the buffer at all and to run the one-shot
     // prefill (which is restart-required for off↔on transitions anyway).
-    let primary_history: Option<ChatHistory> = if llm_client.is_some()
+    let primary_history: Option<ChatHistory> = if ai_boot.is_some()
         && snapshot.ai.history.length > 0
     {
         let history_length = snapshot.ai.history.length as usize;
@@ -239,9 +241,9 @@ where
         cmd_list.push(Box::new(commands::emote::EmoteCommand::new(tracker)));
     }
 
-    if let (Some((llm, ai_boot)), Some(ai_memory_v2)) = (llm_client, ai_memory_v2) {
-        let ai_conn = &snapshot.ai.connection;
-        let ai_media = &snapshot.ai.media;
+    // `ai_boot` only gates whether `!ai` is enabled at all now; the media
+    // client resolves its own key per call via `LlmRegistry::secret_for`.
+    if let (Some(_ai_boot), Some(ai_memory_v2)) = (ai_boot, ai_memory_v2) {
         let web = if let Some(web_cfg) = snapshot.ai.web.as_ref() {
             let search = match ai::content::SearchClient::new(
                 &web_cfg.base_url,
@@ -254,33 +256,20 @@ where
                 }
             };
 
+            // The media client used to be built here once at startup, which
+            // meant an unresolvable media base URL took web search down with
+            // it too. It is now built per call inside the executor (see
+            // `ContentToolExecutor::media_client`), so search stays up
+            // regardless of whether media can currently resolve.
             let media_http = reqwest::Client::builder()
                 .user_agent(crate::APP_USER_AGENT)
                 .build()
                 .expect("build media HTTP client");
-            let provider_base_url =
-                ai_conn
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| match ai_conn.backend {
-                        crate::settings::ai::AiBackendKind::OpenAi => {
-                            "https://api.openai.com/v1".to_string()
-                        }
-                        crate::settings::ai::AiBackendKind::Ollama => {
-                            "http://localhost:11434/v1".to_string()
-                        }
-                    });
-            let media = Arc::new(ai::content::MediaClient::new(
-                media_http,
-                provider_base_url,
-                Some(ai_boot.api_key.clone()),
-                ai_media.model.clone(),
-                Duration::from_secs(ai_media.timeout),
-            ));
             search.map(|client| ai::command::AiWeb {
                 executor: Arc::new(ai::content::ContentToolExecutor::new(
                     client,
-                    media,
+                    media_http,
+                    llm.clone(),
                     settings.clone(),
                     Duration::from_secs(web_cfg.cache_ttl_secs),
                     web_cfg.cache_capacity,
@@ -318,7 +307,7 @@ where
 
         cmd_list.push(Box::new(ai::command::AiCommand::new(
             ai::command::AiCommandDeps {
-                llm_client: llm.clone(),
+                registry: llm.clone(),
                 settings: settings.clone(),
                 chat_ctx: chat_ctx.clone(),
                 memory: ai_memory_v2,
@@ -336,7 +325,6 @@ where
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm.clone(),
-            settings.clone(),
             commands::news::NewsMode::News,
             chat_ctx.clone(),
             whisper.clone(),
@@ -344,7 +332,6 @@ where
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm.clone(),
-            settings.clone(),
             commands::news::NewsMode::Tldr,
             chat_ctx.clone(),
             whisper.clone(),
@@ -352,7 +339,6 @@ where
         )));
         cmd_list.push(Box::new(commands::haiku::HaikuCommand::new(
             llm,
-            settings.clone(),
             chat_ctx,
             news_cooldown,
         )));

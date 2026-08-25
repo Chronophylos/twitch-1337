@@ -20,6 +20,10 @@ pub struct FakeLlm {
     tool_responses: Mutex<VecDeque<ToolChatCompletionResponse>>,
     chat_calls: Mutex<Vec<ChatCompletionRequest>>,
     tool_calls: Mutex<Vec<ToolChatCompletionRequest>>,
+    /// Model id of the most recent request of either kind. Lets a test assert
+    /// which profile a turn resolved to without caring whether the agent went
+    /// through the tool loop or a plain completion.
+    last_model: Mutex<Option<String>>,
 }
 
 impl FakeLlm {
@@ -29,6 +33,7 @@ impl FakeLlm {
             tool_responses: Mutex::new(VecDeque::new()),
             chat_calls: Mutex::new(Vec::new()),
             tool_calls: Mutex::new(Vec::new()),
+            last_model: Mutex::new(None),
         }
     }
 
@@ -52,6 +57,11 @@ impl FakeLlm {
     pub fn tool_calls(&self) -> Vec<ToolChatCompletionRequest> {
         self.tool_calls.lock().unwrap().clone()
     }
+
+    /// Model id the last request carried, `None` before the first call.
+    pub fn last_model(&self) -> Option<String> {
+        self.last_model.lock().unwrap().clone()
+    }
 }
 
 impl Default for FakeLlm {
@@ -63,6 +73,7 @@ impl Default for FakeLlm {
 #[async_trait]
 impl LlmClient for FakeLlm {
     async fn chat_completion(&self, request: ChatCompletionRequest) -> llm::Result<String> {
+        *self.last_model.lock().unwrap() = Some(request.model.clone());
         self.chat_calls.lock().unwrap().push(request);
         self.chat_responses
             .lock()
@@ -78,6 +89,7 @@ impl LlmClient for FakeLlm {
         &self,
         request: ToolChatCompletionRequest,
     ) -> llm::Result<ToolChatCompletionResponse> {
+        *self.last_model.lock().unwrap() = Some(request.model.clone());
         self.tool_calls.lock().unwrap().push(request);
         self.tool_responses
             .lock()

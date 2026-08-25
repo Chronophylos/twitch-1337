@@ -209,60 +209,88 @@ fn read_flash(res: &axum::http::Response<Body>) -> Option<String> {
     None
 }
 
+/// The `/settings` page no longer edits provider/base_url/model directly —
+/// those live on `/ai-profiles` now. It still offers a per-sub-agent
+/// `profile` picker (empty = inherit the active profile).
 #[tokio::test]
-async fn post_settings_applies_ai_connection_model() {
+async fn settings_page_no_longer_offers_connection_inputs() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     set_owner(&state, Some("123"));
-    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+    let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
 
-    let app = build_router(state.clone());
-    let defaults = state.settings_store.defaults().clone();
-    let body = save_form_body(&bare_csrf, &defaults, &[("ai_connection_model", "gpt-5")]);
+    let app = build_router(state);
     let req = Request::builder()
-        .method("POST")
         .uri("/settings")
         .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(body))
+        .body(Body::empty())
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
-    assert_eq!(
-        res.status(),
-        StatusCode::SEE_OTHER,
-        "AI model save should redirect (303)",
-    );
-    // The connection model is read live via the settings handle — no restart.
-    let flash = read_flash(&res).expect("save must emit a flash cookie");
+    assert_eq!(res.status(), StatusCode::OK, "owner GET /settings must 200");
+    let html = body_string(res).await;
     assert!(
-        flash.starts_with("Settings saved."),
-        "flash should start with the saved confirmation; got {flash:?}",
+        !html.contains("ai_connection_backend"),
+        "the legacy backend radio must be gone; got: {html}"
     );
     assert!(
-        !flash.contains("Restart bot"),
-        "model change is live; restart hint must NOT appear; got {flash:?}",
+        !html.contains("ai_connection_model"),
+        "the legacy model input must be gone; got: {html}"
     );
-    assert_eq!(
-        state.settings.load().ai.connection.model,
-        "gpt-5",
-        "live handle must reflect saved AI model",
+    assert!(
+        html.contains("/ai-profiles"),
+        "the connection card must link to the profiles editor; got: {html}"
+    );
+    assert!(
+        html.contains("ai_dreamer_profile"),
+        "the dreamer card must offer a profile picker; got: {html}"
     );
 }
 
+/// A dreamer `profile` override round-trips through the settings POST,
+/// including clearing it back to "inherit the active profile" on an empty
+/// submission.
 #[tokio::test]
-async fn post_settings_flags_backend_restart_required() {
+async fn a_dreamer_profile_override_round_trips_through_the_settings_post() {
+    use twitch_1337_core::settings::{AiProfile, AiProvider, overrides::SettingsOverrides};
+
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     set_owner(&state, Some("123"));
+
+    let profile = |name: &str| AiProfile {
+        name: name.into(),
+        key: None,
+        provider: AiProvider::OpenRouter,
+        base_url: None,
+        model: "some-model".into(),
+        timeout: 30,
+        reasoning_effort: None,
+        service_tier: None,
+    };
+    state
+        .settings_store
+        .apply(
+            SettingsOverrides {
+                ai: twitch_1337_core::settings::AiOverrides {
+                    profiles: Some(vec![profile("a"), profile("b")]),
+                    active_profile: Some("a".to_owned()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            twitch_1337_core::settings::Actor {
+                user_id: "test".into(),
+                user_login: "test".into(),
+            },
+        )
+        .await
+        .expect("seed profiles");
+
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+    let defaults = state.settings_store.defaults().clone();
 
     let app = build_router(state.clone());
-    let defaults = state.settings_store.defaults().clone();
-    let body = save_form_body(
-        &bare_csrf,
-        &defaults,
-        &[("ai_connection_backend", "ollama")],
-    );
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_dreamer_profile", "b")]);
     let req = Request::builder()
         .method("POST")
         .uri("/settings")
@@ -272,21 +300,27 @@ async fn post_settings_flags_backend_restart_required() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    let flash = read_flash(&res).expect("save must emit a flash cookie");
-    assert!(
-        flash.contains("Restart bot to apply"),
-        "backend swap must surface the restart hint; got {flash:?}",
+    assert_eq!(
+        state.settings.load().ai.dreamer.profile.as_deref(),
+        Some("b"),
+        "dreamer.profile must be set to the submitted profile name",
     );
-    assert!(
-        flash.contains("ai.connection.backend"),
-        "restart hint must name the field; got {flash:?}",
-    );
-    assert!(
-        matches!(
-            state.settings.load().ai.connection.backend,
-            twitch_1337_core::settings::AiBackendKind::Ollama,
-        ),
-        "the value still applies — the restart hint is advisory",
+
+    let app = build_router(state.clone());
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_dreamer_profile", "")]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        state.settings.load().ai.dreamer.profile,
+        None,
+        "an empty submission must clear dreamer.profile back to inherit",
     );
 }
 
@@ -615,7 +649,7 @@ async fn settings_page_shows_openrouter_tiers_for_default_base_url() {
     let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
 
     assert!(
-        state.settings.load().ai.connection.base_url.is_none(),
+        state.settings.load().ai.active().base_url.is_none(),
         "fixture must exercise the provider-default base URL path"
     );
 
@@ -630,16 +664,109 @@ async fn settings_page_shows_openrouter_tiers_for_default_base_url() {
     let html = body_string(res).await;
 
     assert!(
-        html.contains("name=\"ai_connection_service_tier\""),
-        "connection service_tier control must render for default OpenRouter base URL"
-    );
-    assert!(
         html.contains("name=\"ai_dreamer_service_tier\""),
         "dreamer service_tier control must render for default OpenRouter base URL"
     );
     assert!(
         html.contains("name=\"ai_grok_service_tier\""),
         "grok service_tier control must render for default OpenRouter base URL"
+    );
+}
+
+/// I2 regression: a sub-agent pinned to a profile whose provider caps
+/// differ from the active profile's must be gated on *its own* profile,
+/// not the active one. Otherwise the dashboard offers controls that save
+/// validation rejects (or hides ones it would accept) — see
+/// `settings::validation`'s `dreamer_caps`/`grok_caps`.
+#[tokio::test]
+async fn sub_agent_caps_gating_follows_its_own_profile_not_the_active_one() {
+    use twitch_1337_core::settings::{AiProfile, AiProvider, overrides::SettingsOverrides};
+
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+
+    let or_profile = AiProfile {
+        name: "or".into(),
+        key: None,
+        provider: AiProvider::OpenRouter,
+        base_url: None,
+        model: "some-model".into(),
+        timeout: 30,
+        reasoning_effort: None,
+        service_tier: None,
+    };
+    let ollama_profile = AiProfile {
+        name: "local".into(),
+        key: None,
+        provider: AiProvider::Ollama,
+        base_url: None,
+        model: "llama3".into(),
+        timeout: 30,
+        reasoning_effort: None,
+        service_tier: None,
+    };
+    state
+        .settings_store
+        .apply(
+            SettingsOverrides {
+                ai: twitch_1337_core::settings::AiOverrides {
+                    profiles: Some(vec![or_profile.clone(), ollama_profile.clone()]),
+                    active_profile: Some("or".to_owned()),
+                    dreamer: twitch_1337_core::settings::overrides::AiDreamerOverrides {
+                        profile: Some(Some("local".to_owned())),
+                        ..Default::default()
+                    },
+                    grok: twitch_1337_core::settings::overrides::AiGrokOverrides {
+                        profile: Some(Some("or".to_owned())),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            twitch_1337_core::settings::Actor {
+                user_id: "test".into(),
+                user_login: "test".into(),
+            },
+        )
+        .await
+        .expect("seed profiles");
+
+    let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let app = build_router(state);
+    let req = Request::builder()
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "owner GET /settings must 200");
+    let html = body_string(res).await;
+
+    // Active profile is OpenRouter, but dreamer is pinned to the Ollama
+    // profile: Ollama has no reasoning_effort or service_tier at all, so
+    // both controls must be absent from the dreamer card even though the
+    // active profile would otherwise show them.
+    assert!(
+        !html.contains("name=\"ai_dreamer_service_tier\""),
+        "dreamer service_tier must not render when dreamer's own profile is Ollama"
+    );
+    assert!(
+        !html.contains("name=\"ai_dreamer_reasoning_effort\""),
+        "dreamer reasoning_effort must not render when dreamer's own profile is Ollama"
+    );
+
+    // grok is pinned to the OpenRouter profile even though the active
+    // profile is also OpenRouter here, so both controls must render.
+    assert!(
+        html.contains("name=\"ai_grok_service_tier\""),
+        "grok service_tier must render when grok's own profile is OpenRouter"
+    );
+    assert!(
+        html.contains("name=\"ai_grok_reasoning_effort\""),
+        "grok reasoning_effort must render when grok's own profile is OpenRouter"
     );
 }
 
@@ -1365,8 +1492,8 @@ async fn validation_error_preserves_stored_ai_settings() {
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
     let defaults = state.settings_store.defaults().clone();
 
-    // Store a model, the way the owner would have.
-    let body = save_form_body(&bare_csrf, &defaults, &[("ai_connection_model", "gpt-5")]);
+    // Store a grok model override, the way the owner would have.
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_grok_model", "x-ai/grok-4")]);
     let req = Request::builder()
         .method("POST")
         .uri("/settings")
@@ -1403,41 +1530,12 @@ async fn validation_error_preserves_stored_ai_settings() {
         "response must surface the failing field; got: {html}",
     );
     assert!(
-        html.contains("gpt-5"),
-        "stored AI model must survive the validation re-render; got: {html}",
+        html.contains("x-ai/grok-4"),
+        "stored grok model override must survive the validation re-render; got: {html}",
     );
     assert_eq!(
-        state.settings.load().ai.connection.model,
-        "gpt-5",
+        state.settings.load().ai.grok.model.as_deref(),
+        Some("x-ai/grok-4"),
         "validation rejection must not mutate stored settings",
     );
-}
-
-/// A blank model input means "unchanged", never "clear it": an empty model
-/// makes every LLM request fail with `No models provided`.
-#[tokio::test]
-async fn blank_model_input_does_not_clear_stored_model() {
-    install_crypto();
-    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    set_owner(&state, Some("123"));
-    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
-    let defaults = state.settings_store.defaults().clone();
-
-    for (value, expected) in [("gpt-5", "gpt-5"), ("", "gpt-5"), ("   ", "gpt-5")] {
-        let body = save_form_body(&bare_csrf, &defaults, &[("ai_connection_model", value)]);
-        let req = Request::builder()
-            .method("POST")
-            .uri("/settings")
-            .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(Body::from(body))
-            .unwrap();
-        let res = build_router(state.clone()).oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::SEE_OTHER);
-        assert_eq!(
-            state.settings.load().ai.connection.model,
-            expected,
-            "submitting model={value:?} must leave the stored model at {expected:?}",
-        );
-    }
 }

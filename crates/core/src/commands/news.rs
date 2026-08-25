@@ -7,11 +7,11 @@ use eyre::Result;
 use tracing::{debug, error, instrument, warn};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use llm::{ChatCompletionRequest, LlmClient, Message, TraceIds};
+use llm::{ChatCompletionRequest, Message, TraceIds};
 
 use crate::ai::command::ChatContext;
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
-use crate::settings::SettingsHandle;
+use crate::llm_factory::LlmRegistry;
 use crate::twitch::whisper::{WHISPER_MAX_CHARS, WhisperSender};
 use crate::util::truncate_response;
 
@@ -66,8 +66,7 @@ impl NewsMode {
 }
 
 pub struct NewsCommand {
-    llm_client: Arc<dyn LlmClient>,
-    settings: SettingsHandle,
+    registry: Arc<LlmRegistry>,
     mode: NewsMode,
     cooldown: Arc<PerUserCooldown>,
     chat_ctx: Option<ChatContext>,
@@ -76,16 +75,14 @@ pub struct NewsCommand {
 
 impl NewsCommand {
     pub fn new(
-        llm_client: Arc<dyn LlmClient>,
-        settings: SettingsHandle,
+        registry: Arc<LlmRegistry>,
         mode: NewsMode,
         chat_ctx: Option<ChatContext>,
         whisper: Option<Arc<dyn WhisperSender>>,
         cooldown: Arc<PerUserCooldown>,
     ) -> Self {
         Self {
-            llm_client,
-            settings,
+            registry,
             mode,
             cooldown,
             chat_ctx,
@@ -234,12 +231,17 @@ where
 
         self.cooldown.record(user).await;
 
-        // Snapshot connection knobs once per turn so dashboard edits take
+        // Resolve the active profile fresh each turn so dashboard edits take
         // effect on the next invocation without a bot restart.
-        let snap = self.settings.load();
-        let model = snap.ai.connection.model.clone();
-        let timeout = Duration::from_secs(snap.ai.connection.timeout);
-        drop(snap);
+        let Some((llm_client, profile)) = self.registry.resolve(None) else {
+            error!("News AI skipped, no usable LLM profile");
+            ctx.sender
+                .reply(ctx.privmsg, "Da ist was schiefgelaufen FDM")
+                .await;
+            return Ok(());
+        };
+        let model = profile.model.clone();
+        let timeout = Duration::from_secs(profile.timeout);
 
         let user_message = format!(
             "{}\n{}",
@@ -268,7 +270,7 @@ where
             },
         };
 
-        let result = tokio::time::timeout(timeout, self.llm_client.chat_completion(request)).await;
+        let result = tokio::time::timeout(timeout, llm_client.chat_completion(request)).await;
 
         let (response, success) = match result {
             Ok(Ok(text)) => (

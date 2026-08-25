@@ -1,0 +1,116 @@
+{# Variant-picker profile form. `form: &FormState`, `action: &str`,
+   `cancel_href: Option<&str>`, `providers: &Vec<ProviderOption>` must be
+   bound in the calling template's scope before this include.
+
+   Askama can't re-render when the provider `<select>` changes, so every
+   provider's effort/tier controls are rendered up front inside a
+   `<fieldset disabled>` and the inline script below flips which one is
+   enabled + visible. Server-side validation (settings::validation) stays
+   the authority — this script is convenience only. #}
+<form method="post" action="{{ action }}" class="settings-rows profile-form">
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+
+  <div class="row">
+    <label>Name
+      <input type="text" name="name" value="{{ form.name }}" required>
+    </label>
+  </div>
+
+  <div class="row">
+    <label>Provider
+      <select name="provider" class="provider-select">
+        {% for p in providers %}
+          <option value="{{ p.value }}" {% if form.provider == p.value %}selected{% endif %}>{{ p.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <div class="row">
+    <label>Key name (config.toml <code>[ai.keys]</code>, optional)
+      <input type="text" name="key" value="{{ form.key }}" placeholder="blank = bare [ai] api_key">
+    </label>
+  </div>
+
+  <div class="row">
+    <label>Base URL (optional — provider default if blank)
+      <input type="text" name="base_url" value="{{ form.base_url }}">
+    </label>
+  </div>
+
+  <div class="row">
+    <label>Model
+      <input type="text" name="model" value="{{ form.model }}" required>
+    </label>
+  </div>
+
+  <div class="row">
+    <label>Timeout (seconds)
+      <input type="number" name="timeout" min="1" max="600" value="{{ form.timeout }}" required>
+    </label>
+  </div>
+
+  {% for p in providers %}
+    <fieldset class="provider-group" data-provider="{{ p.value }}"
+      {% if form.provider != p.value %}hidden disabled{% endif %}>
+      {% if p.effort_kind == "fixed" %}
+        <div class="row">
+          <label>Reasoning effort</label>
+          <div class="segmented" role="radiogroup" aria-label="reasoning_effort">
+            <label class="segment{% if form.reasoning_effort.is_empty() %} is-active{% endif %}">
+              <input type="radio" name="reasoning_effort" value=""
+                {% if form.reasoning_effort.is_empty() %}checked{% endif %}>
+              <span>default</span>
+            </label>
+            {% for v in p.effort_values %}
+              <label class="segment{% if form.reasoning_effort == *v %} is-active{% endif %}">
+                <input type="radio" name="reasoning_effort" value="{{ v }}"
+                  {% if form.reasoning_effort == *v %}checked{% endif %}>
+                <span>{{ v }}</span>
+              </label>
+            {% endfor %}
+          </div>
+        </div>
+      {% else if p.effort_kind == "free" %}
+        <div class="row">
+          <label>Reasoning effort (free text, optional)
+            <input type="text" name="reasoning_effort" value="{{ form.reasoning_effort }}">
+          </label>
+        </div>
+      {% endif %}
+      {% if p.service_tier %}
+        <div class="row">
+          <label>Service tier (optional)
+            <input type="text" name="service_tier" value="{{ form.service_tier }}">
+          </label>
+        </div>
+      {% endif %}
+    </fieldset>
+  {% endfor %}
+
+  <div class="row form-actions">
+    <button type="submit" class="btn primary">Save</button>
+    {% if let Some(href) = cancel_href %}
+      <a class="btn ghost" href="{{ href }}">Cancel</a>
+    {% endif %}
+  </div>
+</form>
+
+<script>
+  (function () {
+    document.querySelectorAll('form.profile-form').forEach(function (form) {
+      var select = form.querySelector('select[name="provider"]');
+      if (!select) { return; }
+      function refresh() {
+        var val = select.value;
+        form.querySelectorAll('fieldset[data-provider]').forEach(function (el) {
+          var match = el.dataset.provider === val;
+          el.hidden = !match;
+          el.disabled = !match;
+        });
+      }
+      select.addEventListener('change', refresh);
+      refresh();
+    });
+  })();
+</script>

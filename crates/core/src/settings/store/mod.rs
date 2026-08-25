@@ -179,7 +179,13 @@ impl SettingsStore {
         match section {
             SettingsSection::Cooldowns => current.cooldowns = Default::default(),
             SettingsSection::Pings => current.pings = Default::default(),
-            SettingsSection::AiConnection => current.ai.connection = Default::default(),
+            SettingsSection::AiProfiles => {
+                current.ai.profiles = None;
+                current.ai.active_profile = None;
+                // MIGRATION(ai-profiles): resetting the section must also drop
+                // the legacy block, or it folds straight back in on resolve.
+                current.ai.connection = Default::default();
+            }
             SettingsSection::AiBehavior => current.ai.behavior = Default::default(),
             SettingsSection::AiHistory => current.ai.history = Default::default(),
             SettingsSection::AiMemory => current.ai.memory = Default::default(),
@@ -335,7 +341,7 @@ mod tests {
             user_login: "tester".into(),
         };
         store.apply(patch, actor).await.expect("apply");
-        assert_eq!(handle.load().ai.connection.model, "o5-pro");
+        assert_eq!(handle.load().ai.active().model, "o5-pro");
         let reopened = SettingsStore::open(
             store.path.parent().unwrap(),
             Arc::new(crate::settings::audit::MemoryAuditLog::new()),
@@ -343,7 +349,7 @@ mod tests {
         )
         .expect("reopen")
         .1;
-        assert_eq!(reopened.load().ai.connection.model, "o5-pro");
+        assert_eq!(reopened.load().ai.active().model, "o5-pro");
         let _ = handle;
     }
 
@@ -366,6 +372,84 @@ mod tests {
                     .starts_with("settings.ron.quarantine-")
             });
         assert!(quarantined, "quarantine file must exist");
+    }
+
+    #[tokio::test]
+    async fn legacy_connection_with_caps_incompatible_effort_does_not_quarantine() {
+        // C1 regression: a schema-5 settings.ron written by a deployment
+        // that ran OpenRouter with reasoning_effort="high" and later
+        // switched backend to ollama survives boot on this build instead of
+        // quarantining the whole file. Every earlier legacy-fold test
+        // builds a `SettingsOverrides` in memory and resolves it directly,
+        // which never exercises `SettingsStore::open`'s validate-then-
+        // quarantine path — this test writes the file to disk first, the
+        // way a real upgrade would leave it.
+        use crate::settings::ai::AiBackendKind;
+        use crate::settings::overrides::{AiConnectionOverrides, AiOverrides, TwitchOverrides};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let overrides = SettingsOverrides {
+            ai: AiOverrides {
+                connection: AiConnectionOverrides {
+                    backend: Some(AiBackendKind::Ollama),
+                    reasoning_effort: Some(Some("high".into())),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            twitch: TwitchOverrides {
+                hidden_admins: Some(vec!["123".into()]),
+                ..Default::default()
+            },
+            schedules: Some(vec![crate::schedule::Schedule {
+                name: "legacy-schedule".into(),
+                message: "hi".into(),
+                trigger: crate::schedule::Trigger::Interval {
+                    every: std::time::Duration::from_secs(3600),
+                    days: crate::schedule::WeekdaySet::default(),
+                    active_from: None,
+                    active_to: None,
+                },
+                start_date: None,
+                end_date: None,
+                enabled: true,
+            }]),
+            ..SettingsOverrides::default()
+        };
+        let body = ron::ser::to_string_pretty(&overrides, ron::ser::PrettyConfig::default())
+            .expect("serialize legacy settings.ron");
+        std::fs::write(dir.path().join(FILE_NAME), body).expect("write legacy settings.ron");
+
+        let log = Arc::new(MemoryAuditLog::new());
+        let (_store, handle) =
+            SettingsStore::open(dir.path(), log, "test_chan").expect("open should not fail");
+
+        // (a) no quarantine.
+        assert!(
+            dir.path().join(FILE_NAME).exists(),
+            "settings.ron must not have been renamed away"
+        );
+        let quarantined = std::fs::read_dir(dir.path())
+            .expect("readdir")
+            .filter_map(Result::ok)
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.ron.quarantine-")
+            });
+        assert!(!quarantined, "settings.ron must not be quarantined");
+
+        // (b) unrelated settings survived.
+        let s = handle.load();
+        assert_eq!(s.twitch.hidden_admins, vec!["123".to_string()]);
+        assert_eq!(s.schedules.len(), 1);
+        assert_eq!(s.schedules[0].name, "legacy-schedule");
+
+        // (c) the folded profile carries the backend/model but drops the
+        // caps-incompatible reasoning_effort.
+        let p = s.ai.active();
+        assert_eq!(p.provider, crate::settings::provider::AiProvider::Ollama);
+        assert_eq!(p.reasoning_effort, None);
     }
 
     #[tokio::test]

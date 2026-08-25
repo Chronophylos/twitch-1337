@@ -25,6 +25,9 @@
         {% if is_mod %}
         {% call nav_item("schedules", "/schedules", "Schedules") %}{% endcall %}
         {% endif %}
+        {% if is_owner %}
+        {% call nav_item("ai_profiles", "/ai-profiles", "AI Profiles") %}{% endcall %}
+        {% endif %}
       </ul>
     </div>
 

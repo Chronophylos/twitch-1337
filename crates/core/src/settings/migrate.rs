@@ -11,6 +11,12 @@ use super::overrides::*;
 /// Returns `AiOverrides::default()` (a no-op patch) when the `[ai]` table is
 /// absent — fresh installs trigger the migration sentinel without writing
 /// anything noisy to the audit log.
+///
+/// Still writes into `out.connection.*`, the pre-schema-6 shape, on purpose:
+/// `resolve_ai` in `resolve.rs` folds a populated `connection` block into a
+/// single profile named "default" (see `legacy_profile`), so this v1→v2
+/// migration keeps working unchanged even though profiles replaced
+/// `connection` as the current schema.
 pub fn migrate_legacy_ai(root: &toml::Value) -> Result<AiOverrides> {
     let mut out = AiOverrides::default();
     let Some(ai) = root.get("ai").and_then(|v| v.as_table()) else {
