@@ -857,14 +857,16 @@ where
                         (self.bot_username.clone(), None)
                     }
                     Err(e) => {
-                        error!(error = ?e, agent = ?agent, "mouth speak failed");
+                        // Display, not Debug: SpeakError::Empty Debug-prints as
+                        // `Empty` with no explanation (`error=Empty` in the log).
+                        error!(error = %e, agent = ?agent, "mouth speak failed");
                         // Out of v1: no auto-fallback resend (double-speak risk). No history write.
                         // A short notice is not a resend — Err means chat saw nothing — and the
                         // realistic failure (mouth timed out, channel-restricted) is persistent,
                         // so without this the command is a black hole for every user.
-                        ctx.sender
-                            .reply(ctx.privmsg, user_facing_mouth_message(&e))
-                            .await;
+                        if let Some(msg) = user_facing_mouth_message(&e) {
+                            ctx.sender.reply(ctx.privmsg, msg).await;
+                        }
                         return Ok(());
                     }
                 };
@@ -901,15 +903,17 @@ where
 /// Map a mouth send failure to a short German chat reply, sent over the
 /// utility bot's IRC connection.
 ///
-/// Unlike the LLM mapper below there is no silent case: a mouth failure means
-/// the answer exists but chat never saw it, and the common causes (the mouth
+/// `Empty` stays silent: there was no answer to deliver (whitespace-only
+/// model output), same as a blank final message. Other failures mean the
+/// answer exists but chat never saw it, and the common causes (the mouth
 /// account timed out, or a channel restriction) persist until someone
 /// intervenes. Staying quiet would make `!ai` and `@grok` look broken with no
 /// signal outside the logs.
-fn user_facing_mouth_message(err: &SpeakError) -> &'static str {
+fn user_facing_mouth_message(err: &SpeakError) -> Option<&'static str> {
     match err {
-        SpeakError::Dropped { .. } => "Twitch hat die Antwort verschluckt Stare",
-        _ => "KI-Account kann gerade nicht reden FeelsBadMan",
+        SpeakError::Empty => None,
+        SpeakError::Dropped { .. } => Some("Twitch hat die Antwort verschluckt Stare"),
+        _ => Some("KI-Account kann gerade nicht reden FeelsBadMan"),
     }
 }
 

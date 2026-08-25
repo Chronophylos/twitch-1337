@@ -170,3 +170,18 @@ async fn helix_401_then_retry_succeeds() {
     let spoken = mouth.speak(req()).await.unwrap();
     assert_eq!(spoken.message_id.as_deref(), Some("retried1"));
 }
+
+#[tokio::test]
+async fn helix_whitespace_only_is_empty_error() {
+    // Rejection is local — no HTTP. The Display string is what `%e` logs.
+    let mouth = build_test_helix_mouth("http://127.0.0.1:1").await;
+    let error = mouth
+        .speak(SpeakRequest {
+            text: "  \n\t  ".into(),
+            ..req()
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(error, SpeakError::Empty));
+    assert_eq!(error.to_string(), "chat-send message empty");
+}

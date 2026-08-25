@@ -423,4 +423,11 @@ mod tests {
             "control chars must be stripped: {sent:?}",
         );
     }
+
+    #[test]
+    fn empty_display_is_not_the_variant_name() {
+        // The command logger used to Debug-print this as `Empty`, which is
+        // how production logs showed `error=Empty` with no explanation.
+        assert_eq!(SpeakError::Empty.to_string(), "chat-send message empty");
+    }
 }
