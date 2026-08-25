@@ -39,20 +39,20 @@
 
     {% let dreamer_model = current.ai.dreamer.model.as_deref().unwrap_or("") %}
     <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
-      {% call m::row_head("model", "Override the model used for the dreamer pass. Empty = use connection.model.") %}{% endcall %}
+      {% call m::row_head("model", "Override the model used for the dreamer pass. Empty = use the resolved profile's model.") %}{% endcall %}
       <div class="row-control-cell">
-        <span class="row-pretty" aria-hidden="true">{% if dreamer_model.is_empty() %}<span class="muted">(connection)</span>{% else %}{{ dreamer_model }}{% endif %}</span>
+        <span class="row-pretty" aria-hidden="true">{% if dreamer_model.is_empty() %}<span class="muted">(profile)</span>{% else %}{{ dreamer_model }}{% endif %}</span>
         <input type="text"
                class="text-input"
                name="ai_dreamer_model"
                value="{{ dreamer_model }}"
-               placeholder="(use connection model)"
+               placeholder="(use profile model)"
                data-default=""
                data-key="ai.dreamer.model">
       </div>
       <div class="row-right">
         {% call m::row_reset("ai.dreamer.model") %}{% endcall %}
-        <span class="row-default">default <span class="mono">(connection)</span></span>
+        <span class="row-default">default <span class="mono">(profile)</span></span>
       </div>
     </div>
 

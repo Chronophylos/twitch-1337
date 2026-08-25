@@ -5,7 +5,7 @@
   <header class="settings-card-head">
     <div>
       <h2>AI · Grok</h2>
-      <p>Optional model overrides for the @grok alias. Empty = use AI · Connection.</p>
+      <p>Optional model overrides for the @grok alias. Empty = use the resolved profile.</p>
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
@@ -29,15 +29,15 @@
 
     {% let grok_model = current.ai.grok.model.as_deref().unwrap_or("") %}
     <div class="settings-row" data-section="ai_grok">
-      {% call m::row_head("model", "Override the model used for @grok turns. Empty = use connection.model.") %}{% endcall %}
+      {% call m::row_head("model", "Override the model used for @grok turns. Empty = use the resolved profile's model.") %}{% endcall %}
       <div class="row-control-cell">
-        <span class="row-pretty" aria-hidden="true">{% if grok_model.is_empty() %}<span class="muted">(connection)</span>{% else %}{{ grok_model }}{% endif %}</span>
+        <span class="row-pretty" aria-hidden="true">{% if grok_model.is_empty() %}<span class="muted">(profile)</span>{% else %}{{ grok_model }}{% endif %}</span>
         <input type="text"
                class="text-input"
                name="ai_grok_model"
                list="ai-models-grok"
                value="{{ grok_model }}"
-               placeholder="(use connection model)"
+               placeholder="(use profile model)"
                data-default=""
                data-key="ai.grok.model"
                data-scope="grok"
@@ -46,7 +46,7 @@
       </div>
       <div class="row-right">
         {% call m::row_reset("ai.grok.model") %}{% endcall %}
-        <span class="row-default">default <span class="mono">(connection)</span></span>
+        <span class="row-default">default <span class="mono">(profile)</span></span>
       </div>
     </div>
 

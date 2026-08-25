@@ -1419,6 +1419,27 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 .settings-row:focus-within .row-control-cell .text-input,
 .settings-row.is-dirty .row-control-cell .text-input { opacity: 1; }
 
+/* Profile-picker rows have no .row-pretty overlay to fade in from, so
+   (unlike .text-input above) the select stays visible at rest. */
+.row-control-cell select {
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  outline: 0;
+  font-family: var(--mono);
+  font-size: 13.5px;
+  color: var(--fg);
+  padding: 7px 12px;
+  width: 260px;
+  color-scheme: dark;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.row-control-cell select:focus {
+  border-color: var(--line-strong);
+  background: var(--bg-2);
+}
+.settings-row.is-dirty .row-control-cell select { border-color: var(--accent-soft); }
+
 .range-wrap {
   display: inline-flex;
   align-items: center;

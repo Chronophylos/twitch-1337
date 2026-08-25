@@ -81,6 +81,25 @@ async fn self_hosted_fonts_are_served() {
 }
 
 #[tokio::test]
+async fn settings_dirty_tracker_registers_select_rows() {
+    // Regression guard: the settings dirty-tracker collects each
+    // `.settings-row`'s primary form control by querying
+    // `input[name], select[name], textarea[name]`. A row whose only
+    // control is a <select> (the AI · Dreamer/Grok/Media profile pickers)
+    // silently drops out of the tracker if `select[name]` isn't in that
+    // list — the save bar's visibility is gated on the dirty count, so a
+    // profile-only edit becomes unsaveable. There's no JS test harness in
+    // this repo, so this checks the shipped selector string directly.
+    let (status, _headers, bytes) = fetch_asset("/assets/app.js").await;
+    assert_eq!(status, StatusCode::OK);
+    let s = std::str::from_utf8(&bytes).expect("app.js must be utf-8");
+    assert!(
+        s.contains("input[name], select[name], textarea[name]"),
+        "settings dirty-tracker must register <select> rows, not just input/textarea",
+    );
+}
+
+#[tokio::test]
 async fn assets_emit_immutable_cache_control() {
     let (status, headers, _bytes) = fetch_asset("/assets/app.css").await;
     assert_eq!(status, StatusCode::OK);
