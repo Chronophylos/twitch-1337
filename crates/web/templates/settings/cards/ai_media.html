@@ -10,6 +10,23 @@
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
   <div class="settings-rows">
+    {% let media_profile = current.ai.media.profile.as_deref().unwrap_or("") %}
+    <div class="settings-row" data-section="ai_media">
+      {% call m::row_head("profile", "Which provider profile this agent runs on. Empty = the active profile.") %}{% endcall %}
+      <div class="row-control-cell">
+        <select name="ai_media_profile" data-key="ai.media.profile" data-default="">
+          <option value="">(active profile)</option>
+          {% for p in current.ai.profiles %}
+          <option value="{{ p.name }}"{% if media_profile == p.name %} selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.media.profile") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(active profile)</span></span>
+      </div>
+    </div>
+
     {% call m::model_row("ai_media", "ai_media_model", "model",
        "Vision-capable model for media analysis.",
        current.ai.media.model, defaults.ai.media.model) %}{% endcall %}

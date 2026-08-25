@@ -10,6 +10,23 @@
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
   <div class="settings-rows">
+    {% let grok_profile = current.ai.grok.profile.as_deref().unwrap_or("") %}
+    <div class="settings-row" data-section="ai_grok">
+      {% call m::row_head("profile", "Which provider profile this agent runs on. Empty = the active profile.") %}{% endcall %}
+      <div class="row-control-cell">
+        <select name="ai_grok_profile" data-key="ai.grok.profile" data-default="">
+          <option value="">(active profile)</option>
+          {% for p in current.ai.profiles %}
+          <option value="{{ p.name }}"{% if grok_profile == p.name %} selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.grok.profile") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(active profile)</span></span>
+      </div>
+    </div>
+
     {% let grok_model = current.ai.grok.model.as_deref().unwrap_or("") %}
     <div class="settings-row" data-section="ai_grok">
       {% call m::row_head("model", "Override the model used for @grok turns. Empty = use connection.model.") %}{% endcall %}

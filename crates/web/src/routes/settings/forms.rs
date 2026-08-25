@@ -11,7 +11,7 @@ use twitch_1337_core::settings::overrides::{
     SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
 };
 use twitch_1337_core::settings::{
-    AiBackendKind, AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides,
+    AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides,
 };
 
 use super::SaveForm;
@@ -61,6 +61,14 @@ fn parse_id_list(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// Maps a submitted profile `<select>` value to the sub-agent's `profile`
+/// override: empty (the "(active profile)" option) means "inherit the
+/// active profile" (`None`); anything else names the profile to pin to.
+fn opt_str(s: &str) -> Option<String> {
+    let t = s.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Per-card form structs
 // ---------------------------------------------------------------------------
@@ -107,46 +115,6 @@ impl PingsForm {
         PingsOverrides {
             cooldown: Some(self.ping_cooldown),
             public: Some(self.ping_public.is_some()),
-        }
-    }
-}
-
-#[derive(Default, Deserialize)]
-struct AiConnectionForm {
-    #[serde(default)]
-    ai_connection_backend: Option<String>,
-    #[serde(default)]
-    ai_connection_base_url: Option<String>,
-    #[serde(default)]
-    ai_connection_model: Option<String>,
-    #[serde(default)]
-    ai_connection_timeout: Option<u64>,
-    #[serde(default)]
-    ai_connection_reasoning_effort: Option<String>,
-    #[serde(default)]
-    ai_connection_service_tier: Option<String>,
-}
-
-impl AiConnectionForm {
-    fn into_overrides(self) -> AiConnectionOverrides {
-        AiConnectionOverrides {
-            backend: self.ai_connection_backend.as_deref().and_then(|s| match s {
-                "openai" => Some(AiBackendKind::OpenAi),
-                "ollama" => Some(AiBackendKind::Ollama),
-                _ => None,
-            }),
-            base_url: self
-                .ai_connection_base_url
-                .map(|s| if s.trim().is_empty() { None } else { Some(s) }),
-            // A blank model box means "unchanged", never "clear it": an empty
-            // model makes every request fail with `No models provided`.
-            model: self
-                .ai_connection_model
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty()),
-            timeout: self.ai_connection_timeout,
-            reasoning_effort: segmented_tri_state(self.ai_connection_reasoning_effort),
-            service_tier: segmented_tri_state(self.ai_connection_service_tier),
         }
     }
 }
@@ -235,6 +203,8 @@ impl AiMemoryForm {
 #[derive(Default, Deserialize)]
 struct AiDreamerForm {
     #[serde(default)]
+    ai_dreamer_profile: String,
+    #[serde(default)]
     ai_dreamer_enabled: Option<String>,
     #[serde(default)]
     ai_dreamer_model: Option<String>,
@@ -255,8 +225,7 @@ struct AiDreamerForm {
 impl AiDreamerForm {
     fn into_overrides(self) -> AiDreamerOverrides {
         AiDreamerOverrides {
-            // Rewritten in a later task; the card has no profile picker yet.
-            profile: None,
+            profile: Some(opt_str(&self.ai_dreamer_profile)),
             // Dreamer card always renders, so checkbox semantics mirror
             // `ping_public`: missing key = false, present = true.
             enabled: Some(self.ai_dreamer_enabled.is_some()),
@@ -276,6 +245,8 @@ impl AiDreamerForm {
 #[derive(Default, Deserialize)]
 struct AiGrokForm {
     #[serde(default)]
+    ai_grok_profile: String,
+    #[serde(default)]
     ai_grok_model: Option<String>,
     #[serde(default)]
     ai_grok_reasoning_effort: Option<String>,
@@ -286,7 +257,7 @@ struct AiGrokForm {
 impl AiGrokForm {
     fn into_overrides(self) -> AiGrokOverrides {
         AiGrokOverrides {
-            profile: None,
+            profile: Some(opt_str(&self.ai_grok_profile)),
             model: self
                 .ai_grok_model
                 .map(|v| if v.is_empty() { None } else { Some(v) }),
@@ -405,6 +376,8 @@ impl AiEmotesForm {
 #[derive(Default, Deserialize)]
 struct AiMediaForm {
     #[serde(default)]
+    ai_media_profile: String,
+    #[serde(default)]
     ai_media_model: Option<String>,
     #[serde(default)]
     ai_media_timeout: Option<u64>,
@@ -423,7 +396,7 @@ struct AiMediaForm {
 impl AiMediaForm {
     fn into_overrides(self) -> AiMediaOverrides {
         AiMediaOverrides {
-            profile: None,
+            profile: Some(opt_str(&self.ai_media_profile)),
             model: self.ai_media_model,
             timeout: self.ai_media_timeout,
             max_image_size: self
@@ -601,19 +574,15 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
         }
         .into_overrides(),
         ai: AiOverrides {
-            // MIGRATION(ai-profiles): the connection card still submits the
-            // legacy block; the profiles editor arrives in a later task.
+            // Profiles are managed wholesale on /ai-profiles, not this form.
             profiles: None,
             active_profile: None,
-            connection: AiConnectionForm {
-                ai_connection_backend: form.ai_connection_backend,
-                ai_connection_base_url: form.ai_connection_base_url,
-                ai_connection_model: form.ai_connection_model,
-                ai_connection_timeout: form.ai_connection_timeout,
-                ai_connection_reasoning_effort: form.ai_connection_reasoning_effort,
-                ai_connection_service_tier: form.ai_connection_service_tier,
-            }
-            .into_overrides(),
+            // MIGRATION(ai-profiles): `connection` is a kept legacy field —
+            // the settings form no longer writes to it, so every save is a
+            // no-op on that block. Do NOT delete it from `settings::` core;
+            // removing it would drop a live deployment's existing override
+            // on the next save.
+            connection: AiConnectionOverrides::default(),
             behavior: AiBehaviorForm {
                 ai_behavior_max_turn_rounds: form.ai_behavior_max_turn_rounds,
                 ai_behavior_max_writes_per_turn: form.ai_behavior_max_writes_per_turn,
@@ -639,6 +608,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             }
             .into_overrides(),
             dreamer: AiDreamerForm {
+                ai_dreamer_profile: form.ai_dreamer_profile,
                 ai_dreamer_enabled: form.ai_dreamer_enabled,
                 ai_dreamer_model: form.ai_dreamer_model,
                 ai_dreamer_reasoning_effort: form.ai_dreamer_reasoning_effort,
@@ -650,6 +620,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             }
             .into_overrides(),
             grok: AiGrokForm {
+                ai_grok_profile: form.ai_grok_profile,
                 ai_grok_model: form.ai_grok_model,
                 ai_grok_reasoning_effort: form.ai_grok_reasoning_effort,
                 ai_grok_service_tier: form.ai_grok_service_tier,
@@ -685,6 +656,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             }
             .into_overrides(),
             media: AiMediaForm {
+                ai_media_profile: form.ai_media_profile,
                 ai_media_model: form.ai_media_model,
                 ai_media_timeout: form.ai_media_timeout,
                 ai_media_max_image_size: form.ai_media_max_image_size,
@@ -797,30 +769,16 @@ mod tests {
 
     #[test]
     fn form_parses_service_tier_flex_priority_and_none_sentinel() {
-        let conn_ov = AiConnectionForm {
-            ai_connection_service_tier: Some("flex".to_string()),
-            ..Default::default()
-        }
-        .into_overrides();
         let dream_ov = AiDreamerForm {
             ai_dreamer_service_tier: Some("priority".to_string()),
             ..Default::default()
         }
         .into_overrides();
         assert_eq!(
-            conn_ov.service_tier.as_ref().and_then(|v| v.as_deref()),
-            Some("flex")
-        );
-        assert_eq!(
             dream_ov.service_tier.as_ref().and_then(|v| v.as_deref()),
             Some("priority")
         );
 
-        let conn_ov2 = AiConnectionForm {
-            ai_connection_service_tier: Some("none".to_string()),
-            ..Default::default()
-        }
-        .into_overrides();
         let dream_ov2 = AiDreamerForm {
             ai_dreamer_service_tier: Some(String::new()),
             ..Default::default()
@@ -836,12 +794,45 @@ mod tests {
             ..Default::default()
         }
         .into_overrides();
-        assert!(matches!(conn_ov2.service_tier, Some(None)));
         assert!(matches!(dream_ov2.service_tier, Some(None)));
         assert_eq!(
             grok_ov.service_tier.as_ref().and_then(|v| v.as_deref()),
             Some("priority")
         );
         assert!(matches!(grok_ov2.service_tier, Some(None)));
+    }
+
+    #[test]
+    fn opt_str_empty_or_whitespace_means_inherit() {
+        assert_eq!(opt_str(""), None);
+        assert_eq!(opt_str("   "), None);
+        assert_eq!(opt_str("cheap"), Some("cheap".to_string()));
+    }
+
+    #[test]
+    fn dreamer_grok_media_profile_overrides_round_trip() {
+        let dream = AiDreamerForm {
+            ai_dreamer_profile: "cheap".to_string(),
+            ..Default::default()
+        }
+        .into_overrides();
+        assert_eq!(dream.profile, Some(Some("cheap".to_string())));
+
+        let dream_cleared = AiDreamerForm::default().into_overrides();
+        assert_eq!(dream_cleared.profile, Some(None));
+
+        let grok = AiGrokForm {
+            ai_grok_profile: "cheap".to_string(),
+            ..Default::default()
+        }
+        .into_overrides();
+        assert_eq!(grok.profile, Some(Some("cheap".to_string())));
+
+        let media = AiMediaForm {
+            ai_media_profile: "cheap".to_string(),
+            ..Default::default()
+        }
+        .into_overrides();
+        assert_eq!(media.profile, Some(Some("cheap".to_string())));
     }
 }
