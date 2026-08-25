@@ -159,6 +159,19 @@ A Twitch reply whose parent is an agent line. It starts a new Turn for that
 agent without `!ai` or `@grok`.
 _Avoid_: thread, continuation, reply turn.
 
+## AI profiles
+
+**Profile**:
+A named provider configuration — provider, base URL, model, timeout,
+reasoning effort, service tier — that a Turn runs under. Switching or
+editing one applies immediately, never a restart.
+_Avoid_: connection, backend, config.
+
+**Active Profile**:
+The Profile `!ai` runs on by default. Dreamer, Grok, and the media tool may
+each override it; unset, they fall back to the Active Profile.
+_Avoid_: default profile, main profile.
+
 ## Emote tracking
 
 **Active Catalog:**

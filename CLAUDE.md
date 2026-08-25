@@ -4,7 +4,7 @@ Guide Claude Code work repo.
 
 ## Project
 
-Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, OpenAI/Ollama), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), feedback (`!fb`), version (`!v`).
+Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), feedback (`!fb`), version (`!v`).
 
 Single persistent IRC connection, broadcast channel routes to independent handler tasks.
 
@@ -142,8 +142,20 @@ lives in `settings.ron`: `ai.behavior.persona_name` (default `"Aurora"`) and
 defaults 480/490/490) is live-tunable on `/settings → AI · Behavior`; Grok
 keeps a baked 480/500 prompt and a 490/490 reword-clamp.
 
-`[ai]` carries only the API key. Backend, model, base URL, memory caps,
-dreamer schedule, web/emote/media tool toggles, history caps, and every
+`[ai]` carries only credentials: `api_key` plus an optional `[ai.keys]` table
+of named keys. A profile stores a key *name*, never the secret, so switching
+providers from the dashboard never touches config.toml. Provider, base URL,
+model, timeout, reasoning effort and service tier live in **profiles** — a
+named list (`ai.profiles`) CRUD'd at `/ai-profiles` (mod-gated). `ai.active_profile`
+names the profile `!ai` uses; dreamer, grok and media each take an optional
+per-profile override at `/settings`, falling back to the active profile when
+unset. Every AI client is resolved per call through `LlmRegistry`
+(`crates/core/src/llm_factory.rs`), so switching `active_profile` or editing a
+profile applies on the next turn — no restart. Each profile declares an
+`AiProvider` (`open_router`, `open_ai`, `open_ai_compatible`, `ollama`) whose
+`caps()` table decides which `reasoning_effort` values it accepts and whether
+`service_tier` applies — see `crates/core/src/settings/provider.rs`. Memory
+caps, dreamer schedule, web/emote/media tool toggles, history caps, and every
 other runtime knob live in the dashboard (`/settings`, owner only) and
 persist to `$DATA_DIR/settings.ron` (schema v2). On first v2 launch any
 legacy hoisted `[ai]` keys in `config.toml` are migrated into
@@ -181,12 +193,11 @@ the `ScheduleCache` sync task subscribes to. On first launch any legacy
 (separate sentinel: `$DATA_DIR/.schedules_migrated_v3`); subsequent edits to
 the legacy section are ignored.
 
-Backend and connection `base_url` changes from the dashboard require a
-bot restart (UI shows a "restart required" badge). Everything else
-applies live via `SettingsHandle` (model, timeout, reasoning_effort,
-behavior limits including Aurora reply target/soft/hard character caps,
-history caps, memory byte budgets, dreamer schedule, web tools, emotes,
-media). Model fields are plain text inputs — type the
+AI profile edits (provider, base URL, model, timeout, reasoning_effort,
+service_tier) apply live via `SettingsHandle` and `LlmRegistry` — no restart,
+same as behavior limits including Aurora reply target/soft/hard character
+caps, history caps, memory byte budgets, dreamer schedule, web tools,
+emotes, and media. Model fields are plain text inputs — type the
 upstream model id exactly.
 
 OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config structs are `Deserialize`-only; do NOT add `Serialize` derive (closes credential-leak via debug dump).
@@ -223,6 +234,7 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - Latency monitor: PING/PONG every 5min, EMA alpha=0.2, shared `Arc<AtomicU32>`. Read by 1337 handler for precise wake-up.
 - Flight tracker: `Arc<mpsc::Sender<TrackerCommand>>` from commands to long task. Adaptive poll 30/60/120s based on phase mix. adsb.lol v2; fallback aggregators in memory `reference_adsb_aggregators.md`.
 - AI memory (v2): per-user character sheets + chat LORE + bot SOUL as markdown under $DATA_DIR/memories/. Single-loop !ai turn drives the model with write_file/write_scratch/delete_scratch tools (run_agent in the llm crate); the model's final assistant text is sent to chat verbatim. Daily dreamer ritual rewrites files from yesterday's transcript at the dashboard-configured `ai.dreamer.run_at` (Berlin local). Per ADR-0003, Memory (SOUL/LORE/users) and Scratch (`memories/scratch/`) are siblings, not tiers of one thing; see CONTEXT.md. Bodies are byte-capped (SOUL/user 4 KiB, LORE 12 KiB, scratch 2 KiB by default; tunable via the dashboard `AI · Memory` card). `@grok` uses a separate baked prompt (`grok.md`) instead of `system.md` and gets no injected memory bodies: its system message carries a paths-only manifest plus a grok-only `read_memory(path)` tool, allowlisted against the manifest paths. SOUL.md stays dreamer-only for both agents: it's never in grok's manifest, and no chat turn on either alias can write it. `users/<id>.md` ids are never minted by the model: `write_file` refuses an id that is neither the speaker's, in this turn's chat history, nor an existing sheet (the dreamer additionally accepts ids carried by the transcript, whose lines are `HH:MM:SS  login#<user-id>: text`). Without that guard the dreamer invented plausible ids for logins it read in the transcript, producing duplicate sheets under ids no Twitch account owns.
+- AI clients are resolved per call through `LlmRegistry` (`crates/core/src/llm_factory.rs`), keyed by (provider, base_url, key name). Editing a profile's model or switching `active_profile` takes effect on the next turn; changing a provider or base URL builds a new cached client, still no restart. Secrets never leave config.toml — a profile stores a key name, not the key.
 - AI mouths speak over Helix `POST /helix/chat/messages` and never join IRC, so their messages come back in over the normal broadcast channel. `EchoGuard` (`crates/core/src/twitch/echo.rs`) keeps them out of the bot's own input. Two mechanisms, both needed: the Helix `message_id` of every sent reply is registered and peeked on the way back (30s TTL, 512 cap, peeked not removed — the transcript tap and the command dispatcher each check the same id), plus a mouth login/user-id identity backstop for when the id doesn't match. History and transcript writes use `is_echo` (both mechanisms); command dispatch, the 1337 tracker, and emote counting use `is_mouth` (identity only) so a viewer can never be filtered by a stale pending id. Neither is dead code. Chat-turn prompts name the mapping via a runtime Konten/Accounts system appendix; a reply parent from a Mouth is labeled `(self)` / the other agent, not an untrusted viewer.
 - Scheduled messages: list loaded from `settings.ron` into `ScheduleCache`; the `run_schedule_settings_sync` task subscribes to `SettingsStore`'s change-`Notify` and updates the cache when the dashboard saves. The message handler polls the cache every 30s. On Ctrl+C, main notifies `Arc<Notify>`; children finish in-flight `say()` then exit; main awaits handler with 5s timeout.
 
