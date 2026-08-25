@@ -69,6 +69,27 @@ impl Default for AiProfile {
 /// "AI disabled" by the registry.
 static FALLBACK_PROFILE: LazyLock<AiProfile> = LazyLock::new(AiProfile::default);
 
+/// The profile a sub-agent actually runs on: `agent_profile` (its own
+/// `profile` override) when it names a row in `profiles`, otherwise
+/// `active_profile`'s row, falling back to the first profile in the list.
+/// Standalone (rather than an `AiSettings` method) so `resolve.rs` can call
+/// it while still assembling the `AiSettings` it would otherwise need
+/// `&self` for. `AiSettings::resolved_profile` and `settings::validation`'s
+/// `dreamer_caps`/`grok_caps` both funnel through this one lookup so the
+/// dashboard's caps-gated rows and save validation never disagree about
+/// which profile's caps apply — see MIGRATION(ai-provider-profiles) issue I2.
+pub fn resolved_profile_in<'a>(
+    profiles: &'a [AiProfile],
+    active_profile: &str,
+    agent_profile: Option<&str>,
+) -> &'a AiProfile {
+    agent_profile
+        .and_then(|name| profiles.iter().find(|p| p.name == name))
+        .or_else(|| profiles.iter().find(|p| p.name == active_profile))
+        .or_else(|| profiles.first())
+        .unwrap_or(&FALLBACK_PROFILE)
+}
+
 impl AiSettings {
     pub fn by_name(&self, name: &str) -> Option<&AiProfile> {
         self.profiles.iter().find(|p| p.name == name)
@@ -77,9 +98,24 @@ impl AiSettings {
     /// The profile `active_profile` names, or the first one if the name is
     /// stale (a deleted profile leaves a dangling pointer until the next save).
     pub fn active(&self) -> &AiProfile {
-        self.by_name(&self.active_profile)
-            .or_else(|| self.profiles.first())
-            .unwrap_or(&FALLBACK_PROFILE)
+        resolved_profile_in(&self.profiles, &self.active_profile, None)
+    }
+
+    /// The profile a sub-agent (dreamer, grok, media) actually runs on: the
+    /// profile its own `profile` override names, falling back to
+    /// [`active`](Self::active) when unset or when the name is stale.
+    pub fn resolved_profile(&self, agent_profile: Option<&str>) -> &AiProfile {
+        resolved_profile_in(&self.profiles, &self.active_profile, agent_profile)
+    }
+
+    /// The profile the dreamer pass will actually run on.
+    pub fn dreamer_profile(&self) -> &AiProfile {
+        self.resolved_profile(self.dreamer.profile.as_deref())
+    }
+
+    /// The profile `@grok` turns will actually run on.
+    pub fn grok_profile(&self) -> &AiProfile {
+        self.resolved_profile(self.grok.profile.as_deref())
     }
 }
 

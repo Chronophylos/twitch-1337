@@ -56,16 +56,27 @@
       </div>
     </div>
 
+    {# Gated against the caps of the profile the dreamer will actually run
+       on (its own `profile` override, or the active profile) — not the
+       active profile alone. Otherwise this row can offer values the save
+       validation rejects, or hide ones it would accept. See issue I2. #}
+    {% let dreamer_caps = current.ai.dreamer_profile().provider.caps() %}
+    {% if dreamer_caps.effort_kind() == "free" %}
+    {% let dreamer_effort_raw = current.ai.dreamer.reasoning_effort.as_deref().unwrap_or("") %}
+    {% call m::text_row("ai_dreamer", "ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort",
+       "Override reasoning_effort for dreamer turns (provider-defined string).",
+       dreamer_effort_raw, "", "(profile default)") %}{% endcall %}
+    {% else if dreamer_caps.effort_kind() == "fixed" %}
     {% let dreamer_effort = current.ai.dreamer.reasoning_effort.as_deref().unwrap_or("none") %}
     <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
       {% call m::row_head("reasoning_effort", "Override reasoning_effort for dreamer turns.") %}{% endcall %}
       <div class="row-control-cell">
         <div class="segmented" role="radiogroup" aria-label="reasoning_effort">
           {% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "none", dreamer_effort) %}{% endcall %}
-          {% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "minimal", dreamer_effort) %}{% endcall %}
-          {% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "medium", dreamer_effort) %}{% endcall %}
-          {% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "high", dreamer_effort) %}{% endcall %}
-          {% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "xhigh", dreamer_effort) %}{% endcall %}
+          {% if dreamer_caps.allows_effort("minimal") %}{% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "minimal", dreamer_effort) %}{% endcall %}{% endif %}
+          {% if dreamer_caps.allows_effort("medium") %}{% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "medium", dreamer_effort) %}{% endcall %}{% endif %}
+          {% if dreamer_caps.allows_effort("high") %}{% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "high", dreamer_effort) %}{% endcall %}{% endif %}
+          {% if dreamer_caps.allows_effort("xhigh") %}{% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "xhigh", dreamer_effort) %}{% endcall %}{% endif %}
         </div>
       </div>
       <div class="row-right">
@@ -73,9 +84,9 @@
         <span class="row-default">default <span class="mono">none</span></span>
       </div>
     </div>
+    {% endif %}
 
-        {% let dreamer_or = current.ai.active().provider.caps().service_tier %}
-    {% if dreamer_or %}
+    {% if dreamer_caps.service_tier %}
     {% let dreamer_tier = current.ai.dreamer.service_tier.as_deref().unwrap_or("none") %}
     <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
       {% call m::row_head("service_tier", "Override OpenRouter pricing tier for dreamer turns. Falls back to connection tier when set to Default.") %}{% endcall %}

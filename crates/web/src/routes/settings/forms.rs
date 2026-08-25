@@ -232,6 +232,14 @@ impl AiDreamerForm {
             model: self
                 .ai_dreamer_model
                 .map(|v| if v.is_empty() { None } else { Some(v) }),
+            // `ai_dreamer_reasoning_effort` renders as a segmented radio
+            // group when dreamer's resolved profile has fixed effort
+            // values, or a free-text input when it's FreeText-caps (issue
+            // I2) — same field name either way, so `segmented_tri_state`
+            // runs for both. That normalises a literal "none" typed into
+            // the free-text row to "unchanged" instead of "set to the
+            // string none"; accepted because no documented vendor uses
+            // "none" as a meaningful reasoning_effort value.
             reasoning_effort: segmented_tri_state(self.ai_dreamer_reasoning_effort),
             service_tier: segmented_tri_state(self.ai_dreamer_service_tier),
             run_at: self.ai_dreamer_run_at,
@@ -261,6 +269,8 @@ impl AiGrokForm {
             model: self
                 .ai_grok_model
                 .map(|v| if v.is_empty() { None } else { Some(v) }),
+            // See the same field on `AiDreamerForm` for the fixed/free-text
+            // caveat.
             reasoning_effort: segmented_tri_state(self.ai_grok_reasoning_effort),
             service_tier: segmented_tri_state(self.ai_grok_service_tier),
         }

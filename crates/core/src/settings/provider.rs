@@ -46,6 +46,17 @@ impl ProviderCaps {
             Efforts::None => false,
         }
     }
+
+    /// "fixed" | "free" | "none" — mirrors `Efforts` for callers (dashboard
+    /// templates in particular) that can't match the enum itself and only
+    /// need to pick which control shape to render.
+    pub const fn effort_kind(&self) -> &'static str {
+        match self.efforts {
+            Efforts::Fixed(_) => "fixed",
+            Efforts::FreeText => "free",
+            Efforts::None => "none",
+        }
+    }
 }
 
 impl AiProvider {

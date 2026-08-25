@@ -673,6 +673,103 @@ async fn settings_page_shows_openrouter_tiers_for_default_base_url() {
     );
 }
 
+/// I2 regression: a sub-agent pinned to a profile whose provider caps
+/// differ from the active profile's must be gated on *its own* profile,
+/// not the active one. Otherwise the dashboard offers controls that save
+/// validation rejects (or hides ones it would accept) — see
+/// `settings::validation`'s `dreamer_caps`/`grok_caps`.
+#[tokio::test]
+async fn sub_agent_caps_gating_follows_its_own_profile_not_the_active_one() {
+    use twitch_1337_core::settings::{AiProfile, AiProvider, overrides::SettingsOverrides};
+
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+
+    let or_profile = AiProfile {
+        name: "or".into(),
+        key: None,
+        provider: AiProvider::OpenRouter,
+        base_url: None,
+        model: "some-model".into(),
+        timeout: 30,
+        reasoning_effort: None,
+        service_tier: None,
+    };
+    let ollama_profile = AiProfile {
+        name: "local".into(),
+        key: None,
+        provider: AiProvider::Ollama,
+        base_url: None,
+        model: "llama3".into(),
+        timeout: 30,
+        reasoning_effort: None,
+        service_tier: None,
+    };
+    state
+        .settings_store
+        .apply(
+            SettingsOverrides {
+                ai: twitch_1337_core::settings::AiOverrides {
+                    profiles: Some(vec![or_profile.clone(), ollama_profile.clone()]),
+                    active_profile: Some("or".to_owned()),
+                    dreamer: twitch_1337_core::settings::overrides::AiDreamerOverrides {
+                        profile: Some(Some("local".to_owned())),
+                        ..Default::default()
+                    },
+                    grok: twitch_1337_core::settings::overrides::AiGrokOverrides {
+                        profile: Some(Some("or".to_owned())),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            twitch_1337_core::settings::Actor {
+                user_id: "test".into(),
+                user_login: "test".into(),
+            },
+        )
+        .await
+        .expect("seed profiles");
+
+    let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let app = build_router(state);
+    let req = Request::builder()
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "owner GET /settings must 200");
+    let html = body_string(res).await;
+
+    // Active profile is OpenRouter, but dreamer is pinned to the Ollama
+    // profile: Ollama has no reasoning_effort or service_tier at all, so
+    // both controls must be absent from the dreamer card even though the
+    // active profile would otherwise show them.
+    assert!(
+        !html.contains("name=\"ai_dreamer_service_tier\""),
+        "dreamer service_tier must not render when dreamer's own profile is Ollama"
+    );
+    assert!(
+        !html.contains("name=\"ai_dreamer_reasoning_effort\""),
+        "dreamer reasoning_effort must not render when dreamer's own profile is Ollama"
+    );
+
+    // grok is pinned to the OpenRouter profile even though the active
+    // profile is also OpenRouter here, so both controls must render.
+    assert!(
+        html.contains("name=\"ai_grok_service_tier\""),
+        "grok service_tier must render when grok's own profile is OpenRouter"
+    );
+    assert!(
+        html.contains("name=\"ai_grok_reasoning_effort\""),
+        "grok reasoning_effort must render when grok's own profile is OpenRouter"
+    );
+}
+
 #[tokio::test]
 async fn settings_page_renders_ai_grok_card() {
     install_crypto();

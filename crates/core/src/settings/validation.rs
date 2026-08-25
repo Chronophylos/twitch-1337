@@ -409,23 +409,12 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
 
     // Sub-agent overrides validate against the caps of the profile that
     // agent will actually run on (its own `profile` pointer, or the active
-    // profile when unset) — not the profile list's index-0 entry.
-    let dreamer_caps = ai
-        .dreamer
-        .profile
-        .as_deref()
-        .and_then(|n| ai.by_name(n))
-        .unwrap_or_else(|| ai.active())
-        .provider
-        .caps();
-    let grok_caps = ai
-        .grok
-        .profile
-        .as_deref()
-        .and_then(|n| ai.by_name(n))
-        .unwrap_or_else(|| ai.active())
-        .provider
-        .caps();
+    // profile when unset) — not the profile list's index-0 entry. Same
+    // lookup the dashboard cards use to gate their reasoning_effort /
+    // service_tier rows (`AiSettings::dreamer_profile`/`grok_profile`), so
+    // the two never disagree (issue I2).
+    let dreamer_caps = ai.dreamer_profile().provider.caps();
+    let grok_caps = ai.grok_profile().provider.caps();
     for (field, val, caps) in [
         (
             "ai.dreamer.reasoning_effort",

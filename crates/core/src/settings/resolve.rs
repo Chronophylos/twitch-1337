@@ -127,8 +127,9 @@ impl Settings {
 }
 
 fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
-    use super::ai::{AiBehavior, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory};
-    use super::provider::ProviderCaps;
+    use super::ai::{
+        AiBehavior, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory, resolved_profile_in,
+    };
 
     let profiles = resolve_profiles(defaults, o);
     let active_profile = o
@@ -140,31 +141,6 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
             legacy_profile(o).map(|p| p.name)
         })
         .unwrap_or_else(|| defaults.active_profile.clone());
-    let active_caps = || -> ProviderCaps {
-        profiles
-            .iter()
-            .find(|p| p.name == active_profile)
-            .or_else(|| profiles.first())
-            .map(|p| p.provider.caps())
-            .unwrap_or_else(|| AiProfile::default().provider.caps())
-    };
-    // Same trap as the connection-block fold: the pre-profiles dashboard
-    // gated the dreamer/grok service_tier row on the connection's backend
-    // and URL rather than the sub-agent's own profile, and never gated
-    // reasoning_effort at all. A stored value that outlived a since-changed
-    // backend now hits the caps-checked validation added on this branch and
-    // would quarantine settings.ron. Resolve the caps of whichever profile
-    // the sub-agent will actually run on (its own `profile` override, or
-    // the active profile) — mirrors `validation.rs`'s `dreamer_caps` /
-    // `grok_caps` — and drop what that profile can't accept.
-    let caps_for = |profile_override: &Option<String>, fallback: &str| -> ProviderCaps {
-        let name = profile_override.as_deref().unwrap_or(fallback);
-        profiles
-            .iter()
-            .find(|p| p.name == name)
-            .map(|p| p.provider.caps())
-            .unwrap_or_else(active_caps)
-    };
     let dreamer_profile = match &o.dreamer.profile {
         Some(v) => v.clone(),
         None => defaults.dreamer.profile.clone(),
@@ -173,8 +149,21 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
         Some(v) => v.clone(),
         None => defaults.grok.profile.clone(),
     };
-    let dreamer_caps = caps_for(&dreamer_profile, &active_profile);
-    let grok_caps = caps_for(&grok_profile, &active_profile);
+    // Same trap as the connection-block fold: the pre-profiles dashboard
+    // gated the dreamer/grok service_tier row on the connection's backend
+    // and URL rather than the sub-agent's own profile, and never gated
+    // reasoning_effort at all. A stored value that outlived a since-changed
+    // backend now hits the caps-checked validation added on this branch and
+    // would quarantine settings.ron. Resolve the caps of whichever profile
+    // the sub-agent will actually run on — the same lookup `validation.rs`
+    // and the dashboard cards use (`resolved_profile_in`, issue I2) — and
+    // drop what that profile can't accept.
+    let dreamer_caps = resolved_profile_in(&profiles, &active_profile, dreamer_profile.as_deref())
+        .provider
+        .caps();
+    let grok_caps = resolved_profile_in(&profiles, &active_profile, grok_profile.as_deref())
+        .provider
+        .caps();
 
     AiSettings {
         profiles,
