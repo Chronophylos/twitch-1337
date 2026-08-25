@@ -69,10 +69,31 @@ pub struct AiBehavior {
     /// `0` disables the padding.
     #[serde(default)]
     pub min_response_delay_ms: u64,
+    /// What Aurora is told to aim for in `system.md` (`{reply_target}`).
+    #[serde(default = "default_reply_target_chars")]
+    pub reply_target_chars: usize,
+    /// Rewrite once if the cleaned reply is longer than this.
+    #[serde(default = "default_reply_soft_chars")]
+    pub reply_soft_chars: usize,
+    /// Ellipsis-clamp if the line is still longer after the rewrite.
+    #[serde(default = "default_reply_hard_chars")]
+    pub reply_hard_chars: usize,
 }
 
 fn default_persona_name() -> String {
     "Aurora".to_string()
+}
+
+fn default_reply_target_chars() -> usize {
+    480
+}
+
+fn default_reply_soft_chars() -> usize {
+    490
+}
+
+fn default_reply_hard_chars() -> usize {
+    490
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -223,6 +244,9 @@ impl Default for AiBehavior {
             max_writes_per_turn: 8,
             persona_name: default_persona_name(),
             min_response_delay_ms: 0,
+            reply_target_chars: default_reply_target_chars(),
+            reply_soft_chars: default_reply_soft_chars(),
+            reply_hard_chars: default_reply_hard_chars(),
         }
     }
 }
@@ -339,6 +363,38 @@ mod tests {
     }
 
     #[test]
+    fn ai_behavior_reply_length_defaults_preserve_today() {
+        let b = AiBehavior::default();
+        assert_eq!(b.reply_target_chars, 480);
+        assert_eq!(b.reply_soft_chars, 490);
+        assert_eq!(b.reply_hard_chars, 490);
+    }
+
+    #[test]
+    fn ai_behavior_overrides_without_reply_keys_keep_defaults() {
+        let o: crate::settings::overrides::AiBehaviorOverrides =
+            ron::from_str("(max_turn_rounds: Some(5))").expect("partial override must parse");
+        assert_eq!(o.max_turn_rounds, Some(5));
+        assert!(o.reply_target_chars.is_none());
+        assert!(o.reply_soft_chars.is_none());
+        assert!(o.reply_hard_chars.is_none());
+        let resolved = crate::settings::Settings::resolve(
+            &crate::settings::Settings::compiled_defaults(),
+            &crate::settings::SettingsOverrides {
+                ai: crate::settings::overrides::AiOverrides {
+                    behavior: o,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        assert_eq!(resolved.ai.behavior.reply_target_chars, 480);
+        assert_eq!(resolved.ai.behavior.reply_soft_chars, 490);
+        assert_eq!(resolved.ai.behavior.reply_hard_chars, 490);
+        assert_eq!(resolved.ai.behavior.max_turn_rounds, 5);
+    }
+
+    #[test]
     fn ai_grok_persona_name_defaults_to_grok() {
         let g = crate::settings::ai::AiGrok::default();
         assert_eq!(g.persona_name, "Grok");
@@ -395,6 +451,9 @@ mod tests {
         assert!(s.connection.base_url.is_none());
         assert_eq!(s.behavior.max_turn_rounds, 4);
         assert_eq!(s.behavior.max_writes_per_turn, 8);
+        assert_eq!(s.behavior.reply_target_chars, 480);
+        assert_eq!(s.behavior.reply_soft_chars, 490);
+        assert_eq!(s.behavior.reply_hard_chars, 490);
         assert_eq!(
             s.history.length,
             crate::ai::chat_history::DEFAULT_HISTORY_LENGTH

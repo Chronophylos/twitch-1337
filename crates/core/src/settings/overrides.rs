@@ -129,6 +129,12 @@ pub struct AiBehaviorOverrides {
     pub persona_name: Option<String>,
     #[serde(default)]
     pub min_response_delay_ms: Option<u64>,
+    #[serde(default)]
+    pub reply_target_chars: Option<usize>,
+    #[serde(default)]
+    pub reply_soft_chars: Option<usize>,
+    #[serde(default)]
+    pub reply_hard_chars: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
