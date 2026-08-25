@@ -24,7 +24,7 @@ use crate::ai::memory::tools::{
 use crate::ai::memory::transcript::TranscriptWriter;
 use crate::ai::memory::types::Role;
 use crate::ai::model_catalog::ModelCatalog;
-use crate::ai::reply::{RewordOpts, prepare_agent_reply};
+use crate::ai::reply::{ReplyLimits, RewordOpts, prepare_agent_reply};
 use crate::commands::{Command, CommandContext};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
@@ -828,6 +828,7 @@ where
                     service_tier: service_tier.clone(),
                     trace: trace.clone(),
                 },
+                &ReplyLimits::GROK,
             )
             .await;
             if !line.is_empty() {
