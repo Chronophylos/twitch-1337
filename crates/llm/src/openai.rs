@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use reqwest::header::{self, HeaderValue};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, instrument, trace, warn};
+use tracing::{debug, error, instrument, trace, warn};
 
 use crate::client::LlmClient;
 use crate::error::{LlmError, Result};
@@ -236,6 +236,30 @@ async fn provider_error(response: reqwest::Response) -> LlmError {
     LlmError::Provider { status, body }
 }
 
+/// If `TWITCH_1337_DUMP_LLM_REQUEST` is a writable path, persist the outbound
+/// JSON so a provider 5xx can be replayed. Opt-in: the body carries chat and
+/// memory. Structural fields are always logged.
+fn log_failed_request(url: &str, model: &str, n_messages: usize, n_tools: usize, req_json: &str) {
+    error!(
+        url,
+        model,
+        n_messages,
+        n_tools,
+        body_bytes = req_json.len(),
+        "OpenAI-compatible API request failed"
+    );
+    let Ok(path) = std::env::var("TWITCH_1337_DUMP_LLM_REQUEST") else {
+        return;
+    };
+    if path.is_empty() {
+        return;
+    }
+    match std::fs::write(&path, req_json) {
+        Ok(()) => error!(path, "dumped failed LLM request body"),
+        Err(error) => error!(path, ?error, "failed to dump LLM request body"),
+    }
+}
+
 // --- Client ---
 
 /// HTTP client for any OpenAI-compatible API (OpenRouter, OpenAI, etc.).
@@ -333,9 +357,17 @@ impl LlmClient for OpenAiClient {
 
         debug!(model = %api_request.model, "Sending request to OpenAI-compatible API");
 
+        let req_json = serde_json::to_string(&api_request).unwrap_or_default();
         let response = self.http.post(&url).json(&api_request).send().await?;
 
         if !response.status().is_success() {
+            log_failed_request(
+                &url,
+                &api_request.model,
+                api_request.messages.len(),
+                0,
+                &req_json,
+            );
             return Err(provider_error(response).await);
         }
 
@@ -404,15 +436,23 @@ impl LlmClient for OpenAiClient {
             trace,
         };
 
-        if let Ok(req_json) = serde_json::to_string(&api_request) {
-            trace!(request_body = %req_json, "Sending tool request to OpenAI-compatible API");
-        } else {
+        let req_json = serde_json::to_string(&api_request).unwrap_or_default();
+        if req_json.is_empty() {
             debug!(model = %api_request.model, "Sending tool request to OpenAI-compatible API");
+        } else {
+            trace!(request_body = %req_json, "Sending tool request to OpenAI-compatible API");
         }
 
         let response = self.http.post(&url).json(&api_request).send().await?;
 
         if !response.status().is_success() {
+            log_failed_request(
+                &url,
+                &api_request.model,
+                api_request.messages.len(),
+                api_request.tools.len(),
+                &req_json,
+            );
             return Err(provider_error(response).await);
         }
 
