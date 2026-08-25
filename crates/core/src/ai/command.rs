@@ -533,6 +533,16 @@ where
         } else {
             aurora_persona.clone()
         };
+        let reply_target = snap.ai.behavior.reply_target_chars.to_string();
+        let reply_hard = snap.ai.behavior.reply_hard_chars.to_string();
+        let reply_limits = if grok_alias {
+            ReplyLimits::GROK
+        } else {
+            ReplyLimits {
+                soft: snap.ai.behavior.reply_soft_chars,
+                hard: snap.ai.behavior.reply_hard_chars,
+            }
+        };
         drop(snap);
 
         let model_display = self.model_catalog.display_name(&connection, &model).await;
@@ -560,6 +570,8 @@ where
             date: &now_berlin,
             model: &model_display,
             model_id: &model,
+            reply_target: &reply_target,
+            reply_hard: &reply_hard,
         };
         // Prompt templates are baked into the binary (#321), not read from disk.
         // @grok is a separate agent, not a style flag on Aurora: it gets its
@@ -828,7 +840,7 @@ where
                     service_tier: service_tier.clone(),
                     trace: trace.clone(),
                 },
-                &ReplyLimits::GROK,
+                &reply_limits,
             )
             .await;
             if !line.is_empty() {
