@@ -58,8 +58,6 @@ pub async fn prepare_agent_reply(
     if cleaned.chars().count() <= limits.soft {
         return cleaned;
     }
-        return cleaned;
-    }
 
     debug!(
         chars = cleaned.chars().count(),
