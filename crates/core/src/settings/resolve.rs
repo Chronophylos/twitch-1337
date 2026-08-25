@@ -128,17 +128,57 @@ impl Settings {
 
 fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
     use super::ai::{AiBehavior, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory};
+    use super::provider::ProviderCaps;
+
+    let profiles = resolve_profiles(defaults, o);
+    let active_profile = o
+        .active_profile
+        .clone()
+        .or_else(|| {
+            // MIGRATION(ai-profiles): a legacy connection block always
+            // lands under the name "default".
+            legacy_profile(o).map(|p| p.name)
+        })
+        .unwrap_or_else(|| defaults.active_profile.clone());
+    let active_caps = || -> ProviderCaps {
+        profiles
+            .iter()
+            .find(|p| p.name == active_profile)
+            .or_else(|| profiles.first())
+            .map(|p| p.provider.caps())
+            .unwrap_or_else(|| AiProfile::default().provider.caps())
+    };
+    // Same trap as the connection-block fold: the pre-profiles dashboard
+    // gated the dreamer/grok service_tier row on the connection's backend
+    // and URL rather than the sub-agent's own profile, and never gated
+    // reasoning_effort at all. A stored value that outlived a since-changed
+    // backend now hits the caps-checked validation added on this branch and
+    // would quarantine settings.ron. Resolve the caps of whichever profile
+    // the sub-agent will actually run on (its own `profile` override, or
+    // the active profile) — mirrors `validation.rs`'s `dreamer_caps` /
+    // `grok_caps` — and drop what that profile can't accept.
+    let caps_for = |profile_override: &Option<String>, fallback: &str| -> ProviderCaps {
+        let name = profile_override.as_deref().unwrap_or(fallback);
+        profiles
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.provider.caps())
+            .unwrap_or_else(active_caps)
+    };
+    let dreamer_profile = match &o.dreamer.profile {
+        Some(v) => v.clone(),
+        None => defaults.dreamer.profile.clone(),
+    };
+    let grok_profile = match &o.grok.profile {
+        Some(v) => v.clone(),
+        None => defaults.grok.profile.clone(),
+    };
+    let dreamer_caps = caps_for(&dreamer_profile, &active_profile);
+    let grok_caps = caps_for(&grok_profile, &active_profile);
+
     AiSettings {
-        profiles: resolve_profiles(defaults, o),
-        active_profile: o
-            .active_profile
-            .clone()
-            .or_else(|| {
-                // MIGRATION(ai-profiles): a legacy connection block always
-                // lands under the name "default".
-                legacy_profile(o).map(|p| p.name)
-            })
-            .unwrap_or_else(|| defaults.active_profile.clone()),
+        profiles,
+        active_profile,
         behavior: AiBehavior {
             max_turn_rounds: o
                 .behavior
@@ -196,10 +236,7 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
         },
         dreamer: AiDreamer {
             enabled: o.dreamer.enabled.unwrap_or(defaults.dreamer.enabled),
-            profile: match &o.dreamer.profile {
-                Some(v) => v.clone(),
-                None => defaults.dreamer.profile.clone(),
-            },
+            profile: dreamer_profile,
             model: match &o.dreamer.model {
                 Some(v) => v.clone(),
                 None => defaults.dreamer.model.clone(),
@@ -207,11 +244,13 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
             reasoning_effort: match &o.dreamer.reasoning_effort {
                 Some(v) => v.clone(),
                 None => defaults.dreamer.reasoning_effort.clone(),
-            },
+            }
+            .filter(|v| dreamer_caps.allows_effort(v.trim())),
             service_tier: match &o.dreamer.service_tier {
                 Some(v) => v.clone(),
                 None => defaults.dreamer.service_tier.clone(),
-            },
+            }
+            .filter(|_| dreamer_caps.service_tier),
             run_at: o
                 .dreamer
                 .run_at
@@ -228,10 +267,7 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .unwrap_or(defaults.dreamer.max_writes_per_turn),
         },
         grok: AiGrok {
-            profile: match &o.grok.profile {
-                Some(v) => v.clone(),
-                None => defaults.grok.profile.clone(),
-            },
+            profile: grok_profile,
             model: match &o.grok.model {
                 Some(v) => v.clone(),
                 None => defaults.grok.model.clone(),
@@ -239,11 +275,13 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
             reasoning_effort: match &o.grok.reasoning_effort {
                 Some(v) => v.clone(),
                 None => defaults.grok.reasoning_effort.clone(),
-            },
+            }
+            .filter(|v| grok_caps.allows_effort(v.trim())),
             service_tier: match &o.grok.service_tier {
                 Some(v) => v.clone(),
                 None => defaults.grok.service_tier.clone(),
-            },
+            }
+            .filter(|_| grok_caps.service_tier),
             // No override plumbing in v1 — baked default only (brief: dashboard
             // field is optional / not yet wired).
             persona_name: defaults.grok.persona_name.clone(),
@@ -309,6 +347,7 @@ fn legacy_profile(o: &overrides::AiOverrides) -> Option<AiProfile> {
             Some(_) => AiProvider::OpenAiCompatible,
         },
     };
+    let caps = provider.caps();
     Some(AiProfile {
         name: "default".to_string(),
         key: None,
@@ -316,8 +355,26 @@ fn legacy_profile(o: &overrides::AiOverrides) -> Option<AiProfile> {
         base_url: base_url.filter(|u| !u.is_empty()),
         model: c.model.clone().unwrap_or_default(),
         timeout: c.timeout.unwrap_or(30),
-        reasoning_effort: c.reasoning_effort.clone().flatten(),
-        service_tier: c.service_tier.clone().flatten(),
+        // The old dashboard hid these rows for backends that couldn't use
+        // them rather than clearing the stored value (a hidden row is
+        // absent from the POST, which the tri-state merge reads as
+        // "unchanged"). Drop what the mapped provider can't accept so a
+        // stale value from a since-abandoned backend can't fail the new,
+        // stricter caps validation and quarantine the whole file — the
+        // client already dropped these on the wire under the old caps-blind
+        // validation (`OllamaClient` never serialises either field,
+        // `OpenAiClient::map_service_tier` returns `None` off OpenRouter),
+        // so this changes nothing an operator could observe.
+        reasoning_effort: c
+            .reasoning_effort
+            .clone()
+            .flatten()
+            .filter(|v| caps.allows_effort(v.trim())),
+        service_tier: c
+            .service_tier
+            .clone()
+            .flatten()
+            .filter(|_| caps.service_tier),
     })
 }
 
