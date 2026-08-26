@@ -464,6 +464,19 @@ mod tests {
     use super::overrides::{CooldownsOverrides, PingsOverrides, SettingsOverrides};
     use super::*;
 
+    fn profile_named(name: &str) -> AiProfile {
+        AiProfile {
+            name: name.into(),
+            key: None,
+            provider: AiProvider::Ollama,
+            base_url: Some("http://127.0.0.1:1".into()),
+            model: name.into(),
+            timeout: 30,
+            reasoning_effort: None,
+            service_tier: None,
+        }
+    }
+
     #[test]
     fn empty_overrides_equal_defaults() {
         let defaults = Settings::compiled_defaults();
@@ -799,5 +812,89 @@ mod tests {
         o.ai.active_profile = Some("gone".into());
         let s = Settings::resolve(&Settings::compiled_defaults(), &o);
         assert_eq!(s.ai.active().name, "a");
+    }
+
+    #[test]
+    fn v6_active_profile_stamps_required_agents_and_leaves_recap_off() {
+        let defaults = Settings::compiled_defaults();
+        let mut o = SettingsOverrides::default();
+        o.ai.profiles = Some(vec![crate::settings::ai::AiProfile {
+            name: "cheap".into(),
+            key: None,
+            provider: AiProvider::Ollama,
+            base_url: Some("http://127.0.0.1:1".into()),
+            model: "cheap-model".into(),
+            timeout: 30,
+            reasoning_effort: None,
+            service_tier: None,
+        }]);
+        o.ai.active_profile = Some("cheap".into());
+        let s = Settings::resolve(&defaults, &o);
+        assert_eq!(s.ai.aurora.profile, "cheap");
+        assert_eq!(s.ai.grok.profile, "cheap");
+        assert_eq!(s.ai.dreamer.profile, "cheap");
+        assert_eq!(s.ai.media.profile, "cheap");
+        assert!(s.ai.recap.profile.is_none());
+    }
+
+    #[test]
+    fn v6_grok_pin_wins_over_active_profile() {
+        let defaults = Settings::compiled_defaults();
+        let mut o = SettingsOverrides::default();
+        o.ai.profiles = Some(vec![profile_named("cheap"), profile_named("local")]);
+        o.ai.active_profile = Some("cheap".into());
+        o.ai.grok.profile = Some(Some("local".into()));
+        let s = Settings::resolve(&defaults, &o);
+        assert_eq!(s.ai.aurora.profile, "cheap");
+        assert_eq!(s.ai.grok.profile, "local");
+        assert_eq!(s.ai.dreamer.profile, "cheap");
+    }
+
+    #[test]
+    fn v6_history_recap_profile_lands_on_ai_recap() {
+        let defaults = Settings::compiled_defaults();
+        let mut o = SettingsOverrides::default();
+        o.ai.profiles = Some(vec![profile_named("tiny")]);
+        o.ai.history.recap_profile = Some(Some("tiny".into()));
+        o.ai.history.batch_size = Some(7);
+        o.ai.history.max_notes = Some(4);
+        o.ai.history.merge_width = Some(2);
+        let s = Settings::resolve(&defaults, &o);
+        assert_eq!(s.ai.recap.profile.as_deref(), Some("tiny"));
+        assert_eq!(s.ai.recap.batch_size, 7);
+        assert_eq!(s.ai.recap.max_notes, 4);
+        assert_eq!(s.ai.recap.merge_width, 2);
+        // history no longer carries recap fields
+    }
+
+    #[test]
+    fn v6_behavior_persona_lands_on_aurora() {
+        let defaults = Settings::compiled_defaults();
+        let mut o = SettingsOverrides::default();
+        o.ai.behavior.persona_name = Some("Nyx".into());
+        o.ai.behavior.max_turn_rounds = Some(6);
+        let s = Settings::resolve(&defaults, &o);
+        assert_eq!(s.ai.aurora.persona_name, "Nyx");
+        assert_eq!(s.ai.aurora.max_turn_rounds, 6);
+    }
+
+    #[test]
+    fn aurora_override_wins_over_legacy_behavior() {
+        let defaults = Settings::compiled_defaults();
+        let mut o = SettingsOverrides::default();
+        o.ai.behavior.persona_name = Some("Nyx".into());
+        o.ai.aurora.persona_name = Some("Vesper".into());
+        let s = Settings::resolve(&defaults, &o);
+        assert_eq!(s.ai.aurora.persona_name, "Vesper");
+    }
+
+    #[test]
+    fn missing_active_profile_stamps_default() {
+        let defaults = Settings::compiled_defaults();
+        let o = SettingsOverrides::default();
+        let s = Settings::resolve(&defaults, &o);
+        assert_eq!(s.ai.aurora.profile, "default");
+        assert_eq!(s.ai.grok.profile, "default");
+        assert!(s.ai.recap.profile.is_none());
     }
 }

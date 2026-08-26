@@ -15,6 +15,9 @@
 # Worktrees
 .worktrees/
 
+# Ephemeral working plans — historical files already on main stay tracked
+docs/superpowers/plans/
+
 # OS files
 .DS_Store
 Thumbs.db

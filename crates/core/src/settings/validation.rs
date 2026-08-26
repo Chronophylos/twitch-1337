@@ -615,6 +615,34 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_unknown_aurora_profile() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.aurora.profile = "ghost".into();
+        let errs = s.validate(&ctx()).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.aurora.profile"));
+    }
+
+    #[test]
+    fn validate_allows_empty_recap_profile() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.recap.profile = None;
+        let errs = s.validate(&ctx()).err().unwrap_or_default();
+        assert!(
+            !errs
+                .iter()
+                .any(|e| e.field.starts_with("ai.recap.profile"))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_grok_persona_name() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.grok.persona_name = "   ".into();
+        let errs = s.validate(&ctx()).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.grok.persona_name"));
+    }
+
+    #[test]
     fn allows_openai_profile_without_key_so_boot_does_not_quarantine() {
         let mut p = profile(AiProvider::OpenRouter);
         p.key = None;
