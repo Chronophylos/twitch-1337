@@ -187,7 +187,17 @@ impl SettingsStore {
                 // the legacy block, or it folds straight back in on resolve.
                 current.ai.connection = Default::default();
             }
-            SettingsSection::AiBehavior => current.ai.behavior = Default::default(),
+            SettingsSection::AiAurora => {
+                current.ai.aurora = Default::default();
+                current.ai.behavior = Default::default();
+            }
+            SettingsSection::AiRecap => {
+                current.ai.recap = Default::default();
+                current.ai.history.recap_profile = None;
+                current.ai.history.batch_size = None;
+                current.ai.history.max_notes = None;
+                current.ai.history.merge_width = None;
+            }
             SettingsSection::AiHistory => current.ai.history = Default::default(),
             SettingsSection::AiMemory => current.ai.memory = Default::default(),
             SettingsSection::AiDreamer => current.ai.dreamer = Default::default(),
@@ -301,7 +311,7 @@ mod tests {
         let mut patch = SettingsOverrides::default();
         patch.ai.history.length = Some(50);
         patch.ai.history.n = Some(20);
-        patch.ai.history.batch_size = Some(40);
+        patch.ai.recap.batch_size = Some(40);
 
         let error = store
             .apply(
@@ -372,7 +382,15 @@ mod tests {
             user_login: "tester".into(),
         };
         store.apply(patch, actor).await.expect("apply");
-        assert_eq!(handle.load().ai.active().model, "o5-pro");
+        assert_eq!(
+            handle
+                .load()
+                .ai
+                .by_name(&handle.load().ai.aurora.profile)
+                .unwrap()
+                .model,
+            "o5-pro"
+        );
         let reopened = SettingsStore::open(
             store.path.parent().unwrap(),
             Arc::new(crate::settings::audit::MemoryAuditLog::new()),
@@ -380,7 +398,15 @@ mod tests {
         )
         .expect("reopen")
         .1;
-        assert_eq!(reopened.load().ai.active().model, "o5-pro");
+        assert_eq!(
+            reopened
+                .load()
+                .ai
+                .by_name(&reopened.load().ai.aurora.profile)
+                .unwrap()
+                .model,
+            "o5-pro"
+        );
         let _ = handle;
     }
 
@@ -421,7 +447,7 @@ mod tests {
             SettingsStore::open(dir.path(), audit, "test_chan").expect("open legacy settings");
         let settings = handle.load();
         assert_eq!(settings.ai.history.length, 50);
-        assert!(settings.ai.history.n + settings.ai.history.batch_size <= 50);
+        assert!(settings.ai.history.n + settings.ai.recap.batch_size <= 50);
         assert!(dir.path().join(FILE_NAME).exists());
         assert!(
             std::fs::read_dir(dir.path())
@@ -507,7 +533,7 @@ mod tests {
 
         // (c) the folded profile carries the backend/model but drops the
         // caps-incompatible reasoning_effort.
-        let p = s.ai.active();
+        let p = s.ai.by_name(&s.ai.aurora.profile).unwrap();
         assert_eq!(p.provider, crate::settings::provider::AiProvider::Ollama);
         assert_eq!(p.reasoning_effort, None);
     }
@@ -559,8 +585,24 @@ mod tests {
                     .starts_with("settings.ron.quarantine-")),
             "settings.ron must not be quarantined"
         );
-        assert_eq!(handle.load().ai.active().model, "some-model");
-        assert!(handle.load().ai.active().key.is_none());
+        assert_eq!(
+            handle
+                .load()
+                .ai
+                .by_name(&handle.load().ai.aurora.profile)
+                .unwrap()
+                .model,
+            "some-model"
+        );
+        assert!(
+            handle
+                .load()
+                .ai
+                .by_name(&handle.load().ai.aurora.profile)
+                .unwrap()
+                .key
+                .is_none()
+        );
     }
 
     #[tokio::test]

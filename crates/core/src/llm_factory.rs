@@ -1,7 +1,7 @@
 //! Resolves a profile name to a live [`LlmClient`].
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use llm::{LlmClient, OllamaClient, OpenAiClient};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -16,6 +16,7 @@ use crate::settings::provider::AiProvider;
 /// One client per endpoint identity. Model, timeout, effort and tier are
 /// per-request, so two profiles differing only in those share a client.
 type CacheKey = (AiProvider, Option<String>, Option<String>);
+static FALLBACK: LazyLock<AiProfile> = LazyLock::new(AiProfile::default);
 
 pub struct LlmRegistry {
     keys: HashMap<String, SecretString>,
@@ -59,9 +60,10 @@ impl LlmRegistry {
         }
     }
 
-    /// True when the active profile can currently produce a client.
+    /// True when Aurora's profile can currently produce a client.
     pub fn is_usable(&self) -> bool {
-        self.resolve(None).is_some()
+        let snapshot = self.settings.load();
+        self.resolve_named(&snapshot.ai.aurora.profile).is_some()
     }
 
     /// Resolve a profile **by name only**. Missing names return `None` —
@@ -88,18 +90,24 @@ impl LlmRegistry {
         Some((client, prof))
     }
 
-    /// `profile: None` = the active profile. A name that no longer exists
-    /// falls back to the active profile rather than disabling the agent —
-    /// deleting a profile should not silently kill the dreamer.
+    /// `profile: None` = Aurora's profile. A name that no longer exists
+    /// temporarily falls back to Aurora while call sites migrate to
+    /// [`Self::resolve_named`].
     pub fn resolve(&self, profile: Option<&str>) -> Option<(Arc<dyn LlmClient>, AiProfile)> {
         let snapshot = self.settings.load();
         let ai = &snapshot.ai;
         let prof = match profile {
             Some(name) => ai.by_name(name).unwrap_or_else(|| {
-                warn!(profile = name, "profile not found, using active profile");
-                ai.active()
+                warn!(profile = name, "profile not found, using aurora profile");
+                ai.by_name(&ai.aurora.profile).unwrap_or_else(|| {
+                    warn!("aurora profile not found");
+                    ai.profiles.first().unwrap_or(&FALLBACK)
+                })
             }),
-            None => ai.active(),
+            None => ai.by_name(&ai.aurora.profile).unwrap_or_else(|| {
+                warn!("aurora profile not found");
+                ai.profiles.first().unwrap_or(&FALLBACK)
+            }),
         }
         .clone();
 
@@ -203,10 +211,10 @@ impl LlmRegistry {
 mod tests {
     use super::*;
 
-    fn handle(profiles: Vec<AiProfile>, active: &str) -> SettingsHandle {
+    fn handle(profiles: Vec<AiProfile>, aurora: &str) -> SettingsHandle {
         let mut s = crate::settings::Settings::compiled_defaults();
         s.ai.profiles = profiles;
-        s.ai.active_profile = active.to_string();
+        s.ai.aurora.profile = aurora.to_string();
         Arc::new(arc_swap::ArcSwap::from_pointee(s))
     }
 

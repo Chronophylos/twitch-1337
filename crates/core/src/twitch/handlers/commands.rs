@@ -141,9 +141,13 @@ where
     // key must be present; both gate !ai.
     let ai_boot: Option<AiBootstrap> = match (llm.is_usable(), ai_config) {
         (true, Some(ai_boot)) => {
+            let aurora_profile = snapshot
+                .ai
+                .by_name(&snapshot.ai.aurora.profile)
+                .expect("usable registry must resolve Aurora's profile");
             info!(
-                provider = snapshot.ai.active().provider.as_str(),
-                model = %snapshot.ai.active().model,
+                provider = aurora_profile.provider.as_str(),
+                model = %aurora_profile.model,
                 "AI command enabled"
             );
             Some(ai_boot)

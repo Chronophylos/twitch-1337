@@ -389,7 +389,7 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
         backoff,
     } = params;
     let snap = settings.load();
-    let profile_name = match snap.ai.history.recap_profile.as_deref() {
+    let profile_name = match snap.ai.recap.profile.as_deref() {
         Some(n) if !n.trim().is_empty() => n.trim().to_string(),
         _ => {
             *last_seen_profile = None;
@@ -429,9 +429,9 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
     let ai_n = snap.ai.history.ai_channel_n;
     let primary_capacity = snap.ai.history.length as usize;
     let ai_capacity = snap.ai.history.ai_channel_length as usize;
-    let batch_size = snap.ai.history.batch_size as usize;
-    let max_notes = snap.ai.history.max_notes as usize;
-    let merge_width = snap.ai.history.merge_width as usize;
+    let batch_size = snap.ai.recap.batch_size as usize;
+    let max_notes = snap.ai.recap.max_notes as usize;
+    let merge_width = snap.ai.recap.merge_width as usize;
     drop(snap);
 
     let TickSnapshot {
@@ -665,9 +665,9 @@ mod tests {
     fn test_settings(recap_profile: &str) -> SettingsHandle {
         let mut s = Settings::compiled_defaults();
         if recap_profile.is_empty() {
-            s.ai.history.recap_profile = None;
+            s.ai.recap.profile = None;
         } else {
-            s.ai.history.recap_profile = Some(recap_profile.into());
+            s.ai.recap.profile = Some(recap_profile.into());
             s.ai.profiles.push(AiProfile {
                 name: recap_profile.into(),
                 key: None,
@@ -680,7 +680,7 @@ mod tests {
             });
         }
         s.ai.history.n = 2;
-        s.ai.history.batch_size = 1;
+        s.ai.recap.batch_size = 1;
         Arc::new(ArcSwap::from_pointee(s))
     }
 

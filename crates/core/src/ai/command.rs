@@ -534,15 +534,13 @@ where
         // Snapshot connection knobs once per turn so dashboard edits take
         // effect on the next invocation without a bot restart.
         let snap = self.settings.load();
-        // Each agent resolves its own profile at turn time: `@grok` follows
-        // `ai.grok.profile`, `!ai` follows the active profile. A dashboard
-        // switch therefore lands on the very next turn.
+        // Each agent resolves its own profile at turn time.
         let profile_name = if grok_alias {
-            snap.ai.grok.profile.clone()
+            &snap.ai.grok.profile
         } else {
-            None
+            &snap.ai.aurora.profile
         };
-        let Some((llm_client, connection)) = self.registry.resolve(profile_name.as_deref()) else {
+        let Some((llm_client, connection)) = self.registry.resolve(Some(profile_name)) else {
             // Log only: a config problem is not the chatter's business.
             error!("AI command skipped, no usable LLM profile");
             return Ok(());
@@ -555,24 +553,25 @@ where
             error!("AI command skipped, model is empty in settings");
             return Ok(());
         }
-        let aurora_persona = snap.ai.behavior.persona_name.clone();
+        let aurora_persona = snap.ai.aurora.persona_name.clone();
         let grok_persona = snap.ai.grok.persona_name.clone();
         let display_name = if grok_alias {
             grok_persona.clone()
         } else {
             aurora_persona.clone()
         };
-        let reply_target = snap.ai.behavior.reply_target_chars.to_string();
-        let reply_hard = snap.ai.behavior.reply_hard_chars.to_string();
+        let reply_target = snap.ai.aurora.reply_target_chars.to_string();
+        let reply_hard = snap.ai.aurora.reply_hard_chars.to_string();
         let reply_limits = if grok_alias {
             ReplyLimits::GROK
         } else {
             ReplyLimits {
-                soft: snap.ai.behavior.reply_soft_chars,
-                hard: snap.ai.behavior.reply_hard_chars,
+                soft: snap.ai.aurora.reply_soft_chars,
+                hard: snap.ai.aurora.reply_hard_chars,
             }
         };
         let history = snap.ai.history.clone();
+        let recap = snap.ai.recap.clone();
         drop(snap);
 
         let model_display = self.model_catalog.display_name(&connection, &model).await;
@@ -624,7 +623,7 @@ where
             inject::InvocationChannel::Primary => RecapChannel::Primary,
             inject::InvocationChannel::AiChannel => RecapChannel::AiChannel,
         };
-        let recap_profile = history.recap_profile.as_deref();
+        let recap_profile = recap.profile.as_deref();
         let recap_parked = if let Some(ref handle) = self.recap {
             handle.parked().await
         } else {
@@ -661,7 +660,7 @@ where
                         recap_channel,
                         primary_login,
                         ai_channel_login,
-                        history.max_notes as usize,
+                        recap.max_notes as usize,
                     )
                     .await
             } else {
@@ -696,7 +695,7 @@ where
             recap_sheet_logins,
             n: history.n as usize,
             ai_channel_n: history.ai_channel_n as usize,
-            batch_size: history.batch_size as usize,
+            batch_size: recap.batch_size as usize,
             recap_through_seq: primary_through_seq,
             ai_channel_recap_through_seq: ai_through_seq,
             recap_enabled,
@@ -1100,10 +1099,15 @@ pub async fn build_ai_memory_v2(
         store,
         transcript,
         inject_byte_budget: settings.ai.memory.inject_byte_budget,
-        max_turn_rounds: settings.ai.behavior.max_turn_rounds,
-        max_writes_per_turn: settings.ai.behavior.max_writes_per_turn,
-        turn_timeout: Duration::from_secs(settings.ai.active().timeout),
-        min_response_delay: Duration::from_millis(settings.ai.behavior.min_response_delay_ms),
+        max_turn_rounds: settings.ai.aurora.max_turn_rounds,
+        max_writes_per_turn: settings.ai.aurora.max_writes_per_turn,
+        turn_timeout: Duration::from_secs(
+            settings
+                .ai
+                .by_name(&settings.ai.aurora.profile)
+                .map_or(30, |profile| profile.timeout),
+        ),
+        min_response_delay: Duration::from_millis(settings.ai.aurora.min_response_delay_ms),
     }))
 }
 
