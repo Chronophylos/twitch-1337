@@ -71,7 +71,7 @@ A Tracked Flight removed because its assigned aircraft never appeared on ADS-B
 within the pending window after tracking began.
 _Avoid_: gave up, abandoned.
 
-## AI memory, scratch, and transcripts
+## AI memory, scratch, transcripts, and recap
 
 **Memory**:
 The durable, curated record the bot keeps of itself and its chat — the Soul, the
@@ -108,10 +108,22 @@ it, and it exists to be the Ritual's input.
 _Avoid_: log, raw memory, chat history, recent chat.
 
 **Recent Chat**:
-The rolling window of the latest messages shown to the bot during a single chat
-turn so it knows what was just said. Distinct from the Transcript — a per-turn
-window, never curated, never read by the Ritual.
-_Avoid_: history, transcript, context window.
+The uncompressed tail shown verbatim on a chat turn — other people's last N
+lines plus the speaking agent's latest own reply. Distinct from Recap
+(paraphrased older lines) and from the Transcript. Never curated, never read
+by the Ritual.
+_Avoid_: history, transcript, context window, recap.
+
+**Recap**:
+The paraphrased, third-person account of chat that has aged out of Recent Chat.
+Shared by both agents, always German, no quoted speech. Not Memory: the Dreamer
+never reads it.
+_Avoid_: digest, summary, compression, history, sketch, chat notes.
+
+**Recap Note**:
+One immutable paragraph of a Recap, covering a batch of aged-out lines. When
+the cap is hit, the oldest Recap Notes become one coarser Recap Note.
+_Avoid_: chunk, summary, card, note (alone — that is Scratch).
 
 **Drain**:
 Moving the substance of a Scratch note or a day's Transcript into the Memory

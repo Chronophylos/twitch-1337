@@ -26,6 +26,8 @@ use twitch_irc::{
 
 use crate::{
     ai,
+    ai::recap::RecapHandle,
+    ai::recap_batcher::run_recap_batcher,
     aviation::{self, AviationClient},
     config::Configuration,
     ping::{PingCommand, PingManager, run_ping_actor},
@@ -33,7 +35,7 @@ use crate::{
     twitch::{
         ChatSender,
         handlers::{
-            commands::{CommandHandlerConfig, run_generic_command_handler},
+            commands::{CommandHandlerConfig, RecapBatcherHistories, run_generic_command_handler},
             emote_usage::run_emote_usage_handler,
             latency::run_latency_handler,
             router::run_message_router,
@@ -56,6 +58,7 @@ pub(crate) struct HandlerSet {
     pub emote_usage: JoinHandle<()>,
     pub ping_actor: JoinHandle<()>,
     pub scheduled_messages: JoinHandle<()>,
+    pub recap: JoinHandle<()>,
     /// Shared notify so consolidation/shutdown code can drain in-flight
     /// scheduled-message sends. Cloned, not consumed.
     pub shutdown_notify: Arc<Notify>,
@@ -136,6 +139,9 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     /// Echo suppression for the bot's own AI mouths, sharing the same
     /// identities `build_mouths` collected.
     pub echo: Arc<crate::twitch::echo::EchoGuard>,
+
+    /// Shared chat-recap handle. `None` when AI / LLM is disabled.
+    pub recap: Option<Arc<RecapHandle>>,
 }
 
 /// Spawn every long-running handler task in the order they currently
@@ -181,7 +187,15 @@ where
         twitch_channel_id,
         mouths,
         echo,
+        recap,
     } = deps;
+
+    let (recap_histories_tx, recap_histories_rx) = if recap.is_some() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<RecapBatcherHistories>();
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
 
     let ping_actor = tokio::spawn(run_ping_actor(ping_actor_rx, ping_manager, ping_names_tx));
 
@@ -317,6 +331,39 @@ where
         }
     });
 
+    let recap_task = match (recap.clone(), recap_histories_rx) {
+        (Some(handle), Some(rx)) => {
+            let settings = settings.clone();
+            let shutdown = shutdown_notify.clone();
+            let bot_username = config.twitch.username.clone();
+            let echo_for_logins = echo.clone();
+            let registry = llm.clone();
+            tokio::spawn(async move {
+                let Ok(histories) = rx.await else {
+                    std::future::pending::<()>().await;
+                    unreachable!("pending future never resolves");
+                };
+                let Some(primary) = histories.primary else {
+                    std::future::pending::<()>().await;
+                    unreachable!("pending future never resolves");
+                };
+                let mut self_logins = vec![bot_username.to_ascii_lowercase()];
+                self_logins.extend(echo_for_logins.mouth_logins().iter().cloned());
+                run_recap_batcher(
+                    (*handle).clone(),
+                    settings,
+                    registry,
+                    primary,
+                    histories.ai_channel,
+                    self_logins,
+                    shutdown,
+                )
+                .await;
+            })
+        }
+        _ => tokio::spawn(std::future::pending::<()>()),
+    };
+
     let generic_commands = tokio::spawn({
         let client = client.clone();
         async move {
@@ -352,6 +399,8 @@ where
                 started_at,
                 mouths,
                 echo,
+                recap,
+                recap_histories_tx,
             })
             .await;
         }
@@ -367,6 +416,7 @@ where
         emote_usage,
         ping_actor,
         scheduled_messages,
+        recap: recap_task,
         shutdown_notify,
     }
 }
@@ -404,6 +454,7 @@ pub(crate) async fn await_shutdown(
         emote_usage,
         mut ping_actor,
         scheduled_messages: mut sched,
+        mut recap,
         shutdown_notify,
     } = handlers;
 
@@ -426,6 +477,7 @@ pub(crate) async fn await_shutdown(
         result = emote_usage => { error!("Emote usage handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut ping_actor => { error!("Ping actor exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut sched => { error!("Scheduled message handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
+        result = &mut recap => { error!("Recap batcher exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
     };
 
     (ping_actor, outcome)

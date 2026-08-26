@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry};
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::types::{FileKind, Frontmatter};
+use crate::ai::recap::{RecapNote, eligible, is_own, n_not_own};
 use crate::twitch::mouth::Agent;
 
 const FENCE_OPEN: &str = "<<<FILE";
@@ -50,15 +51,6 @@ pub enum FenceLabel<'a> {
         date: &'a str,
     },
 }
-
-/// Per-section byte caps for rolling chat injected into the v2 prompt.
-/// Independent of `inject_byte_budget`, which covers SOUL/LORE/users/scratch.
-// Sized to fit the default history lengths (200 primary, 50 ai_channel) at an
-// average `[HH:MM] Name: text` line of ~55 bytes, with headroom for longer
-// ones. These stay a hard bound, not a target: a burst of max-length messages
-// still gets trimmed oldest-first rather than blowing up the turn.
-const RECENT_CHAT_PRIMARY_BYTES: usize = 12_288;
-const RECENT_CHAT_AI_CHANNEL_BYTES: usize = 3_072;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InvocationChannel {
@@ -189,8 +181,24 @@ pub struct BuildOpts {
     /// Lowercased Twitch login of the user that triggered this turn (i.e.
     /// `!ai` invoker). Empty string for the dreamer ritual (no speaker).
     /// Used by [`build_chat_turn_context`] to scope the injected user-file
-    /// set down to chat-window users plus the speaker.
+    /// set down to chat-window users plus the speaker and recap identities.
     pub speaker_login: String,
+    /// Lowercased logins stamped on injected Recap Notes (caller-capped).
+    /// Third packing tier after speaker and chat-window logins.
+    pub recap_sheet_logins: BTreeSet<String>,
+    /// Verbatim tail for the primary channel: newest N lines that are not this agent's own.
+    pub n: usize,
+    /// Verbatim tail for the ai_channel section when configured.
+    pub ai_channel_n: usize,
+    /// When Recap is on, eligible lag lines may stretch the tail up to
+    /// `n + batch_size` other-people lines (never adds extra own lines).
+    pub batch_size: usize,
+    /// Primary-channel Recap watermark seq; `0` when Recap is off.
+    pub recap_through_seq: u64,
+    /// Ai-channel Recap watermark seq; `0` when Recap is off or no ai_channel buffer.
+    pub ai_channel_recap_through_seq: u64,
+    /// When false, no stretch beyond the N-not-own window.
+    pub recap_enabled: bool,
 }
 
 /// Result of [`build_chat_turn_context`].
@@ -213,8 +221,8 @@ pub struct ChatTurnContext {
     pub scratch: String,
 }
 
-/// Rendered rolling chat for one turn, plus the lowercased logins that survived
-/// the byte caps. Shared by the Aurora and grok context builders.
+/// Rendered rolling chat for one turn, plus the lowercased logins that survived.
+/// Shared by the Aurora and grok context builders.
 struct RecentChat {
     body: String,
     mentioned: std::collections::BTreeSet<String>,
@@ -224,9 +232,9 @@ async fn render_recent_chat(opts: &BuildOpts) -> RecentChat {
     let primary_rendered = render_recent_section(
         opts.primary_history.as_ref(),
         &opts.primary_login,
-        RECENT_CHAT_PRIMARY_BYTES,
-        opts.current_agent,
-        &opts.self_logins,
+        opts.n,
+        opts.recap_through_seq,
+        opts,
     )
     .await;
     let ai_rendered = match (
@@ -237,9 +245,9 @@ async fn render_recent_chat(opts: &BuildOpts) -> RecentChat {
             render_recent_section(
                 Some(buf),
                 login,
-                RECENT_CHAT_AI_CHANNEL_BYTES,
-                opts.current_agent,
-                &opts.self_logins,
+                opts.ai_channel_n,
+                opts.ai_channel_recap_through_seq,
+                opts,
             )
             .await
         }
@@ -262,6 +270,24 @@ async fn render_recent_chat(opts: &BuildOpts) -> RecentChat {
     RecentChat {
         body: recent_sections.join("\n\n"),
         mentioned,
+    }
+}
+
+/// Packing tier for character sheets: speaker (0), chat-window (1), recap-only (2).
+fn user_pack_tier(
+    login_lc: &str,
+    speaker_lc: &str,
+    mentioned: &BTreeSet<String>,
+    recap_sheet_logins: &BTreeSet<String>,
+) -> u8 {
+    if !speaker_lc.is_empty() && login_lc == speaker_lc {
+        0
+    } else if mentioned.contains(login_lc) {
+        1
+    } else if recap_sheet_logins.contains(login_lc) {
+        2
+    } else {
+        3
     }
 }
 
@@ -299,9 +325,12 @@ pub async fn build_chat_turn_context(
         || opts.ai_channel_history.is_some()
         || !speaker_lc.is_empty();
     if is_chat_turn {
-        let mut scope: std::collections::BTreeSet<String> = mentioned;
+        let mut scope: std::collections::BTreeSet<String> = mentioned.clone();
         if !speaker_lc.is_empty() {
             scope.insert(speaker_lc.clone());
+        }
+        for login in &opts.recap_sheet_logins {
+            scope.insert(login.to_ascii_lowercase());
         }
         users.retain(|f| {
             let Some(login) = f.frontmatter.username.as_deref() else {
@@ -311,22 +340,28 @@ pub async fn build_chat_turn_context(
         });
     }
 
-    // Speaker first, then newest-first. Ensures the speaker's file always
-    // survives the byte-budget packing loop below. When speaker_login is
-    // empty (dreamer), this collapses to a plain updated_at DESC sort.
+    // Pack speaker → chat-window logins → recap-only identities, newest-first
+    // within each tier. Ensures the speaker's file always survives the
+    // byte-budget packing loop below. When speaker_login is empty (dreamer),
+    // tier 0 is unused and this collapses to mentioned → recap → updated_at.
+    let recap_lc = &opts.recap_sheet_logins;
     users.sort_by(|a, b| {
-        let a_is_speaker = !speaker_lc.is_empty()
-            && a.frontmatter
-                .username
-                .as_deref()
-                .is_some_and(|n| n.eq_ignore_ascii_case(&speaker_lc));
-        let b_is_speaker = !speaker_lc.is_empty()
-            && b.frontmatter
-                .username
-                .as_deref()
-                .is_some_and(|n| n.eq_ignore_ascii_case(&speaker_lc));
-        b_is_speaker
-            .cmp(&a_is_speaker)
+        let a_login = a
+            .frontmatter
+            .username
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        let b_login = b
+            .frontmatter
+            .username
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        let a_tier = user_pack_tier(&a_login, &speaker_lc, &mentioned, recap_lc);
+        let b_tier = user_pack_tier(&b_login, &speaker_lc, &mentioned, recap_lc);
+        a_tier
+            .cmp(&b_tier)
             .then_with(|| b.frontmatter.updated_at.cmp(&a.frontmatter.updated_at))
     });
     states.sort_by_key(|f| std::cmp::Reverse(f.frontmatter.updated_at));
@@ -471,16 +506,16 @@ struct RenderedRecentSection {
     usernames: Vec<String>,
 }
 
-/// Render one `## Recent chat (#login)` section, newest-first up to `cap` bytes,
-/// then reverse to chronological order. Also returns the lowercased usernames
-/// of every line that survived the byte cap. Returns `None` for missing or
-/// empty buffers.
+/// Render one `## Recent chat (#login)` section from the N-not-own window plus
+/// the latest own line, with optional Recap stretch. Returns the lowercased
+/// usernames of every line that survived. Returns `None` for missing or empty
+/// buffers.
 async fn render_recent_section(
     buf: Option<&Arc<Mutex<ChatHistoryBuffer>>>,
     login: &str,
-    cap: usize,
-    current_agent: Agent,
-    self_logins: &[String],
+    n: usize,
+    recap_through_seq: u64,
+    opts: &BuildOpts,
 ) -> Option<RenderedRecentSection> {
     let buf = buf?;
     let snapshot: Vec<ChatHistoryEntry> = buf.lock().await.snapshot();
@@ -488,30 +523,63 @@ async fn render_recent_section(
         return None;
     }
 
-    let mut chosen: Vec<String> = Vec::new();
-    let mut usernames: Vec<String> = Vec::new();
-    let mut bytes = 0usize;
-    for entry in snapshot.iter().rev() {
-        let line = format_entry_line(entry, current_agent, self_logins);
-        let line_bytes = line.len() + 1;
-        if bytes + line_bytes > cap {
-            break;
+    let current_agent = opts.current_agent;
+    let self_logins = &opts.self_logins;
+    let batch_size = opts.batch_size;
+
+    let mut others: Vec<&ChatHistoryEntry> = n_not_own(&snapshot, n, current_agent, self_logins);
+
+    if opts.recap_enabled {
+        let stretch = eligible(&snapshot, n, recap_through_seq, self_logins);
+        let mut seen: std::collections::BTreeSet<u64> = others.iter().map(|e| e.seq).collect();
+        for entry in stretch {
+            if is_own(entry, current_agent, self_logins) {
+                continue;
+            }
+            if seen.insert(entry.seq) {
+                others.push(entry);
+            }
         }
-        bytes += line_bytes;
-        chosen.push(line);
-        usernames.push(entry.username.to_ascii_lowercase());
+        others.sort_by_key(|e| e.seq);
+        let cap = n + batch_size;
+        if others.len() > cap {
+            let keep = cap;
+            let drop = others.len() - keep;
+            others.drain(..drop);
+        }
     }
+
+    let mut chosen: Vec<&ChatHistoryEntry> = others;
+    let chosen_seqs: std::collections::BTreeSet<u64> = chosen.iter().map(|e| e.seq).collect();
+
+    if let Some(latest_own) = snapshot
+        .iter()
+        .rev()
+        .find(|e| is_own(e, current_agent, self_logins))
+        && !chosen_seqs.contains(&latest_own.seq)
+    {
+        chosen.push(latest_own);
+    }
+
+    chosen.sort_by_key(|e| e.seq);
+
     if chosen.is_empty() {
         return None;
     }
-    chosen.reverse();
+
+    let mut usernames: Vec<String> = Vec::with_capacity(chosen.len());
+    let mut lines: Vec<String> = Vec::with_capacity(chosen.len());
+    for entry in chosen {
+        lines.push(format_entry_line(entry, current_agent, self_logins));
+        usernames.push(entry.username.to_ascii_lowercase());
+    }
 
     let mut body = format!("## Recent chat (#{login})\n");
-    body.push_str(&chosen.join("\n"));
+    body.push_str(&lines.join("\n"));
     Some(RenderedRecentSection { body, usernames })
 }
 
-fn format_entry_line(
+pub(crate) fn format_entry_line(
     entry: &ChatHistoryEntry,
     current_agent: Agent,
     self_logins: &[String],
@@ -551,6 +619,10 @@ pub struct SystemParts {
     /// SOUL/LORE/user fences from [`build_chat_turn_context`]. Stable while the
     /// memory content and the (per-process) nonce are unchanged.
     pub memory: String,
+    /// Recap Notes suffix. Appended after `memory` when non-empty; omitted
+    /// entirely when empty so the cache prefix stays stable across turns with
+    /// no recap.
+    pub recap: String,
 }
 
 /// Per-turn (volatile) parts. Every field here may change turn to turn; all of
@@ -569,9 +641,28 @@ pub struct UserParts {
     pub instruction: String,
 }
 
+/// Render a Recap Notes section for injection into the system message suffix.
+///
+/// Invocation-first ordering is the caller's responsibility when concatenating
+/// multiple channel logs; `notes` are joined oldest-to-newest within one channel.
+pub fn render_recap_section(login: &str, notes: &[RecapNote]) -> String {
+    if notes.is_empty() {
+        return String::new();
+    }
+    let mut s = format!("## Recap (#{login})\n");
+    s.push_str(
+        &notes
+            .iter()
+            .map(|n| n.body.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    );
+    s
+}
+
 /// Assemble the `!ai` chat-turn messages from stable and volatile parts.
 ///
-/// `system` = `head` + each appendix + `"\n\n"` + `memory`.
+/// `system` = `head` + each appendix + `"\n\n"` + `memory` + optional `"\n\n"` + `recap`.
 /// `user`   = `emote_block?` + `scratch?` + `recent_chat?` + `instructions` + `instruction`.
 ///
 /// Keeping every volatile section in the user message is what makes the system
@@ -583,6 +674,10 @@ pub fn build_chat_turn_messages(sys: SystemParts, user: UserParts) -> (Message, 
     }
     system.push_str("\n\n");
     system.push_str(&sys.memory);
+    if !sys.recap.is_empty() {
+        system.push_str("\n\n");
+        system.push_str(&sys.recap);
+    }
 
     let mut user_message = String::new();
     if let Some(block) = user.emote_block.as_deref() {
@@ -750,7 +845,269 @@ mod tests {
             current_agent: Agent::Aurora,
             self_logins: Vec::new(),
             speaker_login: speaker_login.into(),
+            recap_sheet_logins: BTreeSet::new(),
+            n: 200,
+            ai_channel_n: 200,
+            batch_size: 40,
+            recap_through_seq: 0,
+            ai_channel_recap_through_seq: 0,
+            recap_enabled: false,
         }
+    }
+
+    #[tokio::test]
+    async fn tail_keeps_only_latest_own_line() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let (store, _tmp) = test_store().await;
+        let buf = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        {
+            let mut h = buf.lock().await;
+            h.push_user("alice", "hi");
+            h.push_bot_with_identity("aurora", Some("Aurora"), Agent::Aurora, "old joke");
+            h.push_user("bob", "yo");
+            h.push_bot_with_identity("aurora", Some("Aurora"), Agent::Aurora, "new joke");
+            h.push_user("carol", "ok");
+        }
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(buf),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                current_agent: Agent::Aurora,
+                self_logins: vec!["aurora".into()],
+                speaker_login: "carol".into(),
+                recap_sheet_logins: BTreeSet::new(),
+                n: 2,
+                ai_channel_n: 2,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(ctx.recent_chat.contains("new joke"));
+        assert!(!ctx.recent_chat.contains("old joke"));
+        let self_hits = ctx.recent_chat.matches("(self)").count();
+        assert_eq!(self_hits, 1);
+    }
+
+    #[tokio::test]
+    async fn grok_tail_keeps_grok_not_aurora() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let (store, _tmp) = test_store().await;
+        let buf = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        {
+            let mut h = buf.lock().await;
+            h.push_user("alice", "hi");
+            h.push_bot_with_identity("aurora", Some("Aurora"), Agent::Aurora, "aurora line");
+            h.push_user("bob", "yo");
+            h.push_bot_with_identity("grok", Some("Grok"), Agent::Grok, "grok line");
+            h.push_user("carol", "ok");
+        }
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(buf),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                current_agent: Agent::Grok,
+                self_logins: vec!["aurora".into(), "grok".into()],
+                speaker_login: "carol".into(),
+                recap_sheet_logins: BTreeSet::new(),
+                n: 2,
+                ai_channel_n: 2,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(ctx.recent_chat.contains("grok line"));
+        let self_hits = ctx.recent_chat.matches("(self)").count();
+        assert_eq!(self_hits, 1);
+        assert!(ctx.recent_chat.contains("Grok (self): grok line"));
+        assert!(!ctx.recent_chat.contains("Aurora (self):"));
+        if ctx.recent_chat.contains("aurora line") {
+            assert!(
+                ctx.recent_chat.contains("Aurora: aurora line"),
+                "aurora line must not be tagged (self): {}",
+                ctx.recent_chat
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stretch_caps_at_n_plus_batch_size() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let (store, _tmp) = test_store().await;
+        let buf = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        {
+            let mut h = buf.lock().await;
+            for i in 0..20 {
+                h.push_user(format!("viewer{i}"), format!("line{i}"));
+            }
+        }
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(buf),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                current_agent: Agent::Aurora,
+                self_logins: Vec::new(),
+                speaker_login: "viewer19".into(),
+                recap_sheet_logins: BTreeSet::new(),
+                n: 2,
+                ai_channel_n: 2,
+                batch_size: 3,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+        let other_lines = ctx
+            .recent_chat
+            .lines()
+            .filter(|line| !line.starts_with("##") && !line.contains("(self)"))
+            .count();
+        assert!(
+            other_lines <= 5,
+            "expected <= 5 other lines, got {other_lines}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stretch_skips_own_lines_only_latest_self_survives() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let (store, _tmp) = test_store().await;
+        let buf = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        {
+            let mut h = buf.lock().await;
+            h.push_user("alice", "hi");
+            h.push_bot_with_identity("aurora", Some("Aurora"), Agent::Aurora, "old joke");
+            h.push_user("bob", "yo");
+            h.push_bot_with_identity("aurora", Some("Aurora"), Agent::Aurora, "new joke");
+            h.push_user("carol", "ok");
+        }
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(buf),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                current_agent: Agent::Aurora,
+                self_logins: vec!["aurora".into()],
+                speaker_login: "carol".into(),
+                recap_sheet_logins: BTreeSet::new(),
+                n: 2,
+                ai_channel_n: 2,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(ctx.recent_chat.contains("new joke"));
+        assert!(!ctx.recent_chat.contains("old joke"));
+        let self_hits = ctx.recent_chat.matches("(self)").count();
+        assert_eq!(self_hits, 1);
+    }
+
+    #[tokio::test]
+    async fn recap_off_keeps_only_tail_and_latest_own_line() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let (store, _tmp) = test_store().await;
+        let buf = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        {
+            let mut h = buf.lock().await;
+            h.push_user("old", "old line");
+            h.push_user("alice", "tail one");
+            h.push_user("bob", "tail two");
+            h.push_bot_with_identity("aurora", Some("Aurora"), Agent::Aurora, "own line");
+        }
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(buf),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                current_agent: Agent::Aurora,
+                self_logins: vec!["aurora".into()],
+                speaker_login: "bob".into(),
+                recap_sheet_logins: BTreeSet::new(),
+                n: 2,
+                ai_channel_n: 2,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!ctx.recent_chat.contains("old line"));
+        assert!(ctx.recent_chat.contains("tail one"));
+        assert!(ctx.recent_chat.contains("tail two"));
+        assert!(ctx.recent_chat.contains("own line"));
     }
 
     #[tokio::test]
@@ -1117,6 +1474,15 @@ mod tests {
     }
 
     #[test]
+    fn bundled_recap_mentions_no_quotes() {
+        let recap = twitch_1337_data::prompts::RECAP;
+        assert!(
+            recap.contains("keine Anführungszeichen") || recap.contains("nicht zitieren"),
+            "recap.md must forbid quoting:\n{recap}"
+        );
+    }
+
+    #[test]
     fn grok_prompt_keeps_baked_length_copy() {
         assert!(
             PROMPT_GROK.contains("Stay at or under 480 characters"),
@@ -1177,6 +1543,13 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: Vec::new(),
                 speaker_login: String::new(),
+                recap_sheet_logins: BTreeSet::new(),
+                n: 200,
+                ai_channel_n: 200,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: false,
             },
         )
         .await
@@ -1228,6 +1601,13 @@ mod tests {
                 // chat-window scope filter is applied, so the byte-budget
                 // ordering this test exercises remains in force.
                 speaker_login: String::new(),
+                recap_sheet_logins: BTreeSet::new(),
+                n: 200,
+                ai_channel_n: 200,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: false,
             },
         )
         .await
@@ -1272,6 +1652,13 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: Vec::new(),
                 speaker_login: String::new(),
+                recap_sheet_logins: BTreeSet::new(),
+                n: 200,
+                ai_channel_n: 200,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: false,
             },
         )
         .await
@@ -1325,6 +1712,13 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: Vec::new(),
                 speaker_login: String::new(),
+                recap_sheet_logins: BTreeSet::new(),
+                n: 200,
+                ai_channel_n: 200,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: false,
             },
         )
         .await
@@ -1332,57 +1726,6 @@ mod tests {
 
         assert!(body.recent_chat.contains("Recent chat (#main)"));
         assert!(!body.recent_chat.contains("Recent chat (#ai_chan)"));
-    }
-
-    #[tokio::test]
-    async fn build_chat_turn_context_drops_oldest_lines_over_per_section_cap() {
-        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-        use crate::settings::test_handle;
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
-
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-            test_handle(),
-            primary_history_capacity,
-        )));
-        {
-            let mut p = primary.lock().await;
-            for _ in 0..200 {
-                p.push_user("u", "x".repeat(100));
-            }
-        }
-
-        let body = build_chat_turn_context(
-            &store,
-            BuildOpts {
-                inject_byte_budget: 24576,
-                nonce: "n00000000000000nn".into(),
-                primary_history: Some(primary),
-                primary_login: "main".into(),
-                ai_channel_history: None,
-                ai_channel_login: None,
-                invocation_channel: InvocationChannel::Primary,
-                current_agent: Agent::Aurora,
-                self_logins: Vec::new(),
-                speaker_login: String::new(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let primary_section_bytes = body
-            .recent_chat
-            .split("Recent chat (#main)")
-            .nth(1)
-            .unwrap_or("")
-            .len();
-        assert!(
-            primary_section_bytes <= RECENT_CHAT_PRIMARY_BYTES + 256, // slack for header
-            "primary section over cap: {primary_section_bytes}"
-        );
     }
 
     /// Seed a user/<id>.md directly with a hand-rolled frontmatter so the test
@@ -1446,6 +1789,13 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: Vec::new(),
                 speaker_login: "alice".into(),
+                recap_sheet_logins: BTreeSet::new(),
+                n: 200,
+                ai_channel_n: 200,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: false,
             },
         )
         .await
@@ -1502,6 +1852,13 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: Vec::new(),
                 speaker_login: "carol".into(),
+                recap_sheet_logins: BTreeSet::new(),
+                n: 200,
+                ai_channel_n: 200,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: false,
             },
         )
         .await
@@ -1540,6 +1897,147 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn note_only_lurker_loses_to_tail_when_budget_tight() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use std::collections::BTreeSet;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+
+        let now = chrono::Utc::now();
+        let backdate = chrono::Duration::days(7);
+        seed_user_file(
+            dir.path(),
+            "11",
+            "carol",
+            "Carol",
+            now - backdate,
+            &"x".repeat(400),
+        )
+        .await;
+        seed_user_file(
+            dir.path(),
+            "22",
+            "alice",
+            "Alice",
+            now - backdate,
+            &"x".repeat(400),
+        )
+        .await;
+        // Newer than alice — without tier ordering lurker would win the second slot.
+        seed_user_file(dir.path(), "99", "lurker", "Lurker", now, &"x".repeat(400)).await;
+
+        let history = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        history.lock().await.push_user("alice", "hi");
+
+        let recap_sheet_logins: BTreeSet<String> =
+            ["lurker"].into_iter().map(str::to_string).collect();
+
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                // SOUL+LORE+carol+alice fit; lurker (third user) exceeds budget.
+                inject_byte_budget: 1950,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(history),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                current_agent: Agent::Aurora,
+                self_logins: Vec::new(),
+                speaker_login: "carol".into(),
+                recap_sheet_logins,
+                n: 200,
+                ai_channel_n: 200,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            ctx.memory.contains("login=carol"),
+            "speaker must survive:\n{}",
+            ctx.memory
+        );
+        assert!(
+            ctx.memory.contains("login=alice"),
+            "tail login alice must beat recap-only lurker:\n{}",
+            ctx.memory
+        );
+        assert!(
+            !ctx.memory.contains("login=lurker"),
+            "lurker must lose when budget is tight:\n{}",
+            ctx.memory
+        );
+    }
+
+    #[tokio::test]
+    async fn recap_only_identity_included_when_budget_allows() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use std::collections::BTreeSet;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+
+        let now = chrono::Utc::now();
+        seed_user_file(dir.path(), "11", "carol", "Carol", now, "carol body").await;
+        seed_user_file(dir.path(), "99", "lurker", "Lurker", now, "lurker body").await;
+
+        let history = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        history.lock().await.push_user("alice", "hi");
+
+        let recap_sheet_logins: BTreeSet<String> =
+            ["lurker"].into_iter().map(str::to_string).collect();
+
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(history),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                current_agent: Agent::Aurora,
+                self_logins: Vec::new(),
+                speaker_login: "carol".into(),
+                recap_sheet_logins,
+                n: 200,
+                ai_channel_n: 200,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            ctx.memory.contains("login=carol"),
+            "speaker missing:\n{}",
+            ctx.memory
+        );
+        assert!(
+            ctx.memory.contains("login=lurker"),
+            "recap-only lurker must be included when budget allows:\n{}",
+            ctx.memory
+        );
+    }
+
     #[test]
     fn build_chat_turn_messages_assembles_in_order() {
         let (system, user) = build_chat_turn_messages(
@@ -1547,6 +2045,7 @@ mod tests {
                 head: "HEAD".to_string(),
                 appendices: vec!["\n\nAPP".to_string()],
                 memory: "MEMORY".to_string(),
+                recap: String::new(),
             },
             UserParts {
                 emote_block: None,
@@ -1568,6 +2067,7 @@ mod tests {
             head: "SYS HEAD".to_string(),
             appendices: vec!["\n\nAPP1".to_string(), "\n\nAPP2".to_string()],
             memory: "<<<FILE kind=soul nonce=abc>>>\nsoul\n<<<ENDFILE nonce=abc>>>".to_string(),
+            recap: String::new(),
         };
         let (sys_a, user_a) = build_chat_turn_messages(
             sys(),
@@ -1604,6 +2104,79 @@ mod tests {
         // ...and never leaks into the cached system prefix.
         assert!(!sys_a.content.contains("EMOTES_A"));
         assert!(!sys_a.content.contains("SCRATCH A"));
+    }
+
+    #[test]
+    fn recap_appends_after_memory() {
+        let (system, _) = build_chat_turn_messages(
+            SystemParts {
+                head: "HEAD".into(),
+                appendices: vec![],
+                memory: "MEMORY".into(),
+                recap: "## Recap (#main)\nraid vorbei".into(),
+            },
+            UserParts {
+                emote_block: None,
+                scratch: String::new(),
+                recent_chat: String::new(),
+                instructions: "I".into(),
+                instruction: "x".into(),
+            },
+        );
+        assert!(system.content.ends_with("## Recap (#main)\nraid vorbei"));
+        assert!(system.content.find("MEMORY").unwrap() < system.content.find("## Recap").unwrap());
+    }
+
+    #[test]
+    fn prefix_without_recap_stable_when_recap_changes() {
+        let prefix = |recap: &str| {
+            let (s, _) = build_chat_turn_messages(
+                SystemParts {
+                    head: "H".into(),
+                    appendices: vec!["\n\nA".into()],
+                    memory: "M".into(),
+                    recap: recap.into(),
+                },
+                UserParts {
+                    emote_block: None,
+                    scratch: String::new(),
+                    recent_chat: "c".into(),
+                    instructions: "i".into(),
+                    instruction: "u".into(),
+                },
+            );
+            let idx = s.content.find("\n\nM").unwrap();
+            s.content[..idx + 3].to_string() // "H\n\nA\n\nM"
+        };
+        assert_eq!(prefix(""), prefix("## Recap (#x)\nnope"));
+    }
+
+    #[test]
+    fn render_recap_section_empty_notes() {
+        assert_eq!(render_recap_section("main", &[]), "");
+    }
+
+    #[test]
+    fn render_recap_section_joins_bodies() {
+        use crate::ai::recap::RecapNote;
+        let notes = vec![
+            RecapNote {
+                body: "first note".into(),
+                identities: vec![],
+                through_seq: 1,
+                generation: 0,
+            },
+            RecapNote {
+                body: "second note".into(),
+                identities: vec![],
+                through_seq: 2,
+                generation: 0,
+            },
+        ];
+        assert_eq!(
+            render_recap_section("main", &notes),
+            "## Recap (#main)\nfirst note\n\nsecond note"
+        );
     }
 
     #[tokio::test]
@@ -1646,6 +2219,13 @@ mod tests {
             current_agent: Agent::Aurora,
             self_logins: Vec::new(),
             speaker_login: String::new(),
+            recap_sheet_logins: BTreeSet::new(),
+            n: 200,
+            ai_channel_n: 200,
+            batch_size: 40,
+            recap_through_seq: 0,
+            ai_channel_recap_through_seq: 0,
+            recap_enabled: false,
         };
 
         let first = build_chat_turn_context(&store, opts()).await.unwrap();

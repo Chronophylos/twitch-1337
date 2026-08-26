@@ -15,6 +15,7 @@ use secrecy::SecretString;
 use tokio::sync::RwLock;
 use tower_cookies::Key;
 use twitch_1337_core::ai::memory::store::MemoryStore;
+use twitch_1337_core::ai::recap::RecapHandle;
 use twitch_1337_core::aviation::TrackerCommand;
 use twitch_1337_core::commands::leaderboard::PersonalBest;
 use twitch_1337_core::ping::PingHandle;
@@ -90,6 +91,9 @@ pub struct WebState {
     /// Shared with the IRC `schedule_runner` orchestrator so the dashboard
     /// surfaces live fire counters.
     pub telemetry: Arc<twitch_1337_core::schedule::TelemetryStore>,
+    /// Shared chat-recap handle (same `Arc` the bot's recap batcher writes
+    /// through). `None` when AI / LLM is disabled at startup.
+    pub recap: Option<Arc<RecapHandle>>,
 }
 
 /// Derive the signed-cookie [`Key`] from `[web].session_secret`.

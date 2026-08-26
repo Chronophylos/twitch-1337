@@ -266,6 +266,78 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
             format!("must be <= {}", crate::ai::chat_history::MAX_HISTORY_LENGTH),
         );
     }
+    if ai.history.n == 0 {
+        err(errs, "ai.history.n", "must be >= 1".into());
+    }
+    if ai.history.ai_channel_n == 0 {
+        err(errs, "ai.history.ai_channel_n", "must be >= 1".into());
+    }
+    if ai.history.batch_size == 0 {
+        err(errs, "ai.history.batch_size", "must be >= 1".into());
+    }
+    if ai.history.max_notes == 0 {
+        err(errs, "ai.history.max_notes", "must be >= 1".into());
+    }
+    if ai.history.merge_width < 2 || ai.history.merge_width > ai.history.max_notes {
+        err(
+            errs,
+            "ai.history.merge_width",
+            format!(
+                "must be 2..=max_notes (got {} vs max_notes {})",
+                ai.history.merge_width, ai.history.max_notes
+            ),
+        );
+    }
+    if ai.history.length > 0
+        && ai.history.length < ai.history.n.saturating_add(ai.history.batch_size)
+    {
+        err(
+            errs,
+            "ai.history.length",
+            format!(
+                "must be >= n + batch_size ({} < {} + {})",
+                ai.history.length, ai.history.n, ai.history.batch_size
+            ),
+        );
+    }
+    if ai.history.ai_channel_length > 0
+        && ai.history.ai_channel_length
+            < ai.history
+                .ai_channel_n
+                .saturating_add(ai.history.batch_size)
+    {
+        err(
+            errs,
+            "ai.history.ai_channel_length",
+            format!(
+                "must be >= ai_channel_n + batch_size ({} < {} + {})",
+                ai.history.ai_channel_length, ai.history.ai_channel_n, ai.history.batch_size
+            ),
+        );
+    }
+    if let Some(m) = ai.history.recap_profile.as_deref()
+        && m.trim().is_empty()
+    {
+        err(
+            errs,
+            "ai.history.recap_profile",
+            "must be non-blank when set".into(),
+        );
+    }
+    if ai.history.n > crate::ai::chat_history::MAX_HISTORY_LENGTH {
+        err(
+            errs,
+            "ai.history.n",
+            format!("must be <= {}", crate::ai::chat_history::MAX_HISTORY_LENGTH),
+        );
+    }
+    if ai.history.ai_channel_n > crate::ai::chat_history::MAX_HISTORY_LENGTH {
+        err(
+            errs,
+            "ai.history.ai_channel_n",
+            format!("must be <= {}", crate::ai::chat_history::MAX_HISTORY_LENGTH),
+        );
+    }
     if ai.memory.inject_byte_budget < ai.memory.soul_bytes + ai.memory.lore_bytes {
         err(
             errs,
@@ -399,6 +471,10 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
         ("ai.dreamer.profile", ai.dreamer.profile.as_deref()),
         ("ai.grok.profile", ai.grok.profile.as_deref()),
         ("ai.media.profile", ai.media.profile.as_deref()),
+        (
+            "ai.history.recap_profile",
+            ai.history.recap_profile.as_deref(),
+        ),
     ] {
         if let Some(name) = sel
             && ai.by_name(name).is_none()
@@ -685,6 +761,14 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_recap_profile_that_does_not_exist() {
+        let mut s = with_profiles(vec![profile(AiProvider::OpenAi)], "p");
+        s.ai.history.recap_profile = Some("ghost".into());
+        let errs = s.validate(&ctx()).unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "ai.history.recap_profile"));
+    }
+
+    #[test]
     fn validate_collects_multiple_errors() {
         let mut s = Settings::compiled_defaults();
         s.cooldowns.ai = 0;
@@ -718,6 +802,47 @@ mod tests {
             })
             .expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.behavior.persona_name"));
+    }
+
+    #[test]
+    fn history_rejects_length_below_n_plus_batch() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.history.n = 20;
+        s.ai.history.batch_size = 40;
+        s.ai.history.length = 50; // 50 < 60
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
+        assert!(
+            errs.iter().any(|e| e.field == "ai.history.length"),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
+    fn history_rejects_merge_width_one() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.history.merge_width = 1;
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.history.merge_width"));
+    }
+
+    #[test]
+    fn history_rejects_blank_recap_profile() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.history.recap_profile = Some("   ".into());
+        let errs = s
+            .validate(&ValidationContext {
+                channel: "test".into(),
+            })
+            .expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.history.recap_profile"));
     }
 
     #[test]

@@ -59,6 +59,30 @@ impl LlmRegistry {
         self.resolve(None).is_some()
     }
 
+    /// Resolve a profile **by name only**. Missing names return `None` —
+    /// unlike [`Self::resolve`], this never falls back to the active profile.
+    /// Recap uses that so an empty / deleted pointer stays Off.
+    pub fn resolve_named(&self, name: &str) -> Option<(Arc<dyn LlmClient>, AiProfile)> {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        let snapshot = self.settings.load();
+        let Some(prof) = snapshot.ai.by_name(name).cloned() else {
+            warn!(profile = name, "named profile not found");
+            return None;
+        };
+        if prof.model.trim().is_empty() {
+            error!(
+                profile = %prof.name,
+                "AI profile has an empty model, named resolve skipped (set it at /ai-profiles)"
+            );
+            return None;
+        }
+        let client = self.client_for(&prof)?;
+        Some((client, prof))
+    }
+
     /// `profile: None` = the active profile. A name that no longer exists
     /// falls back to the active profile rather than disabling the agent —
     /// deleting a profile should not silently kill the dreamer.
@@ -244,6 +268,46 @@ mod tests {
             handle(vec![p("a", AiProvider::Ollama, "m-a")], "a"),
         );
         assert_eq!(r.resolve(Some("deleted")).unwrap().1.name, "a");
+    }
+
+    #[test]
+    fn resolve_named_hits_the_named_profile() {
+        crate::install_crypto_provider();
+        let r = LlmRegistry::new(
+            Some(&boot()),
+            handle(
+                vec![
+                    p("a", AiProvider::OpenRouter, "m-a"),
+                    p("b", AiProvider::Ollama, "m-b"),
+                ],
+                "a",
+            ),
+        );
+        let (_, prof) = r.resolve_named("b").unwrap();
+        assert_eq!(prof.name, "b");
+        assert_eq!(prof.model, "m-b");
+    }
+
+    #[test]
+    fn resolve_named_does_not_fall_back_to_active() {
+        crate::install_crypto_provider();
+        let r = LlmRegistry::new(
+            Some(&boot()),
+            handle(vec![p("a", AiProvider::Ollama, "m-a")], "a"),
+        );
+        assert!(r.resolve_named("deleted").is_none());
+        assert!(r.resolve_named("").is_none());
+        assert!(r.resolve_named("   ").is_none());
+    }
+
+    #[test]
+    fn resolve_named_skips_an_empty_model() {
+        crate::install_crypto_provider();
+        let r = LlmRegistry::new(
+            Some(&boot()),
+            handle(vec![p("empty", AiProvider::Ollama, "")], "empty"),
+        );
+        assert!(r.resolve_named("empty").is_none());
     }
 
     #[test]

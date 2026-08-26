@@ -12,6 +12,15 @@ use super::{
 
 impl Settings {
     pub fn resolve(defaults: &Settings, overrides: &overrides::SettingsOverrides) -> Settings {
+        let mut resolved = Self::resolve_unhealed(defaults, overrides);
+        heal_recap_history(&mut resolved.ai.history);
+        resolved
+    }
+
+    pub(crate) fn resolve_unhealed(
+        defaults: &Settings,
+        overrides: &overrides::SettingsOverrides,
+    ) -> Settings {
         Settings {
             schema_version: SCHEMA_VERSION,
             cooldowns: Cooldowns {
@@ -126,6 +135,59 @@ impl Settings {
     }
 }
 
+fn heal_recap_history(history: &mut crate::settings::ai::AiHistory) {
+    heal_history_window(
+        "ai.history.length",
+        &mut history.length,
+        "ai.history.n",
+        &mut history.n,
+        &mut history.batch_size,
+    );
+    heal_history_window(
+        "ai.history.ai_channel_length",
+        &mut history.ai_channel_length,
+        "ai.history.ai_channel_n",
+        &mut history.ai_channel_n,
+        &mut history.batch_size,
+    );
+}
+
+fn heal_history_window(
+    length_name: &str,
+    length: &mut u64,
+    n_name: &str,
+    n: &mut u64,
+    batch_size: &mut u64,
+) {
+    if *length == 0 || *length >= n.saturating_add(*batch_size) {
+        return;
+    }
+
+    let original_n = *n;
+    let original_batch_size = *batch_size;
+    if *length < 2 {
+        *length = 0;
+        tracing::warn!(
+            %length_name,
+            original_length = 1,
+            "disabled legacy recap history with insufficient capacity"
+        );
+        return;
+    }
+    *batch_size = (*length).saturating_sub(1).min(*batch_size).max(1);
+    *n = (*length).saturating_sub(*batch_size).max(1);
+    tracing::warn!(
+        %length_name,
+        length = *length,
+        %n_name,
+        old_n = original_n,
+        n = *n,
+        old_batch_size = original_batch_size,
+        batch_size = *batch_size,
+        "clamped legacy recap history settings to fit history capacity"
+    );
+}
+
 fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
     use super::ai::{
         AiBehavior, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory, resolved_profile_in,
@@ -205,6 +267,21 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .history
                 .ai_channel_length
                 .unwrap_or(defaults.history.ai_channel_length),
+            n: o.history.n.unwrap_or(defaults.history.n),
+            ai_channel_n: o
+                .history
+                .ai_channel_n
+                .unwrap_or(defaults.history.ai_channel_n),
+            recap_profile: match &o.history.recap_profile {
+                Some(v) => v.clone(),
+                None => defaults.history.recap_profile.clone(),
+            },
+            batch_size: o.history.batch_size.unwrap_or(defaults.history.batch_size),
+            max_notes: o.history.max_notes.unwrap_or(defaults.history.max_notes),
+            merge_width: o
+                .history
+                .merge_width
+                .unwrap_or(defaults.history.merge_width),
         },
         memory: AiMemory {
             soul_bytes: o.memory.soul_bytes.unwrap_or(defaults.memory.soul_bytes),
@@ -442,6 +519,22 @@ mod tests {
         let defaults = Settings::compiled_defaults();
         let overrides = SettingsOverrides::default();
         assert_eq!(Settings::resolve(&defaults, &overrides), defaults);
+    }
+
+    #[test]
+    fn legacy_history_length_is_healed_to_fit_default_recap_window() {
+        let defaults = Settings::compiled_defaults();
+        let mut overrides = SettingsOverrides::default();
+        overrides.ai.history.length = Some(50);
+
+        let resolved = Settings::resolve(&defaults, &overrides);
+        assert_eq!(resolved.ai.history.length, 50);
+        assert!(resolved.ai.history.n + resolved.ai.history.batch_size <= 50);
+        resolved
+            .validate(&crate::settings::ValidationContext {
+                channel: "test".into(),
+            })
+            .expect("healed settings must validate");
     }
 
     #[test]

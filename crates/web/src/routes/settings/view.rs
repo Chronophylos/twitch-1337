@@ -31,6 +31,14 @@ pub(super) struct ShowTpl {
     pub(super) current: Settings,
     pub(super) defaults: Settings,
     pub(super) errors: Vec<FieldError>,
+    pub(super) recap_parked: bool,
+}
+
+pub(super) async fn recap_parked(state: &WebState) -> bool {
+    match &state.recap {
+        Some(handle) => handle.parked().await,
+        None => false,
+    }
 }
 
 pub(super) async fn show(
@@ -40,6 +48,7 @@ pub(super) async fn show(
 ) -> Result<Response, WebError> {
     let current = (**state.settings.load()).clone();
     let defaults = state.settings_store.defaults().clone();
+    let recap_parked = recap_parked(&state).await;
     render(&ShowTpl {
         csrf: csrf::encode(&session.csrf_value),
         flash: flash::take(&cookies),
@@ -52,5 +61,6 @@ pub(super) async fn show(
         current,
         defaults,
         errors: Vec::new(),
+        recap_parked,
     })
 }

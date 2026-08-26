@@ -156,7 +156,7 @@ impl SevenTvEmoteProvider {
         &self,
         twitch_channel_id: &str,
         instruction: &str,
-        recent_chat: &str,
+        scoring_chat: &str,
     ) -> Option<String> {
         let caps = self.live_caps();
         let emotes = self.prompt_emotes(twitch_channel_id, &caps).await?;
@@ -166,7 +166,7 @@ impl SevenTvEmoteProvider {
             caps.min_baseline_emotes,
             &caps.pinned_emotes,
             instruction,
-            recent_chat,
+            scoring_chat,
         )
     }
 
@@ -400,7 +400,7 @@ fn build_prompt_block(
     min_baseline_emotes: usize,
     pinned_emotes: &[String],
     instruction: &str,
-    recent_chat: &str,
+    scoring_chat: &str,
 ) -> Option<String> {
     let lines = select_prompt_emotes(
         emotes,
@@ -408,7 +408,7 @@ fn build_prompt_block(
         min_baseline_emotes,
         pinned_emotes,
         instruction,
-        recent_chat,
+        scoring_chat,
     )
     .into_iter()
     .map(format_prompt_emote_line)
@@ -446,7 +446,7 @@ fn select_prompt_emotes<'a>(
     min_baseline_emotes: usize,
     pinned_emotes: &[String],
     instruction: &str,
-    recent_chat: &str,
+    scoring_chat: &str,
 ) -> Vec<&'a PromptEmote> {
     if max_prompt_emotes == 0 {
         return Vec::new();
@@ -472,7 +472,7 @@ fn select_prompt_emotes<'a>(
         .iter()
         .enumerate()
         .map(|(index, emote)| {
-            let recent_count = recent_emote_count(recent_chat, &emote.name);
+            let recent_count = recent_emote_count(scoring_chat, &emote.name);
             let context_score = context_match_score(emote, &context_terms);
             (index, recent_count, context_score, emote)
         })
@@ -831,6 +831,44 @@ mod tests {
         assert!(
             local_pos < kekw_pos,
             "recent chat emote should rank first:\n{prompt}"
+        );
+    }
+
+    #[test]
+    fn scoring_sees_lines_outside_the_n_tail() {
+        let emotes = vec![
+            prompt_emote_full("KEKW", "lachen", None, Some("wenn etwas lustig ist"), None),
+            prompt_emote_full(
+                "LocalEmote",
+                "lokaler Channel-Insider",
+                None,
+                Some("wenn der Chat den Insider anspricht"),
+                None,
+            ),
+        ];
+
+        // N-line tail: only the latest line — no LocalEmote.
+        let short_tail = "[13:38] bob: sag etwas lustiges";
+        // Full buffer corpus: older line carries LocalEmote.
+        let scoring_chat = "[13:35] alice: LocalEmote\n[13:38] bob: sag etwas lustiges";
+
+        let prompt_short =
+            build_prompt_block(&emotes, 2, 2, &[], "sag etwas lustiges", short_tail).unwrap();
+        let prompt_wide =
+            build_prompt_block(&emotes, 2, 2, &[], "sag etwas lustiges", scoring_chat).unwrap();
+
+        let short_local = prompt_short.find("- LocalEmote;");
+        let short_kekw = prompt_short.find("- KEKW;").unwrap();
+        assert!(
+            short_local.is_none() || short_local.unwrap() > short_kekw,
+            "short tail should not prioritize chat-only emote:\n{prompt_short}"
+        );
+
+        let wide_local = prompt_wide.find("- LocalEmote;").unwrap();
+        let wide_kekw = prompt_wide.find("- KEKW;").unwrap();
+        assert!(
+            wide_local < wide_kekw,
+            "wide scoring corpus should rank chat-seen emote first:\n{prompt_wide}"
         );
     }
 

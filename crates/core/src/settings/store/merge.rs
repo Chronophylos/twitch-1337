@@ -83,6 +83,24 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.ai.history.ai_channel_length {
         into.ai.history.ai_channel_length = Some(v);
     }
+    if let Some(v) = patch.ai.history.n {
+        into.ai.history.n = Some(v);
+    }
+    if let Some(v) = patch.ai.history.ai_channel_n {
+        into.ai.history.ai_channel_n = Some(v);
+    }
+    if patch.ai.history.recap_profile.is_some() {
+        into.ai.history.recap_profile = patch.ai.history.recap_profile.clone();
+    }
+    if let Some(v) = patch.ai.history.batch_size {
+        into.ai.history.batch_size = Some(v);
+    }
+    if let Some(v) = patch.ai.history.max_notes {
+        into.ai.history.max_notes = Some(v);
+    }
+    if let Some(v) = patch.ai.history.merge_width {
+        into.ai.history.merge_width = Some(v);
+    }
     // AI memory
     if let Some(v) = patch.ai.memory.soul_bytes {
         into.ai.memory.soul_bytes = Some(v);

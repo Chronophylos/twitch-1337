@@ -157,13 +157,14 @@ impl SettingsStore {
         let mut current = load_overrides_async(&self.path).await?.unwrap_or_default();
         let prior_resolved = Settings::resolve(&self.defaults, &current);
         mutate(&mut current);
-        let resolved = Settings::resolve(&self.defaults, &current);
+        let unresolved = Settings::resolve_unhealed(&self.defaults, &current);
         let ctx = super::ValidationContext {
             channel: self.boot_channel.clone(),
         };
-        if let Err(errs) = resolved.validate(&ctx) {
+        if let Err(errs) = unresolved.validate(&ctx) {
             return Err(SettingsError::Validation(errs));
         }
+        let resolved = Settings::resolve(&self.defaults, &current);
         self.commit(&current, &prior_resolved, resolved, actor)
             .await
     }
@@ -295,6 +296,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn apply_rejects_invalid_history_window_without_healing_it() {
+        let (_dir, store, _handle, _log) = fixture();
+        let mut patch = SettingsOverrides::default();
+        patch.ai.history.length = Some(50);
+        patch.ai.history.n = Some(20);
+        patch.ai.history.batch_size = Some(40);
+
+        let error = store
+            .apply(
+                patch,
+                Actor {
+                    user_id: "1".into(),
+                    user_login: "tester".into(),
+                },
+            )
+            .await
+            .expect_err("form submission with an invalid recap window must fail");
+        assert!(
+            matches!(error, SettingsError::Validation(ref errors) if errors.iter().any(|e| e.field == "ai.history.length"))
+        );
+    }
+
+    #[tokio::test]
     async fn reset_clears_section_back_to_defaults() {
         let (_dir, store, handle, _log) = fixture();
         let actor = Actor {
@@ -372,6 +396,35 @@ mod tests {
                     .starts_with("settings.ron.quarantine-")
             });
         assert!(quarantined, "quarantine file must exist");
+    }
+
+    #[test]
+    fn legacy_history_length_override_opens_without_quarantine() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut overrides = SettingsOverrides::default();
+        overrides.ai.history.length = Some(50);
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            ron::ser::to_string(&overrides).expect("serialize override"),
+        )
+        .expect("write settings");
+
+        let audit = Arc::new(MemoryAuditLog::new());
+        let (_store, handle) =
+            SettingsStore::open(dir.path(), audit, "test_chan").expect("open legacy settings");
+        let settings = handle.load();
+        assert_eq!(settings.ai.history.length, 50);
+        assert!(settings.ai.history.n + settings.ai.history.batch_size <= 50);
+        assert!(dir.path().join(FILE_NAME).exists());
+        assert!(
+            std::fs::read_dir(dir.path())
+                .expect("read data dir")
+                .all(|entry| !entry
+                    .expect("dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.ron.quarantine-"))
+        );
     }
 
     #[tokio::test]

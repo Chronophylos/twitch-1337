@@ -14,6 +14,7 @@ use crate::{
     ChatHistory, ChatHistoryBuffer, PersonalBest, PersonalWorst, ai,
     ai::chat_history::{ai_channel_history_capacity, primary_history_capacity},
     ai::command::{AI_TRIGGER, GROK_ALIAS_TRIGGER, is_ai_trigger},
+    ai::recap::RecapHandle,
     aviation, commands,
     config::AiBootstrap,
     ping::{PingCommand, PingHandle},
@@ -21,6 +22,12 @@ use crate::{
     suspend::SuspensionManager,
     twitch::{ChatSender, mouth::Agent, seventv::SevenTvEmoteProvider, whisper::WhisperSender},
 };
+
+/// Chat-history buffers handed from the command handler to the recap batcher.
+pub(crate) struct RecapBatcherHistories {
+    pub primary: Option<ChatHistory>,
+    pub ai_channel: Option<ChatHistory>,
+}
 
 /// Configuration for the generic command handler.
 pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
@@ -75,6 +82,11 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub primary_history_tap: Option<Arc<tokio::sync::Mutex<Option<ChatHistory>>>>,
     /// Process start instant, captured in `run_bot`. Used by `!v` for uptime.
     pub started_at: std::time::Instant,
+    /// Shared chat-recap handle. `None` when AI / LLM is disabled.
+    pub recap: Option<std::sync::Arc<RecapHandle>>,
+    /// One-shot sender for chat-history buffers once allocated. Consumed by the
+    /// recap batcher task spawned in `spawn_handlers`.
+    pub(crate) recap_histories_tx: Option<tokio::sync::oneshot::Sender<RecapBatcherHistories>>,
 }
 
 /// Handler for generic text commands that start with `!`.
@@ -113,6 +125,8 @@ where
         started_at,
         mouths,
         echo,
+        recap,
+        recap_histories_tx,
     } = cfg;
 
     let ping_handle = PingHandle::new(ping_actor_tx);
@@ -179,6 +193,22 @@ where
         }
         _ => None,
     };
+
+    if let (Some(handle), Some(ph)) = (recap.as_ref(), primary_history.as_ref()) {
+        let entries = ph.lock().await.snapshot();
+        handle.rebind_primary(&entries).await;
+        if let Some(ai_hist) = ai_channel_history.as_ref() {
+            let ai_entries = ai_hist.lock().await.snapshot();
+            handle.rebind_ai_channel(&ai_entries).await;
+        }
+    }
+
+    if let Some(tx) = recap_histories_tx {
+        let _ = tx.send(RecapBatcherHistories {
+            primary: primary_history.clone(),
+            ai_channel: ai_channel_history.clone(),
+        });
+    }
 
     let mut cmd_list: Vec<Box<dyn commands::Command<T, L>>> = vec![
         Box::new(commands::version::VersionCommand::new(started_at)),
@@ -321,6 +351,7 @@ where
                 model_catalog,
                 mouths: mouths.clone(),
                 echo: echo.clone(),
+                recap: recap.clone(),
             },
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(

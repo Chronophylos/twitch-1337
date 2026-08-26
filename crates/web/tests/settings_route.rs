@@ -244,6 +244,10 @@ async fn settings_page_no_longer_offers_connection_inputs() {
         html.contains("ai_dreamer_profile"),
         "the dreamer card must offer a profile picker; got: {html}"
     );
+    assert!(
+        html.contains("ai_history_recap_profile"),
+        "the history card must offer a Recap profile picker; got: {html}"
+    );
 }
 
 /// A dreamer `profile` override round-trips through the settings POST,
@@ -321,6 +325,83 @@ async fn a_dreamer_profile_override_round_trips_through_the_settings_post() {
         state.settings.load().ai.dreamer.profile,
         None,
         "an empty submission must clear dreamer.profile back to inherit",
+    );
+}
+
+/// Recap's `recap_profile` round-trips through the settings POST.
+/// Empty = Recap off (never inherit the active chat profile).
+#[tokio::test]
+async fn a_recap_profile_round_trips_through_the_settings_post() {
+    use twitch_1337_core::settings::{AiProfile, AiProvider, overrides::SettingsOverrides};
+
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+
+    let profile = |name: &str| AiProfile {
+        name: name.into(),
+        key: None,
+        provider: AiProvider::OpenRouter,
+        base_url: None,
+        model: "some-model".into(),
+        timeout: 30,
+        reasoning_effort: None,
+        service_tier: None,
+    };
+    state
+        .settings_store
+        .apply(
+            SettingsOverrides {
+                ai: twitch_1337_core::settings::AiOverrides {
+                    profiles: Some(vec![profile("a"), profile("b")]),
+                    active_profile: Some("a".to_owned()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            twitch_1337_core::settings::Actor {
+                user_id: "test".into(),
+                user_login: "test".into(),
+            },
+        )
+        .await
+        .expect("seed profiles");
+
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+    let defaults = state.settings_store.defaults().clone();
+
+    let app = build_router(state.clone());
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_history_recap_profile", "b")]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        state.settings.load().ai.history.recap_profile.as_deref(),
+        Some("b"),
+        "recap_profile must be set to the submitted profile name",
+    );
+
+    let app = build_router(state.clone());
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_history_recap_profile", "")]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        state.settings.load().ai.history.recap_profile,
+        None,
+        "an empty submission must turn Recap off, not inherit the active profile",
     );
 }
 
@@ -519,6 +600,61 @@ async fn owner_can_save_aurora_reply_length() {
     assert_eq!(snap.ai.behavior.reply_target_chars, 200);
     assert_eq!(snap.ai.behavior.reply_soft_chars, 300);
     assert_eq!(snap.ai.behavior.reply_hard_chars, 400);
+}
+
+#[tokio::test]
+async fn owner_can_save_ai_history_n() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_history_n", "25")]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(state.settings.load().ai.history.n, 25);
+}
+
+#[tokio::test]
+async fn ai_history_length_below_n_plus_batch_returns_400() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let defaults = state.settings_store.defaults().clone();
+    assert_eq!(defaults.ai.history.n, 20);
+    assert_eq!(defaults.ai.history.batch_size, 40);
+
+    let app = build_router(state.clone());
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_history_length", "10")]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::BAD_REQUEST,
+        "length < n + batch_size must fail validation",
+    );
+    let html = body_string(res).await;
+    assert!(
+        html.contains("ai.history.length"),
+        "response must surface the failing field; got: {html}",
+    );
 }
 
 #[tokio::test]

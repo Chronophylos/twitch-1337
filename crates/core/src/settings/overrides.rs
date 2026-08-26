@@ -155,6 +155,18 @@ pub struct AiHistoryOverrides {
     pub length: Option<u64>,
     #[serde(default)]
     pub ai_channel_length: Option<u64>,
+    #[serde(default)]
+    pub n: Option<u64>,
+    #[serde(default)]
+    pub ai_channel_n: Option<u64>,
+    #[serde(default)]
+    pub recap_profile: Option<Option<String>>,
+    #[serde(default)]
+    pub batch_size: Option<u64>,
+    #[serde(default)]
+    pub max_notes: Option<u64>,
+    #[serde(default)]
+    pub merge_width: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

@@ -133,6 +133,7 @@ async fn main() -> Result<()> {
         ))),
         settings: settings_handle,
         settings_store,
+        recap: None,
     };
 
     let listener = bind(bind_addr).await?;

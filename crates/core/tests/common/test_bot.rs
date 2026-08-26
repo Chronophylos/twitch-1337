@@ -50,6 +50,28 @@ use super::irc_line::{
 // happy path, so it must honor its caller's exact duration.
 const MIN_OUTPUT_TIMEOUT: Duration = super::GENEROUS_WAIT;
 
+/// Integration tests often override `history.length` without touching the new
+/// Recap knobs. Shrink `n` / `batch_size` so `length >= n + batch_size` still
+/// holds after resolve against compiled defaults.
+fn normalize_test_history_overrides(o: &mut twitch_1337::settings::SettingsOverrides) {
+    let Some(length) = o.ai.history.length else {
+        return;
+    };
+    if length == 0 {
+        return;
+    }
+    let defaults = twitch_1337::settings::Settings::compiled_defaults();
+    let n = o.ai.history.n.unwrap_or(defaults.ai.history.n);
+    let batch =
+        o.ai.history
+            .batch_size
+            .unwrap_or(defaults.ai.history.batch_size);
+    if length < n.saturating_add(batch) {
+        o.ai.history.n = Some(1);
+        o.ai.history.batch_size = Some(1);
+    }
+}
+
 pub struct TestBot {
     pub transport: TransportHandle,
     pub clock: Arc<FakeClock>,
@@ -347,7 +369,8 @@ impl TestBotBuilder {
         let (settings_store, settings_handle) =
             twitch_1337::settings::SettingsStore::open(data_dir.path(), audit, "test_chan")
                 .expect("open settings");
-        if let Some(o) = self.settings_overrides.take() {
+        if let Some(mut o) = self.settings_overrides.take() {
+            normalize_test_history_overrides(&mut o);
             let actor = twitch_1337::settings::Actor {
                 user_id: "test".into(),
                 user_login: "test".into(),
@@ -391,6 +414,14 @@ impl TestBotBuilder {
         // Build the telemetry store once; share the Arc with Services, web, and TestBot.
         let telemetry_store = twitch_1337::schedule::TelemetryStore::open(data_dir.path());
 
+        let recap_handle = if self.config.ai.is_some() {
+            Some(Arc::new(
+                twitch_1337::ai::recap::RecapHandle::load(data_dir.path().to_path_buf()).await,
+            ))
+        } else {
+            None
+        };
+
         let web_spawner = if self.config.web.enabled {
             let bind_addr: std::net::SocketAddr = self
                 .config
@@ -407,6 +438,7 @@ impl TestBotBuilder {
                 settings_handle.clone(),
                 settings_store.clone(),
                 telemetry_store.clone(),
+                recap_handle.clone(),
             );
             let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
                 let deps = twitch_1337_web::WebDeps { bind_addr, state };
@@ -512,6 +544,7 @@ impl TestBotBuilder {
             emote_tracker,
             twitch_channel_id: None,
             mouths_override: build_mouths_override(self.mouth_identity, self.fake_mouths),
+            recap: recap_handle.clone(),
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -1054,6 +1087,7 @@ fn flagged_usage_count_sync(path: &std::path::Path) -> EyreResult<usize> {
 /// Build a minimal `WebState` for tests that flip on `with_web`. Uses a
 /// stub helix client that denies every mod check (no production routes
 /// reach it because the web smoke test only probes the public `/healthz`).
+#[allow(clippy::too_many_arguments)]
 fn build_test_web_state(
     config: &Configuration,
     irc_connected: Arc<AtomicBool>,
@@ -1062,6 +1096,7 @@ fn build_test_web_state(
     settings: twitch_1337::settings::SettingsHandle,
     settings_store: Arc<twitch_1337::settings::SettingsStore>,
     telemetry: Arc<twitch_1337::schedule::TelemetryStore>,
+    recap: Option<Arc<twitch_1337::ai::recap::RecapHandle>>,
 ) -> twitch_1337_web::WebState {
     use twitch_1337_web::auth::OAuthCtx;
     use twitch_1337_web::auth::session::SessionTable;
@@ -1126,5 +1161,6 @@ fn build_test_web_state(
         settings,
         settings_store,
         telemetry,
+        recap,
     }
 }
