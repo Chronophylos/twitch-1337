@@ -222,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_named_does_not_fall_back_to_active() {
+    fn resolve_named_rejects_unknown_or_blank_names() {
         crate::install_crypto_provider();
         let r = LlmRegistry::new(
             Some(&boot()),
