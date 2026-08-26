@@ -136,10 +136,10 @@ tokens must be authorized against the same Twitch app, with scope
 once at startup, so adding or removing a mouth needs a bot restart. A mouth that
 is absent or fails to build is skipped and that agent replies through the
 utility bot's IRC connection instead. The persona name each agent speaks under
-lives in `settings.ron`: `ai.behavior.persona_name` (default `"Aurora"`) and
+lives in `settings.ron`: `ai.aurora.persona_name` (default `"Aurora"`) and
 `ai.grok.persona_name` (default `"Grok"`). Aurora's chat-reply length
-(`ai.behavior.reply_target_chars` / `reply_soft_chars` / `reply_hard_chars`,
-defaults 480/490/490) is live-tunable on `/settings → AI · Behavior`; Grok
+(`ai.aurora.reply_target_chars` / `reply_soft_chars` / `reply_hard_chars`,
+defaults 480/490/490) is live-tunable on `/settings → Agents · Aurora`; Grok
 keeps a baked 480/500 prompt and a 490/490 reword-clamp.
 
 `[ai]` carries only credentials: an `[ai.keys]` table of named keys. A profile
@@ -149,14 +149,14 @@ move it into `[ai.keys]` and set the profile's key name. Provider, base URL,
 model, timeout, reasoning effort and service tier live in **profiles** — a
 named list (`ai.profiles`) CRUD'd at `/ai-profiles` (owner only — a profile
 carries `base_url`/`key`, the same credential surface `/settings` keeps
-owner-only). `ai.active_profile`
-names the profile `!ai` uses; dreamer, grok, media and recap each take an
-optional profile picker at `/settings` (recap: empty = off; the others fall
-back to the active profile). Sub-agents do not override model / effort / tier
-on top of a profile — pick a different profile instead. Dreamer and media keep
-their own timeout knobs. Every AI client is resolved per call through `LlmRegistry`
-(`crates/core/src/llm_factory.rs`), so switching `active_profile` or editing a
-profile applies on the next turn — no restart. Each profile declares an
+owner-only). `ai.aurora.profile` names the profile `!ai` uses; Aurora, Grok,
+Dreamer, and Media each have a required profile dropdown at `/settings`.
+Recap's profile dropdown is optional, with empty meaning off. Agents do not
+override model / effort / tier on top of a profile — pick a different profile
+instead. Dreamer and media keep their own timeout knobs. Every AI client is
+resolved per call through `LlmRegistry` (`crates/core/src/llm_factory.rs`), so
+changing an agent's profile selection or editing a profile applies on the next
+turn — no restart. Each profile declares an
 `AiProvider` (`open_router`, `open_ai`, `open_ai_compatible`, `ollama`) whose
 `caps()` table decides which `reasoning_effort` values it accepts and whether
 `service_tier` applies — see `crates/core/src/settings/provider.rs`. Memory
@@ -246,7 +246,7 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - Latency monitor: PING/PONG every 5min, EMA alpha=0.2, shared `Arc<AtomicU32>`. Read by 1337 handler for precise wake-up.
 - Flight tracker: `Arc<mpsc::Sender<TrackerCommand>>` from commands to long task. Adaptive poll 30/60/120s based on phase mix. adsb.lol v2; fallback aggregators in memory `reference_adsb_aggregators.md`.
 - AI memory (v2): per-user character sheets + chat LORE + bot SOUL as markdown under $DATA_DIR/memories/. Single-loop !ai turn drives the model with write_file/write_scratch/delete_scratch tools (run_agent in the llm crate); the model's final assistant text is sent to chat verbatim. Daily dreamer ritual rewrites files from yesterday's transcript at the dashboard-configured `ai.dreamer.run_at` (Berlin local). Per ADR-0003, Memory (SOUL/LORE/users) and Scratch (`memories/scratch/`) are siblings, not tiers of one thing; see CONTEXT.md. Bodies are byte-capped (SOUL/user 4 KiB, LORE 12 KiB, scratch 2 KiB by default; tunable via the dashboard `AI · Memory` card). `@grok` uses a separate baked prompt (`grok.md`) instead of `system.md` and gets no injected memory bodies: its system message carries a paths-only manifest plus a grok-only `read_memory(path)` tool, allowlisted against the manifest paths. SOUL.md stays dreamer-only for both agents: it's never in grok's manifest, and no chat turn on either alias can write it. `users/<id>.md` ids are never minted by the model: `write_file` refuses an id that is neither the speaker's, in this turn's chat history, nor an existing sheet (the dreamer additionally accepts ids carried by the transcript, whose lines are `HH:MM:SS  login#<user-id>: text`). Without that guard the dreamer invented plausible ids for logins it read in the transcript, producing duplicate sheets under ids no Twitch account owns. Recap is not Memory — paraphrased chat notes live in `$DATA_DIR/chat-recap.ron` and are injected as a system suffix after Memory; see `docs/superpowers/specs/2026-08-25-ai-chat-recap-design.md`.
-- AI clients are resolved per call through `LlmRegistry` (`crates/core/src/llm_factory.rs`), keyed by (provider, base_url, key name). Editing a profile's model or switching `active_profile` takes effect on the next turn; changing a provider or base URL builds a new cached client, still no restart. Secrets never leave config.toml — a profile stores a key name, not the key.
+- AI clients are resolved per call through `LlmRegistry` (`crates/core/src/llm_factory.rs`), keyed by (provider, base_url, key name). Editing a profile's model or changing an agent's profile selection takes effect on the next turn; changing a provider or base URL builds a new cached client, still no restart. Secrets never leave config.toml — a profile stores a key name, not the key.
 - AI mouths speak over Helix `POST /helix/chat/messages` and never join IRC, so their messages come back in over the normal broadcast channel. `EchoGuard` (`crates/core/src/twitch/echo.rs`) keeps them out of the bot's own input. Two mechanisms, both needed: the Helix `message_id` of every sent reply is registered and peeked on the way back (30s TTL, 512 cap, peeked not removed — the transcript tap and the command dispatcher each check the same id), plus a mouth login/user-id identity backstop for when the id doesn't match. History and transcript writes use `is_echo` (both mechanisms); command dispatch, the 1337 tracker, and emote counting use `is_mouth` (identity only) so a viewer can never be filtered by a stale pending id. Neither is dead code. Chat-turn prompts name the mapping via a runtime Konten/Accounts system appendix; a reply parent from a Mouth is labeled `(self)` / the other agent, not an untrusted viewer.
 - Scheduled messages: list loaded from `settings.ron` into `ScheduleCache`; the `run_schedule_settings_sync` task subscribes to `SettingsStore`'s change-`Notify` and updates the cache when the dashboard saves. The message handler polls the cache every 30s. On Ctrl+C, main notifies `Arc<Notify>`; children finish in-flight `say()` then exit; main awaits handler with 5s timeout.
 
