@@ -17,10 +17,6 @@ use crate::ai::recap::{
 };
 use crate::settings::SettingsHandle;
 
-/// Stub until Task 11 wires `twitch_1337_data::prompts::RECAP`.
-pub(crate) const RECAP_PROMPT: &str =
-    "Paraphrase the chat batch in German, third person, no quotes.";
-
 const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 async fn paraphrase(
@@ -31,7 +27,10 @@ async fn paraphrase(
 ) -> LlmResult<String> {
     let req = ChatCompletionRequest {
         model: model.to_string(),
-        messages: vec![Message::system(RECAP_PROMPT), Message::user(user)],
+        messages: vec![
+            Message::system(twitch_1337_data::prompts::RECAP),
+            Message::user(user),
+        ],
         reasoning_effort: None,
         service_tier: None,
         trace: TraceIds {

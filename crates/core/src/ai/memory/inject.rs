@@ -1426,6 +1426,15 @@ mod tests {
     }
 
     #[test]
+    fn bundled_recap_mentions_no_quotes() {
+        let recap = twitch_1337_data::prompts::RECAP;
+        assert!(
+            recap.contains("keine Anführungszeichen") || recap.contains("nicht zitieren"),
+            "recap.md must forbid quoting:\n{recap}"
+        );
+    }
+
+    #[test]
     fn grok_prompt_keeps_baked_length_copy() {
         assert!(
             PROMPT_GROK.contains("Stay at or under 480 characters"),
