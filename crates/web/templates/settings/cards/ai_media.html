@@ -5,7 +5,7 @@
   <header class="settings-card-head">
     <div>
       <h2>AI · Media</h2>
-      <p>Sub-agent that handles image/PDF/audio/video/text attachments.</p>
+      <p>Sub-agent that handles image/PDF/audio/video/text attachments. Model comes from the selected profile.</p>
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
@@ -27,9 +27,6 @@
       </div>
     </div>
 
-    {% call m::model_row("ai_media", "ai_media_model", "model",
-       "Vision-capable model for media analysis.",
-       current.ai.media.model, defaults.ai.media.model) %}{% endcall %}
     {% call m::num_row_bounded("ai_media", "ai_media_timeout", "timeout",
        "Per-request timeout for media calls.",
        current.ai.media.timeout, defaults.ai.media.timeout, "s", 5, 600) %}{% endcall %}

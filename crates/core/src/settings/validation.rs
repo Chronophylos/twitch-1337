@@ -420,6 +420,12 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
                 }
             }
         }
+        // Missing key names are a runtime resolve failure (`LlmRegistry`),
+        // not a settings-file error. Requiring one here would quarantine
+        // every pre-named-keys settings.ron (profiles folded from
+        // `ai.connection` have `key: None` and a leftover `[ai].api_key`).
+        // `/ai-profiles` create/edit still refuse a blank key for every
+        // OpenAI-family provider with a model set.
         if let Some(k) = p.key.as_deref()
             && k.trim().is_empty()
         {
@@ -483,72 +489,6 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
         }
     }
 
-    // Sub-agent overrides validate against the caps of the profile that
-    // agent will actually run on (its own `profile` pointer, or the active
-    // profile when unset) — not the profile list's index-0 entry. Same
-    // lookup the dashboard cards use to gate their reasoning_effort /
-    // service_tier rows (`AiSettings::dreamer_profile`/`grok_profile`), so
-    // the two never disagree (issue I2).
-    let dreamer_caps = ai.dreamer_profile().provider.caps();
-    let grok_caps = ai.grok_profile().provider.caps();
-    for (field, val, caps) in [
-        (
-            "ai.dreamer.reasoning_effort",
-            ai.dreamer.reasoning_effort.as_deref(),
-            dreamer_caps,
-        ),
-        (
-            "ai.grok.reasoning_effort",
-            ai.grok.reasoning_effort.as_deref(),
-            grok_caps,
-        ),
-    ] {
-        if let Some(v) = val {
-            if v.trim().is_empty() {
-                err(errs, field, "must be non-empty when set".into());
-            } else if !caps.allows_effort(v.trim()) {
-                err(
-                    errs,
-                    field,
-                    match caps.efforts {
-                        Efforts::Fixed(list) => {
-                            format!("does not accept {v:?} (allowed: {})", list.join(", "))
-                        }
-                        Efforts::None | Efforts::FreeText => {
-                            "provider has no reasoning effort setting".into()
-                        }
-                    },
-                );
-            }
-        }
-    }
-    for (field, val, caps) in [
-        (
-            "ai.dreamer.service_tier",
-            ai.dreamer.service_tier.as_deref(),
-            dreamer_caps,
-        ),
-        (
-            "ai.grok.service_tier",
-            ai.grok.service_tier.as_deref(),
-            grok_caps,
-        ),
-    ] {
-        if let Some(v) = val {
-            let trimmed = v.trim();
-            if trimmed.is_empty() {
-                err(errs, field, "must be non-empty when set".into());
-            } else if !caps.service_tier {
-                err(errs, field, "provider has no service tier setting".into());
-            } else if !matches!(trimmed, "flex" | "priority") {
-                err(
-                    errs,
-                    field,
-                    format!("must be one of 'flex' | 'priority' (got {v:?})"),
-                );
-            }
-        }
-    }
     if let Some(prefill) = &ai.prefill {
         if reqwest::Url::parse(&prefill.base_url).is_err() {
             err(
@@ -657,7 +597,7 @@ mod tests {
     fn profile(provider: AiProvider) -> AiProfile {
         AiProfile {
             name: "p".into(),
-            key: None,
+            key: Some("k".into()),
             provider,
             base_url: Some("https://example.test/v1".into()),
             model: "m".into(),
@@ -672,6 +612,31 @@ mod tests {
         s.ai.profiles = list;
         s.ai.active_profile = active.to_string();
         s
+    }
+
+    #[test]
+    fn allows_openai_profile_without_key_so_boot_does_not_quarantine() {
+        let mut p = profile(AiProvider::OpenRouter);
+        p.key = None;
+        with_profiles(vec![p], "p")
+            .validate(&ctx())
+            .expect("key names are required on /ai-profiles, not on settings.ron load");
+    }
+
+    #[test]
+    fn allows_ollama_profile_without_key() {
+        let mut p = profile(AiProvider::Ollama);
+        p.key = None;
+        with_profiles(vec![p], "p")
+            .validate(&ctx())
+            .expect("Ollama does not need a key");
+    }
+
+    #[test]
+    fn allows_unconfigured_openai_stub_without_key() {
+        Settings::compiled_defaults()
+            .validate(&ctx())
+            .expect("empty default OpenRouter stub must still validate");
     }
 
     #[test]
@@ -954,33 +919,6 @@ mod tests {
             })
             .expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.profiles[0].base_url"));
-    }
-
-    #[test]
-    fn validate_rejects_unknown_grok_service_tier_value() {
-        let mut s = Settings::compiled_defaults();
-        s.ai.grok.service_tier = Some("turbo".to_string());
-        let err = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("'turbo' must be rejected");
-        assert!(
-            err.iter().any(|e| e.field == "ai.grok.service_tier"),
-            "expected field error for ai.grok.service_tier, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn validate_rejects_empty_grok_reasoning_effort() {
-        let mut s = Settings::compiled_defaults();
-        s.ai.grok.reasoning_effort = Some("   ".into());
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
-        assert!(errs.iter().any(|e| e.field == "ai.grok.reasoning_effort"));
     }
 
     #[test]

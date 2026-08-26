@@ -5,7 +5,7 @@
   <header class="settings-card-head">
     <div>
       <h2>AI · Dreamer</h2>
-      <p>Nightly ritual that rewrites memory from yesterday's transcript.</p>
+      <p>Nightly ritual that rewrites memory from yesterday's transcript. Model, effort and tier come from the selected profile.</p>
       <label class="toggle">
         <input type="checkbox" name="ai_dreamer_enabled" data-card-toggle value="1"
                data-key="ai.dreamer.enabled"
@@ -37,72 +37,6 @@
       </div>
     </div>
 
-    {% let dreamer_model = current.ai.dreamer.model.as_deref().unwrap_or("") %}
-    <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
-      {% call m::row_head("model", "Override the model used for the dreamer pass. Empty = use the resolved profile's model.") %}{% endcall %}
-      <div class="row-control-cell">
-        <span class="row-pretty" aria-hidden="true">{% if dreamer_model.is_empty() %}<span class="muted">(profile)</span>{% else %}{{ dreamer_model }}{% endif %}</span>
-        <input type="text"
-               class="text-input"
-               name="ai_dreamer_model"
-               value="{{ dreamer_model }}"
-               placeholder="(use profile model)"
-               data-default=""
-               data-key="ai.dreamer.model">
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.dreamer.model") %}{% endcall %}
-        <span class="row-default">default <span class="mono">(profile)</span></span>
-      </div>
-    </div>
-
-    {# Gated against the caps of the profile the dreamer will actually run
-       on (its own `profile` override, or the active profile) — not the
-       active profile alone. Otherwise this row can offer values the save
-       validation rejects, or hide ones it would accept. See issue I2. #}
-    {% let dreamer_caps = current.ai.dreamer_profile().provider.caps() %}
-    {% if dreamer_caps.effort_kind() == "free" %}
-    {% let dreamer_effort_raw = current.ai.dreamer.reasoning_effort.as_deref().unwrap_or("") %}
-    {% call m::text_row("ai_dreamer", "ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort",
-       "Override reasoning_effort for dreamer turns (provider-defined string).",
-       dreamer_effort_raw, "", "(profile default)") %}{% endcall %}
-    {% else if dreamer_caps.effort_kind() == "fixed" %}
-    {% let dreamer_effort = current.ai.dreamer.reasoning_effort.as_deref().unwrap_or("none") %}
-    <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
-      {% call m::row_head("reasoning_effort", "Override reasoning_effort for dreamer turns.") %}{% endcall %}
-      <div class="row-control-cell">
-        <div class="segmented" role="radiogroup" aria-label="reasoning_effort">
-          {% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "none", dreamer_effort) %}{% endcall %}
-          {% if dreamer_caps.allows_effort("minimal") %}{% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "minimal", dreamer_effort) %}{% endcall %}{% endif %}
-          {% if dreamer_caps.allows_effort("medium") %}{% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "medium", dreamer_effort) %}{% endcall %}{% endif %}
-          {% if dreamer_caps.allows_effort("high") %}{% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "high", dreamer_effort) %}{% endcall %}{% endif %}
-          {% if dreamer_caps.allows_effort("xhigh") %}{% call m::effort_segment("ai_dreamer_reasoning_effort", "ai.dreamer.reasoning_effort", "xhigh", dreamer_effort) %}{% endcall %}{% endif %}
-        </div>
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.dreamer.reasoning_effort") %}{% endcall %}
-        <span class="row-default">default <span class="mono">none</span></span>
-      </div>
-    </div>
-    {% endif %}
-
-    {% if dreamer_caps.service_tier %}
-    {% let dreamer_tier = current.ai.dreamer.service_tier.as_deref().unwrap_or("none") %}
-    <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
-      {% call m::row_head("service_tier", "Override OpenRouter pricing tier for dreamer turns. Falls back to connection tier when set to Default.") %}{% endcall %}
-      <div class="row-control-cell">
-        <div class="segmented" role="radiogroup" aria-label="service_tier">
-          {% call m::tier_segment("ai_dreamer_service_tier", "ai.dreamer.service_tier", "none", "Default", dreamer_tier) %}{% endcall %}
-          {% call m::tier_segment("ai_dreamer_service_tier", "ai.dreamer.service_tier", "flex", "Flex", dreamer_tier) %}{% endcall %}
-          {% call m::tier_segment("ai_dreamer_service_tier", "ai.dreamer.service_tier", "priority", "Priority", dreamer_tier) %}{% endcall %}
-        </div>
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.dreamer.service_tier") %}{% endcall %}
-        <span class="row-default">default <span class="mono">Default</span></span>
-      </div>
-    </div>
-    {% endif %}
     {% call m::time_row("ai_dreamer", "ai_dreamer_run_at", "run_at",
        "Berlin-local wallclock for the nightly run (HH:MM).",
        current.ai.dreamer.run_at, defaults.ai.dreamer.run_at) %}{% endcall %}

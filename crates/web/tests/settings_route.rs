@@ -263,7 +263,7 @@ async fn a_dreamer_profile_override_round_trips_through_the_settings_post() {
 
     let profile = |name: &str| AiProfile {
         name: name.into(),
-        key: None,
+        key: Some("k".into()),
         provider: AiProvider::OpenRouter,
         base_url: None,
         model: "some-model".into(),
@@ -340,7 +340,7 @@ async fn a_recap_profile_round_trips_through_the_settings_post() {
 
     let profile = |name: &str| AiProfile {
         name: name.into(),
-        key: None,
+        key: Some("k".into()),
         provider: AiProvider::OpenRouter,
         base_url: None,
         model: "some-model".into(),
@@ -775,138 +775,6 @@ async fn permissions_lists_render_pretty_resting_display() {
 }
 
 #[tokio::test]
-async fn settings_page_shows_openrouter_tiers_for_default_base_url() {
-    // The OpenAI-compatible client defaults an empty base URL to OpenRouter.
-    // The dashboard must expose OpenRouter-only controls for that effective
-    // runtime configuration, not only after an explicit URL override.
-    install_crypto();
-    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    set_owner(&state, Some("123"));
-    let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
-
-    assert!(
-        state.settings.load().ai.active().base_url.is_none(),
-        "fixture must exercise the provider-default base URL path"
-    );
-
-    let app = build_router(state);
-    let req = Request::builder()
-        .uri("/settings")
-        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
-        .body(Body::empty())
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK, "owner GET /settings must 200");
-    let html = body_string(res).await;
-
-    assert!(
-        html.contains("name=\"ai_dreamer_service_tier\""),
-        "dreamer service_tier control must render for default OpenRouter base URL"
-    );
-    assert!(
-        html.contains("name=\"ai_grok_service_tier\""),
-        "grok service_tier control must render for default OpenRouter base URL"
-    );
-}
-
-/// I2 regression: a sub-agent pinned to a profile whose provider caps
-/// differ from the active profile's must be gated on *its own* profile,
-/// not the active one. Otherwise the dashboard offers controls that save
-/// validation rejects (or hides ones it would accept) — see
-/// `settings::validation`'s `dreamer_caps`/`grok_caps`.
-#[tokio::test]
-async fn sub_agent_caps_gating_follows_its_own_profile_not_the_active_one() {
-    use twitch_1337_core::settings::{AiProfile, AiProvider, overrides::SettingsOverrides};
-
-    install_crypto();
-    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    set_owner(&state, Some("123"));
-
-    let or_profile = AiProfile {
-        name: "or".into(),
-        key: None,
-        provider: AiProvider::OpenRouter,
-        base_url: None,
-        model: "some-model".into(),
-        timeout: 30,
-        reasoning_effort: None,
-        service_tier: None,
-    };
-    let ollama_profile = AiProfile {
-        name: "local".into(),
-        key: None,
-        provider: AiProvider::Ollama,
-        base_url: None,
-        model: "llama3".into(),
-        timeout: 30,
-        reasoning_effort: None,
-        service_tier: None,
-    };
-    state
-        .settings_store
-        .apply(
-            SettingsOverrides {
-                ai: twitch_1337_core::settings::AiOverrides {
-                    profiles: Some(vec![or_profile.clone(), ollama_profile.clone()]),
-                    active_profile: Some("or".to_owned()),
-                    dreamer: twitch_1337_core::settings::overrides::AiDreamerOverrides {
-                        profile: Some(Some("local".to_owned())),
-                        ..Default::default()
-                    },
-                    grok: twitch_1337_core::settings::overrides::AiGrokOverrides {
-                        profile: Some(Some("or".to_owned())),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            twitch_1337_core::settings::Actor {
-                user_id: "test".into(),
-                user_login: "test".into(),
-            },
-        )
-        .await
-        .expect("seed profiles");
-
-    let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
-
-    let app = build_router(state);
-    let req = Request::builder()
-        .uri("/settings")
-        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
-        .body(Body::empty())
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK, "owner GET /settings must 200");
-    let html = body_string(res).await;
-
-    // Active profile is OpenRouter, but dreamer is pinned to the Ollama
-    // profile: Ollama has no reasoning_effort or service_tier at all, so
-    // both controls must be absent from the dreamer card even though the
-    // active profile would otherwise show them.
-    assert!(
-        !html.contains("name=\"ai_dreamer_service_tier\""),
-        "dreamer service_tier must not render when dreamer's own profile is Ollama"
-    );
-    assert!(
-        !html.contains("name=\"ai_dreamer_reasoning_effort\""),
-        "dreamer reasoning_effort must not render when dreamer's own profile is Ollama"
-    );
-
-    // grok is pinned to the OpenRouter profile even though the active
-    // profile is also OpenRouter here, so both controls must render.
-    assert!(
-        html.contains("name=\"ai_grok_service_tier\""),
-        "grok service_tier must render when grok's own profile is OpenRouter"
-    );
-    assert!(
-        html.contains("name=\"ai_grok_reasoning_effort\""),
-        "grok reasoning_effort must render when grok's own profile is OpenRouter"
-    );
-}
-
-#[tokio::test]
 async fn settings_page_renders_ai_grok_card() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
@@ -927,104 +795,12 @@ async fn settings_page_renders_ai_grok_card() {
         "settings page must render the Grok card section"
     );
     assert!(
-        html.contains("name=\"ai_grok_model\""),
-        "Grok model input must be present"
+        html.contains("name=\"ai_grok_profile\""),
+        "Grok profile picker must be present"
     );
     assert!(
-        html.contains("name=\"ai_grok_reasoning_effort\""),
-        "Grok reasoning_effort control must be present"
-    );
-}
-
-#[tokio::test]
-async fn post_settings_applies_ai_grok_model() {
-    install_crypto();
-    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    set_owner(&state, Some("123"));
-    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
-
-    let app = build_router(state.clone());
-    let defaults = state.settings_store.defaults().clone();
-    let body = save_form_body(&bare_csrf, &defaults, &[("ai_grok_model", "x-ai/grok-4")]);
-    let req = Request::builder()
-        .method("POST")
-        .uri("/settings")
-        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(body))
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    assert_eq!(
-        res.status(),
-        StatusCode::SEE_OTHER,
-        "Grok model save should redirect (303)",
-    );
-    let flash = read_flash(&res).expect("save must emit a flash cookie");
-    assert!(
-        flash.starts_with("Settings saved."),
-        "flash should start with the saved confirmation; got {flash:?}",
-    );
-    assert!(
-        !flash.contains("Restart bot"),
-        "grok model change is live; restart hint must NOT appear; got {flash:?}",
-    );
-    assert_eq!(
-        state.settings.load().ai.grok.model.as_deref(),
-        Some("x-ai/grok-4"),
-        "live handle must reflect saved Grok model override",
-    );
-}
-
-#[tokio::test]
-async fn post_settings_clears_ai_grok_model_when_empty() {
-    use twitch_1337_core::settings::overrides::{AiGrokOverrides, AiOverrides, SettingsOverrides};
-
-    install_crypto();
-    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    set_owner(&state, Some("123"));
-    let actor = twitch_1337_core::settings::Actor {
-        user_id: "test".into(),
-        user_login: "test".into(),
-    };
-    state
-        .settings_store
-        .apply(
-            SettingsOverrides {
-                ai: AiOverrides {
-                    grok: AiGrokOverrides {
-                        model: Some(Some("x-ai/grok-4".into())),
-                        ..AiGrokOverrides::default()
-                    },
-                    ..AiOverrides::default()
-                },
-                ..SettingsOverrides::default()
-            },
-            actor,
-        )
-        .await
-        .expect("seed grok model override");
-    assert_eq!(
-        state.settings.load().ai.grok.model.as_deref(),
-        Some("x-ai/grok-4"),
-        "fixture must start with a grok model override",
-    );
-
-    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
-    let app = build_router(state.clone());
-    let defaults = state.settings_store.defaults().clone();
-    let body = save_form_body(&bare_csrf, &defaults, &[("ai_grok_model", "")]);
-    let req = Request::builder()
-        .method("POST")
-        .uri("/settings")
-        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(body))
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    assert!(
-        state.settings.load().ai.grok.model.is_none(),
-        "empty ai_grok_model must clear the override back to inherit connection",
+        !html.contains("name=\"ai_grok_model\""),
+        "Grok model override must be gone"
     );
 }
 
@@ -1622,25 +1398,48 @@ async fn settings_page_renders_new_cards() {
 /// "set to default" on the corrective save and wipes settings silently.
 #[tokio::test]
 async fn validation_error_preserves_stored_ai_settings() {
+    use twitch_1337_core::settings::{AiProfile, AiProvider, overrides::SettingsOverrides};
+
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     set_owner(&state, Some("123"));
+
+    let profile = |name: &str| AiProfile {
+        name: name.into(),
+        key: Some("k".into()),
+        provider: AiProvider::OpenRouter,
+        base_url: None,
+        model: "some-model".into(),
+        timeout: 30,
+        reasoning_effort: None,
+        service_tier: None,
+    };
+    state
+        .settings_store
+        .apply(
+            SettingsOverrides {
+                ai: twitch_1337_core::settings::AiOverrides {
+                    profiles: Some(vec![profile("a"), profile("b")]),
+                    active_profile: Some("a".to_owned()),
+                    grok: twitch_1337_core::settings::overrides::AiGrokOverrides {
+                        profile: Some(Some("b".into())),
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            twitch_1337_core::settings::Actor {
+                user_id: "test".into(),
+                user_login: "test".into(),
+            },
+        )
+        .await
+        .expect("seed grok profile");
+
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
     let defaults = state.settings_store.defaults().clone();
 
-    // Store a grok model override, the way the owner would have.
-    let body = save_form_body(&bare_csrf, &defaults, &[("ai_grok_model", "x-ai/grok-4")]);
-    let req = Request::builder()
-        .method("POST")
-        .uri("/settings")
-        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(body))
-        .unwrap();
-    let res = build_router(state.clone()).oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-
-    // Now fail validation on a different card: the inject budget must cover
+    // Fail validation on a different card: the inject budget must cover
     // SOUL + LORE, and 1024 bytes does not.
     let body = save_form_body(
         &bare_csrf,
@@ -1666,12 +1465,12 @@ async fn validation_error_preserves_stored_ai_settings() {
         "response must surface the failing field; got: {html}",
     );
     assert!(
-        html.contains("x-ai/grok-4"),
-        "stored grok model override must survive the validation re-render; got: {html}",
+        html.contains("name=\"ai_grok_profile\"") && html.contains("value=\"b\" selected"),
+        "stored grok profile override must survive the validation re-render; got: {html}",
     );
     assert_eq!(
-        state.settings.load().ai.grok.model.as_deref(),
-        Some("x-ai/grok-4"),
+        state.settings.load().ai.grok.profile.as_deref(),
+        Some("b"),
         "validation rejection must not mutate stored settings",
     );
 }

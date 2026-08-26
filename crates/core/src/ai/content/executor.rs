@@ -71,9 +71,9 @@ impl ContentToolExecutor {
 
     /// Build a media client for this call.
     ///
-    /// Built per call rather than at startup so `ai.media.profile` and
-    /// `ai.media.model` edits apply live, the way every other settings knob
-    /// does. `reqwest::Client` is an `Arc` internally, so the clone is cheap.
+    /// Built per call rather than at startup so `ai.media.profile` edits
+    /// apply live, the way every other settings knob does. `reqwest::Client`
+    /// is an `Arc` internally, so the clone is cheap.
     fn media_client(&self) -> Option<MediaClient> {
         let media = self.live_media();
         let (_, profile) = self.registry.resolve(media.profile.as_deref())?;
@@ -90,7 +90,7 @@ impl ContentToolExecutor {
             self.http.clone(),
             base_url,
             self.registry.secret_for(&profile),
-            media.model.clone(),
+            profile.model.clone(),
             Duration::from_secs(media.timeout),
         ))
     }
@@ -395,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn media_client_follows_the_media_profile_and_live_model_edits() {
+    fn media_client_follows_the_media_profile_and_live_profile_edits() {
         crate::install_crypto_provider();
         let handle = handle_with(
             vec![
@@ -407,17 +407,20 @@ mod tests {
         {
             let mut s = (*handle.load_full()).clone();
             s.ai.media.profile = Some("vision".into());
-            s.ai.media.model = "override-model".into();
             handle.store(Arc::new(s));
         }
         let ex = test_executor(handle.clone());
         let mc = ex.media_client().unwrap();
-        assert_eq!(mc.model(), "override-model");
+        assert_eq!(mc.model(), "vision-model");
         assert_eq!(mc.base_url(), "https://example.test/v1");
 
         // A live edit is picked up without rebuilding the executor.
         let mut s = (*handle.load_full()).clone();
-        s.ai.media.model = "second-model".into();
+        s.ai.profiles
+            .iter_mut()
+            .find(|p| p.name == "vision")
+            .unwrap()
+            .model = "second-model".into();
         handle.store(Arc::new(s));
         assert_eq!(ex.media_client().unwrap().model(), "second-model");
     }

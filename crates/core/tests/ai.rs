@@ -395,7 +395,11 @@ async fn ai_command_read_url_round_trip() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
         .with_settings(|o| {
-            o.ai.connection.base_url = Some(Some(media_base_url));
+            let list =
+                o.ai.profiles
+                    .as_mut()
+                    .expect("with_ai seeds a default profile");
+            list[0].base_url = Some(media_base_url);
             o.ai.web.enabled = Some(true);
             o.ai.web.base_url = Some(search_base_url_media);
             o.ai.web.timeout = Some(5);

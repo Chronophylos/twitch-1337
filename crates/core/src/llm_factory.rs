@@ -18,7 +18,6 @@ use crate::settings::provider::AiProvider;
 type CacheKey = (AiProvider, Option<String>, Option<String>);
 
 pub struct LlmRegistry {
-    api_key: Option<SecretString>,
     keys: HashMap<String, SecretString>,
     settings: SettingsHandle,
     // ponytail: no invalidation. Entries are keyed by endpoint identity and
@@ -31,8 +30,15 @@ pub struct LlmRegistry {
 
 impl LlmRegistry {
     pub fn new(bootstrap: Option<&AiBootstrap>, settings: SettingsHandle) -> Self {
+        if let Some(boot) = bootstrap
+            && boot
+                .api_key
+                .as_ref()
+                .is_some_and(|k| !k.expose_secret().trim().is_empty())
+        {
+            warn!("[ai].api_key is ignored; move it to [ai.keys] and set each profile's key name");
+        }
         Self {
-            api_key: bootstrap.map(|b| b.api_key.clone()),
             keys: bootstrap.map(|b| b.keys.clone()).unwrap_or_default(),
             settings,
             cache: Mutex::new(HashMap::new()),
@@ -46,7 +52,6 @@ impl LlmRegistry {
     /// items in this crate.
     pub fn fixed(client: Arc<dyn LlmClient>, settings: SettingsHandle) -> Self {
         Self {
-            api_key: Some(SecretString::from("test")),
             keys: HashMap::new(),
             settings,
             cache: Mutex::new(HashMap::new()),
@@ -109,12 +114,11 @@ impl LlmRegistry {
         Some((client, prof))
     }
 
-    /// The API key a profile should use: a named `[ai.keys]` entry, else the
-    /// bare `[ai].api_key`. `Err` means a named key was requested but has no
-    /// `[ai.keys]` entry (a hard failure); `Ok(None)` means no key is
-    /// configured at all, which is fine for providers that don't need one
-    /// (e.g. Ollama). Shared by `client_for` and [`Self::secret_for`] so the
-    /// two lookups cannot drift.
+    /// The API key a profile should use: a named `[ai.keys]` entry.
+    /// `Err` means a named key was requested but has no `[ai.keys]` entry
+    /// (a hard failure); `Ok(None)` means no key is configured at all, which
+    /// is fine for providers that don't need one (e.g. Ollama). Shared by
+    /// `client_for` and [`Self::secret_for`] so the two lookups cannot drift.
     fn key_for(&self, prof: &AiProfile) -> Result<Option<&SecretString>, ()> {
         match &prof.key {
             Some(name) => match self.keys.get(name) {
@@ -128,14 +132,14 @@ impl LlmRegistry {
                     Err(())
                 }
             },
-            None => Ok(self.api_key.as_ref()),
+            None => Ok(None),
         }
     }
 
     /// The API key a profile should use, by the same rules `client_for`
-    /// applies: a named `[ai.keys]` entry, else the bare `[ai].api_key`.
-    /// `MediaClient` needs the raw secret because it posts to
-    /// `/chat/completions` itself rather than going through `LlmClient`.
+    /// applies: a named `[ai.keys]` entry. `MediaClient` needs the raw secret
+    /// because it posts to `/chat/completions` itself rather than going
+    /// through `LlmClient`.
     pub fn secret_for(&self, prof: &AiProfile) -> Option<SecretString> {
         self.key_for(prof).ok().flatten().cloned()
     }
@@ -209,7 +213,7 @@ mod tests {
     fn p(name: &str, provider: AiProvider, model: &str) -> AiProfile {
         AiProfile {
             name: name.into(),
-            key: None,
+            key: Some("alt".into()),
             provider,
             base_url: Some("https://example.test/v1".into()),
             model: model.into(),
@@ -221,7 +225,7 @@ mod tests {
 
     fn boot() -> AiBootstrap {
         AiBootstrap {
-            api_key: "root-key".into(),
+            api_key: None,
             keys: HashMap::from([("alt".to_string(), SecretString::from("alt-key"))]),
         }
     }
@@ -360,6 +364,27 @@ mod tests {
         let r = LlmRegistry::new(None, handle(vec![p("a", AiProvider::OpenRouter, "m")], "a"));
         assert!(r.resolve(None).is_none());
         assert!(!r.is_usable());
+    }
+
+    #[test]
+    fn a_missing_key_name_disables_an_openai_profile() {
+        let mut prof = p("a", AiProvider::OpenRouter, "m");
+        prof.key = None;
+        let r = LlmRegistry::new(Some(&boot()), handle(vec![prof], "a"));
+        assert!(r.resolve(None).is_none());
+    }
+
+    #[test]
+    fn leftover_root_api_key_is_not_a_fallback() {
+        let mut boot = boot();
+        boot.api_key = Some(SecretString::from("legacy-root"));
+        let mut prof = p("a", AiProvider::OpenRouter, "m");
+        prof.key = None;
+        let r = LlmRegistry::new(Some(&boot), handle(vec![prof], "a"));
+        assert!(
+            r.resolve(None).is_none(),
+            "[ai].api_key must not stand in for a named [ai.keys] entry"
+        );
     }
 
     #[test]

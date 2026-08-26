@@ -122,12 +122,6 @@ struct SaveForm {
     #[serde(default)]
     ai_dreamer_enabled: Option<String>,
     #[serde(default)]
-    ai_dreamer_model: Option<String>,
-    #[serde(default)]
-    ai_dreamer_reasoning_effort: Option<String>,
-    #[serde(default)]
-    ai_dreamer_service_tier: Option<String>,
-    #[serde(default)]
     ai_dreamer_run_at: Option<String>,
     #[serde(default)]
     ai_dreamer_timeout_secs: Option<u64>,
@@ -139,12 +133,6 @@ struct SaveForm {
     // ---- AI grok card ----
     #[serde(default)]
     ai_grok_profile: String,
-    #[serde(default)]
-    ai_grok_model: Option<String>,
-    #[serde(default)]
-    ai_grok_reasoning_effort: Option<String>,
-    #[serde(default)]
-    ai_grok_service_tier: Option<String>,
 
     // ---- AI prefill toggle card ----
     /// Hidden marker so the handler can tell "card visible but unchecked"
@@ -197,8 +185,6 @@ struct SaveForm {
     // ---- AI media card ----
     #[serde(default)]
     ai_media_profile: String,
-    #[serde(default)]
-    ai_media_model: Option<String>,
     #[serde(default)]
     ai_media_timeout: Option<u64>,
     #[serde(default)]

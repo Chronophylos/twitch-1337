@@ -27,8 +27,9 @@
   </div>
 
   <div class="row">
-    <label>Key name (config.toml <code>[ai.keys]</code>, optional)
-      <input type="text" name="key" value="{{ form.key }}" placeholder="blank = bare [ai] api_key">
+    <label>
+      <span>Key name — <code>[ai.keys]</code> entry (required except Ollama)</span>
+      <input type="text" name="key" value="{{ form.key }}" placeholder="openrouter">
     </label>
   </div>
 

@@ -10,12 +10,17 @@ concurrency:
   group: sast-${{ github.ref }}
   cancel-in-progress: true
 
+# Public repos implied `actions: read` (codeql-action polls the workflow run)
+# and PR-commit listing. A private GITHUB_TOKEN does not — request them.
+# SARIF upload also needs GitHub Advanced Security, which personal private
+# repos do not have; skip the upload there so the scanners stay the check.
 jobs:
   hadolint:
     name: hadolint (Dockerfile)
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,7 +35,7 @@ jobs:
           no-fail: true
 
       - uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
-        if: always()
+        if: always() && !github.event.repository.private
         with:
           sarif_file: hadolint.sarif
           category: hadolint
@@ -40,6 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,7 +64,7 @@ jobs:
           exit-code: '0'
 
       - uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
-        if: always()
+        if: always() && !github.event.repository.private
         with:
           sarif_file: trivy-config.sarif
           category: trivy-config
@@ -86,6 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -94,14 +101,14 @@ jobs:
 
       - uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
         with:
-          advanced-security: true
+          advanced-security: ${{ !github.event.repository.private }}
 
   gitleaks:
     name: gitleaks (secrets)
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

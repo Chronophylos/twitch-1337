@@ -171,10 +171,10 @@ struct ProfileForm {
 }
 
 impl ProfileForm {
-    /// Parses the raw form fields into an `AiProfile`. Deliberately does
-    /// NOT re-check provider caps (e.g. whether `reasoning_effort` is
-    /// allowed) — that check already lives in `settings::validation` and
-    /// comes back through `SettingsError::Validation` from the store.
+    /// Parses the raw form fields into an `AiProfile`. Provider caps
+    /// (effort/tier) are left to `settings::validation` via the store;
+    /// the key-name requirement lives here so a missing name cannot
+    /// quarantine `settings.ron` on bot start.
     fn to_profile(&self) -> Result<AiProfile, FieldError> {
         let provider = AiProvider::ALL
             .into_iter()
@@ -187,9 +187,16 @@ impl ProfileForm {
             field: "form.timeout".into(),
             message: format!("must be a whole number of seconds (got {:?})", self.timeout),
         })?;
+        let key = non_empty(&self.key);
+        if provider.uses_openai_client() && !self.model.trim().is_empty() && key.is_none() {
+            return Err(FieldError {
+                field: "form.key".into(),
+                message: "required (must name an [ai.keys] entry)".into(),
+            });
+        }
         Ok(AiProfile {
             name: self.name.trim().to_owned(),
-            key: non_empty(&self.key),
+            key,
             provider,
             base_url: non_empty(&self.base_url),
             model: self.model.trim().to_owned(),

@@ -193,12 +193,6 @@ pub struct AiDreamerOverrides {
     #[serde(default)]
     pub profile: Option<Option<String>>,
     #[serde(default)]
-    pub model: Option<Option<String>>,
-    #[serde(default)]
-    pub reasoning_effort: Option<Option<String>>,
-    #[serde(default)]
-    pub service_tier: Option<Option<String>>,
-    #[serde(default)]
     pub run_at: Option<String>,
     #[serde(default)]
     pub timeout_secs: Option<u64>,
@@ -212,12 +206,6 @@ pub struct AiDreamerOverrides {
 pub struct AiGrokOverrides {
     #[serde(default)]
     pub profile: Option<Option<String>>,
-    #[serde(default)]
-    pub model: Option<Option<String>>,
-    #[serde(default)]
-    pub reasoning_effort: Option<Option<String>>,
-    #[serde(default)]
-    pub service_tier: Option<Option<String>>,
 }
 
 /// `threshold` is `f64`; manual `PartialEq`/`Eq` use bit comparison.
@@ -287,8 +275,6 @@ pub struct AiEmotesOverrides {
 pub struct AiMediaOverrides {
     #[serde(default)]
     pub profile: Option<Option<String>>,
-    #[serde(default)]
-    pub model: Option<String>,
     #[serde(default)]
     pub timeout: Option<u64>,
     #[serde(default)]

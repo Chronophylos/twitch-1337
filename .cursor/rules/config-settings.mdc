@@ -12,7 +12,7 @@ Schema source of truth: `config.toml.example`.
 Secrets and boot-time fields only:
 
 - `[twitch]`: OAuth creds, channel, username, `owner` (bootstrap-only, not dashboard-editable)
-- `[ai]`: `api_key` only
+- `[ai]`: `[ai.keys]` named credentials only
 - `[aviationstack]`: `api_key` only
 - `[web]`: `enabled`, `bind_addr`, `public_url`, `session_secret`
 

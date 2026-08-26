@@ -84,8 +84,6 @@ pub fn migrate_legacy_ai(root: &toml::Value) -> Result<AiOverrides> {
     if let Some(d) = ai.get("dreamer").and_then(|v| v.as_table()) {
         let v = toml::Value::Table(d.clone());
         out.dreamer.enabled = b(&v, "enabled");
-        out.dreamer.model = s(&v, "model").map(Some);
-        out.dreamer.reasoning_effort = s(&v, "reasoning_effort").map(Some);
         out.dreamer.run_at = s(&v, "run_at");
         out.dreamer.timeout_secs = u(&v, "timeout_secs");
         out.dreamer.max_rounds = usz(&v, "max_rounds");
@@ -128,7 +126,6 @@ pub fn migrate_legacy_ai(root: &toml::Value) -> Result<AiOverrides> {
 
     if let Some(med) = ai.get("media").and_then(|v| v.as_table()) {
         let v = toml::Value::Table(med.clone());
-        out.media.model = s(&v, "model");
         out.media.timeout = u(&v, "timeout");
         out.media.max_image_size = s(&v, "max_image_size").and_then(|s| s.parse().ok());
         out.media.max_pdf_size = s(&v, "max_pdf_size").and_then(|s| s.parse().ok());
