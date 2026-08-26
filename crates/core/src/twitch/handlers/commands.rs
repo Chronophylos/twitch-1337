@@ -5,7 +5,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use tokio::{sync::broadcast, time::Duration};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use twitch_irc::{
     TwitchIRCClient, login::LoginCredentials, message::ServerMessage, transport::Transport,
 };
@@ -137,20 +137,28 @@ where
     // these values; Tasks 6+ make selected commands consume the handle live.
     let snapshot = settings.load_full();
 
-    // The registry must be able to serve the active profile and the bootstrap
-    // key must be present; both gate !ai.
-    let ai_boot: Option<AiBootstrap> = match (llm.is_usable(), ai_config) {
-        (true, Some(ai_boot)) => {
-            let aurora_profile = snapshot
-                .ai
-                .by_name(&snapshot.ai.aurora.profile)
-                .expect("usable registry must resolve Aurora's profile");
+    // The registry must be able to serve Aurora's selected profile and the
+    // bootstrap key must be present; both gate !ai.
+    let aurora_profile_name = &snapshot.ai.aurora.profile;
+    let ai_boot: Option<AiBootstrap> = match (
+        llm.is_usable(),
+        ai_config,
+        snapshot.ai.by_name(aurora_profile_name),
+    ) {
+        (true, Some(ai_boot), Some(aurora_profile)) => {
             info!(
                 provider = aurora_profile.provider.as_str(),
                 model = %aurora_profile.model,
                 "AI command enabled"
             );
             Some(ai_boot)
+        }
+        (_, _, None) => {
+            warn!(
+                profile = %aurora_profile_name,
+                "AI command disabled, Aurora profile missing"
+            );
+            None
         }
         _ => {
             debug!("AI not configured or LLM client unavailable, AI command disabled");

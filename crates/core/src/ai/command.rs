@@ -540,7 +540,7 @@ where
         } else {
             &snap.ai.aurora.profile
         };
-        let Some((llm_client, connection)) = self.registry.resolve(Some(profile_name)) else {
+        let Some((llm_client, connection)) = self.registry.resolve_named(profile_name) else {
             // Log only: a config problem is not the chatter's business.
             error!("AI command skipped, no usable LLM profile");
             return Ok(());

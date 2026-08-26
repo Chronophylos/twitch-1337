@@ -234,9 +234,11 @@ where
 
         self.cooldown.record(user).await;
 
-        // Resolve the active profile fresh each turn so dashboard edits take
-        // effect on the next invocation without a bot restart.
-        let Some((llm_client, profile)) = self.registry.resolve(None) else {
+        // News follows Aurora's live profile selection.
+        let Some((llm_client, profile)) = self
+            .registry
+            .resolve_named(&self.settings.load().ai.aurora.profile)
+        else {
             error!("News AI skipped, no usable LLM profile");
             ctx.sender
                 .reply(ctx.privmsg, "Da ist was schiefgelaufen FDM")

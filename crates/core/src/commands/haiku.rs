@@ -151,7 +151,10 @@ where
 
         self.cooldown.record(user).await;
 
-        let Some((llm_client, profile)) = self.registry.resolve(None) else {
+        let Some((llm_client, profile)) = self
+            .registry
+            .resolve_named(&self.settings.load().ai.aurora.profile)
+        else {
             error!("Haiku AI skipped, no usable LLM profile");
             ctx.sender.reply(ctx.privmsg, LLM_ERROR_MESSAGE).await;
             return Ok(());
