@@ -1,7 +1,7 @@
 //! Resolves a profile name to a live [`LlmClient`].
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 
 use llm::{LlmClient, OllamaClient, OpenAiClient};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -16,7 +16,6 @@ use crate::settings::provider::AiProvider;
 /// One client per endpoint identity. Model, timeout, effort and tier are
 /// per-request, so two profiles differing only in those share a client.
 type CacheKey = (AiProvider, Option<String>, Option<String>);
-static FALLBACK: LazyLock<AiProfile> = LazyLock::new(AiProfile::default);
 
 pub struct LlmRegistry {
     keys: HashMap<String, SecretString>,
@@ -47,8 +46,8 @@ impl LlmRegistry {
         }
     }
 
-    /// Test-injection constructor: every `resolve` returns `client`, paired
-    /// with the profile the settings snapshot selects. Public because the
+    /// Test-injection constructor: every successful [`Self::resolve_named`]
+    /// returns `client`, paired with the named profile. Public because the
     /// integration tests in `crates/core/tests/` cannot reach `#[cfg(test)]`
     /// items in this crate.
     pub fn fixed(client: Arc<dyn LlmClient>, settings: SettingsHandle) -> Self {
@@ -66,9 +65,7 @@ impl LlmRegistry {
         self.resolve_named(&snapshot.ai.aurora.profile).is_some()
     }
 
-    /// Resolve a profile **by name only**. Missing names return `None` —
-    /// unlike [`Self::resolve`], this never falls back to the active profile.
-    /// Recap uses that so an empty / deleted pointer stays Off.
+    /// Resolve a profile by name. Missing and blank names return `None`.
     pub fn resolve_named(&self, name: &str) -> Option<(Arc<dyn LlmClient>, AiProfile)> {
         let name = name.trim();
         if name.is_empty() {
@@ -83,38 +80,6 @@ impl LlmRegistry {
             error!(
                 profile = %prof.name,
                 "AI profile has an empty model, named resolve skipped (set it at /ai-profiles)"
-            );
-            return None;
-        }
-        let client = self.client_for(&prof)?;
-        Some((client, prof))
-    }
-
-    /// `profile: None` = Aurora's profile. A name that no longer exists
-    /// temporarily falls back to Aurora while call sites migrate to
-    /// [`Self::resolve_named`].
-    pub fn resolve(&self, profile: Option<&str>) -> Option<(Arc<dyn LlmClient>, AiProfile)> {
-        let snapshot = self.settings.load();
-        let ai = &snapshot.ai;
-        let prof = match profile {
-            Some(name) => ai.by_name(name).unwrap_or_else(|| {
-                warn!(profile = name, "profile not found, using aurora profile");
-                ai.by_name(&ai.aurora.profile).unwrap_or_else(|| {
-                    warn!("aurora profile not found");
-                    ai.profiles.first().unwrap_or(&FALLBACK)
-                })
-            }),
-            None => ai.by_name(&ai.aurora.profile).unwrap_or_else(|| {
-                warn!("aurora profile not found");
-                ai.profiles.first().unwrap_or(&FALLBACK)
-            }),
-        }
-        .clone();
-
-        if prof.model.trim().is_empty() {
-            error!(
-                profile = %prof.name,
-                "AI profile has an empty model, AI disabled (set it at /ai-profiles)"
             );
             return None;
         }
@@ -239,50 +204,6 @@ mod tests {
     }
 
     #[test]
-    fn resolves_the_active_profile_when_none_is_named() {
-        crate::install_crypto_provider();
-        let r = LlmRegistry::new(
-            Some(&boot()),
-            handle(
-                vec![
-                    p("a", AiProvider::OpenRouter, "m-a"),
-                    p("b", AiProvider::Ollama, "m-b"),
-                ],
-                "b",
-            ),
-        );
-        let (_, prof) = r.resolve(None).unwrap();
-        assert_eq!(prof.name, "b");
-        assert_eq!(prof.model, "m-b");
-    }
-
-    #[test]
-    fn resolves_a_named_profile_for_a_subagent() {
-        crate::install_crypto_provider();
-        let r = LlmRegistry::new(
-            Some(&boot()),
-            handle(
-                vec![
-                    p("a", AiProvider::OpenRouter, "m-a"),
-                    p("b", AiProvider::Ollama, "m-b"),
-                ],
-                "b",
-            ),
-        );
-        assert_eq!(r.resolve(Some("a")).unwrap().1.model, "m-a");
-    }
-
-    #[test]
-    fn a_stale_subagent_profile_falls_back_to_active() {
-        crate::install_crypto_provider();
-        let r = LlmRegistry::new(
-            Some(&boot()),
-            handle(vec![p("a", AiProvider::Ollama, "m-a")], "a"),
-        );
-        assert_eq!(r.resolve(Some("deleted")).unwrap().1.name, "a");
-    }
-
-    #[test]
     fn resolve_named_hits_the_named_profile() {
         crate::install_crypto_provider();
         let r = LlmRegistry::new(
@@ -335,8 +256,8 @@ mod tests {
                 "a",
             ),
         );
-        let (c1, _) = r.resolve(Some("a")).unwrap();
-        let (c2, _) = r.resolve(Some("b")).unwrap();
+        let (c1, _) = r.resolve_named("a").unwrap();
+        let (c2, _) = r.resolve_named("b").unwrap();
         assert!(
             Arc::ptr_eq(&c1, &c2),
             "same provider+url+key must share a client"
@@ -352,8 +273,8 @@ mod tests {
             Some(&boot()),
             handle(vec![p("a", AiProvider::OpenRouter, "m-a"), other], "a"),
         );
-        let (c1, _) = r.resolve(Some("a")).unwrap();
-        let (c2, _) = r.resolve(Some("b")).unwrap();
+        let (c1, _) = r.resolve_named("a").unwrap();
+        let (c2, _) = r.resolve_named("b").unwrap();
         assert!(!Arc::ptr_eq(&c1, &c2));
     }
 
@@ -363,14 +284,14 @@ mod tests {
             Some(&boot()),
             handle(vec![p("a", AiProvider::OpenRouter, "")], "a"),
         );
-        assert!(r.resolve(None).is_none());
+        assert!(r.resolve_named("a").is_none());
         assert!(!r.is_usable());
     }
 
     #[test]
     fn no_bootstrap_means_no_client() {
         let r = LlmRegistry::new(None, handle(vec![p("a", AiProvider::OpenRouter, "m")], "a"));
-        assert!(r.resolve(None).is_none());
+        assert!(r.resolve_named("a").is_none());
         assert!(!r.is_usable());
     }
 
@@ -379,7 +300,7 @@ mod tests {
         let mut prof = p("a", AiProvider::OpenRouter, "m");
         prof.key = None;
         let r = LlmRegistry::new(Some(&boot()), handle(vec![prof], "a"));
-        assert!(r.resolve(None).is_none());
+        assert!(r.resolve_named("a").is_none());
     }
 
     #[test]
@@ -390,7 +311,7 @@ mod tests {
         prof.key = None;
         let r = LlmRegistry::new(Some(&boot), handle(vec![prof], "a"));
         assert!(
-            r.resolve(None).is_none(),
+            r.resolve_named("a").is_none(),
             "[ai].api_key must not stand in for a named [ai.keys] entry"
         );
     }
@@ -400,6 +321,6 @@ mod tests {
         let mut prof = p("a", AiProvider::OpenRouter, "m");
         prof.key = Some("missing".into());
         let r = LlmRegistry::new(Some(&boot()), handle(vec![prof], "a"));
-        assert!(r.resolve(None).is_none());
+        assert!(r.resolve_named("a").is_none());
     }
 }
