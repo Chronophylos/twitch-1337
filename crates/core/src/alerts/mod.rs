@@ -7,6 +7,7 @@
 
 pub mod quake;
 pub mod solar;
+pub mod state;
 
 pub use solar::class_rank;
 
