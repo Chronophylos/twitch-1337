@@ -431,7 +431,20 @@ async fn a_recap_profile_round_trips_through_the_settings_post() {
     let current = state.settings.load().clone();
 
     let app = build_router(state.clone());
-    let body = save_form_body(&bare_csrf, &current, &[("ai_recap_profile", "b")]);
+    let body = save_form_body(
+        &bare_csrf,
+        &current,
+        &[
+            ("ai_recap_profile", "b"),
+            ("ai_recap_batch_size", "30"),
+            ("ai_recap_max_notes", "250"),
+            ("ai_recap_merge_width", "25"),
+            // Legacy History recap fields must be ignored by schema-7 saves.
+            ("ai_history_batch_size", "1"),
+            ("ai_history_max_notes", "1"),
+            ("ai_history_merge_width", "1"),
+        ],
+    );
     let req = Request::builder()
         .method("POST")
         .uri("/settings")
@@ -446,6 +459,9 @@ async fn a_recap_profile_round_trips_through_the_settings_post() {
         Some("b"),
         "recap.profile must be set to the submitted profile name",
     );
+    assert_eq!(state.settings.load().ai.recap.batch_size, 30);
+    assert_eq!(state.settings.load().ai.recap.max_notes, 250);
+    assert_eq!(state.settings.load().ai.recap.merge_width, 25);
 
     let app = build_router(state.clone());
     let body = save_form_body(
