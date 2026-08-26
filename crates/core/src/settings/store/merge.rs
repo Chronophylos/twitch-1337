@@ -64,7 +64,7 @@ pub(super) fn strip_ai_agents_legacy(into: &mut SettingsOverrides) {
 }
 
 fn materialize_required_profile(slot: &mut Option<Option<String>>, legacy_active: &str) {
-    if slot.is_none() {
+    if !matches!(slot, Some(Some(name)) if !name.trim().is_empty()) {
         *slot = Some(Some(legacy_active.to_string()));
     }
 }
