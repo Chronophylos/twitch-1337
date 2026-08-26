@@ -990,9 +990,10 @@ mod tests {
         assert!(!body.contains("active_profile"), "{body}");
         assert!(!body.contains("behavior:"), "{body}");
         assert!(!body.contains("recap_profile"), "{body}");
-        assert!(!body.contains("batch_size"), "{body}");
-        assert!(!body.contains("max_notes"), "{body}");
-        assert!(!body.contains("merge_width"), "{body}");
+        let persisted: SettingsOverrides = ron::from_str(&body).expect("parse persisted v7");
+        assert_eq!(persisted.ai.history.batch_size, None);
+        assert_eq!(persisted.ai.history.max_notes, None);
+        assert_eq!(persisted.ai.history.merge_width, None);
     }
 
     #[tokio::test]
