@@ -276,7 +276,7 @@ async fn settings_page_no_longer_offers_connection_inputs() {
     );
 }
 
-/// A required Dreamer profile round-trips and cannot be omitted.
+/// A required Dreamer profile round-trips and cannot be blank.
 #[tokio::test]
 async fn a_required_dreamer_profile_round_trips_through_the_settings_post() {
     use twitch_1337_core::settings::{AiProfile, AiProvider, overrides::SettingsOverrides};
@@ -300,7 +300,7 @@ async fn a_required_dreamer_profile_round_trips_through_the_settings_post() {
         .apply(
             SettingsOverrides {
                 ai: twitch_1337_core::settings::AiOverrides {
-                    profiles: Some(vec![profile("a"), profile("b")]),
+                    profiles: Some(vec![profile("default"), profile("a"), profile("b")]),
                     active_profile: Some("a".to_owned()),
                     aurora: twitch_1337_core::settings::overrides::AiAuroraOverrides {
                         profile: Some(Some("a".into())),
@@ -351,12 +351,11 @@ async fn a_required_dreamer_profile_round_trips_through_the_settings_post() {
     );
 
     let app = build_router(state.clone());
-    let body = save_form_body(&bare_csrf, &state.settings.load(), &[]);
-    let body = body
-        .split('&')
-        .filter(|field| !field.starts_with("ai_dreamer_profile="))
-        .collect::<Vec<_>>()
-        .join("&");
+    let body = save_form_body(
+        &bare_csrf,
+        &state.settings.load(),
+        &[("ai_dreamer_profile", "")],
+    );
     let req = Request::builder()
         .method("POST")
         .uri("/settings")
@@ -368,7 +367,17 @@ async fn a_required_dreamer_profile_round_trips_through_the_settings_post() {
     assert_eq!(
         res.status(),
         StatusCode::BAD_REQUEST,
-        "omitting a required Dreamer profile must fail validation",
+        "blank required Dreamer profile must fail validation even when `default` exists",
+    );
+    let html = body_string(res).await;
+    assert!(
+        html.contains("ai.dreamer.profile") && html.contains("must not be empty"),
+        "response must surface the required Dreamer profile error; got: {html}",
+    );
+    assert_eq!(
+        state.settings.load().ai.dreamer.profile,
+        "b",
+        "validation rejection must not silently switch Dreamer to `default`",
     );
 }
 

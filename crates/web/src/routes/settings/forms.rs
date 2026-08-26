@@ -11,7 +11,7 @@ use twitch_1337_core::settings::overrides::{
     PotatAttributionOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
 };
 use twitch_1337_core::settings::{
-    AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides,
+    AiOverrides, CooldownsOverrides, FieldError, PingsOverrides, SettingsOverrides,
 };
 
 use super::SaveForm;
@@ -45,12 +45,34 @@ fn parse_id_list(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// Trims a submitted profile `<select>` value. Required agent forms wrap this
-/// in an outer `Some`, so an empty submission becomes `Some(None)` and fails
-/// validation rather than inheriting another agent's profile.
+/// Trims an optional profile `<select>` value, where empty explicitly disables
+/// the feature.
 fn opt_str(s: &str) -> Option<String> {
     let t = s.trim();
     (!t.is_empty()).then(|| t.to_string())
+}
+
+/// Required profile fields must always remain explicit pointers. The save
+/// handler rejects blanks before conversion, so this must never encode an
+/// inherit/clear operation as `Some(None)`.
+fn required_profile(s: &str) -> Option<Option<String>> {
+    Some(Some(s.trim().to_owned()))
+}
+
+pub(super) fn required_agent_profile_errors(form: &SaveForm) -> Vec<FieldError> {
+    [
+        ("ai.aurora.profile", form.ai_aurora_profile.as_str()),
+        ("ai.grok.profile", form.ai_grok_profile.as_str()),
+        ("ai.dreamer.profile", form.ai_dreamer_profile.as_str()),
+        ("ai.media.profile", form.ai_media_profile.as_str()),
+    ]
+    .into_iter()
+    .filter(|(_, value)| value.trim().is_empty())
+    .map(|(field, _)| FieldError {
+        field: field.to_owned(),
+        message: "must not be empty".to_owned(),
+    })
+    .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +148,7 @@ struct AiAuroraForm {
 impl AiAuroraForm {
     fn into_overrides(self) -> AiAuroraOverrides {
         AiAuroraOverrides {
-            profile: Some(opt_str(&self.ai_aurora_profile)),
+            profile: required_profile(&self.ai_aurora_profile),
             max_turn_rounds: self.ai_aurora_max_turn_rounds,
             max_writes_per_turn: self.ai_aurora_max_writes_per_turn,
             persona_name: self.ai_aurora_persona_name.map(|s| s.trim().to_string()),
@@ -233,7 +255,7 @@ struct AiDreamerForm {
 impl AiDreamerForm {
     fn into_overrides(self) -> AiDreamerOverrides {
         AiDreamerOverrides {
-            profile: Some(opt_str(&self.ai_dreamer_profile)),
+            profile: required_profile(&self.ai_dreamer_profile),
             // Dreamer card always renders, so checkbox semantics mirror
             // `ping_public`: missing key = false, present = true.
             enabled: Some(self.ai_dreamer_enabled.is_some()),
@@ -256,7 +278,7 @@ struct AiGrokForm {
 impl AiGrokForm {
     fn into_overrides(self) -> AiGrokOverrides {
         AiGrokOverrides {
-            profile: Some(opt_str(&self.ai_grok_profile)),
+            profile: required_profile(&self.ai_grok_profile),
             persona_name: self.ai_grok_persona_name.map(|s| s.trim().to_string()),
         }
     }
@@ -389,7 +411,7 @@ struct AiMediaForm {
 impl AiMediaForm {
     fn into_overrides(self) -> AiMediaOverrides {
         AiMediaOverrides {
-            profile: Some(opt_str(&self.ai_media_profile)),
+            profile: required_profile(&self.ai_media_profile),
             timeout: self.ai_media_timeout,
             max_image_size: self
                 .ai_media_max_image_size

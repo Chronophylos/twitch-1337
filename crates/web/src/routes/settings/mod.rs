@@ -304,14 +304,20 @@ async fn save(
         public: form.ping_public.is_some(),
     };
 
-    let patch = forms::overrides_from_save_form(form);
-
     let actor = Actor {
         user_id: session.user_id.clone(),
         user_login: session.user_login.clone(),
     };
 
-    match state.settings_store.apply(patch, actor).await {
+    let profile_errors = forms::required_agent_profile_errors(&form);
+    let apply_result = if profile_errors.is_empty() {
+        let patch = forms::overrides_from_save_form(form);
+        state.settings_store.apply(patch, actor).await
+    } else {
+        Err(SettingsError::Validation(profile_errors))
+    };
+
+    match apply_result {
         Ok(after) => {
             let restart = restart_required(&before.ai, &after.ai);
             tracing::info!(
