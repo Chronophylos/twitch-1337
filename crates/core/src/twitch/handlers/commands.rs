@@ -5,7 +5,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use tokio::{sync::broadcast, time::Duration};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 use twitch_irc::{
     TwitchIRCClient, login::LoginCredentials, message::ServerMessage, transport::Transport,
 };
