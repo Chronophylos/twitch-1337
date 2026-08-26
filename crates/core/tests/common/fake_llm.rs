@@ -15,9 +15,17 @@ use llm::{
     ToolChatCompletionResponse,
 };
 
+enum ToolStep {
+    Response(ToolChatCompletionResponse),
+    Delayed {
+        delay: std::time::Duration,
+        response: ToolChatCompletionResponse,
+    },
+}
+
 pub struct FakeLlm {
     chat_responses: Mutex<VecDeque<String>>,
-    tool_responses: Mutex<VecDeque<ToolChatCompletionResponse>>,
+    tool_responses: Mutex<VecDeque<ToolStep>>,
     chat_calls: Mutex<Vec<ChatCompletionRequest>>,
     tool_calls: Mutex<Vec<ToolChatCompletionRequest>>,
     /// Model id of the most recent request of either kind. Lets a test assert
@@ -42,12 +50,25 @@ impl FakeLlm {
     }
 
     pub fn push_tool(&self, resp: ToolChatCompletionResponse) {
-        self.tool_responses.lock().unwrap().push_back(resp);
+        self.tool_responses
+            .lock()
+            .unwrap()
+            .push_back(ToolStep::Response(resp));
     }
 
     /// Convenience: push a final-message tool response (terminates the agent loop).
     pub fn push_tool_message(&self, text: impl Into<String>) {
         self.push_tool(ToolChatCompletionResponse::Message(text.into()));
+    }
+
+    pub fn push_delayed_tool_message(&self, delay: std::time::Duration, text: impl Into<String>) {
+        self.tool_responses
+            .lock()
+            .unwrap()
+            .push_back(ToolStep::Delayed {
+                delay,
+                response: ToolChatCompletionResponse::Message(text.into()),
+            });
     }
 
     pub fn chat_calls(&self) -> Vec<ChatCompletionRequest> {
@@ -91,13 +112,21 @@ impl LlmClient for FakeLlm {
     ) -> llm::Result<ToolChatCompletionResponse> {
         *self.last_model.lock().unwrap() = Some(request.model.clone());
         self.tool_calls.lock().unwrap().push(request);
-        self.tool_responses
+        let step = self
+            .tool_responses
             .lock()
             .unwrap()
             .pop_front()
             .ok_or_else(|| LlmError::Provider {
                 status: 0,
                 body: "FakeLlm: no tool response queued".to_string(),
-            })
+            })?;
+        match step {
+            ToolStep::Response(response) => Ok(response),
+            ToolStep::Delayed { delay, response } => {
+                tokio::time::sleep(delay).await;
+                Ok(response)
+            }
+        }
     }
 }

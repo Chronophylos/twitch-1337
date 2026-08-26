@@ -461,6 +461,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stale_aurora_profile_opens_without_quarantine() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut overrides = SettingsOverrides::default();
+        overrides.ai.profiles = Some(vec![crate::settings::AiProfile {
+            name: "working".into(),
+            provider: crate::settings::AiProvider::Ollama,
+            base_url: Some("http://127.0.0.1:1".into()),
+            model: "model".into(),
+            ..Default::default()
+        }]);
+        overrides.ai.aurora.profile = Some(Some("deleted".into()));
+        overrides.ai.grok.profile = Some(Some("working".into()));
+        overrides.ai.dreamer.profile = Some(Some("working".into()));
+        overrides.ai.media.profile = Some(Some("working".into()));
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            ron::ser::to_string(&overrides).expect("serialize override"),
+        )
+        .expect("write settings");
+
+        let audit = Arc::new(MemoryAuditLog::new());
+        let (_store, handle) =
+            SettingsStore::open(dir.path(), audit, "test_chan").expect("open stale settings");
+        assert_eq!(handle.load().ai.aurora.profile, "deleted");
+        assert!(
+            crate::llm_factory::LlmRegistry::new(None, handle)
+                .resolve_named("deleted")
+                .is_none(),
+            "the stale agent must skip rather than fall back"
+        );
+        assert!(dir.path().join(FILE_NAME).exists());
+        assert!(
+            std::fs::read_dir(dir.path())
+                .expect("read data dir")
+                .all(|entry| !entry
+                    .expect("dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.ron.quarantine-"))
+        );
+    }
+
     #[tokio::test]
     async fn legacy_connection_with_caps_incompatible_effort_does_not_quarantine() {
         // C1 regression: a schema-5 settings.ron written by a deployment
@@ -928,6 +971,7 @@ mod tests {
         assert_eq!(saved.ai.recap.merge_width, 2);
 
         let persisted: SettingsOverrides = ron::from_str(&body).expect("parse persisted v7");
+        assert_eq!(persisted.schema_version, 7);
         assert_eq!(persisted.ai.aurora.profile, Some(Some("cheap".to_string())));
         assert_eq!(persisted.ai.grok.profile, Some(Some("cheap".to_string())));
         assert_eq!(
@@ -991,6 +1035,7 @@ mod tests {
         assert!(!body.contains("behavior:"), "{body}");
         assert!(!body.contains("recap_profile"), "{body}");
         let persisted: SettingsOverrides = ron::from_str(&body).expect("parse persisted v7");
+        assert_eq!(persisted.schema_version, 7);
         assert_eq!(persisted.ai.history.batch_size, None);
         assert_eq!(persisted.ai.history.max_notes, None);
         assert_eq!(persisted.ai.history.merge_width, None);
