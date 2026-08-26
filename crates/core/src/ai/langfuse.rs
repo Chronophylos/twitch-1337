@@ -212,6 +212,9 @@ fn generation_span(e: GenerationEvent) -> Value {
     if let Some(n) = e.output_tokens {
         attributes.push(attr_int("gen_ai.usage.output_tokens", n));
     }
+    if let Some(cost) = e.cost_usd {
+        attributes.push(attr_f64("gen_ai.usage.cost", cost));
+    }
     span_json(
         OtlpSpanMeta {
             trace_id: &e.trace_id,
@@ -318,6 +321,10 @@ fn attr_int(key: &str, value: u32) -> Value {
     json!({"key": key, "value": {"intValue": value.to_string()}})
 }
 
+fn attr_f64(key: &str, value: f64) -> Value {
+    json!({"key": key, "value": {"doubleValue": value}})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +350,7 @@ mod tests {
             error: None,
             input_tokens: Some(4),
             output_tokens: Some(6),
+            cost_usd: None,
         }
     }
 
@@ -388,6 +396,10 @@ mod tests {
             .collect();
         assert!(keys.contains(&"gen_ai.request.model"));
         assert!(keys.contains(&"gen_ai.usage.input_tokens"));
+        assert!(
+            !keys.contains(&"gen_ai.usage.cost"),
+            "cost must be omitted when the provider did not bill so Langfuse can infer"
+        );
         assert_eq!(
             generation["attributes"]
                 .as_array()
@@ -397,6 +409,26 @@ mod tests {
                 .unwrap()["value"]["stringValue"],
             "generation"
         );
+    }
+
+    #[test]
+    fn otlp_json_includes_ingested_generation_cost() {
+        let mut g = sample_generation();
+        g.cost_usd = Some(0.00125);
+        let body = otlp_traces(vec![ExporterCmd::Generation(g)]);
+        let generation = &body["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
+        let cost = generation["attributes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["key"] == "gen_ai.usage.cost")
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing gen_ai.usage.cost in {:?}",
+                    generation["attributes"]
+                )
+            });
+        assert_eq!(cost["value"]["doubleValue"], 0.00125);
     }
 
     #[tokio::test]

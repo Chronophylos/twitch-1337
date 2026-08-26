@@ -5,6 +5,7 @@ use tracing::{debug, error, instrument, trace, warn};
 
 use crate::client::LlmClient;
 use crate::error::{LlmError, Result};
+use crate::observe::TokenUsage;
 use crate::types::{
     ChatCompletionRequest, ToolArgsError, ToolCall, ToolChatCompletionRequest,
     ToolChatCompletionResponse, TraceIds,
@@ -61,16 +62,22 @@ struct ApiUsage {
     completion_tokens: Option<u32>,
     input_tokens: Option<u32>,
     output_tokens: Option<u32>,
+    /// OpenRouter billed USD. Other OpenAI-compatible hosts omit it.
+    cost: Option<f64>,
 }
 
 impl ApiUsage {
-    fn pair(&self) -> Option<(u32, u32)> {
+    fn to_token_usage(&self) -> Option<TokenUsage> {
         let input = self.prompt_tokens.or(self.input_tokens);
         let output = self.completion_tokens.or(self.output_tokens);
-        match (input, output) {
-            (None, None) => None,
-            (i, o) => Some((i.unwrap_or(0), o.unwrap_or(0))),
+        if input.is_none() && output.is_none() && self.cost.is_none() {
+            return None;
         }
+        Some(TokenUsage {
+            input_tokens: input.unwrap_or(0),
+            output_tokens: output.unwrap_or(0),
+            cost_usd: self.cost,
+        })
     }
 }
 
@@ -356,7 +363,7 @@ impl OpenAiClient {
     async fn chat_completion_untraced(
         &self,
         request: ChatCompletionRequest,
-    ) -> Result<(String, Option<(u32, u32)>)> {
+    ) -> Result<(String, Option<TokenUsage>)> {
         let url = format!("{}/chat/completions", self.base_url);
 
         let ChatCompletionRequest {
@@ -412,7 +419,10 @@ impl OpenAiClient {
                 stage: "openai chat response",
                 source,
             })?;
-        let usage = api_response.usage.as_ref().and_then(ApiUsage::pair);
+        let usage = api_response
+            .usage
+            .as_ref()
+            .and_then(ApiUsage::to_token_usage);
 
         let choice = api_response
             .choices
@@ -427,7 +437,7 @@ impl OpenAiClient {
     async fn chat_completion_with_tools_untraced(
         &self,
         request: ToolChatCompletionRequest,
-    ) -> Result<(ToolChatCompletionResponse, Option<(u32, u32)>)> {
+    ) -> Result<(ToolChatCompletionResponse, Option<TokenUsage>)> {
         let url = format!("{}/chat/completions", self.base_url);
 
         let ToolChatCompletionRequest {
@@ -499,7 +509,10 @@ impl OpenAiClient {
                 stage: "openai tool response",
                 source,
             })?;
-        let usage = api_response.usage.as_ref().and_then(ApiUsage::pair);
+        let usage = api_response
+            .usage
+            .as_ref()
+            .and_then(ApiUsage::to_token_usage);
 
         let choice = api_response
             .choices
@@ -1025,5 +1038,45 @@ mod tests {
         };
         let value = serde_json::to_value(&req).unwrap();
         assert!(value.get("service_tier").is_none());
+    }
+
+    #[test]
+    fn api_usage_parses_openrouter_cost() {
+        let usage: ApiUsage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 194,
+            "completion_tokens": 2,
+            "total_tokens": 196,
+            "cost": 0.0125
+        }))
+        .unwrap();
+        let parsed = usage.to_token_usage().expect("usage present");
+        assert_eq!(parsed.input_tokens, 194);
+        assert_eq!(parsed.output_tokens, 2);
+        assert_eq!(parsed.cost_usd, Some(0.0125));
+    }
+
+    #[test]
+    fn api_usage_without_cost_still_returns_tokens() {
+        let usage: ApiUsage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 10,
+            "completion_tokens": 4
+        }))
+        .unwrap();
+        let parsed = usage.to_token_usage().expect("usage present");
+        assert_eq!(parsed.input_tokens, 10);
+        assert_eq!(parsed.output_tokens, 4);
+        assert_eq!(parsed.cost_usd, None);
+    }
+
+    #[test]
+    fn api_usage_cost_only_is_still_usage() {
+        let usage: ApiUsage = serde_json::from_value(serde_json::json!({
+            "cost": 0.0
+        }))
+        .unwrap();
+        let parsed = usage.to_token_usage().expect("zero cost is usage");
+        assert_eq!(parsed.input_tokens, 0);
+        assert_eq!(parsed.output_tokens, 0);
+        assert_eq!(parsed.cost_usd, Some(0.0));
     }
 }

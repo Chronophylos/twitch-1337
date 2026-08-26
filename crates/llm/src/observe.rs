@@ -28,6 +28,16 @@ pub struct TurnParams {
     pub tags: Vec<String>,
 }
 
+/// Token counts plus optional billed USD from the provider response.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TokenUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    /// OpenRouter `usage.cost` (USD credits). `None` for providers that
+    /// only return token counts.
+    pub cost_usd: Option<f64>,
+}
+
 /// A finished LLM generation observation.
 #[derive(Debug, Clone)]
 pub struct GenerationEvent {
@@ -46,6 +56,9 @@ pub struct GenerationEvent {
     pub error: Option<String>,
     pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
+    /// Billed USD from the provider (`usage.cost` on OpenRouter). `None`
+    /// when the provider did not report a cost so Langfuse can infer.
+    pub cost_usd: Option<f64>,
 }
 
 /// A finished nested span (root Turn or a tool call).
@@ -178,17 +191,17 @@ impl GenerationInProgress {
         })
     }
 
-    pub fn finish_ok(mut self, output: impl Into<String>, usage: Option<(u32, u32)>) {
-        let (input_tokens, output_tokens) = match usage {
-            Some((i, o)) => (Some(i), Some(o)),
-            None => (None, None),
+    pub fn finish_ok(mut self, output: impl Into<String>, usage: Option<TokenUsage>) {
+        let (input_tokens, output_tokens, cost_usd) = match usage {
+            Some(u) => (Some(u.input_tokens), Some(u.output_tokens), u.cost_usd),
+            None => (None, None, None),
         };
-        self.emit(output.into(), None, input_tokens, output_tokens);
+        self.emit(output.into(), None, input_tokens, output_tokens, cost_usd);
         self.finished = true;
     }
 
     pub fn finish_err(mut self, err: &dyn fmt::Display) {
-        self.emit(String::new(), Some(err.to_string()), None, None);
+        self.emit(String::new(), Some(err.to_string()), None, None, None);
         self.finished = true;
     }
 
@@ -198,6 +211,7 @@ impl GenerationInProgress {
         error: Option<String>,
         input_tokens: Option<u32>,
         output_tokens: Option<u32>,
+        cost_usd: Option<f64>,
     ) {
         self.inner.observer.generation(GenerationEvent {
             name: "generation".to_string(),
@@ -215,6 +229,7 @@ impl GenerationInProgress {
             error,
             input_tokens,
             output_tokens,
+            cost_usd,
         });
     }
 }
@@ -222,7 +237,7 @@ impl GenerationInProgress {
 impl Drop for GenerationInProgress {
     fn drop(&mut self) {
         if !self.finished {
-            self.emit(String::new(), Some("dropped".to_string()), None, None);
+            self.emit(String::new(), Some("dropped".to_string()), None, None, None);
         }
     }
 }
@@ -231,7 +246,7 @@ impl Drop for GenerationInProgress {
 pub fn finish_generation<T, E: fmt::Display>(
     rec: Option<GenerationInProgress>,
     result: &std::result::Result<T, E>,
-    ok: impl FnOnce(&T) -> (String, Option<(u32, u32)>),
+    ok: impl FnOnce(&T) -> (String, Option<TokenUsage>),
 ) {
     match (rec, result) {
         (Some(r), Ok(v)) => {
@@ -360,7 +375,14 @@ mod tests {
             },
             async {
                 let rec = GenerationInProgress::start("model-x", "[{\"role\":\"user\"}]").unwrap();
-                rec.finish_ok("hello", Some((3, 5)));
+                rec.finish_ok(
+                    "hello",
+                    Some(TokenUsage {
+                        input_tokens: 3,
+                        output_tokens: 5,
+                        cost_usd: Some(0.0125),
+                    }),
+                );
             },
         )
         .await;
@@ -371,6 +393,7 @@ mod tests {
         assert_eq!(gens[0].output, "hello");
         assert_eq!(gens[0].input_tokens, Some(3));
         assert_eq!(gens[0].output_tokens, Some(5));
+        assert_eq!(gens[0].cost_usd, Some(0.0125));
         assert_eq!(gens[0].user.as_deref(), Some("alice"));
         assert_eq!(gens[0].session_id.as_deref(), Some("sess"));
         assert!(gens[0].parent_span_id.is_some());
