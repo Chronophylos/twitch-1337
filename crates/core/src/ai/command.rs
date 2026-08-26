@@ -122,6 +122,7 @@ pub struct AiCommand {
     echo: Arc<crate::twitch::echo::EchoGuard>,
     dhl: Option<Arc<crate::dhl::DhlClient>>,
     recap: Option<Arc<RecapHandle>>,
+    langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
     /// Per-process nonce stamped into memory fences. Stable across
     /// turns so the memory block is a byte-stable cache prefix; the real
     /// fence-injection guard is `scrub_for_inject`, not nonce freshness.
@@ -144,6 +145,7 @@ pub struct AiCommandDeps {
     pub echo: Arc<crate::twitch::echo::EchoGuard>,
     pub dhl: Option<Arc<crate::dhl::DhlClient>>,
     pub recap: Option<Arc<RecapHandle>>,
+    pub langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 }
 
 pub const GROK_ALIAS_TRIGGER: &str = "@grok";
@@ -205,6 +207,7 @@ impl AiCommand {
             echo: deps.echo,
             dhl: deps.dhl,
             recap: deps.recap,
+            langfuse: deps.langfuse,
             prompt_nonce: inject::fresh_nonce(),
         }
     }
@@ -876,139 +879,162 @@ where
             user: Some(ctx.privmsg.sender.login.clone()),
             session_id: Some(crate::ai::session::new_session_id()),
         };
-        let prior_rounds = if grok_alias && let Some(ref w) = self.web {
-            vec![forced_web_search_round(w, &instruction_for_prompt, &trace).await]
+        let turn_name = if grok_alias {
+            "grok-turn"
         } else {
-            Vec::new()
+            "aurora-turn"
         };
-        let req = ToolChatCompletionRequest {
-            model: model.clone(),
-            messages: vec![system_msg, user_msg],
-            tools,
-            reasoning_effort: reasoning_effort.clone(),
-            service_tier: service_tier.clone(),
-            prior_rounds,
-            trace: trace.clone(),
-        };
-        let opts = AgentOpts {
-            max_rounds: mem.max_turn_rounds,
-            per_round_timeout: Some(mem.turn_timeout),
-        };
-
-        let combined_exec = V2Executor {
-            chat: &exec,
-            web: self.web.as_ref().map(|w| w.executor.as_ref()),
-            emotes: self.emotes.as_deref(),
-            emote_channel_id: &ctx.privmsg.channel_id,
-            doener: self.doener.as_ref(),
-            repology: self.repology.as_ref(),
-            dhl: self.dhl.as_deref(),
-            trace: &trace,
-        };
-        let final_text = match run_agent(&*llm_client, req, &combined_exec, opts).await {
-            Ok(AgentOutcome::Text(text)) => Some(text),
-            Ok(AgentOutcome::MaxRoundsExceeded) => {
-                warn!("AI max_turn_rounds exceeded");
-                None
-            }
-            Ok(AgentOutcome::Timeout { round }) => {
-                warn!(
-                    round,
-                    timeout_s = mem.turn_timeout.as_secs(),
-                    model = %model,
-                    "AI per-round timeout"
-                );
-                ctx.sender
-                    .reply(ctx.privmsg, "hat zu hart gedacht, nochmal probieren Stare")
-                    .await;
-                None
-            }
-            Err(e) => {
-                error!(error = ?e, "AI llm error");
-                if let Some(reply) = user_facing_provider_message(&e) {
-                    ctx.sender.reply(ctx.privmsg, reply).await;
-                }
-                None
-            }
-        };
-
-        if let Some(text) = final_text {
-            let line = prepare_agent_reply(
-                &*llm_client,
-                &text,
-                &RewordOpts {
+        let prepared = llm::with_optional_turn(
+            crate::ai::langfuse::LangfuseHandle::observer_from(&self.langfuse),
+            llm::TurnParams {
+                name: turn_name.to_string(),
+                user: trace.user.clone(),
+                session_id: trace.session_id.clone(),
+                tags: vec![turn_name.to_string(), connection.name.clone()],
+            },
+            async {
+                let prior_rounds = if grok_alias && let Some(ref w) = self.web {
+                    vec![forced_web_search_round(w, &instruction_for_prompt, &trace).await]
+                } else {
+                    Vec::new()
+                };
+                let req = ToolChatCompletionRequest {
                     model: model.clone(),
-                    timeout: mem.turn_timeout,
+                    messages: vec![system_msg, user_msg],
+                    tools,
                     reasoning_effort: reasoning_effort.clone(),
                     service_tier: service_tier.clone(),
+                    prior_rounds,
                     trace: trace.clone(),
-                },
-                &reply_limits,
-            )
-            .await;
-            if !line.is_empty() {
-                // Pad the tail so a sub-second turn still reads as thinking.
-                if let Some(pad) = mem.min_response_delay.checked_sub(turn_started.elapsed()) {
-                    debug!(pad_ms = pad.as_millis(), "padding AI response delay");
-                    tokio::time::sleep(pad).await;
-                }
-                let ts = Utc::now();
-                let req = crate::twitch::mouth::SpeakRequest {
-                    broadcaster_id: &ctx.privmsg.channel_id,
-                    channel_login: &ctx.privmsg.channel_login,
-                    text: line.clone(),
-                    reply_parent_message_id: Some(ctx.privmsg.message_id.clone()),
                 };
-                let (recorded_login, message_id) = match self.mouths.speak(agent, req).await {
-                    Ok(crate::twitch::mouth::SpeakOutcome::Spoken(spoken)) => {
-                        if let Some(id) = spoken.message_id.as_deref() {
-                            self.echo.register(id).await;
-                        }
-                        (spoken.login, spoken.message_id)
+                let opts = AgentOpts {
+                    max_rounds: mem.max_turn_rounds,
+                    per_round_timeout: Some(mem.turn_timeout),
+                };
+
+                let combined_exec = V2Executor {
+                    chat: &exec,
+                    web: self.web.as_ref().map(|w| w.executor.as_ref()),
+                    emotes: self.emotes.as_deref(),
+                    emote_channel_id: &ctx.privmsg.channel_id,
+                    doener: self.doener.as_ref(),
+                    repology: self.repology.as_ref(),
+                    dhl: self.dhl.as_deref(),
+                    trace: &trace,
+                };
+                let final_text = match run_agent(&*llm_client, req, &combined_exec, opts).await {
+                    Ok(AgentOutcome::Text(text)) => Some(text),
+                    Ok(AgentOutcome::MaxRoundsExceeded) => {
+                        warn!("AI max_turn_rounds exceeded");
+                        None
                     }
-                    Ok(crate::twitch::mouth::SpeakOutcome::NoMouth) => {
+                    Ok(AgentOutcome::Timeout { round }) => {
+                        warn!(
+                            round,
+                            timeout_s = mem.turn_timeout.as_secs(),
+                            model = %model,
+                            "AI per-round timeout"
+                        );
                         ctx.sender
-                            .reply_no_byte_clamp(ctx.privmsg, line.clone())
+                            .reply(ctx.privmsg, "hat zu hart gedacht, nochmal probieren Stare")
                             .await;
-                        (self.bot_username.clone(), None)
+                        None
                     }
                     Err(e) => {
-                        // Display, not Debug: SpeakError::Empty Debug-prints as
-                        // `Empty` with no explanation (`error=Empty` in the log).
-                        error!(error = %e, agent = ?agent, "mouth speak failed");
-                        // Out of v1: no auto-fallback resend (double-speak risk). No history write.
-                        // A short notice is not a resend — Err means chat saw nothing — and the
-                        // realistic failure (mouth timed out, channel-restricted) is persistent,
-                        // so without this the command is a black hole for every user.
-                        if let Some(msg) = user_facing_mouth_message(&e) {
-                            ctx.sender.reply(ctx.privmsg, msg).await;
+                        error!(error = ?e, "AI llm error");
+                        if let Some(reply) = user_facing_provider_message(&e) {
+                            ctx.sender.reply(ctx.privmsg, reply).await;
                         }
-                        return Ok(());
+                        None
                     }
                 };
-                let _ = message_id; // reserved for future dashboard/debug surfacing
-                if let Some(ref chat) = self.chat_ctx {
-                    chat.buffer_for(&ctx.privmsg.channel_login)
-                        .lock()
-                        .await
-                        .push_bot_with_identity_at(
-                            recorded_login.clone(),
-                            Some(&display_name),
-                            agent,
-                            line.clone(),
-                            ts,
-                        );
+
+                match final_text {
+                    Some(text) => Some(
+                        prepare_agent_reply(
+                            &*llm_client,
+                            &text,
+                            &RewordOpts {
+                                model: model.clone(),
+                                timeout: mem.turn_timeout,
+                                reasoning_effort: reasoning_effort.clone(),
+                                service_tier: service_tier.clone(),
+                                trace: trace.clone(),
+                            },
+                            &reply_limits,
+                        )
+                        .await,
+                    ),
+                    None => None,
                 }
-                let is_primary_source =
-                    !cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));
-                if is_primary_source
-                    && let Err(e) = mem
-                        .transcript
-                        .append_line(ts, &recorded_login, None, &line)
-                        .await
-                {
-                    error!(error = ?e, "transcript bot-reply append failed");
+            },
+        )
+        .await;
+
+        if let Some(line) = prepared
+            && !line.is_empty()
+        {
+            // Pad the tail so a sub-second turn still reads as thinking.
+            if let Some(pad) = mem.min_response_delay.checked_sub(turn_started.elapsed()) {
+                debug!(pad_ms = pad.as_millis(), "padding AI response delay");
+                tokio::time::sleep(pad).await;
+            }
+            let ts = Utc::now();
+            let req = crate::twitch::mouth::SpeakRequest {
+                broadcaster_id: &ctx.privmsg.channel_id,
+                channel_login: &ctx.privmsg.channel_login,
+                text: line.clone(),
+                reply_parent_message_id: Some(ctx.privmsg.message_id.clone()),
+            };
+            let (recorded_login, message_id) = match self.mouths.speak(agent, req).await {
+                Ok(crate::twitch::mouth::SpeakOutcome::Spoken(spoken)) => {
+                    if let Some(id) = spoken.message_id.as_deref() {
+                        self.echo.register(id).await;
+                    }
+                    (spoken.login, spoken.message_id)
                 }
+                Ok(crate::twitch::mouth::SpeakOutcome::NoMouth) => {
+                    ctx.sender
+                        .reply_no_byte_clamp(ctx.privmsg, line.clone())
+                        .await;
+                    (self.bot_username.clone(), None)
+                }
+                Err(e) => {
+                    // Display, not Debug: SpeakError::Empty Debug-prints as
+                    // `Empty` with no explanation (`error=Empty` in the log).
+                    error!(error = %e, agent = ?agent, "mouth speak failed");
+                    // Out of v1: no auto-fallback resend (double-speak risk). No history write.
+                    // A short notice is not a resend — Err means chat saw nothing — and the
+                    // realistic failure (mouth timed out, channel-restricted) is persistent,
+                    // so without this the command is a black hole for every user.
+                    if let Some(msg) = user_facing_mouth_message(&e) {
+                        ctx.sender.reply(ctx.privmsg, msg).await;
+                    }
+                    return Ok(());
+                }
+            };
+            let _ = message_id; // reserved for future dashboard/debug surfacing
+            if let Some(ref chat) = self.chat_ctx {
+                chat.buffer_for(&ctx.privmsg.channel_login)
+                    .lock()
+                    .await
+                    .push_bot_with_identity_at(
+                        recorded_login.clone(),
+                        Some(&display_name),
+                        agent,
+                        line.clone(),
+                        ts,
+                    );
+            }
+            let is_primary_source =
+                !cc.is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));
+            if is_primary_source
+                && let Err(e) = mem
+                    .transcript
+                    .append_line(ts, &recorded_login, None, &line)
+                    .await
+            {
+                error!(error = ?e, "transcript bot-reply append failed");
             }
         }
 

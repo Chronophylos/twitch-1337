@@ -527,6 +527,7 @@ impl TestBotBuilder {
                     secrecy::SecretString::new("test".into()),
                 ))
             }),
+            langfuse: None,
             doener: Arc::new(twitch_1337::doener::DoeneratlasClient::with_base_url(
                 reqwest::Client::new(),
                 self.doener_base_url
@@ -942,6 +943,7 @@ impl TestBot {
             &self.settings,
             &self.channel,
             yesterday,
+            None,
         )
         .await
         .expect("ritual ok");

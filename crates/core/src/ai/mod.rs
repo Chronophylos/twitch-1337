@@ -4,6 +4,7 @@ pub mod content;
 pub mod dhl_tool;
 pub mod doener_tool;
 pub mod emote_tool;
+pub mod langfuse;
 pub mod memory;
 pub mod model_catalog;
 pub mod packages_tool;

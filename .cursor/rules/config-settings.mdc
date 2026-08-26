@@ -14,6 +14,8 @@ Secrets and boot-time fields only:
 - `[twitch]`: OAuth creds, channel, username, `owner` (bootstrap-only, not dashboard-editable)
 - `[ai]`: `[ai.keys]` named credentials only
 - `[aviationstack]`: `api_key` only
+- `[dhl]`: `api_key` only
+- `[langfuse]`: `public_key` + `secret_key` (+ optional `host`)
 - `[web]`: `enabled`, `bind_addr`, `public_url`, `session_secret`
 
 ## settings.ron (runtime, dashboard-managed)
