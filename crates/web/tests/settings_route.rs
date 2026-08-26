@@ -31,6 +31,31 @@ async fn body_string(res: axum::http::Response<Body>) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
+/// Return the inner HTML of the first `<select name="…">` with the given name.
+fn select_inner<'a>(html: &'a str, name: &str) -> &'a str {
+    let marker = format!("name=\"{name}\"");
+    let after_name = html
+        .split_once(&marker)
+        .unwrap_or_else(|| panic!("missing <select {marker}>"))
+        .1;
+    let after_open = after_name
+        .split_once('>')
+        .unwrap_or_else(|| panic!("malformed <select {marker}>"))
+        .1;
+    after_open
+        .split_once("</select>")
+        .unwrap_or_else(|| panic!("unclosed <select {marker}>"))
+        .0
+}
+
+fn assert_required_profile_select_has_no_empty_option(html: &str, name: &str) {
+    let inner = select_inner(html, name);
+    assert!(
+        !inner.contains("value=\"\""),
+        "{name} must not offer an empty profile option; select inner: {inner}"
+    );
+}
+
 #[tokio::test]
 async fn owner_can_save_cooldown_and_handle_reflects_change() {
     install_crypto();
@@ -297,12 +322,35 @@ async fn settings_nav_is_twitch_agents_shared_then_the_rest() {
     let commands = html
         .find("data-group=\"commands\"")
         .expect("Commands group");
+    let emote_tracker = html
+        .find("data-group=\"emote_tracker\"")
+        .expect("Emote Tracker group");
+    let flight_tracking = html
+        .find("data-group=\"flight_tracking\"")
+        .expect("Flight Tracking group");
+    let system = html.find("data-group=\"system\"").expect("System group");
     assert!(twitch < agents && agents < shared && shared < commands);
+    assert!(
+        commands < emote_tracker && emote_tracker < flight_tracking && flight_tracking < system,
+        "nav groups after Commands must be Emote Tracker → Flight Tracking → System",
+    );
     assert!(!html.contains("data-group=\"ai\""));
     assert!(!html.contains("sec-ai-connection"));
     assert!(html.contains("id=\"sec-ai-aurora\""));
     assert!(html.contains("id=\"sec-ai-recap\""));
-    assert!(!html.contains("name=\"ai_aurora_profile\"><option value=\"\""));
+    for name in [
+        "ai_aurora_profile",
+        "ai_grok_profile",
+        "ai_dreamer_profile",
+        "ai_media_profile",
+    ] {
+        assert_required_profile_select_has_no_empty_option(&html, name);
+    }
+    let recap_inner = select_inner(&html, "ai_recap_profile");
+    assert!(
+        recap_inner.contains("value=\"\""),
+        "Recap profile picker must retain an empty (off) option",
+    );
     assert!(html.contains("name=\"ai_grok_persona_name\""));
     assert!(!html.contains("(active profile)"));
 }
