@@ -166,8 +166,8 @@ Every failure mode degrades to "skip this tick":
 - Body does not parse → `warn!`, skip
 - An individual malformed event → `filter_map` past it; the rest of the
   batch still announces
-- Unparseable timestamp → treat as stale, so a bad record can never be
-  announced as if it just happened
+- Unparseable timestamp → skip the record entirely, so a bad row can never
+  be announced as if it had just happened
 
 The handler never returns, so it never trips the shutdown select. Errors
 in it cannot affect any other handler.
