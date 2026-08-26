@@ -25,10 +25,22 @@
     {% call m::num_row_bounded("ai_history", "ai_history_ai_channel_n", "ai_channel_n",
        "Verbatim lines injected from ai_channel history.",
        current.ai.history.ai_channel_n, defaults.ai.history.ai_channel_n, "lines", 1, 5000) %}{% endcall %}
-    {% let recap_model = current.ai.history.recap_model.as_deref().unwrap_or("") %}
-    {% call m::text_row("ai_history", "ai_history_recap_model", "recap_model",
-       "Model for Recap paraphrasing. Empty = off.",
-       recap_model, "", "off") %}{% endcall %}
+    {% let recap_profile = current.ai.history.recap_profile.as_deref().unwrap_or("") %}
+    <div class="settings-row" data-section="ai_history">
+      {% call m::row_head("recap_profile", "Which provider profile Recap paraphrases on. Empty = Recap off. No extra History overrides — the profile's model, timeout, effort and tier are used as-is.") %}{% endcall %}
+      <div class="row-control-cell">
+        <select name="ai_history_recap_profile" data-key="ai.history.recap_profile" data-default="">
+          <option value="">(off)</option>
+          {% for p in current.ai.profiles %}
+          <option value="{{ p.name }}"{% if recap_profile == p.name %} selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.history.recap_profile") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(off)</span></span>
+      </div>
+    </div>
     {% call m::num_row_bounded("ai_history", "ai_history_batch_size", "batch_size",
        "Chat lines processed per Recap batch.",
        current.ai.history.batch_size, defaults.ai.history.batch_size, "lines", 1, 5000) %}{% endcall %}

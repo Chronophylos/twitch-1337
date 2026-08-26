@@ -89,8 +89,8 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.ai.history.ai_channel_n {
         into.ai.history.ai_channel_n = Some(v);
     }
-    if patch.ai.history.recap_model.is_some() {
-        into.ai.history.recap_model = patch.ai.history.recap_model.clone();
+    if patch.ai.history.recap_profile.is_some() {
+        into.ai.history.recap_profile = patch.ai.history.recap_profile.clone();
     }
     if let Some(v) = patch.ai.history.batch_size {
         into.ai.history.batch_size = Some(v);

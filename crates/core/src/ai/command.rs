@@ -384,12 +384,12 @@ fn format_reply_context(
 /// that replies currently go through the utility bot login without denying
 /// the agent has an account. `Agent::Utility` in the match arm folds into
 /// Aurora's German copy only for exhaustiveness.
-fn recap_model_is_set(recap_model: Option<&str>) -> bool {
-    recap_model.is_some_and(|m| !m.trim().is_empty())
+fn recap_profile_is_set(recap_profile: Option<&str>) -> bool {
+    recap_profile.is_some_and(|m| !m.trim().is_empty())
 }
 
-fn recap_enabled_for_model(recap_model: Option<&str>, parked: bool) -> bool {
-    recap_model_is_set(recap_model) && !parked
+fn recap_enabled_for_profile(recap_profile: Option<&str>, parked: bool) -> bool {
+    recap_profile_is_set(recap_profile) && !parked
 }
 
 async fn union_recap_sheet_logins(
@@ -643,13 +643,13 @@ where
             inject::InvocationChannel::Primary => RecapChannel::Primary,
             inject::InvocationChannel::AiChannel => RecapChannel::AiChannel,
         };
-        let recap_model = history.recap_model.as_deref();
+        let recap_profile = history.recap_profile.as_deref();
         let recap_parked = if let Some(ref handle) = self.recap {
             handle.parked().await
         } else {
             true
         };
-        let recap_enabled = recap_enabled_for_model(recap_model, recap_parked);
+        let recap_enabled = recap_enabled_for_profile(recap_profile, recap_parked);
         let (primary_through_seq, ai_through_seq) = if let Some(ref handle) = self.recap {
             (
                 handle.primary_through_seq().await,
@@ -658,7 +658,7 @@ where
         } else {
             (0, 0)
         };
-        let recap_sheet_logins = if recap_model_is_set(recap_model) {
+        let recap_sheet_logins = if recap_profile_is_set(recap_profile) {
             if let Some(ref handle) = self.recap {
                 union_recap_sheet_logins(handle, recap_channel).await
             } else {
@@ -667,7 +667,7 @@ where
         } else {
             BTreeSet::new()
         };
-        let recap_suffix = if recap_model_is_set(recap_model) {
+        let recap_suffix = if recap_profile_is_set(recap_profile) {
             if let Some(ref handle) = self.recap {
                 let primary_login = cc
                     .map(|c| c.primary_login.as_str())
@@ -1105,18 +1105,18 @@ pub async fn build_ai_memory_v2(
 
 #[cfg(test)]
 mod recap_wiring_tests {
-    use super::{recap_enabled_for_model, recap_model_is_set};
+    use super::{recap_enabled_for_profile, recap_profile_is_set};
     use crate::ai::memory::inject::{self, SystemParts, UserParts};
 
     #[test]
-    fn recap_enabled_follows_model_and_parked_gate() {
-        assert!(!recap_enabled_for_model(None, false));
-        assert!(!recap_enabled_for_model(Some(""), false));
-        assert!(!recap_enabled_for_model(Some("   "), false));
-        assert!(recap_enabled_for_model(Some("tiny"), false));
-        assert!(!recap_enabled_for_model(Some("tiny"), true));
-        assert!(recap_model_is_set(Some("tiny")));
-        assert!(!recap_model_is_set(Some("  ")));
+    fn recap_enabled_follows_profile_and_parked_gate() {
+        assert!(!recap_enabled_for_profile(None, false));
+        assert!(!recap_enabled_for_profile(Some(""), false));
+        assert!(!recap_enabled_for_profile(Some("   "), false));
+        assert!(recap_enabled_for_profile(Some("tiny"), false));
+        assert!(!recap_enabled_for_profile(Some("tiny"), true));
+        assert!(recap_profile_is_set(Some("tiny")));
+        assert!(!recap_profile_is_set(Some("  ")));
     }
 
     #[test]
@@ -1156,8 +1156,8 @@ mod recap_wiring_tests {
             });
         }
 
-        assert!(!recap_enabled_for_model(Some("tiny"), true));
-        let recap = if recap_model_is_set(Some("tiny")) {
+        assert!(!recap_enabled_for_profile(Some("tiny"), true));
+        let recap = if recap_profile_is_set(Some("tiny")) {
             handle
                 .render_suffix(RecapChannel::Primary, "main", "ai", 3)
                 .await

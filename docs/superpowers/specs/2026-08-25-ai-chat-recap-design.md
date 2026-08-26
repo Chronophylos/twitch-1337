@@ -222,16 +222,16 @@ beyond the single latest own reply.
 
 ### Off and parked
 
-**Off** (no `recap_model`, or blank): no batcher work, no Recap in the
+**Off** (no `recap_profile`, or blank): no batcher work, no Recap in the
 system message, prompt is N + one own line, older raw stays in the
 buffer for `!news` and emote scoring. No stretch. The batcher issues
 zero completions.
 
-**Parked** (client set, consecutive failures hit `RECAP_PARK_FAILURES`
+**Parked** (profile set, consecutive failures hit `RECAP_PARK_FAILURES`
 = 5): no further completions until the failure counter is reset
-(settings save that touches the Recap model, or a successful probe
-after backoff). Existing notes still inject. Tail as Off (no stretch).
-Log once at warn; the History card shows parked.
+(settings save that changes the Recap profile name, or a successful
+probe after backoff). Existing notes still inject. Tail as Off (no
+stretch). Log once at warn; the History card shows parked.
 
 Backoff between failures: exponential, cap 5 minutes. A parked
 batcher is not “retry later forever.”
@@ -245,20 +245,17 @@ under Resume cursor. Do not re-paraphrase lines already covered.
 
 ## Client selection
 
-This spec originally targeted a single `ai.connection`. Provider
-profiles landed first (`LlmRegistry`). Recap keeps
-`ai.history.recap_model: Option<String>` as a **model id** on the
-**active profile's** provider / key / base URL. `None` or blank →
-Recap off. Never substitute the active profile's chat `model`.
-Timeout comes from that profile; do not add extra History knobs for
-effort or tier.
+Recap uses `ai.history.recap_profile: Option<String>` — a **profile
+name**, not a model id. Empty / unset = Recap off. A name that is
+missing from `ai.profiles` does **not** fall back to the active chat
+profile (`LlmRegistry::resolve_named`); Recap stays Off.
+
+There are no Recap-specific History overrides for model, timeout,
+reasoning effort, or service tier. Those come from the named profile
+as-is, the same way they are edited at `/ai-profiles`. Dreamer and
+Grok keep their extra override knobs; Recap does not.
 
 The Recap call is a single completion, no tools.
-
-A later rename to `recap_profile: Option<String>` (empty = off, never
-fall back to the active chat profile) is still the right shape if Recap
-should ride a dedicated profile instead of a model id on the active
-endpoint.
 
 Baked prompt: `crates/data/assets/prompts/recap.md`. One template; the
 user message is either a batch of chat lines or (for coarsening) the
@@ -288,7 +285,7 @@ All live via `SettingsHandle`, on the existing **AI · History** card.
 |---|---|---|
 | `length` / `ai_channel_length` | 200 / 100 | Raw retention. AI-channel raised so `n + batch_size` fits with raid headroom. |
 | `n` / `ai_channel_n` | 20 / 10 | Verbatim other-people window. |
-| `recap_model` | unset | Empty = off. |
+| `recap_profile` | unset | Empty = off. Never falls back to the active chat profile. No extra History model/timeout/effort/tier knobs. |
 | `batch_size` | 40 | Lines per tiny-model call. |
 | `max_notes` | 8 | Inject cap per channel. |
 | `merge_width` | 3 | Oldest same-generation notes folded when over cap. |
@@ -303,7 +300,7 @@ Validation:
   `ai_channel_length >= ai_channel_n + batch_size`
 - `n >= 1`, `batch_size >= 1`, `max_notes >= 1`
 - `merge_width >= 2` and `merge_width <= max_notes`
-- `recap_model`, when set, non-blank
+- `recap_profile`, when set, non-blank and names an existing profile
 
 Replace the History card’s 12 KiB / 3 KiB warning with: the prompt
 carries N verbatim lines plus at most `max_notes` Recap Notes; the
@@ -355,7 +352,7 @@ No live-LLM tests for paraphrase quality. Mock the Recap client.
   the front.
 - **Batch format:** a Grok line in the paraphraser input is tagged
   `Grok`, not `(self)` and not a bare viewer name.
-- **Off:** no `recap_model` → no Recap in system, tail is N + one own
+- **Off:** no `recap_profile` → no Recap in system, tail is N + one own
   line, batcher issues **zero** completions, older raw still in the
   buffer.
 - **Parked:** five failures → no further completions, existing notes
@@ -390,11 +387,11 @@ No live-LLM tests for paraphrase quality. Mock the Recap client.
 
 One implementation PR after this spec.
 
-Recap is off by default (`recap_model` unset). Deploy is **not** a
+Recap is off by default (`recap_profile` unset). Deploy is **not** a
 no-op: the tail rules (N + one own line, older own lines dropped)
 ship in the same PR. That is the mimicry fix and a large context cut
 (today ~200 lines, afterwards 20). Recap is how the far tail comes
-back, once a tiny model is pointed at `recap_model`.
+back, once a Recap profile is selected.
 
 Rollback: image pin. `chat-recap.ron` is unused by older binaries and
 can sit in `$DATA_DIR`.

@@ -165,7 +165,7 @@ struct AiHistoryForm {
     #[serde(default)]
     ai_history_ai_channel_n: Option<u64>,
     #[serde(default)]
-    ai_history_recap_model: Option<String>,
+    ai_history_recap_profile: String,
     #[serde(default)]
     ai_history_batch_size: Option<u64>,
     #[serde(default)]
@@ -181,7 +181,7 @@ impl AiHistoryForm {
             ai_channel_length: self.ai_history_ai_channel_length,
             n: self.ai_history_n,
             ai_channel_n: self.ai_history_ai_channel_n,
-            recap_model: tri_state(self.ai_history_recap_model),
+            recap_profile: Some(opt_str(&self.ai_history_recap_profile)),
             batch_size: self.ai_history_batch_size,
             max_notes: self.ai_history_max_notes,
             merge_width: self.ai_history_merge_width,
@@ -626,7 +626,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
                 ai_history_ai_channel_length: form.ai_history_ai_channel_length,
                 ai_history_n: form.ai_history_n,
                 ai_history_ai_channel_n: form.ai_history_ai_channel_n,
-                ai_history_recap_model: form.ai_history_recap_model,
+                ai_history_recap_profile: form.ai_history_recap_profile,
                 ai_history_batch_size: form.ai_history_batch_size,
                 ai_history_max_notes: form.ai_history_max_notes,
                 ai_history_merge_width: form.ai_history_merge_width,
@@ -868,5 +868,15 @@ mod tests {
         }
         .into_overrides();
         assert_eq!(media.profile, Some(Some("cheap".to_string())));
+
+        let recap = AiHistoryForm {
+            ai_history_recap_profile: "cheap".to_string(),
+            ..Default::default()
+        }
+        .into_overrides();
+        assert_eq!(recap.recap_profile, Some(Some("cheap".to_string())));
+
+        let recap_cleared = AiHistoryForm::default().into_overrides();
+        assert_eq!(recap_cleared.recap_profile, Some(None));
     }
 }

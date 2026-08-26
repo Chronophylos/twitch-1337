@@ -160,7 +160,7 @@ pub struct AiHistoryOverrides {
     #[serde(default)]
     pub ai_channel_n: Option<u64>,
     #[serde(default)]
-    pub recap_model: Option<Option<String>>,
+    pub recap_profile: Option<Option<String>>,
     #[serde(default)]
     pub batch_size: Option<u64>,
     #[serde(default)]

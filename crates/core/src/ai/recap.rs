@@ -372,8 +372,6 @@ pub fn append_note(
     log.through_fp = Some(LineFingerprint::from_entry(last_entry));
 }
 
-pub use crate::ai::recap_batcher::coarsen_if_needed;
-
 pub async fn load_recap_file(path: &Path) -> RecapFile {
     match tokio::fs::read_to_string(path).await {
         Ok(raw) => ron::from_str(&raw).unwrap_or_else(|e| {
@@ -392,8 +390,8 @@ pub async fn load_recap_file(path: &Path) -> RecapFile {
 mod tests {
     use super::*;
     use crate::ai::chat_history::ChatHistorySource;
+    use crate::ai::recap_batcher::coarsen_if_needed;
     use crate::util::persist::atomic_save_ron_async;
-    use std::time::Duration;
 
     fn e(seq: u64, user: &str, agent: Option<Agent>) -> ChatHistoryEntry {
         ChatHistoryEntry {
@@ -590,9 +588,7 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        coarsen_if_needed(&mut log, 3, 3, None, "", Duration::from_secs(1))
-            .await
-            .unwrap();
+        coarsen_if_needed(&mut log, 3, 3, None).await.unwrap();
         assert_eq!(log.notes.len(), 3);
         assert_eq!(log.notes[0].body, "n1");
     }

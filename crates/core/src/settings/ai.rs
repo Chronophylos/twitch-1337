@@ -210,8 +210,10 @@ pub struct AiHistory {
     pub n: u64,
     #[serde(default)]
     pub ai_channel_n: u64,
+    /// Profile Recap paraphrases on. `None` / empty = Recap off.
+    /// Never falls back to the active chat profile.
     #[serde(default)]
-    pub recap_model: Option<String>,
+    pub recap_profile: Option<String>,
     #[serde(default)]
     pub batch_size: u64,
     #[serde(default)]
@@ -373,7 +375,7 @@ impl Default for AiHistory {
             ai_channel_length: 100,
             n: 20,
             ai_channel_n: 10,
-            recap_model: None,
+            recap_profile: None,
             batch_size: 40,
             max_notes: 8,
             merge_width: 3,
@@ -584,7 +586,7 @@ mod tests {
         assert_eq!(s.history.ai_channel_length, 100);
         assert_eq!(s.history.n, 20);
         assert_eq!(s.history.ai_channel_n, 10);
-        assert!(s.history.recap_model.is_none());
+        assert!(s.history.recap_profile.is_none());
         assert_eq!(s.history.batch_size, 40);
         assert_eq!(s.memory.soul_bytes, 4096);
         assert_eq!(s.memory.lore_bytes, 12_288);

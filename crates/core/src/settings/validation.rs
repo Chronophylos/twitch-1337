@@ -315,12 +315,12 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
             ),
         );
     }
-    if let Some(m) = ai.history.recap_model.as_deref()
+    if let Some(m) = ai.history.recap_profile.as_deref()
         && m.trim().is_empty()
     {
         err(
             errs,
-            "ai.history.recap_model",
+            "ai.history.recap_profile",
             "must be non-blank when set".into(),
         );
     }
@@ -471,6 +471,10 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
         ("ai.dreamer.profile", ai.dreamer.profile.as_deref()),
         ("ai.grok.profile", ai.grok.profile.as_deref()),
         ("ai.media.profile", ai.media.profile.as_deref()),
+        (
+            "ai.history.recap_profile",
+            ai.history.recap_profile.as_deref(),
+        ),
     ] {
         if let Some(name) = sel
             && ai.by_name(name).is_none()
@@ -757,6 +761,14 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_recap_profile_that_does_not_exist() {
+        let mut s = with_profiles(vec![profile(AiProvider::OpenAi)], "p");
+        s.ai.history.recap_profile = Some("ghost".into());
+        let errs = s.validate(&ctx()).unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "ai.history.recap_profile"));
+    }
+
+    #[test]
     fn validate_collects_multiple_errors() {
         let mut s = Settings::compiled_defaults();
         s.cooldowns.ai = 0;
@@ -822,15 +834,15 @@ mod tests {
     }
 
     #[test]
-    fn history_rejects_blank_recap_model() {
+    fn history_rejects_blank_recap_profile() {
         let mut s = Settings::compiled_defaults();
-        s.ai.history.recap_model = Some("   ".into());
+        s.ai.history.recap_profile = Some("   ".into());
         let errs = s
             .validate(&ValidationContext {
                 channel: "test".into(),
             })
             .expect_err("must fail");
-        assert!(errs.iter().any(|e| e.field == "ai.history.recap_model"));
+        assert!(errs.iter().any(|e| e.field == "ai.history.recap_profile"));
     }
 
     #[test]

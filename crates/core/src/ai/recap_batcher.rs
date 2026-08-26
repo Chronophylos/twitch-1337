@@ -19,26 +19,30 @@ use crate::settings::SettingsHandle;
 
 const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
-async fn paraphrase(
-    llm: &dyn LlmClient,
-    model: &str,
+#[derive(Clone, Copy)]
+pub(crate) struct RecapCompletion<'a> {
+    llm: &'a dyn LlmClient,
+    model: &'a str,
     timeout: Duration,
-    user: String,
-) -> LlmResult<String> {
+    reasoning_effort: Option<&'a str>,
+    service_tier: Option<&'a str>,
+}
+
+async fn paraphrase(call: RecapCompletion<'_>, user: String) -> LlmResult<String> {
     let req = ChatCompletionRequest {
-        model: model.to_string(),
+        model: call.model.to_string(),
         messages: vec![
             Message::system(twitch_1337_data::prompts::RECAP),
             Message::user(user),
         ],
-        reasoning_effort: None,
-        service_tier: None,
+        reasoning_effort: call.reasoning_effort.map(str::to_string),
+        service_tier: call.service_tier.map(str::to_string),
         trace: TraceIds {
             user: Some("<recap>".into()),
             session_id: Some(crate::ai::session::new_session_id()),
         },
     };
-    tokio::time::timeout(timeout, llm.chat_completion(req))
+    tokio::time::timeout(call.timeout, call.llm.chat_completion(req))
         .await
         .map_err(|_| LlmError::Timeout)?
 }
@@ -91,9 +95,7 @@ fn union_identities(notes: &[RecapNote]) -> Vec<RecapIdentity> {
 async fn apply_coarsen_fold(
     log: &mut RecapChannelLog,
     indices: &[usize],
-    llm: &dyn LlmClient,
-    model: &str,
-    timeout: Duration,
+    call: RecapCompletion<'_>,
 ) -> Result<(), LlmError> {
     let folded: Vec<RecapNote> = indices.iter().map(|&i| log.notes[i].clone()).collect();
     let user = folded
@@ -101,7 +103,7 @@ async fn apply_coarsen_fold(
         .map(|n| n.body.as_str())
         .collect::<Vec<_>>()
         .join("\n\n");
-    let body = paraphrase(llm, model, timeout, user).await?;
+    let body = paraphrase(call, user).await?;
     let insert_at = *indices.first().expect("non-empty fold");
     let max_through = folded.iter().map(|n| n.through_seq).max().unwrap_or(0);
     let max_gen = folded.iter().map(|n| n.generation).max().unwrap_or(0);
@@ -118,13 +120,11 @@ async fn apply_coarsen_fold(
     Ok(())
 }
 
-pub async fn coarsen_if_needed(
+pub(crate) async fn coarsen_if_needed(
     log: &mut RecapChannelLog,
     max_notes: usize,
     merge_width: usize,
-    llm: Option<&dyn LlmClient>,
-    model: &str,
-    timeout: Duration,
+    call: Option<RecapCompletion<'_>>,
 ) -> Result<(), LlmError> {
     while log.notes.len() > max_notes {
         let Some(action) = plan_coarsen_step(&log.notes, merge_width) else {
@@ -139,8 +139,8 @@ pub async fn coarsen_if_needed(
                 );
             }
             CoarsenAction::Fold(indices) => {
-                let result = match llm {
-                    Some(llm) => apply_coarsen_fold(log, &indices, llm, model, timeout).await,
+                let result = match call {
+                    Some(call) => apply_coarsen_fold(log, &indices, call).await,
                     None => Err(LlmError::EmptyResponse),
                 };
                 if let Err(error) = result {
@@ -216,6 +216,8 @@ struct FlushParams<'a> {
     llm: &'a dyn LlmClient,
     model: &'a str,
     timeout: Duration,
+    reasoning_effort: Option<&'a str>,
+    service_tier: Option<&'a str>,
     self_logins: &'a [String],
 }
 
@@ -225,6 +227,8 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
         llm,
         model,
         timeout,
+        reasoning_effort,
+        service_tier,
         self_logins,
     } = params;
     let entries = &input.entries;
@@ -245,7 +249,18 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let body = match paraphrase(llm, model, timeout, user).await {
+    let body = match paraphrase(
+        RecapCompletion {
+            llm,
+            model,
+            timeout,
+            reasoning_effort,
+            service_tier,
+        },
+        user,
+    )
+    .await
+    {
         Ok(body) => body,
         Err(error) => {
             tracing::warn!(?error, "recap batch paraphrase failed");
@@ -261,9 +276,13 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
         &mut input.log,
         input.max_notes,
         input.merge_width,
-        Some(llm),
-        model,
-        timeout,
+        Some(RecapCompletion {
+            llm,
+            model,
+            timeout,
+            reasoning_effort,
+            service_tier,
+        }),
     )
     .await
     {
@@ -322,11 +341,10 @@ pub(crate) struct BatcherTickParams<'a> {
     pub handle: &'a RecapHandle,
     pub settings: &'a SettingsHandle,
     pub llm: &'a dyn LlmClient,
-    pub timeout: Duration,
     pub primary: &'a ChatHistory,
     pub ai: Option<&'a ChatHistory>,
     pub self_logins: &'a [String],
-    pub last_seen_model: &'a mut Option<String>,
+    pub last_seen_profile: &'a mut Option<String>,
     pub backoff: &'a mut BatcherBackoff,
 }
 
@@ -336,30 +354,48 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
         handle,
         settings,
         llm,
-        timeout,
         primary,
         ai,
         self_logins,
-        last_seen_model,
+        last_seen_profile,
         backoff,
     } = params;
     let snap = settings.load();
-    let model = match snap.ai.history.recap_model.as_deref() {
-        Some(m) if !m.trim().is_empty() => m.to_string(),
+    let profile_name = match snap.ai.history.recap_profile.as_deref() {
+        Some(n) if !n.trim().is_empty() => n.trim().to_string(),
         _ => {
-            *last_seen_model = None;
+            *last_seen_profile = None;
             backoff.on_success();
             return;
         }
     };
 
-    if last_seen_model.as_deref() != Some(model.as_str()) {
-        *last_seen_model = Some(model.clone());
+    if last_seen_profile.as_deref() != Some(profile_name.as_str()) {
+        *last_seen_profile = Some(profile_name.clone());
         let mut guard = handle.inner.lock().await;
         guard.parked = false;
         guard.failures = 0;
         backoff.on_success();
     }
+
+    let Some(prof) = snap.ai.by_name(&profile_name).cloned() else {
+        tracing::warn!(
+            profile = %profile_name,
+            "recap profile missing, skipping tick"
+        );
+        return;
+    };
+    if prof.model.trim().is_empty() {
+        tracing::warn!(
+            profile = %profile_name,
+            "recap profile has an empty model, skipping tick"
+        );
+        return;
+    }
+    let timeout = Duration::from_secs(prof.timeout);
+    let model = prof.model.clone();
+    let reasoning_effort = prof.reasoning_effort.clone();
+    let service_tier = prof.service_tier.clone();
 
     let n = snap.ai.history.n;
     let ai_n = snap.ai.history.ai_channel_n;
@@ -403,6 +439,8 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
         llm,
         model: &model,
         timeout,
+        reasoning_effort: reasoning_effort.as_deref(),
+        service_tier: service_tier.as_deref(),
         self_logins,
     })
     .await
@@ -435,6 +473,8 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
             llm,
             model: &model,
             timeout,
+            reasoning_effort: reasoning_effort.as_deref(),
+            service_tier: service_tier.as_deref(),
             self_logins,
         })
         .await
@@ -487,7 +527,7 @@ pub async fn run_recap_batcher(
     self_logins: Vec<String>,
     shutdown: Arc<Notify>,
 ) {
-    let mut last_seen_model: Option<String> = None;
+    let mut last_seen_profile: Option<String> = None;
     let mut backoff = BatcherBackoff {
         current: Duration::ZERO,
         until: None,
@@ -500,19 +540,34 @@ pub async fn run_recap_batcher(
         tokio::select! {
             () = shutdown.notified() => break,
             () = tokio::time::sleep(sleep_for) => {
-                let Some((client, prof)) = registry.recap_client() else {
-                    tracing::debug!("recap skipped, no usable LLM endpoint");
+                let snap = settings.load();
+                let Some(name) = snap
+                    .ai
+                    .history
+                    .recap_profile
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                else {
+                    last_seen_profile = None;
+                    backoff.on_success();
+                    continue;
+                };
+                let Some((client, _)) = registry.resolve_named(name) else {
+                    tracing::debug!(
+                        profile = name,
+                        "recap skipped, named profile unusable"
+                    );
                     continue;
                 };
                 recap_batcher_tick(BatcherTickParams {
                     handle: &handle,
                     settings: &settings,
                     llm: client.as_ref(),
-                    timeout: Duration::from_secs(prof.timeout),
                     primary: &primary,
                     ai: ai.as_ref(),
                     self_logins: &self_logins,
-                    last_seen_model: &mut last_seen_model,
+                    last_seen_profile: &mut last_seen_profile,
                     backoff: &mut backoff,
                 })
                 .await;
@@ -535,6 +590,8 @@ mod tests {
     use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistorySource};
     use crate::ai::recap::trim_note_body;
     use crate::settings::Settings;
+    use crate::settings::ai::AiProfile;
+    use crate::settings::provider::AiProvider;
     use crate::twitch::mouth::Agent;
 
     struct CountingBoom {
@@ -572,9 +629,23 @@ mod tests {
         }
     }
 
-    fn test_settings(recap_model: &str) -> SettingsHandle {
+    fn test_settings(recap_profile: &str) -> SettingsHandle {
         let mut s = Settings::compiled_defaults();
-        s.ai.history.recap_model = Some(recap_model.into());
+        if recap_profile.is_empty() {
+            s.ai.history.recap_profile = None;
+        } else {
+            s.ai.history.recap_profile = Some(recap_profile.into());
+            s.ai.profiles.push(AiProfile {
+                name: recap_profile.into(),
+                key: None,
+                provider: AiProvider::Ollama,
+                base_url: None,
+                model: "tiny-model".into(),
+                timeout: 30,
+                reasoning_effort: None,
+                service_tier: None,
+            });
+        }
         s.ai.history.n = 2;
         s.ai.history.batch_size = 1;
         Arc::new(ArcSwap::from_pointee(s))
@@ -632,11 +703,10 @@ mod tests {
                 handle: &handle,
                 settings: &settings,
                 llm: &llm,
-                timeout: Duration::from_secs(30),
                 primary: &primary,
                 ai: None,
                 self_logins: &[],
-                last_seen_model: &mut last_seen,
+                last_seen_profile: &mut last_seen,
                 backoff: &mut backoff,
             })
             .await;
@@ -649,11 +719,10 @@ mod tests {
             handle: &handle,
             settings: &settings,
             llm: &llm,
-            timeout: Duration::from_secs(30),
             primary: &primary,
             ai: None,
             self_logins: &[],
-            last_seen_model: &mut last_seen,
+            last_seen_profile: &mut last_seen,
             backoff: &mut backoff,
         })
         .await;
@@ -723,9 +792,20 @@ mod tests {
             ],
             ..Default::default()
         };
-        coarsen_if_needed(&mut log, 3, 2, Some(&OkLlm), "m", Duration::from_secs(1))
-            .await
-            .unwrap();
+        coarsen_if_needed(
+            &mut log,
+            3,
+            2,
+            Some(RecapCompletion {
+                llm: &OkLlm,
+                model: "m",
+                timeout: Duration::from_secs(1),
+                reasoning_effort: None,
+                service_tier: None,
+            }),
+        )
+        .await
+        .unwrap();
         assert_eq!(log.notes.len(), 3);
         assert_eq!(log.notes[0].body, "high");
         assert_eq!(log.notes[1].body, "zusammengefasst");
@@ -761,9 +841,20 @@ mod tests {
         let boom = CountingBoom {
             calls: Arc::new(AtomicU32::new(0)),
         };
-        coarsen_if_needed(&mut log, 1, 2, Some(&boom), "m", Duration::from_secs(1))
-            .await
-            .unwrap();
+        coarsen_if_needed(
+            &mut log,
+            1,
+            2,
+            Some(RecapCompletion {
+                llm: &boom,
+                model: "m",
+                timeout: Duration::from_secs(1),
+                reasoning_effort: None,
+                service_tier: None,
+            }),
+        )
+        .await
+        .unwrap();
         assert_eq!(log.notes.len(), 1);
         assert_eq!(log.notes[0].body, "c");
     }
@@ -851,11 +942,10 @@ mod tests {
                 handle: &handle_bg,
                 settings: &settings,
                 llm: &llm,
-                timeout: Duration::from_secs(30),
                 primary: &primary,
                 ai: None,
                 self_logins: &[],
-                last_seen_model: &mut last_seen,
+                last_seen_profile: &mut last_seen,
                 backoff: &mut backoff,
             })
             .await;
@@ -910,11 +1000,10 @@ mod tests {
             handle: &handle,
             settings: &settings,
             llm: &OkLlm,
-            timeout: Duration::from_secs(30),
             primary: &primary,
             ai: None,
             self_logins: &[],
-            last_seen_model: &mut last_seen,
+            last_seen_profile: &mut last_seen,
             backoff: &mut backoff,
         })
         .await;

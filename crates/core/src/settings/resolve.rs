@@ -272,9 +272,9 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .history
                 .ai_channel_n
                 .unwrap_or(defaults.history.ai_channel_n),
-            recap_model: match &o.history.recap_model {
+            recap_profile: match &o.history.recap_profile {
                 Some(v) => v.clone(),
-                None => defaults.history.recap_model.clone(),
+                None => defaults.history.recap_profile.clone(),
             },
             batch_size: o.history.batch_size.unwrap_or(defaults.history.batch_size),
             max_notes: o.history.max_notes.unwrap_or(defaults.history.max_notes),

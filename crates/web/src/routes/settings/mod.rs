@@ -94,7 +94,7 @@ struct SaveForm {
     #[serde(default)]
     ai_history_ai_channel_n: Option<u64>,
     #[serde(default)]
-    ai_history_recap_model: Option<String>,
+    ai_history_recap_profile: String,
     #[serde(default)]
     ai_history_batch_size: Option<u64>,
     #[serde(default)]
