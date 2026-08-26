@@ -1,15 +1,22 @@
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use chrono_tz::Europe::Berlin;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
-use crate::ai::chat_history::ChatHistoryEntry;
+use crate::ai::chat_history::{ChatHistoryEntry, ChatHistorySource};
+use crate::ai::memory::inject::render_recap_section;
 use crate::twitch::mouth::Agent;
 
 pub const RECAP_NOTE_BYTES: usize = 768;
 pub const RECAP_MAX_GENERATION: u32 = 2;
 pub const RECAP_SHEET_NOTES: usize = 3;
 pub const RECAP_SHEET_LOGINS: usize = 16;
+pub const RECAP_FLUSH_AGE: chrono::Duration = chrono::Duration::seconds(120);
+pub const RECAP_PARK_FAILURES: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecapIdentity {
@@ -191,6 +198,148 @@ pub fn rebind_through_seq(log: &RecapChannelLog, entries: &[ChatHistoryEntry]) -
         .unwrap_or(0)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecapChannel {
+    Primary,
+    AiChannel,
+}
+
+pub struct RecapState {
+    pub file: RecapFile,
+    pub path: PathBuf,
+    pub parked: bool,
+    pub failures: u32,
+    pub primary_through_seq: u64,
+    pub ai_through_seq: u64,
+}
+
+pub struct RecapHandle {
+    pub(crate) inner: Arc<Mutex<RecapState>>,
+}
+
+impl RecapHandle {
+    pub async fn load(data_dir: PathBuf) -> Self {
+        let path = recap_path(&data_dir);
+        let file = load_recap_file(&path).await;
+        Self {
+            inner: Arc::new(Mutex::new(RecapState {
+                file,
+                path,
+                parked: false,
+                failures: 0,
+                primary_through_seq: 0,
+                ai_through_seq: 0,
+            })),
+        }
+    }
+
+    pub async fn parked(&self) -> bool {
+        self.inner.lock().await.parked
+    }
+
+    pub async fn sheet_logins(&self, channel: RecapChannel) -> BTreeSet<String> {
+        let guard = self.inner.lock().await;
+        let log = match channel {
+            RecapChannel::Primary => &guard.file.primary,
+            RecapChannel::AiChannel => &guard.file.ai_channel,
+        };
+        let n = log.notes.len();
+        let start = n.saturating_sub(RECAP_SHEET_NOTES);
+        let mut out = BTreeSet::new();
+        for note in &log.notes[start..] {
+            for id in &note.identities {
+                out.insert(id.login.to_ascii_lowercase());
+                if out.len() >= RECAP_SHEET_LOGINS {
+                    return out;
+                }
+            }
+        }
+        out
+    }
+
+    /// Invocation channel first, then the other; each section uses `injected_notes`.
+    pub async fn render_suffix(
+        &self,
+        invocation: RecapChannel,
+        login: &str,
+        max_notes: usize,
+    ) -> String {
+        let guard = self.inner.lock().await;
+        let primary = injected_notes(&guard.file.primary, max_notes);
+        let ai = injected_notes(&guard.file.ai_channel, max_notes);
+        let (first, second) = match invocation {
+            RecapChannel::Primary => (primary, ai),
+            RecapChannel::AiChannel => (ai, primary),
+        };
+        let mut out = render_recap_section(login, first);
+        let other = render_recap_section(login, second);
+        if !other.is_empty() {
+            if !out.is_empty() {
+                out.push_str("\n\n");
+            }
+            out.push_str(&other);
+        }
+        out
+    }
+}
+
+pub fn format_batch_line(entry: &ChatHistoryEntry, self_logins: &[String]) -> String {
+    let ts = entry.timestamp.with_timezone(&Berlin).format("%H:%M");
+    let name = entry
+        .display_name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(entry.username.as_str());
+    let tag = match entry.agent {
+        Some(Agent::Aurora) => " Aurora",
+        Some(Agent::Grok) => " Grok",
+        Some(Agent::Utility) => " bot",
+        None if entry.source == ChatHistorySource::Bot
+            || self_logins
+                .iter()
+                .any(|l| l.eq_ignore_ascii_case(&entry.username)) =>
+        {
+            " bot"
+        }
+        None => "",
+    };
+    format!("[{ts}] {name}{tag}: {}", entry.text)
+}
+
+pub fn identities_from_batch(entries: &[&ChatHistoryEntry]) -> Vec<RecapIdentity> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in entries {
+        let key = entry.username.to_ascii_lowercase();
+        if seen.insert(key) {
+            out.push(RecapIdentity {
+                login: entry.username.clone(),
+                user_id: entry.user_id.clone(),
+            });
+        }
+    }
+    out
+}
+
+pub fn append_note(
+    log: &mut RecapChannelLog,
+    body: String,
+    identities: Vec<RecapIdentity>,
+    through_seq: u64,
+    last_entry: &ChatHistoryEntry,
+) {
+    log.notes.push(RecapNote {
+        body: trim_note_body(&body),
+        identities,
+        through_seq,
+        generation: 0,
+    });
+    log.through_ts = Some(last_entry.timestamp);
+    log.through_fp = Some(LineFingerprint::from_entry(last_entry));
+}
+
+pub use crate::ai::recap_batcher::coarsen_if_needed;
+
 pub async fn load_recap_file(path: &Path) -> RecapFile {
     match tokio::fs::read_to_string(path).await {
         Ok(raw) => ron::from_str(&raw).unwrap_or_else(|e| {
@@ -210,6 +359,7 @@ mod tests {
     use super::*;
     use crate::ai::chat_history::ChatHistorySource;
     use crate::util::persist::atomic_save_ron_async;
+    use std::time::Duration;
 
     fn e(seq: u64, user: &str, agent: Option<Agent>) -> ChatHistoryEntry {
         ChatHistoryEntry {
@@ -328,6 +478,43 @@ mod tests {
         assert_eq!(inj.len(), 3);
         assert_eq!(inj[0].body, "n2");
         assert_eq!(inj[2].body, "n4");
+    }
+
+    #[test]
+    fn format_batch_line_tags_grok_not_self() {
+        let e = ChatHistoryEntry {
+            seq: 1,
+            username: "grok".into(),
+            display_name: Some("Grok".into()),
+            user_id: None,
+            text: "sigma".into(),
+            source: ChatHistorySource::Bot,
+            agent: Some(Agent::Grok),
+            timestamp: Utc::now(),
+        };
+        let line = format_batch_line(&e, &[]);
+        assert!(line.contains(" Grok:"));
+        assert!(!line.contains("(self)"));
+    }
+
+    #[tokio::test]
+    async fn coarsen_drops_at_max_generation() {
+        let mut log = RecapChannelLog {
+            notes: (0..4)
+                .map(|i| RecapNote {
+                    body: format!("n{i}"),
+                    identities: vec![],
+                    through_seq: i,
+                    generation: RECAP_MAX_GENERATION,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        coarsen_if_needed(&mut log, 3, 3, None, "", Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(log.notes.len(), 3);
+        assert_eq!(log.notes[0].body, "n1");
     }
 
     #[tokio::test]

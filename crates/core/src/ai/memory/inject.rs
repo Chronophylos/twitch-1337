@@ -331,13 +331,13 @@ pub async fn build_chat_turn_context(
             .frontmatter
             .username
             .as_deref()
-            .map(|s| s.to_ascii_lowercase())
+            .map(str::to_ascii_lowercase)
             .unwrap_or_default();
         let b_login = b
             .frontmatter
             .username
             .as_deref()
-            .map(|s| s.to_ascii_lowercase())
+            .map(str::to_ascii_lowercase)
             .unwrap_or_default();
         let a_tier = user_pack_tier(&a_login, &speaker_lc, &mentioned, recap_lc);
         let b_tier = user_pack_tier(&b_login, &speaker_lc, &mentioned, recap_lc);
