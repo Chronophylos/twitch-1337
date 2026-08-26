@@ -11,6 +11,8 @@ pub mod state;
 
 pub use solar::class_rank;
 
+use std::collections::VecDeque;
+
 use chrono::{DateTime, Duration, Utc};
 
 /// One event that survived parsing and threshold filtering, already
@@ -22,8 +24,6 @@ pub struct Candidate {
     pub at: DateTime<Utc>,
     pub line: String,
 }
-
-use std::collections::VecDeque;
 
 /// Decide what to announce from one poll's candidates.
 ///
