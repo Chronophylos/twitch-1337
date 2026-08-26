@@ -440,6 +440,13 @@ kbd {
   overflow: hidden;
 }
 .stat-strip.three { grid-template-columns: repeat(3, 1fr); }
+.stat-strip.two { grid-template-columns: repeat(2, 1fr); }
+.stat-strip.two .stat-value {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
 .stat {
   padding: 14px 18px;
   border-right: 1px solid var(--line);
