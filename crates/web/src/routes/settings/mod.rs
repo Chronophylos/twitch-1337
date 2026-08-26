@@ -68,21 +68,23 @@ struct SaveForm {
     #[serde(default)]
     ping_public: Option<String>,
 
-    // ---- AI behavior card ----
+    // ---- AI Aurora card ----
     #[serde(default)]
-    ai_behavior_max_turn_rounds: Option<usize>,
+    ai_aurora_profile: String,
     #[serde(default)]
-    ai_behavior_max_writes_per_turn: Option<usize>,
+    ai_aurora_max_turn_rounds: Option<usize>,
     #[serde(default)]
-    ai_behavior_persona_name: Option<String>,
+    ai_aurora_max_writes_per_turn: Option<usize>,
     #[serde(default)]
-    ai_behavior_min_response_delay_ms: Option<u64>,
+    ai_aurora_persona_name: Option<String>,
     #[serde(default)]
-    ai_behavior_reply_target_chars: Option<usize>,
+    ai_aurora_min_response_delay_ms: Option<u64>,
     #[serde(default)]
-    ai_behavior_reply_soft_chars: Option<usize>,
+    ai_aurora_reply_target_chars: Option<usize>,
     #[serde(default)]
-    ai_behavior_reply_hard_chars: Option<usize>,
+    ai_aurora_reply_soft_chars: Option<usize>,
+    #[serde(default)]
+    ai_aurora_reply_hard_chars: Option<usize>,
 
     // ---- AI history card ----
     #[serde(default)]
@@ -93,14 +95,16 @@ struct SaveForm {
     ai_history_n: Option<u64>,
     #[serde(default)]
     ai_history_ai_channel_n: Option<u64>,
+
+    // ---- AI Recap card ----
     #[serde(default)]
-    ai_history_recap_profile: String,
+    ai_recap_profile: String,
     #[serde(default)]
-    ai_history_batch_size: Option<u64>,
+    ai_recap_batch_size: Option<u64>,
     #[serde(default)]
-    ai_history_max_notes: Option<u64>,
+    ai_recap_max_notes: Option<u64>,
     #[serde(default)]
-    ai_history_merge_width: Option<u64>,
+    ai_recap_merge_width: Option<u64>,
 
     // ---- AI memory card ----
     #[serde(default)]
@@ -133,6 +137,8 @@ struct SaveForm {
     // ---- AI grok card ----
     #[serde(default)]
     ai_grok_profile: String,
+    #[serde(default)]
+    ai_grok_persona_name: Option<String>,
 
     // ---- AI prefill toggle card ----
     /// Hidden marker so the handler can tell "card visible but unchecked"
@@ -400,7 +406,8 @@ async fn reset(
         "suspend" => SettingsSection::Suspend,
         "emote_tracker_potat" => SettingsSection::EmoteTrackerPotat,
         "web_runtime" => SettingsSection::WebRuntime,
-        "ai_behavior" => SettingsSection::AiAurora,
+        "ai_behavior" | "ai_aurora" => SettingsSection::AiAurora,
+        "ai_recap" => SettingsSection::AiRecap,
         other => {
             return Err(WebError::Validation {
                 field: "section".into(),

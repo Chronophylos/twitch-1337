@@ -43,15 +43,7 @@ async fn owner_can_save_cooldown_and_handle_reflects_change() {
     // as authoritative, so we send the current value for everything except
     // the one knob we're changing.
     let defaults = state.settings_store.defaults().clone();
-    let body = format!(
-        "_csrf={csrf}&cooldown_ai=15&cooldown_news={n}&cooldown_up={u}&cooldown_feedback={f}&cooldown_doener={d}&ping_cooldown={p}",
-        csrf = urlencoding::encode(&bare_csrf),
-        n = defaults.cooldowns.news,
-        u = defaults.cooldowns.up,
-        f = defaults.cooldowns.feedback,
-        d = defaults.cooldowns.doener,
-        p = defaults.pings.cooldown,
-    );
+    let body = save_form_body(&bare_csrf, &defaults, &[("cooldown_ai", "15")]);
     let req = Request::builder()
         .method("POST")
         .uri("/settings")
@@ -118,13 +110,10 @@ async fn validation_error_renders_form_with_errors() {
         "fixture assumes the default news cooldown is not already 900",
     );
     // cooldown_ai = 0 violates the 1..=3600 bound.
-    let body = format!(
-        "_csrf={csrf}&cooldown_ai=0&cooldown_news=900&cooldown_up={u}&cooldown_feedback={f}&cooldown_doener={d}&ping_cooldown={p}",
-        csrf = urlencoding::encode(&bare_csrf),
-        u = defaults.cooldowns.up,
-        f = defaults.cooldowns.feedback,
-        d = defaults.cooldowns.doener,
-        p = defaults.pings.cooldown,
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[("cooldown_ai", "0"), ("cooldown_news", "900")],
     );
     let req = Request::builder()
         .method("POST")
@@ -165,31 +154,68 @@ async fn validation_error_renders_form_with_errors() {
     );
 }
 
-/// Build a form body containing every required cooldown/ping field at their
-/// default values plus any extra (form_field, value) pairs the test wants to
-/// submit. Returned bodies are ready for `application/x-www-form-urlencoded`.
+/// Build a form body containing every required field at its current value
+/// plus any extra (form_field, value) pairs the test wants to submit.
 fn save_form_body(
     bare_csrf: &str,
-    defaults: &twitch_1337_core::settings::Settings,
+    current: &twitch_1337_core::settings::Settings,
     extra: &[(&str, &str)],
 ) -> String {
-    let mut body = format!(
-        "_csrf={csrf}&cooldown_ai={a}&cooldown_news={n}&cooldown_up={u}&cooldown_feedback={f}&cooldown_doener={d}&ping_cooldown={p}",
-        csrf = urlencoding::encode(bare_csrf),
-        a = defaults.cooldowns.ai,
-        n = defaults.cooldowns.news,
-        u = defaults.cooldowns.up,
-        f = defaults.cooldowns.feedback,
-        d = defaults.cooldowns.doener,
-        p = defaults.pings.cooldown,
-    );
-    for (k, v) in extra {
-        body.push('&');
-        body.push_str(k);
-        body.push('=');
-        body.push_str(&urlencoding::encode(v));
+    let mut fields = vec![
+        ("_csrf".to_owned(), bare_csrf.to_owned()),
+        ("cooldown_ai".to_owned(), current.cooldowns.ai.to_string()),
+        (
+            "cooldown_news".to_owned(),
+            current.cooldowns.news.to_string(),
+        ),
+        ("cooldown_up".to_owned(), current.cooldowns.up.to_string()),
+        (
+            "cooldown_feedback".to_owned(),
+            current.cooldowns.feedback.to_string(),
+        ),
+        (
+            "cooldown_doener".to_owned(),
+            current.cooldowns.doener.to_string(),
+        ),
+        (
+            "ping_cooldown".to_owned(),
+            current.pings.cooldown.to_string(),
+        ),
+        (
+            "ai_aurora_profile".to_owned(),
+            current.ai.aurora.profile.clone(),
+        ),
+        (
+            "ai_grok_profile".to_owned(),
+            current.ai.grok.profile.clone(),
+        ),
+        (
+            "ai_dreamer_profile".to_owned(),
+            current.ai.dreamer.profile.clone(),
+        ),
+        (
+            "ai_media_profile".to_owned(),
+            current.ai.media.profile.clone(),
+        ),
+    ];
+    for &(key, value) in extra {
+        if let Some((_, current_value)) = fields.iter_mut().find(|(name, _)| name == key) {
+            *current_value = value.to_owned();
+        } else {
+            fields.push((key.to_owned(), value.to_owned()));
+        }
     }
-    body
+    fields
+        .into_iter()
+        .map(|(key, value)| {
+            format!(
+                "{}={}",
+                urlencoding::encode(&key),
+                urlencoding::encode(&value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 /// Pluck the `tw1337_flash` cookie value out of `Set-Cookie` headers.
@@ -250,11 +276,9 @@ async fn settings_page_no_longer_offers_connection_inputs() {
     );
 }
 
-/// A dreamer `profile` override round-trips through the settings POST,
-/// including clearing it back to "inherit the active profile" on an empty
-/// submission.
+/// A required Dreamer profile round-trips and cannot be omitted.
 #[tokio::test]
-async fn a_dreamer_profile_override_round_trips_through_the_settings_post() {
+async fn a_required_dreamer_profile_round_trips_through_the_settings_post() {
     use twitch_1337_core::settings::{AiProfile, AiProvider, overrides::SettingsOverrides};
 
     install_crypto();
@@ -278,6 +302,22 @@ async fn a_dreamer_profile_override_round_trips_through_the_settings_post() {
                 ai: twitch_1337_core::settings::AiOverrides {
                     profiles: Some(vec![profile("a"), profile("b")]),
                     active_profile: Some("a".to_owned()),
+                    aurora: twitch_1337_core::settings::overrides::AiAuroraOverrides {
+                        profile: Some(Some("a".into())),
+                        ..Default::default()
+                    },
+                    grok: twitch_1337_core::settings::overrides::AiGrokOverrides {
+                        profile: Some(Some("a".into())),
+                        ..Default::default()
+                    },
+                    dreamer: twitch_1337_core::settings::overrides::AiDreamerOverrides {
+                        profile: Some(Some("a".into())),
+                        ..Default::default()
+                    },
+                    media: twitch_1337_core::settings::overrides::AiMediaOverrides {
+                        profile: Some(Some("a".into())),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 ..Default::default()
@@ -291,27 +331,10 @@ async fn a_dreamer_profile_override_round_trips_through_the_settings_post() {
         .expect("seed profiles");
 
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
-    let defaults = state.settings_store.defaults().clone();
+    let current = state.settings.load().clone();
 
     let app = build_router(state.clone());
-    let body = save_form_body(&bare_csrf, &defaults, &[("ai_dreamer_profile", "b")]);
-    let req = Request::builder()
-        .method("POST")
-        .uri("/settings")
-        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(body))
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    assert_eq!(
-        state.settings.load().ai.dreamer.profile.as_deref(),
-        Some("b"),
-        "dreamer.profile must be set to the submitted profile name",
-    );
-
-    let app = build_router(state.clone());
-    let body = save_form_body(&bare_csrf, &defaults, &[("ai_dreamer_profile", "")]);
+    let body = save_form_body(&bare_csrf, &current, &[("ai_dreamer_profile", "b")]);
     let req = Request::builder()
         .method("POST")
         .uri("/settings")
@@ -323,8 +346,29 @@ async fn a_dreamer_profile_override_round_trips_through_the_settings_post() {
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     assert_eq!(
         state.settings.load().ai.dreamer.profile,
-        None,
-        "an empty submission must clear dreamer.profile back to inherit",
+        "b",
+        "dreamer.profile must be set to the submitted profile name",
+    );
+
+    let app = build_router(state.clone());
+    let body = save_form_body(&bare_csrf, &state.settings.load(), &[]);
+    let body = body
+        .split('&')
+        .filter(|field| !field.starts_with("ai_dreamer_profile="))
+        .collect::<Vec<_>>()
+        .join("&");
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::BAD_REQUEST,
+        "omitting a required Dreamer profile must fail validation",
     );
 }
 
@@ -355,6 +399,22 @@ async fn a_recap_profile_round_trips_through_the_settings_post() {
                 ai: twitch_1337_core::settings::AiOverrides {
                     profiles: Some(vec![profile("a"), profile("b")]),
                     active_profile: Some("a".to_owned()),
+                    aurora: twitch_1337_core::settings::overrides::AiAuroraOverrides {
+                        profile: Some(Some("a".into())),
+                        ..Default::default()
+                    },
+                    grok: twitch_1337_core::settings::overrides::AiGrokOverrides {
+                        profile: Some(Some("a".into())),
+                        ..Default::default()
+                    },
+                    dreamer: twitch_1337_core::settings::overrides::AiDreamerOverrides {
+                        profile: Some(Some("a".into())),
+                        ..Default::default()
+                    },
+                    media: twitch_1337_core::settings::overrides::AiMediaOverrides {
+                        profile: Some(Some("a".into())),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 ..Default::default()
@@ -368,10 +428,10 @@ async fn a_recap_profile_round_trips_through_the_settings_post() {
         .expect("seed profiles");
 
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
-    let defaults = state.settings_store.defaults().clone();
+    let current = state.settings.load().clone();
 
     let app = build_router(state.clone());
-    let body = save_form_body(&bare_csrf, &defaults, &[("ai_history_recap_profile", "b")]);
+    let body = save_form_body(&bare_csrf, &current, &[("ai_recap_profile", "b")]);
     let req = Request::builder()
         .method("POST")
         .uri("/settings")
@@ -382,13 +442,17 @@ async fn a_recap_profile_round_trips_through_the_settings_post() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     assert_eq!(
-        state.settings.load().ai.history.recap_profile.as_deref(),
+        state.settings.load().ai.recap.profile.as_deref(),
         Some("b"),
-        "recap_profile must be set to the submitted profile name",
+        "recap.profile must be set to the submitted profile name",
     );
 
     let app = build_router(state.clone());
-    let body = save_form_body(&bare_csrf, &defaults, &[("ai_history_recap_profile", "")]);
+    let body = save_form_body(
+        &bare_csrf,
+        &state.settings.load(),
+        &[("ai_recap_profile", "")],
+    );
     let req = Request::builder()
         .method("POST")
         .uri("/settings")
@@ -399,10 +463,39 @@ async fn a_recap_profile_round_trips_through_the_settings_post() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     assert_eq!(
-        state.settings.load().ai.history.recap_profile,
+        state.settings.load().ai.recap.profile,
         None,
         "an empty submission must turn Recap off, not inherit the active profile",
     );
+}
+
+#[tokio::test]
+async fn grok_profile_and_persona_round_trip_through_the_settings_post() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let current = state.settings.load().clone();
+    let body = save_form_body(
+        &bare_csrf,
+        &current,
+        &[
+            ("ai_grok_profile", current.ai.grok.profile.as_str()),
+            ("ai_grok_persona_name", "Grok Prime"),
+        ],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = build_router(state.clone()).oneshot(req).await.unwrap();
+
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(state.settings.load().ai.grok.persona_name, "Grok Prime");
 }
 
 #[tokio::test]
@@ -582,9 +675,9 @@ async fn owner_can_save_aurora_reply_length() {
         &bare_csrf,
         &defaults,
         &[
-            ("ai_behavior_reply_target_chars", "200"),
-            ("ai_behavior_reply_soft_chars", "300"),
-            ("ai_behavior_reply_hard_chars", "400"),
+            ("ai_aurora_reply_target_chars", "200"),
+            ("ai_aurora_reply_soft_chars", "300"),
+            ("ai_aurora_reply_hard_chars", "400"),
         ],
     );
     let req = Request::builder()
@@ -597,9 +690,9 @@ async fn owner_can_save_aurora_reply_length() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     let snap = state.settings.load();
-    assert_eq!(snap.ai.behavior.reply_target_chars, 200);
-    assert_eq!(snap.ai.behavior.reply_soft_chars, 300);
-    assert_eq!(snap.ai.behavior.reply_hard_chars, 400);
+    assert_eq!(snap.ai.aurora.reply_target_chars, 200);
+    assert_eq!(snap.ai.aurora.reply_soft_chars, 300);
+    assert_eq!(snap.ai.aurora.reply_hard_chars, 400);
 }
 
 #[tokio::test]
@@ -633,7 +726,7 @@ async fn ai_history_length_below_n_plus_batch_returns_400() {
 
     let defaults = state.settings_store.defaults().clone();
     assert_eq!(defaults.ai.history.n, 20);
-    assert_eq!(defaults.ai.history.batch_size, 40);
+    assert_eq!(defaults.ai.recap.batch_size, 40);
 
     let app = build_router(state.clone());
     let body = save_form_body(&bare_csrf, &defaults, &[("ai_history_length", "10")]);
@@ -658,7 +751,7 @@ async fn ai_history_length_below_n_plus_batch_returns_400() {
 }
 
 #[tokio::test]
-async fn reset_ai_behavior_restores_reply_length_defaults() {
+async fn reset_ai_aurora_restores_reply_length_defaults() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     set_owner(&state, Some("123"));
@@ -670,9 +763,9 @@ async fn reset_ai_behavior_restores_reply_length_defaults() {
         &bare_csrf,
         &defaults,
         &[
-            ("ai_behavior_reply_target_chars", "200"),
-            ("ai_behavior_reply_soft_chars", "300"),
-            ("ai_behavior_reply_hard_chars", "400"),
+            ("ai_aurora_reply_target_chars", "200"),
+            ("ai_aurora_reply_soft_chars", "300"),
+            ("ai_aurora_reply_hard_chars", "400"),
         ],
     );
     let req = Request::builder()
@@ -689,7 +782,7 @@ async fn reset_ai_behavior_restores_reply_length_defaults() {
     let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
     let req = Request::builder()
         .method("POST")
-        .uri("/settings/reset/ai_behavior")
+        .uri("/settings/reset/ai_aurora")
         .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .body(Body::from(body))
@@ -697,9 +790,47 @@ async fn reset_ai_behavior_restores_reply_length_defaults() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     let snap = state.settings.load();
-    assert_eq!(snap.ai.behavior.reply_target_chars, 480);
-    assert_eq!(snap.ai.behavior.reply_soft_chars, 490);
-    assert_eq!(snap.ai.behavior.reply_hard_chars, 490);
+    assert_eq!(snap.ai.aurora.reply_target_chars, 480);
+    assert_eq!(snap.ai.aurora.reply_soft_chars, 490);
+    assert_eq!(snap.ai.aurora.reply_hard_chars, 490);
+}
+
+#[tokio::test]
+async fn reset_ai_recap_restores_recap_off_default() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let current = state.settings.load().clone();
+    let body = save_form_body(
+        &bare_csrf,
+        &current,
+        &[("ai_recap_profile", current.ai.aurora.profile.as_str())],
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = build_router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(state.settings.load().ai.recap.profile.is_some());
+
+    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings/reset/ai_recap")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = build_router(state.clone()).oneshot(req).await.unwrap();
+
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(state.settings.load().ai.recap.profile, None);
 }
 
 #[tokio::test]
@@ -718,18 +849,14 @@ async fn permissions_lists_render_pretty_resting_display() {
     // Seed both permission lists via POST.
     let defaults = state.settings_store.defaults().clone();
     let app = build_router(state.clone());
-    let body = format!(
-        "_csrf={csrf}&cooldown_ai={ai}&cooldown_news={n}&cooldown_up={u}&cooldown_feedback={f}&cooldown_doener={d}&ping_cooldown={p}&twitch_hidden_admins={ha}&twitch_viewer_allowlist={va}&twitch_emote_usage_deny_list={ed}",
-        csrf = urlencoding::encode(&bare_csrf),
-        ai = defaults.cooldowns.ai,
-        n = defaults.cooldowns.news,
-        u = defaults.cooldowns.up,
-        f = defaults.cooldowns.feedback,
-        d = defaults.cooldowns.doener,
-        p = defaults.pings.cooldown,
-        ha = urlencoding::encode("111\n222"),
-        va = urlencoding::encode("333\n444"),
-        ed = urlencoding::encode("evilbot\notherbot"),
+    let body = save_form_body(
+        &bare_csrf,
+        &defaults,
+        &[
+            ("twitch_hidden_admins", "111\n222"),
+            ("twitch_viewer_allowlist", "333\n444"),
+            ("twitch_emote_usage_deny_list", "evilbot\notherbot"),
+        ],
     );
     let req = Request::builder()
         .method("POST")
@@ -814,15 +941,7 @@ async fn reset_cooldowns_clears_section_overrides() {
     let defaults = state.settings_store.defaults().clone();
     // First push a non-default value via /settings POST.
     let app = build_router(state.clone());
-    let body = format!(
-        "_csrf={csrf}&cooldown_ai=15&cooldown_news={n}&cooldown_up={u}&cooldown_feedback={f}&cooldown_doener={d}&ping_cooldown={p}",
-        csrf = urlencoding::encode(&bare_csrf),
-        n = defaults.cooldowns.news,
-        u = defaults.cooldowns.up,
-        f = defaults.cooldowns.feedback,
-        d = defaults.cooldowns.doener,
-        p = defaults.pings.cooldown,
-    );
+    let body = save_form_body(&bare_csrf, &defaults, &[("cooldown_ai", "15")]);
     let req = Request::builder()
         .method("POST")
         .uri("/settings")
@@ -1421,8 +1540,21 @@ async fn validation_error_preserves_stored_ai_settings() {
                 ai: twitch_1337_core::settings::AiOverrides {
                     profiles: Some(vec![profile("a"), profile("b")]),
                     active_profile: Some("a".to_owned()),
+                    aurora: twitch_1337_core::settings::overrides::AiAuroraOverrides {
+                        profile: Some(Some("a".into())),
+                        ..Default::default()
+                    },
                     grok: twitch_1337_core::settings::overrides::AiGrokOverrides {
                         profile: Some(Some("b".into())),
+                        ..Default::default()
+                    },
+                    dreamer: twitch_1337_core::settings::overrides::AiDreamerOverrides {
+                        profile: Some(Some("a".into())),
+                        ..Default::default()
+                    },
+                    media: twitch_1337_core::settings::overrides::AiMediaOverrides {
+                        profile: Some(Some("a".into())),
+                        ..Default::default()
                     },
                     ..Default::default()
                 },
@@ -1437,13 +1569,13 @@ async fn validation_error_preserves_stored_ai_settings() {
         .expect("seed grok profile");
 
     let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
-    let defaults = state.settings_store.defaults().clone();
+    let current = state.settings.load().clone();
 
     // Fail validation on a different card: the inject budget must cover
     // SOUL + LORE, and 1024 bytes does not.
     let body = save_form_body(
         &bare_csrf,
-        &defaults,
+        &current,
         &[("ai_memory_inject_byte_budget", "1024")],
     );
     let req = Request::builder()
@@ -1469,8 +1601,8 @@ async fn validation_error_preserves_stored_ai_settings() {
         "stored grok profile override must survive the validation re-render; got: {html}",
     );
     assert_eq!(
-        state.settings.load().ai.grok.profile.as_deref(),
-        Some("b"),
+        state.settings.load().ai.grok.profile,
+        "b",
         "validation rejection must not mutate stored settings",
     );
 }
