@@ -74,8 +74,12 @@ pub struct DhlBootstrap {
 /// dump round-trip the API keys out of the process.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AiBootstrap {
-    pub api_key: SecretString,
-    /// `[ai.keys]` — named credentials a profile can point at by name, so a
+    /// Leftover from before named keys. Ignored at runtime — operators
+    /// should move the secret into `[ai.keys]` and point each profile at a
+    /// key name. Kept so we can warn instead of silently dropping it.
+    #[serde(default)]
+    pub api_key: Option<SecretString>,
+    /// `[ai.keys]` — named credentials a profile points at by name, so a
     /// profile in settings.ron holds a name and never a secret.
     #[serde(default)]
     pub keys: HashMap<String, SecretString>,
@@ -207,9 +211,12 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
     }
 
     if let Some(ref ai) = config.ai
-        && ai.api_key.expose_secret().trim().is_empty()
+        && ai
+            .keys
+            .values()
+            .any(|k| k.expose_secret().trim().is_empty())
     {
-        bail!("ai.api_key cannot be empty");
+        bail!("[ai.keys] entries cannot be empty");
     }
 
     if config.web.enabled {
@@ -234,7 +241,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ai_bootstrap_parses_api_key_only() {
+    fn ai_bootstrap_parses_named_keys() {
+        let cfg: Configuration = toml::from_str(
+            r#"
+            [twitch]
+            channel = "c"
+            username = "u"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+
+            [ai.keys]
+            openrouter = "sk-test"
+        "#,
+        )
+        .expect("parse");
+        let boot = cfg.ai.as_ref().expect("ai present");
+        assert_eq!(
+            boot.keys
+                .get("openrouter")
+                .expect("named key")
+                .expose_secret(),
+            "sk-test"
+        );
+        assert!(boot.api_key.is_none());
+    }
+
+    #[test]
+    fn leftover_ai_api_key_still_parses_but_is_unused() {
         let cfg: Configuration = toml::from_str(
             r#"
             [twitch]
@@ -245,12 +279,33 @@ mod tests {
             client_secret = "s"
 
             [ai]
-            api_key = "sk-test"
+            api_key = "sk-legacy"
         "#,
         )
         .expect("parse");
         let boot = cfg.ai.as_ref().expect("ai present");
-        assert!(!boot.api_key.expose_secret().is_empty());
+        assert_eq!(
+            boot.api_key.as_ref().expect("leftover key").expose_secret(),
+            "sk-legacy"
+        );
+        assert!(boot.keys.is_empty());
+    }
+
+    #[test]
+    fn empty_named_key_is_rejected() {
+        let mut cfg = Configuration::test_default();
+        cfg.ai = Some(AiBootstrap {
+            api_key: None,
+            keys: std::collections::HashMap::from([(
+                "openrouter".into(),
+                SecretString::new("   ".into()),
+            )]),
+        });
+        let err = validate_config(&cfg).expect_err("empty named key must fail");
+        assert!(
+            err.to_string().contains("[ai.keys]"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

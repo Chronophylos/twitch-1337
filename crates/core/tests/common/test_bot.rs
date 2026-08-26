@@ -152,19 +152,33 @@ impl TestBotBuilder {
 
     pub fn with_ai(mut self) -> Self {
         if self.config.ai.is_none() {
-            // AiBootstrap only holds the api_key secret. All other AI knobs
+            // AiBootstrap holds named `[ai.keys]` secrets. All other AI knobs
             // (model, timeout, history, memory, etc.) live in the settings
             // store and are read from SettingsHandle at runtime.
             self.config.ai = Some(AiBootstrap {
-                api_key: secrecy::SecretString::new("test".into()),
-                keys: std::collections::HashMap::new(),
+                api_key: None,
+                keys: std::collections::HashMap::from([(
+                    "test".into(),
+                    secrecy::SecretString::new("test".into()),
+                )]),
             });
-            // Bake a recognizable test model name into the default settings
-            // override so tests that assert on `calls[0].model` get a stable
-            // value instead of the empty-string production default.
+            // Bake a recognizable test model into a named profile so tests
+            // that assert on `calls[0].model` get a stable value instead of
+            // the empty-string production default. `key` names the
+            // `[ai.keys]` entry above — leftover `[ai].api_key` is unused.
             let o = self.settings_overrides.get_or_insert_with(Default::default);
-            if o.ai.connection.model.is_none() {
-                o.ai.connection.model = Some("test-model".into());
+            if o.ai.profiles.is_none() {
+                o.ai.profiles = Some(vec![twitch_1337::settings::ai::AiProfile {
+                    name: "default".into(),
+                    key: Some("test".into()),
+                    provider: twitch_1337::settings::provider::AiProvider::OpenRouter,
+                    base_url: None,
+                    model: "test-model".into(),
+                    timeout: 30,
+                    reasoning_effort: None,
+                    service_tier: None,
+                }]);
+                o.ai.active_profile = Some("default".into());
             }
         }
         self

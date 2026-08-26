@@ -33,7 +33,7 @@ pub struct AiSettings {
 /// One named provider configuration.
 ///
 /// `key` names an entry in config.toml's `[ai.keys]`; the secret itself
-/// never touches settings.ron. `None` means "the bare `[ai].api_key`".
+/// never touches settings.ron. Required for every provider except Ollama.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiProfile {
     pub name: String,

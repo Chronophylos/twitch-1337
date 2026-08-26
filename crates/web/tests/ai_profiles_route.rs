@@ -30,7 +30,7 @@ async fn body_string(res: axum::http::Response<Body>) -> String {
 fn profile(name: &str) -> AiProfile {
     AiProfile {
         name: name.into(),
-        key: None,
+        key: Some("k".into()),
         provider: AiProvider::OpenRouter,
         base_url: None,
         model: "some-model".into(),
@@ -241,7 +241,7 @@ async fn add_profile_persists_and_renders() {
     let app = build_router(state.clone());
 
     let body = format!(
-        "_csrf={csrf}&name=fresh&provider=open_ai&model=gpt-5&timeout=45",
+        "_csrf={csrf}&name=fresh&provider=open_ai&model=gpt-5&timeout=45&key=k",
         csrf = urlencoding::encode(&bare_csrf),
     );
     let req = Request::builder()
@@ -270,6 +270,40 @@ async fn add_profile_persists_and_renders() {
 }
 
 #[tokio::test]
+async fn add_rejects_openai_profile_without_key() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, csrf_cookie, bare_csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let app = build_router(state.clone());
+
+    let body = format!(
+        "_csrf={csrf}&name=fresh&provider=open_ai&model=gpt-5&timeout=45",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/ai-profiles/add")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "must re-render the form");
+    let html = body_string(res).await;
+    assert!(
+        html.contains("form.key"),
+        "validation must name the key field; got: {html}"
+    );
+    assert_eq!(
+        state.settings.load().ai.profiles.len(),
+        1,
+        "the keyless row must not persist"
+    );
+}
+
+#[tokio::test]
 async fn edit_renaming_active_profile_carries_the_pointer() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
@@ -279,7 +313,7 @@ async fn edit_renaming_active_profile_carries_the_pointer() {
     let app = build_router(state.clone());
 
     let body = format!(
-        "_csrf={csrf}&name=renamed&provider=open_router&model=some-model&timeout=30",
+        "_csrf={csrf}&name=renamed&provider=open_router&model=some-model&timeout=30&key=k",
         csrf = urlencoding::encode(&bare_csrf),
     );
     let req = Request::builder()

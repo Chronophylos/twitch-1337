@@ -122,7 +122,7 @@ log` on `main` is the release history. The workspace version stays at
 
 ## Config
 
-`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (api_key only, optional), `[aviationstack]` (api_key only, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
+`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (`[ai.keys]` named credentials only, optional), `[aviationstack]` (api_key only, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
 
 `[twitch]` holds OAuth credentials (`refresh_token`, `client_id`, `client_secret`), `channel`, `username`, and `owner` (optional Twitch user ID with full dashboard access). `owner` is bootstrap-only and lives here because it gates the settings page — it must not be editable from the thing it controls. Permission lists (`hidden_admins`, `viewer_allowlist`), channel pointers (`admin_channel`, `ai_channel`), and `expected_latency` live in `settings.ron`, managed via `/settings → Twitch · Permissions` and `Twitch · Channels`. `admin_channel` and `ai_channel` changes require a bot restart. Mods always pass the dashboard auth check; `viewer_allowlist` grants read-only access to non-mods.
 
@@ -142,9 +142,10 @@ lives in `settings.ron`: `ai.behavior.persona_name` (default `"Aurora"`) and
 defaults 480/490/490) is live-tunable on `/settings → AI · Behavior`; Grok
 keeps a baked 480/500 prompt and a 490/490 reword-clamp.
 
-`[ai]` carries only credentials: `api_key` plus an optional `[ai.keys]` table
-of named keys. A profile stores a key *name*, never the secret, so switching
-providers from the dashboard never touches config.toml. Provider, base URL,
+`[ai]` carries only credentials: an `[ai.keys]` table of named keys. A profile
+stores a key *name*, never the secret, so switching providers from the dashboard
+never touches config.toml. A leftover `[ai].api_key` is ignored (startup warn);
+move it into `[ai.keys]` and set the profile's key name. Provider, base URL,
 model, timeout, reasoning effort and service tier live in **profiles** — a
 named list (`ai.profiles`) CRUD'd at `/ai-profiles` (owner only — a profile
 carries `base_url`/`key`, the same credential surface `/settings` keeps

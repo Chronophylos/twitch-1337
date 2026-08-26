@@ -352,10 +352,17 @@ mod tests {
         let (_dir, store, handle, _log) = fixture();
         let patch = SettingsOverrides {
             ai: crate::settings::overrides::AiOverrides {
-                connection: crate::settings::overrides::AiConnectionOverrides {
-                    model: Some("o5-pro".into()),
-                    ..Default::default()
-                },
+                profiles: Some(vec![crate::settings::ai::AiProfile {
+                    name: "default".into(),
+                    key: Some("k".into()),
+                    provider: crate::settings::provider::AiProvider::OpenRouter,
+                    base_url: None,
+                    model: "o5-pro".into(),
+                    timeout: 30,
+                    reasoning_effort: None,
+                    service_tier: None,
+                }]),
+                active_profile: Some("default".into()),
                 ..Default::default()
             },
             ..SettingsOverrides::default()
@@ -503,6 +510,57 @@ mod tests {
         let p = s.ai.active();
         assert_eq!(p.provider, crate::settings::provider::AiProvider::Ollama);
         assert_eq!(p.reasoning_effort, None);
+    }
+
+    #[test]
+    fn existing_openai_profile_without_key_does_not_quarantine() {
+        // Operators who still used leftover `[ai].api_key` after the
+        // profiles rollout have rows with a model and `key: None`. A
+        // required-key check on boot would quarantine the whole file.
+        use crate::settings::ai::AiProfile;
+        use crate::settings::overrides::AiOverrides;
+        use crate::settings::provider::AiProvider;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let overrides = SettingsOverrides {
+            ai: AiOverrides {
+                profiles: Some(vec![AiProfile {
+                    name: "default".into(),
+                    key: None,
+                    provider: AiProvider::OpenRouter,
+                    base_url: None,
+                    model: "some-model".into(),
+                    timeout: 30,
+                    reasoning_effort: None,
+                    service_tier: None,
+                }]),
+                active_profile: Some("default".into()),
+                ..Default::default()
+            },
+            ..SettingsOverrides::default()
+        };
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            ron::ser::to_string(&overrides).expect("serialize"),
+        )
+        .expect("write settings");
+
+        let log = Arc::new(MemoryAuditLog::new());
+        let (_store, handle) =
+            SettingsStore::open(dir.path(), log, "test_chan").expect("open should not fail");
+        assert!(dir.path().join(FILE_NAME).exists());
+        assert!(
+            std::fs::read_dir(dir.path())
+                .expect("readdir")
+                .filter_map(Result::ok)
+                .all(|e| !e
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.ron.quarantine-")),
+            "settings.ron must not be quarantined"
+        );
+        assert_eq!(handle.load().ai.active().model, "some-model");
+        assert!(handle.load().ai.active().key.is_none());
     }
 
     #[tokio::test]
