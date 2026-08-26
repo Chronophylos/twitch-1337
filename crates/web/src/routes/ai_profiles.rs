@@ -41,7 +41,6 @@ pub fn router() -> Router<WebState> {
         .route("/ai-profiles/add", post(create))
         .route("/ai-profiles/{name}/edit", post(update))
         .route("/ai-profiles/{name}/delete", post(delete))
-        .route("/ai-profiles/{name}/activate", post(activate))
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -61,7 +60,6 @@ struct CardView {
     reasoning_effort: Option<String>,
     service_tier: Option<String>,
     timeout: u64,
-    is_active: bool,
 }
 
 /// One `<option>` for the provider `<select>`, plus enough of its
@@ -149,7 +147,6 @@ struct ListTpl {
     is_broadcaster: bool,
     is_owner: bool,
     total: usize,
-    active_profile: String,
     providers: Vec<ProviderOption>,
 }
 
@@ -221,11 +218,6 @@ struct DeleteForm {
     _csrf: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct ActivateForm {
-    _csrf: String,
-}
-
 async fn list(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
@@ -234,7 +226,6 @@ async fn list(
 ) -> Result<Response, WebError> {
     let settings = state.settings.load();
     let rows = settings.ai.profiles.clone();
-    let active = settings.ai.aurora.profile.clone();
     let edit_form = q.edit.as_ref().and_then(|name| {
         rows.iter()
             .find(|p| p.name == *name)
@@ -247,7 +238,7 @@ async fn list(
         None
     };
     let total = rows.len();
-    let cards: Vec<CardView> = rows.iter().map(|p| card_view(p, &active)).collect();
+    let cards: Vec<CardView> = rows.iter().map(card_view).collect();
     render(&ListTpl {
         rows: cards,
         edit_form,
@@ -264,12 +255,11 @@ async fn list(
         is_broadcaster: session.is_broadcaster,
         is_owner: matches!(session.role, crate::auth::Role::Owner),
         total,
-        active_profile: active,
         providers: provider_options(),
     })
 }
 
-fn card_view(p: &AiProfile, active: &str) -> CardView {
+fn card_view(p: &AiProfile) -> CardView {
     CardView {
         name: p.name.clone(),
         provider_label: p.provider.label(),
@@ -279,7 +269,6 @@ fn card_view(p: &AiProfile, active: &str) -> CardView {
         reasoning_effort: p.reasoning_effort.clone(),
         service_tier: p.service_tier.clone(),
         timeout: p.timeout,
-        is_active: p.name == active,
     }
 }
 
@@ -326,7 +315,6 @@ async fn create(
             return render_validation(
                 &session,
                 settings.ai.profiles.clone(),
-                settings.ai.aurora.profile.clone(),
                 vec![e],
                 None,
                 Some(submitted),
@@ -371,7 +359,6 @@ async fn update(
             return render_validation(
                 &session,
                 settings.ai.profiles.clone(),
-                settings.ai.aurora.profile.clone(),
                 vec![e],
                 Some(name),
                 Some(submitted),
@@ -382,7 +369,11 @@ async fn update(
     let edit_on_error = name.clone();
     let settings = state.settings.load();
     let current_profiles = settings.ai.profiles.clone();
-    let active_now = settings.ai.aurora.profile.clone();
+    let rewrite_aurora = settings.ai.aurora.profile == name;
+    let rewrite_grok = settings.ai.grok.profile == name;
+    let rewrite_dreamer = settings.ai.dreamer.profile == name;
+    let rewrite_media = settings.ai.media.profile == name;
+    let rewrite_recap = settings.ai.recap.profile.as_deref() == Some(name.as_str());
     let edited_for_mutate = edited.clone();
     apply_or_rerender(
         &state,
@@ -396,15 +387,21 @@ async fn update(
             if let Some(slot) = next.iter_mut().find(|p| p.name == target) {
                 *slot = edited_for_mutate.clone();
             }
-            // Renaming the active profile must carry the pointer with it,
-            // otherwise the save fails validation on a dangling
-            // `active_profile`.
-            let active_ptr =
-                o.ai.active_profile
-                    .clone()
-                    .unwrap_or_else(|| active_now.clone());
-            if active_ptr == target {
-                o.ai.active_profile = Some(edited_for_mutate.name.clone());
+            let renamed = edited_for_mutate.name.clone();
+            if rewrite_aurora {
+                o.ai.aurora.profile = Some(Some(renamed.clone()));
+            }
+            if rewrite_grok {
+                o.ai.grok.profile = Some(Some(renamed.clone()));
+            }
+            if rewrite_dreamer {
+                o.ai.dreamer.profile = Some(Some(renamed.clone()));
+            }
+            if rewrite_media {
+                o.ai.media.profile = Some(Some(renamed.clone()));
+            }
+            if rewrite_recap {
+                o.ai.recap.profile = Some(Some(renamed));
             }
             o.ai.profiles = Some(next);
         }),
@@ -426,12 +423,10 @@ async fn delete(
     }
     let settings = state.settings.load();
     let profiles = settings.ai.profiles.clone();
-    let active = settings.ai.aurora.profile.clone();
     if profiles.len() == 1 {
         return render_validation(
             &session,
             profiles,
-            active,
             vec![FieldError {
                 field: "ai.profiles".into(),
                 message: "at least one profile is required".into(),
@@ -440,14 +435,22 @@ async fn delete(
             None,
         );
     }
-    if name == active {
+    let in_use = [
+        settings.ai.aurora.profile.as_str(),
+        settings.ai.grok.profile.as_str(),
+        settings.ai.dreamer.profile.as_str(),
+        settings.ai.media.profile.as_str(),
+    ]
+    .into_iter()
+    .any(|profile| profile == name)
+        || settings.ai.recap.profile.as_deref() == Some(name.as_str());
+    if in_use {
         return render_validation(
             &session,
             profiles,
-            active,
             vec![FieldError {
-                field: "ai.active_profile".into(),
-                message: "switch to another profile before deleting this one".into(),
+                field: "ai.profiles".into(),
+                message: "assign every agent to another profile before deleting this one".into(),
             }],
             None,
             None,
@@ -462,40 +465,6 @@ async fn delete(
             let mut next = o.ai.profiles.clone().unwrap_or_else(|| profiles.clone());
             next.retain(|p| p.name != target);
             o.ai.profiles = Some(next);
-            // A deleted profile can't stay pinned by a sub-agent — the save
-            // would fail validation on a dangling `*.profile` pointer.
-            for slot in [
-                &mut o.ai.dreamer.profile,
-                &mut o.ai.grok.profile,
-                &mut o.ai.media.profile,
-            ] {
-                if slot.as_ref().and_then(|v| v.as_deref()) == Some(target.as_str()) {
-                    *slot = Some(None);
-                }
-            }
-        }),
-        None,
-        None,
-    )
-    .await
-}
-
-async fn activate(
-    State(state): State<WebState>,
-    Extension(session): Extension<Session>,
-    Path(name): Path<String>,
-    cookies: Cookies,
-    axum::Form(form): axum::Form<ActivateForm>,
-) -> Result<Response, WebError> {
-    if !csrf::verify(&form._csrf, &session.csrf_value) {
-        return Err(WebError::CsrfMismatch);
-    }
-    apply_or_rerender(
-        &state,
-        &session,
-        cookies,
-        Box::new(move |o| {
-            o.ai.active_profile = Some(name.clone());
         }),
         None,
         None,
@@ -530,7 +499,6 @@ async fn apply_or_rerender(
             render_validation(
                 session,
                 settings.ai.profiles.clone(),
-                settings.ai.aurora.profile.clone(),
                 errs,
                 edit_on_error,
                 submitted,
@@ -543,7 +511,6 @@ async fn apply_or_rerender(
 fn render_validation(
     session: &Session,
     rows: Vec<AiProfile>,
-    active: String,
     errs: Vec<FieldError>,
     edit_on_error: Option<String>,
     submitted: Option<FormState>,
@@ -577,7 +544,7 @@ fn render_validation(
         global_errors.push((e.field, e.message));
     }
     let total = rows.len();
-    let cards: Vec<CardView> = rows.iter().map(|p| card_view(p, &active)).collect();
+    let cards: Vec<CardView> = rows.iter().map(card_view).collect();
 
     // The edit form's POST target must stay pinned to the row this edit
     // actually opened against, regardless of what name the user typed into
@@ -612,7 +579,6 @@ fn render_validation(
         is_broadcaster: session.is_broadcaster,
         is_owner: matches!(session.role, crate::auth::Role::Owner),
         total,
-        active_profile: active,
         providers: provider_options(),
     };
     render(&resp)

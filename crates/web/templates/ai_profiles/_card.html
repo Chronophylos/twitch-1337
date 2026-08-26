@@ -1,15 +1,7 @@
 {# Single AI profile card. `card: &CardView` and `csrf: &str` must be in scope. #}
-<article class="schedule-card{% if card.is_active %} active-profile{% endif %}">
+<article class="schedule-card">
   <header class="card-head">
     <span class="card-title">{{ card.name }}</span>
-    {% if card.is_active %}
-      <span class="chip active">ACTIVE</span>
-    {% else %}
-      <form method="post" action="/ai-profiles/{{ card.name|urlencode }}/activate" class="card-toggle">
-        <input type="hidden" name="_csrf" value="{{ csrf }}">
-        <button class="chip" type="submit">activate</button>
-      </form>
-    {% endif %}
   </header>
   <div class="card-badges">
     <span class="chip trigger">{{ card.provider_label }}</span>
