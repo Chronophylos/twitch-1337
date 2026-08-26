@@ -592,14 +592,6 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
     }
 }
 
-/// Temporary local check. Task 2 replaces this with `crate::alerts::class_rank`.
-fn class_letter_ok(s: &str) -> bool {
-    matches!(
-        s.trim().chars().next().map(|c| c.to_ascii_uppercase()),
-        Some('A' | 'B' | 'C' | 'M' | 'X')
-    ) && s.trim().chars().count() == 1
-}
-
 fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldError>) {
     bound(
         "alerts.quake.poll_secs",
@@ -622,7 +614,7 @@ fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldErro
             message: format!("must be 0..=100 (got {})", a.quake.min_mag_tenths),
         });
     }
-    if !class_letter_ok(&a.solar.min_class) {
+    if crate::alerts::class_rank(&a.solar.min_class).is_none() {
         errs.push(FieldError {
             field: "alerts.solar.min_class".into(),
             message: format!("must be one of A, B, C, M, X (got {:?})", a.solar.min_class),

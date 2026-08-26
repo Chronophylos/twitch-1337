@@ -1,0 +1,5 @@
+{"type":"FeatureCollection","metadata":{"count":3},"features":[
+{"type":"Feature","geometry":{"type":"Point","coordinates":[7.0225,45.8901,-5.5]},"id":"20260825_0000276","properties":{"source_id":"2051060","source_catalog":"EMSC-RTS","lastupdate":"2026-08-25T19:10:04.753429Z","time":"2026-08-25T19:03:58.480702Z","flynn_region":"NORTHERN ITALY","lat":45.8901,"lon":7.0225,"depth":5.5,"evtype":"ke","auth":"ETHZ","mag":4.2,"magtype":"ml","unid":"20260825_0000276"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[16.1666,51.5512,-1.0]},"id":"20260825_0000115","properties":{"source_id":"2050853","source_catalog":"EMSC-RTS","lastupdate":"2026-08-25T07:55:44.391549Z","time":"2026-08-25T03:40:22.132Z","flynn_region":"POLAND","lat":51.5512,"lon":16.1666,"depth":1.0,"evtype":"ke","auth":"IGPAS","mag":2.2,"magtype":"m","unid":"20260825_0000115"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[10.0,50.0,-2.0]},"id":"20260825_0000999","properties":{"time":"2026-08-25T05:00:00.0Z","flynn_region":"GERMANY","lat":50.0,"lon":10.0,"depth":2.0,"mag":null,"unid":"20260825_0000999"}}
+]}
