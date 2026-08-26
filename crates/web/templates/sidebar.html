@@ -25,9 +25,6 @@
         {% if is_mod %}
         {% call nav_item("schedules", "/schedules", "Schedules") %}{% endcall %}
         {% endif %}
-        {% if is_owner %}
-        {% call nav_item("ai_profiles", "/ai-profiles", "AI Profiles") %}{% endcall %}
-        {% endif %}
       </ul>
     </div>
 
@@ -56,6 +53,7 @@
       <ul class="nav-list">
         {% call nav_item("logs", "/logs", "Logs") %}{% endcall %}
         {% if is_owner %}
+        {% call nav_item("ai_profiles", "/ai-profiles", "AI Profiles") %}{% endcall %}
         {% call nav_item("settings", "/settings", "Settings") %}{% endcall %}
         {% endif %}
       </ul>
