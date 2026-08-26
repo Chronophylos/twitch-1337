@@ -355,7 +355,7 @@ fn fold_required_profile_slot(slot: &Option<Option<String>>, legacy_active: &str
 fn fold_opt_string(new: Option<&Option<String>>, old: Option<&Option<String>>) -> Option<String> {
     match new {
         Some(v) => v.clone(),
-        None => old.and_then(|v| v.clone()),
+        None => old.and_then(Clone::clone),
     }
 }
 
