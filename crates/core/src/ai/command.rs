@@ -632,6 +632,24 @@ where
             recap_enabled: false,
         };
 
+        let scoring_chat = {
+            let buf = match invocation_channel {
+                inject::InvocationChannel::Primary => build_opts.primary_history.as_ref(),
+                inject::InvocationChannel::AiChannel => build_opts.ai_channel_history.as_ref(),
+            };
+            if let Some(buf) = buf {
+                buf.lock()
+                    .await
+                    .snapshot()
+                    .iter()
+                    .map(|e| inject::format_entry_line(e, agent, &build_opts.self_logins))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                String::new()
+            }
+        };
+
         // Aurora gets bodies injected; grok gets an index and pulls what it
         // needs. Two agents, two memory postures.
         let (recent_chat, memory, scratch, readable_paths) = if grok_alias {
@@ -677,7 +695,7 @@ where
                 .prompt_block_for_turn(
                     &ctx.privmsg.channel_id,
                     &instruction_for_prompt,
-                    &recent_chat,
+                    &scoring_chat,
                 )
                 .await
         } else {

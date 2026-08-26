@@ -559,7 +559,7 @@ async fn render_recent_section(
     Some(RenderedRecentSection { body, usernames })
 }
 
-fn format_entry_line(
+pub(crate) fn format_entry_line(
     entry: &ChatHistoryEntry,
     current_agent: Agent,
     self_logins: &[String],
