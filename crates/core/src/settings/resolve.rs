@@ -205,6 +205,21 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .history
                 .ai_channel_length
                 .unwrap_or(defaults.history.ai_channel_length),
+            n: o.history.n.unwrap_or(defaults.history.n),
+            ai_channel_n: o
+                .history
+                .ai_channel_n
+                .unwrap_or(defaults.history.ai_channel_n),
+            recap_model: match &o.history.recap_model {
+                Some(v) => v.clone(),
+                None => defaults.history.recap_model.clone(),
+            },
+            batch_size: o.history.batch_size.unwrap_or(defaults.history.batch_size),
+            max_notes: o.history.max_notes.unwrap_or(defaults.history.max_notes),
+            merge_width: o
+                .history
+                .merge_width
+                .unwrap_or(defaults.history.merge_width),
         },
         memory: AiMemory {
             soul_bytes: o.memory.soul_bytes.unwrap_or(defaults.memory.soul_bytes),

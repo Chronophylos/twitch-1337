@@ -206,6 +206,18 @@ fn default_reply_hard_chars() -> usize {
 pub struct AiHistory {
     pub length: u64,
     pub ai_channel_length: u64,
+    #[serde(default)]
+    pub n: u64,
+    #[serde(default)]
+    pub ai_channel_n: u64,
+    #[serde(default)]
+    pub recap_model: Option<String>,
+    #[serde(default)]
+    pub batch_size: u64,
+    #[serde(default)]
+    pub max_notes: u64,
+    #[serde(default)]
+    pub merge_width: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -358,7 +370,13 @@ impl Default for AiHistory {
     fn default() -> Self {
         Self {
             length: crate::ai::chat_history::DEFAULT_HISTORY_LENGTH,
-            ai_channel_length: 50,
+            ai_channel_length: 100,
+            n: 20,
+            ai_channel_n: 10,
+            recap_model: None,
+            batch_size: 40,
+            max_notes: 8,
+            merge_width: 3,
         }
     }
 }
@@ -563,7 +581,11 @@ mod tests {
             s.history.length,
             crate::ai::chat_history::DEFAULT_HISTORY_LENGTH
         );
-        assert_eq!(s.history.ai_channel_length, 50);
+        assert_eq!(s.history.ai_channel_length, 100);
+        assert_eq!(s.history.n, 20);
+        assert_eq!(s.history.ai_channel_n, 10);
+        assert!(s.history.recap_model.is_none());
+        assert_eq!(s.history.batch_size, 40);
         assert_eq!(s.memory.soul_bytes, 4096);
         assert_eq!(s.memory.lore_bytes, 12_288);
         assert_eq!(s.memory.user_bytes, 4096);

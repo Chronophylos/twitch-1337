@@ -50,6 +50,28 @@ use super::irc_line::{
 // happy path, so it must honor its caller's exact duration.
 const MIN_OUTPUT_TIMEOUT: Duration = super::GENEROUS_WAIT;
 
+/// Integration tests often override `history.length` without touching the new
+/// Recap knobs. Shrink `n` / `batch_size` so `length >= n + batch_size` still
+/// holds after resolve against compiled defaults.
+fn normalize_test_history_overrides(o: &mut twitch_1337::settings::SettingsOverrides) {
+    let Some(length) = o.ai.history.length else {
+        return;
+    };
+    if length == 0 {
+        return;
+    }
+    let defaults = twitch_1337::settings::Settings::compiled_defaults();
+    let n = o.ai.history.n.unwrap_or(defaults.ai.history.n);
+    let batch =
+        o.ai.history
+            .batch_size
+            .unwrap_or(defaults.ai.history.batch_size);
+    if length < n.saturating_add(batch) {
+        o.ai.history.n = Some(1);
+        o.ai.history.batch_size = Some(1);
+    }
+}
+
 pub struct TestBot {
     pub transport: TransportHandle,
     pub clock: Arc<FakeClock>,
@@ -347,7 +369,8 @@ impl TestBotBuilder {
         let (settings_store, settings_handle) =
             twitch_1337::settings::SettingsStore::open(data_dir.path(), audit, "test_chan")
                 .expect("open settings");
-        if let Some(o) = self.settings_overrides.take() {
+        if let Some(mut o) = self.settings_overrides.take() {
+            normalize_test_history_overrides(&mut o);
             let actor = twitch_1337::settings::Actor {
                 user_id: "test".into(),
                 user_login: "test".into(),

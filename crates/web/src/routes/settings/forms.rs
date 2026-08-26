@@ -167,6 +167,7 @@ impl AiHistoryForm {
         AiHistoryOverrides {
             length: self.ai_history_length,
             ai_channel_length: self.ai_history_ai_channel_length,
+            ..Default::default()
         }
     }
 }
