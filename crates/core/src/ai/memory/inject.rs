@@ -181,8 +181,11 @@ pub struct BuildOpts {
     /// Lowercased Twitch login of the user that triggered this turn (i.e.
     /// `!ai` invoker). Empty string for the dreamer ritual (no speaker).
     /// Used by [`build_chat_turn_context`] to scope the injected user-file
-    /// set down to chat-window users plus the speaker.
+    /// set down to chat-window users plus the speaker and recap identities.
     pub speaker_login: String,
+    /// Lowercased logins stamped on injected Recap Notes (caller-capped).
+    /// Third packing tier after speaker and chat-window logins.
+    pub recap_sheet_logins: BTreeSet<String>,
     /// Verbatim tail: newest N lines that are not this agent's own.
     pub n: usize,
     /// When Recap is on, eligible lag lines may stretch the tail up to
@@ -251,6 +254,24 @@ async fn render_recent_chat(opts: &BuildOpts) -> RecentChat {
     }
 }
 
+/// Packing tier for character sheets: speaker (0), chat-window (1), recap-only (2).
+fn user_pack_tier(
+    login_lc: &str,
+    speaker_lc: &str,
+    mentioned: &BTreeSet<String>,
+    recap_sheet_logins: &BTreeSet<String>,
+) -> u8 {
+    if !speaker_lc.is_empty() && login_lc == speaker_lc {
+        0
+    } else if mentioned.contains(login_lc) {
+        1
+    } else if recap_sheet_logins.contains(login_lc) {
+        2
+    } else {
+        3
+    }
+}
+
 /// Build the chat-turn injected context split into a recent-chat section and a
 /// memory section. Callers place each in the message that maximizes prompt
 /// caching: memory in the system message, recent chat in the user message.
@@ -285,9 +306,12 @@ pub async fn build_chat_turn_context(
         || opts.ai_channel_history.is_some()
         || !speaker_lc.is_empty();
     if is_chat_turn {
-        let mut scope: std::collections::BTreeSet<String> = mentioned;
+        let mut scope: std::collections::BTreeSet<String> = mentioned.clone();
         if !speaker_lc.is_empty() {
             scope.insert(speaker_lc.clone());
+        }
+        for login in &opts.recap_sheet_logins {
+            scope.insert(login.to_ascii_lowercase());
         }
         users.retain(|f| {
             let Some(login) = f.frontmatter.username.as_deref() else {
@@ -297,22 +321,28 @@ pub async fn build_chat_turn_context(
         });
     }
 
-    // Speaker first, then newest-first. Ensures the speaker's file always
-    // survives the byte-budget packing loop below. When speaker_login is
-    // empty (dreamer), this collapses to a plain updated_at DESC sort.
+    // Pack speaker → chat-window logins → recap-only identities, newest-first
+    // within each tier. Ensures the speaker's file always survives the
+    // byte-budget packing loop below. When speaker_login is empty (dreamer),
+    // tier 0 is unused and this collapses to mentioned → recap → updated_at.
+    let recap_lc = &opts.recap_sheet_logins;
     users.sort_by(|a, b| {
-        let a_is_speaker = !speaker_lc.is_empty()
-            && a.frontmatter
-                .username
-                .as_deref()
-                .is_some_and(|n| n.eq_ignore_ascii_case(&speaker_lc));
-        let b_is_speaker = !speaker_lc.is_empty()
-            && b.frontmatter
-                .username
-                .as_deref()
-                .is_some_and(|n| n.eq_ignore_ascii_case(&speaker_lc));
-        b_is_speaker
-            .cmp(&a_is_speaker)
+        let a_login = a
+            .frontmatter
+            .username
+            .as_deref()
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default();
+        let b_login = b
+            .frontmatter
+            .username
+            .as_deref()
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default();
+        let a_tier = user_pack_tier(&a_login, &speaker_lc, &mentioned, recap_lc);
+        let b_tier = user_pack_tier(&b_login, &speaker_lc, &mentioned, recap_lc);
+        a_tier
+            .cmp(&b_tier)
             .then_with(|| b.frontmatter.updated_at.cmp(&a.frontmatter.updated_at))
     });
     states.sort_by_key(|f| std::cmp::Reverse(f.frontmatter.updated_at));
@@ -795,6 +825,7 @@ mod tests {
             current_agent: Agent::Aurora,
             self_logins: Vec::new(),
             speaker_login: speaker_login.into(),
+            recap_sheet_logins: BTreeSet::new(),
             n: 200,
             batch_size: 40,
             recap_through_seq: 0,
@@ -834,6 +865,7 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: vec!["aurora".into()],
                 speaker_login: "carol".into(),
+                recap_sheet_logins: BTreeSet::new(),
                 n: 2,
                 batch_size: 40,
                 recap_through_seq: 0,
@@ -880,6 +912,7 @@ mod tests {
                 current_agent: Agent::Grok,
                 self_logins: vec!["aurora".into(), "grok".into()],
                 speaker_login: "carol".into(),
+                recap_sheet_logins: BTreeSet::new(),
                 n: 2,
                 batch_size: 40,
                 recap_through_seq: 0,
@@ -932,6 +965,7 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: Vec::new(),
                 speaker_login: "viewer19".into(),
+                recap_sheet_logins: BTreeSet::new(),
                 n: 2,
                 batch_size: 3,
                 recap_through_seq: 0,
@@ -983,6 +1017,7 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: vec!["aurora".into()],
                 speaker_login: "carol".into(),
+                recap_sheet_logins: BTreeSet::new(),
                 n: 2,
                 batch_size: 40,
                 recap_through_seq: 0,
@@ -1421,6 +1456,7 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: Vec::new(),
                 speaker_login: String::new(),
+                recap_sheet_logins: BTreeSet::new(),
                 n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
@@ -1476,6 +1512,7 @@ mod tests {
                 // chat-window scope filter is applied, so the byte-budget
                 // ordering this test exercises remains in force.
                 speaker_login: String::new(),
+                recap_sheet_logins: BTreeSet::new(),
                 n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
@@ -1524,6 +1561,7 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: Vec::new(),
                 speaker_login: String::new(),
+                recap_sheet_logins: BTreeSet::new(),
                 n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
@@ -1581,6 +1619,7 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: Vec::new(),
                 speaker_login: String::new(),
+                recap_sheet_logins: BTreeSet::new(),
                 n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
@@ -1655,6 +1694,7 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: Vec::new(),
                 speaker_login: "alice".into(),
+                recap_sheet_logins: BTreeSet::new(),
                 n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
@@ -1715,6 +1755,7 @@ mod tests {
                 current_agent: Agent::Aurora,
                 self_logins: Vec::new(),
                 speaker_login: "carol".into(),
+                recap_sheet_logins: BTreeSet::new(),
                 n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
@@ -1753,6 +1794,143 @@ mod tests {
         assert!(
             carol_idx < alice_idx && carol_idx < bob_idx,
             "speaker must come first:\n{}",
+            ctx.memory
+        );
+    }
+
+    #[tokio::test]
+    async fn note_only_lurker_loses_to_tail_when_budget_tight() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use std::collections::BTreeSet;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+
+        let now = chrono::Utc::now();
+        let backdate = chrono::Duration::days(7);
+        seed_user_file(
+            dir.path(),
+            "11",
+            "carol",
+            "Carol",
+            now - backdate,
+            &"x".repeat(400),
+        )
+        .await;
+        seed_user_file(
+            dir.path(),
+            "22",
+            "alice",
+            "Alice",
+            now - backdate,
+            &"x".repeat(400),
+        )
+        .await;
+        // Newer than alice — without tier ordering lurker would win the second slot.
+        seed_user_file(dir.path(), "99", "lurker", "Lurker", now, &"x".repeat(400)).await;
+
+        let history = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        history.lock().await.push_user("alice", "hi");
+
+        let recap_sheet_logins: BTreeSet<String> =
+            ["lurker"].into_iter().map(str::to_string).collect();
+
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                // SOUL+LORE+carol+alice fit; lurker (third user) exceeds budget.
+                inject_byte_budget: 1950,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(history),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                current_agent: Agent::Aurora,
+                self_logins: Vec::new(),
+                speaker_login: "carol".into(),
+                recap_sheet_logins,
+                n: 200,
+                batch_size: 40,
+                recap_through_seq: 0,
+                recap_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            ctx.memory.contains("login=carol"),
+            "speaker must survive:\n{}",
+            ctx.memory
+        );
+        assert!(
+            ctx.memory.contains("login=alice"),
+            "tail login alice must beat recap-only lurker:\n{}",
+            ctx.memory
+        );
+        assert!(
+            !ctx.memory.contains("login=lurker"),
+            "lurker must lose when budget is tight:\n{}",
+            ctx.memory
+        );
+    }
+
+    #[tokio::test]
+    async fn recap_only_identity_included_when_budget_allows() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use std::collections::BTreeSet;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+
+        let now = chrono::Utc::now();
+        seed_user_file(dir.path(), "11", "carol", "Carol", now, "carol body").await;
+        seed_user_file(dir.path(), "99", "lurker", "Lurker", now, "lurker body").await;
+
+        let history = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        history.lock().await.push_user("alice", "hi");
+
+        let recap_sheet_logins: BTreeSet<String> =
+            ["lurker"].into_iter().map(str::to_string).collect();
+
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(history),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                current_agent: Agent::Aurora,
+                self_logins: Vec::new(),
+                speaker_login: "carol".into(),
+                recap_sheet_logins,
+                n: 200,
+                batch_size: 40,
+                recap_through_seq: 0,
+                recap_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            ctx.memory.contains("login=carol"),
+            "speaker missing:\n{}",
+            ctx.memory
+        );
+        assert!(
+            ctx.memory.contains("login=lurker"),
+            "recap-only lurker must be included when budget allows:\n{}",
             ctx.memory
         );
     }
@@ -1938,6 +2116,7 @@ mod tests {
             current_agent: Agent::Aurora,
             self_logins: Vec::new(),
             speaker_login: String::new(),
+            recap_sheet_logins: BTreeSet::new(),
             n: 200,
             batch_size: 40,
             recap_through_seq: 0,

@@ -625,6 +625,7 @@ where
                 .chain(self.echo.mouth_logins().iter().cloned())
                 .collect(),
             speaker_login: ctx.privmsg.sender.login.clone(),
+            recap_sheet_logins: BTreeSet::new(),
             n: 200,
             batch_size: 40,
             recap_through_seq: 0,
