@@ -67,7 +67,6 @@ pub struct AiMemoryV2 {
     pub inject_byte_budget: usize,
     pub max_turn_rounds: usize,
     pub max_writes_per_turn: usize,
-    pub turn_timeout: Duration,
     /// Artificial floor on turn wall time before the reply is spoken.
     pub min_response_delay: Duration,
 }
@@ -545,6 +544,7 @@ where
             error!("AI command skipped, no usable LLM profile");
             return Ok(());
         };
+        let turn_timeout = Duration::from_secs(connection.timeout);
         let model = connection.model.clone();
         let reasoning_effort = connection.reasoning_effort.clone();
         let service_tier = connection.service_tier.clone();
@@ -908,7 +908,7 @@ where
                 };
                 let opts = AgentOpts {
                     max_rounds: mem.max_turn_rounds,
-                    per_round_timeout: Some(mem.turn_timeout),
+                    per_round_timeout: Some(turn_timeout),
                 };
 
                 let combined_exec = V2Executor {
@@ -930,7 +930,7 @@ where
                     Ok(AgentOutcome::Timeout { round }) => {
                         warn!(
                             round,
-                            timeout_s = mem.turn_timeout.as_secs(),
+                            timeout_s = turn_timeout.as_secs(),
                             model = %model,
                             "AI per-round timeout"
                         );
@@ -955,7 +955,7 @@ where
                             &text,
                             &RewordOpts {
                                 model: model.clone(),
-                                timeout: mem.turn_timeout,
+                                timeout: turn_timeout,
                                 reasoning_effort: reasoning_effort.clone(),
                                 service_tier: service_tier.clone(),
                                 trace: trace.clone(),
@@ -1101,12 +1101,6 @@ pub async fn build_ai_memory_v2(
         inject_byte_budget: settings.ai.memory.inject_byte_budget,
         max_turn_rounds: settings.ai.aurora.max_turn_rounds,
         max_writes_per_turn: settings.ai.aurora.max_writes_per_turn,
-        turn_timeout: Duration::from_secs(
-            settings
-                .ai
-                .by_name(&settings.ai.aurora.profile)
-                .map_or(30, |profile| profile.timeout),
-        ),
         min_response_delay: Duration::from_millis(settings.ai.aurora.min_response_delay_ms),
     }))
 }

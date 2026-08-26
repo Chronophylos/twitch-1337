@@ -36,12 +36,11 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     /// buffered instead of lost.
     pub broadcast_rx: broadcast::Receiver<ServerMessage>,
     pub client: Arc<TwitchIRCClient<T, L>>,
-    /// Bootstrap AI config (api_key only). `None` disables `!ai`. All other
-    /// AI knobs are read from the dashboard settings snapshot at startup.
+    /// Bootstrap AI config (named keys only). `None` disables AI commands.
+    /// Agent profiles are resolved independently on every turn.
     pub ai_config: Option<AiBootstrap>,
-    /// Resolves an AI profile to a client per turn. When it cannot produce a
-    /// client for the active profile, `!ai` is disabled regardless of
-    /// `ai_config`. Injected so tests can supply a fake via
+    /// Resolves each agent's selected profile per turn. Injected so tests can
+    /// supply a fake via
     /// [`crate::llm_factory::LlmRegistry::fixed`].
     pub llm: Arc<crate::llm_factory::LlmRegistry>,
     /// Pre-built memory v2 bundle. `None` disables v2 memory for `!ai`.
@@ -137,42 +136,21 @@ where
     // these values; Tasks 6+ make selected commands consume the handle live.
     let snapshot = settings.load_full();
 
-    // The registry must be able to serve Aurora's selected profile and the
-    // bootstrap key must be present; both gate !ai.
-    let aurora_profile_name = &snapshot.ai.aurora.profile;
-    let ai_boot: Option<AiBootstrap> = match (
-        llm.is_usable(),
-        ai_config,
-        snapshot.ai.by_name(aurora_profile_name),
-    ) {
-        (true, Some(ai_boot), Some(aurora_profile)) => {
-            info!(
-                provider = aurora_profile.provider.as_str(),
-                model = %aurora_profile.model,
-                "AI command enabled"
-            );
-            Some(ai_boot)
-        }
-        (_, _, None) => {
-            warn!(
-                profile = %aurora_profile_name,
-                "AI command disabled, Aurora profile missing"
-            );
-            None
-        }
-        _ => {
-            debug!("AI not configured or LLM client unavailable, AI command disabled");
-            None
-        }
-    };
+    // Registration depends only on bootstrap AI being present. Each command
+    // resolves its own profile per turn, so one stale agent pointer cannot
+    // disable the others and profile repairs take effect without a restart.
+    let ai_configured = ai_config.is_some();
+    if ai_configured {
+        info!("AI commands enabled; agent profiles resolve per turn");
+    } else {
+        debug!("AI not configured, AI commands disabled");
+    }
 
     // Create chat history buffer for AI context. Capacity is read live from
     // the settings handle on every push; the initial snapshot is only used to
     // decide whether to allocate the buffer at all and to run the one-shot
     // prefill (which is restart-required for off↔on transitions anyway).
-    let primary_history: Option<ChatHistory> = if ai_boot.is_some()
-        && snapshot.ai.history.length > 0
-    {
+    let primary_history: Option<ChatHistory> = if ai_configured && snapshot.ai.history.length > 0 {
         let history_length = snapshot.ai.history.length as usize;
         let prefill_cfg = snapshot
             .ai
@@ -285,9 +263,7 @@ where
         cmd_list.push(Box::new(commands::emote::EmoteCommand::new(tracker)));
     }
 
-    // `ai_boot` only gates whether `!ai` is enabled at all now; the media
-    // client resolves its own key per call via `LlmRegistry::secret_for`.
-    if let (Some(_ai_boot), Some(ai_memory_v2)) = (ai_boot, ai_memory_v2) {
+    if let Some(ai_memory_v2) = ai_memory_v2.filter(|_| ai_configured) {
         let web = if let Some(web_cfg) = snapshot.ai.web.as_ref() {
             let search = match ai::content::SearchClient::new(
                 &web_cfg.base_url,

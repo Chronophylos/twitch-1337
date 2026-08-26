@@ -59,12 +59,6 @@ impl LlmRegistry {
         }
     }
 
-    /// True when Aurora's profile can currently produce a client.
-    pub fn is_usable(&self) -> bool {
-        let snapshot = self.settings.load();
-        self.resolve_named(&snapshot.ai.aurora.profile).is_some()
-    }
-
     /// Resolve a profile by name. Missing and blank names return `None`.
     pub fn resolve_named(&self, name: &str) -> Option<(Arc<dyn LlmClient>, AiProfile)> {
         let name = name.trim();
@@ -285,14 +279,12 @@ mod tests {
             handle(vec![p("a", AiProvider::OpenRouter, "")], "a"),
         );
         assert!(r.resolve_named("a").is_none());
-        assert!(!r.is_usable());
     }
 
     #[test]
     fn no_bootstrap_means_no_client() {
         let r = LlmRegistry::new(None, handle(vec![p("a", AiProvider::OpenRouter, "m")], "a"));
         assert!(r.resolve_named("a").is_none());
-        assert!(!r.is_usable());
     }
 
     #[test]

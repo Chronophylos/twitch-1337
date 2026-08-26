@@ -18,7 +18,7 @@ use tracing::{error, info, warn};
 
 use super::audit::{AuditEntry, AuditLog, berlin_now, diff_changes};
 use super::overrides::SettingsOverrides;
-use super::{Settings, SettingsError, SettingsHandle, SettingsSection};
+use super::{SCHEMA_VERSION, Settings, SettingsError, SettingsHandle, SettingsSection};
 use load::{load_or_quarantine, load_overrides_async, quarantine};
 use merge::{merge_into, strip_ai_agents_legacy};
 
@@ -58,7 +58,7 @@ impl SettingsStore {
         let ctx = super::ValidationContext {
             channel: boot_channel.to_owned(),
         };
-        if let Err(errs) = resolved.validate(&ctx) {
+        if let Err(errs) = resolved.validate_for_load(&ctx) {
             warn!(
                 ?errs,
                 "settings.ron failed validation; falling back to compile defaults"
@@ -117,11 +117,12 @@ impl SettingsStore {
     /// before handing the resolved snapshot here.
     async fn commit(
         &self,
-        current: &SettingsOverrides,
+        current: &mut SettingsOverrides,
         prior_resolved: &Settings,
         resolved: Settings,
         actor: Actor,
     ) -> Result<Settings, SettingsError> {
+        current.schema_version = SCHEMA_VERSION;
         crate::util::persist::atomic_save_ron_async(current, &self.path).await?;
         self.handle.store(Arc::new(resolved.clone()));
         let changes = diff_changes(prior_resolved, &resolved);
@@ -166,7 +167,7 @@ impl SettingsStore {
             return Err(SettingsError::Validation(errs));
         }
         let resolved = Settings::resolve(&self.defaults, &current);
-        self.commit(&current, &prior_resolved, resolved, actor)
+        self.commit(&mut current, &prior_resolved, resolved, actor)
             .await
     }
 
@@ -226,7 +227,7 @@ impl SettingsStore {
         }
         strip_ai_agents_legacy(&mut current);
         let resolved = Settings::resolve(&self.defaults, &current);
-        self.commit(&current, &prior_resolved, resolved, actor)
+        self.commit(&mut current, &prior_resolved, resolved, actor)
             .await
     }
 }

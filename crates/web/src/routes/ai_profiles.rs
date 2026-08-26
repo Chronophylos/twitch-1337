@@ -17,7 +17,7 @@ use axum::routing::{get, post};
 use serde::Deserialize;
 use tower_cookies::Cookies;
 use twitch_1337_core::settings::{
-    Actor, AiProfile, AiProvider, Efforts, FieldError, SettingsError,
+    Actor, AiProfile, AiProvider, Efforts, FieldError, Settings, SettingsError,
 };
 
 use crate::auth::csrf;
@@ -367,23 +367,23 @@ async fn update(
     };
     let target = name.clone();
     let edit_on_error = name.clone();
-    let settings = state.settings.load();
-    let current_profiles = settings.ai.profiles.clone();
-    let rewrite_aurora = settings.ai.aurora.profile == name;
-    let rewrite_grok = settings.ai.grok.profile == name;
-    let rewrite_dreamer = settings.ai.dreamer.profile == name;
-    let rewrite_media = settings.ai.media.profile == name;
-    let rewrite_recap = settings.ai.recap.profile.as_deref() == Some(name.as_str());
+    let defaults = state.settings_store.defaults().clone();
     let edited_for_mutate = edited.clone();
     apply_or_rerender(
         &state,
         &session,
         cookies,
         Box::new(move |o| {
-            let mut next =
-                o.ai.profiles
-                    .clone()
-                    .unwrap_or_else(|| current_profiles.clone());
+            // Resolve from the overrides loaded under SettingsStore's lock.
+            // A concurrent settings save may have repointed an agent since
+            // this HTTP request began; rename only pointers that are current.
+            let current = Settings::resolve(&defaults, o);
+            let rewrite_aurora = current.ai.aurora.profile == target;
+            let rewrite_grok = current.ai.grok.profile == target;
+            let rewrite_dreamer = current.ai.dreamer.profile == target;
+            let rewrite_media = current.ai.media.profile == target;
+            let rewrite_recap = current.ai.recap.profile.as_deref() == Some(target.as_str());
+            let mut next = current.ai.profiles;
             if let Some(slot) = next.iter_mut().find(|p| p.name == target) {
                 *slot = edited_for_mutate.clone();
             }

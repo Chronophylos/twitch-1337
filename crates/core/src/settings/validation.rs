@@ -32,6 +32,22 @@ fn bound<T: PartialOrd + std::fmt::Display>(
 
 impl Settings {
     pub fn validate(&self, ctx: &ValidationContext) -> Result<(), Vec<FieldError>> {
+        self.validate_with(ctx, true)
+    }
+
+    /// Boot-time validation keeps rejecting malformed values but tolerates
+    /// agent pointers whose profile row disappeared. Runtime resolution skips
+    /// only that agent; every save still uses [`Self::validate`] as the hard
+    /// referential-integrity gate.
+    pub(crate) fn validate_for_load(&self, ctx: &ValidationContext) -> Result<(), Vec<FieldError>> {
+        self.validate_with(ctx, false)
+    }
+
+    fn validate_with(
+        &self,
+        ctx: &ValidationContext,
+        validate_agent_profile_targets: bool,
+    ) -> Result<(), Vec<FieldError>> {
         let mut errs = Vec::new();
         bound("cooldowns.ai", self.cooldowns.ai, 1, 3600, &mut errs);
         bound("cooldowns.news", self.cooldowns.news, 1, 3600, &mut errs);
@@ -51,7 +67,7 @@ impl Settings {
             &mut errs,
         );
         bound("pings.cooldown", self.pings.cooldown, 1, 86_400, &mut errs);
-        validate_ai(&self.ai, &mut errs);
+        validate_ai(&self.ai, validate_agent_profile_targets, &mut errs);
         if self.twitch.expected_latency > 1000 {
             errs.push(FieldError {
                 field: "twitch.expected_latency".into(),
@@ -185,7 +201,7 @@ impl Settings {
     }
 }
 
-fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
+fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut Vec<FieldError>) {
     fn err(errs: &mut Vec<FieldError>, field: &str, msg: String) {
         errs.push(FieldError {
             field: field.into(),
@@ -372,7 +388,7 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
     ] {
         if name.trim().is_empty() {
             err(errs, field, "must not be empty".into());
-        } else if ai.by_name(name).is_none() {
+        } else if validate_agent_profile_targets && ai.by_name(name).is_none() {
             err(errs, field, format!("no profile named {name:?}"));
         }
     }
@@ -383,7 +399,7 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
                 "ai.recap.profile",
                 "must be non-blank when set".into(),
             );
-        } else if ai.by_name(name).is_none() {
+        } else if validate_agent_profile_targets && ai.by_name(name).is_none() {
             err(
                 errs,
                 "ai.recap.profile",
