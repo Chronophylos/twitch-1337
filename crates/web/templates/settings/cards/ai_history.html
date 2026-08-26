@@ -5,9 +5,12 @@
   <header class="settings-card-head">
     <div>
       <h2>AI · History</h2>
-      <p>How much recent chat the bot keeps per channel. The prompt is also capped by bytes (12 KiB primary, 3 KiB ai_channel) and drops the oldest lines first, so unusually long messages can still push out older ones before this count is reached.</p>
+      <p>Rolling raw retention (<code>length</code>) must be at least N + batch size. The prompt carries N verbatim lines plus at most max notes Recap paragraphs. Recap-off still cuts the prompt to N + one own line.</p>
     </div>
-    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+      {% if recap_parked %}<span class="restart-required" style="margin-left: 0;">recap parked</span>{% endif %}
+    </div>
   </header>
   <div class="settings-rows">
     {% call m::num_row_bounded("ai_history", "ai_history_length", "length",
@@ -16,5 +19,24 @@
     {% call m::num_row_bounded("ai_history", "ai_history_ai_channel_length", "ai_channel_length",
        "Rolling history kept for the ai_channel (!ai only, smaller).",
        current.ai.history.ai_channel_length, defaults.ai.history.ai_channel_length, "msgs", 1, 5000) %}{% endcall %}
+    {% call m::num_row_bounded("ai_history", "ai_history_n", "n",
+       "Verbatim lines injected from primary channel history.",
+       current.ai.history.n, defaults.ai.history.n, "lines", 1, 5000) %}{% endcall %}
+    {% call m::num_row_bounded("ai_history", "ai_history_ai_channel_n", "ai_channel_n",
+       "Verbatim lines injected from ai_channel history.",
+       current.ai.history.ai_channel_n, defaults.ai.history.ai_channel_n, "lines", 1, 5000) %}{% endcall %}
+    {% let recap_model = current.ai.history.recap_model.as_deref().unwrap_or("") %}
+    {% call m::text_row("ai_history", "ai_history_recap_model", "recap_model",
+       "Model for Recap paraphrasing. Empty = off.",
+       recap_model, "", "off") %}{% endcall %}
+    {% call m::num_row_bounded("ai_history", "ai_history_batch_size", "batch_size",
+       "Chat lines processed per Recap batch.",
+       current.ai.history.batch_size, defaults.ai.history.batch_size, "lines", 1, 5000) %}{% endcall %}
+    {% call m::num_row_bounded("ai_history", "ai_history_max_notes", "max_notes",
+       "Max Recap note paragraphs injected into the prompt.",
+       current.ai.history.max_notes, defaults.ai.history.max_notes, "notes", 1, 64) %}{% endcall %}
+    {% call m::num_row_bounded("ai_history", "ai_history_merge_width", "merge_width",
+       "Existing notes merged per Recap pass when coarsening.",
+       current.ai.history.merge_width, defaults.ai.history.merge_width, "notes", 2, 64) %}{% endcall %}
   </div>
 </section>

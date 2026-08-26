@@ -522,6 +522,61 @@ async fn owner_can_save_aurora_reply_length() {
 }
 
 #[tokio::test]
+async fn owner_can_save_ai_history_n() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let defaults = state.settings_store.defaults().clone();
+    let app = build_router(state.clone());
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_history_n", "25")]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(state.settings.load().ai.history.n, 25);
+}
+
+#[tokio::test]
+async fn ai_history_length_below_n_plus_batch_returns_400() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let defaults = state.settings_store.defaults().clone();
+    assert_eq!(defaults.ai.history.n, 20);
+    assert_eq!(defaults.ai.history.batch_size, 40);
+
+    let app = build_router(state.clone());
+    let body = save_form_body(&bare_csrf, &defaults, &[("ai_history_length", "10")]);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::BAD_REQUEST,
+        "length < n + batch_size must fail validation",
+    );
+    let html = body_string(res).await;
+    assert!(
+        html.contains("ai.history.length"),
+        "response must surface the failing field; got: {html}",
+    );
+}
+
+#[tokio::test]
 async fn reset_ai_behavior_restores_reply_length_defaults() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;

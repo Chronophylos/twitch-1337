@@ -89,6 +89,18 @@ struct SaveForm {
     ai_history_length: Option<u64>,
     #[serde(default)]
     ai_history_ai_channel_length: Option<u64>,
+    #[serde(default)]
+    ai_history_n: Option<u64>,
+    #[serde(default)]
+    ai_history_ai_channel_n: Option<u64>,
+    #[serde(default)]
+    ai_history_recap_model: Option<String>,
+    #[serde(default)]
+    ai_history_batch_size: Option<u64>,
+    #[serde(default)]
+    ai_history_max_notes: Option<u64>,
+    #[serde(default)]
+    ai_history_merge_width: Option<u64>,
 
     // ---- AI memory card ----
     #[serde(default)]
@@ -354,6 +366,7 @@ async fn save(
                 ..before
             };
             let defaults = state.settings_store.defaults().clone();
+            let recap_parked = view::recap_parked(&state).await;
             render_with(
                 axum::http::StatusCode::BAD_REQUEST,
                 &ShowTpl {
@@ -368,6 +381,7 @@ async fn save(
                     current: submitted,
                     defaults,
                     errors,
+                    recap_parked,
                 },
             )
         }

@@ -160,6 +160,18 @@ struct AiHistoryForm {
     ai_history_length: Option<u64>,
     #[serde(default)]
     ai_history_ai_channel_length: Option<u64>,
+    #[serde(default)]
+    ai_history_n: Option<u64>,
+    #[serde(default)]
+    ai_history_ai_channel_n: Option<u64>,
+    #[serde(default)]
+    ai_history_recap_model: Option<String>,
+    #[serde(default)]
+    ai_history_batch_size: Option<u64>,
+    #[serde(default)]
+    ai_history_max_notes: Option<u64>,
+    #[serde(default)]
+    ai_history_merge_width: Option<u64>,
 }
 
 impl AiHistoryForm {
@@ -167,7 +179,12 @@ impl AiHistoryForm {
         AiHistoryOverrides {
             length: self.ai_history_length,
             ai_channel_length: self.ai_history_ai_channel_length,
-            ..Default::default()
+            n: self.ai_history_n,
+            ai_channel_n: self.ai_history_ai_channel_n,
+            recap_model: tri_state(self.ai_history_recap_model),
+            batch_size: self.ai_history_batch_size,
+            max_notes: self.ai_history_max_notes,
+            merge_width: self.ai_history_merge_width,
         }
     }
 }
@@ -607,6 +624,12 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             history: AiHistoryForm {
                 ai_history_length: form.ai_history_length,
                 ai_history_ai_channel_length: form.ai_history_ai_channel_length,
+                ai_history_n: form.ai_history_n,
+                ai_history_ai_channel_n: form.ai_history_ai_channel_n,
+                ai_history_recap_model: form.ai_history_recap_model,
+                ai_history_batch_size: form.ai_history_batch_size,
+                ai_history_max_notes: form.ai_history_max_notes,
+                ai_history_merge_width: form.ai_history_merge_width,
             }
             .into_overrides(),
             memory: AiMemoryForm {
