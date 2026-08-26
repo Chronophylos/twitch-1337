@@ -91,6 +91,11 @@ Follow Langfuse's OTEL property mapping:
 - `gen_ai.request.model`
 - `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` when the
   provider returns usage (OpenAI-compatible; Ollama often has none)
+- `gen_ai.usage.cost` (OTLP `doubleValue`, USD) when the provider bills in
+  the response (OpenRouter `usage.cost`). Langfuse will not infer a price
+  from OpenRouter model ids like `anthropic/claude-sonnet-4`, so the billed
+  amount must be ingested. Omit the attribute when cost is unknown so
+  Langfuse can still infer from its model catalog for bare OpenAI ids.
 
 ## Failure mode
 
