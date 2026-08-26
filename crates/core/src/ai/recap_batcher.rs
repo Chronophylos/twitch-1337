@@ -575,8 +575,8 @@ pub async fn run_recap_batcher(
                 let snap = settings.load();
                 let Some(name) = snap
                     .ai
-                    .history
-                    .recap_profile
+                    .recap
+                    .profile
                     .as_deref()
                     .map(str::trim)
                     .filter(|n| !n.is_empty())

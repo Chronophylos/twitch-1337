@@ -76,7 +76,7 @@ impl ContentToolExecutor {
     /// is an `Arc` internally, so the clone is cheap.
     fn media_client(&self) -> Option<MediaClient> {
         let media = self.live_media();
-        let (_, profile) = self.registry.resolve(media.profile.as_deref())?;
+        let (_, profile) = self.registry.resolve(Some(&media.profile))?;
         let base_url = profile.base_url.clone().or_else(|| {
             profile
                 .provider

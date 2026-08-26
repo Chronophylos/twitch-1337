@@ -149,7 +149,7 @@ pub async fn run_ritual(
     let dated = transcript.rotate_to(rotate_to).await?;
     // Resolve fresh on every run, not once at spawn, so a dashboard profile
     // switch (or an edit to ai.dreamer.profile) applies to the next run.
-    let Some((llm, base_profile)) = registry.resolve(dreamer_profile.as_deref()) else {
+    let Some((llm, base_profile)) = registry.resolve(Some(&dreamer_profile)) else {
         warn!("dreamer skipped, no usable LLM profile");
         return Ok(());
     };
