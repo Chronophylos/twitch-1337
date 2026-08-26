@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Europe::Berlin;
@@ -17,6 +18,8 @@ pub const RECAP_SHEET_NOTES: usize = 3;
 pub const RECAP_SHEET_LOGINS: usize = 16;
 pub const RECAP_FLUSH_AGE: chrono::Duration = chrono::Duration::seconds(120);
 pub const RECAP_PARK_FAILURES: u32 = 5;
+pub const RECAP_BACKOFF_INITIAL: Duration = Duration::from_secs(2);
+pub const RECAP_BACKOFF_CAP: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecapIdentity {
@@ -238,10 +241,13 @@ impl RecapHandle {
     }
 
     pub async fn sheet_logins(&self, channel: RecapChannel) -> BTreeSet<String> {
-        let guard = self.inner.lock().await;
+        let file = {
+            let guard = self.inner.lock().await;
+            guard.file.clone()
+        };
         let log = match channel {
-            RecapChannel::Primary => &guard.file.primary,
-            RecapChannel::AiChannel => &guard.file.ai_channel,
+            RecapChannel::Primary => &file.primary,
+            RecapChannel::AiChannel => &file.ai_channel,
         };
         let n = log.notes.len();
         let start = n.saturating_sub(RECAP_SHEET_NOTES);
@@ -264,9 +270,12 @@ impl RecapHandle {
         login: &str,
         max_notes: usize,
     ) -> String {
-        let guard = self.inner.lock().await;
-        let primary = injected_notes(&guard.file.primary, max_notes);
-        let ai = injected_notes(&guard.file.ai_channel, max_notes);
+        let file = {
+            let guard = self.inner.lock().await;
+            guard.file.clone()
+        };
+        let primary = injected_notes(&file.primary, max_notes);
+        let ai = injected_notes(&file.ai_channel, max_notes);
         let (first, second) = match invocation {
             RecapChannel::Primary => (primary, ai),
             RecapChannel::AiChannel => (ai, primary),

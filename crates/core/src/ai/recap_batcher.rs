@@ -6,11 +6,13 @@ use std::time::Duration;
 use chrono::Utc;
 use llm::{ChatCompletionRequest, LlmClient, LlmError, Message, Result as LlmResult, TraceIds};
 use tokio::sync::Notify;
+use tokio::time::Instant;
 
 use crate::ai::chat_history::ChatHistory;
 use crate::ai::recap::{
-    RECAP_FLUSH_AGE, RECAP_MAX_GENERATION, RECAP_PARK_FAILURES, RecapChannelLog, RecapHandle,
-    RecapNote, RecapState, append_note, eligible, format_batch_line, identities_from_batch,
+    RECAP_BACKOFF_CAP, RECAP_BACKOFF_INITIAL, RECAP_FLUSH_AGE, RECAP_MAX_GENERATION,
+    RECAP_PARK_FAILURES, RecapChannelLog, RecapFile, RecapHandle, RecapIdentity, RecapNote,
+    RecapState, append_note, eligible, format_batch_line, identities_from_batch,
     rebind_through_seq,
 };
 use crate::settings::SettingsHandle;
@@ -42,6 +44,81 @@ async fn paraphrase(
         .map_err(|_| LlmError::EmptyResponse)?
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CoarsenAction {
+    Drop(usize),
+    Fold(Vec<usize>),
+}
+
+/// Oldest `merge_width` notes at the minimum generation (not necessarily a vec prefix).
+pub(crate) fn plan_coarsen_step(notes: &[RecapNote], merge_width: usize) -> Option<CoarsenAction> {
+    if notes.is_empty() {
+        return None;
+    }
+    let min_gen = notes.iter().map(|n| n.generation).min()?;
+    let indices: Vec<usize> = notes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.generation == min_gen)
+        .take(merge_width)
+        .map(|(i, _)| i)
+        .collect();
+    if indices.is_empty() {
+        return None;
+    }
+    if min_gen >= RECAP_MAX_GENERATION {
+        return Some(CoarsenAction::Drop(indices[0]));
+    }
+    if indices.len() < 2 {
+        return Some(CoarsenAction::Drop(indices[0]));
+    }
+    Some(CoarsenAction::Fold(indices))
+}
+
+fn union_identities(notes: &[RecapNote]) -> Vec<RecapIdentity> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for note in notes {
+        for id in &note.identities {
+            let key = id.login.to_ascii_lowercase();
+            if seen.insert(key) {
+                out.push(id.clone());
+            }
+        }
+    }
+    out
+}
+
+async fn apply_coarsen_fold(
+    log: &mut RecapChannelLog,
+    indices: &[usize],
+    llm: &dyn LlmClient,
+    model: &str,
+    timeout: Duration,
+) -> Result<(), LlmError> {
+    let folded: Vec<RecapNote> = indices.iter().map(|&i| log.notes[i].clone()).collect();
+    let user = folded
+        .iter()
+        .map(|n| n.body.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let body = paraphrase(llm, model, timeout, user).await?;
+    let insert_at = *indices.first().expect("non-empty fold");
+    let max_through = folded.iter().map(|n| n.through_seq).max().unwrap_or(0);
+    let max_gen = folded.iter().map(|n| n.generation).max().unwrap_or(0);
+    let merged = RecapNote {
+        body: crate::ai::recap::trim_note_body(&body),
+        identities: union_identities(&folded),
+        through_seq: max_through,
+        generation: max_gen.saturating_add(1),
+    };
+    for &i in indices.iter().rev() {
+        log.notes.remove(i);
+    }
+    log.notes.insert(insert_at, merged);
+    Ok(())
+}
+
 pub async fn coarsen_if_needed(
     log: &mut RecapChannelLog,
     max_notes: usize,
@@ -51,57 +128,22 @@ pub async fn coarsen_if_needed(
     timeout: Duration,
 ) -> Result<(), LlmError> {
     while log.notes.len() > max_notes {
-        let min_gen = log.notes.iter().map(|n| n.generation).min().unwrap_or(0);
-        if min_gen >= RECAP_MAX_GENERATION {
-            log.notes.remove(0);
-            tracing::warn!(
-                generation = min_gen,
-                "dropped oldest recap note at max generation"
-            );
-            continue;
-        }
-
-        let fold_count = log
-            .notes
-            .iter()
-            .take_while(|n| n.generation == min_gen)
-            .count()
-            .min(merge_width);
-        if fold_count < 2 {
-            log.notes.remove(0);
-            tracing::warn!("dropped oldest recap note; not enough notes to fold");
-            continue;
-        }
-
-        let folded: Vec<RecapNote> = log.notes.drain(..fold_count).collect();
-        let max_through = folded.iter().map(|n| n.through_seq).max().unwrap_or(0);
-        let max_gen = folded.iter().map(|n| n.generation).max().unwrap_or(0);
-        let mut identities = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for note in &folded {
-            for id in &note.identities {
-                let key = id.login.to_ascii_lowercase();
-                if seen.insert(key) {
-                    identities.push(id.clone());
-                }
+        let Some(action) = plan_coarsen_step(&log.notes, merge_width) else {
+            break;
+        };
+        match action {
+            CoarsenAction::Drop(idx) => {
+                log.notes.remove(idx);
+                tracing::warn!(
+                    generation = RECAP_MAX_GENERATION,
+                    "dropped oldest recap note at max generation"
+                );
+            }
+            CoarsenAction::Fold(indices) => {
+                let llm = llm.ok_or(LlmError::EmptyResponse)?;
+                apply_coarsen_fold(log, &indices, llm, model, timeout).await?;
             }
         }
-        let user = folded
-            .iter()
-            .map(|n| n.body.as_str())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let llm = llm.ok_or(LlmError::EmptyResponse)?;
-        let body = paraphrase(llm, model, timeout, user).await?;
-        log.notes.insert(
-            0,
-            RecapNote {
-                body: crate::ai::recap::trim_note_body(&body),
-                identities,
-                through_seq: max_through,
-                generation: max_gen.saturating_add(1),
-            },
-        );
     }
 
     let ceiling = max_notes.saturating_mul(2);
@@ -138,50 +180,54 @@ fn should_flush(
         .is_some_and(|idx| idx < batch_size)
 }
 
-enum ChannelFlush {
-    Idle,
-    Failed,
-    Saved,
-}
-
-struct FlushParams<'a> {
-    log: &'a mut RecapChannelLog,
-    through_seq: &'a mut u64,
-    entries: &'a [crate::ai::chat_history::ChatHistoryEntry],
+struct FlushInput {
+    log: RecapChannelLog,
+    through_seq: u64,
+    entries: Vec<crate::ai::chat_history::ChatHistoryEntry>,
     n: u64,
     batch_size: usize,
     max_notes: usize,
     merge_width: usize,
+}
+
+struct FlushOutput {
+    log: RecapChannelLog,
+    through_seq: u64,
+}
+
+enum FlushAttempt {
+    Idle,
+    Updated(FlushOutput),
+    LlmFailed,
+}
+
+struct FlushParams<'a> {
+    input: FlushInput,
     llm: &'a dyn LlmClient,
     model: &'a str,
     timeout: Duration,
     self_logins: &'a [String],
 }
 
-async fn flush_channel(params: FlushParams<'_>) -> ChannelFlush {
+async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
     let FlushParams {
-        log,
-        through_seq,
-        entries,
-        n,
-        batch_size,
-        max_notes,
-        merge_width,
+        mut input,
         llm,
         model,
         timeout,
         self_logins,
     } = params;
-    if *through_seq == 0 && log.through_fp.is_some() {
-        *through_seq = rebind_through_seq(log, entries);
+    let entries = &input.entries;
+    if input.through_seq == 0 && input.log.through_fp.is_some() {
+        input.through_seq = rebind_through_seq(&input.log, entries);
     }
 
-    let eligible = eligible(entries, n as usize, *through_seq, self_logins);
-    if !should_flush(&eligible, batch_size, entries) {
-        return ChannelFlush::Idle;
+    let eligible = eligible(entries, input.n as usize, input.through_seq, self_logins);
+    if !should_flush(&eligible, input.batch_size, entries) {
+        return FlushAttempt::Idle;
     }
 
-    let take = eligible.len().min(batch_size);
+    let take = eligible.len().min(input.batch_size);
     let batch: Vec<_> = eligible.into_iter().take(take).collect();
     let user = batch
         .iter()
@@ -191,27 +237,58 @@ async fn flush_channel(params: FlushParams<'_>) -> ChannelFlush {
 
     let body = match paraphrase(llm, model, timeout, user).await {
         Ok(body) => body,
-        Err(_) => return ChannelFlush::Failed,
+        Err(_) => return FlushAttempt::LlmFailed,
     };
 
     let last = batch.last().expect("non-empty batch");
     let identities = identities_from_batch(&batch);
     let through = last.seq;
-    append_note(log, body, identities, through, last);
-    *through_seq = through;
-
-    if coarsen_if_needed(log, max_notes, merge_width, Some(llm), model, timeout)
-        .await
-        .is_err()
+    append_note(&mut input.log, body, identities, through, last);
+    if coarsen_if_needed(
+        &mut input.log,
+        input.max_notes,
+        input.merge_width,
+        Some(llm),
+        model,
+        timeout,
+    )
+    .await
+    .is_err()
     {
-        return ChannelFlush::Failed;
+        return FlushAttempt::LlmFailed;
     }
 
-    ChannelFlush::Saved
+    FlushAttempt::Updated(FlushOutput {
+        log: input.log,
+        through_seq: through,
+    })
 }
 
-fn record_failure(state: &mut RecapState) {
+pub(crate) struct BatcherBackoff {
+    pub current: Duration,
+    pub until: Option<Instant>,
+}
+
+impl BatcherBackoff {
+    pub fn on_failure(&mut self) {
+        let next = if self.current.is_zero() {
+            RECAP_BACKOFF_INITIAL
+        } else {
+            (self.current * 2).min(RECAP_BACKOFF_CAP)
+        };
+        self.current = next;
+        self.until = Some(Instant::now() + next);
+    }
+
+    pub fn on_success(&mut self) {
+        self.current = Duration::ZERO;
+        self.until = None;
+    }
+}
+
+fn record_failure(state: &mut RecapState, backoff: &mut BatcherBackoff) {
     state.failures = state.failures.saturating_add(1);
+    backoff.on_failure();
     if state.failures >= RECAP_PARK_FAILURES {
         state.parked = true;
         tracing::warn!(
@@ -221,21 +298,42 @@ fn record_failure(state: &mut RecapState) {
     }
 }
 
+struct TickSnapshot {
+    path: std::path::PathBuf,
+    file: RecapFile,
+    primary_through_seq: u64,
+    ai_through_seq: u64,
+}
+
+pub(crate) struct BatcherTickParams<'a> {
+    pub handle: &'a RecapHandle,
+    pub settings: &'a SettingsHandle,
+    pub llm: &'a dyn LlmClient,
+    pub primary: &'a ChatHistory,
+    pub ai: Option<&'a ChatHistory>,
+    pub self_logins: &'a [String],
+    pub last_seen_model: &'a mut Option<String>,
+    pub backoff: &'a mut BatcherBackoff,
+}
+
 /// One batcher iteration: snapshot settings, optionally flush each channel.
-pub(crate) async fn recap_batcher_tick(
-    handle: &RecapHandle,
-    settings: &SettingsHandle,
-    llm: &dyn LlmClient,
-    primary: &ChatHistory,
-    ai: Option<&ChatHistory>,
-    self_logins: &[String],
-    last_seen_model: &mut Option<String>,
-) {
+pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
+    let BatcherTickParams {
+        handle,
+        settings,
+        llm,
+        primary,
+        ai,
+        self_logins,
+        last_seen_model,
+        backoff,
+    } = params;
     let snap = settings.load();
     let model = match snap.ai.history.recap_model.as_deref() {
         Some(m) if !m.trim().is_empty() => m.to_string(),
         _ => {
             *last_seen_model = None;
+            backoff.on_success();
             return;
         }
     };
@@ -245,6 +343,7 @@ pub(crate) async fn recap_batcher_tick(
         let mut guard = handle.inner.lock().await;
         guard.parked = false;
         guard.failures = 0;
+        backoff.on_success();
     }
 
     let timeout = Duration::from_secs(snap.ai.connection.timeout);
@@ -255,21 +354,35 @@ pub(crate) async fn recap_batcher_tick(
     let merge_width = snap.ai.history.merge_width as usize;
     drop(snap);
 
-    let mut guard = handle.inner.lock().await;
-    if guard.parked {
-        return;
-    }
+    let TickSnapshot {
+        path,
+        mut file,
+        mut primary_through_seq,
+        mut ai_through_seq,
+    } = {
+        let guard = handle.inner.lock().await;
+        if guard.parked {
+            return;
+        }
+        TickSnapshot {
+            path: guard.path.clone(),
+            file: guard.file.clone(),
+            primary_through_seq: guard.primary_through_seq,
+            ai_through_seq: guard.ai_through_seq,
+        }
+    };
 
     let primary_entries = primary.lock().await.snapshot();
-    let mut primary_through = guard.primary_through_seq;
-    match flush_channel(FlushParams {
-        log: &mut guard.file.primary,
-        through_seq: &mut primary_through,
-        entries: &primary_entries,
-        n,
-        batch_size,
-        max_notes,
-        merge_width,
+    match try_flush_channel(FlushParams {
+        input: FlushInput {
+            log: file.primary.clone(),
+            through_seq: primary_through_seq,
+            entries: primary_entries,
+            n,
+            batch_size,
+            max_notes,
+            merge_width,
+        },
         llm,
         model: &model,
         timeout,
@@ -277,34 +390,30 @@ pub(crate) async fn recap_batcher_tick(
     })
     .await
     {
-        ChannelFlush::Idle => {}
-        ChannelFlush::Failed => record_failure(&mut guard),
-        ChannelFlush::Saved => {
-            if let Err(err) =
-                crate::util::persist::atomic_save_ron_async(&guard.file, &guard.path).await
-            {
-                tracing::error!(?err, path = %guard.path.display(), "chat-recap.ron save failed");
-            }
-            guard.failures = 0;
+        FlushAttempt::Idle => {}
+        FlushAttempt::LlmFailed => {
+            let mut guard = handle.inner.lock().await;
+            record_failure(&mut guard, backoff);
+            return;
         }
-    }
-    guard.primary_through_seq = primary_through;
-
-    if guard.parked {
-        return;
+        FlushAttempt::Updated(out) => {
+            file.primary = out.log;
+            primary_through_seq = out.through_seq;
+        }
     }
 
     if let Some(ai_hist) = ai {
         let ai_entries = ai_hist.lock().await.snapshot();
-        let mut ai_through = guard.ai_through_seq;
-        match flush_channel(FlushParams {
-            log: &mut guard.file.ai_channel,
-            through_seq: &mut ai_through,
-            entries: &ai_entries,
-            n: ai_n,
-            batch_size,
-            max_notes,
-            merge_width,
+        match try_flush_channel(FlushParams {
+            input: FlushInput {
+                log: file.ai_channel.clone(),
+                through_seq: ai_through_seq,
+                entries: ai_entries,
+                n: ai_n,
+                batch_size,
+                max_notes,
+                merge_width,
+            },
             llm,
             model: &model,
             timeout,
@@ -312,19 +421,45 @@ pub(crate) async fn recap_batcher_tick(
         })
         .await
         {
-            ChannelFlush::Idle => {}
-            ChannelFlush::Failed => record_failure(&mut guard),
-            ChannelFlush::Saved => {
-                if let Err(err) =
-                    crate::util::persist::atomic_save_ron_async(&guard.file, &guard.path).await
-                {
-                    tracing::error!(?err, path = %guard.path.display(), "chat-recap.ron save failed");
-                }
-                guard.failures = 0;
+            FlushAttempt::Idle => {}
+            FlushAttempt::LlmFailed => {
+                let mut guard = handle.inner.lock().await;
+                record_failure(&mut guard, backoff);
+                return;
+            }
+            FlushAttempt::Updated(out) => {
+                file.ai_channel = out.log;
+                ai_through_seq = out.through_seq;
             }
         }
-        guard.ai_through_seq = ai_through;
     }
+
+    let dirty = {
+        let guard = handle.inner.lock().await;
+        guard.file != file
+            || guard.primary_through_seq != primary_through_seq
+            || guard.ai_through_seq != ai_through_seq
+    };
+    if !dirty {
+        return;
+    }
+
+    if crate::util::persist::atomic_save_ron_async(&file, &path)
+        .await
+        .is_err()
+    {
+        tracing::error!(path = %path.display(), "chat-recap.ron save failed");
+        let mut guard = handle.inner.lock().await;
+        record_failure(&mut guard, backoff);
+        return;
+    }
+
+    let mut guard = handle.inner.lock().await;
+    guard.file = file;
+    guard.primary_through_seq = primary_through_seq;
+    guard.ai_through_seq = ai_through_seq;
+    guard.failures = 0;
+    backoff.on_success();
 }
 
 /// Background loop: never blocks chat turns.
@@ -338,19 +473,28 @@ pub async fn run_recap_batcher(
     shutdown: Arc<Notify>,
 ) {
     let mut last_seen_model: Option<String> = None;
+    let mut backoff = BatcherBackoff {
+        current: Duration::ZERO,
+        until: None,
+    };
     loop {
+        let sleep_for = match backoff.until {
+            Some(until) if Instant::now() < until => until - Instant::now(),
+            _ => TICK_INTERVAL,
+        };
         tokio::select! {
             () = shutdown.notified() => break,
-            () = tokio::time::sleep(TICK_INTERVAL) => {
-                recap_batcher_tick(
-                    &handle,
-                    &settings,
-                    llm.as_ref(),
-                    &primary,
-                    ai.as_ref(),
-                    &self_logins,
-                    &mut last_seen_model,
-                )
+            () = tokio::time::sleep(sleep_for) => {
+                recap_batcher_tick(BatcherTickParams {
+                    handle: &handle,
+                    settings: &settings,
+                    llm: llm.as_ref(),
+                    primary: &primary,
+                    ai: ai.as_ref(),
+                    self_logins: &self_logins,
+                    last_seen_model: &mut last_seen_model,
+                    backoff: &mut backoff,
+                })
                 .await;
             }
         }
@@ -382,6 +526,22 @@ mod tests {
         async fn chat_completion(&self, _: ChatCompletionRequest) -> LlmResult<String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Err(LlmError::EmptyResponse)
+        }
+
+        async fn chat_completion_with_tools(
+            &self,
+            _: llm::ToolChatCompletionRequest,
+        ) -> LlmResult<llm::ToolChatCompletionResponse> {
+            unimplemented!()
+        }
+    }
+
+    struct OkLlm;
+
+    #[async_trait]
+    impl LlmClient for OkLlm {
+        async fn chat_completion(&self, _: ChatCompletionRequest) -> LlmResult<String> {
+            Ok("zusammengefasst".into())
         }
 
         async fn chat_completion_with_tools(
@@ -442,32 +602,38 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let handle = RecapHandle::load(dir.path().to_path_buf()).await;
         let mut last_seen = None;
+        let mut backoff = BatcherBackoff {
+            current: Duration::ZERO,
+            until: None,
+        };
 
         for _ in 0..5 {
-            recap_batcher_tick(
-                &handle,
-                &settings,
-                &llm,
-                &primary,
-                None,
-                &[],
-                &mut last_seen,
-            )
+            recap_batcher_tick(BatcherTickParams {
+                handle: &handle,
+                settings: &settings,
+                llm: &llm,
+                primary: &primary,
+                ai: None,
+                self_logins: &[],
+                last_seen_model: &mut last_seen,
+                backoff: &mut backoff,
+            })
             .await;
         }
 
         assert!(handle.parked().await);
         assert_eq!(calls.load(Ordering::SeqCst), 5);
 
-        recap_batcher_tick(
-            &handle,
-            &settings,
-            &llm,
-            &primary,
-            None,
-            &[],
-            &mut last_seen,
-        )
+        recap_batcher_tick(BatcherTickParams {
+            handle: &handle,
+            settings: &settings,
+            llm: &llm,
+            primary: &primary,
+            ai: None,
+            self_logins: &[],
+            last_seen_model: &mut last_seen,
+            backoff: &mut backoff,
+        })
         .await;
         assert_eq!(calls.load(Ordering::SeqCst), 5);
     }
@@ -476,5 +642,245 @@ mod tests {
     fn trim_note_body_still_used_by_batcher_path() {
         let long = "x".repeat(900);
         assert!(trim_note_body(&long).len() <= crate::ai::recap::RECAP_NOTE_BYTES);
+    }
+
+    #[test]
+    fn plan_coarsen_skips_high_gen_prefix() {
+        let notes = vec![
+            RecapNote {
+                body: "high".into(),
+                identities: vec![],
+                through_seq: 1,
+                generation: RECAP_MAX_GENERATION,
+            },
+            RecapNote {
+                body: "a".into(),
+                identities: vec![],
+                through_seq: 2,
+                generation: 0,
+            },
+            RecapNote {
+                body: "b".into(),
+                identities: vec![],
+                through_seq: 3,
+                generation: 0,
+            },
+        ];
+        let action = plan_coarsen_step(&notes, 2);
+        assert!(matches!(action, Some(CoarsenAction::Fold(indices)) if indices == vec![1, 2]));
+    }
+
+    #[tokio::test]
+    async fn coarsen_fold_skips_high_gen_prefix() {
+        let mut log = RecapChannelLog {
+            notes: vec![
+                RecapNote {
+                    body: "high".into(),
+                    identities: vec![],
+                    through_seq: 1,
+                    generation: RECAP_MAX_GENERATION,
+                },
+                RecapNote {
+                    body: "a".into(),
+                    identities: vec![],
+                    through_seq: 2,
+                    generation: 0,
+                },
+                RecapNote {
+                    body: "b".into(),
+                    identities: vec![],
+                    through_seq: 3,
+                    generation: 0,
+                },
+                RecapNote {
+                    body: "c".into(),
+                    identities: vec![],
+                    through_seq: 4,
+                    generation: 0,
+                },
+            ],
+            ..Default::default()
+        };
+        coarsen_if_needed(&mut log, 3, 2, Some(&OkLlm), "m", Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(log.notes.len(), 3);
+        assert_eq!(log.notes[0].body, "high");
+        assert_eq!(log.notes[1].body, "zusammengefasst");
+        assert_eq!(log.notes[1].generation, 1);
+        assert_eq!(log.notes[2].body, "c");
+    }
+
+    #[tokio::test]
+    async fn coarsen_fold_failure_leaves_notes_intact() {
+        let notes = vec![
+            RecapNote {
+                body: "a".into(),
+                identities: vec![],
+                through_seq: 1,
+                generation: 0,
+            },
+            RecapNote {
+                body: "b".into(),
+                identities: vec![],
+                through_seq: 2,
+                generation: 0,
+            },
+            RecapNote {
+                body: "c".into(),
+                identities: vec![],
+                through_seq: 3,
+                generation: 0,
+            },
+        ];
+        let mut log = RecapChannelLog {
+            notes: notes.clone(),
+            ..Default::default()
+        };
+        let boom = CountingBoom {
+            calls: Arc::new(AtomicU32::new(0)),
+        };
+        let err = coarsen_if_needed(&mut log, 1, 2, Some(&boom), "m", Duration::from_secs(1)).await;
+        assert!(err.is_err());
+        assert_eq!(log.notes, notes);
+    }
+
+    struct SlowOkLlm;
+
+    #[async_trait]
+    impl LlmClient for SlowOkLlm {
+        async fn chat_completion(&self, _: ChatCompletionRequest) -> LlmResult<String> {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            Ok("ok".into())
+        }
+
+        async fn chat_completion_with_tools(
+            &self,
+            _: llm::ToolChatCompletionRequest,
+        ) -> LlmResult<llm::ToolChatCompletionResponse> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn render_suffix_while_batcher_on_llm_does_not_block() {
+        use crate::ai::recap::{RecapChannel, RecapHandle};
+
+        let dir = tempfile::tempdir().unwrap();
+        let handle = RecapHandle::load(dir.path().to_path_buf()).await;
+        {
+            let mut guard = handle.inner.lock().await;
+            guard.file.primary.notes.push(RecapNote {
+                body: "live".into(),
+                identities: vec![],
+                through_seq: 0,
+                generation: 0,
+            });
+        }
+
+        let settings = test_settings("tiny-model");
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            Arc::clone(&settings),
+            crate::ai::chat_history::primary_history_capacity,
+        )));
+        {
+            let mut buf = primary.lock().await;
+            buf.push_user("v1", "a");
+            buf.push_user("v2", "b");
+            buf.push_user("v3", "c");
+            let g = grok_entry(4);
+            buf.push_bot_with_identity_at(
+                g.username,
+                g.display_name.as_deref(),
+                Agent::Grok,
+                g.text,
+                g.timestamp,
+            );
+        }
+
+        let handle_bg = RecapHandle {
+            inner: Arc::clone(&handle.inner),
+        };
+        let llm = SlowOkLlm;
+        let tick = tokio::spawn(async move {
+            let mut last_seen = None;
+            let mut backoff = BatcherBackoff {
+                current: Duration::ZERO,
+                until: None,
+            };
+            recap_batcher_tick(BatcherTickParams {
+                handle: &handle_bg,
+                settings: &settings,
+                llm: &llm,
+                primary: &primary,
+                ai: None,
+                self_logins: &[],
+                last_seen_model: &mut last_seen,
+                backoff: &mut backoff,
+            })
+            .await;
+        });
+
+        let started = Instant::now();
+        let suffix = handle
+            .render_suffix(RecapChannel::Primary, "alice", 8)
+            .await;
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert!(suffix.contains("live"));
+        let _ = tick.await;
+    }
+
+    #[tokio::test]
+    async fn persist_failure_does_not_advance_watermark() {
+        use crate::ai::recap::RecapHandle;
+
+        let settings = test_settings("tiny-model");
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            Arc::clone(&settings),
+            crate::ai::chat_history::primary_history_capacity,
+        )));
+        {
+            let mut buf = primary.lock().await;
+            buf.push_user("v1", "a");
+            buf.push_user("v2", "b");
+            buf.push_user("v3", "c");
+            let g = grok_entry(4);
+            buf.push_bot_with_identity_at(
+                g.username,
+                g.display_name.as_deref(),
+                Agent::Grok,
+                g.text,
+                g.timestamp,
+            );
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let handle = RecapHandle::load(dir.path().to_path_buf()).await;
+        {
+            let mut guard = handle.inner.lock().await;
+            guard.path = std::path::PathBuf::from("/definitely/not/writable/chat-recap.ron");
+        }
+
+        let mut last_seen = None;
+        let mut backoff = BatcherBackoff {
+            current: Duration::ZERO,
+            until: None,
+        };
+        recap_batcher_tick(BatcherTickParams {
+            handle: &handle,
+            settings: &settings,
+            llm: &OkLlm,
+            primary: &primary,
+            ai: None,
+            self_logins: &[],
+            last_seen_model: &mut last_seen,
+            backoff: &mut backoff,
+        })
+        .await;
+
+        let guard = handle.inner.lock().await;
+        assert_eq!(guard.primary_through_seq, 0);
+        assert!(guard.file.primary.notes.is_empty());
+        assert_eq!(guard.failures, 1);
     }
 }
