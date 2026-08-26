@@ -322,6 +322,7 @@ pub(crate) struct BatcherTickParams<'a> {
     pub handle: &'a RecapHandle,
     pub settings: &'a SettingsHandle,
     pub llm: &'a dyn LlmClient,
+    pub timeout: Duration,
     pub primary: &'a ChatHistory,
     pub ai: Option<&'a ChatHistory>,
     pub self_logins: &'a [String],
@@ -335,6 +336,7 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
         handle,
         settings,
         llm,
+        timeout,
         primary,
         ai,
         self_logins,
@@ -359,7 +361,6 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
         backoff.on_success();
     }
 
-    let timeout = Duration::from_secs(snap.ai.connection.timeout);
     let n = snap.ai.history.n;
     let ai_n = snap.ai.history.ai_channel_n;
     let primary_capacity = snap.ai.history.length as usize;
@@ -480,7 +481,7 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
 pub async fn run_recap_batcher(
     handle: RecapHandle,
     settings: SettingsHandle,
-    llm: Arc<dyn LlmClient>,
+    registry: Arc<crate::llm_factory::LlmRegistry>,
     primary: ChatHistory,
     ai: Option<ChatHistory>,
     self_logins: Vec<String>,
@@ -499,10 +500,15 @@ pub async fn run_recap_batcher(
         tokio::select! {
             () = shutdown.notified() => break,
             () = tokio::time::sleep(sleep_for) => {
+                let Some((client, prof)) = registry.recap_client() else {
+                    tracing::debug!("recap skipped, no usable LLM endpoint");
+                    continue;
+                };
                 recap_batcher_tick(BatcherTickParams {
                     handle: &handle,
                     settings: &settings,
-                    llm: llm.as_ref(),
+                    llm: client.as_ref(),
+                    timeout: Duration::from_secs(prof.timeout),
                     primary: &primary,
                     ai: ai.as_ref(),
                     self_logins: &self_logins,
@@ -626,6 +632,7 @@ mod tests {
                 handle: &handle,
                 settings: &settings,
                 llm: &llm,
+                timeout: Duration::from_secs(30),
                 primary: &primary,
                 ai: None,
                 self_logins: &[],
@@ -642,6 +649,7 @@ mod tests {
             handle: &handle,
             settings: &settings,
             llm: &llm,
+            timeout: Duration::from_secs(30),
             primary: &primary,
             ai: None,
             self_logins: &[],
@@ -843,6 +851,7 @@ mod tests {
                 handle: &handle_bg,
                 settings: &settings,
                 llm: &llm,
+                timeout: Duration::from_secs(30),
                 primary: &primary,
                 ai: None,
                 self_logins: &[],
@@ -901,6 +910,7 @@ mod tests {
             handle: &handle,
             settings: &settings,
             llm: &OkLlm,
+            timeout: Duration::from_secs(30),
             primary: &primary,
             ai: None,
             self_logins: &[],

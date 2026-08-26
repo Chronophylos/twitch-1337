@@ -331,12 +331,13 @@ where
         }
     });
 
-    let recap_task = match (llm.clone(), recap.clone(), recap_histories_rx) {
-        (Some(llm), Some(handle), Some(rx)) => {
+    let recap_task = match (recap.clone(), recap_histories_rx) {
+        (Some(handle), Some(rx)) => {
             let settings = settings.clone();
             let shutdown = shutdown_notify.clone();
             let bot_username = config.twitch.username.clone();
             let echo_for_logins = echo.clone();
+            let registry = llm.clone();
             tokio::spawn(async move {
                 let Ok(histories) = rx.await else {
                     std::future::pending::<()>().await;
@@ -351,7 +352,7 @@ where
                 run_recap_batcher(
                     (*handle).clone(),
                     settings,
-                    llm,
+                    registry,
                     primary,
                     histories.ai_channel,
                     self_logins,

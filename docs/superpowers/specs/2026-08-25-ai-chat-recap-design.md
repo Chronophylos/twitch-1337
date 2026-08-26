@@ -245,21 +245,20 @@ under Resume cursor. Do not re-paraphrase lines already covered.
 
 ## Client selection
 
-This spec is against `origin/main`: one `ai.connection`, no provider
-profiles, no `LlmRegistry`.
-
-`ai.history.recap_model: Option<String>` on the shared backend / key /
-base URL. `None` or blank → Recap off. Never substitute
-`connection.model`. Timeout / effort / tier default to the
-connection’s values; do not add extra History knobs for them unless
-the shared timeout is wrong in practice.
+This spec originally targeted a single `ai.connection`. Provider
+profiles landed first (`LlmRegistry`). Recap keeps
+`ai.history.recap_model: Option<String>` as a **model id** on the
+**active profile's** provider / key / base URL. `None` or blank →
+Recap off. Never substitute the active profile's chat `model`.
+Timeout comes from that profile; do not add extra History knobs for
+effort or tier.
 
 The Recap call is a single completion, no tools.
 
-If provider profiles land first, that PR (or a follow-up) renames
-`recap_model` to `recap_profile: Option<String>` with the same Off
-semantics — empty means off, never fall back to the active chat
-profile.
+A later rename to `recap_profile: Option<String>` (empty = off, never
+fall back to the active chat profile) is still the right shape if Recap
+should ride a dedicated profile instead of a model id on the active
+endpoint.
 
 Baked prompt: `crates/data/assets/prompts/recap.md`. One template; the
 user message is either a batch of chat lines or (for coarsening) the

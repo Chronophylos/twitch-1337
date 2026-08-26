@@ -59,6 +59,21 @@ impl LlmRegistry {
         self.resolve(None).is_some()
     }
 
+    /// Active-profile endpoint for Recap.
+    ///
+    /// Recap's request model comes from `ai.history.recap_model` and is never
+    /// the chat profile's model, so this skips the empty-model check
+    /// [`Self::resolve`] uses to disable `!ai`.
+    pub fn recap_client(&self) -> Option<(Arc<dyn LlmClient>, AiProfile)> {
+        if let Some(fixed) = &self.fixed {
+            let prof = self.settings.load().ai.active().clone();
+            return Some((fixed.clone(), prof));
+        }
+        let prof = self.settings.load().ai.active().clone();
+        let client = self.client_for(&prof)?;
+        Some((client, prof))
+    }
+
     /// `profile: None` = the active profile. A name that no longer exists
     /// falls back to the active profile rather than disabling the agent —
     /// deleting a profile should not silently kill the dreamer.

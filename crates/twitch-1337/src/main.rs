@@ -267,7 +267,7 @@ pub async fn main() -> Result<()> {
         settings_handle.clone(),
     ));
 
-    let recap_handle = if llm_client.is_some() {
+    let recap_handle = if config.ai.is_some() {
         Some(Arc::new(
             twitch_1337::ai::recap::RecapHandle::load(get_data_dir()).await,
         ))
