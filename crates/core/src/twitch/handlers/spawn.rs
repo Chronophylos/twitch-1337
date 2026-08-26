@@ -339,10 +339,12 @@ where
             let echo_for_logins = echo.clone();
             tokio::spawn(async move {
                 let Ok(histories) = rx.await else {
-                    return;
+                    std::future::pending::<()>().await;
+                    unreachable!("pending future never resolves");
                 };
                 let Some(primary) = histories.primary else {
-                    return;
+                    std::future::pending::<()>().await;
+                    unreachable!("pending future never resolves");
                 };
                 let mut self_logins = vec![bot_username.to_ascii_lowercase()];
                 self_logins.extend(echo_for_logins.mouth_logins().iter().cloned());

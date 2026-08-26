@@ -384,8 +384,12 @@ fn format_reply_context(
 /// that replies currently go through the utility bot login without denying
 /// the agent has an account. `Agent::Utility` in the match arm folds into
 /// Aurora's German copy only for exhaustiveness.
+fn recap_model_is_set(recap_model: Option<&str>) -> bool {
+    recap_model.is_some_and(|m| !m.trim().is_empty())
+}
+
 fn recap_enabled_for_model(recap_model: Option<&str>, parked: bool) -> bool {
-    recap_model.is_some_and(|m| !m.trim().is_empty()) && !parked
+    recap_model_is_set(recap_model) && !parked
 }
 
 async fn union_recap_sheet_logins(
@@ -654,12 +658,16 @@ where
         } else {
             (0, 0)
         };
-        let recap_sheet_logins = if let Some(ref handle) = self.recap {
-            union_recap_sheet_logins(handle, recap_channel).await
+        let recap_sheet_logins = if recap_model_is_set(recap_model) {
+            if let Some(ref handle) = self.recap {
+                union_recap_sheet_logins(handle, recap_channel).await
+            } else {
+                BTreeSet::new()
+            }
         } else {
             BTreeSet::new()
         };
-        let recap_suffix = if recap_enabled {
+        let recap_suffix = if recap_model_is_set(recap_model) {
             if let Some(ref handle) = self.recap {
                 let primary_login = cc
                     .map(|c| c.primary_login.as_str())
@@ -1097,7 +1105,7 @@ pub async fn build_ai_memory_v2(
 
 #[cfg(test)]
 mod recap_wiring_tests {
-    use super::recap_enabled_for_model;
+    use super::{recap_enabled_for_model, recap_model_is_set};
     use crate::ai::memory::inject::{self, SystemParts, UserParts};
 
     #[test]
@@ -1107,6 +1115,8 @@ mod recap_wiring_tests {
         assert!(!recap_enabled_for_model(Some("   "), false));
         assert!(recap_enabled_for_model(Some("tiny"), false));
         assert!(!recap_enabled_for_model(Some("tiny"), true));
+        assert!(recap_model_is_set(Some("tiny")));
+        assert!(!recap_model_is_set(Some("  ")));
     }
 
     #[test]
@@ -1127,6 +1137,50 @@ mod recap_wiring_tests {
             },
         );
         assert!(!system.content.contains("## Recap"));
+    }
+
+    #[tokio::test]
+    async fn parked_recap_still_injects_existing_notes() {
+        use crate::ai::recap::{RecapChannel, RecapHandle, RecapNote};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = RecapHandle::load(dir.path().to_path_buf()).await;
+        {
+            let mut state = handle.inner.lock().await;
+            state.parked = true;
+            state.file.primary.notes.push(RecapNote {
+                body: "existing recap note".into(),
+                identities: Vec::new(),
+                through_seq: 1,
+                generation: 0,
+            });
+        }
+
+        assert!(!recap_enabled_for_model(Some("tiny"), true));
+        let recap = if recap_model_is_set(Some("tiny")) {
+            handle
+                .render_suffix(RecapChannel::Primary, "main", "ai", 3)
+                .await
+        } else {
+            String::new()
+        };
+        let (system, _) = inject::build_chat_turn_messages(
+            SystemParts {
+                head: "head".into(),
+                appendices: Vec::new(),
+                memory: String::new(),
+                recap,
+            },
+            UserParts {
+                emote_block: None,
+                scratch: String::new(),
+                recent_chat: String::new(),
+                instructions: "instr".into(),
+                instruction: "do thing".into(),
+            },
+        );
+        assert!(system.content.contains("## Recap"));
+        assert!(system.content.contains("existing recap note"));
     }
 }
 

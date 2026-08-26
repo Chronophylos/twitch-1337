@@ -40,7 +40,7 @@ async fn paraphrase(
     };
     tokio::time::timeout(timeout, llm.chat_completion(req))
         .await
-        .map_err(|_| LlmError::EmptyResponse)?
+        .map_err(|_| LlmError::Timeout)?
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,8 +139,17 @@ pub async fn coarsen_if_needed(
                 );
             }
             CoarsenAction::Fold(indices) => {
-                let llm = llm.ok_or(LlmError::EmptyResponse)?;
-                apply_coarsen_fold(log, &indices, llm, model, timeout).await?;
+                let result = match llm {
+                    Some(llm) => apply_coarsen_fold(log, &indices, llm, model, timeout).await,
+                    None => Err(LlmError::EmptyResponse),
+                };
+                if let Err(error) = result {
+                    log.notes.remove(0);
+                    tracing::warn!(
+                        ?error,
+                        "recap coarsening failed; dropped oldest recap note instead"
+                    );
+                }
             }
         }
     }
@@ -162,6 +171,7 @@ fn should_flush(
     eligible: &[&crate::ai::chat_history::ChatHistoryEntry],
     batch_size: usize,
     snapshot: &[crate::ai::chat_history::ChatHistoryEntry],
+    capacity: usize,
 ) -> bool {
     if eligible.is_empty() {
         return false;
@@ -176,13 +186,14 @@ fn should_flush(
     snapshot
         .iter()
         .position(|e| e.seq == oldest.seq)
-        .is_some_and(|idx| idx < batch_size)
+        .is_some_and(|idx| capacity.saturating_sub(snapshot.len()).saturating_add(idx) < batch_size)
 }
 
 struct FlushInput {
     log: RecapChannelLog,
     through_seq: u64,
     entries: Vec<crate::ai::chat_history::ChatHistoryEntry>,
+    capacity: usize,
     n: u64,
     batch_size: usize,
     max_notes: usize,
@@ -222,7 +233,7 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
     }
 
     let eligible = eligible(entries, input.n as usize, input.through_seq, self_logins);
-    if !should_flush(&eligible, input.batch_size, entries) {
+    if !should_flush(&eligible, input.batch_size, entries, input.capacity) {
         return FlushAttempt::Idle;
     }
 
@@ -236,14 +247,17 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
 
     let body = match paraphrase(llm, model, timeout, user).await {
         Ok(body) => body,
-        Err(_) => return FlushAttempt::LlmFailed,
+        Err(error) => {
+            tracing::warn!(?error, "recap batch paraphrase failed");
+            return FlushAttempt::LlmFailed;
+        }
     };
 
     let last = batch.last().expect("non-empty batch");
     let identities = identities_from_batch(&batch);
     let through = last.seq;
     append_note(&mut input.log, body, identities, through, last);
-    if coarsen_if_needed(
+    if let Err(error) = coarsen_if_needed(
         &mut input.log,
         input.max_notes,
         input.merge_width,
@@ -252,8 +266,8 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
         timeout,
     )
     .await
-    .is_err()
     {
+        tracing::warn!(?error, "recap coarsening failed");
         return FlushAttempt::LlmFailed;
     }
 
@@ -348,6 +362,8 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
     let timeout = Duration::from_secs(snap.ai.connection.timeout);
     let n = snap.ai.history.n;
     let ai_n = snap.ai.history.ai_channel_n;
+    let primary_capacity = snap.ai.history.length as usize;
+    let ai_capacity = snap.ai.history.ai_channel_length as usize;
     let batch_size = snap.ai.history.batch_size as usize;
     let max_notes = snap.ai.history.max_notes as usize;
     let merge_width = snap.ai.history.merge_width as usize;
@@ -377,6 +393,7 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
             log: file.primary.clone(),
             through_seq: primary_through_seq,
             entries: primary_entries,
+            capacity: primary_capacity,
             n,
             batch_size,
             max_notes,
@@ -408,6 +425,7 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
                 log: file.ai_channel.clone(),
                 through_seq: ai_through_seq,
                 entries: ai_entries,
+                capacity: ai_capacity,
                 n: ai_n,
                 batch_size,
                 max_notes,
@@ -443,11 +461,8 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
         return;
     }
 
-    if crate::util::persist::atomic_save_ron_async(&file, &path)
-        .await
-        .is_err()
-    {
-        tracing::error!(path = %path.display(), "chat-recap.ron save failed");
+    if let Err(error) = crate::util::persist::atomic_save_ron_async(&file, &path).await {
+        tracing::error!(?error, path = %path.display(), "chat-recap.ron save failed");
         let mut guard = handle.inner.lock().await;
         record_failure(&mut guard, backoff);
         return;
@@ -711,37 +726,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn coarsen_fold_failure_leaves_notes_intact() {
-        let notes = vec![
-            RecapNote {
-                body: "a".into(),
-                identities: vec![],
-                through_seq: 1,
-                generation: 0,
-            },
-            RecapNote {
-                body: "b".into(),
-                identities: vec![],
-                through_seq: 2,
-                generation: 0,
-            },
-            RecapNote {
-                body: "c".into(),
-                identities: vec![],
-                through_seq: 3,
-                generation: 0,
-            },
-        ];
+    async fn coarsen_fold_failure_drops_oldest_instead_of_parking() {
         let mut log = RecapChannelLog {
-            notes: notes.clone(),
+            notes: vec![
+                RecapNote {
+                    body: "a".into(),
+                    identities: vec![],
+                    through_seq: 1,
+                    generation: 0,
+                },
+                RecapNote {
+                    body: "b".into(),
+                    identities: vec![],
+                    through_seq: 2,
+                    generation: 0,
+                },
+                RecapNote {
+                    body: "c".into(),
+                    identities: vec![],
+                    through_seq: 3,
+                    generation: 0,
+                },
+            ],
             ..Default::default()
         };
         let boom = CountingBoom {
             calls: Arc::new(AtomicU32::new(0)),
         };
-        let err = coarsen_if_needed(&mut log, 1, 2, Some(&boom), "m", Duration::from_secs(1)).await;
-        assert!(err.is_err());
-        assert_eq!(log.notes, notes);
+        coarsen_if_needed(&mut log, 1, 2, Some(&boom), "m", Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(log.notes.len(), 1);
+        assert_eq!(log.notes[0].body, "c");
+    }
+
+    #[test]
+    fn non_full_buffer_does_not_flush_for_eviction_backpressure() {
+        let mut entries = vec![grok_entry(1)];
+        entries[0].timestamp = Utc::now();
+        assert!(!should_flush(&[&entries[0]], 40, &entries, 200));
+    }
+
+    #[test]
+    fn full_buffer_flushes_oldest_eligible_before_eviction() {
+        let mut entries: Vec<_> = (1..=42).map(grok_entry).collect();
+        for entry in &mut entries {
+            entry.timestamp = Utc::now();
+        }
+        assert!(should_flush(&[&entries[0]], 40, &entries, 42));
     }
 
     struct SlowOkLlm;

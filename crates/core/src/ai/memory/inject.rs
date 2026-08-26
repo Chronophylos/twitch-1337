@@ -221,8 +221,8 @@ pub struct ChatTurnContext {
     pub scratch: String,
 }
 
-/// Rendered rolling chat for one turn, plus the lowercased logins that survived
-/// the byte caps. Shared by the Aurora and grok context builders.
+/// Rendered rolling chat for one turn, plus the lowercased logins that survived.
+/// Shared by the Aurora and grok context builders.
 struct RecentChat {
     body: String,
     mentioned: std::collections::BTreeSet<String>,
@@ -1060,6 +1060,54 @@ mod tests {
         assert!(!ctx.recent_chat.contains("old joke"));
         let self_hits = ctx.recent_chat.matches("(self)").count();
         assert_eq!(self_hits, 1);
+    }
+
+    #[tokio::test]
+    async fn recap_off_keeps_only_tail_and_latest_own_line() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let (store, _tmp) = test_store().await;
+        let buf = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        {
+            let mut h = buf.lock().await;
+            h.push_user("old", "old line");
+            h.push_user("alice", "tail one");
+            h.push_user("bob", "tail two");
+            h.push_bot_with_identity("aurora", Some("Aurora"), Agent::Aurora, "own line");
+        }
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(buf),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                current_agent: Agent::Aurora,
+                self_logins: vec!["aurora".into()],
+                speaker_login: "bob".into(),
+                recap_sheet_logins: BTreeSet::new(),
+                n: 2,
+                ai_channel_n: 2,
+                batch_size: 40,
+                recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
+                recap_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!ctx.recent_chat.contains("old line"));
+        assert!(ctx.recent_chat.contains("tail one"));
+        assert!(ctx.recent_chat.contains("tail two"));
+        assert!(ctx.recent_chat.contains("own line"));
     }
 
     #[tokio::test]

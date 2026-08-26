@@ -79,11 +79,9 @@ pub fn strip_quotes(s: &str) -> String {
     let mut i = 0;
     while i < chars.len() {
         if let Some(&(_, close)) = PAIRS.iter().find(|&&(open, _)| chars[i] == open) {
-            i += 1;
-            while i < chars.len() && chars[i] != close {
-                i += 1;
-            }
-            if i < chars.len() {
+            if let Some(end) = chars[i + 1..].iter().position(|&c| c == close) {
+                i += end + 2;
+            } else {
                 i += 1;
             }
         } else {
@@ -260,7 +258,7 @@ impl RecapHandle {
         let n = log.notes.len();
         let start = n.saturating_sub(RECAP_SHEET_NOTES);
         let mut out = BTreeSet::new();
-        for note in &log.notes[start..] {
+        for note in log.notes[start..].iter().rev() {
             for id in &note.identities {
                 out.insert(id.login.to_ascii_lowercase());
                 if out.len() >= RECAP_SHEET_LOGINS {
@@ -498,6 +496,11 @@ mod tests {
     }
 
     #[test]
+    fn strip_quotes_keeps_text_after_unmatched_opener() {
+        assert_eq!(strip_quotes("bob sagte „oops"), "bob sagte oops");
+    }
+
+    #[test]
     fn injected_notes_keeps_newest_max() {
         let log = RecapChannelLog {
             notes: (0..5)
@@ -514,6 +517,47 @@ mod tests {
         assert_eq!(inj.len(), 3);
         assert_eq!(inj[0].body, "n2");
         assert_eq!(inj[2].body, "n4");
+    }
+
+    #[tokio::test]
+    async fn sheet_logins_prefers_newest_notes_when_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = RecapHandle::load(dir.path().to_path_buf()).await;
+        {
+            let mut state = handle.inner.lock().await;
+            state.file.primary.notes = vec![
+                RecapNote {
+                    body: "outside window".into(),
+                    identities: vec![],
+                    through_seq: 1,
+                    generation: 0,
+                },
+                RecapNote {
+                    body: "older".into(),
+                    identities: (0..RECAP_SHEET_LOGINS)
+                        .map(|i| RecapIdentity {
+                            login: format!("older{i}"),
+                            user_id: None,
+                        })
+                        .collect(),
+                    through_seq: 2,
+                    generation: 0,
+                },
+                RecapNote {
+                    body: "newest".into(),
+                    identities: vec![RecapIdentity {
+                        login: "newest".into(),
+                        user_id: None,
+                    }],
+                    through_seq: 3,
+                    generation: 0,
+                },
+            ];
+        }
+        let logins = handle.sheet_logins(RecapChannel::Primary).await;
+        assert_eq!(logins.len(), RECAP_SHEET_LOGINS);
+        assert!(logins.contains("newest"));
+        assert!(!logins.contains("older15"));
     }
 
     #[test]

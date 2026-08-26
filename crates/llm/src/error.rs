@@ -24,4 +24,7 @@ pub enum LlmError {
 
     #[error("provider returned an empty response")]
     EmptyResponse,
+
+    #[error("request timed out")]
+    Timeout,
 }
