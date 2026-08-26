@@ -20,7 +20,7 @@ use super::audit::{AuditEntry, AuditLog, berlin_now, diff_changes};
 use super::overrides::SettingsOverrides;
 use super::{Settings, SettingsError, SettingsHandle, SettingsSection};
 use load::{load_or_quarantine, load_overrides_async, quarantine};
-use merge::merge_into;
+use merge::{merge_into, strip_ai_agents_legacy};
 
 const FILE_NAME: &str = "settings.ron";
 
@@ -187,17 +187,8 @@ impl SettingsStore {
                 // the legacy block, or it folds straight back in on resolve.
                 current.ai.connection = Default::default();
             }
-            SettingsSection::AiAurora => {
-                current.ai.aurora = Default::default();
-                current.ai.behavior = Default::default();
-            }
-            SettingsSection::AiRecap => {
-                current.ai.recap = Default::default();
-                current.ai.history.recap_profile = None;
-                current.ai.history.batch_size = None;
-                current.ai.history.max_notes = None;
-                current.ai.history.merge_width = None;
-            }
+            SettingsSection::AiAurora => current.ai.aurora = Default::default(),
+            SettingsSection::AiRecap => current.ai.recap = Default::default(),
             SettingsSection::AiHistory => current.ai.history = Default::default(),
             SettingsSection::AiMemory => current.ai.memory = Default::default(),
             SettingsSection::AiDreamer => current.ai.dreamer = Default::default(),
@@ -224,6 +215,7 @@ impl SettingsStore {
             SettingsSection::WebRuntime => current.web = Default::default(),
             SettingsSection::Schedules => current.schedules = None,
         }
+        strip_ai_agents_legacy(&mut current);
         let resolved = Settings::resolve(&self.defaults, &current);
         self.commit(&current, &prior_resolved, resolved, actor)
             .await
@@ -867,6 +859,49 @@ mod tests {
             .expect("reset");
         assert!(s.twitch.hidden_admins.is_empty());
         assert_eq!(s.twitch.expected_latency, 250); // perm reset does not touch channels
+    }
+
+    #[tokio::test]
+    async fn v7_save_omits_legacy_active_profile_and_behavior() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            r#"(
+                schema_version: 6,
+                ai: (
+                    active_profile: Some("cheap"),
+                    behavior: (persona_name: Some("Nyx")),
+                    history: (recap_profile: Some(Some("tiny"))),
+                    profiles: Some([
+                        (name: "cheap", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "m", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                        (name: "tiny", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "t", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                    ]),
+                ),
+            )"#,
+        )
+        .unwrap();
+        let audit = Arc::new(MemoryAuditLog::new());
+        let (store, _handle) =
+            SettingsStore::open(dir.path(), audit, "test_chan").expect("open v6 file");
+        let mut patch = SettingsOverrides::default();
+        patch.ai.aurora.persona_name = Some("Nyx".into());
+        store
+            .apply(
+                patch,
+                Actor {
+                    user_id: "1".into(),
+                    user_login: "tester".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let body = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
+        assert!(!body.contains("active_profile"), "{body}");
+        assert!(!body.contains("behavior:"), "{body}");
+        assert!(!body.contains("recap_profile"), "{body}");
+        assert!(body.contains("aurora:"), "{body}");
     }
 
     #[tokio::test]
