@@ -483,6 +483,9 @@ async fn render_recent_section(
         let stretch = eligible(&snapshot, n, opts.recap_through_seq, self_logins);
         let mut seen: std::collections::BTreeSet<u64> = others.iter().map(|e| e.seq).collect();
         for entry in stretch {
+            if is_own(entry, current_agent, self_logins) {
+                continue;
+            }
             if seen.insert(entry.seq) {
                 others.push(entry);
             }
@@ -919,6 +922,52 @@ mod tests {
             other_lines <= 5,
             "expected <= 5 other lines, got {other_lines}"
         );
+    }
+
+    #[tokio::test]
+    async fn stretch_skips_own_lines_only_latest_self_survives() {
+        use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let (store, _tmp) = test_store().await;
+        let buf = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+            test_handle(),
+            primary_history_capacity,
+        )));
+        {
+            let mut h = buf.lock().await;
+            h.push_user("alice", "hi");
+            h.push_bot_with_identity("aurora", Some("Aurora"), Agent::Aurora, "old joke");
+            h.push_user("bob", "yo");
+            h.push_bot_with_identity("aurora", Some("Aurora"), Agent::Aurora, "new joke");
+            h.push_user("carol", "ok");
+        }
+        let ctx = build_chat_turn_context(
+            &store,
+            BuildOpts {
+                inject_byte_budget: 16 * 1024,
+                nonce: "n00000000000000nn".into(),
+                primary_history: Some(buf),
+                primary_login: "chan".into(),
+                ai_channel_history: None,
+                ai_channel_login: None,
+                invocation_channel: InvocationChannel::Primary,
+                current_agent: Agent::Aurora,
+                self_logins: vec!["aurora".into()],
+                speaker_login: "carol".into(),
+                n: 2,
+                batch_size: 40,
+                recap_through_seq: 0,
+                recap_enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(ctx.recent_chat.contains("new joke"));
+        assert!(!ctx.recent_chat.contains("old joke"));
+        let self_hits = ctx.recent_chat.matches("(self)").count();
+        assert_eq!(self_hits, 1);
     }
 
     #[tokio::test]
