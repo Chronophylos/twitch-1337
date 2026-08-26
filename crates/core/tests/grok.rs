@@ -273,8 +273,7 @@ async fn grok_uses_its_own_profile_model_effort_and_tier() {
             let mut grok = profile("grok", "x-ai/grok-4");
             grok.reasoning_effort = Some("high".into());
             grok.service_tier = Some("flex".into());
-            o.ai.profiles = Some(vec![profile("chat", "test-model"), grok]);
-            o.ai.aurora.profile = Some(Some("chat".into()));
+            o.ai.profiles = Some(vec![profile("default", "test-model"), grok]);
             o.ai.grok.profile = Some(Some("grok".into()));
         })
         .spawn()
@@ -375,10 +374,9 @@ async fn ai_ignores_grok_profile() {
         .with_settings(|o| {
             o.ai.history.length = Some(0);
             o.ai.profiles = Some(vec![
-                profile("chat", "test-model"),
+                profile("default", "test-model"),
                 profile("grok", "x-ai/grok-4"),
             ]);
-            o.ai.aurora.profile = Some(Some("chat".into()));
             o.ai.grok.profile = Some(Some("grok".into()));
         })
         .spawn()
