@@ -243,6 +243,7 @@ impl AiGrokForm {
     fn into_overrides(self) -> AiGrokOverrides {
         AiGrokOverrides {
             profile: Some(opt_str(&self.ai_grok_profile)),
+            persona_name: None,
         }
     }
 }
@@ -570,6 +571,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
                 ai_behavior_reply_hard_chars: form.ai_behavior_reply_hard_chars,
             }
             .into_overrides(),
+            aurora: Default::default(),
             history: AiHistoryForm {
                 ai_history_length: form.ai_history_length,
                 ai_history_ai_channel_length: form.ai_history_ai_channel_length,
@@ -581,6 +583,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
                 ai_history_merge_width: form.ai_history_merge_width,
             }
             .into_overrides(),
+            recap: Default::default(),
             memory: AiMemoryForm {
                 ai_memory_soul_bytes: form.ai_memory_soul_bytes,
                 ai_memory_lore_bytes: form.ai_memory_lore_bytes,

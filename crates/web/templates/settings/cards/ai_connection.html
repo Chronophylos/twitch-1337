@@ -16,8 +16,7 @@
     <div class="settings-row">
       {% call m::row_head("active_profile", "The profile used for !ai turns and any sub-agent that doesn't override it.") %}{% endcall %}
       <div class="row-control-cell">
-        <span class="mono">{{ current.ai.active().name }}</span>
-        <span class="row-hint">{{ current.ai.active().provider.label() }} · {{ current.ai.active().model }}</span>
+        <span class="mono">{{ current.ai.aurora.profile }}</span>
       </div>
       <div class="row-right"><a class="btn" href="/ai-profiles">Manage profiles</a></div>
     </div>

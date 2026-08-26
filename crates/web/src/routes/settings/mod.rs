@@ -400,7 +400,7 @@ async fn reset(
         "suspend" => SettingsSection::Suspend,
         "emote_tracker_potat" => SettingsSection::EmoteTrackerPotat,
         "web_runtime" => SettingsSection::WebRuntime,
-        "ai_behavior" => SettingsSection::AiBehavior,
+        "ai_behavior" => SettingsSection::AiAurora,
         other => {
             return Err(WebError::Validation {
                 field: "section".into(),

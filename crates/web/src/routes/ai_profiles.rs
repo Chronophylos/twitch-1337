@@ -234,7 +234,7 @@ async fn list(
 ) -> Result<Response, WebError> {
     let settings = state.settings.load();
     let rows = settings.ai.profiles.clone();
-    let active = settings.ai.active_profile.clone();
+    let active = settings.ai.aurora.profile.clone();
     let edit_form = q.edit.as_ref().and_then(|name| {
         rows.iter()
             .find(|p| p.name == *name)
@@ -326,7 +326,7 @@ async fn create(
             return render_validation(
                 &session,
                 settings.ai.profiles.clone(),
-                settings.ai.active_profile.clone(),
+                settings.ai.aurora.profile.clone(),
                 vec![e],
                 None,
                 Some(submitted),
@@ -371,7 +371,7 @@ async fn update(
             return render_validation(
                 &session,
                 settings.ai.profiles.clone(),
-                settings.ai.active_profile.clone(),
+                settings.ai.aurora.profile.clone(),
                 vec![e],
                 Some(name),
                 Some(submitted),
@@ -382,7 +382,7 @@ async fn update(
     let edit_on_error = name.clone();
     let settings = state.settings.load();
     let current_profiles = settings.ai.profiles.clone();
-    let active_now = settings.ai.active_profile.clone();
+    let active_now = settings.ai.aurora.profile.clone();
     let edited_for_mutate = edited.clone();
     apply_or_rerender(
         &state,
@@ -426,7 +426,7 @@ async fn delete(
     }
     let settings = state.settings.load();
     let profiles = settings.ai.profiles.clone();
-    let active = settings.ai.active_profile.clone();
+    let active = settings.ai.aurora.profile.clone();
     if profiles.len() == 1 {
         return render_validation(
             &session,
@@ -530,7 +530,7 @@ async fn apply_or_rerender(
             render_validation(
                 session,
                 settings.ai.profiles.clone(),
-                settings.ai.active_profile.clone(),
+                settings.ai.aurora.profile.clone(),
                 errs,
                 edit_on_error,
                 submitted,

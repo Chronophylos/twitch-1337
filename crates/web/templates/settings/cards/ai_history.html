@@ -25,7 +25,7 @@
     {% call m::num_row_bounded("ai_history", "ai_history_ai_channel_n", "ai_channel_n",
        "Verbatim lines injected from ai_channel history.",
        current.ai.history.ai_channel_n, defaults.ai.history.ai_channel_n, "lines", 1, 5000) %}{% endcall %}
-    {% let recap_profile = current.ai.history.recap_profile.as_deref().unwrap_or("") %}
+    {% let recap_profile = current.ai.recap.profile.as_deref().unwrap_or("") %}
     <div class="settings-row" data-section="ai_history">
       {% call m::row_head("recap_profile", "Which provider profile Recap paraphrases on. Empty = Recap off. No extra History overrides — the profile's model, timeout, effort and tier are used as-is.") %}{% endcall %}
       <div class="row-control-cell">
@@ -43,12 +43,12 @@
     </div>
     {% call m::num_row_bounded("ai_history", "ai_history_batch_size", "batch_size",
        "Chat lines processed per Recap batch.",
-       current.ai.history.batch_size, defaults.ai.history.batch_size, "lines", 1, 5000) %}{% endcall %}
+       current.ai.recap.batch_size, defaults.ai.recap.batch_size, "lines", 1, 5000) %}{% endcall %}
     {% call m::num_row_bounded("ai_history", "ai_history_max_notes", "max_notes",
        "Max Recap note paragraphs injected into the prompt.",
-       current.ai.history.max_notes, defaults.ai.history.max_notes, "notes", 1, 64) %}{% endcall %}
+       current.ai.recap.max_notes, defaults.ai.recap.max_notes, "notes", 1, 64) %}{% endcall %}
     {% call m::num_row_bounded("ai_history", "ai_history_merge_width", "merge_width",
        "Existing notes merged per Recap pass when coarsening.",
-       current.ai.history.merge_width, defaults.ai.history.merge_width, "notes", 2, 64) %}{% endcall %}
+       current.ai.recap.merge_width, defaults.ai.recap.merge_width, "notes", 2, 64) %}{% endcall %}
   </div>
 </section>

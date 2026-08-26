@@ -10,7 +10,7 @@
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
   <div class="settings-rows">
-    {% let media_profile = current.ai.media.profile.as_deref().unwrap_or("") %}
+    {% let media_profile = current.ai.media.profile.as_str() %}
     <div class="settings-row" data-section="ai_media">
       {% call m::row_head("profile", "Which provider profile this agent runs on. Empty = the active profile.") %}{% endcall %}
       <div class="row-control-cell">
