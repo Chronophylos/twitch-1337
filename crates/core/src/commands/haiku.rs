@@ -11,6 +11,7 @@ use llm::{ChatCompletionRequest, Message, TraceIds};
 use crate::ai::command::ChatContext;
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::llm_factory::LlmRegistry;
+use crate::settings::SettingsHandle;
 
 use super::{Command, CommandContext};
 
@@ -24,6 +25,7 @@ const LLM_TIMEOUT_MESSAGE: &str = "Das hat zu lange gedauert Waiting";
 
 pub struct HaikuCommand {
     registry: Arc<LlmRegistry>,
+    settings: SettingsHandle,
     cooldown: Arc<PerUserCooldown>,
     chat_ctx: Option<ChatContext>,
     langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
@@ -32,12 +34,14 @@ pub struct HaikuCommand {
 impl HaikuCommand {
     pub fn new(
         registry: Arc<LlmRegistry>,
+        settings: SettingsHandle,
         chat_ctx: Option<ChatContext>,
         cooldown: Arc<PerUserCooldown>,
         langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
     ) -> Self {
         Self {
             registry,
+            settings,
             cooldown,
             chat_ctx,
             langfuse,

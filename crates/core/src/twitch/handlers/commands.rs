@@ -371,6 +371,7 @@ where
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm.clone(),
+            settings.clone(),
             commands::news::NewsMode::News,
             chat_ctx.clone(),
             whisper.clone(),
@@ -379,6 +380,7 @@ where
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm.clone(),
+            settings.clone(),
             commands::news::NewsMode::Tldr,
             chat_ctx.clone(),
             whisper.clone(),
@@ -387,6 +389,7 @@ where
         )));
         cmd_list.push(Box::new(commands::haiku::HaikuCommand::new(
             llm,
+            settings.clone(),
             chat_ctx,
             news_cooldown,
             langfuse,

@@ -12,6 +12,7 @@ use llm::{ChatCompletionRequest, Message, TraceIds};
 use crate::ai::command::ChatContext;
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::llm_factory::LlmRegistry;
+use crate::settings::SettingsHandle;
 use crate::twitch::whisper::{WHISPER_MAX_CHARS, WhisperSender};
 use crate::util::truncate_response;
 
@@ -67,6 +68,7 @@ impl NewsMode {
 
 pub struct NewsCommand {
     registry: Arc<LlmRegistry>,
+    settings: SettingsHandle,
     mode: NewsMode,
     cooldown: Arc<PerUserCooldown>,
     chat_ctx: Option<ChatContext>,
@@ -77,6 +79,7 @@ pub struct NewsCommand {
 impl NewsCommand {
     pub fn new(
         registry: Arc<LlmRegistry>,
+        settings: SettingsHandle,
         mode: NewsMode,
         chat_ctx: Option<ChatContext>,
         whisper: Option<Arc<dyn WhisperSender>>,
@@ -85,6 +88,7 @@ impl NewsCommand {
     ) -> Self {
         Self {
             registry,
+            settings,
             mode,
             cooldown,
             chat_ctx,
