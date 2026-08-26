@@ -179,10 +179,17 @@ fn should_flush(
     if eligible.len() >= batch_size {
         return true;
     }
-    let oldest = eligible[0];
-    if oldest.timestamp < Utc::now() - RECAP_FLUSH_AGE {
+    // Eligible lines are already older than the N-window, so their own
+    // timestamps are usually past FLUSH_AGE the moment they qualify. Age the
+    // newest buffer line instead: a live tail accumulates toward batch_size;
+    // a quiet channel still flushes a leftover partial batch.
+    if snapshot
+        .last()
+        .is_some_and(|e| e.timestamp < Utc::now() - RECAP_FLUSH_AGE)
+    {
         return true;
     }
+    let oldest = eligible[0];
     snapshot
         .iter()
         .position(|e| e.seq == oldest.seq)
@@ -873,6 +880,24 @@ mod tests {
             entry.timestamp = Utc::now();
         }
         assert!(should_flush(&[&entries[0]], 40, &entries, 42));
+    }
+
+    #[test]
+    fn stale_eligible_does_not_flush_while_channel_is_live() {
+        let mut entries = vec![grok_entry(1), grok_entry(2)];
+        entries[0].timestamp = Utc::now() - RECAP_FLUSH_AGE - chrono::Duration::seconds(1);
+        entries[1].timestamp = Utc::now();
+        assert!(
+            !should_flush(&[&entries[0]], 40, &entries, 200),
+            "a live tail must accumulate toward batch_size; eligible lines are already N-window old"
+        );
+    }
+
+    #[test]
+    fn quiet_channel_flushes_partial_batch() {
+        let mut entries = vec![grok_entry(1)];
+        entries[0].timestamp = Utc::now() - RECAP_FLUSH_AGE - chrono::Duration::seconds(1);
+        assert!(should_flush(&[&entries[0]], 40, &entries, 200));
     }
 
     struct SlowOkLlm;
