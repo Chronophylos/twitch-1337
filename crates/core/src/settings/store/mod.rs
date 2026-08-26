@@ -222,6 +222,13 @@ impl SettingsStore {
             SettingsSection::Aviationstack => current.aviationstack = Default::default(),
             SettingsSection::Suspend => current.suspend = Default::default(),
             SettingsSection::EmoteTrackerPotat => current.emote_tracker = Default::default(),
+            SettingsSection::AlertsQuake => current.alerts.quake = Default::default(),
+            SettingsSection::AlertsSolar => {
+                current.alerts.solar = Default::default();
+                // max_age_secs is shared by both feeds and has no card of its
+                // own; it rides with the solar card so a reset can clear it.
+                current.alerts.max_age_secs = None;
+            }
             SettingsSection::WebRuntime => current.web = Default::default(),
             SettingsSection::Schedules => current.schedules = None,
         }

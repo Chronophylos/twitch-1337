@@ -11,6 +11,7 @@
 //! validation lives in `validation.rs`.
 
 pub mod ai;
+pub mod alerts;
 pub mod audit;
 pub mod aviationstack;
 pub mod emote_tracker;
@@ -29,6 +30,7 @@ pub use ai::{
     AiAurora, AiBackendKind, AiDreamer, AiEmotes, AiGrok, AiHistory, AiMedia, AiMemory, AiPrefill,
     AiProfile, AiRecap, AiSettings, AiWeb,
 };
+pub use alerts::{AlertsSettings, QuakeAlerts, SolarAlerts};
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
 pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
@@ -63,6 +65,7 @@ pub struct Settings {
     pub aviationstack: AviationstackSettings,
     pub suspend: SuspendSettings,
     pub emote_tracker: EmoteTrackerSettings,
+    pub alerts: AlertsSettings,
     pub web: WebRuntime,
     pub schedules: Vec<Schedule>,
 }
@@ -102,6 +105,8 @@ pub enum SettingsSection {
     Aviationstack,
     Suspend,
     EmoteTrackerPotat,
+    AlertsQuake,
+    AlertsSolar,
     WebRuntime,
     Schedules,
 }
@@ -150,6 +155,7 @@ impl Settings {
             aviationstack: AviationstackSettings::default(),
             suspend: SuspendSettings::default(),
             emote_tracker: EmoteTrackerSettings::default(),
+            alerts: AlertsSettings::default(),
             web: WebRuntime::default(),
             schedules: Vec::new(),
         }
@@ -184,11 +190,23 @@ mod tests {
         assert_eq!(s.emote_tracker.potat_attribution.window_secs, 15);
         assert_eq!(s.web, WebRuntime::default());
         assert!(s.schedules.is_empty());
+        assert_eq!(s.alerts, AlertsSettings::default());
     }
 
     #[test]
     fn schedules_default_is_empty_vec() {
         let s = Settings::compiled_defaults();
         assert!(s.schedules.is_empty());
+    }
+
+    #[test]
+    fn alerts_default_is_disabled() {
+        let s = Settings::compiled_defaults();
+        assert_eq!(s.alerts, AlertsSettings::default());
+        assert!(!s.alerts.quake.enabled);
+        assert!(!s.alerts.solar.enabled);
+        assert_eq!(s.alerts.quake.min_mag_tenths, 25);
+        assert_eq!(s.alerts.solar.min_class, "M");
+        assert_eq!(s.alerts.max_age_secs, 7_200);
     }
 }

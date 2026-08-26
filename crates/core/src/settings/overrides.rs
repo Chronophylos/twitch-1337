@@ -29,6 +29,8 @@ pub struct SettingsOverrides {
     #[serde(default)]
     pub emote_tracker: EmoteTrackerOverrides,
     #[serde(default)]
+    pub alerts: AlertsOverrides,
+    #[serde(default)]
     pub web: WebRuntimeOverrides,
     #[serde(default)]
     pub schedules: Option<Vec<crate::schedule::Schedule>>,
@@ -49,6 +51,7 @@ impl Default for SettingsOverrides {
             aviationstack: AviationstackOverrides::default(),
             suspend: SuspendOverrides::default(),
             emote_tracker: EmoteTrackerOverrides::default(),
+            alerts: AlertsOverrides::default(),
             web: WebRuntimeOverrides::default(),
             schedules: None,
         }
@@ -397,4 +400,34 @@ pub struct WebRuntimeOverrides {
     pub session_ttl_secs: Option<u64>,
     #[serde(default)]
     pub mod_check_refresh_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AlertsOverrides {
+    #[serde(default)]
+    pub quake: QuakeAlertsOverrides,
+    #[serde(default)]
+    pub solar: SolarAlertsOverrides,
+    #[serde(default)]
+    pub max_age_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuakeAlertsOverrides {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub poll_secs: Option<u64>,
+    #[serde(default)]
+    pub min_mag_tenths: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SolarAlertsOverrides {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub poll_secs: Option<u64>,
+    #[serde(default)]
+    pub min_class: Option<String>,
 }

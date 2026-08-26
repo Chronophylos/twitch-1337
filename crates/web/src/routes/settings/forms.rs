@@ -729,6 +729,8 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             web_mod_check_refresh_secs: form.web_mod_check_refresh_secs,
         }
         .into_overrides(),
+        // No dashboard card for alerts yet; this form never touches it.
+        alerts: Default::default(),
         // Schedules are managed via the dedicated /schedules CRUD endpoint;
         // the settings form must not overwrite them.
         schedules: None,
