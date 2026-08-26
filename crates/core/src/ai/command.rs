@@ -716,6 +716,7 @@ where
                 head: system_head,
                 appendices,
                 memory,
+                recap: String::new(),
             },
             inject::UserParts {
                 emote_block,

@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry};
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::types::{FileKind, Frontmatter};
-use crate::ai::recap::{eligible, is_own, n_not_own};
+use crate::ai::recap::{RecapNote, eligible, is_own, n_not_own};
 use crate::twitch::mouth::Agent;
 
 const FENCE_OPEN: &str = "<<<FILE";
@@ -569,6 +569,10 @@ pub struct SystemParts {
     /// SOUL/LORE/user fences from [`build_chat_turn_context`]. Stable while the
     /// memory content and the (per-process) nonce are unchanged.
     pub memory: String,
+    /// Recap Notes suffix. Appended after `memory` when non-empty; omitted
+    /// entirely when empty so the cache prefix stays stable across turns with
+    /// no recap.
+    pub recap: String,
 }
 
 /// Per-turn (volatile) parts. Every field here may change turn to turn; all of
@@ -587,9 +591,28 @@ pub struct UserParts {
     pub instruction: String,
 }
 
+/// Render a Recap Notes section for injection into the system message suffix.
+///
+/// Invocation-first ordering is the caller's responsibility when concatenating
+/// multiple channel logs; `notes` are joined oldest-to-newest within one channel.
+pub fn render_recap_section(login: &str, notes: &[RecapNote]) -> String {
+    if notes.is_empty() {
+        return String::new();
+    }
+    let mut s = format!("## Recap (#{login})\n");
+    s.push_str(
+        &notes
+            .iter()
+            .map(|n| n.body.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    );
+    s
+}
+
 /// Assemble the `!ai` chat-turn messages from stable and volatile parts.
 ///
-/// `system` = `head` + each appendix + `"\n\n"` + `memory`.
+/// `system` = `head` + each appendix + `"\n\n"` + `memory` + optional `"\n\n"` + `recap`.
 /// `user`   = `emote_block?` + `scratch?` + `recent_chat?` + `instructions` + `instruction`.
 ///
 /// Keeping every volatile section in the user message is what makes the system
@@ -601,6 +624,10 @@ pub fn build_chat_turn_messages(sys: SystemParts, user: UserParts) -> (Message, 
     }
     system.push_str("\n\n");
     system.push_str(&sys.memory);
+    if !sys.recap.is_empty() {
+        system.push_str("\n\n");
+        system.push_str(&sys.recap);
+    }
 
     let mut user_message = String::new();
     if let Some(block) = user.emote_block.as_deref() {
@@ -1737,6 +1764,7 @@ mod tests {
                 head: "HEAD".to_string(),
                 appendices: vec!["\n\nAPP".to_string()],
                 memory: "MEMORY".to_string(),
+                recap: String::new(),
             },
             UserParts {
                 emote_block: None,
@@ -1758,6 +1786,7 @@ mod tests {
             head: "SYS HEAD".to_string(),
             appendices: vec!["\n\nAPP1".to_string(), "\n\nAPP2".to_string()],
             memory: "<<<FILE kind=soul nonce=abc>>>\nsoul\n<<<ENDFILE nonce=abc>>>".to_string(),
+            recap: String::new(),
         };
         let (sys_a, user_a) = build_chat_turn_messages(
             sys(),
@@ -1794,6 +1823,79 @@ mod tests {
         // ...and never leaks into the cached system prefix.
         assert!(!sys_a.content.contains("EMOTES_A"));
         assert!(!sys_a.content.contains("SCRATCH A"));
+    }
+
+    #[test]
+    fn recap_appends_after_memory() {
+        let (system, _) = build_chat_turn_messages(
+            SystemParts {
+                head: "HEAD".into(),
+                appendices: vec![],
+                memory: "MEMORY".into(),
+                recap: "## Recap (#main)\nraid vorbei".into(),
+            },
+            UserParts {
+                emote_block: None,
+                scratch: String::new(),
+                recent_chat: String::new(),
+                instructions: "I".into(),
+                instruction: "x".into(),
+            },
+        );
+        assert!(system.content.ends_with("## Recap (#main)\nraid vorbei"));
+        assert!(system.content.find("MEMORY").unwrap() < system.content.find("## Recap").unwrap());
+    }
+
+    #[test]
+    fn prefix_without_recap_stable_when_recap_changes() {
+        let prefix = |recap: &str| {
+            let (s, _) = build_chat_turn_messages(
+                SystemParts {
+                    head: "H".into(),
+                    appendices: vec!["\n\nA".into()],
+                    memory: "M".into(),
+                    recap: recap.into(),
+                },
+                UserParts {
+                    emote_block: None,
+                    scratch: String::new(),
+                    recent_chat: "c".into(),
+                    instructions: "i".into(),
+                    instruction: "u".into(),
+                },
+            );
+            let idx = s.content.find("\n\nM").unwrap();
+            s.content[..idx + 3].to_string() // "H\n\nA\n\nM"
+        };
+        assert_eq!(prefix(""), prefix("## Recap (#x)\nnope"));
+    }
+
+    #[test]
+    fn render_recap_section_empty_notes() {
+        assert_eq!(render_recap_section("main", &[]), "");
+    }
+
+    #[test]
+    fn render_recap_section_joins_bodies() {
+        use crate::ai::recap::RecapNote;
+        let notes = vec![
+            RecapNote {
+                body: "first note".into(),
+                identities: vec![],
+                through_seq: 1,
+                generation: 0,
+            },
+            RecapNote {
+                body: "second note".into(),
+                identities: vec![],
+                through_seq: 2,
+                generation: 0,
+            },
+        ];
+        assert_eq!(
+            render_recap_section("main", &notes),
+            "## Recap (#main)\nfirst note\n\nsecond note"
+        );
     }
 
     #[tokio::test]
