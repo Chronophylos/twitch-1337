@@ -236,8 +236,7 @@ fn read_flash(res: &axum::http::Response<Body>) -> Option<String> {
 }
 
 /// The `/settings` page no longer edits provider/base_url/model directly —
-/// those live on `/ai-profiles` now. It still offers a per-sub-agent
-/// `profile` picker (empty = inherit the active profile).
+/// those live on `/ai-profiles` now. Each agent card selects its own profile.
 #[tokio::test]
 async fn settings_page_no_longer_offers_connection_inputs() {
     install_crypto();
@@ -271,9 +270,41 @@ async fn settings_page_no_longer_offers_connection_inputs() {
         "the dreamer card must offer a profile picker; got: {html}"
     );
     assert!(
-        html.contains("ai_history_recap_profile"),
-        "the history card must offer a Recap profile picker; got: {html}"
+        html.contains("ai_recap_profile"),
+        "the Recap card must offer a profile picker; got: {html}"
     );
+}
+
+#[tokio::test]
+async fn settings_nav_is_twitch_agents_shared_then_the_rest() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let (sid, csrf_cookie, _bare) = insert_session_as(&state, "123", "owner", Role::Owner);
+
+    let req = Request::builder()
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let res = build_router(state).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "owner GET /settings must 200");
+    let html = body_string(res).await;
+
+    let twitch = html.find("data-group=\"twitch\"").expect("Twitch group");
+    let agents = html.find("data-group=\"agents\"").expect("Agents group");
+    let shared = html.find("data-group=\"shared\"").expect("Shared group");
+    let commands = html
+        .find("data-group=\"commands\"")
+        .expect("Commands group");
+    assert!(twitch < agents && agents < shared && shared < commands);
+    assert!(!html.contains("data-group=\"ai\""));
+    assert!(!html.contains("sec-ai-connection"));
+    assert!(html.contains("id=\"sec-ai-aurora\""));
+    assert!(html.contains("id=\"sec-ai-recap\""));
+    assert!(!html.contains("name=\"ai_aurora_profile\"><option value=\"\""));
+    assert!(html.contains("name=\"ai_grok_persona_name\""));
+    assert!(!html.contains("(active profile)"));
 }
 
 /// A required Dreamer profile round-trips and cannot be blank.
@@ -641,16 +672,16 @@ async fn settings_page_renders_all_ai_cards() {
     assert_eq!(res.status(), StatusCode::OK, "owner GET /settings must 200");
     let html = body_string(res).await;
     for id in [
-        "sec-ai-connection",
-        "sec-ai-behavior",
-        "sec-ai-history",
-        "sec-ai-memory",
-        "sec-ai-dreamer",
+        "sec-ai-aurora",
         "sec-ai-grok",
-        "sec-ai-prefill",
-        "sec-ai-web",
-        "sec-ai-emotes",
+        "sec-ai-recap",
+        "sec-ai-dreamer",
         "sec-ai-media",
+        "sec-ai-history",
+        "sec-ai-prefill",
+        "sec-ai-memory",
+        "sec-ai-emotes",
+        "sec-ai-web",
     ] {
         assert!(
             html.contains(&format!("id=\"{id}\"")),
@@ -676,13 +707,13 @@ async fn settings_page_renders_aurora_reply_length_rows() {
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_string(res).await;
     for name in [
-        "ai_behavior_reply_target_chars",
-        "ai_behavior_reply_soft_chars",
-        "ai_behavior_reply_hard_chars",
+        "ai_aurora_reply_target_chars",
+        "ai_aurora_reply_soft_chars",
+        "ai_aurora_reply_hard_chars",
     ] {
         assert!(
             html.contains(&format!("name=\"{name}\"")),
-            "behavior card is missing input {name}"
+            "Aurora card is missing input {name}"
         );
     }
 }

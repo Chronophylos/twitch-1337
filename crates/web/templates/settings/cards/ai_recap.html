@@ -1,0 +1,43 @@
+{# crates/web/templates/settings/cards/ai_recap.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-recap" class="settings-card" data-section="ai_recap">
+  <header class="settings-card-head">
+    <div>
+      <h2>Recap</h2>
+      <p>Paraphrases chat into compact notes for the agents. Select off to disable Recap.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+      {% if recap_parked %}<span class="restart-required" style="margin-left: 0;">recap parked</span>{% endif %}
+    </div>
+  </header>
+  <div class="settings-rows">
+    {% let recap_profile = current.ai.recap.profile.as_deref().unwrap_or("") %}
+    {% let recap_default = defaults.ai.recap.profile.as_deref().unwrap_or("") %}
+    <div class="settings-row" data-section="ai_recap">
+      {% call m::row_head("ai.recap.profile", "Which provider profile Recap uses. Empty turns Recap off; it never inherits another agent's profile.") %}{% endcall %}
+      <div class="row-control-cell">
+        <select name="ai_recap_profile" data-key="ai.recap.profile" data-default="{{ recap_default }}">
+          <option value="">(off)</option>
+          {% for p in current.ai.profiles %}
+          <option value="{{ p.name }}"{% if recap_profile == p.name %} selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("ai.recap.profile") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(off)</span></span>
+      </div>
+    </div>
+    {% call m::num_row_bounded("ai_recap", "ai_recap_batch_size", "ai.recap.batch_size",
+       "Chat lines processed per Recap batch.",
+       current.ai.recap.batch_size, defaults.ai.recap.batch_size, "lines", 1, 5000) %}{% endcall %}
+    {% call m::num_row_bounded("ai_recap", "ai_recap_max_notes", "ai.recap.max_notes",
+       "Max Recap note paragraphs injected into the prompt.",
+       current.ai.recap.max_notes, defaults.ai.recap.max_notes, "notes", 1, 64) %}{% endcall %}
+    {% call m::num_row_bounded("ai_recap", "ai_recap_merge_width", "ai.recap.merge_width",
+       "Existing notes merged per Recap pass when coarsening.",
+       current.ai.recap.merge_width, defaults.ai.recap.merge_width, "notes", 2, 64) %}{% endcall %}
+  </div>
+</section>
