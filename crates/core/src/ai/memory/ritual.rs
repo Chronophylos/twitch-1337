@@ -48,6 +48,7 @@ pub fn spawn_ritual(
     settings: SettingsHandle,
     channel: String,
     shutdown: Arc<Notify>,
+    langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -91,6 +92,7 @@ pub fn spawn_ritual(
                 &settings,
                 &channel,
                 yesterday,
+                langfuse.as_ref(),
             )
             .await
             {
@@ -123,6 +125,7 @@ pub async fn run_ritual(
     settings: &SettingsHandle,
     channel: &str,
     rotate_to: NaiveDate,
+    langfuse: Option<&Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) -> Result<()> {
     // Snapshot once at top; build local config from live settings values.
     let snap = settings.load_full();
@@ -275,12 +278,27 @@ pub async fn run_ritual(
         max_rounds,
         per_round_timeout: Some(Duration::from_secs(timeout_secs)),
     };
-    match run_agent(&*llm, req, &exec, opts).await {
-        Ok(AgentOutcome::Text(_)) => info!(rotated = %dated.display(), "dreamer ritual finished"),
-        Ok(AgentOutcome::MaxRoundsExceeded) => warn!("dreamer max_rounds reached"),
-        Ok(AgentOutcome::Timeout { round }) => warn!(round, "dreamer per-round timeout"),
-        Err(e) => error!(error = ?e, "dreamer llm error"),
-    }
+    let session_id = req.trace.session_id.clone();
+    llm::with_optional_turn(
+        langfuse.map(crate::ai::langfuse::LangfuseHandle::as_observer),
+        llm::TurnParams {
+            name: "dreamer".into(),
+            user: Some("<dreamer>".into()),
+            session_id,
+            tags: vec!["dreamer".into()],
+        },
+        async {
+            match run_agent(&*llm, req, &exec, opts).await {
+                Ok(AgentOutcome::Text(_)) => {
+                    info!(rotated = %dated.display(), "dreamer ritual finished");
+                }
+                Ok(AgentOutcome::MaxRoundsExceeded) => warn!("dreamer max_rounds reached"),
+                Ok(AgentOutcome::Timeout { round }) => warn!(round, "dreamer per-round timeout"),
+                Err(e) => error!(error = ?e, "dreamer llm error"),
+            }
+        },
+    )
+    .await;
     Ok(())
 }
 
@@ -403,6 +421,7 @@ not a transcript line
             &settings,
             "testchan",
             yesterday,
+            None,
         )
         .await
         .unwrap();
@@ -422,6 +441,7 @@ not a transcript line
             &settings,
             "testchan",
             yesterday2,
+            None,
         )
         .await
         .unwrap();
@@ -507,6 +527,7 @@ not a transcript line
             &settings,
             "testchan",
             NaiveDate::from_ymd_opt(2026, 4, 17).unwrap(),
+            None,
         )
         .await
         .unwrap();
@@ -585,6 +606,7 @@ not a transcript line
             &settings,
             "testchan",
             yesterday,
+            None,
         )
         .await
         .unwrap();

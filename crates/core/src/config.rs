@@ -66,6 +66,17 @@ pub struct DhlBootstrap {
     pub api_key: SecretString,
 }
 
+/// Bootstrap-only Langfuse configuration. Presence of the section enables
+/// first-party OTLP export. Keys never belong in settings.ron.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LangfuseBootstrap {
+    pub public_key: SecretString,
+    pub secret_key: SecretString,
+    /// Origin only, e.g. `https://cloud.langfuse.com`. Default is the EU cloud.
+    #[serde(default)]
+    pub host: Option<String>,
+}
+
 /// Bootstrap-only AI configuration. Secrets only — every other AI knob
 /// lives in the dashboard settings store and is read from the
 /// SettingsHandle at runtime.
@@ -124,6 +135,8 @@ pub struct Configuration {
     #[serde(default)]
     pub dhl: Option<DhlBootstrap>,
     #[serde(default)]
+    pub langfuse: Option<LangfuseBootstrap>,
+    #[serde(default)]
     pub ai: Option<AiBootstrap>,
     #[serde(default)]
     pub web: WebConfig,
@@ -147,6 +160,7 @@ impl Configuration {
             },
             aviationstack: None,
             dhl: None,
+            langfuse: None,
             ai: None,
             web: WebConfig::default(),
         }
@@ -208,6 +222,15 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         .is_some_and(|d| d.api_key.expose_secret().trim().is_empty())
     {
         bail!("dhl.api_key cannot be empty when dhl is configured");
+    }
+
+    if let Some(lf) = config.langfuse.as_ref() {
+        if lf.public_key.expose_secret().trim().is_empty() {
+            bail!("langfuse.public_key cannot be empty when langfuse is configured");
+        }
+        if lf.secret_key.expose_secret().trim().is_empty() {
+            bail!("langfuse.secret_key cannot be empty when langfuse is configured");
+        }
     }
 
     if let Some(ref ai) = config.ai
@@ -451,6 +474,57 @@ client_secret = "s"
         let err = validate_config(&cfg).expect_err("empty key must fail");
         assert!(
             err.to_string().contains("dhl.api_key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn langfuse_section_parses_keys_and_optional_host() {
+        let toml = r#"
+[twitch]
+channel = "chan"
+username = "bot"
+refresh_token = "r"
+client_id = "c"
+client_secret = "s"
+
+[langfuse]
+public_key = "pk-lf-x"
+secret_key = "sk-lf-y"
+host = "https://us.cloud.langfuse.com"
+"#;
+        let cfg: Configuration = toml::from_str(toml).expect("parse");
+        let lf = cfg.langfuse.expect("langfuse section present");
+        assert_eq!(lf.public_key.expose_secret(), "pk-lf-x");
+        assert_eq!(lf.secret_key.expose_secret(), "sk-lf-y");
+        assert_eq!(lf.host.as_deref(), Some("https://us.cloud.langfuse.com"));
+    }
+
+    #[test]
+    fn langfuse_section_is_optional() {
+        let toml = r#"
+[twitch]
+channel = "chan"
+username = "bot"
+refresh_token = "r"
+client_id = "c"
+client_secret = "s"
+"#;
+        let cfg: Configuration = toml::from_str(toml).expect("parse");
+        assert!(cfg.langfuse.is_none());
+    }
+
+    #[test]
+    fn empty_langfuse_keys_are_rejected() {
+        let mut cfg = Configuration::test_default();
+        cfg.langfuse = Some(LangfuseBootstrap {
+            public_key: SecretString::new("   ".into()),
+            secret_key: SecretString::new("sk".into()),
+            host: None,
+        });
+        let err = validate_config(&cfg).expect_err("empty public_key must fail");
+        assert!(
+            err.to_string().contains("langfuse.public_key"),
             "unexpected error: {err}"
         );
     }

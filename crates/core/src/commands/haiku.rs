@@ -26,6 +26,7 @@ pub struct HaikuCommand {
     registry: Arc<LlmRegistry>,
     cooldown: Arc<PerUserCooldown>,
     chat_ctx: Option<ChatContext>,
+    langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 }
 
 impl HaikuCommand {
@@ -33,11 +34,13 @@ impl HaikuCommand {
         registry: Arc<LlmRegistry>,
         chat_ctx: Option<ChatContext>,
         cooldown: Arc<PerUserCooldown>,
+        langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
     ) -> Self {
         Self {
             registry,
             cooldown,
             chat_ctx,
+            langfuse,
         }
     }
 
@@ -175,7 +178,17 @@ where
             },
         };
 
-        let result = tokio::time::timeout(timeout, llm_client.chat_completion(request)).await;
+        let result = llm::with_optional_turn(
+            crate::ai::langfuse::LangfuseHandle::observer_from(&self.langfuse),
+            llm::TurnParams {
+                name: "haiku".into(),
+                user: Some(user.clone()),
+                session_id: request.trace.session_id.clone(),
+                tags: vec!["haiku".into()],
+            },
+            tokio::time::timeout(timeout, llm_client.chat_completion(request)),
+        )
+        .await;
 
         let response = match result {
             Ok(Ok(text)) => match format_haiku_for_chat(text.trim()) {

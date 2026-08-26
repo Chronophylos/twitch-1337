@@ -55,6 +55,7 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub aviation_client: Option<aviation::AviationClient>,
     /// DHL tracking client. `None` hides `track_shipment` from the model.
     pub dhl: Option<Arc<crate::dhl::DhlClient>>,
+    pub langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
     pub whisper: Option<Arc<dyn WhisperSender>>,
     pub admin_channel: Option<String>,
     pub ai_channel: Option<String>,
@@ -111,6 +112,7 @@ where
         tracker_tx,
         aviation_client,
         dhl,
+        langfuse,
         whisper,
         admin_channel,
         ai_channel,
@@ -348,6 +350,7 @@ where
                 repology,
                 pronouns,
                 dhl,
+                langfuse: langfuse.clone(),
                 model_catalog,
                 mouths: mouths.clone(),
                 echo: echo.clone(),
@@ -360,6 +363,7 @@ where
             chat_ctx.clone(),
             whisper.clone(),
             news_cooldown.clone(),
+            langfuse.clone(),
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
             llm.clone(),
@@ -367,11 +371,13 @@ where
             chat_ctx.clone(),
             whisper.clone(),
             news_cooldown.clone(),
+            langfuse.clone(),
         )));
         cmd_list.push(Box::new(commands::haiku::HaikuCommand::new(
             llm,
             chat_ctx,
             news_cooldown,
+            langfuse,
         )));
     }
 

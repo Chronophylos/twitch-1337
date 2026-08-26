@@ -153,12 +153,8 @@ impl OllamaClient {
             base_url: base_url.to_string(),
         })
     }
-}
 
-#[async_trait]
-impl LlmClient for OllamaClient {
-    #[instrument(skip(self, request))]
-    async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<String> {
+    async fn chat_completion_untraced(&self, request: ChatCompletionRequest) -> Result<String> {
         let url = format!("{}/api/chat", self.base_url);
 
         let api_request = ApiRequest {
@@ -197,8 +193,7 @@ impl LlmClient for OllamaClient {
         Ok(api_response.message.content)
     }
 
-    #[instrument(skip(self, request))]
-    async fn chat_completion_with_tools(
+    async fn chat_completion_with_tools_untraced(
         &self,
         request: ToolChatCompletionRequest,
     ) -> Result<ToolChatCompletionResponse> {
@@ -270,6 +265,52 @@ impl LlmClient for OllamaClient {
             .content
             .ok_or(LlmError::EmptyResponse)?;
         Ok(ToolChatCompletionResponse::Message(content))
+    }
+}
+
+#[async_trait]
+impl LlmClient for OllamaClient {
+    #[instrument(skip(self, request))]
+    async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<String> {
+        let rec = crate::observe::GenerationInProgress::start(
+            request.model.clone(),
+            crate::observe::messages_json(&request.messages),
+        );
+        let result = self.chat_completion_untraced(request).await;
+        crate::observe::finish_generation(rec, &result, |text| (text.clone(), None));
+        result
+    }
+
+    #[instrument(skip(self, request))]
+    async fn chat_completion_with_tools(
+        &self,
+        request: ToolChatCompletionRequest,
+    ) -> Result<ToolChatCompletionResponse> {
+        let rec = crate::observe::GenerationInProgress::start(
+            request.model.clone(),
+            crate::observe::messages_json(&request.messages),
+        );
+        let result = self.chat_completion_with_tools_untraced(request).await;
+        crate::observe::finish_generation(rec, &result, |resp| (format_tool_output(resp), None));
+        result
+    }
+}
+
+fn format_tool_output(resp: &ToolChatCompletionResponse) -> String {
+    match resp {
+        ToolChatCompletionResponse::Message(text) => text.clone(),
+        ToolChatCompletionResponse::ToolCalls { calls, .. } => {
+            let rows: Vec<serde_json::Value> = calls
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "name": c.name,
+                        "arguments": c.arguments,
+                    })
+                })
+                .collect();
+            serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+        }
     }
 }
 

@@ -94,6 +94,7 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     pub aviation: Option<AviationClient>,
     pub aviation_for_commands: Option<AviationClient>,
     pub dhl: Option<Arc<crate::dhl::DhlClient>>,
+    pub langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
     /// Pre-created sender half of the flight-tracker channel. Must be `Some`
     /// when `aviation` is `Some`, and `None` otherwise.
     pub aviation_tracker_tx: Option<mpsc::Sender<aviation::TrackerCommand>>,
@@ -174,6 +175,7 @@ where
         aviation,
         aviation_for_commands,
         dhl,
+        langfuse,
         aviation_tracker_tx,
         aviation_tracker_rx,
         emote_provider,
@@ -338,6 +340,7 @@ where
             let bot_username = config.twitch.username.clone();
             let echo_for_logins = echo.clone();
             let registry = llm.clone();
+            let observer = langfuse.clone();
             tokio::spawn(async move {
                 let Ok(histories) = rx.await else {
                     std::future::pending::<()>().await;
@@ -357,6 +360,7 @@ where
                     histories.ai_channel,
                     self_logins,
                     shutdown,
+                    observer,
                 )
                 .await;
             })
@@ -385,6 +389,7 @@ where
                 tracker_tx,
                 aviation_client: aviation_for_commands,
                 dhl,
+                langfuse,
                 whisper,
                 admin_channel,
                 ai_channel,

@@ -51,6 +51,27 @@ struct ApiChoice {
 #[derive(Debug, Deserialize)]
 struct ApiResponse {
     choices: Vec<ApiChoice>,
+    #[serde(default)]
+    usage: Option<ApiUsage>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ApiUsage {
+    prompt_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
+    input_tokens: Option<u32>,
+    output_tokens: Option<u32>,
+}
+
+impl ApiUsage {
+    fn pair(&self) -> Option<(u32, u32)> {
+        let input = self.prompt_tokens.or(self.input_tokens);
+        let output = self.completion_tokens.or(self.output_tokens);
+        match (input, output) {
+            (None, None) => None,
+            (i, o) => Some((i.unwrap_or(0), o.unwrap_or(0))),
+        }
+    }
 }
 
 // --- Tool-calling serde types ---
@@ -112,6 +133,8 @@ struct ApiToolResponseMessage {
 #[derive(Debug, Deserialize)]
 struct ApiToolResponse {
     choices: Vec<ApiToolChoice>,
+    #[serde(default)]
+    usage: Option<ApiUsage>,
 }
 
 // --- Message serialization ---
@@ -329,12 +352,11 @@ impl OpenAiClient {
             is_openrouter,
         })
     }
-}
 
-#[async_trait]
-impl LlmClient for OpenAiClient {
-    #[instrument(skip(self, request))]
-    async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<String> {
+    async fn chat_completion_untraced(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> Result<(String, Option<(u32, u32)>)> {
         let url = format!("{}/chat/completions", self.base_url);
 
         let ChatCompletionRequest {
@@ -390,6 +412,7 @@ impl LlmClient for OpenAiClient {
                 stage: "openai chat response",
                 source,
             })?;
+        let usage = api_response.usage.as_ref().and_then(ApiUsage::pair);
 
         let choice = api_response
             .choices
@@ -397,14 +420,14 @@ impl LlmClient for OpenAiClient {
             .next()
             .ok_or(LlmError::EmptyResponse)?;
 
-        choice.message.content.ok_or(LlmError::EmptyResponse)
+        let content = choice.message.content.ok_or(LlmError::EmptyResponse)?;
+        Ok((content, usage))
     }
 
-    #[instrument(skip(self, request))]
-    async fn chat_completion_with_tools(
+    async fn chat_completion_with_tools_untraced(
         &self,
         request: ToolChatCompletionRequest,
-    ) -> Result<ToolChatCompletionResponse> {
+    ) -> Result<(ToolChatCompletionResponse, Option<(u32, u32)>)> {
         let url = format!("{}/chat/completions", self.base_url);
 
         let ToolChatCompletionRequest {
@@ -476,6 +499,7 @@ impl LlmClient for OpenAiClient {
                 stage: "openai tool response",
                 source,
             })?;
+        let usage = api_response.usage.as_ref().and_then(ApiUsage::pair);
 
         let choice = api_response
             .choices
@@ -509,14 +533,65 @@ impl LlmClient for OpenAiClient {
                     }
                 })
                 .collect();
-            return Ok(ToolChatCompletionResponse::ToolCalls {
-                calls,
-                reasoning_content: choice.message.reasoning_content,
-            });
+            return Ok((
+                ToolChatCompletionResponse::ToolCalls {
+                    calls,
+                    reasoning_content: choice.message.reasoning_content,
+                },
+                usage,
+            ));
         }
 
         let content = choice.message.content.ok_or(LlmError::EmptyResponse)?;
-        Ok(ToolChatCompletionResponse::Message(content))
+        Ok((ToolChatCompletionResponse::Message(content), usage))
+    }
+}
+
+#[async_trait]
+impl LlmClient for OpenAiClient {
+    #[instrument(skip(self, request))]
+    async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<String> {
+        let rec = crate::observe::GenerationInProgress::start(
+            request.model.clone(),
+            crate::observe::messages_json(&request.messages),
+        );
+        let result = self.chat_completion_untraced(request).await;
+        crate::observe::finish_generation(rec, &result, |(text, usage)| (text.clone(), *usage));
+        result.map(|(text, _)| text)
+    }
+
+    #[instrument(skip(self, request))]
+    async fn chat_completion_with_tools(
+        &self,
+        request: ToolChatCompletionRequest,
+    ) -> Result<ToolChatCompletionResponse> {
+        let rec = crate::observe::GenerationInProgress::start(
+            request.model.clone(),
+            crate::observe::messages_json(&request.messages),
+        );
+        let result = self.chat_completion_with_tools_untraced(request).await;
+        crate::observe::finish_generation(rec, &result, |(resp, usage)| {
+            (format_tool_output(resp), *usage)
+        });
+        result.map(|(resp, _)| resp)
+    }
+}
+
+fn format_tool_output(resp: &ToolChatCompletionResponse) -> String {
+    match resp {
+        ToolChatCompletionResponse::Message(text) => text.clone(),
+        ToolChatCompletionResponse::ToolCalls { calls, .. } => {
+            let rows: Vec<serde_json::Value> = calls
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "name": c.name,
+                        "arguments": c.arguments,
+                    })
+                })
+                .collect();
+            serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+        }
     }
 }
 

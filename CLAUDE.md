@@ -122,7 +122,7 @@ log` on `main` is the release history. The workspace version stays at
 
 ## Config
 
-`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (`[ai.keys]` named credentials only, optional), `[aviationstack]` (api_key only, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
+`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (`[ai.keys]` named credentials only, optional), `[aviationstack]` (api_key only, optional), `[dhl]` (api_key only, optional), `[langfuse]` (public/secret keys, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
 
 `[twitch]` holds OAuth credentials (`refresh_token`, `client_id`, `client_secret`), `channel`, `username`, and `owner` (optional Twitch user ID with full dashboard access). `owner` is bootstrap-only and lives here because it gates the settings page — it must not be editable from the thing it controls. Permission lists (`hidden_admins`, `viewer_allowlist`), channel pointers (`admin_channel`, `ai_channel`), and `expected_latency` live in `settings.ron`, managed via `/settings → Twitch · Permissions` and `Twitch · Channels`. `admin_channel` and `ai_channel` changes require a bot restart. Mods always pass the dashboard auth check; `viewer_allowlist` grants read-only access to non-mods.
 
@@ -176,6 +176,13 @@ changes), managed via `/settings → Aviationstack`.
 There is no `settings.ron` section and no dashboard toggle — AI tools have no
 per-tool toggles, unlike Aviationstack, which backs commands. Adding or
 removing the key needs a bot restart.
+
+`[langfuse]` holds `public_key` + `secret_key` and an optional `host`
+(default `https://cloud.langfuse.com`, EU). Presence enables first-party
+OTLP export of LLM Turns (all backends, nested tool spans). Init or export
+failure logs and disables tracing; the bot stays up. No dashboard card.
+Turn off OpenRouter's Langfuse broadcast for the same project to avoid
+duplicate traces. Adding or removing keys needs a bot restart.
 
 `[suspend]` is removed from config.toml entirely. `default_duration_secs`
 lives in `settings.ron`, managed via `/settings → Suspend`.

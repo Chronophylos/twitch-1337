@@ -71,6 +71,7 @@ pub struct NewsCommand {
     cooldown: Arc<PerUserCooldown>,
     chat_ctx: Option<ChatContext>,
     whisper: Option<Arc<dyn WhisperSender>>,
+    langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 }
 
 impl NewsCommand {
@@ -80,6 +81,7 @@ impl NewsCommand {
         chat_ctx: Option<ChatContext>,
         whisper: Option<Arc<dyn WhisperSender>>,
         cooldown: Arc<PerUserCooldown>,
+        langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
     ) -> Self {
         Self {
             registry,
@@ -87,6 +89,7 @@ impl NewsCommand {
             cooldown,
             chat_ctx,
             whisper,
+            langfuse,
         }
     }
 
@@ -270,7 +273,17 @@ where
             },
         };
 
-        let result = tokio::time::timeout(timeout, llm_client.chat_completion(request)).await;
+        let result = llm::with_optional_turn(
+            crate::ai::langfuse::LangfuseHandle::observer_from(&self.langfuse),
+            llm::TurnParams {
+                name: self.mode.trigger().trim_start_matches('!').to_string(),
+                user: Some(user.clone()),
+                session_id: request.trace.session_id.clone(),
+                tags: vec![self.mode.trigger().to_string()],
+            },
+            tokio::time::timeout(timeout, llm_client.chat_completion(request)),
+        )
+        .await;
 
         let (response, success) = match result {
             Ok(Ok(text)) => (

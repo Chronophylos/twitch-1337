@@ -53,6 +53,14 @@ client_secret = "your_client_secret"
 # [dhl]
 # api_key = "your_dhl_api_key_here"
 
+# Optional: first-party LLM traces to Langfuse Cloud. Presence enables
+# export; init/export failures never abort the bot. No dashboard card —
+# keys stay here. Default host is the EU cloud.
+# [langfuse]
+# public_key = "pk-lf-..."
+# secret_key = "sk-lf-..."
+# # host = "https://cloud.langfuse.com"  # EU default; US = https://us.cloud.langfuse.com
+
 # Suspend defaults now live in the dashboard (`/settings → Suspend`).
 
 # Optional: AI configuration for the !ai command

@@ -79,7 +79,7 @@ pub async fn run_agent<E: ToolExecutor + ?Sized>(
                 debug!(round, calls = calls.len(), "agent round");
                 let mut results = Vec::with_capacity(calls.len());
                 for call in &calls {
-                    results.push(executor.execute(call).await);
+                    results.push(crate::observe::observe_tool(executor, call).await);
                 }
                 request.prior_rounds.push(ToolCallRound {
                     calls,
@@ -326,5 +326,41 @@ mod tests {
         assert_eq!(round.results[0].tool_call_id, "c1");
         assert_eq!(round.results[0].content, "echoed:tool_a");
         assert_eq!(round.reasoning_content.as_deref(), Some("thinking"));
+    }
+
+    #[tokio::test]
+    async fn tool_execute_records_a_span_when_turn_is_in_scope() {
+        use crate::observe::{LlmObserver, RecordingObserver, TurnParams, with_turn};
+
+        let obs = RecordingObserver::new();
+        let obs_dyn: std::sync::Arc<dyn LlmObserver> = obs.clone();
+        let client = ScriptedClient::new(vec![
+            Scripted::Response(ToolChatCompletionResponse::ToolCalls {
+                calls: vec![tool_call("c1", "noop")],
+                reasoning_content: None,
+            }),
+            Scripted::Response(ToolChatCompletionResponse::Message("done".into())),
+        ]);
+        with_turn(
+            obs_dyn,
+            TurnParams {
+                name: "aurora-turn".into(),
+                user: Some("alice".into()),
+                session_id: Some("s".into()),
+                tags: vec![],
+            },
+            async {
+                run_agent(&client, base_request(), &EchoExecutor, opts(3))
+                    .await
+                    .unwrap();
+            },
+        )
+        .await;
+        let spans = obs.spans.lock().unwrap();
+        assert!(
+            spans.iter().any(|s| s.name == "tool noop"),
+            "missing tool span in {spans:?}"
+        );
+        assert!(spans.iter().any(|s| s.name == "aurora-turn"));
     }
 }

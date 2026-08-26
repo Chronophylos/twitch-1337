@@ -22,6 +22,7 @@ const TICK_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Clone, Copy)]
 pub(crate) struct RecapCompletion<'a> {
     llm: &'a dyn LlmClient,
+    observer: Option<&'a Arc<crate::ai::langfuse::LangfuseHandle>>,
     model: &'a str,
     timeout: Duration,
     reasoning_effort: Option<&'a str>,
@@ -29,6 +30,7 @@ pub(crate) struct RecapCompletion<'a> {
 }
 
 async fn paraphrase(call: RecapCompletion<'_>, user: String) -> LlmResult<String> {
+    let session_id = crate::ai::session::new_session_id();
     let req = ChatCompletionRequest {
         model: call.model.to_string(),
         messages: vec![
@@ -39,12 +41,25 @@ async fn paraphrase(call: RecapCompletion<'_>, user: String) -> LlmResult<String
         service_tier: call.service_tier.map(str::to_string),
         trace: TraceIds {
             user: Some("<recap>".into()),
-            session_id: Some(crate::ai::session::new_session_id()),
+            session_id: Some(session_id.clone()),
         },
     };
-    tokio::time::timeout(call.timeout, call.llm.chat_completion(req))
-        .await
-        .map_err(|_| LlmError::Timeout)?
+    llm::with_optional_turn(
+        call.observer
+            .map(crate::ai::langfuse::LangfuseHandle::as_observer),
+        llm::TurnParams {
+            name: "recap".into(),
+            user: Some("<recap>".into()),
+            session_id: Some(session_id),
+            tags: vec!["recap".into()],
+        },
+        async {
+            tokio::time::timeout(call.timeout, call.llm.chat_completion(req))
+                .await
+                .map_err(|_| LlmError::Timeout)?
+        },
+    )
+    .await
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +236,7 @@ enum FlushAttempt {
 struct FlushParams<'a> {
     input: FlushInput,
     llm: &'a dyn LlmClient,
+    observer: Option<&'a Arc<crate::ai::langfuse::LangfuseHandle>>,
     model: &'a str,
     timeout: Duration,
     reasoning_effort: Option<&'a str>,
@@ -232,6 +248,7 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
     let FlushParams {
         mut input,
         llm,
+        observer,
         model,
         timeout,
         reasoning_effort,
@@ -259,6 +276,7 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
     let body = match paraphrase(
         RecapCompletion {
             llm,
+            observer,
             model,
             timeout,
             reasoning_effort,
@@ -285,6 +303,7 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
         input.merge_width,
         Some(RecapCompletion {
             llm,
+            observer,
             model,
             timeout,
             reasoning_effort,
@@ -348,6 +367,7 @@ pub(crate) struct BatcherTickParams<'a> {
     pub handle: &'a RecapHandle,
     pub settings: &'a SettingsHandle,
     pub llm: &'a dyn LlmClient,
+    pub observer: Option<&'a Arc<crate::ai::langfuse::LangfuseHandle>>,
     pub primary: &'a ChatHistory,
     pub ai: Option<&'a ChatHistory>,
     pub self_logins: &'a [String],
@@ -361,6 +381,7 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
         handle,
         settings,
         llm,
+        observer,
         primary,
         ai,
         self_logins,
@@ -444,6 +465,7 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
             merge_width,
         },
         llm,
+        observer,
         model: &model,
         timeout,
         reasoning_effort: reasoning_effort.as_deref(),
@@ -478,6 +500,7 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
                 merge_width,
             },
             llm,
+            observer,
             model: &model,
             timeout,
             reasoning_effort: reasoning_effort.as_deref(),
@@ -525,6 +548,7 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
 }
 
 /// Background loop: never blocks chat turns.
+#[allow(clippy::too_many_arguments)] // services plus optional Langfuse observer
 pub async fn run_recap_batcher(
     handle: RecapHandle,
     settings: SettingsHandle,
@@ -533,6 +557,7 @@ pub async fn run_recap_batcher(
     ai: Option<ChatHistory>,
     self_logins: Vec<String>,
     shutdown: Arc<Notify>,
+    langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) {
     let mut last_seen_profile: Option<String> = None;
     let mut backoff = BatcherBackoff {
@@ -571,6 +596,7 @@ pub async fn run_recap_batcher(
                     handle: &handle,
                     settings: &settings,
                     llm: client.as_ref(),
+                    observer: langfuse.as_ref(),
                     primary: &primary,
                     ai: ai.as_ref(),
                     self_logins: &self_logins,
@@ -710,6 +736,7 @@ mod tests {
                 handle: &handle,
                 settings: &settings,
                 llm: &llm,
+                observer: None,
                 primary: &primary,
                 ai: None,
                 self_logins: &[],
@@ -726,6 +753,7 @@ mod tests {
             handle: &handle,
             settings: &settings,
             llm: &llm,
+            observer: None,
             primary: &primary,
             ai: None,
             self_logins: &[],
@@ -805,6 +833,7 @@ mod tests {
             2,
             Some(RecapCompletion {
                 llm: &OkLlm,
+                observer: None,
                 model: "m",
                 timeout: Duration::from_secs(1),
                 reasoning_effort: None,
@@ -854,6 +883,7 @@ mod tests {
             2,
             Some(RecapCompletion {
                 llm: &boom,
+                observer: None,
                 model: "m",
                 timeout: Duration::from_secs(1),
                 reasoning_effort: None,
@@ -967,6 +997,7 @@ mod tests {
                 handle: &handle_bg,
                 settings: &settings,
                 llm: &llm,
+                observer: None,
                 primary: &primary,
                 ai: None,
                 self_logins: &[],
@@ -1025,6 +1056,7 @@ mod tests {
             handle: &handle,
             settings: &settings,
             llm: &OkLlm,
+            observer: None,
             primary: &primary,
             ai: None,
             self_logins: &[],

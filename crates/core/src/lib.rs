@@ -85,6 +85,9 @@ pub struct Services {
     /// DHL tracking client backing Aurora's `track_shipment`. `None` when
     /// `[dhl]` is absent from config.toml, which hides the tool entirely.
     pub dhl: Option<Arc<crate::dhl::DhlClient>>,
+    /// First-party Langfuse exporter. `None` when `[langfuse]` is absent or
+    /// init failed; AI still runs, traces are dropped.
+    pub langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
     pub whisper: Option<Arc<dyn WhisperSender>>,
     pub data_dir: PathBuf,
@@ -208,6 +211,7 @@ where
         llm,
         aviation,
         dhl,
+        langfuse,
         doener,
         whisper,
         data_dir,
@@ -335,6 +339,7 @@ where
         aviation,
         aviation_for_commands,
         dhl,
+        langfuse: langfuse.clone(),
         aviation_tracker_tx: aviation_tracker_tx_inner,
         aviation_tracker_rx,
         emote_provider,
@@ -369,6 +374,7 @@ where
             settings_for_ritual.clone(),
             channel_for_ritual,
             shutdown_notify.clone(),
+            langfuse.clone(),
         );
         tracing::info!("Daily AI memory dreamer ritual spawned (live settings)");
     }
@@ -434,6 +440,10 @@ where
             ?e,
             "Ping actor did not drain within 500ms; runtime will clean up"
         );
+    }
+
+    if let Some(handle) = langfuse {
+        handle.flush(std::time::Duration::from_secs(2)).await;
     }
 
     info!("Bot shutdown complete");
