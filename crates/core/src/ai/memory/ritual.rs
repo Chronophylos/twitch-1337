@@ -182,6 +182,10 @@ pub async fn run_ritual(
             // filter so the dreamer still sees every user file in its
             // system prompt.
             speaker_login: String::new(),
+            n: 200,
+            batch_size: 40,
+            recap_through_seq: 0,
+            recap_enabled: false,
         },
     )
     .await?;

@@ -625,6 +625,10 @@ where
                 .chain(self.echo.mouth_logins().iter().cloned())
                 .collect(),
             speaker_login: ctx.privmsg.sender.login.clone(),
+            n: 200,
+            batch_size: 40,
+            recap_through_seq: 0,
+            recap_enabled: false,
         };
 
         // Aurora gets bodies injected; grok gets an index and pulls what it
