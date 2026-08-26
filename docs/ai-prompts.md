@@ -9,7 +9,7 @@ The bot's prompts live as Markdown files in the repo at `crates/data/assets/prom
 | `system.md` | `!ai` chat-turn loop | System prompt for the per-turn LLM session. |
 | `ai_instructions.md` | `!ai` chat-turn loop | Preamble in the user message after the relevant-emotes block, scratch, and recent chat; carries `{speaker_*}` tokens. |
 | `dreamer.md` | nightly ritual | System prompt for the dreamer LLM. |
-| `recap.md` | recap batcher | System prompt for the tiny-model paraphrase/coarsen loop. |
+| `recap.md` | recap batcher | System prompt for the tiny-model paraphrase/coarsen loop. Keep names/logins verbatim (no translating or Germanizing). |
 
 The chat turn injects `system.md` as the system prompt, then assembles the user message in order: relevant-emotes block → scratch fences → recent chat → substituted `ai_instructions.md` → the turn instruction. The ritual injects `dreamer.md` as the system prompt, then memory + transcript as the user message.
 

@@ -16,7 +16,12 @@ pub const RECAP_NOTE_BYTES: usize = 768;
 pub const RECAP_MAX_GENERATION: u32 = 2;
 pub const RECAP_SHEET_NOTES: usize = 3;
 pub const RECAP_SHEET_LOGINS: usize = 16;
-pub const RECAP_FLUSH_AGE: chrono::Duration = chrono::Duration::seconds(120);
+/// Quiet-channel flush: leftover eligible lines recap after the newest buffer
+/// line is this old. Must outlast typical stream lulls (BRB, raid, talking to
+/// chat) or partial batches fire every pause. Not a setting — `batch_size` is
+/// the live knob; eviction backpressure still drains before the raw window
+/// drops uncovered lines.
+pub const RECAP_FLUSH_AGE: chrono::Duration = chrono::Duration::minutes(30);
 pub const RECAP_PARK_FAILURES: u32 = 5;
 pub const RECAP_BACKOFF_INITIAL: Duration = Duration::from_secs(2);
 pub const RECAP_BACKOFF_CAP: Duration = Duration::from_secs(300);
@@ -319,25 +324,24 @@ impl RecapHandle {
 
 pub fn format_batch_line(entry: &ChatHistoryEntry, self_logins: &[String]) -> String {
     let ts = entry.timestamp.with_timezone(&Berlin).format("%H:%M");
-    let name = entry
-        .display_name
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(entry.username.as_str());
-    let tag = match entry.agent {
-        Some(Agent::Aurora) => " Aurora",
-        Some(Agent::Grok) => " Grok",
-        Some(Agent::Utility) => " bot",
+    let name = match entry.agent {
+        Some(Agent::Aurora) => "Aurora",
+        Some(Agent::Grok) => "Grok",
+        Some(Agent::Utility) => "bot",
         None if entry.source == ChatHistorySource::Bot
             || self_logins
                 .iter()
                 .any(|l| l.eq_ignore_ascii_case(&entry.username)) =>
         {
-            " bot"
+            "bot"
         }
-        None => "",
+        None => entry
+            .display_name
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(entry.username.as_str()),
     };
-    format!("[{ts}] {name}{tag}: {}", entry.text)
+    format!("[{ts}] {name}: {}", entry.text)
 }
 
 pub fn identities_from_batch(entries: &[&ChatHistoryEntry]) -> Vec<RecapIdentity> {
@@ -408,6 +412,11 @@ mod tests {
             agent,
             timestamp: Utc::now(),
         }
+    }
+
+    #[test]
+    fn flush_age_outlasts_typical_stream_lulls() {
+        assert!(RECAP_FLUSH_AGE >= chrono::Duration::minutes(15));
     }
 
     #[test]
@@ -558,20 +567,32 @@ mod tests {
         assert!(!logins.contains("older15"));
     }
 
-    #[test]
-    fn format_batch_line_tags_grok_not_self() {
-        let e = ChatHistoryEntry {
+    fn batch_entry(username: &str, display_name: &str, agent: Agent) -> ChatHistoryEntry {
+        ChatHistoryEntry {
             seq: 1,
-            username: "grok".into(),
-            display_name: Some("Grok".into()),
+            username: username.into(),
+            display_name: Some(display_name.into()),
             user_id: None,
             text: "sigma".into(),
             source: ChatHistorySource::Bot,
-            agent: Some(Agent::Grok),
+            agent: Some(agent),
             timestamp: Utc::now(),
-        };
-        let line = format_batch_line(&e, &[]);
-        assert!(line.contains(" Grok:"));
+        }
+    }
+
+    #[test]
+    fn format_batch_line_tags_grok_not_self() {
+        let line = format_batch_line(&batch_entry("grok", "Grok", Agent::Grok), &[]);
+        assert!(line.contains("] Grok:"), "got: {line}");
+        assert!(!line.contains("Grok Grok"), "got: {line}");
+        assert!(!line.contains("(self)"));
+    }
+
+    #[test]
+    fn format_batch_line_does_not_repeat_aurora_persona() {
+        let line = format_batch_line(&batch_entry("aurora", "Aurora", Agent::Aurora), &[]);
+        assert!(line.contains("] Aurora:"), "got: {line}");
+        assert!(!line.contains("Aurora Aurora"), "got: {line}");
         assert!(!line.contains("(self)"));
     }
 

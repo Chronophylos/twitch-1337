@@ -1483,6 +1483,16 @@ mod tests {
     }
 
     #[test]
+    fn bundled_recap_keeps_names_verbatim() {
+        let recap = twitch_1337_data::prompts::RECAP;
+        let lower = recap.to_lowercase();
+        assert!(
+            lower.contains("eindeutsch") || lower.contains("übersetz"),
+            "recap.md must forbid translating/localizing names:\n{recap}"
+        );
+    }
+
+    #[test]
     fn grok_prompt_keeps_baked_length_copy() {
         assert!(
             PROMPT_GROK.contains("Stay at or under 480 characters"),

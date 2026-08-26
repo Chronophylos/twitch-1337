@@ -166,19 +166,24 @@ scratch. Do not require a fingerprint match that cannot exist.
 Flush when any of:
 
 - `eligible.len() >= batch_size`
-- the oldest eligible line is older than `RECAP_FLUSH_AGE` (120s) —
-  age-based, so a slow night still notes, and a raid does not wait on
-  “inactivity”
+- the newest line in the buffer is older than `RECAP_FLUSH_AGE` (30 min) —
+  the channel went quiet, so a leftover partial batch flushes. Do **not**
+  age eligible lines from their own timestamps: they are already older
+  than the N-window, so in normal chat they pass the old 120s timeout
+  the moment they qualify and would flush 1–2 lines at a time. 30 min
+  outlasts typical stream lulls. Raids still hit `batch_size` without
+  waiting.
 - the oldest eligible line is within `batch_size` of the front of the
   buffer (eviction backpressure)
 
 One tiny-model completion per flush:
 
-- Input: the batch as `[HH:MM] Name: text` with an **agent-neutral**
-  tag from `entry.agent`: `Aurora`, `Grok`, or `bot` (utility, and
-  untagged prefill rows whose login is in `self_logins`). Never
+- Input: the batch as `[HH:MM] Name: text`. For agent rows, `Name` **is**
+  the agent-neutral label from `entry.agent`: `Aurora`, `Grok`, or `bot`
+  (utility, and untagged prefill rows whose login is in `self_logins`) —
+  not display name plus that label, which printed `Aurora Aurora`. Never
   `(self)` — that tag is relative to a speaking agent and the batcher
-  has none. Viewers stay untagged.
+  has none. Viewers keep their display name.
 - Output: one German paragraph, no quoted speech. Trimmed to
   `RECAP_NOTE_BYTES` (constant, 768). Quoted spans stripped if the
   model leaks them (`"…"`, `„…“`, `»…«`, leftover quote chars).
@@ -291,7 +296,7 @@ All live via `SettingsHandle`, on the existing **AI · History** card.
 | `merge_width` | 3 | Oldest same-generation notes folded when over cap. |
 
 Constants, not settings: `RECAP_NOTE_BYTES = 768`, `RECAP_FLUSH_AGE =
-120s`, `RECAP_MAX_GENERATION = 2`, `RECAP_PARK_FAILURES = 5`,
+30 min`, `RECAP_MAX_GENERATION = 2`, `RECAP_PARK_FAILURES = 5`,
 `RECAP_SHEET_NOTES = 3`, `RECAP_SHEET_LOGINS = 16`.
 
 Validation:
