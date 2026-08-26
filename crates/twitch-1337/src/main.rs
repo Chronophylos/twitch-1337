@@ -267,6 +267,14 @@ pub async fn main() -> Result<()> {
         settings_handle.clone(),
     ));
 
+    let recap_handle = if llm_client.is_some() {
+        Some(Arc::new(
+            twitch_1337::ai::recap::RecapHandle::load(get_data_dir()).await,
+        ))
+    } else {
+        None
+    };
+
     // Memory v2 store opens unconditionally so the dashboard editor has a
     // handle even when `[ai]` is disabled. The same `Arc`-backed store is
     // shared with the bot's IRC handlers / dreamer ritual via `Services`.
@@ -325,6 +333,7 @@ pub async fn main() -> Result<()> {
                 settings_handle.clone(),
                 settings_store.clone(),
                 telemetry.clone(),
+                recap_handle.clone(),
             )
             .await?,
         )
@@ -359,6 +368,7 @@ pub async fn main() -> Result<()> {
         emote_tracker,
         twitch_channel_id,
         mouths_override: None,
+        recap: recap_handle,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -389,6 +399,7 @@ async fn build_web_spawner(
     settings: twitch_1337::settings::SettingsHandle,
     settings_store: Arc<twitch_1337::settings::SettingsStore>,
     telemetry: Arc<twitch_1337::schedule::TelemetryStore>,
+    recap: Option<Arc<twitch_1337::ai::recap::RecapHandle>>,
 ) -> Result<twitch_1337::WebSpawner> {
     let bind_addr: std::net::SocketAddr = config
         .web
@@ -485,6 +496,7 @@ async fn build_web_spawner(
         settings,
         settings_store,
         telemetry,
+        recap,
     };
 
     Ok(Box::new(move |shutdown| {

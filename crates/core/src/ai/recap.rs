@@ -220,6 +220,14 @@ pub struct RecapHandle {
     pub(crate) inner: Arc<Mutex<RecapState>>,
 }
 
+impl Clone for RecapHandle {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
 impl RecapHandle {
     pub async fn load(data_dir: PathBuf) -> Self {
         let path = recap_path(&data_dir);
@@ -263,11 +271,20 @@ impl RecapHandle {
         out
     }
 
-    /// Invocation channel first, then the other; each section uses `injected_notes`.
+    pub async fn primary_through_seq(&self) -> u64 {
+        self.inner.lock().await.primary_through_seq
+    }
+
+    pub async fn ai_through_seq(&self) -> u64 {
+        self.inner.lock().await.ai_through_seq
+    }
+
+    /// Invocation channel first, then the other; each section uses that channel's login.
     pub async fn render_suffix(
         &self,
         invocation: RecapChannel,
-        login: &str,
+        primary_login: &str,
+        ai_channel_login: &str,
         max_notes: usize,
     ) -> String {
         let file = {
@@ -276,12 +293,12 @@ impl RecapHandle {
         };
         let primary = injected_notes(&file.primary, max_notes);
         let ai = injected_notes(&file.ai_channel, max_notes);
-        let (first, second) = match invocation {
-            RecapChannel::Primary => (primary, ai),
-            RecapChannel::AiChannel => (ai, primary),
+        let (first, first_login, second, second_login) = match invocation {
+            RecapChannel::Primary => (primary, primary_login, ai, ai_channel_login),
+            RecapChannel::AiChannel => (ai, ai_channel_login, primary, primary_login),
         };
-        let mut out = render_recap_section(login, first);
-        let other = render_recap_section(login, second);
+        let mut out = render_recap_section(first_login, first);
+        let other = render_recap_section(second_login, second);
         if !other.is_empty() {
             if !out.is_empty() {
                 out.push_str("\n\n");
@@ -289,6 +306,16 @@ impl RecapHandle {
             out.push_str(&other);
         }
         out
+    }
+
+    pub async fn rebind_primary(&self, entries: &[ChatHistoryEntry]) {
+        let mut guard = self.inner.lock().await;
+        guard.primary_through_seq = rebind_through_seq(&guard.file.primary, entries);
+    }
+
+    pub async fn rebind_ai_channel(&self, entries: &[ChatHistoryEntry]) {
+        let mut guard = self.inner.lock().await;
+        guard.ai_through_seq = rebind_through_seq(&guard.file.ai_channel, entries);
     }
 }
 

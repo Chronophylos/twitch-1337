@@ -823,7 +823,7 @@ mod tests {
 
         let started = Instant::now();
         let suffix = handle
-            .render_suffix(RecapChannel::Primary, "alice", 8)
+            .render_suffix(RecapChannel::Primary, "main", "ai", 8)
             .await;
         assert!(started.elapsed() < Duration::from_millis(100));
         assert!(suffix.contains("live"));

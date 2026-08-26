@@ -186,13 +186,17 @@ pub struct BuildOpts {
     /// Lowercased logins stamped on injected Recap Notes (caller-capped).
     /// Third packing tier after speaker and chat-window logins.
     pub recap_sheet_logins: BTreeSet<String>,
-    /// Verbatim tail: newest N lines that are not this agent's own.
+    /// Verbatim tail for the primary channel: newest N lines that are not this agent's own.
     pub n: usize,
+    /// Verbatim tail for the ai_channel section when configured.
+    pub ai_channel_n: usize,
     /// When Recap is on, eligible lag lines may stretch the tail up to
     /// `n + batch_size` other-people lines (never adds extra own lines).
     pub batch_size: usize,
-    /// Recap watermark seq; `0` when Recap is off.
+    /// Primary-channel Recap watermark seq; `0` when Recap is off.
     pub recap_through_seq: u64,
+    /// Ai-channel Recap watermark seq; `0` when Recap is off or no ai_channel buffer.
+    pub ai_channel_recap_through_seq: u64,
     /// When false, no stretch beyond the N-not-own window.
     pub recap_enabled: bool,
 }
@@ -225,13 +229,28 @@ struct RecentChat {
 }
 
 async fn render_recent_chat(opts: &BuildOpts) -> RecentChat {
-    let primary_rendered =
-        render_recent_section(opts.primary_history.as_ref(), &opts.primary_login, opts).await;
+    let primary_rendered = render_recent_section(
+        opts.primary_history.as_ref(),
+        &opts.primary_login,
+        opts.n,
+        opts.recap_through_seq,
+        opts,
+    )
+    .await;
     let ai_rendered = match (
         opts.ai_channel_history.as_ref(),
         opts.ai_channel_login.as_ref(),
     ) {
-        (Some(buf), Some(login)) => render_recent_section(Some(buf), login, opts).await,
+        (Some(buf), Some(login)) => {
+            render_recent_section(
+                Some(buf),
+                login,
+                opts.ai_channel_n,
+                opts.ai_channel_recap_through_seq,
+                opts,
+            )
+            .await
+        }
         _ => None,
     };
 
@@ -494,6 +513,8 @@ struct RenderedRecentSection {
 async fn render_recent_section(
     buf: Option<&Arc<Mutex<ChatHistoryBuffer>>>,
     login: &str,
+    n: usize,
+    recap_through_seq: u64,
     opts: &BuildOpts,
 ) -> Option<RenderedRecentSection> {
     let buf = buf?;
@@ -504,13 +525,12 @@ async fn render_recent_section(
 
     let current_agent = opts.current_agent;
     let self_logins = &opts.self_logins;
-    let n = opts.n;
     let batch_size = opts.batch_size;
 
     let mut others: Vec<&ChatHistoryEntry> = n_not_own(&snapshot, n, current_agent, self_logins);
 
     if opts.recap_enabled {
-        let stretch = eligible(&snapshot, n, opts.recap_through_seq, self_logins);
+        let stretch = eligible(&snapshot, n, recap_through_seq, self_logins);
         let mut seen: std::collections::BTreeSet<u64> = others.iter().map(|e| e.seq).collect();
         for entry in stretch {
             if is_own(entry, current_agent, self_logins) {
@@ -827,8 +847,10 @@ mod tests {
             speaker_login: speaker_login.into(),
             recap_sheet_logins: BTreeSet::new(),
             n: 200,
+            ai_channel_n: 200,
             batch_size: 40,
             recap_through_seq: 0,
+            ai_channel_recap_through_seq: 0,
             recap_enabled: false,
         }
     }
@@ -867,8 +889,10 @@ mod tests {
                 speaker_login: "carol".into(),
                 recap_sheet_logins: BTreeSet::new(),
                 n: 2,
+                ai_channel_n: 2,
                 batch_size: 40,
                 recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
                 recap_enabled: false,
             },
         )
@@ -914,8 +938,10 @@ mod tests {
                 speaker_login: "carol".into(),
                 recap_sheet_logins: BTreeSet::new(),
                 n: 2,
+                ai_channel_n: 2,
                 batch_size: 40,
                 recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
                 recap_enabled: false,
             },
         )
@@ -967,8 +993,10 @@ mod tests {
                 speaker_login: "viewer19".into(),
                 recap_sheet_logins: BTreeSet::new(),
                 n: 2,
+                ai_channel_n: 2,
                 batch_size: 3,
                 recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
                 recap_enabled: true,
             },
         )
@@ -1019,8 +1047,10 @@ mod tests {
                 speaker_login: "carol".into(),
                 recap_sheet_logins: BTreeSet::new(),
                 n: 2,
+                ai_channel_n: 2,
                 batch_size: 40,
                 recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
                 recap_enabled: true,
             },
         )
@@ -1458,8 +1488,10 @@ mod tests {
                 speaker_login: String::new(),
                 recap_sheet_logins: BTreeSet::new(),
                 n: 200,
+                ai_channel_n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
                 recap_enabled: false,
             },
         )
@@ -1514,8 +1546,10 @@ mod tests {
                 speaker_login: String::new(),
                 recap_sheet_logins: BTreeSet::new(),
                 n: 200,
+                ai_channel_n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
                 recap_enabled: false,
             },
         )
@@ -1563,8 +1597,10 @@ mod tests {
                 speaker_login: String::new(),
                 recap_sheet_logins: BTreeSet::new(),
                 n: 200,
+                ai_channel_n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
                 recap_enabled: false,
             },
         )
@@ -1621,8 +1657,10 @@ mod tests {
                 speaker_login: String::new(),
                 recap_sheet_logins: BTreeSet::new(),
                 n: 200,
+                ai_channel_n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
                 recap_enabled: false,
             },
         )
@@ -1696,8 +1734,10 @@ mod tests {
                 speaker_login: "alice".into(),
                 recap_sheet_logins: BTreeSet::new(),
                 n: 200,
+                ai_channel_n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
                 recap_enabled: false,
             },
         )
@@ -1757,8 +1797,10 @@ mod tests {
                 speaker_login: "carol".into(),
                 recap_sheet_logins: BTreeSet::new(),
                 n: 200,
+                ai_channel_n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
                 recap_enabled: false,
             },
         )
@@ -1854,8 +1896,10 @@ mod tests {
                 speaker_login: "carol".into(),
                 recap_sheet_logins,
                 n: 200,
+                ai_channel_n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
                 recap_enabled: false,
             },
         )
@@ -1915,8 +1959,10 @@ mod tests {
                 speaker_login: "carol".into(),
                 recap_sheet_logins,
                 n: 200,
+                ai_channel_n: 200,
                 batch_size: 40,
                 recap_through_seq: 0,
+                ai_channel_recap_through_seq: 0,
                 recap_enabled: false,
             },
         )
@@ -2118,8 +2164,10 @@ mod tests {
             speaker_login: String::new(),
             recap_sheet_logins: BTreeSet::new(),
             n: 200,
+            ai_channel_n: 200,
             batch_size: 40,
             recap_through_seq: 0,
+            ai_channel_recap_through_seq: 0,
             recap_enabled: false,
         };
 

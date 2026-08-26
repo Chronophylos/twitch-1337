@@ -414,6 +414,14 @@ impl TestBotBuilder {
         // Build the telemetry store once; share the Arc with Services, web, and TestBot.
         let telemetry_store = twitch_1337::schedule::TelemetryStore::open(data_dir.path());
 
+        let recap_handle = if self.config.ai.is_some() {
+            Some(Arc::new(
+                twitch_1337::ai::recap::RecapHandle::load(data_dir.path().to_path_buf()).await,
+            ))
+        } else {
+            None
+        };
+
         let web_spawner = if self.config.web.enabled {
             let bind_addr: std::net::SocketAddr = self
                 .config
@@ -430,6 +438,7 @@ impl TestBotBuilder {
                 settings_handle.clone(),
                 settings_store.clone(),
                 telemetry_store.clone(),
+                recap_handle.clone(),
             );
             let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
                 let deps = twitch_1337_web::WebDeps { bind_addr, state };
@@ -535,6 +544,7 @@ impl TestBotBuilder {
             emote_tracker,
             twitch_channel_id: None,
             mouths_override: build_mouths_override(self.mouth_identity, self.fake_mouths),
+            recap: recap_handle.clone(),
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -1077,6 +1087,7 @@ fn flagged_usage_count_sync(path: &std::path::Path) -> EyreResult<usize> {
 /// Build a minimal `WebState` for tests that flip on `with_web`. Uses a
 /// stub helix client that denies every mod check (no production routes
 /// reach it because the web smoke test only probes the public `/healthz`).
+#[allow(clippy::too_many_arguments)]
 fn build_test_web_state(
     config: &Configuration,
     irc_connected: Arc<AtomicBool>,
@@ -1085,6 +1096,7 @@ fn build_test_web_state(
     settings: twitch_1337::settings::SettingsHandle,
     settings_store: Arc<twitch_1337::settings::SettingsStore>,
     telemetry: Arc<twitch_1337::schedule::TelemetryStore>,
+    recap: Option<Arc<twitch_1337::ai::recap::RecapHandle>>,
 ) -> twitch_1337_web::WebState {
     use twitch_1337_web::auth::OAuthCtx;
     use twitch_1337_web::auth::session::SessionTable;
@@ -1149,5 +1161,6 @@ fn build_test_web_state(
         settings,
         settings_store,
         telemetry,
+        recap,
     }
 }

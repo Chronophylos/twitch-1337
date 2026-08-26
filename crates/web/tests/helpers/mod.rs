@@ -253,6 +253,7 @@ async fn build_state_inner_keep_settings(
         settings: settings_handle,
         settings_store,
         telemetry,
+        recap: None,
     };
     (state, pings_dir, memory_dir, settings_dir)
 }

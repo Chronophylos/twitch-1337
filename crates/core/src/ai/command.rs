@@ -24,6 +24,7 @@ use crate::ai::memory::tools::{
 use crate::ai::memory::transcript::TranscriptWriter;
 use crate::ai::memory::types::Role;
 use crate::ai::model_catalog::ModelCatalog;
+use crate::ai::recap::{RECAP_SHEET_LOGINS, RecapChannel, RecapHandle};
 use crate::ai::reply::{ReplyLimits, RewordOpts, prepare_agent_reply};
 use crate::commands::{Command, CommandContext};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
@@ -120,6 +121,7 @@ pub struct AiCommand {
     mouths: Arc<crate::twitch::mouth::MouthRouter>,
     echo: Arc<crate::twitch::echo::EchoGuard>,
     dhl: Option<Arc<crate::dhl::DhlClient>>,
+    recap: Option<Arc<RecapHandle>>,
     /// Per-process nonce stamped into memory fences. Stable across
     /// turns so the memory block is a byte-stable cache prefix; the real
     /// fence-injection guard is `scrub_for_inject`, not nonce freshness.
@@ -141,6 +143,7 @@ pub struct AiCommandDeps {
     pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
     pub echo: Arc<crate::twitch::echo::EchoGuard>,
     pub dhl: Option<Arc<crate::dhl::DhlClient>>,
+    pub recap: Option<Arc<RecapHandle>>,
 }
 
 pub const GROK_ALIAS_TRIGGER: &str = "@grok";
@@ -201,6 +204,7 @@ impl AiCommand {
             mouths: deps.mouths,
             echo: deps.echo,
             dhl: deps.dhl,
+            recap: deps.recap,
             prompt_nonce: inject::fresh_nonce(),
         }
     }
@@ -380,6 +384,34 @@ fn format_reply_context(
 /// that replies currently go through the utility bot login without denying
 /// the agent has an account. `Agent::Utility` in the match arm folds into
 /// Aurora's German copy only for exhaustiveness.
+fn recap_enabled_for_model(recap_model: Option<&str>, parked: bool) -> bool {
+    recap_model.is_some_and(|m| !m.trim().is_empty()) && !parked
+}
+
+async fn union_recap_sheet_logins(
+    handle: &RecapHandle,
+    invocation: RecapChannel,
+) -> BTreeSet<String> {
+    let (first, second) = match invocation {
+        RecapChannel::Primary => (RecapChannel::Primary, RecapChannel::AiChannel),
+        RecapChannel::AiChannel => (RecapChannel::AiChannel, RecapChannel::Primary),
+    };
+    let mut out = BTreeSet::new();
+    for login in handle.sheet_logins(first).await {
+        out.insert(login);
+        if out.len() >= RECAP_SHEET_LOGINS {
+            return out;
+        }
+    }
+    for login in handle.sheet_logins(second).await {
+        out.insert(login);
+        if out.len() >= RECAP_SHEET_LOGINS {
+            break;
+        }
+    }
+    out
+}
+
 fn mouths_system_appendix(
     current: Agent,
     aurora_persona: &str,
@@ -555,6 +587,7 @@ where
                 hard: snap.ai.behavior.reply_hard_chars,
             }
         };
+        let history = snap.ai.history.clone();
         drop(snap);
 
         let model_display = self.model_catalog.display_name(&connection, &model).await;
@@ -602,6 +635,52 @@ where
         } else {
             inject::InvocationChannel::Primary
         };
+        let recap_channel = match invocation_channel {
+            inject::InvocationChannel::Primary => RecapChannel::Primary,
+            inject::InvocationChannel::AiChannel => RecapChannel::AiChannel,
+        };
+        let recap_model = history.recap_model.as_deref();
+        let recap_parked = if let Some(ref handle) = self.recap {
+            handle.parked().await
+        } else {
+            true
+        };
+        let recap_enabled = recap_enabled_for_model(recap_model, recap_parked);
+        let (primary_through_seq, ai_through_seq) = if let Some(ref handle) = self.recap {
+            (
+                handle.primary_through_seq().await,
+                handle.ai_through_seq().await,
+            )
+        } else {
+            (0, 0)
+        };
+        let recap_sheet_logins = if let Some(ref handle) = self.recap {
+            union_recap_sheet_logins(handle, recap_channel).await
+        } else {
+            BTreeSet::new()
+        };
+        let recap_suffix = if recap_enabled {
+            if let Some(ref handle) = self.recap {
+                let primary_login = cc
+                    .map(|c| c.primary_login.as_str())
+                    .unwrap_or(ctx.privmsg.channel_login.as_str());
+                let ai_channel_login = cc
+                    .and_then(|c| c.ai_channel_login.as_deref())
+                    .unwrap_or(primary_login);
+                handle
+                    .render_suffix(
+                        recap_channel,
+                        primary_login,
+                        ai_channel_login,
+                        history.max_notes as usize,
+                    )
+                    .await
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
         // Memory (SOUL/LORE/users) goes in the system message so the
         // prompt cache survives across turns. Scratch and recent chat
         // go in the user message: any scratch write or chat line would otherwise
@@ -625,11 +704,13 @@ where
                 .chain(self.echo.mouth_logins().iter().cloned())
                 .collect(),
             speaker_login: ctx.privmsg.sender.login.clone(),
-            recap_sheet_logins: BTreeSet::new(),
-            n: 200,
-            batch_size: 40,
-            recap_through_seq: 0,
-            recap_enabled: false,
+            recap_sheet_logins,
+            n: history.n as usize,
+            ai_channel_n: history.ai_channel_n as usize,
+            batch_size: history.batch_size as usize,
+            recap_through_seq: primary_through_seq,
+            ai_channel_recap_through_seq: ai_through_seq,
+            recap_enabled,
         };
 
         let scoring_chat = {
@@ -735,7 +816,7 @@ where
                 head: system_head,
                 appendices,
                 memory,
-                recap: String::new(),
+                recap: recap_suffix,
             },
             inject::UserParts {
                 emote_block,
@@ -1012,6 +1093,41 @@ pub async fn build_ai_memory_v2(
         turn_timeout: Duration::from_secs(settings.ai.active().timeout),
         min_response_delay: Duration::from_millis(settings.ai.behavior.min_response_delay_ms),
     }))
+}
+
+#[cfg(test)]
+mod recap_wiring_tests {
+    use super::recap_enabled_for_model;
+    use crate::ai::memory::inject::{self, SystemParts, UserParts};
+
+    #[test]
+    fn recap_enabled_follows_model_and_parked_gate() {
+        assert!(!recap_enabled_for_model(None, false));
+        assert!(!recap_enabled_for_model(Some(""), false));
+        assert!(!recap_enabled_for_model(Some("   "), false));
+        assert!(recap_enabled_for_model(Some("tiny"), false));
+        assert!(!recap_enabled_for_model(Some("tiny"), true));
+    }
+
+    #[test]
+    fn recap_off_system_message_has_no_recap_heading() {
+        let (system, _) = inject::build_chat_turn_messages(
+            SystemParts {
+                head: "head".into(),
+                appendices: Vec::new(),
+                memory: "mem".into(),
+                recap: String::new(),
+            },
+            UserParts {
+                emote_block: None,
+                scratch: String::new(),
+                recent_chat: String::new(),
+                instructions: "instr".into(),
+                instruction: "do thing".into(),
+            },
+        );
+        assert!(!system.content.contains("## Recap"));
+    }
 }
 
 #[cfg(test)]

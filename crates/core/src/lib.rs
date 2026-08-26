@@ -179,6 +179,9 @@ pub struct Services {
         Arc<crate::twitch::mouth::MouthRouter>,
         Arc<crate::twitch::echo::EchoGuard>,
     )>,
+
+    /// Shared chat-recap handle. `None` when AI / LLM is disabled.
+    pub recap: Option<Arc<crate::ai::recap::RecapHandle>>,
 }
 
 pub type WebSpawner =
@@ -227,6 +230,7 @@ where
         emote_tracker,
         twitch_channel_id,
         mouths_override,
+        recap,
     } = services;
 
     // Clone the sender out of the Arc for SpawnDeps.
@@ -344,6 +348,7 @@ where
         twitch_channel_id,
         mouths,
         echo,
+        recap,
     });
 
     let shutdown_notify = handlers.shutdown_notify.clone();
