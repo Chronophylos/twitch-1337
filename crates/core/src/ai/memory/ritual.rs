@@ -128,9 +128,6 @@ pub async fn run_ritual(
     let snap = settings.load_full();
     let ai = &snap.ai;
     let dreamer_profile = ai.dreamer.profile.clone();
-    let dreamer_model = ai.dreamer.model.clone();
-    let dreamer_reasoning_effort = ai.dreamer.reasoning_effort.clone();
-    let dreamer_service_tier = ai.dreamer.service_tier.clone();
     let timeout_secs = ai.dreamer.timeout_secs;
     let max_rounds = ai.dreamer.max_rounds;
     let max_writes_per_turn = ai.dreamer.max_writes_per_turn;
@@ -153,9 +150,9 @@ pub async fn run_ritual(
         warn!("dreamer skipped, no usable LLM profile");
         return Ok(());
     };
-    let model = dreamer_model.unwrap_or(base_profile.model);
-    let reasoning_effort = dreamer_reasoning_effort.or(base_profile.reasoning_effort);
-    let service_tier = dreamer_service_tier.or(base_profile.service_tier);
+    let model = base_profile.model;
+    let reasoning_effort = base_profile.reasoning_effort;
+    let service_tier = base_profile.service_tier;
     if model.trim().is_empty() {
         warn!("dreamer skipped, AI model is empty in settings");
         return Ok(());
@@ -388,8 +385,8 @@ not a transcript line
         let recorder = Arc::new(ModelRecorder(Mutex::new(Vec::new())));
         let yesterday = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
 
-        // ── First call: dreamer.model is unset → falls back to connection.model ──
-        // compiled_defaults has an empty connection.model; set it explicitly.
+        // ── First call: uses the profile's model ──
+        // compiled_defaults has an empty profile model; set it explicitly.
         {
             let mut s = (*settings.load_full()).clone();
             s.ai.profiles[0].model = "model-v1".into();

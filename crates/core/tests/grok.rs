@@ -4,8 +4,24 @@ use std::time::Duration;
 
 use common::TestBotBuilder;
 use llm::{Role, ToolCall, ToolChatCompletionResponse};
+use twitch_1337::settings::ai::AiProfile;
+use twitch_1337::settings::provider::AiProvider;
+use twitch_1337_core as twitch_1337;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn profile(name: &str, model: &str) -> AiProfile {
+    AiProfile {
+        name: name.into(),
+        key: Some("test".into()),
+        provider: AiProvider::OpenRouter,
+        base_url: None,
+        model: model.into(),
+        timeout: 30,
+        reasoning_effort: None,
+        service_tier: None,
+    }
+}
 
 #[tokio::test]
 async fn ai_reply_includes_parent_message() {
@@ -249,17 +265,17 @@ async fn grok_uses_web_tools_when_enabled() {
 }
 
 #[tokio::test]
-async fn grok_uses_override_model_effort_and_tier() {
+async fn grok_uses_its_own_profile_model_effort_and_tier() {
     let bot = TestBotBuilder::new()
         .with_ai()
         .with_settings(|o| {
             o.ai.history.length = Some(0);
-            o.ai.connection.model = Some("test-model".into());
-            o.ai.connection.reasoning_effort = Some(Some("minimal".into()));
-            o.ai.connection.service_tier = Some(Some("priority".into()));
-            o.ai.grok.model = Some(Some("x-ai/grok-4".into()));
-            o.ai.grok.reasoning_effort = Some(Some("high".into()));
-            o.ai.grok.service_tier = Some(Some("flex".into()));
+            let mut grok = profile("grok", "x-ai/grok-4");
+            grok.reasoning_effort = Some("high".into());
+            grok.service_tier = Some("flex".into());
+            o.ai.profiles = Some(vec![profile("chat", "test-model"), grok]);
+            o.ai.active_profile = Some("chat".into());
+            o.ai.grok.profile = Some(Some("grok".into()));
         })
         .spawn()
         .await;
@@ -293,13 +309,12 @@ async fn grok_uses_override_model_effort_and_tier() {
 }
 
 #[tokio::test]
-async fn grok_without_override_uses_connection_model() {
+async fn grok_without_profile_override_uses_active_profile_model() {
     let bot = TestBotBuilder::new()
         .with_ai()
         .with_settings(|o| {
             o.ai.history.length = Some(0);
-            o.ai.connection.model = Some("test-model".into());
-            o.ai.grok.model = None; // inherit
+            o.ai.grok.profile = None; // inherit
         })
         .spawn()
         .await;
@@ -375,13 +390,17 @@ async fn ai_still_uses_auroras_system_prompt() {
 }
 
 #[tokio::test]
-async fn ai_ignores_grok_model_override() {
+async fn ai_ignores_grok_profile() {
     let bot = TestBotBuilder::new()
         .with_ai()
         .with_settings(|o| {
             o.ai.history.length = Some(0);
-            o.ai.connection.model = Some("test-model".into());
-            o.ai.grok.model = Some(Some("x-ai/grok-4".into()));
+            o.ai.profiles = Some(vec![
+                profile("chat", "test-model"),
+                profile("grok", "x-ai/grok-4"),
+            ]);
+            o.ai.active_profile = Some("chat".into());
+            o.ai.grok.profile = Some(Some("grok".into()));
         })
         .spawn()
         .await;

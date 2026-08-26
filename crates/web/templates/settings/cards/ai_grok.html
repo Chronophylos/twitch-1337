@@ -5,7 +5,7 @@
   <header class="settings-card-head">
     <div>
       <h2>AI · Grok</h2>
-      <p>Optional model overrides for the @grok alias. Empty = use the resolved profile.</p>
+      <p>Which provider profile the @grok alias runs on. Empty = the active profile. Model, effort and tier come from that profile.</p>
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
@@ -26,75 +26,5 @@
         <span class="row-default">default <span class="mono">(active profile)</span></span>
       </div>
     </div>
-
-    {% let grok_model = current.ai.grok.model.as_deref().unwrap_or("") %}
-    <div class="settings-row" data-section="ai_grok">
-      {% call m::row_head("model", "Override the model used for @grok turns. Empty = use the resolved profile's model.") %}{% endcall %}
-      <div class="row-control-cell">
-        <span class="row-pretty" aria-hidden="true">{% if grok_model.is_empty() %}<span class="muted">(profile)</span>{% else %}{{ grok_model }}{% endif %}</span>
-        <input type="text"
-               class="text-input"
-               name="ai_grok_model"
-               list="ai-models-grok"
-               value="{{ grok_model }}"
-               placeholder="(use profile model)"
-               data-default=""
-               data-key="ai.grok.model"
-               data-scope="grok"
-               data-models-url="/settings/ai/models?scope=grok">
-        <datalist id="ai-models-grok"></datalist>
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.grok.model") %}{% endcall %}
-        <span class="row-default">default <span class="mono">(profile)</span></span>
-      </div>
-    </div>
-
-    {# Gated against the caps of the profile grok will actually run on (its
-       own `profile` override, or the active profile) — not the active
-       profile alone. See issue I2. #}
-    {% let grok_caps = current.ai.grok_profile().provider.caps() %}
-    {% if grok_caps.effort_kind() == "free" %}
-    {% let grok_effort_raw = current.ai.grok.reasoning_effort.as_deref().unwrap_or("") %}
-    {% call m::text_row("ai_grok", "ai_grok_reasoning_effort", "ai.grok.reasoning_effort",
-       "Override reasoning_effort for @grok turns (provider-defined string).",
-       grok_effort_raw, "", "(profile default)") %}{% endcall %}
-    {% else if grok_caps.effort_kind() == "fixed" %}
-    {% let grok_effort = current.ai.grok.reasoning_effort.as_deref().unwrap_or("none") %}
-    <div class="settings-row" data-section="ai_grok">
-      {% call m::row_head("reasoning_effort", "Override reasoning_effort for @grok turns.") %}{% endcall %}
-      <div class="row-control-cell">
-        <div class="segmented" role="radiogroup" aria-label="reasoning_effort">
-          {% call m::effort_segment("ai_grok_reasoning_effort", "ai.grok.reasoning_effort", "none", grok_effort) %}{% endcall %}
-          {% if grok_caps.allows_effort("minimal") %}{% call m::effort_segment("ai_grok_reasoning_effort", "ai.grok.reasoning_effort", "minimal", grok_effort) %}{% endcall %}{% endif %}
-          {% if grok_caps.allows_effort("medium") %}{% call m::effort_segment("ai_grok_reasoning_effort", "ai.grok.reasoning_effort", "medium", grok_effort) %}{% endcall %}{% endif %}
-          {% if grok_caps.allows_effort("high") %}{% call m::effort_segment("ai_grok_reasoning_effort", "ai.grok.reasoning_effort", "high", grok_effort) %}{% endcall %}{% endif %}
-          {% if grok_caps.allows_effort("xhigh") %}{% call m::effort_segment("ai_grok_reasoning_effort", "ai.grok.reasoning_effort", "xhigh", grok_effort) %}{% endcall %}{% endif %}
-        </div>
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.grok.reasoning_effort") %}{% endcall %}
-        <span class="row-default">default <span class="mono">none</span></span>
-      </div>
-    </div>
-    {% endif %}
-
-    {% if grok_caps.service_tier %}
-    {% let grok_tier = current.ai.grok.service_tier.as_deref().unwrap_or("none") %}
-    <div class="settings-row" data-section="ai_grok">
-      {% call m::row_head("service_tier", "Override OpenRouter pricing tier for @grok turns. Falls back to connection tier when set to Default.") %}{% endcall %}
-      <div class="row-control-cell">
-        <div class="segmented" role="radiogroup" aria-label="service_tier">
-          {% call m::tier_segment("ai_grok_service_tier", "ai.grok.service_tier", "none", "Default", grok_tier) %}{% endcall %}
-          {% call m::tier_segment("ai_grok_service_tier", "ai.grok.service_tier", "flex", "Flex", grok_tier) %}{% endcall %}
-          {% call m::tier_segment("ai_grok_service_tier", "ai.grok.service_tier", "priority", "Priority", grok_tier) %}{% endcall %}
-        </div>
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.grok.service_tier") %}{% endcall %}
-        <span class="row-default">default <span class="mono">Default</span></span>
-      </div>
-    </div>
-    {% endif %}
   </div>
 </section>

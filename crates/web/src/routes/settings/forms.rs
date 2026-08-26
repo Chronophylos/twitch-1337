@@ -32,22 +32,6 @@ fn tri_state(val: Option<String>) -> Option<Option<String>> {
     }
 }
 
-/// Variant of [`tri_state`] for segmented-selector fields that use the literal
-/// `"none"` as their "no value selected" option. Normalises `"none"` to `""`
-/// before delegating so the sentinel stays at the call site, not in the shared
-/// helper (a future plain-text field whose value happens to be "none" must not
-/// accidentally clear itself).
-fn segmented_tri_state(val: Option<String>) -> Option<Option<String>> {
-    tri_state(val.map(|s| {
-        let t = s.trim();
-        if t == "none" || t.is_empty() {
-            String::new()
-        } else {
-            s
-        }
-    }))
-}
-
 /// Resolves the `enabled` field for toggle cards that use a `*_card_visible`
 /// hidden input to differentiate "card rendered but unchecked" from "card absent".
 fn enabled_from_card(visible: &Option<String>, checked: &Option<String>) -> Option<bool> {
@@ -225,12 +209,6 @@ struct AiDreamerForm {
     #[serde(default)]
     ai_dreamer_enabled: Option<String>,
     #[serde(default)]
-    ai_dreamer_model: Option<String>,
-    #[serde(default)]
-    ai_dreamer_reasoning_effort: Option<String>,
-    #[serde(default)]
-    ai_dreamer_service_tier: Option<String>,
-    #[serde(default)]
     ai_dreamer_run_at: Option<String>,
     #[serde(default)]
     ai_dreamer_timeout_secs: Option<u64>,
@@ -247,19 +225,6 @@ impl AiDreamerForm {
             // Dreamer card always renders, so checkbox semantics mirror
             // `ping_public`: missing key = false, present = true.
             enabled: Some(self.ai_dreamer_enabled.is_some()),
-            model: self
-                .ai_dreamer_model
-                .map(|v| if v.is_empty() { None } else { Some(v) }),
-            // `ai_dreamer_reasoning_effort` renders as a segmented radio
-            // group when dreamer's resolved profile has fixed effort
-            // values, or a free-text input when it's FreeText-caps (issue
-            // I2) — same field name either way, so `segmented_tri_state`
-            // runs for both. That normalises a literal "none" typed into
-            // the free-text row to "unchanged" instead of "set to the
-            // string none"; accepted because no documented vendor uses
-            // "none" as a meaningful reasoning_effort value.
-            reasoning_effort: segmented_tri_state(self.ai_dreamer_reasoning_effort),
-            service_tier: segmented_tri_state(self.ai_dreamer_service_tier),
             run_at: self.ai_dreamer_run_at,
             timeout_secs: self.ai_dreamer_timeout_secs,
             max_rounds: self.ai_dreamer_max_rounds,
@@ -272,25 +237,12 @@ impl AiDreamerForm {
 struct AiGrokForm {
     #[serde(default)]
     ai_grok_profile: String,
-    #[serde(default)]
-    ai_grok_model: Option<String>,
-    #[serde(default)]
-    ai_grok_reasoning_effort: Option<String>,
-    #[serde(default)]
-    ai_grok_service_tier: Option<String>,
 }
 
 impl AiGrokForm {
     fn into_overrides(self) -> AiGrokOverrides {
         AiGrokOverrides {
             profile: Some(opt_str(&self.ai_grok_profile)),
-            model: self
-                .ai_grok_model
-                .map(|v| if v.is_empty() { None } else { Some(v) }),
-            // See the same field on `AiDreamerForm` for the fixed/free-text
-            // caveat.
-            reasoning_effort: segmented_tri_state(self.ai_grok_reasoning_effort),
-            service_tier: segmented_tri_state(self.ai_grok_service_tier),
         }
     }
 }
@@ -406,8 +358,6 @@ struct AiMediaForm {
     #[serde(default)]
     ai_media_profile: String,
     #[serde(default)]
-    ai_media_model: Option<String>,
-    #[serde(default)]
     ai_media_timeout: Option<u64>,
     #[serde(default)]
     ai_media_max_image_size: Option<String>,
@@ -425,7 +375,6 @@ impl AiMediaForm {
     fn into_overrides(self) -> AiMediaOverrides {
         AiMediaOverrides {
             profile: Some(opt_str(&self.ai_media_profile)),
-            model: self.ai_media_model,
             timeout: self.ai_media_timeout,
             max_image_size: self
                 .ai_media_max_image_size
@@ -644,9 +593,6 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             dreamer: AiDreamerForm {
                 ai_dreamer_profile: form.ai_dreamer_profile,
                 ai_dreamer_enabled: form.ai_dreamer_enabled,
-                ai_dreamer_model: form.ai_dreamer_model,
-                ai_dreamer_reasoning_effort: form.ai_dreamer_reasoning_effort,
-                ai_dreamer_service_tier: form.ai_dreamer_service_tier,
                 ai_dreamer_run_at: form.ai_dreamer_run_at,
                 ai_dreamer_timeout_secs: form.ai_dreamer_timeout_secs,
                 ai_dreamer_max_rounds: form.ai_dreamer_max_rounds,
@@ -655,9 +601,6 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             .into_overrides(),
             grok: AiGrokForm {
                 ai_grok_profile: form.ai_grok_profile,
-                ai_grok_model: form.ai_grok_model,
-                ai_grok_reasoning_effort: form.ai_grok_reasoning_effort,
-                ai_grok_service_tier: form.ai_grok_service_tier,
             }
             .into_overrides(),
             prefill: AiPrefillForm {
@@ -691,7 +634,6 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             .into_overrides(),
             media: AiMediaForm {
                 ai_media_profile: form.ai_media_profile,
-                ai_media_model: form.ai_media_model,
                 ai_media_timeout: form.ai_media_timeout,
                 ai_media_max_image_size: form.ai_media_max_image_size,
                 ai_media_max_pdf_size: form.ai_media_max_pdf_size,
@@ -764,8 +706,6 @@ mod tests {
 
     #[test]
     fn tri_state_literal_none_is_not_cleared() {
-        // tri_state does NOT treat the word "none" specially — it would set it.
-        // Segmented selectors must go through segmented_tri_state instead.
         assert_eq!(
             tri_state(Some("none".to_string())),
             Some(Some("none".to_string()))
@@ -778,62 +718,6 @@ mod tests {
             tri_state(Some("gpt-4o".to_string())),
             Some(Some("gpt-4o".to_string()))
         );
-    }
-
-    #[test]
-    fn segmented_tri_state_none_sentinel_clears() {
-        assert_eq!(segmented_tri_state(Some("none".to_string())), Some(None));
-    }
-
-    #[test]
-    fn segmented_tri_state_empty_clears() {
-        assert_eq!(segmented_tri_state(Some(String::new())), Some(None));
-    }
-
-    #[test]
-    fn segmented_tri_state_absent_is_none() {
-        assert_eq!(segmented_tri_state(None), None);
-    }
-
-    #[test]
-    fn segmented_tri_state_whitespace_only_clears() {
-        // Preserve old behavior: trim before sentinel check.
-        assert_eq!(segmented_tri_state(Some("   ".to_string())), Some(None));
-    }
-
-    #[test]
-    fn form_parses_service_tier_flex_priority_and_none_sentinel() {
-        let dream_ov = AiDreamerForm {
-            ai_dreamer_service_tier: Some("priority".to_string()),
-            ..Default::default()
-        }
-        .into_overrides();
-        assert_eq!(
-            dream_ov.service_tier.as_ref().and_then(|v| v.as_deref()),
-            Some("priority")
-        );
-
-        let dream_ov2 = AiDreamerForm {
-            ai_dreamer_service_tier: Some(String::new()),
-            ..Default::default()
-        }
-        .into_overrides();
-        let grok_ov = AiGrokForm {
-            ai_grok_service_tier: Some("priority".to_string()),
-            ..Default::default()
-        }
-        .into_overrides();
-        let grok_ov2 = AiGrokForm {
-            ai_grok_service_tier: Some("none".to_string()),
-            ..Default::default()
-        }
-        .into_overrides();
-        assert!(matches!(dream_ov2.service_tier, Some(None)));
-        assert_eq!(
-            grok_ov.service_tier.as_ref().and_then(|v| v.as_deref()),
-            Some("priority")
-        );
-        assert!(matches!(grok_ov2.service_tier, Some(None)));
     }
 
     #[test]
@@ -857,7 +741,6 @@ mod tests {
 
         let grok = AiGrokForm {
             ai_grok_profile: "cheap".to_string(),
-            ..Default::default()
         }
         .into_overrides();
         assert_eq!(grok.profile, Some(Some("cheap".to_string())));

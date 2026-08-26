@@ -544,31 +544,9 @@ where
             error!("AI command skipped, no usable LLM profile");
             return Ok(());
         };
-        let (model, reasoning_effort, service_tier) = if grok_alias {
-            (
-                snap.ai
-                    .grok
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| connection.model.clone()),
-                snap.ai
-                    .grok
-                    .reasoning_effort
-                    .clone()
-                    .or_else(|| connection.reasoning_effort.clone()),
-                snap.ai
-                    .grok
-                    .service_tier
-                    .clone()
-                    .or_else(|| connection.service_tier.clone()),
-            )
-        } else {
-            (
-                connection.model.clone(),
-                connection.reasoning_effort.clone(),
-                connection.service_tier.clone(),
-            )
-        };
+        let model = connection.model.clone();
+        let reasoning_effort = connection.reasoning_effort.clone();
+        let service_tier = connection.service_tier.clone();
         if model.trim().is_empty() {
             // Log only: a config problem is not the chatter's business.
             error!("AI command skipped, model is empty in settings");

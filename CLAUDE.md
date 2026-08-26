@@ -150,9 +150,11 @@ model, timeout, reasoning effort and service tier live in **profiles** — a
 named list (`ai.profiles`) CRUD'd at `/ai-profiles` (owner only — a profile
 carries `base_url`/`key`, the same credential surface `/settings` keeps
 owner-only). `ai.active_profile`
-names the profile `!ai` uses; dreamer, grok and media each take an optional
-per-profile override at `/settings`, falling back to the active profile when
-unset. Every AI client is resolved per call through `LlmRegistry`
+names the profile `!ai` uses; dreamer, grok, media and recap each take an
+optional profile picker at `/settings` (recap: empty = off; the others fall
+back to the active profile). Sub-agents do not override model / effort / tier
+on top of a profile — pick a different profile instead. Dreamer and media keep
+their own timeout knobs. Every AI client is resolved per call through `LlmRegistry`
 (`crates/core/src/llm_factory.rs`), so switching `active_profile` or editing a
 profile applies on the next turn — no restart. Each profile declares an
 `AiProvider` (`open_router`, `open_ai`, `open_ai_compatible`, `ollama`) whose

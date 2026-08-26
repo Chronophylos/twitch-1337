@@ -189,9 +189,7 @@ fn heal_history_window(
 }
 
 fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
-    use super::ai::{
-        AiBehavior, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory, resolved_profile_in,
-    };
+    use super::ai::{AiBehavior, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory};
 
     let profiles = resolve_profiles(defaults, o);
     let active_profile = o
@@ -211,21 +209,6 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
         Some(v) => v.clone(),
         None => defaults.grok.profile.clone(),
     };
-    // Same trap as the connection-block fold: the pre-profiles dashboard
-    // gated the dreamer/grok service_tier row on the connection's backend
-    // and URL rather than the sub-agent's own profile, and never gated
-    // reasoning_effort at all. A stored value that outlived a since-changed
-    // backend now hits the caps-checked validation added on this branch and
-    // would quarantine settings.ron. Resolve the caps of whichever profile
-    // the sub-agent will actually run on — the same lookup `validation.rs`
-    // and the dashboard cards use (`resolved_profile_in`, issue I2) — and
-    // drop what that profile can't accept.
-    let dreamer_caps = resolved_profile_in(&profiles, &active_profile, dreamer_profile.as_deref())
-        .provider
-        .caps();
-    let grok_caps = resolved_profile_in(&profiles, &active_profile, grok_profile.as_deref())
-        .provider
-        .caps();
 
     AiSettings {
         profiles,
@@ -303,20 +286,6 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
         dreamer: AiDreamer {
             enabled: o.dreamer.enabled.unwrap_or(defaults.dreamer.enabled),
             profile: dreamer_profile,
-            model: match &o.dreamer.model {
-                Some(v) => v.clone(),
-                None => defaults.dreamer.model.clone(),
-            },
-            reasoning_effort: match &o.dreamer.reasoning_effort {
-                Some(v) => v.clone(),
-                None => defaults.dreamer.reasoning_effort.clone(),
-            }
-            .filter(|v| dreamer_caps.allows_effort(v.trim())),
-            service_tier: match &o.dreamer.service_tier {
-                Some(v) => v.clone(),
-                None => defaults.dreamer.service_tier.clone(),
-            }
-            .filter(|_| dreamer_caps.service_tier),
             run_at: o
                 .dreamer
                 .run_at
@@ -334,20 +303,6 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
         },
         grok: AiGrok {
             profile: grok_profile,
-            model: match &o.grok.model {
-                Some(v) => v.clone(),
-                None => defaults.grok.model.clone(),
-            },
-            reasoning_effort: match &o.grok.reasoning_effort {
-                Some(v) => v.clone(),
-                None => defaults.grok.reasoning_effort.clone(),
-            }
-            .filter(|v| grok_caps.allows_effort(v.trim())),
-            service_tier: match &o.grok.service_tier {
-                Some(v) => v.clone(),
-                None => defaults.grok.service_tier.clone(),
-            }
-            .filter(|_| grok_caps.service_tier),
             // No override plumbing in v1 — baked default only (brief: dashboard
             // field is optional / not yet wired).
             persona_name: defaults.grok.persona_name.clone(),
@@ -360,11 +315,6 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 Some(v) => v.clone(),
                 None => defaults.media.profile.clone(),
             },
-            model: o
-                .media
-                .model
-                .clone()
-                .unwrap_or_else(|| defaults.media.model.clone()),
             timeout: o.media.timeout.unwrap_or(defaults.media.timeout),
             max_image_size: o
                 .media
@@ -604,13 +554,11 @@ mod tests {
     }
 
     #[test]
-    fn service_tier_override_resolves_for_connection_and_dreamer() {
+    fn service_tier_override_resolves_for_connection() {
         let mut overrides = overrides::SettingsOverrides::default();
         overrides.ai.connection.service_tier = Some(Some("flex".to_string()));
-        overrides.ai.dreamer.service_tier = Some(Some("priority".to_string()));
         let s = Settings::resolve(&Settings::compiled_defaults(), &overrides);
         assert_eq!(s.ai.active().service_tier.as_deref(), Some("flex"));
-        assert_eq!(s.ai.dreamer.service_tier.as_deref(), Some("priority"));
     }
 
     #[test]
@@ -748,31 +696,19 @@ mod tests {
     }
 
     #[test]
-    fn grok_overrides_resolve_and_default_to_none() {
+    fn grok_profile_override_resolves_and_clears() {
         let defaults = Settings::compiled_defaults();
         let mut ovr = overrides::SettingsOverrides::default();
-        // No grok patch → still None
         let s = Settings::resolve(&defaults, &ovr);
-        assert!(s.ai.grok.model.is_none());
-        assert!(s.ai.grok.reasoning_effort.is_none());
-        assert!(s.ai.grok.service_tier.is_none());
+        assert!(s.ai.grok.profile.is_none());
 
-        ovr.ai.grok.model = Some(Some("x-ai/grok-4".into()));
-        ovr.ai.grok.reasoning_effort = Some(Some("high".into()));
-        ovr.ai.grok.service_tier = Some(Some("flex".into()));
+        ovr.ai.grok.profile = Some(Some("cheap".into()));
         let s = Settings::resolve(&defaults, &ovr);
-        assert_eq!(s.ai.grok.model.as_deref(), Some("x-ai/grok-4"));
-        assert_eq!(s.ai.grok.reasoning_effort.as_deref(), Some("high"));
-        assert_eq!(s.ai.grok.service_tier.as_deref(), Some("flex"));
+        assert_eq!(s.ai.grok.profile.as_deref(), Some("cheap"));
 
-        // Explicit clear
-        ovr.ai.grok.model = Some(None);
-        ovr.ai.grok.reasoning_effort = Some(None);
-        ovr.ai.grok.service_tier = Some(None);
+        ovr.ai.grok.profile = Some(None);
         let s = Settings::resolve(&defaults, &ovr);
-        assert!(s.ai.grok.model.is_none());
-        assert!(s.ai.grok.reasoning_effort.is_none());
-        assert!(s.ai.grok.service_tier.is_none());
+        assert!(s.ai.grok.profile.is_none());
     }
 
     #[test]

@@ -74,10 +74,7 @@ static FALLBACK_PROFILE: LazyLock<AiProfile> = LazyLock::new(AiProfile::default)
 /// `active_profile`'s row, falling back to the first profile in the list.
 /// Standalone (rather than an `AiSettings` method) so `resolve.rs` can call
 /// it while still assembling the `AiSettings` it would otherwise need
-/// `&self` for. `AiSettings::resolved_profile` and `settings::validation`'s
-/// `dreamer_caps`/`grok_caps` both funnel through this one lookup so the
-/// dashboard's caps-gated rows and save validation never disagree about
-/// which profile's caps apply — see MIGRATION(ai-provider-profiles) issue I2.
+/// `&self` for.
 pub fn resolved_profile_in<'a>(
     profiles: &'a [AiProfile],
     active_profile: &str,
@@ -99,23 +96,6 @@ impl AiSettings {
     /// stale (a deleted profile leaves a dangling pointer until the next save).
     pub fn active(&self) -> &AiProfile {
         resolved_profile_in(&self.profiles, &self.active_profile, None)
-    }
-
-    /// The profile a sub-agent (dreamer, grok, media) actually runs on: the
-    /// profile its own `profile` override names, falling back to
-    /// [`active`](Self::active) when unset or when the name is stale.
-    pub fn resolved_profile(&self, agent_profile: Option<&str>) -> &AiProfile {
-        resolved_profile_in(&self.profiles, &self.active_profile, agent_profile)
-    }
-
-    /// The profile the dreamer pass will actually run on.
-    pub fn dreamer_profile(&self) -> &AiProfile {
-        self.resolved_profile(self.dreamer.profile.as_deref())
-    }
-
-    /// The profile `@grok` turns will actually run on.
-    pub fn grok_profile(&self) -> &AiProfile {
-        self.resolved_profile(self.grok.profile.as_deref())
     }
 }
 
@@ -243,12 +223,6 @@ pub struct AiDreamer {
     /// Profile name to run this agent on. `None` = the active profile.
     #[serde(default)]
     pub profile: Option<String>,
-    pub model: Option<String>,
-    pub reasoning_effort: Option<String>,
-    /// OpenRouter service tier hint for the dreamer pass. Falls back to
-    /// `connection.service_tier` when `None`. Documented values: `"flex"`,
-    /// `"priority"`.
-    pub service_tier: Option<String>,
     pub run_at: String,
     pub timeout_secs: u64,
     pub max_rounds: usize,
@@ -264,11 +238,6 @@ pub struct AiGrok {
     /// Profile name to run this agent on. `None` = the active profile.
     #[serde(default)]
     pub profile: Option<String>,
-    pub model: Option<String>,
-    pub reasoning_effort: Option<String>,
-    /// OpenRouter service tier hint for `@grok` turns. Falls back to
-    /// `connection.service_tier` when `None`.
-    pub service_tier: Option<String>,
     /// Persona name for the `@grok` alias, used in chat-history identity push
     /// and chat-line rendering (mirrors `AiBehavior::persona_name` for
     /// Aurora). Defaults to `"Grok"`. `#[serde(default = ...)]` keeps v1
@@ -281,9 +250,6 @@ impl Default for AiGrok {
     fn default() -> Self {
         Self {
             profile: None,
-            model: None,
-            reasoning_effort: None,
-            service_tier: None,
             persona_name: default_grok_persona_name(),
         }
     }
@@ -345,7 +311,6 @@ pub struct AiMedia {
     /// Profile name to run this agent on. `None` = the active profile.
     #[serde(default)]
     pub profile: Option<String>,
-    pub model: String,
     pub timeout: u64,
     pub max_image_size: bytesize::ByteSize,
     pub max_pdf_size: bytesize::ByteSize,
@@ -401,9 +366,6 @@ impl Default for AiDreamer {
         Self {
             enabled: true,
             profile: None,
-            model: None,
-            reasoning_effort: None,
-            service_tier: None,
             run_at: "04:00".into(),
             timeout_secs: 120,
             max_rounds: 20,
@@ -453,7 +415,6 @@ impl Default for AiMedia {
     fn default() -> Self {
         Self {
             profile: None,
-            model: "~google/gemini-flash-latest".into(),
             timeout: 60,
             max_image_size: bytesize::ByteSize::mib(10),
             max_pdf_size: bytesize::ByteSize::mib(25),
@@ -602,13 +563,9 @@ mod tests {
         assert!(s.prefill.is_none());
         assert!(s.web.is_none());
         assert!(s.emotes.is_none());
-        assert_eq!(s.media.model, "~google/gemini-flash-latest");
         assert_eq!(s.media.timeout, 60);
         assert_eq!(s.media.max_image_size.as_u64(), 10 * 1024 * 1024);
         assert!(s.active().service_tier.is_none());
-        assert!(s.dreamer.service_tier.is_none());
-        assert!(s.grok.model.is_none());
-        assert!(s.grok.reasoning_effort.is_none());
-        assert!(s.grok.service_tier.is_none());
+        assert!(s.grok.profile.is_none());
     }
 }

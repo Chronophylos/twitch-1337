@@ -127,15 +127,6 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if patch.ai.dreamer.profile.is_some() {
         into.ai.dreamer.profile = patch.ai.dreamer.profile.clone();
     }
-    if patch.ai.dreamer.model.is_some() {
-        into.ai.dreamer.model = patch.ai.dreamer.model.clone();
-    }
-    if patch.ai.dreamer.reasoning_effort.is_some() {
-        into.ai.dreamer.reasoning_effort = patch.ai.dreamer.reasoning_effort.clone();
-    }
-    if patch.ai.dreamer.service_tier.is_some() {
-        into.ai.dreamer.service_tier = patch.ai.dreamer.service_tier.clone();
-    }
     if let Some(v) = patch.ai.dreamer.run_at.as_ref() {
         into.ai.dreamer.run_at = Some(v.clone());
     }
@@ -151,15 +142,6 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     // AI grok
     if patch.ai.grok.profile.is_some() {
         into.ai.grok.profile = patch.ai.grok.profile.clone();
-    }
-    if patch.ai.grok.model.is_some() {
-        into.ai.grok.model = patch.ai.grok.model.clone();
-    }
-    if patch.ai.grok.reasoning_effort.is_some() {
-        into.ai.grok.reasoning_effort = patch.ai.grok.reasoning_effort.clone();
-    }
-    if patch.ai.grok.service_tier.is_some() {
-        into.ai.grok.service_tier = patch.ai.grok.service_tier.clone();
     }
     // AI prefill
     if let Some(v) = patch.ai.prefill.enabled {
@@ -218,9 +200,6 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     // AI media
     if patch.ai.media.profile.is_some() {
         into.ai.media.profile = patch.ai.media.profile.clone();
-    }
-    if let Some(v) = patch.ai.media.model.as_ref() {
-        into.ai.media.model = Some(v.clone());
     }
     if let Some(v) = patch.ai.media.timeout {
         into.ai.media.timeout = Some(v);
@@ -310,27 +289,22 @@ mod tests {
     };
 
     #[test]
-    fn patch_round_trips_service_tier_on_grok() {
+    fn patch_round_trips_profile_on_grok() {
         let mut into = SettingsOverrides::default();
         let mut patch = SettingsOverrides::default();
-        patch.ai.grok.service_tier = Some(Some("flex".to_string()));
+        patch.ai.grok.profile = Some(Some("cheap".to_string()));
         merge_into(&mut into, &patch);
         assert_eq!(
-            into.ai
-                .grok
-                .service_tier
-                .as_ref()
-                .and_then(|v| v.as_deref()),
-            Some("flex")
+            into.ai.grok.profile.as_ref().and_then(|v| v.as_deref()),
+            Some("cheap")
         );
     }
 
     #[test]
-    fn patch_round_trips_service_tier_on_connection_and_dreamer() {
+    fn patch_round_trips_service_tier_on_connection() {
         let mut into = SettingsOverrides::default();
         let mut patch = SettingsOverrides::default();
         patch.ai.connection.service_tier = Some(Some("flex".to_string()));
-        patch.ai.dreamer.service_tier = Some(Some("priority".to_string()));
         merge_into(&mut into, &patch);
         assert_eq!(
             into.ai
@@ -339,14 +313,6 @@ mod tests {
                 .as_ref()
                 .and_then(|v| v.as_deref()),
             Some("flex")
-        );
-        assert_eq!(
-            into.ai
-                .dreamer
-                .service_tier
-                .as_ref()
-                .and_then(|v| v.as_deref()),
-            Some("priority")
         );
     }
 
