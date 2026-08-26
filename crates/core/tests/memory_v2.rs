@@ -234,7 +234,7 @@ async fn chat_turn_write_quota() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
         .with_settings(|o| {
-            o.ai.behavior.max_writes_per_turn = Some(1); // tight quota
+            o.ai.aurora.max_writes_per_turn = Some(1); // tight quota
         })
         .spawn()
         .await;
@@ -404,7 +404,7 @@ async fn dreamer_uses_its_own_write_cap_not_chat_cap() {
     let bot = TestBotBuilder::new()
         .with_ai()
         .with_settings(|o| {
-            o.ai.behavior.max_writes_per_turn = Some(1);
+            o.ai.aurora.max_writes_per_turn = Some(1);
             o.ai.dreamer.max_writes_per_turn = Some(8);
         })
         .spawn()
