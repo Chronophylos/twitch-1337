@@ -157,6 +157,7 @@ impl SettingsStore {
         let mut current = load_overrides_async(&self.path).await?.unwrap_or_default();
         let prior_resolved = Settings::resolve(&self.defaults, &current);
         mutate(&mut current);
+        strip_ai_agents_legacy(&mut current);
         let unresolved = Settings::resolve_unhealed(&self.defaults, &current);
         let ctx = super::ValidationContext {
             channel: self.boot_channel.clone(),
@@ -942,6 +943,56 @@ mod tests {
         assert_eq!(persisted.ai.history.batch_size, None);
         assert_eq!(persisted.ai.history.max_notes, None);
         assert_eq!(persisted.ai.history.merge_width, None);
+    }
+
+    #[tokio::test]
+    async fn apply_with_on_v6_omits_legacy_ai_agent_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            r#"(
+                schema_version: 6,
+                ai: (
+                    active_profile: Some("cheap"),
+                    behavior: (persona_name: Some("Nyx")),
+                    history: (
+                        recap_profile: Some(Some("tiny")),
+                        batch_size: Some(7),
+                        max_notes: Some(4),
+                        merge_width: Some(2),
+                    ),
+                    profiles: Some([
+                        (name: "cheap", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "m", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                        (name: "tiny", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "t", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                    ]),
+                ),
+            )"#,
+        )
+        .unwrap();
+        let audit = Arc::new(MemoryAuditLog::new());
+        let (store, _handle) =
+            SettingsStore::open(dir.path(), audit, "test_chan").expect("open v6 file");
+
+        store
+            .apply_with(
+                |current| current.schedules = Some(Vec::new()),
+                Actor {
+                    user_id: "1".into(),
+                    user_login: "tester".into(),
+                },
+            )
+            .await
+            .expect("apply_with");
+
+        let body = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
+        assert!(!body.contains("active_profile"), "{body}");
+        assert!(!body.contains("behavior:"), "{body}");
+        assert!(!body.contains("recap_profile"), "{body}");
+        assert!(!body.contains("batch_size"), "{body}");
+        assert!(!body.contains("max_notes"), "{body}");
+        assert!(!body.contains("merge_width"), "{body}");
     }
 
     #[tokio::test]
