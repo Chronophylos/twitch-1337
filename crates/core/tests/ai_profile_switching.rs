@@ -21,18 +21,18 @@ fn profile(name: &str, model: &str) -> AiProfile {
     }
 }
 
-/// Flipping `ai.active_profile` on the live settings handle must change the
+/// Flipping `ai.aurora.profile` on the live settings handle must change the
 /// model the very next `!ai` turn sends, with no bot restart. This is the
 /// behavior `LlmRegistry::resolve` exists to deliver: every call site
-/// re-resolves the active profile at turn time instead of caching a client
+/// re-resolves Aurora's profile at turn time instead of caching a client
 /// (and its model) once at startup.
 #[tokio::test]
-async fn switching_the_active_profile_changes_the_model_sent() {
+async fn switching_the_aurora_profile_changes_the_model_sent() {
     let mut bot = TestBotBuilder::new().with_ai().spawn().await;
 
     let mut s = (*bot.settings.load_full()).clone();
     s.ai.profiles = vec![profile("a", "model-a"), profile("b", "model-b")];
-    s.ai.active_profile = "a".into();
+    s.ai.aurora.profile = "a".into();
     bot.settings.store(Arc::new(s));
 
     bot.llm.push_tool_message("ok-a");
@@ -41,7 +41,7 @@ async fn switching_the_active_profile_changes_the_model_sent() {
     assert_eq!(bot.llm.last_model().as_deref(), Some("model-a"));
 
     let mut s = (*bot.settings.load_full()).clone();
-    s.ai.active_profile = "b".into();
+    s.ai.aurora.profile = "b".into();
     bot.settings.store(Arc::new(s));
 
     bot.llm.push_tool_message("ok-b");
