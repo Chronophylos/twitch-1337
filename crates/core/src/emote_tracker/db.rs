@@ -2,8 +2,8 @@ use eyre::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::types::{
-    EmoteMeaningRow, EmoteRow, NewSetEvent, NewUsageEvent, SetEventKind, SetEventListFilter,
-    SetEventRow, UsageEventListFilter, UsageEventRow,
+    EmoteMeaningRow, EmoteRow, EmoteUsageCount, NewSetEvent, NewUsageEvent, SetEventKind,
+    SetEventListFilter, SetEventRow, UsageEventListFilter, UsageEventRow, UserUsageCount,
 };
 
 /// Insert or update a curated emote meaning row.
@@ -264,6 +264,150 @@ pub fn catalog_is_empty(conn: &Connection) -> Result<bool> {
 
 fn clamp_limit(limit: u32) -> u32 {
     limit.clamp(1, 1000)
+}
+
+/// Top emotes ranked by unflagged use count within a window.
+///
+/// Joins the catalog so counts surface current names even after renames;
+/// events for deleted rows cannot exist (`foreign_keys = ON`).
+pub fn top_usage_counts(
+    conn: &Connection,
+    since_ms: Option<i64>,
+    limit: u32,
+) -> Result<Vec<EmoteUsageCount>> {
+    let limit = clamp_limit(limit);
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut sql = String::from(
+        "SELECT e.emote_id, e.name, COUNT(*) AS cnt, MAX(u.at) AS last_at
+         FROM usage_events u JOIN emotes e ON e.emote_id = u.emote_id
+         WHERE u.flagged = 0",
+    );
+    if let Some(since) = since_ms {
+        sql.push_str(" AND u.at >= ?");
+        params.push(Box::new(since));
+    }
+    sql.push_str(" GROUP BY e.emote_id ORDER BY cnt DESC, last_at DESC LIMIT ?");
+    params.push(Box::new(i64::from(limit)));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(std::convert::AsRef::as_ref).collect();
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+        Ok(EmoteUsageCount {
+            emote_id: row.get(0)?,
+            name: row.get(1)?,
+            count: row.get(2)?,
+            last_used_at: row.get(3)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// Resolve a viewer reference to their stable `twitch_user_id`.
+///
+/// Accepts a Twitch login (matched case-insensitively against the newest
+/// observed row carrying that login). Returns `None` when the login has never
+/// been seen; ids work when passed straight through at the call site.
+pub fn resolve_viewer_twitch_id(conn: &Connection, login: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT twitch_user_id FROM usage_events
+         WHERE login = ?1 COLLATE NOCASE
+         ORDER BY at DESC, id DESC LIMIT 1",
+        params![login],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+/// Per-emote unflagged counts for one viewer, plus their total across all
+/// emotes within the window.
+pub fn usage_counts_for_user(
+    conn: &Connection,
+    twitch_user_id: &str,
+    since_ms: Option<i64>,
+    limit: u32,
+) -> Result<(i64, Vec<EmoteUsageCount>)> {
+    let limit = clamp_limit(limit);
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        vec![Box::new(twitch_user_id.to_owned())];
+    let mut where_extra = String::new();
+    if let Some(since) = since_ms {
+        where_extra.push_str(" AND u.at >= ?");
+        params.push(Box::new(since));
+    }
+    let total_sql = format!(
+        "SELECT COUNT(*)
+         FROM usage_events u
+         WHERE u.flagged = 0 AND u.twitch_user_id = ?{where_extra}"
+    );
+    let total_params: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(AsRef::as_ref).collect();
+    let total: i64 = conn.query_row(&total_sql, total_params.as_slice(), |r| r.get(0))?;
+
+    params.push(Box::new(i64::from(limit)));
+    let top_sql = format!(
+        "SELECT e.emote_id, e.name, COUNT(*) AS cnt, MAX(u.at) AS last_at
+         FROM usage_events u JOIN emotes e ON e.emote_id = u.emote_id
+         WHERE u.flagged = 0 AND u.twitch_user_id = ?{where_extra}
+         GROUP BY e.emote_id ORDER BY cnt DESC, last_at DESC LIMIT ?"
+    );
+    let mut stmt = conn.prepare(&top_sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(std::convert::AsRef::as_ref).collect();
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+        Ok(EmoteUsageCount {
+            emote_id: row.get(0)?,
+            name: row.get(1)?,
+            count: row.get(2)?,
+            last_used_at: row.get(3)?,
+        })
+    })?;
+    let top = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok((total, top))
+}
+
+/// Total unflagged uses plus per-viewer ranking for one emote within a window.
+pub fn usage_counts_of_emote(
+    conn: &Connection,
+    emote_id: &str,
+    since_ms: Option<i64>,
+    limit: u32,
+) -> Result<(i64, Vec<UserUsageCount>)> {
+    let limit = clamp_limit(limit);
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(emote_id.to_owned())];
+    let mut where_extra = String::new();
+    if let Some(since) = since_ms {
+        where_extra.push_str(" AND at >= ?");
+        params.push(Box::new(since));
+    }
+    let total_sql = format!(
+        "SELECT COUNT(*) FROM usage_events WHERE emote_id = ?1 AND flagged = 0{where_extra}"
+    );
+    let total_params: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(AsRef::as_ref).collect();
+    let total: i64 = conn.query_row(&total_sql, total_params.as_slice(), |r| r.get(0))?;
+
+    // Bare `login` picks one row per group; any observed casing or a None is
+    // still an accurate label for that viewer, never a misattribution.
+    params.push(Box::new(i64::from(limit)));
+    let top_sql = format!(
+        "SELECT twitch_user_id, login, COUNT(*) AS cnt, MAX(at) AS last_at
+         FROM usage_events
+         WHERE emote_id = ?1 AND flagged = 0{where_extra}
+         GROUP BY twitch_user_id ORDER BY cnt DESC, last_at DESC LIMIT ?"
+    );
+    let mut stmt = conn.prepare(&top_sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(AsRef::as_ref).collect();
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+        Ok(UserUsageCount {
+            twitch_user_id: row.get(0)?,
+            login: row.get(1)?,
+            count: row.get(2)?,
+            last_used_at: row.get(3)?,
+        })
+    })?;
+    let top = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok((total, top))
 }
 
 pub fn list_set_events(conn: &Connection, filter: &SetEventListFilter) -> Result<Vec<SetEventRow>> {

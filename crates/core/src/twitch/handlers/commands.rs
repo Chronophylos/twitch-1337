@@ -259,7 +259,7 @@ where
         cmd_list.push(Box::new(aviation::commands::info::InfoCommand::new(tx)));
     }
 
-    if let Some(tracker) = emote_tracker {
+    if let Some(tracker) = emote_tracker.clone() {
         cmd_list.push(Box::new(commands::emote::EmoteCommand::new(tracker)));
     }
 
@@ -338,6 +338,7 @@ where
                 repology,
                 pronouns,
                 dhl,
+                emote_tracker,
                 langfuse: langfuse.clone(),
                 model_catalog,
                 mouths: mouths.clone(),
