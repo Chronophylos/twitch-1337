@@ -3,6 +3,7 @@ pub mod command;
 pub mod content;
 pub mod dhl_tool;
 pub mod doener_tool;
+pub mod emote_stats_tool;
 pub mod emote_tool;
 pub mod langfuse;
 pub mod memory;

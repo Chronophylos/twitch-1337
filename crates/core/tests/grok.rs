@@ -617,6 +617,69 @@ async fn track_shipment_is_absent_when_dhl_is_unconfigured() {
 }
 
 #[tokio::test]
+async fn emote_stats_is_registered_for_aurora_and_grok_when_tracker_is_open() {
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_emote_tracker()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+        })
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("checked");
+    bot.llm.push_tool_message("checked too");
+
+    let mut bot = bot;
+    bot.send("alice", "@grok welche emotes sind im trend").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+    bot.send("bob", "!ai emote statistik bitte").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+
+    let calls = bot.llm.tool_calls();
+    let grok_tools: Vec<_> = calls[0].tools.iter().map(|t| t.name.as_str()).collect();
+    let ai_tools: Vec<_> = calls[1].tools.iter().map(|t| t.name.as_str()).collect();
+
+    assert!(
+        ai_tools.contains(&"emote_stats"),
+        "aurora should expose emote_stats with an open tracker: {ai_tools:?}"
+    );
+    assert!(
+        grok_tools.contains(&"emote_stats"),
+        "grok should expose emote_stats like search_emotes does: {grok_tools:?}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn emote_stats_is_absent_when_emote_tracker_is_closed() {
+    // No .with_emote_tracker(): a closed tracker must hide the tool entirely
+    // rather than register one that always fails.
+    let bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+        })
+        .spawn()
+        .await;
+    bot.llm.push_tool_message("ok");
+
+    let mut bot = bot;
+    bot.send("bob", "!ai emote statistik bitte").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+
+    let calls = bot.llm.tool_calls();
+    let ai_tools: Vec<_> = calls[0].tools.iter().map(|t| t.name.as_str()).collect();
+
+    assert!(
+        !ai_tools.contains(&"emote_stats"),
+        "closed tracker must hide emote_stats: {ai_tools:?}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
 async fn aurora_package_appendix_does_not_describe_search_fallback() {
     let bot = TestBotBuilder::new()
         .with_ai()
