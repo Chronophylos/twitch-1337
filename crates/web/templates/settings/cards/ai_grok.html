@@ -4,18 +4,17 @@
 <section id="sec-ai-grok" class="settings-card" data-section="ai_grok">
   <header class="settings-card-head">
     <div>
-      <h2>AI · Grok</h2>
-      <p>Which provider profile the @grok alias runs on. Empty = the active profile. Model, effort and tier come from that profile.</p>
+      <h2>Grok</h2>
+      <p>Provider profile and persona name for the @grok agent.</p>
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
   <div class="settings-rows">
-    {% let grok_profile = current.ai.grok.profile.as_deref().unwrap_or("") %}
+    {% let grok_profile = current.ai.grok.profile.as_str() %}
     <div class="settings-row" data-section="ai_grok">
-      {% call m::row_head("profile", "Which provider profile this agent runs on. Empty = the active profile.") %}{% endcall %}
+      {% call m::row_head("ai.grok.profile", "Which provider profile this agent runs on.") %}{% endcall %}
       <div class="row-control-cell">
-        <select name="ai_grok_profile" data-key="ai.grok.profile" data-default="">
-          <option value="">(active profile)</option>
+        <select name="ai_grok_profile" data-key="ai.grok.profile" data-default="{{ defaults.ai.grok.profile }}" required>
           {% for p in current.ai.profiles %}
           <option value="{{ p.name }}"{% if grok_profile == p.name %} selected{% endif %}>{{ p.name }}</option>
           {% endfor %}
@@ -23,8 +22,11 @@
       </div>
       <div class="row-right">
         {% call m::row_reset("ai.grok.profile") %}{% endcall %}
-        <span class="row-default">default <span class="mono">(active profile)</span></span>
+        <span class="row-default">default <span class="mono">{{ defaults.ai.grok.profile }}</span></span>
       </div>
     </div>
+    {% call m::text_row("ai_grok", "ai_grok_persona_name", "ai.grok.persona_name",
+       "Persona name used for chat-history identity and rendered chat lines.",
+       current.ai.grok.persona_name, defaults.ai.grok.persona_name, "Grok") %}{% endcall %}
   </div>
 </section>

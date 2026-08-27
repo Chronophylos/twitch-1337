@@ -91,12 +91,18 @@ pub struct AiOverrides {
     /// removed.
     #[serde(default)]
     pub profiles: Option<Vec<crate::settings::ai::AiProfile>>,
-    #[serde(default)]
+    /// MIGRATION(ai-agents): pre-schema-7 active pointer. Read-only; stripped on persist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_profile: Option<String>,
-    #[serde(default)]
+    /// MIGRATION(ai-agents): pre-schema-7 aurora knobs. Read-only; stripped on persist.
+    #[serde(default, skip_serializing_if = "ai_behavior_overrides_is_empty")]
     pub behavior: AiBehaviorOverrides,
     #[serde(default)]
+    pub aurora: AiAuroraOverrides,
+    #[serde(default)]
     pub history: AiHistoryOverrides,
+    #[serde(default)]
+    pub recap: AiRecapOverrides,
     #[serde(default)]
     pub memory: AiMemoryOverrides,
     #[serde(default)]
@@ -149,6 +155,36 @@ pub struct AiBehaviorOverrides {
     pub reply_hard_chars: Option<usize>,
 }
 
+fn ai_behavior_overrides_is_empty(b: &AiBehaviorOverrides) -> bool {
+    b.max_turn_rounds.is_none()
+        && b.max_writes_per_turn.is_none()
+        && b.persona_name.is_none()
+        && b.min_response_delay_ms.is_none()
+        && b.reply_target_chars.is_none()
+        && b.reply_soft_chars.is_none()
+        && b.reply_hard_chars.is_none()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiAuroraOverrides {
+    #[serde(default)]
+    pub profile: Option<Option<String>>,
+    #[serde(default)]
+    pub max_turn_rounds: Option<usize>,
+    #[serde(default)]
+    pub max_writes_per_turn: Option<usize>,
+    #[serde(default)]
+    pub persona_name: Option<String>,
+    #[serde(default)]
+    pub min_response_delay_ms: Option<u64>,
+    #[serde(default)]
+    pub reply_target_chars: Option<usize>,
+    #[serde(default)]
+    pub reply_soft_chars: Option<usize>,
+    #[serde(default)]
+    pub reply_hard_chars: Option<usize>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiHistoryOverrides {
     #[serde(default)]
@@ -159,8 +195,24 @@ pub struct AiHistoryOverrides {
     pub n: Option<u64>,
     #[serde(default)]
     pub ai_channel_n: Option<u64>,
-    #[serde(default)]
+    // MIGRATION(ai-agents): pre-schema-7 Recap fields. Read-only; stripped on persist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recap_profile: Option<Option<String>>,
+    // MIGRATION(ai-agents)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<u64>,
+    // MIGRATION(ai-agents)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_notes: Option<u64>,
+    // MIGRATION(ai-agents)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_width: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiRecapOverrides {
+    #[serde(default)]
+    pub profile: Option<Option<String>>,
     #[serde(default)]
     pub batch_size: Option<u64>,
     #[serde(default)]
@@ -206,6 +258,8 @@ pub struct AiDreamerOverrides {
 pub struct AiGrokOverrides {
     #[serde(default)]
     pub profile: Option<Option<String>>,
+    #[serde(default)]
+    pub persona_name: Option<String>,
 }
 
 /// `threshold` is `f64`; manual `PartialEq`/`Eq` use bit comparison.

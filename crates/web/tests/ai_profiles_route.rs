@@ -2,7 +2,7 @@
 //! profile carries `base_url`/`key`, the same credential surface that was
 //! owner-only on `main`).
 
-use std::sync::Arc;
+use std::{fs, sync::Arc};
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
@@ -50,6 +50,26 @@ async fn seed_profiles(state: &twitch_1337_web::WebState, rows: Vec<AiProfile>, 
                 ai: twitch_1337_core::settings::AiOverrides {
                     profiles: Some(rows),
                     active_profile: Some(active.to_owned()),
+                    aurora: twitch_1337_core::settings::overrides::AiAuroraOverrides {
+                        profile: Some(Some(active.to_owned())),
+                        ..Default::default()
+                    },
+                    grok: twitch_1337_core::settings::overrides::AiGrokOverrides {
+                        profile: Some(Some(active.to_owned())),
+                        ..Default::default()
+                    },
+                    dreamer: twitch_1337_core::settings::overrides::AiDreamerOverrides {
+                        profile: Some(Some(active.to_owned())),
+                        ..Default::default()
+                    },
+                    media: twitch_1337_core::settings::overrides::AiMediaOverrides {
+                        profile: Some(Some(active.to_owned())),
+                        ..Default::default()
+                    },
+                    recap: twitch_1337_core::settings::overrides::AiRecapOverrides {
+                        profile: Some(None),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 ..Default::default()
@@ -64,7 +84,7 @@ async fn seed_profiles(state: &twitch_1337_web::WebState, rows: Vec<AiProfile>, 
 }
 
 #[tokio::test]
-async fn activate_switches_the_active_profile() {
+async fn activate_route_is_unmounted() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
@@ -81,8 +101,8 @@ async fn activate_switches_the_active_profile() {
         .body(Body::from(body))
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    assert_eq!(state.settings.load().ai.active_profile, "b");
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    assert_eq!(state.settings.load().ai.aurora.profile, "a");
 }
 
 #[tokio::test]
@@ -108,7 +128,7 @@ async fn delete_refuses_to_remove_the_last_profile() {
 }
 
 #[tokio::test]
-async fn delete_refuses_to_remove_the_active_profile() {
+async fn delete_refuses_to_remove_a_profile_used_by_aurora() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     seed_profiles(&state, vec![profile("a"), profile("b")], "b").await;
@@ -128,7 +148,7 @@ async fn delete_refuses_to_remove_the_active_profile() {
     assert_eq!(res.status(), StatusCode::OK); // re-rendered with an error
     let settings = state.settings.load();
     assert_eq!(settings.ai.profiles.len(), 2);
-    assert_eq!(settings.ai.active_profile, "b");
+    assert_eq!(settings.ai.aurora.profile, "b");
 }
 
 /// I1: `/ai-profiles` moved from mod-gated to owner-gated because a profile
@@ -181,7 +201,7 @@ async fn the_page_is_owner_gated() {
 /// I1, mutating side: a mod's POST must be refused before it ever reaches
 /// the handler, not just the page GET.
 #[tokio::test]
-async fn mod_cannot_activate_a_profile() {
+async fn mod_cannot_delete_a_profile() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
@@ -192,7 +212,7 @@ async fn mod_cannot_activate_a_profile() {
     let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
     let req = Request::builder()
         .method("POST")
-        .uri("/ai-profiles/b/activate")
+        .uri("/ai-profiles/b/delete")
         .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .body(Body::from(body))
@@ -200,9 +220,9 @@ async fn mod_cannot_activate_a_profile() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
     assert_eq!(
-        state.settings.load().ai.active_profile,
-        "a",
-        "a mod's activate must not take effect"
+        state.settings.load().ai.profiles.len(),
+        2,
+        "a mod's delete must not take effect"
     );
 }
 
@@ -331,8 +351,13 @@ async fn list_page_puts_ai_profiles_in_system_nav_and_does_not_split_labels() {
         "AI Profiles must sit under System, not Operate"
     );
     assert!(
-        html.contains("stat-strip two"),
-        "overview strip must be two columns so the active name can use the width"
+        !html.contains("/activate"),
+        "activate action must be absent"
+    );
+    assert!(!html.contains(">ACTIVE<"), "active chip must be absent");
+    assert!(
+        !html.contains("active-profile"),
+        "active-profile styling must be absent"
     );
     assert!(
         html.contains(
@@ -343,10 +368,45 @@ async fn list_page_puts_ai_profiles_in_system_nav_and_does_not_split_labels() {
 }
 
 #[tokio::test]
-async fn edit_renaming_active_profile_carries_the_pointer() {
+async fn edit_renaming_profile_rewrites_all_five_agent_pointers() {
     install_crypto();
-    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    let (state, _td_p, _td_m, td_s) = build_state_with_all_dirs(empty_helix()).await;
     seed_profiles(&state, vec![profile("old")], "old").await;
+    state
+        .settings_store
+        .apply(
+            SettingsOverrides {
+                ai: twitch_1337_core::settings::AiOverrides {
+                    recap: twitch_1337_core::settings::overrides::AiRecapOverrides {
+                        profile: Some(Some("old".into())),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            Actor {
+                user_id: "test".into(),
+                user_login: "test".into(),
+            },
+        )
+        .await
+        .expect("seed recap pointer");
+    let settings_path = td_s.path().join("settings.ron");
+    let mut legacy: SettingsOverrides =
+        ron::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    legacy.ai.active_profile = Some("old".into());
+    legacy.ai.aurora.profile = None;
+    legacy.ai.grok.profile = None;
+    legacy.ai.dreamer.profile = None;
+    legacy.ai.media.profile = None;
+    legacy.ai.recap.profile = None;
+    legacy.ai.history.recap_profile = Some(Some("old".into()));
+    fs::write(
+        &settings_path,
+        ron::ser::to_string_pretty(&legacy, ron::ser::PrettyConfig::default()).unwrap(),
+    )
+    .unwrap();
     let (sid, csrf_cookie, bare_csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
@@ -363,38 +423,87 @@ async fn edit_renaming_active_profile_carries_the_pointer() {
         .body(Body::from(body))
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let status = res.status();
+    let html = body_string(res).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{html}");
     let settings = state.settings.load();
     assert_eq!(settings.ai.profiles.len(), 1);
     assert_eq!(settings.ai.profiles[0].name, "renamed");
-    assert_eq!(settings.ai.active_profile, "renamed");
+    assert_eq!(settings.ai.aurora.profile, "renamed");
+    assert_eq!(settings.ai.grok.profile, "renamed");
+    assert_eq!(settings.ai.dreamer.profile, "renamed");
+    assert_eq!(settings.ai.media.profile, "renamed");
+    assert_eq!(settings.ai.recap.profile.as_deref(), Some("renamed"));
+
+    let persisted: SettingsOverrides =
+        ron::from_str(&fs::read_to_string(settings_path).unwrap()).unwrap();
+    assert_eq!(persisted.ai.aurora.profile, Some(Some("renamed".into())));
+    assert_eq!(persisted.ai.grok.profile, Some(Some("renamed".into())));
+    assert_eq!(persisted.ai.dreamer.profile, Some(Some("renamed".into())));
+    assert_eq!(persisted.ai.media.profile, Some(Some("renamed".into())));
+    assert_eq!(persisted.ai.recap.profile, Some(Some("renamed".into())));
 }
 
 #[tokio::test]
-async fn delete_clears_dangling_sub_agent_pointers() {
+async fn delete_refuses_every_referenced_agent_pointer() {
+    for pointer in ["aurora", "grok", "dreamer", "media", "recap"] {
+        install_crypto();
+        let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+        seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
+        let mut ai = twitch_1337_core::settings::AiOverrides::default();
+        match pointer {
+            "aurora" => ai.aurora.profile = Some(Some("b".into())),
+            "grok" => ai.grok.profile = Some(Some("b".into())),
+            "dreamer" => ai.dreamer.profile = Some(Some("b".into())),
+            "media" => ai.media.profile = Some(Some("b".into())),
+            "recap" => ai.recap.profile = Some(Some("b".into())),
+            _ => unreachable!(),
+        }
+        state
+            .settings_store
+            .apply(
+                SettingsOverrides {
+                    ai,
+                    ..Default::default()
+                },
+                Actor {
+                    user_id: "test".into(),
+                    user_login: "test".into(),
+                },
+            )
+            .await
+            .expect("seed agent pointer");
+        let (sid, csrf_cookie, bare_csrf) =
+            insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+        let app = build_router(state.clone());
+
+        let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/ai-profiles/b/delete")
+            .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "{pointer} reference must block delete"
+        );
+        assert_eq!(
+            state.settings.load().ai.profiles.len(),
+            2,
+            "{pointer} reference must preserve the profile"
+        );
+    }
+}
+
+#[tokio::test]
+async fn delete_allows_unreferenced_profile_when_recap_is_off() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
-    state
-        .settings_store
-        .apply(
-            SettingsOverrides {
-                ai: twitch_1337_core::settings::AiOverrides {
-                    dreamer: twitch_1337_core::settings::overrides::AiDreamerOverrides {
-                        profile: Some(Some("b".into())),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            Actor {
-                user_id: "test".into(),
-                user_login: "test".into(),
-            },
-        )
-        .await
-        .expect("seed dreamer pointer");
     let (sid, csrf_cookie, bare_csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
@@ -411,7 +520,8 @@ async fn delete_clears_dangling_sub_agent_pointers() {
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     let settings = state.settings.load();
     assert_eq!(settings.ai.profiles.len(), 1);
-    assert_eq!(settings.ai.dreamer.profile, None);
+    assert_eq!(settings.ai.profiles[0].name, "a");
+    assert_eq!(settings.ai.recap.profile, None);
 }
 
 /// A rename that also trips store-level validation (an unsupported
@@ -461,11 +571,11 @@ async fn edit_rename_with_rejected_field_reopens_under_the_original_name_then_su
         settings.ai.profiles[0].name, "old",
         "rejected rename must not persist"
     );
-    assert_eq!(settings.ai.active_profile, "old");
+    assert_eq!(settings.ai.aurora.profile, "old");
 
     // Step 2: resubmit the corrected edit to the action the page actually
     // rendered (still "/ai-profiles/old/edit") — the rename must land, and
-    // since "old" was the active profile, the pointer must follow it.
+    // Since Aurora named "old", its pointer must follow it.
     let good_body = format!(
         "_csrf={csrf}&name=renamed&provider=ollama&model=qwen3%3A8b&timeout=30",
         csrf = urlencoding::encode(&bare_csrf),
@@ -485,5 +595,5 @@ async fn edit_rename_with_rejected_field_reopens_under_the_original_name_then_su
         settings.ai.profiles[0].name, "renamed",
         "rename must actually land"
     );
-    assert_eq!(settings.ai.active_profile, "renamed");
+    assert_eq!(settings.ai.aurora.profile, "renamed");
 }

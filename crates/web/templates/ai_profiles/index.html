@@ -5,14 +5,13 @@
 <div class="page-head">
   <div>
     <h1>AI Profiles <span class="muted">({{ total }})</span></h1>
-    <p class="page-sub">Provider connections the bot can switch between — no restart required.</p>
+    <p class="page-sub">Provider connections assigned to AI agents — no restart required.</p>
   </div>
   <a class="btn primary" href="/ai-profiles?new=true">+ New profile</a>
 </div>
 
-<div class="stat-strip two">
+<div class="stat-strip">
   <div class="stat"><div class="stat-label">TOTAL</div><div class="stat-value">{{ total }}</div></div>
-  <div class="stat"><div class="stat-label">ACTIVE</div><div class="stat-value">{{ active_profile }}</div></div>
 </div>
 
 {% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}

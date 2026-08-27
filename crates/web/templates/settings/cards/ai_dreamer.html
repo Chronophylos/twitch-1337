@@ -4,7 +4,7 @@
 <section id="sec-ai-dreamer" class="settings-card{% if !current.ai.dreamer.enabled %} is-card-off{% endif %}" data-section="ai_dreamer">
   <header class="settings-card-head">
     <div>
-      <h2>AI · Dreamer</h2>
+      <h2>Dreamer</h2>
       <p>Nightly ritual that rewrites memory from yesterday's transcript. Model, effort and tier come from the selected profile.</p>
       <label class="toggle">
         <input type="checkbox" name="ai_dreamer_enabled" data-card-toggle value="1"
@@ -20,12 +20,11 @@
      the same hidden input is kept for symmetry with the optional cards. #}
   <input type="hidden" name="ai_dreamer_card_visible" value="1">
   <div class="settings-rows">
-    {% let dreamer_profile = current.ai.dreamer.profile.as_deref().unwrap_or("") %}
+    {% let dreamer_profile = current.ai.dreamer.profile.as_str() %}
     <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
-      {% call m::row_head("profile", "Which provider profile this agent runs on. Empty = the active profile.") %}{% endcall %}
+      {% call m::row_head("profile", "Which provider profile this agent runs on.") %}{% endcall %}
       <div class="row-control-cell">
-        <select name="ai_dreamer_profile" data-key="ai.dreamer.profile" data-default="">
-          <option value="">(active profile)</option>
+        <select name="ai_dreamer_profile" data-key="ai.dreamer.profile" data-default="{{ defaults.ai.dreamer.profile }}" required>
           {% for p in current.ai.profiles %}
           <option value="{{ p.name }}"{% if dreamer_profile == p.name %} selected{% endif %}>{{ p.name }}</option>
           {% endfor %}
@@ -33,7 +32,7 @@
       </div>
       <div class="row-right">
         {% call m::row_reset("ai.dreamer.profile") %}{% endcall %}
-        <span class="row-default">default <span class="mono">(active profile)</span></span>
+        <span class="row-default">default <span class="mono">{{ defaults.ai.dreamer.profile }}</span></span>
       </div>
     </div>
 

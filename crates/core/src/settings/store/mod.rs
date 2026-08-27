@@ -18,9 +18,9 @@ use tracing::{error, info, warn};
 
 use super::audit::{AuditEntry, AuditLog, berlin_now, diff_changes};
 use super::overrides::SettingsOverrides;
-use super::{Settings, SettingsError, SettingsHandle, SettingsSection};
+use super::{SCHEMA_VERSION, Settings, SettingsError, SettingsHandle, SettingsSection};
 use load::{load_or_quarantine, load_overrides_async, quarantine};
-use merge::merge_into;
+use merge::{merge_into, strip_ai_agents_legacy};
 
 const FILE_NAME: &str = "settings.ron";
 
@@ -58,7 +58,7 @@ impl SettingsStore {
         let ctx = super::ValidationContext {
             channel: boot_channel.to_owned(),
         };
-        if let Err(errs) = resolved.validate(&ctx) {
+        if let Err(errs) = resolved.validate_for_load(&ctx) {
             warn!(
                 ?errs,
                 "settings.ron failed validation; falling back to compile defaults"
@@ -117,11 +117,12 @@ impl SettingsStore {
     /// before handing the resolved snapshot here.
     async fn commit(
         &self,
-        current: &SettingsOverrides,
+        current: &mut SettingsOverrides,
         prior_resolved: &Settings,
         resolved: Settings,
         actor: Actor,
     ) -> Result<Settings, SettingsError> {
+        current.schema_version = SCHEMA_VERSION;
         crate::util::persist::atomic_save_ron_async(current, &self.path).await?;
         self.handle.store(Arc::new(resolved.clone()));
         let changes = diff_changes(prior_resolved, &resolved);
@@ -157,6 +158,7 @@ impl SettingsStore {
         let mut current = load_overrides_async(&self.path).await?.unwrap_or_default();
         let prior_resolved = Settings::resolve(&self.defaults, &current);
         mutate(&mut current);
+        strip_ai_agents_legacy(&mut current);
         let unresolved = Settings::resolve_unhealed(&self.defaults, &current);
         let ctx = super::ValidationContext {
             channel: self.boot_channel.clone(),
@@ -165,7 +167,7 @@ impl SettingsStore {
             return Err(SettingsError::Validation(errs));
         }
         let resolved = Settings::resolve(&self.defaults, &current);
-        self.commit(&current, &prior_resolved, resolved, actor)
+        self.commit(&mut current, &prior_resolved, resolved, actor)
             .await
     }
 
@@ -177,6 +179,14 @@ impl SettingsStore {
         let _g = self.write_lock.lock().await;
         let mut current = load_overrides_async(&self.path).await?.unwrap_or_default();
         let prior_resolved = Settings::resolve(&self.defaults, &current);
+        if matches!(
+            section,
+            SettingsSection::AiAurora | SettingsSection::AiRecap | SettingsSection::AiHistory
+        ) {
+            // Preserve the legacy fold before clearing its source section.
+            // The selected new section is reset immediately below.
+            strip_ai_agents_legacy(&mut current);
+        }
         match section {
             SettingsSection::Cooldowns => current.cooldowns = Default::default(),
             SettingsSection::Pings => current.pings = Default::default(),
@@ -187,7 +197,8 @@ impl SettingsStore {
                 // the legacy block, or it folds straight back in on resolve.
                 current.ai.connection = Default::default();
             }
-            SettingsSection::AiBehavior => current.ai.behavior = Default::default(),
+            SettingsSection::AiAurora => current.ai.aurora = Default::default(),
+            SettingsSection::AiRecap => current.ai.recap = Default::default(),
             SettingsSection::AiHistory => current.ai.history = Default::default(),
             SettingsSection::AiMemory => current.ai.memory = Default::default(),
             SettingsSection::AiDreamer => current.ai.dreamer = Default::default(),
@@ -214,8 +225,9 @@ impl SettingsStore {
             SettingsSection::WebRuntime => current.web = Default::default(),
             SettingsSection::Schedules => current.schedules = None,
         }
+        strip_ai_agents_legacy(&mut current);
         let resolved = Settings::resolve(&self.defaults, &current);
-        self.commit(&current, &prior_resolved, resolved, actor)
+        self.commit(&mut current, &prior_resolved, resolved, actor)
             .await
     }
 }
@@ -301,7 +313,7 @@ mod tests {
         let mut patch = SettingsOverrides::default();
         patch.ai.history.length = Some(50);
         patch.ai.history.n = Some(20);
-        patch.ai.history.batch_size = Some(40);
+        patch.ai.recap.batch_size = Some(40);
 
         let error = store
             .apply(
@@ -372,7 +384,15 @@ mod tests {
             user_login: "tester".into(),
         };
         store.apply(patch, actor).await.expect("apply");
-        assert_eq!(handle.load().ai.active().model, "o5-pro");
+        assert_eq!(
+            handle
+                .load()
+                .ai
+                .by_name(&handle.load().ai.aurora.profile)
+                .unwrap()
+                .model,
+            "o5-pro"
+        );
         let reopened = SettingsStore::open(
             store.path.parent().unwrap(),
             Arc::new(crate::settings::audit::MemoryAuditLog::new()),
@@ -380,7 +400,15 @@ mod tests {
         )
         .expect("reopen")
         .1;
-        assert_eq!(reopened.load().ai.active().model, "o5-pro");
+        assert_eq!(
+            reopened
+                .load()
+                .ai
+                .by_name(&reopened.load().ai.aurora.profile)
+                .unwrap()
+                .model,
+            "o5-pro"
+        );
         let _ = handle;
     }
 
@@ -421,7 +449,50 @@ mod tests {
             SettingsStore::open(dir.path(), audit, "test_chan").expect("open legacy settings");
         let settings = handle.load();
         assert_eq!(settings.ai.history.length, 50);
-        assert!(settings.ai.history.n + settings.ai.history.batch_size <= 50);
+        assert!(settings.ai.history.n + settings.ai.recap.batch_size <= 50);
+        assert!(dir.path().join(FILE_NAME).exists());
+        assert!(
+            std::fs::read_dir(dir.path())
+                .expect("read data dir")
+                .all(|entry| !entry
+                    .expect("dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.ron.quarantine-"))
+        );
+    }
+
+    #[test]
+    fn stale_aurora_profile_opens_without_quarantine() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut overrides = SettingsOverrides::default();
+        overrides.ai.profiles = Some(vec![crate::settings::AiProfile {
+            name: "working".into(),
+            provider: crate::settings::AiProvider::Ollama,
+            base_url: Some("http://127.0.0.1:1".into()),
+            model: "model".into(),
+            ..Default::default()
+        }]);
+        overrides.ai.aurora.profile = Some(Some("deleted".into()));
+        overrides.ai.grok.profile = Some(Some("working".into()));
+        overrides.ai.dreamer.profile = Some(Some("working".into()));
+        overrides.ai.media.profile = Some(Some("working".into()));
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            ron::ser::to_string(&overrides).expect("serialize override"),
+        )
+        .expect("write settings");
+
+        let audit = Arc::new(MemoryAuditLog::new());
+        let (_store, handle) =
+            SettingsStore::open(dir.path(), audit, "test_chan").expect("open stale settings");
+        assert_eq!(handle.load().ai.aurora.profile, "deleted");
+        assert!(
+            crate::llm_factory::LlmRegistry::new(None, handle)
+                .resolve_named("deleted")
+                .is_none(),
+            "the stale agent must skip rather than fall back"
+        );
         assert!(dir.path().join(FILE_NAME).exists());
         assert!(
             std::fs::read_dir(dir.path())
@@ -507,7 +578,7 @@ mod tests {
 
         // (c) the folded profile carries the backend/model but drops the
         // caps-incompatible reasoning_effort.
-        let p = s.ai.active();
+        let p = s.ai.by_name(&s.ai.aurora.profile).unwrap();
         assert_eq!(p.provider, crate::settings::provider::AiProvider::Ollama);
         assert_eq!(p.reasoning_effort, None);
     }
@@ -559,8 +630,24 @@ mod tests {
                     .starts_with("settings.ron.quarantine-")),
             "settings.ron must not be quarantined"
         );
-        assert_eq!(handle.load().ai.active().model, "some-model");
-        assert!(handle.load().ai.active().key.is_none());
+        assert_eq!(
+            handle
+                .load()
+                .ai
+                .by_name(&handle.load().ai.aurora.profile)
+                .unwrap()
+                .model,
+            "some-model"
+        );
+        assert!(
+            handle
+                .load()
+                .ai
+                .by_name(&handle.load().ai.aurora.profile)
+                .unwrap()
+                .key
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -825,6 +912,267 @@ mod tests {
             .expect("reset");
         assert!(s.twitch.hidden_admins.is_empty());
         assert_eq!(s.twitch.expected_latency, 250); // perm reset does not touch channels
+    }
+
+    #[tokio::test]
+    async fn v7_save_omits_legacy_active_profile_and_behavior() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            r#"(
+                schema_version: 6,
+                ai: (
+                    active_profile: Some("cheap"),
+                    behavior: (persona_name: Some("Nyx")),
+                    history: (
+                        recap_profile: Some(Some("tiny")),
+                        batch_size: Some(7),
+                        max_notes: Some(4),
+                        merge_width: Some(2),
+                    ),
+                    grok: (profile: Some(None)),
+                    dreamer: (profile: Some(Some("   "))),
+                    profiles: Some([
+                        (name: "cheap", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "m", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                        (name: "tiny", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "t", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                    ]),
+                ),
+            )"#,
+        )
+        .unwrap();
+        let audit = Arc::new(MemoryAuditLog::new());
+        let (store, _handle) =
+            SettingsStore::open(dir.path(), audit, "test_chan").expect("open v6 file");
+        let mut patch = SettingsOverrides::default();
+        patch.ai.aurora.persona_name = Some("Nyx".into());
+        let saved = store
+            .apply(
+                patch,
+                Actor {
+                    user_id: "1".into(),
+                    user_login: "tester".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let body = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
+        assert!(!body.contains("active_profile"), "{body}");
+        assert!(!body.contains("behavior:"), "{body}");
+        assert!(!body.contains("recap_profile"), "{body}");
+        assert!(body.contains("aurora:"), "{body}");
+        assert_eq!(saved.ai.aurora.profile, "cheap");
+        assert_eq!(saved.ai.grok.profile, "cheap");
+        assert_eq!(saved.ai.dreamer.profile, "cheap");
+        assert_eq!(saved.ai.media.profile, "cheap");
+        assert_eq!(saved.ai.recap.profile.as_deref(), Some("tiny"));
+        assert_eq!(saved.ai.recap.batch_size, 7);
+        assert_eq!(saved.ai.recap.max_notes, 4);
+        assert_eq!(saved.ai.recap.merge_width, 2);
+
+        let persisted: SettingsOverrides = ron::from_str(&body).expect("parse persisted v7");
+        assert_eq!(persisted.schema_version, 7);
+        assert_eq!(persisted.ai.aurora.profile, Some(Some("cheap".to_string())));
+        assert_eq!(persisted.ai.grok.profile, Some(Some("cheap".to_string())));
+        assert_eq!(
+            persisted.ai.dreamer.profile,
+            Some(Some("cheap".to_string()))
+        );
+        assert_eq!(persisted.ai.media.profile, Some(Some("cheap".to_string())));
+        assert_eq!(persisted.ai.recap.profile, Some(Some("tiny".to_string())));
+        assert_eq!(persisted.ai.recap.batch_size, Some(7));
+        assert_eq!(persisted.ai.recap.max_notes, Some(4));
+        assert_eq!(persisted.ai.recap.merge_width, Some(2));
+        assert_eq!(persisted.ai.history.recap_profile, None);
+        assert_eq!(persisted.ai.history.batch_size, None);
+        assert_eq!(persisted.ai.history.max_notes, None);
+        assert_eq!(persisted.ai.history.merge_width, None);
+    }
+
+    #[tokio::test]
+    async fn apply_with_on_v6_omits_legacy_ai_agent_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            r#"(
+                schema_version: 6,
+                ai: (
+                    active_profile: Some("cheap"),
+                    behavior: (persona_name: Some("Nyx")),
+                    history: (
+                        recap_profile: Some(Some("tiny")),
+                        batch_size: Some(7),
+                        max_notes: Some(4),
+                        merge_width: Some(2),
+                    ),
+                    profiles: Some([
+                        (name: "cheap", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "m", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                        (name: "tiny", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "t", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                    ]),
+                ),
+            )"#,
+        )
+        .unwrap();
+        let audit = Arc::new(MemoryAuditLog::new());
+        let (store, _handle) =
+            SettingsStore::open(dir.path(), audit, "test_chan").expect("open v6 file");
+
+        store
+            .apply_with(
+                |current| current.schedules = Some(Vec::new()),
+                Actor {
+                    user_id: "1".into(),
+                    user_login: "tester".into(),
+                },
+            )
+            .await
+            .expect("apply_with");
+
+        let body = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
+        assert!(!body.contains("active_profile"), "{body}");
+        assert!(!body.contains("behavior:"), "{body}");
+        assert!(!body.contains("recap_profile"), "{body}");
+        let persisted: SettingsOverrides = ron::from_str(&body).expect("parse persisted v7");
+        assert_eq!(persisted.schema_version, 7);
+        assert_eq!(persisted.ai.history.batch_size, None);
+        assert_eq!(persisted.ai.history.max_notes, None);
+        assert_eq!(persisted.ai.history.merge_width, None);
+    }
+
+    #[tokio::test]
+    async fn history_reset_on_v6_preserves_recap() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            r#"(
+                schema_version: 6,
+                ai: (
+                    active_profile: Some("cheap"),
+                    history: (
+                        length: Some(77),
+                        n: Some(17),
+                        recap_profile: Some(Some("tiny")),
+                        batch_size: Some(7),
+                        max_notes: Some(4),
+                        merge_width: Some(2),
+                    ),
+                    profiles: Some([
+                        (name: "cheap", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "m", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                        (name: "tiny", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "t", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                    ]),
+                ),
+            )"#,
+        )
+        .unwrap();
+        let audit = Arc::new(MemoryAuditLog::new());
+        let (store, _handle) =
+            SettingsStore::open(dir.path(), audit, "test_chan").expect("open v6 file");
+
+        let reset = store
+            .reset(
+                SettingsSection::AiHistory,
+                Actor {
+                    user_id: "1".into(),
+                    user_login: "tester".into(),
+                },
+            )
+            .await
+            .expect("reset history");
+
+        assert_eq!(reset.ai.history, crate::settings::AiHistory::default());
+        assert_eq!(reset.ai.recap.profile.as_deref(), Some("tiny"));
+        assert_eq!(reset.ai.recap.batch_size, 7);
+        assert_eq!(reset.ai.recap.max_notes, 4);
+        assert_eq!(reset.ai.recap.merge_width, 2);
+    }
+
+    #[tokio::test]
+    async fn aurora_reset_on_v6_uses_compiled_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            r#"(
+                schema_version: 6,
+                ai: (
+                    active_profile: Some("cheap"),
+                    behavior: (
+                        persona_name: Some("Nyx"),
+                        max_turn_rounds: Some(19),
+                    ),
+                    profiles: Some([
+                        (name: "default", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "d", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                        (name: "cheap", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "m", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                    ]),
+                ),
+            )"#,
+        )
+        .unwrap();
+        let audit = Arc::new(MemoryAuditLog::new());
+        let (store, _handle) =
+            SettingsStore::open(dir.path(), audit, "test_chan").expect("open v6 file");
+
+        let reset = store
+            .reset(
+                SettingsSection::AiAurora,
+                Actor {
+                    user_id: "1".into(),
+                    user_login: "tester".into(),
+                },
+            )
+            .await
+            .expect("reset aurora");
+
+        assert_eq!(reset.ai.aurora, crate::settings::AiAurora::default());
+    }
+
+    #[tokio::test]
+    async fn recap_reset_on_v6_turns_recap_off() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            r#"(
+                schema_version: 6,
+                ai: (
+                    active_profile: Some("cheap"),
+                    history: (
+                        recap_profile: Some(Some("tiny")),
+                        batch_size: Some(7),
+                        max_notes: Some(4),
+                        merge_width: Some(2),
+                    ),
+                    profiles: Some([
+                        (name: "cheap", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "m", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                        (name: "tiny", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "t", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                    ]),
+                ),
+            )"#,
+        )
+        .unwrap();
+        let audit = Arc::new(MemoryAuditLog::new());
+        let (store, _handle) =
+            SettingsStore::open(dir.path(), audit, "test_chan").expect("open v6 file");
+
+        let reset = store
+            .reset(
+                SettingsSection::AiRecap,
+                Actor {
+                    user_id: "1".into(),
+                    user_login: "tester".into(),
+                },
+            )
+            .await
+            .expect("reset recap");
+
+        assert_eq!(reset.ai.recap, crate::settings::AiRecap::default());
     }
 
     #[tokio::test]

@@ -32,6 +32,22 @@ fn bound<T: PartialOrd + std::fmt::Display>(
 
 impl Settings {
     pub fn validate(&self, ctx: &ValidationContext) -> Result<(), Vec<FieldError>> {
+        self.validate_with(ctx, true)
+    }
+
+    /// Boot-time validation keeps rejecting malformed values but tolerates
+    /// agent pointers whose profile row disappeared. Runtime resolution skips
+    /// only that agent; every save still uses [`Self::validate`] as the hard
+    /// referential-integrity gate.
+    pub(crate) fn validate_for_load(&self, ctx: &ValidationContext) -> Result<(), Vec<FieldError>> {
+        self.validate_with(ctx, false)
+    }
+
+    fn validate_with(
+        &self,
+        ctx: &ValidationContext,
+        validate_agent_profile_targets: bool,
+    ) -> Result<(), Vec<FieldError>> {
         let mut errs = Vec::new();
         bound("cooldowns.ai", self.cooldowns.ai, 1, 3600, &mut errs);
         bound("cooldowns.news", self.cooldowns.news, 1, 3600, &mut errs);
@@ -51,7 +67,7 @@ impl Settings {
             &mut errs,
         );
         bound("pings.cooldown", self.pings.cooldown, 1, 86_400, &mut errs);
-        validate_ai(&self.ai, &mut errs);
+        validate_ai(&self.ai, validate_agent_profile_targets, &mut errs);
         if self.twitch.expected_latency > 1000 {
             errs.push(FieldError {
                 field: "twitch.expected_latency".into(),
@@ -185,7 +201,7 @@ impl Settings {
     }
 }
 
-fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
+fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut Vec<FieldError>) {
     fn err(errs: &mut Vec<FieldError>, field: &str, msg: String) {
         errs.push(FieldError {
             field: field.into(),
@@ -193,62 +209,62 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
         });
     }
 
-    if !(1..=20).contains(&ai.behavior.max_turn_rounds) {
+    if !(1..=20).contains(&ai.aurora.max_turn_rounds) {
         err(
             errs,
-            "ai.behavior.max_turn_rounds",
-            format!("must be 1..=20 (got {})", ai.behavior.max_turn_rounds),
+            "ai.aurora.max_turn_rounds",
+            format!("must be 1..=20 (got {})", ai.aurora.max_turn_rounds),
         );
     }
-    if ai.behavior.min_response_delay_ms > 60_000 {
+    if ai.aurora.min_response_delay_ms > 60_000 {
         err(
             errs,
-            "ai.behavior.min_response_delay_ms",
+            "ai.aurora.min_response_delay_ms",
             format!(
                 "must be 0..=60000 (got {})",
-                ai.behavior.min_response_delay_ms
+                ai.aurora.min_response_delay_ms
             ),
         );
     }
-    if !(1..=64).contains(&ai.behavior.max_writes_per_turn) {
+    if !(1..=64).contains(&ai.aurora.max_writes_per_turn) {
         err(
             errs,
-            "ai.behavior.max_writes_per_turn",
-            format!("must be 1..=64 (got {})", ai.behavior.max_writes_per_turn),
+            "ai.aurora.max_writes_per_turn",
+            format!("must be 1..=64 (got {})", ai.aurora.max_writes_per_turn),
         );
     }
-    if ai.behavior.persona_name.trim().is_empty() {
-        err(errs, "ai.behavior.persona_name", "must not be empty".into());
+    if ai.aurora.persona_name.trim().is_empty() {
+        err(errs, "ai.aurora.persona_name", "must not be empty".into());
+    }
+    if ai.grok.persona_name.trim().is_empty() {
+        err(errs, "ai.grok.persona_name", "must not be empty".into());
     }
     for (field, value) in [
-        (
-            "ai.behavior.reply_target_chars",
-            ai.behavior.reply_target_chars,
-        ),
-        ("ai.behavior.reply_soft_chars", ai.behavior.reply_soft_chars),
-        ("ai.behavior.reply_hard_chars", ai.behavior.reply_hard_chars),
+        ("ai.aurora.reply_target_chars", ai.aurora.reply_target_chars),
+        ("ai.aurora.reply_soft_chars", ai.aurora.reply_soft_chars),
+        ("ai.aurora.reply_hard_chars", ai.aurora.reply_hard_chars),
     ] {
         if !(1..=500).contains(&value) {
             err(errs, field, format!("must be 1..=500 (got {value})"));
         }
     }
-    if ai.behavior.reply_target_chars > ai.behavior.reply_soft_chars {
+    if ai.aurora.reply_target_chars > ai.aurora.reply_soft_chars {
         err(
             errs,
-            "ai.behavior.reply_target_chars",
+            "ai.aurora.reply_target_chars",
             format!(
                 "must be <= reply_soft_chars ({} > {})",
-                ai.behavior.reply_target_chars, ai.behavior.reply_soft_chars
+                ai.aurora.reply_target_chars, ai.aurora.reply_soft_chars
             ),
         );
     }
-    if ai.behavior.reply_soft_chars > ai.behavior.reply_hard_chars {
+    if ai.aurora.reply_soft_chars > ai.aurora.reply_hard_chars {
         err(
             errs,
-            "ai.behavior.reply_soft_chars",
+            "ai.aurora.reply_soft_chars",
             format!(
                 "must be <= reply_hard_chars ({} > {})",
-                ai.behavior.reply_soft_chars, ai.behavior.reply_hard_chars
+                ai.aurora.reply_soft_chars, ai.aurora.reply_hard_chars
             ),
         );
     }
@@ -272,56 +288,44 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
     if ai.history.ai_channel_n == 0 {
         err(errs, "ai.history.ai_channel_n", "must be >= 1".into());
     }
-    if ai.history.batch_size == 0 {
-        err(errs, "ai.history.batch_size", "must be >= 1".into());
+    if ai.recap.batch_size == 0 {
+        err(errs, "ai.recap.batch_size", "must be >= 1".into());
     }
-    if ai.history.max_notes == 0 {
-        err(errs, "ai.history.max_notes", "must be >= 1".into());
+    if ai.recap.max_notes == 0 {
+        err(errs, "ai.recap.max_notes", "must be >= 1".into());
     }
-    if ai.history.merge_width < 2 || ai.history.merge_width > ai.history.max_notes {
+    if ai.recap.merge_width < 2 || ai.recap.merge_width > ai.recap.max_notes {
         err(
             errs,
-            "ai.history.merge_width",
+            "ai.recap.merge_width",
             format!(
                 "must be 2..=max_notes (got {} vs max_notes {})",
-                ai.history.merge_width, ai.history.max_notes
+                ai.recap.merge_width, ai.recap.max_notes
             ),
         );
     }
-    if ai.history.length > 0
-        && ai.history.length < ai.history.n.saturating_add(ai.history.batch_size)
+    if ai.history.length > 0 && ai.history.length < ai.history.n.saturating_add(ai.recap.batch_size)
     {
         err(
             errs,
             "ai.history.length",
             format!(
                 "must be >= n + batch_size ({} < {} + {})",
-                ai.history.length, ai.history.n, ai.history.batch_size
+                ai.history.length, ai.history.n, ai.recap.batch_size
             ),
         );
     }
     if ai.history.ai_channel_length > 0
         && ai.history.ai_channel_length
-            < ai.history
-                .ai_channel_n
-                .saturating_add(ai.history.batch_size)
+            < ai.history.ai_channel_n.saturating_add(ai.recap.batch_size)
     {
         err(
             errs,
             "ai.history.ai_channel_length",
             format!(
                 "must be >= ai_channel_n + batch_size ({} < {} + {})",
-                ai.history.ai_channel_length, ai.history.ai_channel_n, ai.history.batch_size
+                ai.history.ai_channel_length, ai.history.ai_channel_n, ai.recap.batch_size
             ),
-        );
-    }
-    if let Some(m) = ai.history.recap_profile.as_deref()
-        && m.trim().is_empty()
-    {
-        err(
-            errs,
-            "ai.history.recap_profile",
-            "must be non-blank when set".into(),
         );
     }
     if ai.history.n > crate::ai::chat_history::MAX_HISTORY_LENGTH {
@@ -376,12 +380,32 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
             "at least one profile is required".into(),
         );
     }
-    if !ai.profiles.is_empty() && ai.by_name(&ai.active_profile).is_none() {
-        err(
-            errs,
-            "ai.active_profile",
-            format!("no profile named {:?}", ai.active_profile),
-        );
+    for (field, name) in [
+        ("ai.aurora.profile", ai.aurora.profile.as_str()),
+        ("ai.grok.profile", ai.grok.profile.as_str()),
+        ("ai.dreamer.profile", ai.dreamer.profile.as_str()),
+        ("ai.media.profile", ai.media.profile.as_str()),
+    ] {
+        if name.trim().is_empty() {
+            err(errs, field, "must not be empty".into());
+        } else if validate_agent_profile_targets && ai.by_name(name).is_none() {
+            err(errs, field, format!("no profile named {name:?}"));
+        }
+    }
+    if let Some(name) = ai.recap.profile.as_deref() {
+        if name.trim().is_empty() {
+            err(
+                errs,
+                "ai.recap.profile",
+                "must be non-blank when set".into(),
+            );
+        } else if validate_agent_profile_targets && ai.by_name(name).is_none() {
+            err(
+                errs,
+                "ai.recap.profile",
+                format!("no profile named {name:?}"),
+            );
+        }
     }
 
     let mut seen: BTreeSet<&str> = BTreeSet::new();
@@ -470,22 +494,6 @@ fn validate_ai(ai: &AiSettings, errs: &mut Vec<FieldError>) {
                     format!("must be one of 'flex' | 'priority' (got {v:?})"),
                 );
             }
-        }
-    }
-
-    for (field, sel) in [
-        ("ai.dreamer.profile", ai.dreamer.profile.as_deref()),
-        ("ai.grok.profile", ai.grok.profile.as_deref()),
-        ("ai.media.profile", ai.media.profile.as_deref()),
-        (
-            "ai.history.recap_profile",
-            ai.history.recap_profile.as_deref(),
-        ),
-    ] {
-        if let Some(name) = sel
-            && ai.by_name(name).is_none()
-        {
-            err(errs, field, format!("no profile named {name:?}"));
         }
     }
 
@@ -610,8 +618,35 @@ mod tests {
     fn with_profiles(list: Vec<AiProfile>, active: &str) -> Settings {
         let mut s = Settings::compiled_defaults();
         s.ai.profiles = list;
-        s.ai.active_profile = active.to_string();
+        s.ai.aurora.profile = active.to_string();
+        s.ai.grok.profile = active.to_string();
+        s.ai.dreamer.profile = active.to_string();
+        s.ai.media.profile = active.to_string();
         s
+    }
+
+    #[test]
+    fn validate_rejects_unknown_aurora_profile() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.aurora.profile = "ghost".into();
+        let errs = s.validate(&ctx()).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.aurora.profile"));
+    }
+
+    #[test]
+    fn validate_allows_empty_recap_profile() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.recap.profile = None;
+        let errs = s.validate(&ctx()).err().unwrap_or_default();
+        assert!(!errs.iter().any(|e| e.field.starts_with("ai.recap.profile")));
+    }
+
+    #[test]
+    fn validate_rejects_empty_grok_persona_name() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.grok.persona_name = "   ".into();
+        let errs = s.validate(&ctx()).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.grok.persona_name"));
     }
 
     #[test]
@@ -699,14 +734,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_empty_profile_list_and_a_dangling_active_pointer() {
+    fn rejects_an_empty_profile_list_and_a_dangling_agent_pointer() {
         let errs = with_profiles(vec![], "x").validate(&ctx()).unwrap_err();
         assert!(errs.iter().any(|e| e.field == "ai.profiles"));
 
         let errs = with_profiles(vec![profile(AiProvider::OpenAi)], "nope")
             .validate(&ctx())
             .unwrap_err();
-        assert!(errs.iter().any(|e| e.field == "ai.active_profile"));
+        assert!(errs.iter().any(|e| e.field == "ai.aurora.profile"));
     }
 
     #[test]
@@ -720,7 +755,7 @@ mod tests {
     #[test]
     fn rejects_a_subagent_profile_that_does_not_exist() {
         let mut s = with_profiles(vec![profile(AiProvider::OpenAi)], "p");
-        s.ai.dreamer.profile = Some("ghost".into());
+        s.ai.dreamer.profile = "ghost".into();
         let errs = s.validate(&ctx()).unwrap_err();
         assert!(errs.iter().any(|e| e.field == "ai.dreamer.profile"));
     }
@@ -728,9 +763,9 @@ mod tests {
     #[test]
     fn rejects_a_recap_profile_that_does_not_exist() {
         let mut s = with_profiles(vec![profile(AiProvider::OpenAi)], "p");
-        s.ai.history.recap_profile = Some("ghost".into());
+        s.ai.recap.profile = Some("ghost".into());
         let errs = s.validate(&ctx()).unwrap_err();
-        assert!(errs.iter().any(|e| e.field == "ai.history.recap_profile"));
+        assert!(errs.iter().any(|e| e.field == "ai.recap.profile"));
     }
 
     #[test]
@@ -760,20 +795,20 @@ mod tests {
     #[test]
     fn validate_rejects_empty_persona_name() {
         let mut s = Settings::compiled_defaults();
-        s.ai.behavior.persona_name = "   ".into();
+        s.ai.aurora.persona_name = "   ".into();
         let errs = s
             .validate(&ValidationContext {
                 channel: "test".into(),
             })
             .expect_err("must fail");
-        assert!(errs.iter().any(|e| e.field == "ai.behavior.persona_name"));
+        assert!(errs.iter().any(|e| e.field == "ai.aurora.persona_name"));
     }
 
     #[test]
     fn history_rejects_length_below_n_plus_batch() {
         let mut s = Settings::compiled_defaults();
         s.ai.history.n = 20;
-        s.ai.history.batch_size = 40;
+        s.ai.recap.batch_size = 40;
         s.ai.history.length = 50; // 50 < 60
         let errs = s
             .validate(&ValidationContext {
@@ -787,42 +822,39 @@ mod tests {
     }
 
     #[test]
-    fn history_rejects_merge_width_one() {
+    fn recap_rejects_merge_width_one() {
         let mut s = Settings::compiled_defaults();
-        s.ai.history.merge_width = 1;
+        s.ai.recap.merge_width = 1;
         let errs = s
             .validate(&ValidationContext {
                 channel: "test".into(),
             })
             .expect_err("must fail");
-        assert!(errs.iter().any(|e| e.field == "ai.history.merge_width"));
+        assert!(errs.iter().any(|e| e.field == "ai.recap.merge_width"));
     }
 
     #[test]
-    fn history_rejects_blank_recap_profile() {
+    fn recap_rejects_blank_profile() {
         let mut s = Settings::compiled_defaults();
-        s.ai.history.recap_profile = Some("   ".into());
+        s.ai.recap.profile = Some("   ".into());
         let errs = s
             .validate(&ValidationContext {
                 channel: "test".into(),
             })
             .expect_err("must fail");
-        assert!(errs.iter().any(|e| e.field == "ai.history.recap_profile"));
+        assert!(errs.iter().any(|e| e.field == "ai.recap.profile"));
     }
 
     #[test]
     fn validate_rejects_max_turn_rounds_out_of_range() {
         let mut s = Settings::compiled_defaults();
-        s.ai.behavior.max_turn_rounds = 0;
+        s.ai.aurora.max_turn_rounds = 0;
         let errs = s
             .validate(&ValidationContext {
                 channel: "test".into(),
             })
             .expect_err("must fail");
-        assert!(
-            errs.iter()
-                .any(|e| e.field == "ai.behavior.max_turn_rounds")
-        );
+        assert!(errs.iter().any(|e| e.field == "ai.aurora.max_turn_rounds"));
     }
 
     fn reply_len_err(s: Settings) -> Vec<crate::settings::FieldError> {
@@ -835,49 +867,43 @@ mod tests {
     #[test]
     fn validate_rejects_reply_target_out_of_range() {
         let mut s = Settings::compiled_defaults();
-        s.ai.behavior.reply_target_chars = 0;
+        s.ai.aurora.reply_target_chars = 0;
         let errs = reply_len_err(s);
         assert!(
             errs.iter()
-                .any(|e| e.field == "ai.behavior.reply_target_chars")
+                .any(|e| e.field == "ai.aurora.reply_target_chars")
         );
     }
 
     #[test]
     fn validate_rejects_reply_hard_above_helix() {
         let mut s = Settings::compiled_defaults();
-        s.ai.behavior.reply_hard_chars = 501;
+        s.ai.aurora.reply_hard_chars = 501;
         let errs = reply_len_err(s);
-        assert!(
-            errs.iter()
-                .any(|e| e.field == "ai.behavior.reply_hard_chars")
-        );
+        assert!(errs.iter().any(|e| e.field == "ai.aurora.reply_hard_chars"));
     }
 
     #[test]
     fn validate_rejects_target_greater_than_soft() {
         let mut s = Settings::compiled_defaults();
-        s.ai.behavior.reply_target_chars = 400;
-        s.ai.behavior.reply_soft_chars = 300;
-        s.ai.behavior.reply_hard_chars = 490;
+        s.ai.aurora.reply_target_chars = 400;
+        s.ai.aurora.reply_soft_chars = 300;
+        s.ai.aurora.reply_hard_chars = 490;
         let errs = reply_len_err(s);
         assert!(
             errs.iter()
-                .any(|e| e.field == "ai.behavior.reply_target_chars")
+                .any(|e| e.field == "ai.aurora.reply_target_chars")
         );
     }
 
     #[test]
     fn validate_rejects_soft_greater_than_hard() {
         let mut s = Settings::compiled_defaults();
-        s.ai.behavior.reply_target_chars = 200;
-        s.ai.behavior.reply_soft_chars = 400;
-        s.ai.behavior.reply_hard_chars = 300;
+        s.ai.aurora.reply_target_chars = 200;
+        s.ai.aurora.reply_soft_chars = 400;
+        s.ai.aurora.reply_hard_chars = 300;
         let errs = reply_len_err(s);
-        assert!(
-            errs.iter()
-                .any(|e| e.field == "ai.behavior.reply_soft_chars")
-        );
+        assert!(errs.iter().any(|e| e.field == "ai.aurora.reply_soft_chars"));
     }
 
     #[test]

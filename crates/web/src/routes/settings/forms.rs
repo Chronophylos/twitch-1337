@@ -5,13 +5,13 @@
 
 use serde::Deserialize;
 use twitch_1337_core::settings::overrides::{
-    AiBehaviorOverrides, AiConnectionOverrides, AiDreamerOverrides, AiEmotesOverrides,
+    AiAuroraOverrides, AiConnectionOverrides, AiDreamerOverrides, AiEmotesOverrides,
     AiGrokOverrides, AiHistoryOverrides, AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides,
-    AiWebOverrides, AviationstackOverrides, EmoteTrackerOverrides, PotatAttributionOverrides,
-    SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
+    AiRecapOverrides, AiWebOverrides, AviationstackOverrides, EmoteTrackerOverrides,
+    PotatAttributionOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
 };
 use twitch_1337_core::settings::{
-    AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides,
+    AiOverrides, CooldownsOverrides, FieldError, PingsOverrides, SettingsOverrides,
 };
 
 use super::SaveForm;
@@ -45,12 +45,34 @@ fn parse_id_list(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// Maps a submitted profile `<select>` value to the sub-agent's `profile`
-/// override: empty (the "(active profile)" option) means "inherit the
-/// active profile" (`None`); anything else names the profile to pin to.
+/// Trims an optional profile `<select>` value, where empty explicitly disables
+/// the feature.
 fn opt_str(s: &str) -> Option<String> {
     let t = s.trim();
     (!t.is_empty()).then(|| t.to_string())
+}
+
+/// Required profile fields must always remain explicit pointers. The save
+/// handler rejects blanks before conversion, so this must never encode an
+/// inherit/clear operation as `Some(None)`.
+fn required_profile(s: &str) -> Option<Option<String>> {
+    Some(Some(s.trim().to_owned()))
+}
+
+pub(super) fn required_agent_profile_errors(form: &SaveForm) -> Vec<FieldError> {
+    [
+        ("ai.aurora.profile", form.ai_aurora_profile.as_str()),
+        ("ai.grok.profile", form.ai_grok_profile.as_str()),
+        ("ai.dreamer.profile", form.ai_dreamer_profile.as_str()),
+        ("ai.media.profile", form.ai_media_profile.as_str()),
+    ]
+    .into_iter()
+    .filter(|(_, value)| value.trim().is_empty())
+    .map(|(field, _)| FieldError {
+        field: field.to_owned(),
+        message: "must not be empty".to_owned(),
+    })
+    .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -104,36 +126,36 @@ impl PingsForm {
 }
 
 #[derive(Default, Deserialize)]
-struct AiBehaviorForm {
+struct AiAuroraForm {
     #[serde(default)]
-    ai_behavior_max_turn_rounds: Option<usize>,
+    ai_aurora_profile: String,
     #[serde(default)]
-    ai_behavior_max_writes_per_turn: Option<usize>,
+    ai_aurora_max_turn_rounds: Option<usize>,
     #[serde(default)]
-    ai_behavior_persona_name: Option<String>,
+    ai_aurora_max_writes_per_turn: Option<usize>,
     #[serde(default)]
-    ai_behavior_min_response_delay_ms: Option<u64>,
+    ai_aurora_persona_name: Option<String>,
     #[serde(default)]
-    ai_behavior_reply_target_chars: Option<usize>,
+    ai_aurora_min_response_delay_ms: Option<u64>,
     #[serde(default)]
-    ai_behavior_reply_soft_chars: Option<usize>,
+    ai_aurora_reply_target_chars: Option<usize>,
     #[serde(default)]
-    ai_behavior_reply_hard_chars: Option<usize>,
+    ai_aurora_reply_soft_chars: Option<usize>,
+    #[serde(default)]
+    ai_aurora_reply_hard_chars: Option<usize>,
 }
 
-impl AiBehaviorForm {
-    fn into_overrides(self) -> AiBehaviorOverrides {
-        AiBehaviorOverrides {
-            max_turn_rounds: self.ai_behavior_max_turn_rounds,
-            max_writes_per_turn: self.ai_behavior_max_writes_per_turn,
-            persona_name: self
-                .ai_behavior_persona_name
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty()),
-            min_response_delay_ms: self.ai_behavior_min_response_delay_ms,
-            reply_target_chars: self.ai_behavior_reply_target_chars,
-            reply_soft_chars: self.ai_behavior_reply_soft_chars,
-            reply_hard_chars: self.ai_behavior_reply_hard_chars,
+impl AiAuroraForm {
+    fn into_overrides(self) -> AiAuroraOverrides {
+        AiAuroraOverrides {
+            profile: required_profile(&self.ai_aurora_profile),
+            max_turn_rounds: self.ai_aurora_max_turn_rounds,
+            max_writes_per_turn: self.ai_aurora_max_writes_per_turn,
+            persona_name: self.ai_aurora_persona_name.map(|s| s.trim().to_string()),
+            min_response_delay_ms: self.ai_aurora_min_response_delay_ms,
+            reply_target_chars: self.ai_aurora_reply_target_chars,
+            reply_soft_chars: self.ai_aurora_reply_soft_chars,
+            reply_hard_chars: self.ai_aurora_reply_hard_chars,
         }
     }
 }
@@ -148,14 +170,6 @@ struct AiHistoryForm {
     ai_history_n: Option<u64>,
     #[serde(default)]
     ai_history_ai_channel_n: Option<u64>,
-    #[serde(default)]
-    ai_history_recap_profile: String,
-    #[serde(default)]
-    ai_history_batch_size: Option<u64>,
-    #[serde(default)]
-    ai_history_max_notes: Option<u64>,
-    #[serde(default)]
-    ai_history_merge_width: Option<u64>,
 }
 
 impl AiHistoryForm {
@@ -165,10 +179,30 @@ impl AiHistoryForm {
             ai_channel_length: self.ai_history_ai_channel_length,
             n: self.ai_history_n,
             ai_channel_n: self.ai_history_ai_channel_n,
-            recap_profile: Some(opt_str(&self.ai_history_recap_profile)),
-            batch_size: self.ai_history_batch_size,
-            max_notes: self.ai_history_max_notes,
-            merge_width: self.ai_history_merge_width,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct AiRecapForm {
+    #[serde(default)]
+    ai_recap_profile: String,
+    #[serde(default)]
+    ai_recap_batch_size: Option<u64>,
+    #[serde(default)]
+    ai_recap_max_notes: Option<u64>,
+    #[serde(default)]
+    ai_recap_merge_width: Option<u64>,
+}
+
+impl AiRecapForm {
+    fn into_overrides(self) -> AiRecapOverrides {
+        AiRecapOverrides {
+            profile: Some(opt_str(&self.ai_recap_profile)),
+            batch_size: self.ai_recap_batch_size,
+            max_notes: self.ai_recap_max_notes,
+            merge_width: self.ai_recap_merge_width,
         }
     }
 }
@@ -221,7 +255,7 @@ struct AiDreamerForm {
 impl AiDreamerForm {
     fn into_overrides(self) -> AiDreamerOverrides {
         AiDreamerOverrides {
-            profile: Some(opt_str(&self.ai_dreamer_profile)),
+            profile: required_profile(&self.ai_dreamer_profile),
             // Dreamer card always renders, so checkbox semantics mirror
             // `ping_public`: missing key = false, present = true.
             enabled: Some(self.ai_dreamer_enabled.is_some()),
@@ -237,12 +271,15 @@ impl AiDreamerForm {
 struct AiGrokForm {
     #[serde(default)]
     ai_grok_profile: String,
+    #[serde(default)]
+    ai_grok_persona_name: Option<String>,
 }
 
 impl AiGrokForm {
     fn into_overrides(self) -> AiGrokOverrides {
         AiGrokOverrides {
-            profile: Some(opt_str(&self.ai_grok_profile)),
+            profile: required_profile(&self.ai_grok_profile),
+            persona_name: self.ai_grok_persona_name.map(|s| s.trim().to_string()),
         }
     }
 }
@@ -374,7 +411,7 @@ struct AiMediaForm {
 impl AiMediaForm {
     fn into_overrides(self) -> AiMediaOverrides {
         AiMediaOverrides {
-            profile: Some(opt_str(&self.ai_media_profile)),
+            profile: required_profile(&self.ai_media_profile),
             timeout: self.ai_media_timeout,
             max_image_size: self
                 .ai_media_max_image_size
@@ -560,14 +597,18 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             // removing it would drop a live deployment's existing override
             // on the next save.
             connection: AiConnectionOverrides::default(),
-            behavior: AiBehaviorForm {
-                ai_behavior_max_turn_rounds: form.ai_behavior_max_turn_rounds,
-                ai_behavior_max_writes_per_turn: form.ai_behavior_max_writes_per_turn,
-                ai_behavior_persona_name: form.ai_behavior_persona_name,
-                ai_behavior_min_response_delay_ms: form.ai_behavior_min_response_delay_ms,
-                ai_behavior_reply_target_chars: form.ai_behavior_reply_target_chars,
-                ai_behavior_reply_soft_chars: form.ai_behavior_reply_soft_chars,
-                ai_behavior_reply_hard_chars: form.ai_behavior_reply_hard_chars,
+            // MIGRATION(ai-agents): legacy fields are read-only and stripped
+            // from the next persisted schema-7 save.
+            behavior: Default::default(),
+            aurora: AiAuroraForm {
+                ai_aurora_profile: form.ai_aurora_profile,
+                ai_aurora_max_turn_rounds: form.ai_aurora_max_turn_rounds,
+                ai_aurora_max_writes_per_turn: form.ai_aurora_max_writes_per_turn,
+                ai_aurora_persona_name: form.ai_aurora_persona_name,
+                ai_aurora_min_response_delay_ms: form.ai_aurora_min_response_delay_ms,
+                ai_aurora_reply_target_chars: form.ai_aurora_reply_target_chars,
+                ai_aurora_reply_soft_chars: form.ai_aurora_reply_soft_chars,
+                ai_aurora_reply_hard_chars: form.ai_aurora_reply_hard_chars,
             }
             .into_overrides(),
             history: AiHistoryForm {
@@ -575,10 +616,13 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
                 ai_history_ai_channel_length: form.ai_history_ai_channel_length,
                 ai_history_n: form.ai_history_n,
                 ai_history_ai_channel_n: form.ai_history_ai_channel_n,
-                ai_history_recap_profile: form.ai_history_recap_profile,
-                ai_history_batch_size: form.ai_history_batch_size,
-                ai_history_max_notes: form.ai_history_max_notes,
-                ai_history_merge_width: form.ai_history_merge_width,
+            }
+            .into_overrides(),
+            recap: AiRecapForm {
+                ai_recap_profile: form.ai_recap_profile,
+                ai_recap_batch_size: form.ai_recap_batch_size,
+                ai_recap_max_notes: form.ai_recap_max_notes,
+                ai_recap_merge_width: form.ai_recap_merge_width,
             }
             .into_overrides(),
             memory: AiMemoryForm {
@@ -601,6 +645,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             .into_overrides(),
             grok: AiGrokForm {
                 ai_grok_profile: form.ai_grok_profile,
+                ai_grok_persona_name: form.ai_grok_persona_name,
             }
             .into_overrides(),
             prefill: AiPrefillForm {
@@ -721,14 +766,21 @@ mod tests {
     }
 
     #[test]
-    fn opt_str_empty_or_whitespace_means_inherit() {
+    fn opt_str_trims_names_and_rejects_blank_values() {
         assert_eq!(opt_str(""), None);
         assert_eq!(opt_str("   "), None);
         assert_eq!(opt_str("cheap"), Some("cheap".to_string()));
     }
 
     #[test]
-    fn dreamer_grok_media_profile_overrides_round_trip() {
+    fn agent_profile_overrides_round_trip() {
+        let aurora = AiAuroraForm {
+            ai_aurora_profile: "cheap".to_string(),
+            ..Default::default()
+        }
+        .into_overrides();
+        assert_eq!(aurora.profile, Some(Some("cheap".to_string())));
+
         let dream = AiDreamerForm {
             ai_dreamer_profile: "cheap".to_string(),
             ..Default::default()
@@ -736,14 +788,13 @@ mod tests {
         .into_overrides();
         assert_eq!(dream.profile, Some(Some("cheap".to_string())));
 
-        let dream_cleared = AiDreamerForm::default().into_overrides();
-        assert_eq!(dream_cleared.profile, Some(None));
-
         let grok = AiGrokForm {
             ai_grok_profile: "cheap".to_string(),
+            ai_grok_persona_name: Some(" Grok Prime ".to_string()),
         }
         .into_overrides();
         assert_eq!(grok.profile, Some(Some("cheap".to_string())));
+        assert_eq!(grok.persona_name.as_deref(), Some("Grok Prime"));
 
         let media = AiMediaForm {
             ai_media_profile: "cheap".to_string(),
@@ -752,14 +803,14 @@ mod tests {
         .into_overrides();
         assert_eq!(media.profile, Some(Some("cheap".to_string())));
 
-        let recap = AiHistoryForm {
-            ai_history_recap_profile: "cheap".to_string(),
+        let recap = AiRecapForm {
+            ai_recap_profile: "cheap".to_string(),
             ..Default::default()
         }
         .into_overrides();
-        assert_eq!(recap.recap_profile, Some(Some("cheap".to_string())));
+        assert_eq!(recap.profile, Some(Some("cheap".to_string())));
 
-        let recap_cleared = AiHistoryForm::default().into_overrides();
-        assert_eq!(recap_cleared.recap_profile, Some(None));
+        let recap_cleared = AiRecapForm::default().into_overrides();
+        assert_eq!(recap_cleared.profile, Some(None));
     }
 }

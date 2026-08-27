@@ -27,8 +27,8 @@ mod validation;
 pub mod web;
 
 pub use ai::{
-    AiBackendKind, AiBehavior, AiDreamer, AiEmotes, AiGrok, AiHistory, AiMedia, AiMemory,
-    AiPrefill, AiProfile, AiSettings, AiWeb,
+    AiAurora, AiBackendKind, AiDreamer, AiEmotes, AiGrok, AiHistory, AiMedia, AiMemory, AiPrefill,
+    AiProfile, AiRecap, AiSettings, AiWeb,
 };
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
@@ -52,7 +52,7 @@ use thiserror::Error;
 
 pub type SettingsHandle = Arc<ArcSwap<Settings>>;
 
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Settings {
@@ -88,7 +88,8 @@ pub enum SettingsSection {
     Cooldowns,
     Pings,
     AiProfiles,
-    AiBehavior,
+    AiAurora,
+    AiRecap,
     AiHistory,
     AiMemory,
     AiDreamer,
@@ -166,13 +167,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compiled_defaults_v6_layout() {
+    fn compiled_defaults_v7_layout() {
         let s = Settings::compiled_defaults();
-        assert_eq!(s.schema_version, 6);
+        assert_eq!(s.schema_version, 7);
         assert_eq!(s.ai, AiSettings::default());
         assert_eq!(s.ai.profiles.len(), 1);
-        assert_eq!(s.ai.active_profile, "default");
-        assert_eq!(s.ai.active().provider, AiProvider::OpenRouter);
+        assert_eq!(s.ai.aurora.profile, "default");
+        assert_eq!(
+            s.ai.by_name(&s.ai.aurora.profile).unwrap().provider,
+            AiProvider::OpenRouter
+        );
         assert_eq!(s.twitch, TwitchRuntime::default());
         assert_eq!(s.aviationstack, AviationstackSettings::default());
         assert_eq!(s.suspend, SuspendSettings::default());

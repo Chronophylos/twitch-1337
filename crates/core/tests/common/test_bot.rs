@@ -63,12 +63,12 @@ fn normalize_test_history_overrides(o: &mut twitch_1337::settings::SettingsOverr
     let defaults = twitch_1337::settings::Settings::compiled_defaults();
     let n = o.ai.history.n.unwrap_or(defaults.ai.history.n);
     let batch =
-        o.ai.history
+        o.ai.recap
             .batch_size
-            .unwrap_or(defaults.ai.history.batch_size);
+            .unwrap_or(defaults.ai.recap.batch_size);
     if length < n.saturating_add(batch) {
         o.ai.history.n = Some(1);
-        o.ai.history.batch_size = Some(1);
+        o.ai.recap.batch_size = Some(1);
     }
 }
 

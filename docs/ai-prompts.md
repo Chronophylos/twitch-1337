@@ -27,8 +27,8 @@ The loader runs a simple `str::replace` pass before sending. Available tokens:
 | `{date}` | Today's Berlin-local date, `YYYY-MM-DD` | all |
 | `{model}` | Display name. OpenRouter: from provider catalog (normalized). Otherwise: same as `{model_id}`. | `system.md` |
 | `{model_id}` | Raw model id sent to the API (`ai.connection.model`). | `system.md` |
-| `{reply_target}` | Aurora's target reply length (`ai.behavior.reply_target_chars`, default 480). | `system.md` |
-| `{reply_hard}` | Aurora's hard trim ceiling (`ai.behavior.reply_hard_chars`, default 490). | `system.md` |
+| `{reply_target}` | Aurora's target reply length (`ai.aurora.reply_target_chars`, default 480). | `system.md` |
+| `{reply_hard}` | Aurora's hard trim ceiling (`ai.aurora.reply_hard_chars`, default 490). | `system.md` |
 
 Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no error, no warning. Check spelling.
 
@@ -44,7 +44,7 @@ Unknown tokens (e.g. typos like `{user_name}`) are left as literal text — no e
 
 **Replies**. The model's final assistant text (returned when it makes no more tool calls) is sent to chat as a single line, after control-char stripping and the rewrite/clamp path in `prepare_agent_reply`. Newlines collapse into a single chat line. There is no `say` tool — encourage the model to do memory updates first, then end the turn with the reply text.
 
-**Length nudge**. Aurora's `system.md` interpolates `{reply_target}` / `{reply_hard}` from `ai.behavior` (defaults 480 / 490), managed at `/settings → AI · Behavior`. After the tool loop, a reply over `reply_soft_chars` (default 490) gets one no-tools rewrite aimed at the soft limit; if that fails or the line is still over `reply_hard_chars`, it is clamped there. `@grok` keeps the baked "≤480, hard 500" copy in `grok.md` and still rewords/clamps at 490. The 480-byte IRC clamp does not run on agent replies.
+**Length nudge**. Aurora's `system.md` interpolates `{reply_target}` / `{reply_hard}` from `ai.aurora` (defaults 480 / 490), managed at `/settings → Agents · Aurora`. After the tool loop, a reply over `reply_soft_chars` (default 490) gets one no-tools rewrite aimed at the soft limit; if that fails or the line is still over `reply_hard_chars`, it is clamped there. `@grok` keeps the baked "≤480, hard 500" copy in `grok.md` and still rewords/clamps at 490. The 480-byte IRC clamp does not run on agent replies.
 
 **Prefix stability (caching).** The chat-turn system message is built so Gemini's implicit prompt cache hits (cached tokens bill at 0.25x). `build_chat_turn_messages` in `inject.rs` enforces the split: the stable **prefix** is substituted `system.md`, the tool appendices, and durable SOUL/LORE/user memory; **Recap** is a suffix after Memory and may change as the batcher flushes or coarsens notes. **Recent Chat** is the N-line tail in the user message (not in the system message). Everything else per-turn (the relevant-emotes block, scratch, `ai_instructions.md`, the instruction) also goes in the user message. Two rules keep the prefix stable: do not interpolate per-speaker tokens into `system.md`, and do not append per-turn content before Memory in the system message. Both reintroduce a cache miss every turn.
 

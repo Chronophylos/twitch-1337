@@ -13,7 +13,7 @@ use super::{
 impl Settings {
     pub fn resolve(defaults: &Settings, overrides: &overrides::SettingsOverrides) -> Settings {
         let mut resolved = Self::resolve_unhealed(defaults, overrides);
-        heal_recap_history(&mut resolved.ai.history);
+        heal_recap_history(&mut resolved.ai.history, &mut resolved.ai.recap);
         resolved
     }
 
@@ -135,20 +135,23 @@ impl Settings {
     }
 }
 
-fn heal_recap_history(history: &mut crate::settings::ai::AiHistory) {
+fn heal_recap_history(
+    history: &mut crate::settings::ai::AiHistory,
+    recap: &mut crate::settings::ai::AiRecap,
+) {
     heal_history_window(
         "ai.history.length",
         &mut history.length,
         "ai.history.n",
         &mut history.n,
-        &mut history.batch_size,
+        &mut recap.batch_size,
     );
     heal_history_window(
         "ai.history.ai_channel_length",
         &mut history.ai_channel_length,
         "ai.history.ai_channel_n",
         &mut history.ai_channel_n,
-        &mut history.batch_size,
+        &mut recap.batch_size,
     );
 }
 
@@ -189,103 +192,88 @@ fn heal_history_window(
 }
 
 fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
-    use super::ai::{AiBehavior, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory};
+    use super::ai::{AiAurora, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory, AiRecap};
 
     let profiles = resolve_profiles(defaults, o);
-    let active_profile = o
+    let legacy_active = o
         .active_profile
-        .clone()
-        .or_else(|| {
-            // MIGRATION(ai-profiles): a legacy connection block always
-            // lands under the name "default".
-            legacy_profile(o).map(|p| p.name)
-        })
-        .unwrap_or_else(|| defaults.active_profile.clone());
-    let dreamer_profile = match &o.dreamer.profile {
-        Some(v) => v.clone(),
-        None => defaults.dreamer.profile.clone(),
-    };
-    let grok_profile = match &o.grok.profile {
-        Some(v) => v.clone(),
-        None => defaults.grok.profile.clone(),
-    };
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| legacy_profile(o).map(|p| p.name))
+        .unwrap_or_else(|| "default".to_string());
 
     AiSettings {
         profiles,
-        active_profile,
-        behavior: AiBehavior {
+        aurora: AiAurora {
+            profile: fold_required_profile_slot(&o.aurora.profile, &legacy_active),
             max_turn_rounds: o
-                .behavior
+                .aurora
                 .max_turn_rounds
-                .unwrap_or(defaults.behavior.max_turn_rounds),
+                .or(o.behavior.max_turn_rounds)
+                .unwrap_or(defaults.aurora.max_turn_rounds),
             max_writes_per_turn: o
-                .behavior
+                .aurora
                 .max_writes_per_turn
-                .unwrap_or(defaults.behavior.max_writes_per_turn),
+                .or(o.behavior.max_writes_per_turn)
+                .unwrap_or(defaults.aurora.max_writes_per_turn),
             persona_name: o
-                .behavior
+                .aurora
                 .persona_name
                 .clone()
-                .unwrap_or_else(|| defaults.behavior.persona_name.clone()),
+                .or_else(|| o.behavior.persona_name.clone())
+                .unwrap_or_else(|| defaults.aurora.persona_name.clone()),
             min_response_delay_ms: o
-                .behavior
+                .aurora
                 .min_response_delay_ms
-                .unwrap_or(defaults.behavior.min_response_delay_ms),
+                .or(o.behavior.min_response_delay_ms)
+                .unwrap_or(defaults.aurora.min_response_delay_ms),
             reply_target_chars: o
-                .behavior
+                .aurora
                 .reply_target_chars
-                .unwrap_or(defaults.behavior.reply_target_chars),
+                .or(o.behavior.reply_target_chars)
+                .unwrap_or(defaults.aurora.reply_target_chars),
             reply_soft_chars: o
-                .behavior
+                .aurora
                 .reply_soft_chars
-                .unwrap_or(defaults.behavior.reply_soft_chars),
+                .or(o.behavior.reply_soft_chars)
+                .unwrap_or(defaults.aurora.reply_soft_chars),
             reply_hard_chars: o
-                .behavior
+                .aurora
                 .reply_hard_chars
-                .unwrap_or(defaults.behavior.reply_hard_chars),
+                .or(o.behavior.reply_hard_chars)
+                .unwrap_or(defaults.aurora.reply_hard_chars),
         },
-        history: AiHistory {
-            length: o.history.length.unwrap_or(defaults.history.length),
-            ai_channel_length: o
-                .history
-                .ai_channel_length
-                .unwrap_or(defaults.history.ai_channel_length),
-            n: o.history.n.unwrap_or(defaults.history.n),
-            ai_channel_n: o
-                .history
-                .ai_channel_n
-                .unwrap_or(defaults.history.ai_channel_n),
-            recap_profile: match &o.history.recap_profile {
-                Some(v) => v.clone(),
-                None => defaults.history.recap_profile.clone(),
-            },
-            batch_size: o.history.batch_size.unwrap_or(defaults.history.batch_size),
-            max_notes: o.history.max_notes.unwrap_or(defaults.history.max_notes),
+        grok: AiGrok {
+            profile: fold_required_profile_slot(&o.grok.profile, &legacy_active),
+            persona_name: o
+                .grok
+                .persona_name
+                .clone()
+                .unwrap_or_else(|| defaults.grok.persona_name.clone()),
+        },
+        recap: AiRecap {
+            profile: fold_opt_string(o.recap.profile.as_ref(), o.history.recap_profile.as_ref()),
+            batch_size: o
+                .recap
+                .batch_size
+                .or(o.history.batch_size)
+                .unwrap_or(defaults.recap.batch_size),
+            max_notes: o
+                .recap
+                .max_notes
+                .or(o.history.max_notes)
+                .unwrap_or(defaults.recap.max_notes),
             merge_width: o
-                .history
+                .recap
                 .merge_width
-                .unwrap_or(defaults.history.merge_width),
-        },
-        memory: AiMemory {
-            soul_bytes: o.memory.soul_bytes.unwrap_or(defaults.memory.soul_bytes),
-            lore_bytes: o.memory.lore_bytes.unwrap_or(defaults.memory.lore_bytes),
-            user_bytes: o.memory.user_bytes.unwrap_or(defaults.memory.user_bytes),
-            scratch_bytes: o
-                .memory
-                .scratch_bytes
-                .unwrap_or(defaults.memory.scratch_bytes),
-            inject_byte_budget: o
-                .memory
-                .inject_byte_budget
-                .unwrap_or(defaults.memory.inject_byte_budget),
-            max_scratch_files: o
-                .memory
-                .max_scratch_files
-                .unwrap_or(defaults.memory.max_scratch_files),
+                .or(o.history.merge_width)
+                .unwrap_or(defaults.recap.merge_width),
         },
         dreamer: AiDreamer {
             enabled: o.dreamer.enabled.unwrap_or(defaults.dreamer.enabled),
-            profile: dreamer_profile,
+            profile: fold_required_profile_slot(&o.dreamer.profile, &legacy_active),
             run_at: o
                 .dreamer
                 .run_at
@@ -301,20 +289,8 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .max_writes_per_turn
                 .unwrap_or(defaults.dreamer.max_writes_per_turn),
         },
-        grok: AiGrok {
-            profile: grok_profile,
-            // No override plumbing in v1 — baked default only (brief: dashboard
-            // field is optional / not yet wired).
-            persona_name: defaults.grok.persona_name.clone(),
-        },
-        prefill: resolve_prefill(defaults.prefill.as_ref(), &o.prefill),
-        web: resolve_web(defaults.web.as_ref(), &o.web),
-        emotes: resolve_emotes(defaults.emotes.as_ref(), &o.emotes),
         media: AiMedia {
-            profile: match &o.media.profile {
-                Some(v) => v.clone(),
-                None => defaults.media.profile.clone(),
-            },
+            profile: fold_required_profile_slot(&o.media.profile, &legacy_active),
             timeout: o.media.timeout.unwrap_or(defaults.media.timeout),
             max_image_size: o
                 .media
@@ -334,6 +310,52 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .max_text_size
                 .unwrap_or(defaults.media.max_text_size),
         },
+        history: AiHistory {
+            length: o.history.length.unwrap_or(defaults.history.length),
+            ai_channel_length: o
+                .history
+                .ai_channel_length
+                .unwrap_or(defaults.history.ai_channel_length),
+            n: o.history.n.unwrap_or(defaults.history.n),
+            ai_channel_n: o
+                .history
+                .ai_channel_n
+                .unwrap_or(defaults.history.ai_channel_n),
+        },
+        memory: AiMemory {
+            soul_bytes: o.memory.soul_bytes.unwrap_or(defaults.memory.soul_bytes),
+            lore_bytes: o.memory.lore_bytes.unwrap_or(defaults.memory.lore_bytes),
+            user_bytes: o.memory.user_bytes.unwrap_or(defaults.memory.user_bytes),
+            scratch_bytes: o
+                .memory
+                .scratch_bytes
+                .unwrap_or(defaults.memory.scratch_bytes),
+            inject_byte_budget: o
+                .memory
+                .inject_byte_budget
+                .unwrap_or(defaults.memory.inject_byte_budget),
+            max_scratch_files: o
+                .memory
+                .max_scratch_files
+                .unwrap_or(defaults.memory.max_scratch_files),
+        },
+        prefill: resolve_prefill(defaults.prefill.as_ref(), &o.prefill),
+        web: resolve_web(defaults.web.as_ref(), &o.web),
+        emotes: resolve_emotes(defaults.emotes.as_ref(), &o.emotes),
+    }
+}
+
+fn fold_required_profile_slot(slot: &Option<Option<String>>, legacy_active: &str) -> String {
+    match slot {
+        Some(Some(name)) if !name.trim().is_empty() => name.clone(),
+        _ => legacy_active.to_string(),
+    }
+}
+
+fn fold_opt_string(new: Option<&Option<String>>, old: Option<&Option<String>>) -> Option<String> {
+    match new {
+        Some(v) => v.clone(),
+        None => old.and_then(Clone::clone),
     }
 }
 
@@ -464,6 +486,19 @@ mod tests {
     use super::overrides::{CooldownsOverrides, PingsOverrides, SettingsOverrides};
     use super::*;
 
+    fn profile_named(name: &str) -> AiProfile {
+        AiProfile {
+            name: name.into(),
+            key: None,
+            provider: AiProvider::Ollama,
+            base_url: Some("http://127.0.0.1:1".into()),
+            model: name.into(),
+            timeout: 30,
+            reasoning_effort: None,
+            service_tier: None,
+        }
+    }
+
     #[test]
     fn empty_overrides_equal_defaults() {
         let defaults = Settings::compiled_defaults();
@@ -479,7 +514,7 @@ mod tests {
 
         let resolved = Settings::resolve(&defaults, &overrides);
         assert_eq!(resolved.ai.history.length, 50);
-        assert!(resolved.ai.history.n + resolved.ai.history.batch_size <= 50);
+        assert!(resolved.ai.history.n + resolved.ai.recap.batch_size <= 50);
         resolved
             .validate(&crate::settings::ValidationContext {
                 channel: "test".into(),
@@ -549,8 +584,26 @@ mod tests {
             ..SettingsOverrides::default()
         };
         let resolved = Settings::resolve(&defaults, &overrides);
-        assert_eq!(resolved.ai.active().model, "gpt-5");
-        assert_eq!(resolved.ai.active().timeout, defaults.ai.active().timeout);
+        assert_eq!(
+            resolved
+                .ai
+                .by_name(&resolved.ai.aurora.profile)
+                .unwrap()
+                .model,
+            "gpt-5"
+        );
+        assert_eq!(
+            resolved
+                .ai
+                .by_name(&resolved.ai.aurora.profile)
+                .unwrap()
+                .timeout,
+            defaults
+                .ai
+                .by_name(&defaults.ai.aurora.profile)
+                .unwrap()
+                .timeout
+        );
     }
 
     #[test]
@@ -558,7 +611,13 @@ mod tests {
         let mut overrides = overrides::SettingsOverrides::default();
         overrides.ai.connection.service_tier = Some(Some("flex".to_string()));
         let s = Settings::resolve(&Settings::compiled_defaults(), &overrides);
-        assert_eq!(s.ai.active().service_tier.as_deref(), Some("flex"));
+        assert_eq!(
+            s.ai.by_name(&s.ai.aurora.profile)
+                .unwrap()
+                .service_tier
+                .as_deref(),
+            Some("flex")
+        );
     }
 
     #[test]
@@ -569,7 +628,12 @@ mod tests {
         let mut overrides = overrides::SettingsOverrides::default();
         overrides.ai.connection.service_tier = Some(None);
         let s = Settings::resolve(&defaults, &overrides);
-        assert!(s.ai.active().service_tier.is_none());
+        assert!(
+            s.ai.by_name(&s.ai.aurora.profile)
+                .unwrap()
+                .service_tier
+                .is_none()
+        );
     }
 
     #[test]
@@ -696,19 +760,19 @@ mod tests {
     }
 
     #[test]
-    fn grok_profile_override_resolves_and_clears() {
+    fn grok_profile_override_resolves_and_inherits_when_cleared() {
         let defaults = Settings::compiled_defaults();
         let mut ovr = overrides::SettingsOverrides::default();
         let s = Settings::resolve(&defaults, &ovr);
-        assert!(s.ai.grok.profile.is_none());
+        assert_eq!(s.ai.grok.profile, "default");
 
         ovr.ai.grok.profile = Some(Some("cheap".into()));
         let s = Settings::resolve(&defaults, &ovr);
-        assert_eq!(s.ai.grok.profile.as_deref(), Some("cheap"));
+        assert_eq!(s.ai.grok.profile, "cheap");
 
         ovr.ai.grok.profile = Some(None);
         let s = Settings::resolve(&defaults, &ovr);
-        assert!(s.ai.grok.profile.is_none());
+        assert_eq!(s.ai.grok.profile, "default");
     }
 
     #[test]
@@ -737,8 +801,8 @@ mod tests {
 
         let s = Settings::resolve(&Settings::compiled_defaults(), &o);
 
-        assert_eq!(s.ai.active_profile, "default");
-        let p = s.ai.active();
+        assert_eq!(s.ai.aurora.profile, "default");
+        let p = s.ai.by_name(&s.ai.aurora.profile).unwrap();
         assert_eq!(p.name, "default");
         assert_eq!(p.provider, AiProvider::OpenRouter);
         assert_eq!(p.model, "z-ai/glm-4.6");
@@ -750,7 +814,10 @@ mod tests {
         let mut o = SettingsOverrides::default();
         o.ai.connection.backend = Some(AiBackendKind::Ollama);
         let s = Settings::resolve(&Settings::compiled_defaults(), &o);
-        assert_eq!(s.ai.active().provider, AiProvider::Ollama);
+        assert_eq!(
+            s.ai.by_name(&s.ai.aurora.profile).unwrap().provider,
+            AiProvider::Ollama
+        );
     }
 
     #[test]
@@ -759,7 +826,10 @@ mod tests {
         o.ai.connection.backend = Some(AiBackendKind::OpenAi);
         o.ai.connection.base_url = Some(Some("https://api.deepseek.com/v1".into()));
         let s = Settings::resolve(&Settings::compiled_defaults(), &o);
-        assert_eq!(s.ai.active().provider, AiProvider::OpenAiCompatible);
+        assert_eq!(
+            s.ai.by_name(&s.ai.aurora.profile).unwrap().provider,
+            AiProvider::OpenAiCompatible
+        );
     }
 
     #[test]
@@ -780,11 +850,14 @@ mod tests {
 
         let s = Settings::resolve(&Settings::compiled_defaults(), &o);
         assert_eq!(s.ai.profiles.len(), 1);
-        assert_eq!(s.ai.active().model, "qwen3:8b");
+        assert_eq!(
+            s.ai.by_name(&s.ai.aurora.profile).unwrap().model,
+            "qwen3:8b"
+        );
     }
 
     #[test]
-    fn active_falls_back_to_the_first_profile_when_the_name_is_stale() {
+    fn v6_stale_active_profile_remains_a_required_agent_pointer() {
         let mut o = SettingsOverrides::default();
         o.ai.profiles = Some(vec![AiProfile {
             name: "a".into(),
@@ -798,6 +871,90 @@ mod tests {
         }]);
         o.ai.active_profile = Some("gone".into());
         let s = Settings::resolve(&Settings::compiled_defaults(), &o);
-        assert_eq!(s.ai.active().name, "a");
+        assert_eq!(s.ai.aurora.profile, "gone");
+    }
+
+    #[test]
+    fn v6_active_profile_stamps_required_agents_and_leaves_recap_off() {
+        let defaults = Settings::compiled_defaults();
+        let mut o = SettingsOverrides::default();
+        o.ai.profiles = Some(vec![crate::settings::ai::AiProfile {
+            name: "cheap".into(),
+            key: None,
+            provider: AiProvider::Ollama,
+            base_url: Some("http://127.0.0.1:1".into()),
+            model: "cheap-model".into(),
+            timeout: 30,
+            reasoning_effort: None,
+            service_tier: None,
+        }]);
+        o.ai.active_profile = Some("cheap".into());
+        let s = Settings::resolve(&defaults, &o);
+        assert_eq!(s.ai.aurora.profile, "cheap");
+        assert_eq!(s.ai.grok.profile, "cheap");
+        assert_eq!(s.ai.dreamer.profile, "cheap");
+        assert_eq!(s.ai.media.profile, "cheap");
+        assert!(s.ai.recap.profile.is_none());
+    }
+
+    #[test]
+    fn v6_grok_pin_wins_over_active_profile() {
+        let defaults = Settings::compiled_defaults();
+        let mut o = SettingsOverrides::default();
+        o.ai.profiles = Some(vec![profile_named("cheap"), profile_named("local")]);
+        o.ai.active_profile = Some("cheap".into());
+        o.ai.grok.profile = Some(Some("local".into()));
+        let s = Settings::resolve(&defaults, &o);
+        assert_eq!(s.ai.aurora.profile, "cheap");
+        assert_eq!(s.ai.grok.profile, "local");
+        assert_eq!(s.ai.dreamer.profile, "cheap");
+    }
+
+    #[test]
+    fn v6_history_recap_profile_lands_on_ai_recap() {
+        let defaults = Settings::compiled_defaults();
+        let mut o = SettingsOverrides::default();
+        o.ai.profiles = Some(vec![profile_named("tiny")]);
+        o.ai.history.recap_profile = Some(Some("tiny".into()));
+        o.ai.history.batch_size = Some(7);
+        o.ai.history.max_notes = Some(4);
+        o.ai.history.merge_width = Some(2);
+        let s = Settings::resolve(&defaults, &o);
+        assert_eq!(s.ai.recap.profile.as_deref(), Some("tiny"));
+        assert_eq!(s.ai.recap.batch_size, 7);
+        assert_eq!(s.ai.recap.max_notes, 4);
+        assert_eq!(s.ai.recap.merge_width, 2);
+        // history no longer carries recap fields
+    }
+
+    #[test]
+    fn v6_behavior_persona_lands_on_aurora() {
+        let defaults = Settings::compiled_defaults();
+        let mut o = SettingsOverrides::default();
+        o.ai.behavior.persona_name = Some("Nyx".into());
+        o.ai.behavior.max_turn_rounds = Some(6);
+        let s = Settings::resolve(&defaults, &o);
+        assert_eq!(s.ai.aurora.persona_name, "Nyx");
+        assert_eq!(s.ai.aurora.max_turn_rounds, 6);
+    }
+
+    #[test]
+    fn aurora_override_wins_over_legacy_behavior() {
+        let defaults = Settings::compiled_defaults();
+        let mut o = SettingsOverrides::default();
+        o.ai.behavior.persona_name = Some("Nyx".into());
+        o.ai.aurora.persona_name = Some("Vesper".into());
+        let s = Settings::resolve(&defaults, &o);
+        assert_eq!(s.ai.aurora.persona_name, "Vesper");
+    }
+
+    #[test]
+    fn missing_active_profile_stamps_default() {
+        let defaults = Settings::compiled_defaults();
+        let o = SettingsOverrides::default();
+        let s = Settings::resolve(&defaults, &o);
+        assert_eq!(s.ai.aurora.profile, "default");
+        assert_eq!(s.ai.grok.profile, "default");
+        assert!(s.ai.recap.profile.is_none());
     }
 }

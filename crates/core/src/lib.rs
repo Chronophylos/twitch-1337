@@ -268,8 +268,8 @@ where
     // 7TV emote provider: built once at startup when AI + emotes + tracker are
     // all present. If ai.emotes is on but the tracker failed to open, emote
     // grounding is disabled and the bot continues.
-    let emote_provider = match (llm.is_usable(), config.ai.as_ref()) {
-        (true, Some(_)) => {
+    let emote_provider = match config.ai.as_ref() {
+        Some(_) => {
             if settings.load().ai.emotes.is_some() {
                 match emote_tracker.clone() {
                     Some(tracker) => {
@@ -301,7 +301,7 @@ where
                 None
             }
         }
-        _ => None,
+        None => None,
     };
 
     // Clone before moving into SpawnDeps so the dreamer ritual can also use them.

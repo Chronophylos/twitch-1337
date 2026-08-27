@@ -76,7 +76,7 @@ impl ContentToolExecutor {
     /// is an `Arc` internally, so the clone is cheap.
     fn media_client(&self) -> Option<MediaClient> {
         let media = self.live_media();
-        let (_, profile) = self.registry.resolve(media.profile.as_deref())?;
+        let (_, profile) = self.registry.resolve_named(&media.profile)?;
         let base_url = profile.base_url.clone().or_else(|| {
             profile
                 .provider
@@ -387,10 +387,10 @@ mod tests {
         }
     }
 
-    fn handle_with(profiles: Vec<AiProfile>, active: &str) -> SettingsHandle {
+    fn handle_with(profiles: Vec<AiProfile>, aurora: &str) -> SettingsHandle {
         let mut s = crate::settings::Settings::compiled_defaults();
         s.ai.profiles = profiles;
-        s.ai.active_profile = active.to_string();
+        s.ai.aurora.profile = aurora.to_string();
         crate::settings::SettingsHandle::new(arc_swap::ArcSwap::from_pointee(s))
     }
 
@@ -406,7 +406,7 @@ mod tests {
         );
         {
             let mut s = (*handle.load_full()).clone();
-            s.ai.media.profile = Some("vision".into());
+            s.ai.media.profile = "vision".into();
             handle.store(Arc::new(s));
         }
         let ex = test_executor(handle.clone());

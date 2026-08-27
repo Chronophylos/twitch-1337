@@ -3,7 +3,71 @@
 //! leaves the existing value untouched (except list/option fields, which the
 //! patch replaces wholesale when present).
 
-use crate::settings::overrides::SettingsOverrides;
+use crate::settings::overrides::{AiBehaviorOverrides, SettingsOverrides};
+
+pub(super) fn strip_ai_agents_legacy(into: &mut SettingsOverrides) {
+    let legacy_active = into
+        .ai
+        .active_profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("default")
+        .to_string();
+
+    materialize_required_profile(&mut into.ai.aurora.profile, &legacy_active);
+    materialize_required_profile(&mut into.ai.grok.profile, &legacy_active);
+    materialize_required_profile(&mut into.ai.dreamer.profile, &legacy_active);
+    materialize_required_profile(&mut into.ai.media.profile, &legacy_active);
+
+    if into.ai.recap.profile.is_none() {
+        into.ai.recap.profile = into.ai.history.recap_profile.clone();
+    }
+    if into.ai.recap.batch_size.is_none() {
+        into.ai.recap.batch_size = into.ai.history.batch_size;
+    }
+    if into.ai.recap.max_notes.is_none() {
+        into.ai.recap.max_notes = into.ai.history.max_notes;
+    }
+    if into.ai.recap.merge_width.is_none() {
+        into.ai.recap.merge_width = into.ai.history.merge_width;
+    }
+
+    if into.ai.aurora.max_turn_rounds.is_none() {
+        into.ai.aurora.max_turn_rounds = into.ai.behavior.max_turn_rounds;
+    }
+    if into.ai.aurora.max_writes_per_turn.is_none() {
+        into.ai.aurora.max_writes_per_turn = into.ai.behavior.max_writes_per_turn;
+    }
+    if into.ai.aurora.persona_name.is_none() {
+        into.ai.aurora.persona_name = into.ai.behavior.persona_name.clone();
+    }
+    if into.ai.aurora.min_response_delay_ms.is_none() {
+        into.ai.aurora.min_response_delay_ms = into.ai.behavior.min_response_delay_ms;
+    }
+    if into.ai.aurora.reply_target_chars.is_none() {
+        into.ai.aurora.reply_target_chars = into.ai.behavior.reply_target_chars;
+    }
+    if into.ai.aurora.reply_soft_chars.is_none() {
+        into.ai.aurora.reply_soft_chars = into.ai.behavior.reply_soft_chars;
+    }
+    if into.ai.aurora.reply_hard_chars.is_none() {
+        into.ai.aurora.reply_hard_chars = into.ai.behavior.reply_hard_chars;
+    }
+
+    into.ai.active_profile = None;
+    into.ai.behavior = AiBehaviorOverrides::default();
+    into.ai.history.recap_profile = None;
+    into.ai.history.batch_size = None;
+    into.ai.history.max_notes = None;
+    into.ai.history.merge_width = None;
+}
+
+fn materialize_required_profile(slot: &mut Option<Option<String>>, legacy_active: &str) {
+    if !matches!(slot, Some(Some(name)) if !name.trim().is_empty()) {
+        *slot = Some(Some(legacy_active.to_string()));
+    }
+}
 
 pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides) {
     if let Some(v) = patch.cooldowns.ai {
@@ -31,9 +95,6 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if patch.ai.profiles.is_some() {
         into.ai.profiles = patch.ai.profiles.clone();
     }
-    if let Some(v) = patch.ai.active_profile.as_ref() {
-        into.ai.active_profile = Some(v.clone());
-    }
     // MIGRATION(ai-profiles): legacy connection block, still merged so an
     // existing settings.ron keeps resolving until it is rewritten.
     if let Some(v) = patch.ai.connection.backend {
@@ -54,27 +115,30 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if patch.ai.connection.service_tier.is_some() {
         into.ai.connection.service_tier = patch.ai.connection.service_tier.clone();
     }
-    // AI behavior
-    if let Some(v) = patch.ai.behavior.max_turn_rounds {
-        into.ai.behavior.max_turn_rounds = Some(v);
+    // AI aurora
+    if patch.ai.aurora.profile.is_some() {
+        into.ai.aurora.profile = patch.ai.aurora.profile.clone();
     }
-    if let Some(v) = patch.ai.behavior.max_writes_per_turn {
-        into.ai.behavior.max_writes_per_turn = Some(v);
+    if let Some(v) = patch.ai.aurora.max_turn_rounds {
+        into.ai.aurora.max_turn_rounds = Some(v);
     }
-    if let Some(v) = &patch.ai.behavior.persona_name {
-        into.ai.behavior.persona_name = Some(v.clone());
+    if let Some(v) = patch.ai.aurora.max_writes_per_turn {
+        into.ai.aurora.max_writes_per_turn = Some(v);
     }
-    if let Some(v) = patch.ai.behavior.min_response_delay_ms {
-        into.ai.behavior.min_response_delay_ms = Some(v);
+    if let Some(v) = &patch.ai.aurora.persona_name {
+        into.ai.aurora.persona_name = Some(v.clone());
     }
-    if let Some(v) = patch.ai.behavior.reply_target_chars {
-        into.ai.behavior.reply_target_chars = Some(v);
+    if let Some(v) = patch.ai.aurora.min_response_delay_ms {
+        into.ai.aurora.min_response_delay_ms = Some(v);
     }
-    if let Some(v) = patch.ai.behavior.reply_soft_chars {
-        into.ai.behavior.reply_soft_chars = Some(v);
+    if let Some(v) = patch.ai.aurora.reply_target_chars {
+        into.ai.aurora.reply_target_chars = Some(v);
     }
-    if let Some(v) = patch.ai.behavior.reply_hard_chars {
-        into.ai.behavior.reply_hard_chars = Some(v);
+    if let Some(v) = patch.ai.aurora.reply_soft_chars {
+        into.ai.aurora.reply_soft_chars = Some(v);
+    }
+    if let Some(v) = patch.ai.aurora.reply_hard_chars {
+        into.ai.aurora.reply_hard_chars = Some(v);
     }
     // AI history
     if let Some(v) = patch.ai.history.length {
@@ -89,17 +153,18 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.ai.history.ai_channel_n {
         into.ai.history.ai_channel_n = Some(v);
     }
-    if patch.ai.history.recap_profile.is_some() {
-        into.ai.history.recap_profile = patch.ai.history.recap_profile.clone();
+    // AI recap
+    if patch.ai.recap.profile.is_some() {
+        into.ai.recap.profile = patch.ai.recap.profile.clone();
     }
-    if let Some(v) = patch.ai.history.batch_size {
-        into.ai.history.batch_size = Some(v);
+    if let Some(v) = patch.ai.recap.batch_size {
+        into.ai.recap.batch_size = Some(v);
     }
-    if let Some(v) = patch.ai.history.max_notes {
-        into.ai.history.max_notes = Some(v);
+    if let Some(v) = patch.ai.recap.max_notes {
+        into.ai.recap.max_notes = Some(v);
     }
-    if let Some(v) = patch.ai.history.merge_width {
-        into.ai.history.merge_width = Some(v);
+    if let Some(v) = patch.ai.recap.merge_width {
+        into.ai.recap.merge_width = Some(v);
     }
     // AI memory
     if let Some(v) = patch.ai.memory.soul_bytes {
@@ -142,6 +207,9 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     // AI grok
     if patch.ai.grok.profile.is_some() {
         into.ai.grok.profile = patch.ai.grok.profile.clone();
+    }
+    if let Some(v) = &patch.ai.grok.persona_name {
+        into.ai.grok.persona_name = Some(v.clone());
     }
     // AI prefill
     if let Some(v) = patch.ai.prefill.enabled {
@@ -278,6 +346,8 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if patch.schedules.is_some() {
         into.schedules = patch.schedules.clone();
     }
+
+    strip_ai_agents_legacy(into);
 }
 
 #[cfg(test)]
@@ -451,6 +521,9 @@ mod tests {
         let v = into.ai.profiles.expect("Some");
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].name, "keep");
-        assert_eq!(into.ai.active_profile.as_deref(), Some("keep"));
+        assert!(
+            into.ai.active_profile.is_none(),
+            "strip clears MIGRATION(ai-agents) active_profile on persist"
+        );
     }
 }

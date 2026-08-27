@@ -273,8 +273,7 @@ async fn grok_uses_its_own_profile_model_effort_and_tier() {
             let mut grok = profile("grok", "x-ai/grok-4");
             grok.reasoning_effort = Some("high".into());
             grok.service_tier = Some("flex".into());
-            o.ai.profiles = Some(vec![profile("chat", "test-model"), grok]);
-            o.ai.active_profile = Some("chat".into());
+            o.ai.profiles = Some(vec![profile("default", "test-model"), grok]);
             o.ai.grok.profile = Some(Some("grok".into()));
         })
         .spawn()
@@ -305,27 +304,6 @@ async fn grok_uses_its_own_profile_model_effort_and_tier() {
         system.content
     );
 
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn grok_without_profile_override_uses_active_profile_model() {
-    let bot = TestBotBuilder::new()
-        .with_ai()
-        .with_settings(|o| {
-            o.ai.history.length = Some(0);
-            o.ai.grok.profile = None; // inherit
-        })
-        .spawn()
-        .await;
-    bot.llm.push_tool_message("ok");
-
-    let mut bot = bot;
-    bot.send("alice", "@grok sag hallo").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-
-    let calls = bot.llm.tool_calls();
-    assert_eq!(calls[0].model, "test-model");
     bot.shutdown().await;
 }
 
@@ -396,10 +374,9 @@ async fn ai_ignores_grok_profile() {
         .with_settings(|o| {
             o.ai.history.length = Some(0);
             o.ai.profiles = Some(vec![
-                profile("chat", "test-model"),
+                profile("default", "test-model"),
                 profile("grok", "x-ai/grok-4"),
             ]);
-            o.ai.active_profile = Some("chat".into());
             o.ai.grok.profile = Some(Some("grok".into()));
         })
         .spawn()

@@ -5,29 +5,25 @@
 //! pre-hoist behavior so existing deployments see no drift after
 //! the schema bump.
 
-use std::sync::LazyLock;
-
 use serde::{Deserialize, Serialize};
 
 use super::provider::AiProvider;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiSettings {
-    /// Named provider configurations. Switching the active one is a
-    /// dashboard action; no restart, no config.toml edit.
+    /// Named provider configurations. Agent profile changes are dashboard
+    /// actions; no restart, no config.toml edit.
     pub profiles: Vec<AiProfile>,
-    /// Name of the profile used for `!ai` turns and for any sub-agent
-    /// that does not override it.
-    pub active_profile: String,
-    pub behavior: AiBehavior,
+    pub aurora: AiAurora,
+    pub grok: AiGrok,
+    pub recap: AiRecap,
+    pub dreamer: AiDreamer,
+    pub media: AiMedia,
     pub history: AiHistory,
     pub memory: AiMemory,
-    pub dreamer: AiDreamer,
-    pub grok: AiGrok,
     pub prefill: Option<AiPrefill>,
     pub web: Option<AiWeb>,
     pub emotes: Option<AiEmotes>,
-    pub media: AiMedia,
 }
 
 /// One named provider configuration.
@@ -63,39 +59,9 @@ impl Default for AiProfile {
     }
 }
 
-/// Last-resort profile handed out when the list is empty. A borrow has to
-/// come from somewhere and returning `Option` here would push a `.unwrap()`
-/// into every call site; an empty-model profile is already treated as
-/// "AI disabled" by the registry.
-static FALLBACK_PROFILE: LazyLock<AiProfile> = LazyLock::new(AiProfile::default);
-
-/// The profile a sub-agent actually runs on: `agent_profile` (its own
-/// `profile` override) when it names a row in `profiles`, otherwise
-/// `active_profile`'s row, falling back to the first profile in the list.
-/// Standalone (rather than an `AiSettings` method) so `resolve.rs` can call
-/// it while still assembling the `AiSettings` it would otherwise need
-/// `&self` for.
-pub fn resolved_profile_in<'a>(
-    profiles: &'a [AiProfile],
-    active_profile: &str,
-    agent_profile: Option<&str>,
-) -> &'a AiProfile {
-    agent_profile
-        .and_then(|name| profiles.iter().find(|p| p.name == name))
-        .or_else(|| profiles.iter().find(|p| p.name == active_profile))
-        .or_else(|| profiles.first())
-        .unwrap_or(&FALLBACK_PROFILE)
-}
-
 impl AiSettings {
     pub fn by_name(&self, name: &str) -> Option<&AiProfile> {
         self.profiles.iter().find(|p| p.name == name)
-    }
-
-    /// The profile `active_profile` names, or the first one if the name is
-    /// stale (a deleted profile leaves a dangling pointer until the next save).
-    pub fn active(&self) -> &AiProfile {
-        resolved_profile_in(&self.profiles, &self.active_profile, None)
     }
 }
 
@@ -103,16 +69,16 @@ impl Default for AiSettings {
     fn default() -> Self {
         Self {
             profiles: vec![AiProfile::default()],
-            active_profile: "default".to_string(),
-            behavior: AiBehavior::default(),
+            aurora: AiAurora::default(),
+            grok: AiGrok::default(),
+            recap: AiRecap::default(),
+            dreamer: AiDreamer::default(),
+            media: AiMedia::default(),
             history: AiHistory::default(),
             memory: AiMemory::default(),
-            dreamer: AiDreamer::default(),
-            grok: AiGrok::default(),
             prefill: None,
             web: None,
             emotes: None,
-            media: AiMedia::default(),
         }
     }
 }
@@ -140,7 +106,8 @@ impl AiBackendKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AiBehavior {
+pub struct AiAurora {
+    pub profile: String,
     pub max_turn_rounds: usize,
     pub max_writes_per_turn: usize,
     /// Persona name the bot uses in chat-history identity push and chat-line
@@ -190,15 +157,15 @@ pub struct AiHistory {
     pub n: u64,
     #[serde(default)]
     pub ai_channel_n: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiRecap {
     /// Profile Recap paraphrases on. `None` / empty = Recap off.
-    /// Never falls back to the active chat profile.
     #[serde(default)]
-    pub recap_profile: Option<String>,
-    #[serde(default)]
+    pub profile: Option<String>,
     pub batch_size: u64,
-    #[serde(default)]
     pub max_notes: u64,
-    #[serde(default)]
     pub merge_width: u64,
 }
 
@@ -220,14 +187,13 @@ pub struct AiMemory {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiDreamer {
     pub enabled: bool,
-    /// Profile name to run this agent on. `None` = the active profile.
-    #[serde(default)]
-    pub profile: Option<String>,
+    /// Required profile name to run this agent on.
+    pub profile: String,
     pub run_at: String,
     pub timeout_secs: u64,
     pub max_rounds: usize,
     /// Per-turn `write_file` quota for the dreamer ritual. Separate from the
-    /// chat-turn cap (`AiBehavior::max_writes_per_turn`): the dreamer rewrites
+    /// chat-turn cap (`AiAurora::max_writes_per_turn`): the dreamer rewrites
     /// SOUL + LORE + many user files in one pass, so it defaults higher (32 vs
     /// the chat cap's 8). Both are bounded to the same `1..=64` range.
     pub max_writes_per_turn: usize,
@@ -235,11 +201,10 @@ pub struct AiDreamer {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiGrok {
-    /// Profile name to run this agent on. `None` = the active profile.
-    #[serde(default)]
-    pub profile: Option<String>,
+    /// Required profile name to run this agent on.
+    pub profile: String,
     /// Persona name for the `@grok` alias, used in chat-history identity push
-    /// and chat-line rendering (mirrors `AiBehavior::persona_name` for
+    /// and chat-line rendering (mirrors `AiAurora::persona_name` for
     /// Aurora). Defaults to `"Grok"`. `#[serde(default = ...)]` keeps v1
     /// settings.ron reads forward-compatible without a migration sentinel.
     #[serde(default = "default_grok_persona_name")]
@@ -249,7 +214,7 @@ pub struct AiGrok {
 impl Default for AiGrok {
     fn default() -> Self {
         Self {
-            profile: None,
+            profile: "default".into(),
             persona_name: default_grok_persona_name(),
         }
     }
@@ -308,9 +273,8 @@ fn default_pinned_emotes() -> Vec<String> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiMedia {
-    /// Profile name to run this agent on. `None` = the active profile.
-    #[serde(default)]
-    pub profile: Option<String>,
+    /// Required profile name to run this agent on.
+    pub profile: String,
     pub timeout: u64,
     pub max_image_size: bytesize::ByteSize,
     pub max_pdf_size: bytesize::ByteSize,
@@ -319,9 +283,10 @@ pub struct AiMedia {
     pub max_text_size: bytesize::ByteSize,
 }
 
-impl Default for AiBehavior {
+impl Default for AiAurora {
     fn default() -> Self {
         Self {
+            profile: "default".into(),
             max_turn_rounds: 4,
             max_writes_per_turn: 8,
             persona_name: default_persona_name(),
@@ -340,7 +305,14 @@ impl Default for AiHistory {
             ai_channel_length: 100,
             n: 20,
             ai_channel_n: 10,
-            recap_profile: None,
+        }
+    }
+}
+
+impl Default for AiRecap {
+    fn default() -> Self {
+        Self {
+            profile: None,
             batch_size: 40,
             max_notes: 8,
             merge_width: 3,
@@ -365,7 +337,7 @@ impl Default for AiDreamer {
     fn default() -> Self {
         Self {
             enabled: true,
-            profile: None,
+            profile: "default".into(),
             run_at: "04:00".into(),
             timeout_secs: 120,
             max_rounds: 20,
@@ -414,7 +386,7 @@ impl Default for AiEmotes {
 impl Default for AiMedia {
     fn default() -> Self {
         Self {
-            profile: None,
+            profile: "default".into(),
             timeout: 60,
             max_image_size: bytesize::ByteSize::mib(10),
             max_pdf_size: bytesize::ByteSize::mib(25),
@@ -443,21 +415,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ai_behavior_default_has_persona_aurora() {
-        let b = AiBehavior::default();
+    fn ai_aurora_default_has_persona_aurora() {
+        let b = AiAurora::default();
         assert_eq!(b.persona_name, "Aurora");
     }
 
     #[test]
-    fn ai_behavior_reply_length_defaults_preserve_today() {
-        let b = AiBehavior::default();
+    fn ai_aurora_reply_length_defaults_preserve_today() {
+        let b = AiAurora::default();
         assert_eq!(b.reply_target_chars, 480);
         assert_eq!(b.reply_soft_chars, 490);
         assert_eq!(b.reply_hard_chars, 490);
     }
 
     #[test]
-    fn ai_behavior_overrides_without_reply_keys_keep_defaults() {
+    fn legacy_ai_behavior_overrides_without_reply_keys_keep_defaults() {
         let o: crate::settings::overrides::AiBehaviorOverrides =
             ron::from_str("(max_turn_rounds: Some(5))").expect("partial override must parse");
         assert_eq!(o.max_turn_rounds, Some(5));
@@ -474,10 +446,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(resolved.ai.behavior.reply_target_chars, 480);
-        assert_eq!(resolved.ai.behavior.reply_soft_chars, 490);
-        assert_eq!(resolved.ai.behavior.reply_hard_chars, 490);
-        assert_eq!(resolved.ai.behavior.max_turn_rounds, 5);
+        assert_eq!(resolved.ai.aurora.reply_target_chars, 480);
+        assert_eq!(resolved.ai.aurora.reply_soft_chars, 490);
+        assert_eq!(resolved.ai.aurora.reply_hard_chars, 490);
+        assert_eq!(resolved.ai.aurora.max_turn_rounds, 5);
     }
 
     #[test]
@@ -533,13 +505,14 @@ mod tests {
     #[test]
     fn defaults_match_legacy_ai_config_defaults() {
         let s = AiSettings::default();
-        assert_eq!(s.active().timeout, 30);
-        assert!(s.active().base_url.is_none());
-        assert_eq!(s.behavior.max_turn_rounds, 4);
-        assert_eq!(s.behavior.max_writes_per_turn, 8);
-        assert_eq!(s.behavior.reply_target_chars, 480);
-        assert_eq!(s.behavior.reply_soft_chars, 490);
-        assert_eq!(s.behavior.reply_hard_chars, 490);
+        let aurora_profile = s.by_name(&s.aurora.profile).expect("aurora profile");
+        assert_eq!(aurora_profile.timeout, 30);
+        assert!(aurora_profile.base_url.is_none());
+        assert_eq!(s.aurora.max_turn_rounds, 4);
+        assert_eq!(s.aurora.max_writes_per_turn, 8);
+        assert_eq!(s.aurora.reply_target_chars, 480);
+        assert_eq!(s.aurora.reply_soft_chars, 490);
+        assert_eq!(s.aurora.reply_hard_chars, 490);
         assert_eq!(
             s.history.length,
             crate::ai::chat_history::DEFAULT_HISTORY_LENGTH
@@ -547,8 +520,8 @@ mod tests {
         assert_eq!(s.history.ai_channel_length, 100);
         assert_eq!(s.history.n, 20);
         assert_eq!(s.history.ai_channel_n, 10);
-        assert!(s.history.recap_profile.is_none());
-        assert_eq!(s.history.batch_size, 40);
+        assert!(s.recap.profile.is_none());
+        assert_eq!(s.recap.batch_size, 40);
         assert_eq!(s.memory.soul_bytes, 4096);
         assert_eq!(s.memory.lore_bytes, 12_288);
         assert_eq!(s.memory.user_bytes, 4096);
@@ -565,7 +538,7 @@ mod tests {
         assert!(s.emotes.is_none());
         assert_eq!(s.media.timeout, 60);
         assert_eq!(s.media.max_image_size.as_u64(), 10 * 1024 * 1024);
-        assert!(s.active().service_tier.is_none());
-        assert!(s.grok.profile.is_none());
+        assert!(aurora_profile.service_tier.is_none());
+        assert_eq!(s.grok.profile, "default");
     }
 }

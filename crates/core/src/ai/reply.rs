@@ -22,7 +22,7 @@ pub struct ReplyLimits {
 
 impl ReplyLimits {
     /// Grok keeps today's shared 490/490 reword-and-clamp. Aurora reads
-    /// `ai.behavior.reply_{soft,hard}_chars` instead.
+    /// `ai.aurora.reply_{soft,hard}_chars` instead.
     pub const GROK: Self = Self {
         soft: 490,
         hard: 490,

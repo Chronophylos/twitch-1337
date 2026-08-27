@@ -5,12 +5,9 @@
   <header class="settings-card-head">
     <div>
       <h2>AI · History</h2>
-      <p>Rolling raw retention (<code>length</code>) must be at least N + batch size. The prompt carries N verbatim lines plus at most max notes Recap paragraphs. Recap-off still cuts the prompt to N + one own line.</p>
+      <p>Rolling raw retention and verbatim prompt windows shared by the agents.</p>
     </div>
-    <div class="settings-card-tag">
-      <span class="card-dirty" hidden>0 modified</span>
-      {% if recap_parked %}<span class="restart-required" style="margin-left: 0;">recap parked</span>{% endif %}
-    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
   <div class="settings-rows">
     {% call m::num_row_bounded("ai_history", "ai_history_length", "length",
@@ -25,30 +22,5 @@
     {% call m::num_row_bounded("ai_history", "ai_history_ai_channel_n", "ai_channel_n",
        "Verbatim lines injected from ai_channel history.",
        current.ai.history.ai_channel_n, defaults.ai.history.ai_channel_n, "lines", 1, 5000) %}{% endcall %}
-    {% let recap_profile = current.ai.history.recap_profile.as_deref().unwrap_or("") %}
-    <div class="settings-row" data-section="ai_history">
-      {% call m::row_head("recap_profile", "Which provider profile Recap paraphrases on. Empty = Recap off. No extra History overrides — the profile's model, timeout, effort and tier are used as-is.") %}{% endcall %}
-      <div class="row-control-cell">
-        <select name="ai_history_recap_profile" data-key="ai.history.recap_profile" data-default="">
-          <option value="">(off)</option>
-          {% for p in current.ai.profiles %}
-          <option value="{{ p.name }}"{% if recap_profile == p.name %} selected{% endif %}>{{ p.name }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="row-right">
-        {% call m::row_reset("ai.history.recap_profile") %}{% endcall %}
-        <span class="row-default">default <span class="mono">(off)</span></span>
-      </div>
-    </div>
-    {% call m::num_row_bounded("ai_history", "ai_history_batch_size", "batch_size",
-       "Chat lines processed per Recap batch.",
-       current.ai.history.batch_size, defaults.ai.history.batch_size, "lines", 1, 5000) %}{% endcall %}
-    {% call m::num_row_bounded("ai_history", "ai_history_max_notes", "max_notes",
-       "Max Recap note paragraphs injected into the prompt.",
-       current.ai.history.max_notes, defaults.ai.history.max_notes, "notes", 1, 64) %}{% endcall %}
-    {% call m::num_row_bounded("ai_history", "ai_history_merge_width", "merge_width",
-       "Existing notes merged per Recap pass when coarsening.",
-       current.ai.history.merge_width, defaults.ai.history.merge_width, "notes", 2, 64) %}{% endcall %}
   </div>
 </section>
