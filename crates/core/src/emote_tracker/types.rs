@@ -151,6 +151,32 @@ pub struct UsageEventRow {
     pub flagged: bool,
 }
 
+/// Usage count for one emote within a query window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmoteUsageCount {
+    /// 7TV emote id.
+    pub emote_id: String,
+    /// Current (or last-known) channel-set name.
+    pub name: String,
+    /// Unflagged uses in the window.
+    pub count: i64,
+    /// Most recent use in the window (UTC unix ms).
+    pub last_used_at: i64,
+}
+
+/// Per-viewer count inside one emote's usage breakdown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserUsageCount {
+    /// Twitch user id (stable grouping key).
+    pub twitch_user_id: String,
+    /// Login at their most recent use in the window, when known.
+    pub login: Option<String>,
+    /// Unflagged uses of one emote in the window.
+    pub count: i64,
+    /// Most recent use in the window (UTC unix ms).
+    pub last_used_at: i64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SetEventListFilter {
     pub kind: Option<SetEventKind>,

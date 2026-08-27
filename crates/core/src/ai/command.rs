@@ -120,6 +120,7 @@ pub struct AiCommand {
     mouths: Arc<crate::twitch::mouth::MouthRouter>,
     echo: Arc<crate::twitch::echo::EchoGuard>,
     dhl: Option<Arc<crate::dhl::DhlClient>>,
+    emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     recap: Option<Arc<RecapHandle>>,
     langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
     /// Per-process nonce stamped into memory fences. Stable across
@@ -143,6 +144,7 @@ pub struct AiCommandDeps {
     pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
     pub echo: Arc<crate::twitch::echo::EchoGuard>,
     pub dhl: Option<Arc<crate::dhl::DhlClient>>,
+    pub emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     pub recap: Option<Arc<RecapHandle>>,
     pub langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 }
@@ -181,6 +183,12 @@ nur für DHL — bei DPD, Hermes, GLS oder UPS sag offen, dass du da nicht nachs
 Kein Treffer heißt: noch nicht erfasst oder kein DHL-Paket, nicht dass es die Sendung nicht \
 gibt. Erfind niemals einen Status oder ein Zustelldatum. Schreib Sendungsnummern nicht in \
 Memory-Dateien.";
+const EMOTE_STATS_SYSTEM_APPENDIX: &str = "\
+\n\n## Emote-Statistik\n\
+Bei Fragen zu Emote-Nutzung oder Set-Aenderungen ruf emote_stats auf und lass dir die Zahlen \
+liefern: kind=top fuer Trends, usage_by_user/usage_of_emote fuer einzelne Viewer oder Emotes, \
+set_history fuer Aenderungen am Channel-Set. Nenne niemals Zahlen, die das Tool nicht \
+geliefert hat.";
 
 fn ai_cooldown_duration(s: &Settings) -> Duration {
     Duration::from_secs(s.cooldowns.ai)
@@ -205,6 +213,7 @@ impl AiCommand {
             mouths: deps.mouths,
             echo: deps.echo,
             dhl: deps.dhl,
+            emote_tracker: deps.emote_tracker,
             recap: deps.recap,
             langfuse: deps.langfuse,
             prompt_nonce: inject::fresh_nonce(),
@@ -226,6 +235,7 @@ struct V2Executor<'a> {
     doener: &'a crate::doener::DoeneratlasClient,
     repology: &'a crate::repology::RepologyClient,
     dhl: Option<&'a crate::dhl::DhlClient>,
+    emote_tracker: Option<&'a Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     trace: &'a TraceIds,
 }
 
@@ -244,6 +254,12 @@ impl ToolExecutor for V2Executor<'_> {
         if call.name == crate::ai::dhl_tool::TRACK_SHIPMENT_TOOL_NAME {
             return match self.dhl {
                 Some(c) => crate::ai::dhl_tool::execute_track_shipment(c, call).await,
+                None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
+            };
+        }
+        if call.name == crate::ai::emote_stats_tool::EMOTE_STATS_TOOL_NAME {
+            return match self.emote_tracker {
+                Some(t) => crate::ai::emote_stats_tool::execute_emote_stats(t.clone(), call).await,
                 None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
             };
         }
@@ -785,6 +801,9 @@ where
         if self.emotes.is_some() {
             appendices.push(EMOTE_TOOLS_SYSTEM_APPENDIX.to_string());
         }
+        if self.emote_tracker.is_some() {
+            appendices.push(EMOTE_STATS_SYSTEM_APPENDIX.to_string());
+        }
         if !grok_alias {
             appendices.push(PACKAGE_TOOLS_SYSTEM_APPENDIX.to_string());
         }
@@ -874,6 +893,11 @@ where
         if self.emotes.is_some() {
             tools.push(crate::ai::emote_tool::search_emotes_tool());
         }
+        // Never registered without the tracker; available to Aurora and Grok
+        // alike, matching search_emotes.
+        if self.emote_tracker.is_some() {
+            tools.push(crate::ai::emote_stats_tool::emote_stats_tool());
+        }
         let trace = TraceIds {
             user: Some(ctx.privmsg.sender.login.clone()),
             session_id: Some(crate::ai::session::new_session_id()),
@@ -919,6 +943,7 @@ where
                     doener: self.doener.as_ref(),
                     repology: self.repology.as_ref(),
                     dhl: self.dhl.as_deref(),
+                    emote_tracker: self.emote_tracker.as_ref(),
                     trace: &trace,
                 };
                 let final_text = match run_agent(&*llm_client, req, &combined_exec, opts).await {
