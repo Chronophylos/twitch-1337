@@ -317,292 +317,300 @@ impl TestBotBuilder {
         self
     }
 
-    pub async fn spawn(mut self) -> TestBot {
-        let data_dir = TempDir::new().expect("tempdir");
+    /// Returns a boxed future: the builder chain produces a very large
+    /// future and every test awaits it inline; boxing keeps each call
+    /// site pointer-sized (also silences clippy::large_futures for all
+    /// 26 test call sites).
+    pub fn spawn(mut self) -> std::pin::Pin<Box<impl std::future::Future<Output = TestBot>>> {
+        Box::pin(async move {
+            let data_dir = TempDir::new().expect("tempdir");
 
-        if let Some(entries) = &self.seeded_leaderboard {
-            let path = data_dir.path().join("leaderboard.ron");
-            let contents = ron::ser::to_string(entries).expect("serialize leaderboard");
-            std::fs::write(&path, contents).expect("write leaderboard.ron");
-        }
-
-        if let Some(entries) = &self.seeded_hall_of_shame {
-            let path = data_dir.path().join("hall_of_shame.ron");
-            let contents = ron::ser::to_string(entries).expect("serialize hall of shame");
-            std::fs::write(&path, contents).expect("write hall_of_shame.ron");
-        }
-
-        let (adsb_mock, nominatim_mock, seventv_mock) = tokio::join!(
-            MockServer::start(),
-            MockServer::start(),
-            MockServer::start()
-        );
-        // When the test enables aviationstack via settings overrides and uses the
-        // default base_url, redirect to the mock server so tests don't hit the
-        // real API.
-        if let Some(ref mut o) = self.settings_overrides
-            && o.aviationstack.enabled == Some(true)
-            && o.aviationstack.base_url.is_none()
-        {
-            o.aviationstack.base_url = Some(adsb_mock.uri());
-        }
-        // If the test enabled emotes via settings overrides but hasn't set a
-        // base_url, redirect the 7TV API call to the wiremock server.
-        if self
-            .settings_overrides
-            .as_ref()
-            .and_then(|o| o.ai.emotes.enabled)
-            == Some(true)
-        {
-            let o = self.settings_overrides.get_or_insert_with(Default::default);
-            if o.ai.emotes.base_url.is_none() {
-                o.ai.emotes.base_url = Some(Some(seventv_mock.uri()));
+            if let Some(entries) = &self.seeded_leaderboard {
+                let path = data_dir.path().join("leaderboard.ron");
+                let contents = ron::ser::to_string(entries).expect("serialize leaderboard");
+                std::fs::write(&path, contents).expect("write leaderboard.ron");
             }
-        }
-        let llm = Arc::new(FakeLlm::new());
-        let whisper = Arc::new(FakeWhisperSender::new(self.whisper_failure));
-        let clock = FakeClock::new(self.now);
-        let channel = self.config.twitch.channel.clone();
 
-        let transport = fake_transport::install().await;
+            if let Some(entries) = &self.seeded_hall_of_shame {
+                let path = data_dir.path().join("hall_of_shame.ron");
+                let contents = ron::ser::to_string(entries).expect("serialize hall of shame");
+                std::fs::write(&path, contents).expect("write hall_of_shame.ron");
+            }
 
-        let client_cfg = ClientConfig::new_simple(StaticLoginCredentials::new(
-            "bot".to_owned(),
-            Some("test-token".to_owned()),
-        ));
-        let (incoming, client) =
-            TwitchIRCClient::<FakeTransport, StaticLoginCredentials>::new(client_cfg);
-        let client = Arc::new(client);
-        client.join(channel.clone()).expect("join");
-
-        twitch_1337::install_crypto_provider();
-
-        // Open settings first so we can read runtime values (e.g. aviationstack)
-        // before constructing the aviation client.
-        let audit = Arc::new(twitch_1337::settings::MemoryAuditLog::new());
-        let (settings_store, settings_handle) =
-            twitch_1337::settings::SettingsStore::open(data_dir.path(), audit, "test_chan")
-                .expect("open settings");
-        if let Some(mut o) = self.settings_overrides.take() {
-            normalize_test_history_overrides(&mut o);
-            let actor = twitch_1337::settings::Actor {
-                user_id: "test".into(),
-                user_login: "test".into(),
-            };
-            settings_store
-                .apply(o, actor)
-                .await
-                .expect("apply test overrides");
-        }
-
-        let http = reqwest::Client::new();
-        let av_settings = settings_handle.load().aviationstack.clone();
-        let aviation = AviationClient::new_with_base_url(
-            adsb_mock.uri(),
-            adsb_mock.uri(),      // adsbdb shares the same mock server in tests
-            nominatim_mock.uri(), // nominatim
-            http,
-        )
-        .with_aviationstack(
-            self.config
-                .aviationstack
+            let (adsb_mock, nominatim_mock, seventv_mock) = tokio::join!(
+                MockServer::start(),
+                MockServer::start(),
+                MockServer::start()
+            );
+            // When the test enables aviationstack via settings overrides and uses the
+            // default base_url, redirect to the mock server so tests don't hit the
+            // real API.
+            if let Some(ref mut o) = self.settings_overrides
+                && o.aviationstack.enabled == Some(true)
+                && o.aviationstack.base_url.is_none()
+            {
+                o.aviationstack.base_url = Some(adsb_mock.uri());
+            }
+            // If the test enabled emotes via settings overrides but hasn't set a
+            // base_url, redirect the 7TV API call to the wiremock server.
+            if self
+                .settings_overrides
                 .as_ref()
-                .map(|b| b.api_key.clone()),
-            av_settings.base_url.clone(),
-            av_settings.timeout_secs,
-        );
+                .and_then(|o| o.ai.emotes.enabled)
+                == Some(true)
+            {
+                let o = self.settings_overrides.get_or_insert_with(Default::default);
+                if o.ai.emotes.base_url.is_none() {
+                    o.ai.emotes.base_url = Some(Some(seventv_mock.uri()));
+                }
+            }
+            let llm = Arc::new(FakeLlm::new());
+            let whisper = Arc::new(FakeWhisperSender::new(self.whisper_failure));
+            let clock = FakeClock::new(self.now);
+            let channel = self.config.twitch.channel.clone();
 
-        let irc_connected = Arc::new(AtomicBool::new(false));
+            let transport = fake_transport::install().await;
 
-        let ping_manager =
-            twitch_1337::ping::PingManager::load(data_dir.path()).expect("load ping manager");
-        let (ping_actor_tx, ping_actor_rx, ping_names_tx, ping_names_rx) =
-            ping_actor_channel_full();
+            let client_cfg = ClientConfig::new_simple(StaticLoginCredentials::new(
+                "bot".to_owned(),
+                Some("test-token".to_owned()),
+            ));
+            let (incoming, client) =
+                TwitchIRCClient::<FakeTransport, StaticLoginCredentials>::new(client_cfg);
+            let client = Arc::new(client);
+            client.join(channel.clone()).expect("join");
 
-        let memory_store = twitch_1337::ai::memory::store::MemoryStore::open(
-            data_dir.path(),
-            settings_handle.clone(),
-        )
-        .await
-        .expect("open memory store");
-        // Build the telemetry store once; share the Arc with Services, web, and TestBot.
-        let telemetry_store = twitch_1337::schedule::TelemetryStore::open(data_dir.path());
+            twitch_1337::install_crypto_provider();
 
-        let recap_handle = if self.config.ai.is_some() {
-            Some(Arc::new(
-                twitch_1337::ai::recap::RecapHandle::load(data_dir.path().to_path_buf()).await,
-            ))
-        } else {
-            None
-        };
+            // Open settings first so we can read runtime values (e.g. aviationstack)
+            // before constructing the aviation client.
+            let audit = Arc::new(twitch_1337::settings::MemoryAuditLog::new());
+            let (settings_store, settings_handle) =
+                twitch_1337::settings::SettingsStore::open(data_dir.path(), audit, "test_chan")
+                    .expect("open settings");
+            if let Some(mut o) = self.settings_overrides.take() {
+                normalize_test_history_overrides(&mut o);
+                let actor = twitch_1337::settings::Actor {
+                    user_id: "test".into(),
+                    user_login: "test".into(),
+                };
+                settings_store
+                    .apply(o, actor)
+                    .await
+                    .expect("apply test overrides");
+            }
 
-        let web_spawner = if self.config.web.enabled {
-            let bind_addr: std::net::SocketAddr = self
-                .config
-                .web
-                .bind_addr
-                .parse()
-                .expect("test web.bind_addr");
-            let listener = twitch_1337_web::bind(bind_addr).await.expect("bind web");
-            let state = build_test_web_state(
-                &self.config,
-                irc_connected.clone(),
-                PingHandle::new((*ping_actor_tx).clone()),
-                memory_store.clone(),
-                settings_handle.clone(),
-                settings_store.clone(),
-                telemetry_store.clone(),
-                recap_handle.clone(),
+            let http = reqwest::Client::new();
+            let av_settings = settings_handle.load().aviationstack.clone();
+            let aviation = AviationClient::new_with_base_url(
+                adsb_mock.uri(),
+                adsb_mock.uri(),      // adsbdb shares the same mock server in tests
+                nominatim_mock.uri(), // nominatim
+                http,
+            )
+            .with_aviationstack(
+                self.config
+                    .aviationstack
+                    .as_ref()
+                    .map(|b| b.api_key.clone()),
+                av_settings.base_url.clone(),
+                av_settings.timeout_secs,
             );
-            let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
-                let deps = twitch_1337_web::WebDeps { bind_addr, state };
-                tokio::spawn(async move {
-                    if let Err(e) = twitch_1337_web::run_web(listener, deps, shutdown).await {
-                        tracing::error!(target: "twitch_1337_web", ?e, "test web exited");
-                    }
-                })
-            });
-            Some(spawner)
-        } else {
-            None
-        };
 
-        let (aviation_tracker_tx, aviation_tracker_rx) = {
-            let (tx, rx) = tokio::sync::mpsc::channel::<twitch_1337::aviation::TrackerCommand>(32);
-            (Some(Arc::new(tx)), Some(rx))
-        };
+            let irc_connected = Arc::new(AtomicBool::new(false));
 
-        let primary_history_tap: Arc<Mutex<Option<twitch_1337::ai::chat_history::ChatHistory>>> =
-            Arc::new(Mutex::new(None));
+            let ping_manager =
+                twitch_1337::ping::PingManager::load(data_dir.path()).expect("load ping manager");
+            let (ping_actor_tx, ping_actor_rx, ping_names_tx, ping_names_rx) =
+                ping_actor_channel_full();
 
-        let emote_tracker = if !self.open_emote_tracker {
-            None
-        } else {
-            let path = data_dir
-                .path()
-                .join(twitch_1337::emote_tracker::DB_FILENAME);
-            let handle = Arc::new(
-                twitch_1337::emote_tracker::EmoteTrackerHandle::open(&path)
-                    .expect("open test emote tracker"),
-            );
-            for (id, name) in &self.emote_catalog_seed {
-                handle
-                    .upsert_emote(id, name, true, 0)
-                    .await
-                    .expect("seed catalog");
-            }
-            for meaning in &self.emote_meanings_seed {
-                handle
-                    .upsert_emote_meaning(
-                        &meaning.emote_id,
-                        &meaning.appearance,
-                        meaning.meaning.as_deref(),
-                        meaning.usage.as_deref(),
-                        meaning.avoid.as_deref(),
-                        0,
-                    )
-                    .await
-                    .expect("seed emote meaning");
-            }
-            for event in &self.emote_set_event_seed {
-                handle
-                    .insert_set_event(event.clone())
-                    .await
-                    .expect("seed set event");
-            }
-            Some(handle)
-        };
-
-        let services = Services {
-            clock: clock.clone(),
-            llm: Arc::new(twitch_1337::llm_factory::LlmRegistry::fixed(
-                llm.clone() as Arc<dyn LlmClient>,
+            let memory_store = twitch_1337::ai::memory::store::MemoryStore::open(
+                data_dir.path(),
                 settings_handle.clone(),
-            )),
-            aviation: Some(aviation),
-            dhl: self.dhl_base_url.as_ref().map(|base| {
-                std::sync::Arc::new(twitch_1337::dhl::DhlClient::with_base_url(
-                    reqwest::Client::new(),
-                    base.clone(),
-                    secrecy::SecretString::new("test".into()),
+            )
+            .await
+            .expect("open memory store");
+            // Build the telemetry store once; share the Arc with Services, web, and TestBot.
+            let telemetry_store = twitch_1337::schedule::TelemetryStore::open(data_dir.path());
+
+            let recap_handle = if self.config.ai.is_some() {
+                Some(Arc::new(
+                    twitch_1337::ai::recap::RecapHandle::load(data_dir.path().to_path_buf()).await,
                 ))
-            }),
-            langfuse: None,
-            doener: Arc::new(twitch_1337::doener::DoeneratlasClient::with_base_url(
-                reqwest::Client::new(),
-                self.doener_base_url
-                    .clone()
-                    .unwrap_or_else(|| "http://127.0.0.1:1".to_string()),
-            )),
-            whisper: Some(whisper.clone() as Arc<dyn WhisperSender>),
-            data_dir: data_dir.path().to_path_buf(),
-            settings: settings_handle.clone(),
-            settings_store: settings_store.clone(),
-            irc_connected: irc_connected.clone(),
-            web_spawner,
-            ping_actor_tx,
-            ping_actor_rx,
-            ping_manager,
-            ping_names_tx,
-            ping_names_rx,
-            memory_store,
-            leaderboard: Arc::new(tokio::sync::RwLock::new(
-                load_leaderboard(data_dir.path()).await,
-            )),
-            hall_of_shame: Arc::new(tokio::sync::RwLock::new(
-                load_hall_of_shame(data_dir.path()).await,
-            )),
-            aviation_tracker_tx,
-            aviation_tracker_rx,
-            primary_history_tap: Some(primary_history_tap.clone()),
-            telemetry: telemetry_store.clone(),
-            emote_tracker,
-            twitch_channel_id: None,
-            mouths_override: build_mouths_override(self.mouth_identity, self.fake_mouths),
-            recap: recap_handle.clone(),
-        };
+            } else {
+                None
+            };
 
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let bot_task = tokio::spawn(run_bot(
-            client,
-            incoming,
-            self.config,
-            services,
-            shutdown_rx,
-        ));
+            let web_spawner = if self.config.web.enabled {
+                let bind_addr: std::net::SocketAddr = self
+                    .config
+                    .web
+                    .bind_addr
+                    .parse()
+                    .expect("test web.bind_addr");
+                let listener = twitch_1337_web::bind(bind_addr).await.expect("bind web");
+                let state = build_test_web_state(
+                    &self.config,
+                    irc_connected.clone(),
+                    PingHandle::new((*ping_actor_tx).clone()),
+                    memory_store.clone(),
+                    settings_handle.clone(),
+                    settings_store.clone(),
+                    telemetry_store.clone(),
+                    recap_handle.clone(),
+                );
+                let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
+                    let deps = twitch_1337_web::WebDeps { bind_addr, state };
+                    tokio::spawn(async move {
+                        if let Err(e) = twitch_1337_web::run_web(listener, deps, shutdown).await {
+                            tracing::error!(target: "twitch_1337_web", ?e, "test web exited");
+                        }
+                    })
+                });
+                Some(spawner)
+            } else {
+                None
+            };
 
-        // Wait for startup instead of sleeping a fixed interval: the latency
-        // handler flips `irc_connected` as its first action, and it is spawned
-        // *after* `spawn_handlers` created the command handler's broadcast
-        // receiver — so once the flag is set, injected messages can no longer
-        // be lost to a not-yet-subscribed handler.
-        let ready_deadline = tokio::time::Instant::now() + super::GENEROUS_WAIT;
-        while !irc_connected.load(std::sync::atomic::Ordering::Relaxed) {
-            assert!(
-                tokio::time::Instant::now() < ready_deadline,
-                "bot did not become ready within {:?}",
-                super::GENEROUS_WAIT
-            );
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
+            let (aviation_tracker_tx, aviation_tracker_rx) = {
+                let (tx, rx) =
+                    tokio::sync::mpsc::channel::<twitch_1337::aviation::TrackerCommand>(32);
+                (Some(Arc::new(tx)), Some(rx))
+            };
 
-        TestBot {
-            transport,
-            clock,
-            data_dir,
-            adsb_mock,
-            nominatim_mock,
-            seventv_mock,
-            llm,
-            whisper,
-            channel,
-            irc_connected,
-            primary_history_tap,
-            telemetry: telemetry_store,
-            settings: settings_handle,
-            shutdown: Some(shutdown_tx),
-            bot_task: Some(bot_task),
-        }
+            let primary_history_tap: Arc<
+                Mutex<Option<twitch_1337::ai::chat_history::ChatHistory>>,
+            > = Arc::new(Mutex::new(None));
+
+            let emote_tracker = if !self.open_emote_tracker {
+                None
+            } else {
+                let path = data_dir
+                    .path()
+                    .join(twitch_1337::emote_tracker::DB_FILENAME);
+                let handle = Arc::new(
+                    twitch_1337::emote_tracker::EmoteTrackerHandle::open(&path)
+                        .expect("open test emote tracker"),
+                );
+                for (id, name) in &self.emote_catalog_seed {
+                    handle
+                        .upsert_emote(id, name, true, 0)
+                        .await
+                        .expect("seed catalog");
+                }
+                for meaning in &self.emote_meanings_seed {
+                    handle
+                        .upsert_emote_meaning(
+                            &meaning.emote_id,
+                            &meaning.appearance,
+                            meaning.meaning.as_deref(),
+                            meaning.usage.as_deref(),
+                            meaning.avoid.as_deref(),
+                            0,
+                        )
+                        .await
+                        .expect("seed emote meaning");
+                }
+                for event in &self.emote_set_event_seed {
+                    handle
+                        .insert_set_event(event.clone())
+                        .await
+                        .expect("seed set event");
+                }
+                Some(handle)
+            };
+
+            let services = Services {
+                clock: clock.clone(),
+                llm: Arc::new(twitch_1337::llm_factory::LlmRegistry::fixed(
+                    llm.clone() as Arc<dyn LlmClient>,
+                    settings_handle.clone(),
+                )),
+                aviation: Some(aviation),
+                dhl: self.dhl_base_url.as_ref().map(|base| {
+                    std::sync::Arc::new(twitch_1337::dhl::DhlClient::with_base_url(
+                        reqwest::Client::new(),
+                        base.clone(),
+                        secrecy::SecretString::new("test".into()),
+                    ))
+                }),
+                langfuse: None,
+                doener: Arc::new(twitch_1337::doener::DoeneratlasClient::with_base_url(
+                    reqwest::Client::new(),
+                    self.doener_base_url
+                        .clone()
+                        .unwrap_or_else(|| "http://127.0.0.1:1".to_string()),
+                )),
+                whisper: Some(whisper.clone() as Arc<dyn WhisperSender>),
+                data_dir: data_dir.path().to_path_buf(),
+                settings: settings_handle.clone(),
+                settings_store: settings_store.clone(),
+                irc_connected: irc_connected.clone(),
+                web_spawner,
+                ping_actor_tx,
+                ping_actor_rx,
+                ping_manager,
+                ping_names_tx,
+                ping_names_rx,
+                memory_store,
+                leaderboard: Arc::new(tokio::sync::RwLock::new(
+                    load_leaderboard(data_dir.path()).await,
+                )),
+                hall_of_shame: Arc::new(tokio::sync::RwLock::new(
+                    load_hall_of_shame(data_dir.path()).await,
+                )),
+                aviation_tracker_tx,
+                aviation_tracker_rx,
+                primary_history_tap: Some(primary_history_tap.clone()),
+                telemetry: telemetry_store.clone(),
+                emote_tracker,
+                twitch_channel_id: None,
+                mouths_override: build_mouths_override(self.mouth_identity, self.fake_mouths),
+                recap: recap_handle.clone(),
+            };
+
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            let bot_task = tokio::spawn(run_bot(
+                client,
+                incoming,
+                self.config,
+                services,
+                shutdown_rx,
+            ));
+
+            // Wait for startup instead of sleeping a fixed interval: the latency
+            // handler flips `irc_connected` as its first action, and it is spawned
+            // *after* `spawn_handlers` created the command handler's broadcast
+            // receiver — so once the flag is set, injected messages can no longer
+            // be lost to a not-yet-subscribed handler.
+            let ready_deadline = tokio::time::Instant::now() + super::GENEROUS_WAIT;
+            while !irc_connected.load(std::sync::atomic::Ordering::Relaxed) {
+                assert!(
+                    tokio::time::Instant::now() < ready_deadline,
+                    "bot did not become ready within {:?}",
+                    super::GENEROUS_WAIT
+                );
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+
+            TestBot {
+                transport,
+                clock,
+                data_dir,
+                adsb_mock,
+                nominatim_mock,
+                seventv_mock,
+                llm,
+                whisper,
+                channel,
+                irc_connected,
+                primary_history_tap,
+                telemetry: telemetry_store,
+                settings: settings_handle,
+                shutdown: Some(shutdown_tx),
+                bot_task: Some(bot_task),
+            }
+        })
     }
 }
 

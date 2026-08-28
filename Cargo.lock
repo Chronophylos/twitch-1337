@@ -3286,7 +3286,6 @@ dependencies = [
  "reqwest",
  "secrecy",
  "tokio",
- "tower-cookies",
  "tracing",
  "twitch-1337-core",
  "twitch-1337-web",
