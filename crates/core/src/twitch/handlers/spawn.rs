@@ -24,7 +24,7 @@ use crate::{
     twitch::{
         ChatSender,
         handlers::{
-            commands::{CommandHandlerConfig, run_generic_command_handler},
+            commands::{CommandConfig, run_generic_command_handler},
             emote_usage::run_emote_usage_handler,
             latency::run_latency_handler,
             router::run_message_router,
@@ -67,16 +67,11 @@ where
     // Tasks that need raw IRC framing (latency PING/PONG, JOINs) keep `client`.
     let chat_sender = ChatSender::new(client.clone());
 
-    // Flight tracker: spawned first so `tracker_tx` exists for the command handler.
-    // The channel is pre-created by the caller (production: main.rs; tests: TestBotBuilder)
-    // so the sender Arc can be shared with WebState before handlers are spawned.
-    let (tracker_tx, flight_tracker) = match (services.aviation.clone(), tracker_rx) {
+    // Flight tracker. The channel is pre-created by the caller (production:
+    // main.rs; tests: TestBotBuilder) so the sender Arc can be shared with
+    // WebState and the command handler before handlers are spawned.
+    let flight_tracker = match (services.aviation.clone(), tracker_rx) {
         (Some(av), Some(rx)) => {
-            let tx = services
-                .aviation_tracker_tx
-                .as_ref()
-                .map(|a| (**a).clone())
-                .expect("tracker_tx must be Some when aviation is Some");
             let handle = tokio::spawn({
                 let services = services.clone();
                 let sender = chat_sender.clone();
@@ -92,9 +87,9 @@ where
                     .await;
                 }
             });
-            (Some(tx), handle)
+            handle
         }
-        _ => (None, tokio::spawn(std::future::pending::<()>())),
+        _ => tokio::spawn(std::future::pending::<()>()),
     };
 
     let emote_set_ingest = match (
@@ -238,40 +233,10 @@ where
         let services = services.clone();
         let client = client.clone();
         async move {
-            let (admin_channel, ai_channel) = {
-                let s = services.settings.load();
-                (s.twitch.admin_channel.clone(), s.twitch.ai_channel.clone())
-            };
-            run_generic_command_handler(CommandHandlerConfig {
+            run_generic_command_handler(CommandConfig {
                 broadcast_rx: commands_broadcast_rx,
+                services,
                 client,
-                ai_config: services.ai.clone(),
-                llm: services.llm.clone(),
-                ai_memory_v2: services.ai_memory.clone(),
-                leaderboard: services.leaderboard.clone(),
-                hall_of_shame: services.hall_of_shame.clone(),
-                ping_handle: services.ping.clone(),
-                ping_names_rx: services.ping_names_rx.clone(),
-                settings: services.settings.clone(),
-                tracker_tx,
-                aviation_client: services.aviation.clone(),
-                dhl: services.dhl.clone(),
-                langfuse: services.langfuse.clone(),
-                whisper: services.whisper.clone(),
-                admin_channel,
-                ai_channel,
-                bot_username: services.bot_username.clone(),
-                data_dir: services.data_dir.clone(),
-                doener: services.doener.clone(),
-                suspension_manager: services.suspension.clone(),
-                emote_provider: services.emote_provider.clone(),
-                emote_tracker: services.emote_tracker.clone(),
-                primary_history_tap: services.primary_history_tap.clone(),
-                started_at: services.started_at,
-                mouths: services.mouths.clone(),
-                echo: services.echo.clone(),
-                recap: services.recap.clone(),
-                chat_ctx: services.chat_ctx.clone(),
             })
             .await;
         }

@@ -2,7 +2,7 @@
 //! Owns the long-running task that filters PRIVMSGs from the broadcast channel
 //! and routes them to the matching `Command` implementation.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use tokio::{sync::broadcast, time::Duration};
 use tracing::{debug, error, info};
@@ -11,124 +11,47 @@ use twitch_irc::{
 };
 
 use crate::{
-    ChatHistory, PersonalBest, PersonalWorst, ai,
+    ChatHistory, Services, ai,
     ai::command::{AI_TRIGGER, GROK_ALIAS_TRIGGER, is_ai_trigger},
-    ai::recap::RecapHandle,
     aviation, commands,
-    config::AiBootstrap,
-    ping::PingHandle,
-    settings::SettingsHandle,
     suspend::SuspensionManager,
-    twitch::{ChatSender, mouth::Agent, seventv::SevenTvEmoteProvider, whisper::WhisperSender},
+    twitch::{ChatSender, mouth::Agent},
 };
 
-/// Configuration for the generic command handler.
-pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
-    /// Pre-subscribed broadcast receiver, created in `spawn_handlers` before
-    /// any handler task runs so messages broadcast during startup are
-    /// buffered instead of lost.
+/// Configuration for the generic command handler. Dispatcher-only: the
+/// only consumer of this struct. Everything else destructures
+/// `Arc<Services>` directly.
+pub struct CommandConfig<T: Transport, L: LoginCredentials> {
+    /// Pre-subscribed broadcast receiver, created in `spawn_handlers`
+    /// before any handler task runs so messages broadcast during startup
+    /// are buffered instead of lost (subscribe-before-router invariant).
     pub broadcast_rx: broadcast::Receiver<ServerMessage>,
+    pub services: Arc<Services>,
     pub client: Arc<TwitchIRCClient<T, L>>,
-    /// Bootstrap AI config (named keys only). `None` disables AI commands.
-    /// Agent profiles are resolved independently on every turn.
-    pub ai_config: Option<AiBootstrap>,
-    /// Resolves each agent's selected profile per turn. Injected so tests can
-    /// supply a fake via
-    /// [`crate::llm_factory::LlmRegistry::fixed`].
-    pub llm: Arc<crate::llm_factory::LlmRegistry>,
-    /// Pre-built memory v2 bundle. `None` disables v2 memory for `!ai`.
-    pub ai_memory_v2: Option<ai::command::AiMemoryV2>,
-    pub leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
-    pub hall_of_shame: Arc<tokio::sync::RwLock<HashMap<String, PersonalWorst>>>,
-    pub ping_handle: PingHandle,
-    pub ping_names_rx: tokio::sync::watch::Receiver<std::collections::HashSet<String>>,
-    pub settings: SettingsHandle,
-    pub tracker_tx: Option<tokio::sync::mpsc::Sender<aviation::TrackerCommand>>,
-    pub aviation_client: Option<aviation::AviationClient>,
-    /// DHL tracking client. `None` hides `track_shipment` from the model.
-    pub dhl: Option<Arc<crate::dhl::DhlClient>>,
-    pub langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
-    pub whisper: Option<Arc<dyn WhisperSender>>,
-    pub admin_channel: Option<String>,
-    pub ai_channel: Option<String>,
-    pub bot_username: String,
-    pub data_dir: std::path::PathBuf,
-    pub doener: Arc<crate::doener::DoeneratlasClient>,
-    /// Per-agent Helix chat-send mouths, built at startup from configured
-    /// mouth accounts. A mouth without a configured account (or one whose
-    /// Helix setup failed) is `None`; the reply path routes through it and
-    /// falls back to utility IRC via `SpeakOutcome::NoMouth`.
-    pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
-    /// Echo suppression for the bot's own AI mouths; registered on speak so
-    /// the reply path (and other broadcast consumers) can recognize its own
-    /// outgoing messages coming back over the broadcast channel.
-    pub echo: Arc<crate::twitch::echo::EchoGuard>,
-    pub suspension_manager: Arc<SuspensionManager>,
-    /// Pre-built 7TV emote provider. `None` disables emote grounding for `!ai`.
-    pub emote_provider: Option<Arc<SevenTvEmoteProvider>>,
-    /// Emote set-audit store. `None` disables `!e`.
-    pub emote_tracker: Option<std::sync::Arc<crate::emote_tracker::EmoteTrackerHandle>>,
-    /// Optional test-only sink: when set, the freshly built primary
-    /// `ChatHistory` `Arc` is stored here so integration tests can peek at
-    /// chat-history entries. Production wires `None`.
-    pub primary_history_tap: Option<Arc<tokio::sync::Mutex<Option<ChatHistory>>>>,
-    /// Process start instant, captured in `run_bot`. Used by `!v` for uptime.
-    pub started_at: std::time::Instant,
-    /// Shared chat-recap handle. `None` when AI / LLM is disabled.
-    pub recap: Option<std::sync::Arc<RecapHandle>>,
-    /// Shared chat-history buffers built at composition. `None` when AI or
-    /// chat history is disabled.
-    pub chat_ctx: Option<ai::command::ChatContext>,
 }
 
 /// Handler for generic text commands that start with `!`.
-pub async fn run_generic_command_handler<T, L>(cfg: CommandHandlerConfig<T, L>)
+pub async fn run_generic_command_handler<T, L>(cfg: CommandConfig<T, L>)
 where
     T: Transport + Send + Sync + 'static,
     L: LoginCredentials + Send + Sync + 'static,
 {
     info!("Generic Command Handler started");
 
-    let CommandHandlerConfig {
+    let CommandConfig {
         broadcast_rx,
+        services,
         client,
-        ai_config,
-        llm,
-        ai_memory_v2,
-        leaderboard,
-        hall_of_shame,
-        ping_handle,
-        ping_names_rx,
-        settings,
-        tracker_tx,
-        aviation_client,
-        dhl,
-        langfuse,
-        whisper,
-        admin_channel,
-        ai_channel,
-        bot_username,
-        data_dir,
-        doener,
-        suspension_manager,
-        emote_provider,
-        emote_tracker,
-        primary_history_tap,
-        started_at,
-        mouths,
-        echo,
-        recap,
-        chat_ctx,
     } = cfg;
 
     // Snapshot of the dashboard-managed settings at startup. Reads below use
-    // these values; Tasks 6+ make selected commands consume the handle live.
-    let snapshot = settings.load_full();
+    // these values; selected commands consume the handle live.
+    let snapshot = services.settings.load_full();
 
     // Registration depends only on bootstrap AI being present. Each command
     // resolves its own profile per turn, so one stale agent pointer cannot
     // disable the others and profile repairs take effect without a restart.
-    let ai_configured = ai_config.is_some();
+    let ai_configured = services.ai.is_some();
     if ai_configured {
         info!("AI commands enabled; agent profiles resolve per turn");
     } else {
@@ -137,64 +60,55 @@ where
 
     // Hand the primary history Arc to the (test-only) tap so integration
     // tests can peek at chat-history entries. Production wires `None`.
-    if let (Some(tap), Some(ctx)) = (primary_history_tap.as_ref(), chat_ctx.as_ref()) {
+    if let (Some(tap), Some(ctx)) = (
+        services.primary_history_tap.as_ref(),
+        services.chat_ctx.as_ref(),
+    ) {
         *tap.lock().await = Some(ctx.primary_history.clone());
     }
 
-    // Snapshot the shared history buffers for the dispatcher before the
-    // individual commands consume `chat_ctx`.
-    let (primary_history_for_dispatch, ai_channel_history_for_dispatch) = chat_ctx
-        .as_ref()
-        .map(|ctx| {
-            (
-                Some(ctx.primary_history.clone()),
-                ctx.ai_channel_history.clone(),
-            )
-        })
-        .unwrap_or((None, None));
-
     let mut cmd_list: Vec<Box<dyn commands::Command<T, L>>> = vec![
-        Box::new(commands::version::VersionCommand::new(started_at)),
+        Box::new(commands::version::VersionCommand::new(services.started_at)),
         Box::new(commands::ping_admin::PingAdminCommand::new(
-            ping_handle.clone(),
-            settings.clone(),
+            services.ping.clone(),
+            services.settings.clone(),
         )),
         Box::new(commands::suspend::SuspendCommand::new(
-            suspension_manager.clone(),
-            settings.clone(),
+            services.suspension.clone(),
+            services.settings.clone(),
         )),
         Box::new(commands::suspend::UnsuspendCommand::new(
-            suspension_manager.clone(),
-            settings.clone(),
+            services.suspension.clone(),
+            services.settings.clone(),
         )),
         Box::new(aviation::commands::random_flight::RandomFlightCommand),
         Box::new(aviation::commands::flights_above::FlightsAboveCommand::new(
-            aviation_client,
-            settings.clone(),
+            services.aviation.clone(),
+            services.settings.clone(),
         )),
         Box::new(commands::leaderboard::LeaderboardCommand::new(
-            leaderboard.clone(),
+            services.leaderboard.clone(),
         )),
         Box::new(commands::hall_of_shame::HallOfShameCommand::new(
-            hall_of_shame.clone(),
+            services.hall_of_shame.clone(),
         )),
-        Box::new(commands::pw::PwCommand::new(hall_of_shame)),
-        Box::new(commands::pb::PbCommand::new(leaderboard)),
+        Box::new(commands::pw::PwCommand::new(services.hall_of_shame.clone())),
+        Box::new(commands::pb::PbCommand::new(services.leaderboard.clone())),
         Box::new(commands::feedback::FeedbackCommand::new(
-            data_dir.clone(),
-            settings.clone(),
+            services.data_dir.clone(),
+            services.settings.clone(),
         )),
         Box::new(commands::doener::DoenerCommand::new(
-            doener.clone(),
-            settings.clone(),
+            services.doener.clone(),
+            services.settings.clone(),
         )),
         Box::new(commands::doener_calc::DoenerCalcCommand::new(
-            doener.clone(),
-            settings.clone(),
+            services.doener.clone(),
+            services.settings.clone(),
         )),
     ];
 
-    if let Some(tx) = tracker_tx {
+    if let Some(tx) = services.aviation_tracker_tx.as_ref().map(|a| (**a).clone()) {
         cmd_list.push(Box::new(aviation::commands::track::TrackCommand::new(
             tx.clone(),
         )));
@@ -210,11 +124,11 @@ where
         cmd_list.push(Box::new(aviation::commands::info::InfoCommand::new(tx)));
     }
 
-    if let Some(tracker) = emote_tracker.clone() {
+    if let Some(tracker) = services.emote_tracker.clone() {
         cmd_list.push(Box::new(commands::emote::EmoteCommand::new(tracker)));
     }
 
-    if let Some(ai_memory_v2) = ai_memory_v2.filter(|_| ai_configured) {
+    if let Some(ai_memory_v2) = services.ai_memory.clone().filter(|_| ai_configured) {
         let web = if let Some(web_cfg) = snapshot.ai.web.as_ref() {
             let search = match ai::content::SearchClient::new(
                 &web_cfg.base_url,
@@ -240,19 +154,19 @@ where
                 executor: Arc::new(ai::content::ContentToolExecutor::new(
                     client,
                     media_http,
-                    llm.clone(),
-                    settings.clone(),
+                    services.llm.clone(),
+                    services.settings.clone(),
                     Duration::from_secs(web_cfg.cache_ttl_secs),
                     web_cfg.cache_capacity,
                 )),
-                settings: settings.clone(),
+                settings: services.settings.clone(),
             })
         } else {
             None
         };
 
         let news_cooldown = Arc::new(crate::cooldown::PerUserCooldown::live(
-            settings.clone(),
+            services.settings.clone(),
             commands::news_cooldown_duration,
         ));
 
@@ -269,74 +183,63 @@ where
 
         cmd_list.push(Box::new(ai::command::AiCommand::new(
             ai::command::AiCommandDeps {
-                registry: llm.clone(),
-                settings: settings.clone(),
-                chat_ctx: chat_ctx.clone(),
+                registry: services.llm.clone(),
+                settings: services.settings.clone(),
+                chat_ctx: services.chat_ctx.clone(),
                 memory: ai_memory_v2,
-                web: web.clone(),
-                emotes: emote_provider,
-                bot_username: bot_username.clone(),
-                doener: doener.clone(),
+                web,
+                emotes: services.emote_provider.clone(),
+                bot_username: services.bot_username.clone(),
+                doener: services.doener.clone(),
                 repology,
                 pronouns,
-                dhl,
-                emote_tracker,
-                langfuse: langfuse.clone(),
+                dhl: services.dhl.clone(),
+                emote_tracker: services.emote_tracker.clone(),
+                langfuse: services.langfuse.clone(),
                 model_catalog,
-                mouths: mouths.clone(),
-                echo: echo.clone(),
-                recap: recap.clone(),
+                mouths: services.mouths.clone(),
+                echo: services.echo.clone(),
+                recap: services.recap.clone(),
             },
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
-            llm.clone(),
-            settings.clone(),
+            services.llm.clone(),
+            services.settings.clone(),
             commands::news::NewsMode::News,
-            chat_ctx.clone(),
-            whisper.clone(),
+            services.chat_ctx.clone(),
+            services.whisper.clone(),
             news_cooldown.clone(),
-            langfuse.clone(),
+            services.langfuse.clone(),
         )));
         cmd_list.push(Box::new(commands::news::NewsCommand::new(
-            llm.clone(),
-            settings.clone(),
+            services.llm.clone(),
+            services.settings.clone(),
             commands::news::NewsMode::Tldr,
-            chat_ctx.clone(),
-            whisper.clone(),
+            services.chat_ctx.clone(),
+            services.whisper.clone(),
             news_cooldown.clone(),
-            langfuse.clone(),
+            services.langfuse.clone(),
         )));
         cmd_list.push(Box::new(commands::haiku::HaikuCommand::new(
-            llm,
-            settings.clone(),
-            chat_ctx,
+            services.llm.clone(),
+            services.settings.clone(),
+            services.chat_ctx.clone(),
             news_cooldown,
-            langfuse,
+            services.langfuse.clone(),
         )));
     }
 
     // PingTriggerCommand must be last: it matches any !<name> that is a registered ping,
     // so built-in commands earlier in the list take priority and can't be shadowed.
     cmd_list.push(Box::new(commands::ping_trigger::PingTriggerCommand::new(
-        ping_handle,
-        settings.clone(),
-        ping_names_rx,
+        services.ping.clone(),
+        services.settings.clone(),
+        services.ping_names_rx.clone(),
     )));
 
     let sender = ChatSender::new(client.clone());
 
-    run_command_dispatcher(
-        broadcast_rx,
-        sender,
-        cmd_list,
-        admin_channel,
-        ai_channel,
-        primary_history_for_dispatch,
-        ai_channel_history_for_dispatch,
-        suspension_manager,
-        echo,
-    )
-    .await;
+    run_command_dispatcher(broadcast_rx, services, sender, cmd_list).await;
 }
 
 struct CommandInvocation<'a> {
@@ -459,23 +362,34 @@ async fn dispatch_command<T, L>(
 }
 
 /// Main dispatch loop for trait-based commands.
-// Two separate history buffers (primary + ai_channel) push this over the 7-arg limit;
-// wrapping them in a struct would add noise without clarity gain.
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_command_dispatcher<T, L>(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
+    services: Arc<Services>,
     sender: Arc<ChatSender<T, L>>,
     commands: Vec<Box<dyn crate::commands::Command<T, L>>>,
-    admin_channel: Option<String>,
-    ai_channel: Option<String>,
-    primary_history_for_dispatch: Option<ChatHistory>,
-    ai_channel_history_for_dispatch: Option<ChatHistory>,
-    suspension_manager: Arc<SuspensionManager>,
-    echo: Arc<crate::twitch::echo::EchoGuard>,
 ) where
     T: Transport,
     L: LoginCredentials,
 {
+    // Channel gating and history buffers are read from `Services` once, up
+    // front. `admin_channel` / `ai_channel` are restart-required settings
+    // knobs; the buffers are Arcs shared with every other consumer.
+    let snapshot = services.settings.load_full();
+    let admin_channel = snapshot.twitch.admin_channel.clone();
+    let ai_channel = snapshot.twitch.ai_channel.clone();
+    let (primary_history_for_dispatch, ai_channel_history_for_dispatch) = services
+        .chat_ctx
+        .as_ref()
+        .map(|ctx| {
+            (
+                Some(ctx.primary_history.clone()),
+                ctx.ai_channel_history.clone(),
+            )
+        })
+        .unwrap_or((None, None));
+    let suspension_manager = services.suspension.clone();
+    let echo = services.echo.clone();
+
     loop {
         match broadcast_rx.recv().await {
             Ok(message) => {
