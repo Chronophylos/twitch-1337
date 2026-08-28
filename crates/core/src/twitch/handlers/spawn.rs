@@ -1,21 +1,14 @@
 //! Handler spawn factory.
 //!
-//! `run_bot` (in `src/lib.rs`) calls [`spawn_handlers`] once with everything
-//! the long-running tasks need. The returned [`HandlerSet`] owns every
+//! `run_bot` (in `src/lib.rs`) calls [`spawn_handlers`] once with the shared
+//! `Arc<Services>`. The returned [`HandlerSet`] owns every
 //! `JoinHandle` plus the shared `Arc<Notify>` post-spawn code uses to drain
 //! the scheduled-message handler on shutdown.
 
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU32},
-    },
-};
+use std::sync::{Arc, atomic::AtomicU32};
 
 use tokio::{
-    sync::{Notify, RwLock, broadcast, mpsc, oneshot, watch},
+    sync::{Notify, broadcast, mpsc, oneshot},
     task::JoinHandle,
     time::{Duration, timeout},
 };
@@ -25,13 +18,9 @@ use twitch_irc::{
 };
 
 use crate::{
-    ai,
-    ai::recap::RecapHandle,
+    Services,
     ai::recap_batcher::run_recap_batcher,
-    aviation::{self, AviationClient},
-    config::AiBootstrap,
-    ping::PingHandle,
-    suspend::SuspensionManager,
+    aviation,
     twitch::{
         ChatSender,
         handlers::{
@@ -40,11 +29,9 @@ use crate::{
             latency::run_latency_handler,
             router::run_message_router,
             schedule_runner::run_orchestrator,
-            tracker_1337::{PersonalBest, PersonalWorst, run_1337_handler},
+            tracker_1337::run_1337_handler,
         },
-        whisper::WhisperSender,
     },
-    util::clock::Clock,
 };
 
 /// All `JoinHandle`s plus the shared state `run_bot` keeps after spawn.
@@ -63,138 +50,19 @@ pub(crate) struct HandlerSet {
     pub shutdown_notify: Arc<Notify>,
 }
 
-/// Inputs for [`spawn_handlers`]. Grouped by handler.
-pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
-    // Shared.
-    pub client: Arc<TwitchIRCClient<T, L>>,
-    pub incoming: tokio::sync::mpsc::UnboundedReceiver<ServerMessage>,
-    pub clock: Arc<dyn Clock>,
-    pub data_dir: PathBuf,
-    pub doener: Arc<crate::doener::DoeneratlasClient>,
-    /// Primary channel login (`Services.channel`).
-    pub channel: String,
-    /// The utility bot's own login (`Services.bot_username`).
-    pub bot_username: String,
-    /// Bootstrap AI section; presence gates AI command registration.
-    pub ai: Option<AiBootstrap>,
-
-    // 1337 tracker.
-    pub leaderboard: Arc<RwLock<HashMap<String, PersonalBest>>>,
-    pub hall_of_shame: Arc<RwLock<HashMap<String, PersonalWorst>>>,
-
-    // Generic commands (ping actor).
-    pub ping: PingHandle,
-    pub ping_names_rx: watch::Receiver<std::collections::HashSet<String>>,
-    pub suspension_manager: Arc<SuspensionManager>,
-    pub llm: Arc<crate::llm_factory::LlmRegistry>,
-    pub ai_memory_v2: Option<ai::command::AiMemoryV2>,
-    pub transcript: Option<crate::ai::memory::transcript::TranscriptWriter>,
-    pub whisper: Option<Arc<dyn WhisperSender>>,
-
-    // Flight tracker.
-    pub aviation: Option<AviationClient>,
-    pub aviation_for_commands: Option<AviationClient>,
-    pub dhl: Option<Arc<crate::dhl::DhlClient>>,
-    pub langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
-    /// Pre-created sender half of the flight-tracker channel. Must be `Some`
-    /// when `aviation` is `Some`, and `None` otherwise.
-    pub aviation_tracker_tx: Option<mpsc::Sender<aviation::TrackerCommand>>,
-    /// Pre-created receiver half of the flight-tracker channel. Consumed by
-    /// `spawn_handlers` to start the flight-tracker task. Must be `Some` when
-    /// `aviation` is `Some`, and `None` otherwise.
-    pub aviation_tracker_rx: Option<mpsc::Receiver<aviation::TrackerCommand>>,
-
-    // AI emote grounding.
-    pub emote_provider: Option<Arc<crate::twitch::seventv::SevenTvEmoteProvider>>,
-
-    // Shared IRC connectivity flag (latency monitor flips, web /healthz reads).
-    pub irc_connected: Arc<AtomicBool>,
-
-    // Dashboard-managed runtime settings (cooldowns, pings.cooldown, pings.public).
-    pub settings: crate::settings::SettingsHandle,
-
-    /// Settings store handle, used by the schedule sync task to subscribe to
-    /// change notifications.
-    pub settings_store: Arc<crate::settings::SettingsStore>,
-
-    /// Optional test-only sink: when set, the commands handler stores the
-    /// primary `ChatHistory` `Arc` here so integration tests can peek at
-    /// chat-history entries. Production wires `None`.
-    pub primary_history_tap:
-        Option<Arc<tokio::sync::Mutex<Option<crate::ai::chat_history::ChatHistory>>>>,
-
-    /// Per-schedule runtime telemetry. Shared with the dashboard so card
-    /// chips ("12 today", "12m ago") read live data.
-    pub telemetry: Arc<crate::schedule::TelemetryStore>,
-    /// Process start instant, captured at composition; forwarded to `!v`.
-    pub started_at: std::time::Instant,
-
-    /// Emote set audit + usage SoR. `None` when SQLite open/migrate failed.
-    pub emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
-    /// Twitch broadcaster user id for 7TV EventAPI subscription. `None` when
-    /// Helix resolve failed — ingest stays off without aborting the bot.
-    pub twitch_channel_id: Option<String>,
-
-    /// Per-agent Helix chat-send mouths, built at composition.
-    pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
-    /// Echo suppression for the bot's own AI mouths.
-    pub echo: Arc<crate::twitch::echo::EchoGuard>,
-
-    /// Shared chat-history buffers built at composition. `None` when AI or
-    /// chat history is disabled.
-    pub chat_ctx: Option<ai::command::ChatContext>,
-
-    /// Shared chat-recap handle. `None` when AI / LLM is disabled.
-    pub recap: Option<Arc<RecapHandle>>,
-}
-
 /// Spawn every long-running handler task in the order they currently
 /// appear in `run_bot`. Returns a [`HandlerSet`] owning all handles plus
 /// shared `Notify` / `tracker_tx`.
-pub(crate) fn spawn_handlers<T, L>(deps: SpawnDeps<T, L>) -> HandlerSet
+pub(crate) fn spawn_handlers<T, L>(
+    services: Arc<Services>,
+    client: Arc<TwitchIRCClient<T, L>>,
+    incoming: tokio::sync::mpsc::UnboundedReceiver<ServerMessage>,
+    tracker_rx: Option<mpsc::Receiver<aviation::TrackerCommand>>,
+) -> HandlerSet
 where
     T: Transport + Send + Sync + 'static,
     L: LoginCredentials + Send + Sync + 'static,
 {
-    let SpawnDeps {
-        client,
-        incoming,
-        clock,
-        data_dir,
-        doener,
-        channel,
-        bot_username,
-        ai,
-        leaderboard,
-        hall_of_shame,
-        ping,
-        ping_names_rx,
-        suspension_manager,
-        llm,
-        ai_memory_v2,
-        transcript,
-        whisper,
-        aviation,
-        aviation_for_commands,
-        dhl,
-        langfuse,
-        aviation_tracker_tx,
-        aviation_tracker_rx,
-        emote_provider,
-        irc_connected,
-        settings,
-        settings_store,
-        primary_history_tap,
-        telemetry,
-        started_at,
-        emote_tracker,
-        twitch_channel_id,
-        mouths,
-        echo,
-        chat_ctx,
-        recap,
-    } = deps;
-
     // One sanitizing chat sender shared by every PRIVMSG-emitting handler.
     // Tasks that need raw IRC framing (latency PING/PONG, JOINs) keep `client`.
     let chat_sender = ChatSender::new(client.clone());
@@ -202,16 +70,26 @@ where
     // Flight tracker: spawned first so `tracker_tx` exists for the command handler.
     // The channel is pre-created by the caller (production: main.rs; tests: TestBotBuilder)
     // so the sender Arc can be shared with WebState before handlers are spawned.
-    let (tracker_tx, flight_tracker) = match (aviation, aviation_tracker_rx) {
+    let (tracker_tx, flight_tracker) = match (services.aviation.clone(), tracker_rx) {
         (Some(av), Some(rx)) => {
-            let tx = aviation_tracker_tx.expect("tracker_tx must be Some when aviation is Some");
+            let tx = services
+                .aviation_tracker_tx
+                .as_ref()
+                .map(|a| (**a).clone())
+                .expect("tracker_tx must be Some when aviation is Some");
             let handle = tokio::spawn({
+                let services = services.clone();
                 let sender = chat_sender.clone();
-                let channel = channel.clone();
-                let dir = data_dir.clone();
-                let clk = clock.clone();
                 async move {
-                    aviation::run_flight_tracker(rx, sender, channel, av, dir, clk).await;
+                    aviation::run_flight_tracker(
+                        rx,
+                        sender,
+                        services.channel.clone(),
+                        av,
+                        services.data_dir.clone(),
+                        services.clock.clone(),
+                    )
+                    .await;
                 }
             });
             (Some(tx), handle)
@@ -219,11 +97,14 @@ where
         _ => (None, tokio::spawn(std::future::pending::<()>())),
     };
 
-    let emote_set_ingest = match (emote_tracker.clone(), twitch_channel_id) {
+    let emote_set_ingest = match (
+        services.emote_tracker.clone(),
+        services.twitch_channel_id.clone(),
+    ) {
         (Some(handle), Some(channel_id)) => {
             let http = reqwest::Client::new();
-            let cfg = crate::emote_tracker::IngestConfig::new(channel_id, channel.clone());
-            let settings = settings.clone();
+            let cfg = crate::emote_tracker::IngestConfig::new(channel_id, services.channel.clone());
+            let settings = services.settings.clone();
             tokio::spawn(async move {
                 crate::emote_tracker::run_set_ingest(handle, cfg, http, settings).await;
             })
@@ -250,44 +131,44 @@ where
     // `telemetry` comes from the caller (constructed in run_bot so WebState
     // and the orchestrator share the same Arc).
     let scheduled_messages = tokio::spawn({
+        let services = services.clone();
         let sender = chat_sender.clone();
-        let settings = settings.clone();
-        let change_notify = settings_store.change_notify();
-        let telemetry = telemetry.clone();
-        let channel = channel.clone();
+        let change_notify = services.settings_store.change_notify();
         let notify = shutdown_notify.clone();
-        let clk = clock.clone();
         async move {
             run_orchestrator(
                 sender,
-                settings,
+                services.settings.clone(),
                 change_notify,
-                telemetry,
-                channel,
+                services.telemetry.clone(),
+                services.channel.clone(),
                 notify,
-                clk,
+                services.clock.clone(),
             )
             .await;
         }
     });
 
-    let latency_value = Arc::new(AtomicU32::new(settings.load().twitch.expected_latency));
+    let latency_value = Arc::new(AtomicU32::new(
+        services.settings.load().twitch.expected_latency,
+    ));
 
     let latency = tokio::spawn({
         let client = client.clone();
         let btx = broadcast_tx.clone();
         let lat = latency_value.clone();
-        let conn = irc_connected.clone();
+        let conn = services.irc_connected.clone();
         async move {
             run_latency_handler(client, btx, lat, conn).await;
         }
     });
 
-    let _transcript_tap = if let Some(t) = transcript {
+    let _transcript_tap = if let Some(t) = services.ai_memory.as_ref().map(|m| m.transcript.clone())
+    {
         let rx = broadcast_tx.subscribe();
         let w = Arc::new(t);
-        let ch = channel.clone();
-        let echo_tap = echo.clone();
+        let ch = services.channel.clone();
+        let echo_tap = services.echo.clone();
         Some(tokio::spawn(async move {
             crate::twitch::handlers::transcript::run_transcript_tap(rx, w, ch, echo_tap).await;
         }))
@@ -296,13 +177,13 @@ where
     };
 
     // Clone so `CommandHandlerConfig` (Plan 4 `!e`) can still take `emote_tracker`.
-    let emote_usage = match emote_tracker.clone() {
+    let emote_usage = match services.emote_tracker.clone() {
         Some(handle) => {
             let rx = broadcast_tx.subscribe();
-            let settings = settings.clone();
-            let channel = channel.clone();
-            let bot_username = bot_username.clone();
-            let echo_usage = echo.clone();
+            let settings = services.settings.clone();
+            let channel = services.channel.clone();
+            let bot_username = services.bot_username.clone();
+            let echo_usage = services.echo.clone();
             tokio::spawn(async move {
                 run_emote_usage_handler(rx, handle, settings, channel, bot_username, echo_usage)
                     .await;
@@ -314,26 +195,26 @@ where
     let tracker_1337 = tokio::spawn({
         let btx = broadcast_tx.clone();
         let sender = chat_sender.clone();
-        let channel = channel.clone();
+        let channel = services.channel.clone();
         let lat = latency_value.clone();
-        let lb = leaderboard.clone();
-        let hos = hall_of_shame.clone();
-        let clk = clock.clone();
-        let dd = data_dir.clone();
-        let echo_tracker = echo.clone();
+        let lb = services.leaderboard.clone();
+        let hos = services.hall_of_shame.clone();
+        let clk = services.clock.clone();
+        let dd = services.data_dir.clone();
+        let echo_tracker = services.echo.clone();
         async move {
             run_1337_handler(btx, sender, channel, lat, lb, hos, clk, dd, echo_tracker).await;
         }
     });
 
-    let recap_task = match (recap.clone(), chat_ctx.clone()) {
+    let recap_task = match (services.recap.clone(), services.chat_ctx.clone()) {
         (Some(handle), Some(ctx)) => {
-            let settings = settings.clone();
+            let settings = services.settings.clone();
             let shutdown = shutdown_notify.clone();
-            let echo_for_logins = echo.clone();
-            let registry = llm.clone();
-            let observer = langfuse.clone();
-            let bot_username = bot_username.clone();
+            let echo_for_logins = services.echo.clone();
+            let registry = services.llm.clone();
+            let observer = services.langfuse.clone();
+            let bot_username = services.bot_username.clone();
             tokio::spawn(async move {
                 let mut self_logins = vec![bot_username.to_ascii_lowercase()];
                 self_logins.extend(echo_for_logins.mouth_logins().iter().cloned());
@@ -354,42 +235,43 @@ where
     };
 
     let generic_commands = tokio::spawn({
+        let services = services.clone();
         let client = client.clone();
         async move {
             let (admin_channel, ai_channel) = {
-                let s = settings.load();
+                let s = services.settings.load();
                 (s.twitch.admin_channel.clone(), s.twitch.ai_channel.clone())
             };
             run_generic_command_handler(CommandHandlerConfig {
                 broadcast_rx: commands_broadcast_rx,
                 client,
-                ai_config: ai,
-                llm,
-                ai_memory_v2,
-                leaderboard,
-                hall_of_shame,
-                ping_handle: ping,
-                ping_names_rx,
-                settings: settings.clone(),
+                ai_config: services.ai.clone(),
+                llm: services.llm.clone(),
+                ai_memory_v2: services.ai_memory.clone(),
+                leaderboard: services.leaderboard.clone(),
+                hall_of_shame: services.hall_of_shame.clone(),
+                ping_handle: services.ping.clone(),
+                ping_names_rx: services.ping_names_rx.clone(),
+                settings: services.settings.clone(),
                 tracker_tx,
-                aviation_client: aviation_for_commands,
-                dhl,
-                langfuse,
-                whisper,
+                aviation_client: services.aviation.clone(),
+                dhl: services.dhl.clone(),
+                langfuse: services.langfuse.clone(),
+                whisper: services.whisper.clone(),
                 admin_channel,
                 ai_channel,
-                bot_username,
-                data_dir,
-                doener,
-                suspension_manager,
-                emote_provider,
-                emote_tracker,
-                primary_history_tap,
-                started_at,
-                mouths,
-                echo,
-                recap,
-                chat_ctx,
+                bot_username: services.bot_username.clone(),
+                data_dir: services.data_dir.clone(),
+                doener: services.doener.clone(),
+                suspension_manager: services.suspension.clone(),
+                emote_provider: services.emote_provider.clone(),
+                emote_tracker: services.emote_tracker.clone(),
+                primary_history_tap: services.primary_history_tap.clone(),
+                started_at: services.started_at,
+                mouths: services.mouths.clone(),
+                echo: services.echo.clone(),
+                recap: services.recap.clone(),
+                chat_ctx: services.chat_ctx.clone(),
             })
             .await;
         }

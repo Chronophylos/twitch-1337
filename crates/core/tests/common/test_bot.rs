@@ -582,7 +582,6 @@ impl TestBotBuilder {
                 settings: settings_handle.clone(),
                 settings_store: settings_store.clone(),
                 irc_connected: irc_connected.clone(),
-                web_spawner,
                 channel: channel.clone(),
                 bot_username: self.config.twitch.username.clone(),
                 ai: self.config.ai.clone(),
@@ -617,6 +616,7 @@ impl TestBotBuilder {
                 services,
                 ping_runtime,
                 aviation_tracker_rx,
+                web_spawner,
                 shutdown_rx,
             ));
 

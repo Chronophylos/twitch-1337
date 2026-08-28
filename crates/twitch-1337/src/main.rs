@@ -407,7 +407,6 @@ pub async fn main() -> Result<()> {
         settings: settings_handle,
         settings_store,
         irc_connected,
-        web_spawner,
         channel: config.twitch.channel.clone(),
         bot_username: config.twitch.username.clone(),
         ai: config.ai.clone(),
@@ -443,6 +442,7 @@ pub async fn main() -> Result<()> {
         services,
         ping_runtime,
         aviation_tracker_rx,
+        web_spawner,
         shutdown_rx,
     )
     .await

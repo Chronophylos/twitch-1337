@@ -18,7 +18,7 @@ use secrecy::SecretString;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 use twitch_1337_core::ai::memory::store::MemoryStore;
-use twitch_1337_core::ping::{PingManager, ping_runtime};
+use twitch_1337_core::ping::{PingManager, ping_runtime, run_ping_actor};
 use twitch_1337_web::WebState;
 use twitch_1337_web::auth::OAuthCtx;
 use twitch_1337_web::auth::session::SessionTable;
@@ -181,9 +181,17 @@ async fn build_state_inner_keep_settings(
     let pings_dir = TempDir::new().expect("pings tempdir");
     let memory_dir = TempDir::new().expect("memory tempdir");
     let pings = PingManager::load(pings_dir.path()).expect("load empty ping manager");
-    // Alive through the end of the fixture so the ping actor's command
-    // channel stays open for WebState senders.
     let (_ping_runtime, ping_actor, _ping_names_rx) = ping_runtime(pings);
+    // The actor must actually run for the lifetime of the fixture: without a
+    // spawned `run_ping_actor`, WebState's `PingHandle` dangles once the
+    // runtime (holding the receiver half) drops at the end of this function,
+    // and every ping route degrades to "Ping-System ist gerade nicht
+    // verfügbar".
+    let _ping_actor_task = tokio::spawn(run_ping_actor(
+        _ping_runtime.rx,
+        _ping_runtime.manager,
+        _ping_runtime.names_tx,
+    ));
     let sessions = Arc::new(SessionTable::new(clock.clone()));
     let oauth = Arc::new(
         OAuthCtx::new(

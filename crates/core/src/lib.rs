@@ -41,7 +41,7 @@ use crate::{
     aviation::AviationClient,
     ping::PingRuntime,
     twitch::handlers::{
-        spawn::{SpawnDeps, spawn_handlers},
+        spawn::spawn_handlers,
         tracker_1337::{TARGET_HOUR, TARGET_MINUTE},
     },
     twitch::whisper::WhisperSender,
@@ -102,18 +102,6 @@ pub struct Services {
     /// Shared connectivity flag flipped by the latency monitor. Read by the
     /// web dashboard's `/healthz` endpoint.
     pub irc_connected: Arc<std::sync::atomic::AtomicBool>,
-    /// Optional callback that spawns the embedded web dashboard task.
-    ///
-    /// `core` no longer depends on the `web` crate (the cycle would break
-    /// builds), so the binary is the only place that can construct
-    /// `WebState` + spawn `run_web`. Tests leave this `None` and the bot
-    /// runs without a dashboard.
-    ///
-    /// The closure receives the shared shutdown `Notify` (so axum's
-    /// graceful-shutdown future fires when handlers wind down) and is
-    /// expected to return a `JoinHandle` that resolves when the web task
-    /// exits.
-    pub web_spawner: Option<WebSpawner>,
     /// Primary channel login (config `[twitch].channel`).
     pub channel: String,
     /// The utility bot's own login (config `[twitch].username`).
@@ -211,6 +199,7 @@ pub async fn run_bot<T, L>(
     services: Services,
     ping: PingRuntime,
     tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
+    web_spawner: Option<WebSpawner>,
     shutdown: oneshot::Receiver<()>,
 ) -> Result<()>
 where
@@ -226,100 +215,15 @@ where
         ping.names_tx,
     ));
 
-    let Services {
-        clock,
-        llm,
-        aviation,
-        dhl,
-        langfuse,
-        doener,
-        whisper,
-        data_dir,
-        settings,
-        settings_store,
-        irc_connected,
-        web_spawner,
-        channel,
-        bot_username,
-        ai,
-        started_at,
-        ping,
-        ping_names_rx,
-        memory_store: _,
-        ai_memory,
-        chat_ctx,
-        emote_provider,
-        leaderboard,
-        hall_of_shame,
-        aviation_tracker_tx,
-        primary_history_tap,
-        telemetry,
-        emote_tracker,
-        twitch_channel_id,
-        mouths,
-        echo,
-        suspension,
-        recap,
-    } = services;
-
-    // Clone the sender out of the Arc for SpawnDeps.
-    let aviation_tracker_tx_inner = aviation_tracker_tx.as_ref().map(|a| (**a).clone());
-
-    // Aviation is consumed by the flight tracker; clone first so commands (!up/!fl) also get it.
-    let aviation_for_commands = aviation.clone();
+    let services = Arc::new(services);
 
     // Cloned Arc retained for the startup/shutdown announces; `client` itself is
     // moved into spawn_handlers below.
     let client_for_announce = client.clone();
 
-    let admin_channel = settings.load().twitch.admin_channel.clone();
+    let admin_channel = services.settings.load().twitch.admin_channel.clone();
 
-    // Clone before moving into SpawnDeps so the dreamer ritual can also use them.
-    let transcript = ai_memory.as_ref().map(|m| m.transcript.clone());
-    let ai_memory_for_ritual = ai_memory.clone();
-    let llm_for_ritual = llm.clone();
-    let ai_enabled = ai.is_some();
-    let channel_for_ritual = channel.clone();
-    let emote_usage_enabled = emote_tracker.is_some();
-
-    let handlers = spawn_handlers(SpawnDeps {
-        client,
-        incoming,
-        clock,
-        data_dir,
-        doener,
-        channel,
-        bot_username,
-        ai,
-        leaderboard,
-        hall_of_shame,
-        ping,
-        ping_names_rx,
-        suspension_manager: suspension,
-        llm,
-        ai_memory_v2: ai_memory,
-        transcript,
-        whisper,
-        aviation,
-        aviation_for_commands,
-        dhl,
-        langfuse: langfuse.clone(),
-        aviation_tracker_tx: aviation_tracker_tx_inner,
-        aviation_tracker_rx: tracker_rx,
-        emote_provider,
-        irc_connected: irc_connected.clone(),
-        settings: settings.clone(),
-        settings_store,
-        primary_history_tap,
-        telemetry: telemetry.clone(),
-        started_at,
-        emote_tracker,
-        twitch_channel_id,
-        mouths,
-        echo,
-        chat_ctx,
-        recap,
-    });
+    let handlers = spawn_handlers(Arc::clone(&services), client, incoming, tracker_rx);
 
     let shutdown_notify = handlers.shutdown_notify.clone();
 
@@ -328,25 +232,23 @@ where
     let web_handle = web_spawner.map(|spawner| spawner(shutdown_notify.clone()));
 
     // Daily dreamer ritual. Re-reads settings each loop iteration so dashboard
-    // edits to ai.dreamer.* apply on the next scheduled run without a restart.
-    if let Some(mem) = &ai_memory_for_ritual
-        && ai_enabled
+    if let Some(mem) = &services.ai_memory
+        && services.ai.is_some()
     {
         crate::ai::memory::ritual::spawn_ritual(
-            llm_for_ritual.clone(),
+            services.llm.clone(),
             mem.store.clone(),
             mem.transcript.clone(),
-            settings.clone(),
-            channel_for_ritual,
+            services.settings.clone(),
+            services.channel.clone(),
             shutdown_notify.clone(),
-            langfuse.clone(),
+            services.langfuse.clone(),
         );
         tracing::info!("Daily AI memory dreamer ritual spawned (live settings)");
     }
 
     crate::twitch::announce::announce_startup(&client_for_announce, admin_channel.as_deref()).await;
-
-    if emote_usage_enabled {
+    if services.emote_tracker.is_some() {
         tracing::info!("Emote usage recording enabled");
     } else {
         tracing::info!("Emote usage recording disabled (SQLite unavailable)");
@@ -401,7 +303,7 @@ where
         );
     }
 
-    if let Some(handle) = langfuse {
+    if let Some(handle) = &services.langfuse {
         handle.flush(std::time::Duration::from_secs(2)).await;
     }
 
