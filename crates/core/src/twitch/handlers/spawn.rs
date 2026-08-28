@@ -51,8 +51,8 @@ pub(crate) struct HandlerSet {
 }
 
 /// Spawn every long-running handler task in the order they currently
-/// appear in `run_bot`. Returns a [`HandlerSet`] owning all handles plus
-/// shared `Notify` / `tracker_tx`.
+/// appear in `run_bot`. Returns a [`HandlerSet`] owning all handles plus the
+/// shared `Notify`.
 pub(crate) fn spawn_handlers<T, L>(
     services: Arc<Services>,
     client: Arc<TwitchIRCClient<T, L>>,
@@ -297,7 +297,7 @@ pub(crate) async fn await_shutdown(
         shutdown_notify,
     } = handlers;
 
-    let outcome = tokio::select! {
+    tokio::select! {
         _ = shutdown => {
             info!("Shutdown signal received, exiting gracefully");
             // Always wake any waiters (scheduled messages, web dashboard).
@@ -317,7 +317,5 @@ pub(crate) async fn await_shutdown(
         result = &mut sched => { error!("Scheduled message handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut recap => { error!("Recap batcher exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut *ping_actor => { error!("Ping actor exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-    };
-
-    outcome
+    }
 }

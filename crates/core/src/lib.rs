@@ -206,6 +206,25 @@ where
     T: Transport + Send + Sync + 'static,
     L: LoginCredentials + Send + Sync + 'static,
 {
+    // The flight-tracker boot guard ties all three values together —
+    // `Services.aviation`, `Services.aviation_tracker_tx`, and `tracker_rx` —
+    // restoring the invariant the deleted
+    // `expect("tracker_tx must be Some when aviation is Some")` enforced. It
+    // runs before the ping actor spawns so the bail path never orphans the
+    // actor task with no handle.
+    if [
+        services.aviation.is_some(),
+        services.aviation_tracker_tx.is_some(),
+        tracker_rx.is_some(),
+    ]
+    .iter()
+    .any(|has| *has != services.aviation.is_some())
+    {
+        eyre::bail!(
+            "flight-tracker mismatch: Services.aviation, Services.aviation_tracker_tx, and tracker_rx must be Some together"
+        );
+    }
+
     // The ping actor is owned by `run_bot` and supervised by
     // `await_shutdown`'s select (an actor crash trips `HandlerExited`). It
     // is NOT drained on shutdown: every handler task holds an
@@ -220,18 +239,6 @@ where
     ));
 
     let services = Arc::new(services);
-
-    // The flight tracker task keys off `tracker_rx` while the !track/!untrack/
-    // !flights/!flight/!info commands key off `Services.aviation_tracker_tx`.
-    // They are separate values now that Services no longer carries the
-    // receiver half — refuse to boot with mismatched halves instead of
-    // registering commands whose sends land on a closed channel (or silently
-    // disabling the commands while the task runs).
-    if tracker_rx.is_some() != services.aviation_tracker_tx.is_some() {
-        eyre::bail!(
-            "flight-tracker channel mismatch: tracker_rx and Services.aviation_tracker_tx must be Some together"
-        );
-    }
 
     // Cloned Arc retained for the startup/shutdown announces; `client` itself is
     // moved into spawn_handlers below.

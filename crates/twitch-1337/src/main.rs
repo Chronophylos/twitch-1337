@@ -313,6 +313,20 @@ pub async fn main() -> Result<()> {
     .await
     .wrap_err("build ai memory v2")?;
 
+    // Bind before the (opt-in, up to ~20 s) history prefill so /healthz
+    // connections queue on the accept backlog instead of being refused
+    // while Docker's HEALTHCHECK start-period is running.
+    let web_listener = if config.web.enabled {
+        let bind_addr: std::net::SocketAddr = config
+            .web
+            .bind_addr
+            .parse()
+            .wrap_err("parse web.bind_addr")?;
+        Some(twitch_1337_web::bind(bind_addr).await?)
+    } else {
+        None
+    };
+
     // Shared chat-history buffers: built once here so `!ai`, `!news`,
     // `!haiku`, the dispatcher, and the recap batcher all clone the same
     // buffers out of `Services`. `ChatContext::build` may fetch history
@@ -375,7 +389,6 @@ pub async fn main() -> Result<()> {
 
     let services = Services {
         clock: Arc::new(SystemClock),
-
         llm,
         aviation: aviation_client,
         dhl: dhl_client,
@@ -409,7 +422,15 @@ pub async fn main() -> Result<()> {
         recap: recap_handle,
     };
     let web_spawner = if config.web.enabled {
-        Some(build_web_spawner(&config, credentials.clone(), &services).await?)
+        Some(
+            build_web_spawner(
+                &config,
+                credentials.clone(),
+                &services,
+                web_listener.expect("web enabled implies listener"),
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -431,39 +452,44 @@ pub async fn main() -> Result<()> {
     )
     .await
 }
-
 /// Build the web-task spawn closure. Resolves the broadcaster id, builds
-/// the helix client + OAuth context, binds the listener loud (port-in-use
-/// aborts startup), and returns a closure that — given the shared
-/// shutdown `Notify` — spawns `run_web` on a tokio task.
+/// the helix client + OAuth context, and returns a closure that — given the
+/// shared shutdown `Notify` — spawns `run_web` on a tokio task. The listener
+/// is bound in `run` (port-in-use aborts startup loudly there) and passed in.
 async fn build_web_spawner(
     config: &twitch_1337::config::Configuration,
     credentials: AuthenticatedLoginCredentials,
     services: &twitch_1337::Services,
+    listener: tokio::net::TcpListener,
 ) -> Result<twitch_1337::WebSpawner> {
-    let bind_addr: std::net::SocketAddr = config
-        .web
-        .bind_addr
-        .parse()
-        .wrap_err("parse web.bind_addr")?;
-    // Bind synchronously so a port-in-use failure aborts startup loudly.
-    let listener = twitch_1337_web::bind(bind_addr).await?;
+    let bind_addr = listener
+        .local_addr()
+        .wrap_err("query web listener local addr")?;
 
     let token_provider: Arc<dyn AccessTokenProvider> = Arc::new(CredsTokenProvider {
         creds: Arc::new(credentials),
     });
+
     let helix = Arc::new(ReqwestHelixClient::new(
         reqwest::Client::new(),
         config.twitch.client_id.clone(),
         token_provider,
     ));
 
-    let broadcaster = helix
-        .as_ref()
-        .fetch_user_by_login(&config.twitch.channel)
-        .await
-        .wrap_err("resolve broadcaster id")?
-        .ok_or_else(|| eyre!("channel `{}` not found on twitch", config.twitch.channel))?;
+    let broadcaster_id = match &services.twitch_channel_id {
+        Some(id) => id.clone(),
+        // `None` means the earlier resolve failed (emote ingest disabled);
+        // the dashboard still needs a broadcaster id, so try once here.
+        None => {
+            helix
+                .as_ref()
+                .fetch_user_by_login(&config.twitch.channel)
+                .await
+                .wrap_err("resolve broadcaster id")?
+                .ok_or_else(|| eyre!("channel `{}` not found on twitch", config.twitch.channel))?
+                .id
+        }
+    };
 
     let oauth = Arc::new(twitch_1337_web::auth::OAuthCtx::new(
         config.twitch.client_id.expose_secret(),
@@ -519,7 +545,7 @@ async fn build_web_spawner(
             helix: helix as Arc<dyn twitch_1337_web::helix::HelixClient>,
             config: web_config,
             clock: web_clock,
-            broadcaster_id: Arc::from(broadcaster.id.as_str()),
+            broadcaster_id: Arc::from(broadcaster_id.as_str()),
             client_id: config.twitch.client_id.clone(),
             oauth,
             signed_key,

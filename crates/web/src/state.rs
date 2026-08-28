@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use arc_swap::ArcSwap;
+use eyre::{WrapErr as _, eyre};
 use secrecy::ExposeSecret;
 use secrecy::SecretString;
 use tokio::sync::RwLock;
@@ -25,7 +26,6 @@ use crate::auth::session::SessionTable;
 use crate::clock::Clock;
 use crate::config::WebConfig;
 use crate::helix::{AvatarCache, HelixClient};
-use eyre::{WrapErr as _, eyre};
 
 #[derive(Clone)]
 pub struct WebState {
@@ -184,7 +184,7 @@ impl WebState {
                 &SecretString::new("test-secret".to_owned().into()),
                 "https://test.invalid",
             )
-            .expect("test oauth"),
+            .wrap_err("build test oauth ctx")?,
         );
         let config = Arc::new(WebConfig {
             bind_addr: cfg.bind_addr.clone(),

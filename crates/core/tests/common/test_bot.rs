@@ -1052,9 +1052,10 @@ impl Mouth for FakeMouth {
     }
 }
 
-/// Assemble the `Services::mouths_override` pair from the builder's mouth
-/// configuration. `None` when the test configured neither an identity nor a
-/// fake mouth, so `run_bot` falls back to production `build_mouths`.
+/// Assemble the fixed `MouthRouter` + `EchoGuard` pair injected into
+/// `Services` from the builder's mouth configuration. `None` when the test
+/// configured neither — the builder then falls back to production
+/// `build_mouths`.
 fn build_mouths_override(
     identity: Option<(String, String)>,
     fake_mouths: Vec<(Agent, FakeMouth)>,

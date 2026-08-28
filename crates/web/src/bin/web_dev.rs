@@ -20,6 +20,12 @@
 //! OAuth client-id, public_url, and the session secret are fixed test
 //! values (`WebState::for_tests`): dev-login bypasses the OAuth callback
 //! entirely, so nothing here performs a real OAuth round-trip.
+//!
+//! Note: the fixture's fixed signed-cookie key (`0x42…` bytes) replaces the
+//! previously derived one, so existing dev browser cookies are invalidated
+//! once across this change but remain stable across restarts. `state.oauth`
+//! redirects to the fixed `https://test.invalid` base (dev-login bypasses
+//! OAuth), while `state.config.public_url` reports the real bind addr.
 
 use std::env;
 use std::net::SocketAddr;

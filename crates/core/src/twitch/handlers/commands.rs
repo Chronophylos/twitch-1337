@@ -239,7 +239,7 @@ where
 
     let sender = ChatSender::new(client.clone());
 
-    run_command_dispatcher(broadcast_rx, services, sender, cmd_list).await;
+    run_command_dispatcher(broadcast_rx, services, snapshot, sender, cmd_list).await;
 }
 
 struct CommandInvocation<'a> {
@@ -365,6 +365,7 @@ async fn dispatch_command<T, L>(
 pub(crate) async fn run_command_dispatcher<T, L>(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
     services: Arc<Services>,
+    snapshot: Arc<crate::settings::Settings>,
     sender: Arc<ChatSender<T, L>>,
     commands: Vec<Box<dyn crate::commands::Command<T, L>>>,
 ) where
@@ -372,19 +373,16 @@ pub(crate) async fn run_command_dispatcher<T, L>(
     L: LoginCredentials,
 {
     // Channel gating and history buffers are read from `Services` once, up
-    // front. `admin_channel` is a restart-required settings knob;
-    // `ai_channel` comes from the buffers' own login (the snapshot
-    // `ChatContext::build` used) so both sides of the routing decision come
-    // from one read. The fallback covers `chat_ctx == None` — AI or history
-    // off, no buffers exist — where a mid-window settings change can only
-    // flip command gating, which is harmless.
-    let snapshot = services.settings.load_full();
+    // front. `admin_channel` is a restart-required settings knob. One read:
+    // the buffers' own ai_channel login when they exist; the settings
+    // snapshot only when there are no buffers at all (AI or history off) — a
+    // mid-boot dashboard change can then only flip command gating, never
+    // mis-route history.
     let admin_channel = snapshot.twitch.admin_channel.clone();
-    let ai_channel = services
-        .chat_ctx
-        .as_ref()
-        .and_then(|ctx| ctx.ai_channel_login.clone())
-        .or_else(|| snapshot.twitch.ai_channel.clone());
+    let ai_channel = match &services.chat_ctx {
+        Some(ctx) => ctx.ai_channel_login.clone(),
+        None => snapshot.twitch.ai_channel.clone(),
+    };
     let (primary_history_for_dispatch, ai_channel_history_for_dispatch) = services
         .chat_ctx
         .as_ref()

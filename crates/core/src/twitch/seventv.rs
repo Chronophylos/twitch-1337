@@ -9,7 +9,7 @@ use std::{
 use eyre::{Result, WrapErr as _, bail, eyre};
 use serde::Deserialize;
 use tokio::sync::Mutex;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     APP_USER_AGENT,
@@ -33,24 +33,24 @@ pub const SEARCH_EMOTES_LIMIT: usize = 20;
 pub fn build_emote_provider(
     ai_enabled: bool,
     settings: &SettingsHandle,
-    emote_tracker: Option<std::sync::Arc<EmoteTrackerHandle>>,
-) -> Option<std::sync::Arc<SevenTvEmoteProvider>> {
+    emote_tracker: Option<Arc<EmoteTrackerHandle>>,
+) -> Option<Arc<SevenTvEmoteProvider>> {
     if !ai_enabled || settings.load().ai.emotes.is_none() {
         return None;
     }
     let Some(tracker) = emote_tracker else {
-        tracing::warn!(
+        warn!(
             "ai.emotes is enabled but the emote tracker is unavailable; 7TV emote grounding disabled"
         );
         return None;
     };
     match SevenTvEmoteProvider::new(settings.clone(), tracker) {
         Ok(provider) => {
-            tracing::info!("7TV emote meanings prompt grounding enabled");
+            info!("7TV emote meanings prompt grounding enabled");
             Some(Arc::new(provider))
         }
         Err(error) => {
-            tracing::warn!(
+            warn!(
                 ?error,
                 "Failed to initialize 7TV emote provider; emote grounding disabled"
             );

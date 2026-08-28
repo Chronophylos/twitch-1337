@@ -118,7 +118,12 @@ mod settings_live_tests {
         let handle: crate::settings::SettingsHandle =
             Arc::new(arc_swap::ArcSwap::from_pointee(initial));
         let mgr = PingManager::empty();
-        let (_ping_runtime, ping, names_rx) = ping_runtime(mgr);
+        let (ping_runtime, ping, names_rx) = ping_runtime(mgr);
+        tokio::spawn(crate::ping::run_ping_actor(
+            ping_runtime.rx,
+            ping_runtime.manager,
+            ping_runtime.names_tx,
+        ));
         let cmd = PingTriggerCommand::new(ping, handle.clone(), names_rx);
         let before_cooldown = cmd.current_cooldown();
         let before_public = cmd.current_public();
