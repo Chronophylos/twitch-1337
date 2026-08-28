@@ -47,7 +47,6 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("./dev-data"));
     let channel = env::var("CHANNEL").unwrap_or_else(|_| "devchannel".to_owned());
-    let public_url = format!("http://{bind_addr}");
 
     tracing::warn!(
         target: "twitch_1337_web",
