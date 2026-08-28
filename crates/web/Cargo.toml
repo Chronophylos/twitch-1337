@@ -51,6 +51,12 @@ dev-login = ["dep:tower-livereload", "dep:notify-debouncer-mini"]
 # gated.)
 e2e = []
 
+# Test-only fixture surface (`WebState::for_tests` / `WebTestConfig`). Mirrors
+# the core crate's pattern: the self dev-dependency below turns it on for this
+# crate's own test targets without `required-features`, so CI's feature-less
+# nextest run still compiles and runs the web test targets.
+testing = []
+
 # Standalone dashboard runner — skips IRC, uses StubHelix.
 # `cargo run -p twitch-1337-web --bin web-dev --features dev-login`
 [[bin]]
@@ -59,6 +65,7 @@ path = "src/bin/web_dev.rs"
 required-features = ["dev-login"]
 
 [dev-dependencies]
+twitch-1337-web = { path = ".", features = ["testing"] }
 arc-swap = { workspace = true }
 # HTTP-only WebDriver (chromedriver on http://localhost). Avoid rustls-tls /
 # native-tls — hyper-rustls defaults pull aws-lc-rs into the workspace graph.

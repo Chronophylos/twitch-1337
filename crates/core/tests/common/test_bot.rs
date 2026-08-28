@@ -22,7 +22,7 @@ use twitch_1337::{
     aviation::AviationClient,
     config::{AiBootstrap, Configuration},
     load_hall_of_shame, load_leaderboard,
-    ping::{PingHandle, ping_actor_channel_full},
+    ping::ping_runtime,
     run_bot,
     twitch::echo::{EchoGuard, MouthIdentities},
     twitch::mouth::{Agent, Mouth, MouthRouter, SpeakError, SpeakRequest, SpokenMessage},
@@ -421,8 +421,7 @@ impl TestBotBuilder {
 
             let ping_manager =
                 twitch_1337::ping::PingManager::load(data_dir.path()).expect("load ping manager");
-            let (ping_actor_tx, ping_actor_rx, ping_names_tx, ping_names_rx) =
-                ping_actor_channel_full();
+            let (ping_runtime, ping_handle, ping_names_rx) = ping_runtime(ping_manager);
 
             let memory_store = twitch_1337::ai::memory::store::MemoryStore::open(
                 data_dir.path(),
@@ -430,7 +429,15 @@ impl TestBotBuilder {
             )
             .await
             .expect("open memory store");
-            // Build the telemetry store once; share the Arc with Services, web, and TestBot.
+
+            let ai_memory = twitch_1337::ai::command::build_ai_memory_v2(
+                self.config.ai.is_some(),
+                &settings_handle.load_full(),
+                memory_store.clone(),
+            )
+            .await
+            .expect("build ai memory v2");
+
             let telemetry_store = twitch_1337::schedule::TelemetryStore::open(data_dir.path());
 
             let recap_handle = if self.config.ai.is_some() {
@@ -440,37 +447,13 @@ impl TestBotBuilder {
             } else {
                 None
             };
-
-            let web_spawner = if self.config.web.enabled {
-                let bind_addr: std::net::SocketAddr = self
-                    .config
-                    .web
-                    .bind_addr
-                    .parse()
-                    .expect("test web.bind_addr");
-                let listener = twitch_1337_web::bind(bind_addr).await.expect("bind web");
-                let state = build_test_web_state(
-                    &self.config,
-                    irc_connected.clone(),
-                    PingHandle::new((*ping_actor_tx).clone()),
-                    memory_store.clone(),
-                    settings_handle.clone(),
-                    settings_store.clone(),
-                    telemetry_store.clone(),
-                    recap_handle.clone(),
-                );
-                let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
-                    let deps = twitch_1337_web::WebDeps { bind_addr, state };
-                    tokio::spawn(async move {
-                        if let Err(e) = twitch_1337_web::run_web(listener, deps, shutdown).await {
-                            tracing::error!(target: "twitch_1337_web", ?e, "test web exited");
-                        }
-                    })
-                });
-                Some(spawner)
-            } else {
-                None
-            };
+            let chat_ctx = twitch_1337::ai::command::ChatContext::build(
+                &settings_handle,
+                self.config.ai.is_some(),
+                &channel,
+                recap_handle.as_deref(),
+            )
+            .await;
 
             let (aviation_tracker_tx, aviation_tracker_rx) = {
                 let (tx, rx) =
@@ -520,6 +503,28 @@ impl TestBotBuilder {
                 Some(handle)
             };
 
+            // Per-agent mouths + echo suppression. Tests with a configured
+            // mouth identity / fake mouths bypass production `build_mouths`
+            // (which performs live Helix I/O) via the stub pair.
+            let (mouths, echo) = match build_mouths_override(self.mouth_identity, self.fake_mouths)
+            {
+                Some(pair) => pair,
+                None => {
+                    twitch_1337::twitch::mouth_setup::build_mouths(&self.config, data_dir.path())
+                        .await
+                }
+            };
+
+            // 7TV emote grounding; `None` unless AI + `ai.emotes` + tracker.
+            let emote_provider = twitch_1337::twitch::seventv::build_emote_provider(
+                self.config.ai.is_some(),
+                &settings_handle,
+                emote_tracker.clone(),
+            );
+
+            let suspension = Arc::new(twitch_1337::suspend::SuspensionManager::new());
+            let started_at = std::time::Instant::now();
+
             let services = Services {
                 clock: clock.clone(),
                 llm: Arc::new(twitch_1337::llm_factory::LlmRegistry::fixed(
@@ -546,13 +551,16 @@ impl TestBotBuilder {
                 settings: settings_handle.clone(),
                 settings_store: settings_store.clone(),
                 irc_connected: irc_connected.clone(),
-                web_spawner,
-                ping_actor_tx,
-                ping_actor_rx,
-                ping_manager,
-                ping_names_tx,
+                channel: channel.clone(),
+                bot_username: self.config.twitch.username.clone(),
+                ai_enabled: self.config.ai.is_some(),
+                started_at,
+                ping: ping_handle,
                 ping_names_rx,
                 memory_store,
+                ai_memory,
+                chat_ctx,
+                emote_provider,
                 leaderboard: Arc::new(tokio::sync::RwLock::new(
                     load_leaderboard(data_dir.path()).await,
                 )),
@@ -560,21 +568,80 @@ impl TestBotBuilder {
                     load_hall_of_shame(data_dir.path()).await,
                 )),
                 aviation_tracker_tx,
-                aviation_tracker_rx,
                 primary_history_tap: Some(primary_history_tap.clone()),
                 telemetry: telemetry_store.clone(),
                 emote_tracker,
                 twitch_channel_id: None,
-                mouths_override: build_mouths_override(self.mouth_identity, self.fake_mouths),
+                mouths,
+                echo,
+                suspension,
                 recap: recap_handle.clone(),
+            };
+            let web_spawner = if self.config.web.enabled {
+                let bind_addr: std::net::SocketAddr = self
+                    .config
+                    .web
+                    .bind_addr
+                    .parse()
+                    .expect("test web.bind_addr");
+                let listener = twitch_1337_web::bind(bind_addr).await.expect("bind web");
+                let web_clock = Arc::new(twitch_1337_web::clock::SystemClock);
+                let state = twitch_1337_web::WebState::new(
+                    &services,
+                    twitch_1337_web::state::WebBoot {
+                        sessions: Arc::new(twitch_1337_web::auth::session::SessionTable::new(
+                            web_clock.clone(),
+                        )),
+                        helix: Arc::new(DenyHelix),
+                        config: Arc::new(twitch_1337_web::config::WebConfig {
+                            bind_addr: self.config.web.bind_addr.clone(),
+                            public_url: self.config.web.public_url.clone(),
+                            session_secret: self.config.web.session_secret.clone(),
+                        }),
+                        clock: web_clock,
+                        broadcaster_id: Arc::from("0"),
+                        client_id: secrecy::SecretString::new("test-client-id".to_owned().into()),
+                        oauth: Arc::new(
+                            twitch_1337_web::auth::OAuthCtx::new(
+                                "test-client-id",
+                                &secrecy::SecretString::new("test-secret".to_owned().into()),
+                                "https://test.invalid",
+                            )
+                            .expect("test oauth"),
+                        ),
+                        signed_key: tower_cookies::Key::from(&[0x42u8; 64]),
+                        avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
+                            std::time::Duration::from_secs(3600),
+                        )),
+                        owner: Arc::new(arc_swap::ArcSwap::from_pointee(
+                            self.config.twitch.owner.clone(),
+                        )),
+                        memory_audit: Arc::new(twitch_1337::settings::FileAuditLog::new(
+                            services.memory_store.root().join("memory_audit.log"),
+                        )),
+                    },
+                );
+                let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
+                    let deps = twitch_1337_web::WebDeps { bind_addr, state };
+                    tokio::spawn(async move {
+                        if let Err(e) = twitch_1337_web::run_web(listener, deps, shutdown).await {
+                            tracing::error!(target: "twitch_1337_web", ?e, "test web exited");
+                        }
+                    })
+                });
+                Some(spawner)
+            } else {
+                None
             };
 
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             let bot_task = tokio::spawn(run_bot(
                 client,
                 incoming,
-                self.config,
                 services,
+                ping_runtime,
+                aviation_tracker_rx,
+                web_spawner,
                 shutdown_rx,
             ));
 
@@ -985,9 +1052,10 @@ impl Mouth for FakeMouth {
     }
 }
 
-/// Assemble the `Services::mouths_override` pair from the builder's mouth
-/// configuration. `None` when the test configured neither an identity nor a
-/// fake mouth, so `run_bot` falls back to production `build_mouths`.
+/// Assemble the fixed `MouthRouter` + `EchoGuard` pair injected into
+/// `Services` from the builder's mouth configuration. `None` when the test
+/// configured neither — the builder then falls back to production
+/// `build_mouths`.
 fn build_mouths_override(
     identity: Option<(String, String)>,
     fake_mouths: Vec<(Agent, FakeMouth)>,
@@ -1108,83 +1176,27 @@ fn flagged_usage_count_sync(path: &std::path::Path) -> EyreResult<usize> {
     Ok(n as usize)
 }
 
-/// Build a minimal `WebState` for tests that flip on `with_web`. Uses a
-/// stub helix client that denies every mod check (no production routes
-/// reach it because the web smoke test only probes the public `/healthz`).
-#[allow(clippy::too_many_arguments)]
-fn build_test_web_state(
-    config: &Configuration,
-    irc_connected: Arc<AtomicBool>,
-    ping_actor: PingHandle,
-    memory_store: twitch_1337::ai::memory::store::MemoryStore,
-    settings: twitch_1337::settings::SettingsHandle,
-    settings_store: Arc<twitch_1337::settings::SettingsStore>,
-    telemetry: Arc<twitch_1337::schedule::TelemetryStore>,
-    recap: Option<Arc<twitch_1337::ai::recap::RecapHandle>>,
-) -> twitch_1337_web::WebState {
-    use twitch_1337_web::auth::OAuthCtx;
-    use twitch_1337_web::auth::session::SessionTable;
-    use twitch_1337_web::clock::SystemClock as WebSystemClock;
-    use twitch_1337_web::config::WebConfig as WebWebConfig;
-    use twitch_1337_web::helix::{HelixClient, HelixUser};
+/// Stub `HelixClient` that denies every mod check. No production routes
+/// reach it because the web smoke test only probes the public `/healthz`.
+struct DenyHelix;
 
-    struct DenyHelix;
-    #[async_trait]
-    impl HelixClient for DenyHelix {
-        async fn fetch_user_by_id(&self, _id: &str) -> eyre::Result<Option<HelixUser>> {
-            Ok(None)
-        }
-        async fn fetch_user_by_login(&self, _login: &str) -> eyre::Result<Option<HelixUser>> {
-            Ok(None)
-        }
-        async fn is_moderator(&self, _b: &str, _u: &str) -> eyre::Result<bool> {
-            Ok(false)
-        }
+#[async_trait]
+impl twitch_1337_web::helix::HelixClient for DenyHelix {
+    async fn fetch_user_by_id(
+        &self,
+        _id: &str,
+    ) -> eyre::Result<Option<twitch_1337_web::helix::HelixUser>> {
+        Ok(None)
     }
 
-    let web_clock = Arc::new(WebSystemClock);
-    let sessions = Arc::new(SessionTable::new(web_clock.clone()));
-    let oauth = Arc::new(
-        OAuthCtx::new(
-            "test-client-id",
-            &secrecy::SecretString::new("test-secret".to_owned().into()),
-            "https://test.invalid",
-        )
-        .expect("test oauth"),
-    );
-    let web_config = Arc::new(WebWebConfig {
-        bind_addr: config.web.bind_addr.clone(),
-        public_url: config.web.public_url.clone(),
-        session_secret: config.web.session_secret.clone(),
-    });
-    let signed_key = tower_cookies::Key::from(&[0x42u8; 64]);
-    let memory_audit = Arc::new(twitch_1337::settings::FileAuditLog::new(
-        memory_store.root().join("memory_audit.log"),
-    ));
-    twitch_1337_web::WebState {
-        sessions,
-        helix: Arc::new(DenyHelix),
-        irc_connected,
-        config: web_config,
-        clock: web_clock,
-        channel: Arc::from(config.twitch.channel.as_str()),
-        broadcaster_id: Arc::from("0"),
-        client_id: secrecy::SecretString::new("test-client-id".to_owned().into()),
-        oauth,
-        ping_actor,
-        memory_store,
-        memory_audit,
-        signed_key,
-        leaderboard: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        tracker_tx: None,
-        emote_tracker: None,
-        avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
-            std::time::Duration::from_secs(3600),
-        )),
-        owner: Arc::new(arc_swap::ArcSwap::from_pointee(config.twitch.owner.clone())),
-        settings,
-        settings_store,
-        telemetry,
-        recap,
+    async fn fetch_user_by_login(
+        &self,
+        _login: &str,
+    ) -> eyre::Result<Option<twitch_1337_web::helix::HelixUser>> {
+        Ok(None)
+    }
+
+    async fn is_moderator(&self, _b: &str, _u: &str) -> eyre::Result<bool> {
+        Ok(false)
     }
 }

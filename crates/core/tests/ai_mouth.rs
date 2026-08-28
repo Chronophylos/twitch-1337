@@ -92,8 +92,8 @@ async fn ai_fallback_reply_is_tagged_aurora() {
 /// Helix send back over IRC) must be treated as an echo, not fresh chat
 /// input: no chat-history entry, and no command dispatch (mouths are
 /// speak-only, never command callers). `with_mouth_identity` registers the
-/// identity directly in `EchoGuard` via the `Services::mouths_override` test
-/// seam, since production `build_mouths` does live Helix I/O.
+/// identity directly in `EchoGuard` via the builder's mouth configuration,
+/// since production `build_mouths` does live Helix I/O.
 #[tokio::test]
 async fn mouth_echo_does_not_double_log_or_run_commands() {
     let mut bot = TestBotBuilder::new()

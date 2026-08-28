@@ -11,11 +11,15 @@ use tokio::sync::oneshot;
 use tracing::info;
 use twitch_1337_core::{
     AuthenticatedLoginCredentials, PersonalBest, PersonalWorst, Services,
+    ai::command::ChatContext,
     ai::memory::store::MemoryStore,
     aviation, doener, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing,
     llm_factory, load_configuration, load_hall_of_shame, load_leaderboard,
-    ping::{PingHandle, PingManager, ping_actor_channel_full},
+    ping::{PingManager, ping_runtime},
     run_bot, setup_and_verify_twitch_client,
+    suspend::SuspensionManager,
+    twitch::mouth_setup::build_mouths,
+    twitch::seventv::build_emote_provider,
     twitch::whisper,
     util::clock::SystemClock,
 };
@@ -196,7 +200,7 @@ pub async fn main() -> Result<()> {
 
     let ping_manager =
         PingManager::load(&get_data_dir()).wrap_err("Failed to load ping manager")?;
-    let (ping_actor_tx, ping_actor_rx, ping_names_tx, ping_names_rx) = ping_actor_channel_full();
+    let (ping_runtime, ping_handle, ping_names_rx) = ping_runtime(ping_manager);
 
     // Warn on subsequent boots if any migrated key still appears in config.toml
     // — it's silently ignored after the v3 marker has been written. Skipped on
@@ -299,6 +303,49 @@ pub async fn main() -> Result<()> {
         .await
         .wrap_err("open memory store")?;
 
+    // Build the v2 memory bundle (store + transcript + knobs) once at
+    // composition; `run_bot` reads it from `Services`. `None` when AI is off.
+    let ai_memory = twitch_1337::ai::command::build_ai_memory_v2(
+        config.ai.is_some(),
+        &settings_handle.load_full(),
+        memory_store.clone(),
+    )
+    .await
+    .wrap_err("build ai memory v2")?;
+
+    // Bind before the (opt-in, up to ~20 s) history prefill so /healthz
+    // connections queue on the accept backlog instead of being refused
+    // while Docker's HEALTHCHECK start-period is running.
+    let web_listener = if config.web.enabled {
+        let bind_addr: std::net::SocketAddr = config
+            .web
+            .bind_addr
+            .parse()
+            .wrap_err("parse web.bind_addr")?;
+        Some(twitch_1337_web::bind(bind_addr).await?)
+    } else {
+        None
+    };
+
+    // Shared chat-history buffers: built once here so `!ai`, `!news`,
+    // `!haiku`, the dispatcher, and the recap batcher all clone the same
+    // buffers out of `Services`. `ChatContext::build` may fetch history
+    // prefill (up to ~20 s when `ai.prefill` is on); overlap it with the
+    // mouths' Helix I/O instead of serializing both ahead of run_bot.
+    let data_dir = get_data_dir();
+    let (chat_ctx, (mouths, echo)) = tokio::join!(
+        ChatContext::build(
+            &settings_handle,
+            config.ai.is_some(),
+            &config.twitch.channel,
+            recap_handle.as_deref(),
+        ),
+        build_mouths(&config, &data_dir),
+    );
+
+    let suspension = Arc::new(SuspensionManager::new());
+    let started_at = std::time::Instant::now();
+
     // Load the leaderboard before building the web spawner so the same Arc
     // can be shared with WebState (dashboard read) and the IRC tracker (writes).
     let leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>> = Arc::new(
@@ -324,6 +371,11 @@ pub async fn main() -> Result<()> {
     // Soft-fail: open/migrate error leaves None and disables the tracker only.
     let emote_tracker = twitch_1337::emote_tracker::try_open(&get_data_dir());
 
+    // 7TV emote grounding: enabled only when AI + `ai.emotes` + tracker are
+    // all present. Failure logs and continues without grounding.
+    let emote_provider =
+        build_emote_provider(config.ai.is_some(), &settings_handle, emote_tracker.clone());
+
     let twitch_channel_id = match resolve_twitch_channel_id(&config, &credentials).await {
         Ok(id) => Some(id),
         Err(error) => {
@@ -333,29 +385,6 @@ pub async fn main() -> Result<()> {
             );
             None
         }
-    };
-
-    let web_spawner = if config.web.enabled {
-        let credentials_for_web = credentials.clone();
-        Some(
-            build_web_spawner(
-                &config,
-                credentials_for_web,
-                irc_connected.clone(),
-                PingHandle::new((*ping_actor_tx).clone()),
-                memory_store.clone(),
-                leaderboard.clone(),
-                aviation_tracker_tx.clone(),
-                emote_tracker.clone(),
-                settings_handle.clone(),
-                settings_store.clone(),
-                telemetry.clone(),
-                recap_handle.clone(),
-            )
-            .await?,
-        )
-    } else {
-        None
     };
 
     let services = Services {
@@ -370,23 +399,40 @@ pub async fn main() -> Result<()> {
         settings: settings_handle,
         settings_store,
         irc_connected,
-        web_spawner,
-        ping_actor_tx,
-        ping_actor_rx,
-        ping_manager,
-        ping_names_tx,
+        channel: config.twitch.channel.clone(),
+        bot_username: config.twitch.username.clone(),
+        ai_enabled: config.ai.is_some(),
+        started_at,
+        ping: ping_handle,
         ping_names_rx,
         memory_store,
+        ai_memory,
+        chat_ctx,
+        emote_provider,
         leaderboard,
         hall_of_shame,
         aviation_tracker_tx,
-        aviation_tracker_rx,
         primary_history_tap: None,
         telemetry,
         emote_tracker,
         twitch_channel_id,
-        mouths_override: None,
+        mouths,
+        echo,
+        suspension,
         recap: recap_handle,
+    };
+    let web_spawner = if config.web.enabled {
+        Some(
+            build_web_spawner(
+                &config,
+                credentials.clone(),
+                &services,
+                web_listener.expect("web enabled implies listener"),
+            )
+            .await?,
+        )
+    } else {
+        None
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -395,53 +441,55 @@ pub async fn main() -> Result<()> {
         let _ = shutdown_tx.send(());
     });
 
-    run_bot(client, incoming, config, services, shutdown_rx).await
+    run_bot(
+        client,
+        incoming,
+        services,
+        ping_runtime,
+        aviation_tracker_rx,
+        web_spawner,
+        shutdown_rx,
+    )
+    .await
 }
-
 /// Build the web-task spawn closure. Resolves the broadcaster id, builds
-/// the helix client + OAuth context, binds the listener loud (port-in-use
-/// aborts startup), and returns a closure that — given the shared
-/// shutdown `Notify` — spawns `run_web` on a tokio task.
-// Top-level DI compositor for the web spawner; argument count tracks the
-// dashboard's dependency surface and is intentionally explicit.
-#[allow(clippy::too_many_arguments)]
+/// the helix client + OAuth context, and returns a closure that — given the
+/// shared shutdown `Notify` — spawns `run_web` on a tokio task. The listener
+/// is bound in `run` (port-in-use aborts startup loudly there) and passed in.
 async fn build_web_spawner(
     config: &twitch_1337::config::Configuration,
     credentials: AuthenticatedLoginCredentials,
-    irc_connected: Arc<AtomicBool>,
-    ping_actor: PingHandle,
-    memory_store: MemoryStore,
-    leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
-    tracker_tx: Option<Arc<tokio::sync::mpsc::Sender<aviation::TrackerCommand>>>,
-    emote_tracker: Option<Arc<twitch_1337::emote_tracker::EmoteTrackerHandle>>,
-    settings: twitch_1337::settings::SettingsHandle,
-    settings_store: Arc<twitch_1337::settings::SettingsStore>,
-    telemetry: Arc<twitch_1337::schedule::TelemetryStore>,
-    recap: Option<Arc<twitch_1337::ai::recap::RecapHandle>>,
+    services: &twitch_1337::Services,
+    listener: tokio::net::TcpListener,
 ) -> Result<twitch_1337::WebSpawner> {
-    let bind_addr: std::net::SocketAddr = config
-        .web
-        .bind_addr
-        .parse()
-        .wrap_err("parse web.bind_addr")?;
-    // Bind synchronously so a port-in-use failure aborts startup loudly.
-    let listener = twitch_1337_web::bind(bind_addr).await?;
+    let bind_addr = listener
+        .local_addr()
+        .wrap_err("query web listener local addr")?;
 
     let token_provider: Arc<dyn AccessTokenProvider> = Arc::new(CredsTokenProvider {
         creds: Arc::new(credentials),
     });
+
     let helix = Arc::new(ReqwestHelixClient::new(
         reqwest::Client::new(),
         config.twitch.client_id.clone(),
         token_provider,
     ));
 
-    let broadcaster = helix
-        .as_ref()
-        .fetch_user_by_login(&config.twitch.channel)
-        .await
-        .wrap_err("resolve broadcaster id")?
-        .ok_or_else(|| eyre!("channel `{}` not found on twitch", config.twitch.channel))?;
+    let broadcaster_id = match &services.twitch_channel_id {
+        Some(id) => id.clone(),
+        // `None` means the earlier resolve failed (emote ingest disabled);
+        // the dashboard still needs a broadcaster id, so try once here.
+        None => {
+            helix
+                .as_ref()
+                .fetch_user_by_login(&config.twitch.channel)
+                .await
+                .wrap_err("resolve broadcaster id")?
+                .ok_or_else(|| eyre!("channel `{}` not found on twitch", config.twitch.channel))?
+                .id
+        }
+    };
 
     let oauth = Arc::new(twitch_1337_web::auth::OAuthCtx::new(
         config.twitch.client_id.expose_secret(),
@@ -490,32 +538,24 @@ async fn build_web_spawner(
     let memory_audit = Arc::new(twitch_1337::settings::FileAuditLog::new(
         get_data_dir().join("memory_audit.log"),
     ));
-    let state = twitch_1337_web::WebState {
-        sessions,
-        helix: helix as Arc<dyn twitch_1337_web::helix::HelixClient>,
-        irc_connected,
-        config: web_config,
-        clock: web_clock,
-        channel: Arc::from(config.twitch.channel.as_str()),
-        broadcaster_id: Arc::from(broadcaster.id.as_str()),
-        client_id: config.twitch.client_id.clone(),
-        oauth,
-        ping_actor,
-        memory_store,
-        memory_audit,
-        signed_key,
-        leaderboard,
-        tracker_tx,
-        emote_tracker,
-        avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
-            std::time::Duration::from_secs(3600),
-        )),
-        owner: Arc::new(arc_swap::ArcSwap::from_pointee(config.twitch.owner.clone())),
-        settings,
-        settings_store,
-        telemetry,
-        recap,
-    };
+    let state = twitch_1337_web::WebState::new(
+        services,
+        twitch_1337_web::state::WebBoot {
+            sessions,
+            helix: helix as Arc<dyn twitch_1337_web::helix::HelixClient>,
+            config: web_config,
+            clock: web_clock,
+            broadcaster_id: Arc::from(broadcaster_id.as_str()),
+            client_id: config.twitch.client_id.clone(),
+            oauth,
+            signed_key,
+            avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
+                std::time::Duration::from_secs(3600),
+            )),
+            owner: Arc::new(arc_swap::ArcSwap::from_pointee(config.twitch.owner.clone())),
+            memory_audit,
+        },
+    );
 
     Ok(Box::new(move |shutdown| {
         let deps = twitch_1337_web::WebDeps { bind_addr, state };

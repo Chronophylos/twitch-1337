@@ -259,18 +259,22 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 
 ## Adding handler
 
-Handlers live in `crates/core/src/twitch/handlers/`. `run_bot` (`crates/core/src/lib.rs`) calls `spawn_handlers` once; that factory owns every `JoinHandle` and the shutdown `tokio::select!`. Each handler is generic over `<T: Transport, L: LoginCredentials>` so integration tests can swap in a fake transport. Shared deps (clock, data_dir, llm, aviation) come from `Services` in `crates/core/src/lib.rs`, moved into `SpawnDeps`.
+Handlers live in `crates/core/src/twitch/handlers/`. `run_bot` (`crates/core/src/lib.rs`) calls `spawn_handlers` once; that factory owns every `JoinHandle` and the shutdown `tokio::select!`. Each handler is generic over `<T: Transport, L: LoginCredentials>` so integration tests can swap in a fake transport. Every task receives `Arc<Services>` (plus `client` and the broadcast receiver) and destructures the handles it uses at its own top — add new shared state to `Services` in `crates/core/src/lib.rs`, never to a per-handler relay struct. The only struct still threaded through is `CommandConfig` (`commands.rs`), and only the generic-command dispatcher receives it.
 
 ```rust
 // crates/core/src/twitch/handlers/my_handler.rs
 pub async fn run_my_handler<T, L>(
-    broadcast_tx: broadcast::Sender<ServerMessage>,
+    services: Arc<Services>,
     client: Arc<TwitchIRCClient<T, L>>,
-    /* other deps from SpawnDeps as needed */
-) where T: Transport, L: LoginCredentials { /* subscribe, filter, act */ }
+    broadcast_tx: broadcast::Sender<ServerMessage>,
+) where T: Transport, L: LoginCredentials {
+    let settings = services.settings.clone();
+    /* subscribe, filter, act */
+}
 
-// crates/core/src/twitch/handlers/spawn.rs: add the dep to SpawnDeps,
-// spawn into HandlerSet, add an exit arm to the final tokio::select!
+// crates/core/src/twitch/handlers/spawn.rs: tokio::spawn(run_my_handler(
+//     services.clone(), client.clone(), broadcast_tx.clone(),
+// )), add the JoinHandle to HandlerSet, add an exit arm to await_shutdown's select!
 ```
 
 Integration-testable via `TestBotBuilder` in `crates/core/tests/common/`.
