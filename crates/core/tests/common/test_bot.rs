@@ -317,8 +317,13 @@ impl TestBotBuilder {
         self
     }
 
-    pub async fn spawn(mut self) -> TestBot {
-        let data_dir = TempDir::new().expect("tempdir");
+    /// Returns a boxed future: the builder chain produces a very large
+    /// future and every test awaits it inline; boxing keeps each call
+    /// site pointer-sized (also silences clippy::large_futures for all
+    /// 26 test call sites).
+    pub fn spawn(mut self) -> std::pin::Pin<Box<impl std::future::Future<Output = TestBot>>> {
+        Box::pin(async move {
+            let data_dir = TempDir::new().expect("tempdir");
 
         if let Some(entries) = &self.seeded_leaderboard {
             let path = data_dir.path().join("leaderboard.ron");
@@ -603,6 +608,7 @@ impl TestBotBuilder {
             shutdown: Some(shutdown_tx),
             bot_task: Some(bot_task),
         }
+        })
     }
 }
 
