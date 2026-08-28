@@ -15,7 +15,6 @@ eyre = { workspace = true }
 reqwest = { workspace = true }
 secrecy = { workspace = true }
 tokio = { workspace = true }
-tower-cookies = { workspace = true }
 tracing = { workspace = true }
 twitch-1337-core = { path = "../core" }
 twitch-1337-web = { path = "../web" }
