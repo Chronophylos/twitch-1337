@@ -38,7 +38,12 @@ pub fn build_emote_provider(
     if !ai_enabled || settings.load().ai.emotes.is_none() {
         return None;
     }
-    let tracker = emote_tracker?;
+    let Some(tracker) = emote_tracker else {
+        tracing::warn!(
+            "ai.emotes is enabled but the emote tracker is unavailable; 7TV emote grounding disabled"
+        );
+        return None;
+    };
     match SevenTvEmoteProvider::new(settings.clone(), tracker) {
         Ok(provider) => {
             tracing::info!("7TV emote meanings prompt grounding enabled");

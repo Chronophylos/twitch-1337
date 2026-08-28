@@ -106,9 +106,10 @@ pub struct Services {
     pub channel: String,
     /// The utility bot's own login (config `[twitch].username`).
     pub bot_username: String,
-    /// Bootstrap AI section. Presence gates AI command registration; the
-    /// named keys inside back the `LlmRegistry`.
-    pub ai: Option<crate::config::AiBootstrap>,
+    /// Whether `[ai]` is configured in config.toml. Gates AI command
+    /// registration and the dreamer ritual; the named keys back the
+    /// `LlmRegistry` and are not carried here.
+    pub ai_enabled: bool,
     /// Process start instant, captured at composition. Used by `!v` for
     /// uptime.
     pub started_at: std::time::Instant,
@@ -158,8 +159,7 @@ pub struct Services {
     /// Optional test-only sink: when set, the commands handler stores the
     /// primary chat-history `Arc` here so integration tests can peek at
     /// chat-history entries (display_name / user_id) for assertions.
-    /// Production passes `None`; integration tests use this to peek at
-    /// chat-history entries.
+    /// Production passes `None`.
     pub primary_history_tap:
         Option<Arc<tokio::sync::Mutex<Option<crate::ai::chat_history::ChatHistory>>>>,
 
@@ -209,13 +209,25 @@ where
     // The ping actor is owned by `run_bot`: spawned here, drained by
     // awaiting its handle after the handler tasks wind down. Senders live
     // in `Services.ping` (dispatcher, `WebState`) and die with their owners.
-    let ping_actor = tokio::spawn(crate::ping::run_ping_actor(
+    let mut ping_actor = tokio::spawn(crate::ping::run_ping_actor(
         ping.rx,
         ping.manager,
         ping.names_tx,
     ));
 
     let services = Arc::new(services);
+
+    // The flight tracker task keys off `tracker_rx` while the !track/!untrack/
+    // !flights/!flight/!info commands key off `Services.aviation_tracker_tx`.
+    // They are separate values now that Services no longer carries the
+    // receiver half — refuse to boot with mismatched halves instead of
+    // registering commands whose sends land on a closed channel (or silently
+    // disabling the commands while the task runs).
+    if tracker_rx.is_some() != services.aviation_tracker_tx.is_some() {
+        eyre::bail!(
+            "flight-tracker channel mismatch: tracker_rx and Services.aviation_tracker_tx must be Some together"
+        );
+    }
 
     // Cloned Arc retained for the startup/shutdown announces; `client` itself is
     // moved into spawn_handlers below.
@@ -232,8 +244,9 @@ where
     let web_handle = web_spawner.map(|spawner| spawner(shutdown_notify.clone()));
 
     // Daily dreamer ritual. Re-reads settings each loop iteration so dashboard
+    // edits to ai.dreamer.* apply on the next scheduled run without a restart.
     if let Some(mem) = &services.ai_memory
-        && services.ai.is_some()
+        && services.ai_enabled
     {
         crate::ai::memory::ritual::spawn_ritual(
             services.llm.clone(),
@@ -264,7 +277,8 @@ where
         TARGET_HOUR,
         TARGET_MINUTE - 1
     );
-    let shutdown_outcome = crate::twitch::handlers::spawn::await_shutdown(handlers, shutdown).await;
+    let shutdown_outcome =
+        crate::twitch::handlers::spawn::await_shutdown(handlers, &mut ping_actor, shutdown).await;
 
     // Shutdown initiated; best-effort line before draining web/ping actor. A
     // handler fault posts a distinct message so operators don't read it as a
@@ -292,18 +306,22 @@ where
         tracing::warn!(target: "twitch_1337_web", ?e, "Web task did not shut down within 5s");
     }
 
-    // Best-effort drain: the actor exits once every `PingHandle` clone has
-    // dropped (the web task above holds the last one). A short timeout avoids
-    // blocking shutdown when a stray clone lingers; the runtime will clean up
-    // on exit.
-    if let Err(e) = tokio::time::timeout(std::time::Duration::from_millis(500), ping_actor).await {
+    // Handler and web tasks are gone; dropping the Arc releases `Services.ping`,
+    // the last live sender, so the actor's `recv()` loop winds down and the
+    // drain below actually finishes. A short timeout avoids blocking shutdown
+    // when a stray clone lingers; the runtime will clean up on exit.
+    let langfuse = services.langfuse.clone();
+    drop(services);
+    if let Err(e) =
+        tokio::time::timeout(std::time::Duration::from_millis(500), &mut ping_actor).await
+    {
         tracing::debug!(
             ?e,
             "Ping actor did not drain within 500ms; runtime will clean up"
         );
     }
 
-    if let Some(handle) = &services.langfuse {
+    if let Some(handle) = &langfuse {
         handle.flush(std::time::Duration::from_secs(2)).await;
     }
 

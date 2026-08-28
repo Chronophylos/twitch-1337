@@ -186,8 +186,11 @@ async fn build_state_inner_keep_settings(
         owner: None,
         irc_connected: true,
         channel: "testchannel".into(),
+        bind_addr: "127.0.0.1:0".into(),
+        public_url: "https://test.invalid".into(),
     })
-    .await;
+    .await
+    .expect("build web test state");
     // Inject web timing values into the live in-memory settings snapshot.
     // `mod_check_refresh_secs` may be 0 (force-recheck) which is below the
     // validator's 30 s floor; we write via the raw ArcSwap handle so

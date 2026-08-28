@@ -86,6 +86,7 @@ impl ChatContext {
             .as_ref()
             .map(super::prefill::HistoryPrefillConfig::from);
         let buffer = if let Some(cfg) = &prefill_cfg {
+            tracing::info!("ai.prefill configured; fetching history before startup continues");
             let prefilled =
                 super::prefill::prefill_chat_history(channel, history_length, cfg).await;
             ChatHistoryBuffer::from_prefill(settings.clone(), primary_history_capacity, prefilled)

@@ -553,7 +553,7 @@ impl TestBotBuilder {
                 irc_connected: irc_connected.clone(),
                 channel: channel.clone(),
                 bot_username: self.config.twitch.username.clone(),
-                ai: self.config.ai.clone(),
+                ai_enabled: self.config.ai.is_some(),
                 started_at,
                 ping: ping_handle,
                 ping_names_rx,

@@ -51,7 +51,7 @@ where
     // Registration depends only on bootstrap AI being present. Each command
     // resolves its own profile per turn, so one stale agent pointer cannot
     // disable the others and profile repairs take effect without a restart.
-    let ai_configured = services.ai.is_some();
+    let ai_configured = services.ai_enabled;
     if ai_configured {
         info!("AI commands enabled; agent profiles resolve per turn");
     } else {
@@ -372,11 +372,19 @@ pub(crate) async fn run_command_dispatcher<T, L>(
     L: LoginCredentials,
 {
     // Channel gating and history buffers are read from `Services` once, up
-    // front. `admin_channel` / `ai_channel` are restart-required settings
-    // knobs; the buffers are Arcs shared with every other consumer.
+    // front. `admin_channel` is a restart-required settings knob;
+    // `ai_channel` comes from the buffers' own login (the snapshot
+    // `ChatContext::build` used) so both sides of the routing decision come
+    // from one read. The fallback covers `chat_ctx == None` — AI or history
+    // off, no buffers exist — where a mid-window settings change can only
+    // flip command gating, which is harmless.
     let snapshot = services.settings.load_full();
     let admin_channel = snapshot.twitch.admin_channel.clone();
-    let ai_channel = snapshot.twitch.ai_channel.clone();
+    let ai_channel = services
+        .chat_ctx
+        .as_ref()
+        .and_then(|ctx| ctx.ai_channel_login.clone())
+        .or_else(|| snapshot.twitch.ai_channel.clone());
     let (primary_history_for_dispatch, ai_channel_history_for_dispatch) = services
         .chat_ctx
         .as_ref()

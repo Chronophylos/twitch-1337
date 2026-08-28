@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use arc_swap::ArcSwap;
-use eyre::eyre;
 use secrecy::ExposeSecret;
 use secrecy::SecretString;
 use tokio::sync::RwLock;
@@ -26,6 +25,7 @@ use crate::auth::session::SessionTable;
 use crate::clock::Clock;
 use crate::config::WebConfig;
 use crate::helix::{AvatarCache, HelixClient};
+use eyre::{WrapErr as _, eyre};
 
 #[derive(Clone)]
 pub struct WebState {
@@ -153,40 +153,22 @@ impl WebState {
             recap: core.recap.clone(),
         }
     }
-}
-
-/// Stub-backed construction inputs for [`for_tests`]: which stub helix /
-/// clock to use and which on-disk dirs back the ping, memory, and settings
-/// stores.
-pub struct WebTestConfig {
-    pub helix: Arc<dyn HelixClient>,
-    pub clock: Arc<dyn Clock>,
-    /// Ping store dir; also hosts the telemetry store.
-    pub ping_dir: std::path::PathBuf,
-    /// Memory-tree dir.
-    pub memory_dir: std::path::PathBuf,
-    /// settings.ron dir.
-    pub settings_dir: std::path::PathBuf,
-    pub owner: Option<String>,
-    pub irc_connected: bool,
-    pub channel: String,
-}
-
-/// Stub-backed dashboard state for tests and the dev-login bin: owns its
-/// ping actor (spawned internally from `ping_dir`), opens settings/memory
-/// stores from the given dirs, and uses fixed test OAuth/client-id values.
-/// Callers keep the temp dirs alive.
-///
-/// Deliberately ungated (no cargo feature): no bin references it, so
-/// production builds never instantiate it, and gating would force
-/// `required-features` onto the web test targets — silently skipping them
-impl WebState {
-    pub async fn for_tests(cfg: WebTestConfig) -> WebState {
+    /// Stub-backed dashboard state for tests and the dev-login bin: owns its
+    /// ping actor (spawned internally from `ping_dir`), opens settings/memory
+    /// stores from the given dirs, and uses fixed test OAuth/client-id values.
+    /// Callers keep the temp dirs alive.
+    ///
+    /// Gated `cfg(any(test, feature = "testing", feature = "dev-login"))` so
+    /// the hardcoded test keys stay out of the production library: unit tests
+    /// see it via `cfg(test)`, integration tests via the self dev-dependency
+    /// enabling `testing`, and the dev bin via `dev-login`.
+    #[cfg(any(test, feature = "testing", feature = "dev-login"))]
+    pub async fn for_tests(cfg: WebTestConfig) -> eyre::Result<WebState> {
         // Spawn the ping actor for the lifetime of the returned state: the
         // task owns the receiver half, so it only exits once every
         // `WebState.ping_actor` clone (and thus the state) is dropped.
         let pings = twitch_1337_core::ping::PingManager::load(&cfg.ping_dir)
-            .expect("load ping manager for web tests");
+            .wrap_err("load ping manager")?;
         let (ping_runtime, ping_actor, _ping_names_rx) =
             twitch_1337_core::ping::ping_runtime(pings);
         let _ping_actor_task = tokio::spawn(twitch_1337_core::ping::run_ping_actor(
@@ -205,8 +187,8 @@ impl WebState {
             .expect("test oauth"),
         );
         let config = Arc::new(WebConfig {
-            bind_addr: "127.0.0.1:0".into(),
-            public_url: "https://test.invalid".into(),
+            bind_addr: cfg.bind_addr.clone(),
+            public_url: cfg.public_url.clone(),
             session_secret: SecretString::new("0".repeat(64).into()),
         });
         // Tests don't need a real production secret; a fixed key keeps
@@ -218,16 +200,16 @@ impl WebState {
         ));
         let (settings_store, settings) =
             twitch_1337_core::settings::SettingsStore::open(&cfg.settings_dir, audit, &cfg.channel)
-                .expect("open settings store for web tests");
+                .wrap_err("open settings store")?;
         let memory_store = MemoryStore::open(&cfg.memory_dir, settings.clone())
             .await
-            .expect("open memory store for web tests");
+            .wrap_err("open memory store")?;
         let memory_audit = Arc::new(FileAuditLog::new(cfg.memory_dir.join("memory_audit.log")));
         // Reuse ping_dir for telemetry: TelemetryStore only writes on flush,
         // and ping_dir is owned by the caller so it stays alive for the test.
         let telemetry = twitch_1337_core::schedule::TelemetryStore::open(&cfg.ping_dir);
 
-        WebState {
+        Ok(WebState {
             sessions,
             helix: cfg.helix,
             irc_connected: Arc::new(AtomicBool::new(cfg.irc_connected)),
@@ -252,8 +234,31 @@ impl WebState {
             settings_store,
             telemetry,
             recap: None,
-        }
+        })
     }
+}
+
+/// Stub-backed construction inputs for [`for_tests`]: which stub helix /
+/// clock to use and which on-disk dirs back the ping, memory, and settings
+/// stores.
+#[cfg(any(test, feature = "testing", feature = "dev-login"))]
+pub struct WebTestConfig {
+    pub helix: Arc<dyn HelixClient>,
+    pub clock: Arc<dyn Clock>,
+    /// Ping store dir; also hosts the telemetry store.
+    pub ping_dir: std::path::PathBuf,
+    /// Memory-tree dir.
+    pub memory_dir: std::path::PathBuf,
+    /// settings.ron dir.
+    pub settings_dir: std::path::PathBuf,
+    pub owner: Option<String>,
+    pub irc_connected: bool,
+    pub channel: String,
+    /// Reported in `WebConfig.bind_addr` so the dev bin reflects where the
+    /// process actually listens; tests pass a throwaway value.
+    pub bind_addr: String,
+    /// Reported in `WebConfig.public_url` (base for OAuth redirect URIs).
+    pub public_url: String,
 }
 
 /// Derive the signed-cookie [`Key`] from `[web].session_secret`.

@@ -15,6 +15,7 @@
 //! persist, so two processes against the same dir will not corrupt each
 //! other's writes — but a last-writer-wins race is real. Don't run this
 //! against the same dev-data the production bot is actively writing to
+//! unless you're aware of that.
 //!
 //! OAuth client-id, public_url, and the session secret are fixed test
 //! values (`WebState::for_tests`): dev-login bypasses the OAuth callback
@@ -63,8 +64,10 @@ async fn main() -> Result<()> {
         owner: Some(DEV_USER_ID.to_owned()),
         irc_connected: true,
         channel: channel.clone(),
+        bind_addr: bind_addr.to_string(),
+        public_url: format!("http://{bind_addr}"),
     })
-    .await;
+    .await?;
 
     // Inject the fixed dev session (bootstrap owner via DEV_USER_ID above so
     // the role-recheck gate admits it). Stored in the session table, not

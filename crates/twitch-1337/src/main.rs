@@ -315,17 +315,19 @@ pub async fn main() -> Result<()> {
 
     // Shared chat-history buffers: built once here so `!ai`, `!news`,
     // `!haiku`, the dispatcher, and the recap batcher all clone the same
-    // buffers out of `Services`.
-    let chat_ctx = ChatContext::build(
-        &settings_handle,
-        config.ai.is_some(),
-        &config.twitch.channel,
-        recap_handle.as_deref(),
-    )
-    .await;
-
-    // Per-agent Helix mouths + echo suppression, built once at composition.
-    let (mouths, echo) = build_mouths(&config, &get_data_dir()).await;
+    // buffers out of `Services`. `ChatContext::build` may fetch history
+    // prefill (up to ~20 s when `ai.prefill` is on); overlap it with the
+    // mouths' Helix I/O instead of serializing both ahead of run_bot.
+    let data_dir = get_data_dir();
+    let (chat_ctx, (mouths, echo)) = tokio::join!(
+        ChatContext::build(
+            &settings_handle,
+            config.ai.is_some(),
+            &config.twitch.channel,
+            recap_handle.as_deref(),
+        ),
+        build_mouths(&config, &data_dir),
+    );
 
     let suspension = Arc::new(SuspensionManager::new());
     let started_at = std::time::Instant::now();
@@ -386,7 +388,7 @@ pub async fn main() -> Result<()> {
         irc_connected,
         channel: config.twitch.channel.clone(),
         bot_username: config.twitch.username.clone(),
-        ai: config.ai.clone(),
+        ai_enabled: config.ai.is_some(),
         started_at,
         ping: ping_handle,
         ping_names_rx,

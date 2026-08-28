@@ -168,7 +168,7 @@ where
         None
     };
 
-    // Clone so `CommandHandlerConfig` (Plan 4 `!e`) can still take `emote_tracker`.
+    // Emote usage recording; `None` when SQLite open/migrate failed.
     let emote_usage = match services.emote_tracker.clone() {
         Some(handle) => {
             let rx = broadcast_tx.subscribe();
@@ -268,13 +268,16 @@ pub(crate) enum ShutdownOutcome {
 /// drains in-flight `say()` calls) and waits up to 5s for the scheduled
 /// handler before returning. Returns a [`ShutdownOutcome`] telling the
 /// caller whether the exit was graceful. The ping actor is owned by
-/// `run_bot` and drained there.
+/// `run_bot` and drained there after the handler tasks wind down — but its
+/// exit races this select: an actor crash trips `HandlerExited` just like
+/// any other handler.
 ///
 /// The scheduled-message handler subscribes directly to
 /// `SettingsStore::change_notify` and reconciles per-schedule tasks
 /// internally — there is no separate settings-sync task.
 pub(crate) async fn await_shutdown(
     handlers: HandlerSet,
+    ping_actor: &mut tokio::task::JoinHandle<()>,
     shutdown: oneshot::Receiver<()>,
 ) -> ShutdownOutcome {
     let HandlerSet {
@@ -309,6 +312,7 @@ pub(crate) async fn await_shutdown(
         result = emote_usage => { error!("Emote usage handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut sched => { error!("Scheduled message handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut recap => { error!("Recap batcher exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
+        result = &mut *ping_actor => { error!("Ping actor exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
     };
 
     outcome

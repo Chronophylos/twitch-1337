@@ -3386,6 +3386,7 @@ dependencies = [
  "tower-livereload",
  "tracing",
  "twitch-1337-core",
+ "twitch-1337-web",
  "url",
  "urlencoding",
  "wiremock",
