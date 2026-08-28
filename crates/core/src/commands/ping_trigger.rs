@@ -108,7 +108,7 @@ where
 #[cfg(test)]
 mod settings_live_tests {
     use super::*;
-    use crate::ping::{PingManager, ping_actor_channel_full, run_ping_actor};
+    use crate::ping::{PingManager, ping_runtime};
     use crate::settings::Settings;
     use std::sync::Arc;
 
@@ -117,10 +117,8 @@ mod settings_live_tests {
         let initial = Settings::compiled_defaults();
         let handle: crate::settings::SettingsHandle =
             Arc::new(arc_swap::ArcSwap::from_pointee(initial));
-        let (tx, rx, names_tx, names_rx) = ping_actor_channel_full();
         let mgr = PingManager::empty();
-        tokio::spawn(run_ping_actor(rx, mgr, names_tx));
-        let ping = crate::ping::PingHandle::new((*tx).clone());
+        let (_ping_runtime, ping, names_rx) = ping_runtime(mgr);
         let cmd = PingTriggerCommand::new(ping, handle.clone(), names_rx);
         let before_cooldown = cmd.current_cooldown();
         let before_public = cmd.current_public();

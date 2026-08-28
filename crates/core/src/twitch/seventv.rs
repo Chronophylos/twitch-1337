@@ -26,6 +26,34 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// catalog without bloating every prompt.
 pub const SEARCH_EMOTES_LIMIT: usize = 20;
 
+/// Build the 7TV emote-grounding provider once at startup (composition:
+/// main / `TestBotBuilder` via `Services`). Enabled only when AI is on and
+/// `ai.emotes` is set; if the emote tracker failed to open, grounding is
+/// disabled and the bot continues.
+pub fn build_emote_provider(
+    ai_enabled: bool,
+    settings: &SettingsHandle,
+    emote_tracker: Option<std::sync::Arc<EmoteTrackerHandle>>,
+) -> Option<std::sync::Arc<SevenTvEmoteProvider>> {
+    if !ai_enabled || settings.load().ai.emotes.is_none() {
+        return None;
+    }
+    let tracker = emote_tracker?;
+    match SevenTvEmoteProvider::new(settings.clone(), tracker) {
+        Ok(provider) => {
+            tracing::info!("7TV emote meanings prompt grounding enabled");
+            Some(Arc::new(provider))
+        }
+        Err(error) => {
+            tracing::warn!(
+                ?error,
+                "Failed to initialize 7TV emote provider; emote grounding disabled"
+            );
+            None
+        }
+    }
+}
+
 /// Lazily refreshes the available 7TV catalog and builds an LLM prompt block
 /// from the tracker active catalog and global REST set joined to SQLite meanings.
 pub struct SevenTvEmoteProvider {

@@ -29,13 +29,13 @@ use crate::{
     ai::recap::RecapHandle,
     ai::recap_batcher::run_recap_batcher,
     aviation::{self, AviationClient},
-    config::Configuration,
-    ping::{PingCommand, PingManager, run_ping_actor},
+    config::AiBootstrap,
+    ping::PingHandle,
     suspend::SuspensionManager,
     twitch::{
         ChatSender,
         handlers::{
-            commands::{CommandHandlerConfig, RecapBatcherHistories, run_generic_command_handler},
+            commands::{CommandHandlerConfig, run_generic_command_handler},
             emote_usage::run_emote_usage_handler,
             latency::run_latency_handler,
             router::run_message_router,
@@ -56,7 +56,6 @@ pub(crate) struct HandlerSet {
     pub flight_tracker: JoinHandle<()>,
     pub emote_set_ingest: JoinHandle<()>,
     pub emote_usage: JoinHandle<()>,
-    pub ping_actor: JoinHandle<()>,
     pub scheduled_messages: JoinHandle<()>,
     pub recap: JoinHandle<()>,
     /// Shared notify so consolidation/shutdown code can drain in-flight
@@ -69,20 +68,22 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     // Shared.
     pub client: Arc<TwitchIRCClient<T, L>>,
     pub incoming: tokio::sync::mpsc::UnboundedReceiver<ServerMessage>,
-    pub config: Configuration,
     pub clock: Arc<dyn Clock>,
     pub data_dir: PathBuf,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
+    /// Primary channel login (`Services.channel`).
+    pub channel: String,
+    /// The utility bot's own login (`Services.bot_username`).
+    pub bot_username: String,
+    /// Bootstrap AI section; presence gates AI command registration.
+    pub ai: Option<AiBootstrap>,
 
     // 1337 tracker.
     pub leaderboard: Arc<RwLock<HashMap<String, PersonalBest>>>,
     pub hall_of_shame: Arc<RwLock<HashMap<String, PersonalWorst>>>,
 
     // Generic commands (ping actor).
-    pub ping_actor_tx: mpsc::Sender<PingCommand>,
-    pub ping_actor_rx: mpsc::Receiver<PingCommand>,
-    pub ping_manager: PingManager,
-    pub ping_names_tx: watch::Sender<std::collections::HashSet<String>>,
+    pub ping: PingHandle,
     pub ping_names_rx: watch::Receiver<std::collections::HashSet<String>>,
     pub suspension_manager: Arc<SuspensionManager>,
     pub llm: Arc<crate::llm_factory::LlmRegistry>,
@@ -117,15 +118,15 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     pub settings_store: Arc<crate::settings::SettingsStore>,
 
     /// Optional test-only sink: when set, the commands handler stores the
-    /// freshly built primary `ChatHistory` here so integration tests can
-    /// peek at chat-history entries. Production wires `None`.
+    /// primary `ChatHistory` `Arc` here so integration tests can peek at
+    /// chat-history entries. Production wires `None`.
     pub primary_history_tap:
         Option<Arc<tokio::sync::Mutex<Option<crate::ai::chat_history::ChatHistory>>>>,
 
     /// Per-schedule runtime telemetry. Shared with the dashboard so card
     /// chips ("12 today", "12m ago") read live data.
     pub telemetry: Arc<crate::schedule::TelemetryStore>,
-    /// Process start instant, captured in `run_bot`; forwarded to `!v`.
+    /// Process start instant, captured at composition; forwarded to `!v`.
     pub started_at: std::time::Instant,
 
     /// Emote set audit + usage SoR. `None` when SQLite open/migrate failed.
@@ -134,12 +135,14 @@ pub(crate) struct SpawnDeps<T: Transport, L: LoginCredentials> {
     /// Helix resolve failed — ingest stays off without aborting the bot.
     pub twitch_channel_id: Option<String>,
 
-    /// Per-agent Helix chat-send mouths, built at startup from configured
-    /// mouth accounts (`crate::twitch::mouth_setup::build_mouths`).
+    /// Per-agent Helix chat-send mouths, built at composition.
     pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
-    /// Echo suppression for the bot's own AI mouths, sharing the same
-    /// identities `build_mouths` collected.
+    /// Echo suppression for the bot's own AI mouths.
     pub echo: Arc<crate::twitch::echo::EchoGuard>,
+
+    /// Shared chat-history buffers built at composition. `None` when AI or
+    /// chat history is disabled.
+    pub chat_ctx: Option<ai::command::ChatContext>,
 
     /// Shared chat-recap handle. `None` when AI / LLM is disabled.
     pub recap: Option<Arc<RecapHandle>>,
@@ -156,16 +159,15 @@ where
     let SpawnDeps {
         client,
         incoming,
-        config,
         clock,
         data_dir,
         doener,
+        channel,
+        bot_username,
+        ai,
         leaderboard,
         hall_of_shame,
-        ping_actor_tx,
-        ping_actor_rx,
-        ping_manager,
-        ping_names_tx,
+        ping,
         ping_names_rx,
         suspension_manager,
         llm,
@@ -189,17 +191,9 @@ where
         twitch_channel_id,
         mouths,
         echo,
+        chat_ctx,
         recap,
     } = deps;
-
-    let (recap_histories_tx, recap_histories_rx) = if recap.is_some() {
-        let (tx, rx) = tokio::sync::oneshot::channel::<RecapBatcherHistories>();
-        (Some(tx), Some(rx))
-    } else {
-        (None, None)
-    };
-
-    let ping_actor = tokio::spawn(run_ping_actor(ping_actor_rx, ping_manager, ping_names_tx));
 
     // One sanitizing chat sender shared by every PRIVMSG-emitting handler.
     // Tasks that need raw IRC framing (latency PING/PONG, JOINs) keep `client`.
@@ -213,7 +207,7 @@ where
             let tx = aviation_tracker_tx.expect("tracker_tx must be Some when aviation is Some");
             let handle = tokio::spawn({
                 let sender = chat_sender.clone();
-                let channel = config.twitch.channel.clone();
+                let channel = channel.clone();
                 let dir = data_dir.clone();
                 let clk = clock.clone();
                 async move {
@@ -228,8 +222,7 @@ where
     let emote_set_ingest = match (emote_tracker.clone(), twitch_channel_id) {
         (Some(handle), Some(channel_id)) => {
             let http = reqwest::Client::new();
-            let cfg =
-                crate::emote_tracker::IngestConfig::new(channel_id, config.twitch.channel.clone());
+            let cfg = crate::emote_tracker::IngestConfig::new(channel_id, channel.clone());
             let settings = settings.clone();
             tokio::spawn(async move {
                 crate::emote_tracker::run_set_ingest(handle, cfg, http, settings).await;
@@ -261,7 +254,7 @@ where
         let settings = settings.clone();
         let change_notify = settings_store.change_notify();
         let telemetry = telemetry.clone();
-        let channel = config.twitch.channel.clone();
+        let channel = channel.clone();
         let notify = shutdown_notify.clone();
         let clk = clock.clone();
         async move {
@@ -293,7 +286,7 @@ where
     let _transcript_tap = if let Some(t) = transcript {
         let rx = broadcast_tx.subscribe();
         let w = Arc::new(t);
-        let ch = config.twitch.channel.clone();
+        let ch = channel.clone();
         let echo_tap = echo.clone();
         Some(tokio::spawn(async move {
             crate::twitch::handlers::transcript::run_transcript_tap(rx, w, ch, echo_tap).await;
@@ -307,8 +300,8 @@ where
         Some(handle) => {
             let rx = broadcast_tx.subscribe();
             let settings = settings.clone();
-            let channel = config.twitch.channel.clone();
-            let bot_username = config.twitch.username.clone();
+            let channel = channel.clone();
+            let bot_username = bot_username.clone();
             let echo_usage = echo.clone();
             tokio::spawn(async move {
                 run_emote_usage_handler(rx, handle, settings, channel, bot_username, echo_usage)
@@ -321,7 +314,7 @@ where
     let tracker_1337 = tokio::spawn({
         let btx = broadcast_tx.clone();
         let sender = chat_sender.clone();
-        let channel = config.twitch.channel.clone();
+        let channel = channel.clone();
         let lat = latency_value.clone();
         let lb = leaderboard.clone();
         let hos = hall_of_shame.clone();
@@ -333,31 +326,23 @@ where
         }
     });
 
-    let recap_task = match (recap.clone(), recap_histories_rx) {
-        (Some(handle), Some(rx)) => {
+    let recap_task = match (recap.clone(), chat_ctx.clone()) {
+        (Some(handle), Some(ctx)) => {
             let settings = settings.clone();
             let shutdown = shutdown_notify.clone();
-            let bot_username = config.twitch.username.clone();
             let echo_for_logins = echo.clone();
             let registry = llm.clone();
             let observer = langfuse.clone();
+            let bot_username = bot_username.clone();
             tokio::spawn(async move {
-                let Ok(histories) = rx.await else {
-                    std::future::pending::<()>().await;
-                    unreachable!("pending future never resolves");
-                };
-                let Some(primary) = histories.primary else {
-                    std::future::pending::<()>().await;
-                    unreachable!("pending future never resolves");
-                };
                 let mut self_logins = vec![bot_username.to_ascii_lowercase()];
                 self_logins.extend(echo_for_logins.mouth_logins().iter().cloned());
                 run_recap_batcher(
                     (*handle).clone(),
                     settings,
                     registry,
-                    primary,
-                    histories.ai_channel,
+                    ctx.primary_history.clone(),
+                    ctx.ai_channel_history.clone(),
                     self_logins,
                     shutdown,
                     observer,
@@ -378,12 +363,12 @@ where
             run_generic_command_handler(CommandHandlerConfig {
                 broadcast_rx: commands_broadcast_rx,
                 client,
-                ai_config: config.ai.clone(),
+                ai_config: ai,
                 llm,
                 ai_memory_v2,
                 leaderboard,
                 hall_of_shame,
-                ping_actor_tx,
+                ping_handle: ping,
                 ping_names_rx,
                 settings: settings.clone(),
                 tracker_tx,
@@ -393,11 +378,10 @@ where
                 whisper,
                 admin_channel,
                 ai_channel,
-                bot_username: config.twitch.username.clone(),
-                channel: config.twitch.channel.clone(),
-                data_dir: data_dir.clone(),
-                doener: doener.clone(),
-                suspension_manager: suspension_manager.clone(),
+                bot_username,
+                data_dir,
+                doener,
+                suspension_manager,
                 emote_provider,
                 emote_tracker,
                 primary_history_tap,
@@ -405,7 +389,7 @@ where
                 mouths,
                 echo,
                 recap,
-                recap_histories_tx,
+                chat_ctx,
             })
             .await;
         }
@@ -419,7 +403,6 @@ where
         flight_tracker,
         emote_set_ingest,
         emote_usage,
-        ping_actor,
         scheduled_messages,
         recap: recap_task,
         shutdown_notify,
@@ -439,8 +422,9 @@ pub(crate) enum ShutdownOutcome {
 ///
 /// On shutdown, notifies `shutdown_notify` (so the scheduled-message handler
 /// drains in-flight `say()` calls) and waits up to 5s for the scheduled
-/// handler before returning. Returns the ping-actor handle plus a
-/// [`ShutdownOutcome`] telling the caller whether the exit was graceful.
+/// handler before returning. Returns a [`ShutdownOutcome`] telling the
+/// caller whether the exit was graceful. The ping actor is owned by
+/// `run_bot` and drained there.
 ///
 /// The scheduled-message handler subscribes directly to
 /// `SettingsStore::change_notify` and reconciles per-schedule tasks
@@ -448,7 +432,7 @@ pub(crate) enum ShutdownOutcome {
 pub(crate) async fn await_shutdown(
     handlers: HandlerSet,
     shutdown: oneshot::Receiver<()>,
-) -> (tokio::task::JoinHandle<()>, ShutdownOutcome) {
+) -> ShutdownOutcome {
     let HandlerSet {
         router,
         latency,
@@ -457,7 +441,6 @@ pub(crate) async fn await_shutdown(
         flight_tracker,
         emote_set_ingest,
         emote_usage,
-        mut ping_actor,
         scheduled_messages: mut sched,
         mut recap,
         shutdown_notify,
@@ -480,10 +463,9 @@ pub(crate) async fn await_shutdown(
         result = flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = emote_set_ingest => { error!("Emote set ingest exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = emote_usage => { error!("Emote usage handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = &mut ping_actor => { error!("Ping actor exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut sched => { error!("Scheduled message handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut recap => { error!("Recap batcher exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
     };
 
-    (ping_actor, outcome)
+    outcome
 }

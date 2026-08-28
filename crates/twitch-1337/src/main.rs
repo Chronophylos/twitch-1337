@@ -11,11 +11,15 @@ use tokio::sync::oneshot;
 use tracing::info;
 use twitch_1337_core::{
     AuthenticatedLoginCredentials, PersonalBest, PersonalWorst, Services,
+    ai::command::ChatContext,
     ai::memory::store::MemoryStore,
     aviation, doener, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing,
     llm_factory, load_configuration, load_hall_of_shame, load_leaderboard,
-    ping::{PingHandle, PingManager, ping_actor_channel_full},
+    ping::{PingHandle, PingManager, ping_runtime},
     run_bot, setup_and_verify_twitch_client,
+    suspend::SuspensionManager,
+    twitch::mouth_setup::build_mouths,
+    twitch::seventv::build_emote_provider,
     twitch::whisper,
     util::clock::SystemClock,
 };
@@ -196,7 +200,7 @@ pub async fn main() -> Result<()> {
 
     let ping_manager =
         PingManager::load(&get_data_dir()).wrap_err("Failed to load ping manager")?;
-    let (ping_actor_tx, ping_actor_rx, ping_names_tx, ping_names_rx) = ping_actor_channel_full();
+    let (ping_runtime, ping_handle, ping_names_rx) = ping_runtime(ping_manager);
 
     // Warn on subsequent boots if any migrated key still appears in config.toml
     // — it's silently ignored after the v3 marker has been written. Skipped on
@@ -299,6 +303,33 @@ pub async fn main() -> Result<()> {
         .await
         .wrap_err("open memory store")?;
 
+    // Build the v2 memory bundle (store + transcript + knobs) once at
+    // composition; `run_bot` reads it from `Services`. `None` when AI is off.
+    let ai_memory = twitch_1337::ai::command::build_ai_memory_v2(
+        config.ai.is_some(),
+        &settings_handle.load_full(),
+        memory_store.clone(),
+    )
+    .await
+    .wrap_err("build ai memory v2")?;
+
+    // Shared chat-history buffers: built once here so `!ai`, `!news`,
+    // `!haiku`, the dispatcher, and the recap batcher all clone the same
+    // buffers out of `Services`.
+    let chat_ctx = ChatContext::build(
+        &settings_handle,
+        config.ai.is_some(),
+        &config.twitch.channel,
+        recap_handle.as_deref(),
+    )
+    .await;
+
+    // Per-agent Helix mouths + echo suppression, built once at composition.
+    let (mouths, echo) = build_mouths(&config, &get_data_dir()).await;
+
+    let suspension = Arc::new(SuspensionManager::new());
+    let started_at = std::time::Instant::now();
+
     // Load the leaderboard before building the web spawner so the same Arc
     // can be shared with WebState (dashboard read) and the IRC tracker (writes).
     let leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>> = Arc::new(
@@ -324,6 +355,11 @@ pub async fn main() -> Result<()> {
     // Soft-fail: open/migrate error leaves None and disables the tracker only.
     let emote_tracker = twitch_1337::emote_tracker::try_open(&get_data_dir());
 
+    // 7TV emote grounding: enabled only when AI + `ai.emotes` + tracker are
+    // all present. Failure logs and continues without grounding.
+    let emote_provider =
+        build_emote_provider(config.ai.is_some(), &settings_handle, emote_tracker.clone());
+
     let twitch_channel_id = match resolve_twitch_channel_id(&config, &credentials).await {
         Ok(id) => Some(id),
         Err(error) => {
@@ -342,7 +378,7 @@ pub async fn main() -> Result<()> {
                 &config,
                 credentials_for_web,
                 irc_connected.clone(),
-                PingHandle::new((*ping_actor_tx).clone()),
+                ping_handle.clone(),
                 memory_store.clone(),
                 leaderboard.clone(),
                 aviation_tracker_tx.clone(),
@@ -360,6 +396,7 @@ pub async fn main() -> Result<()> {
 
     let services = Services {
         clock: Arc::new(SystemClock),
+
         llm,
         aviation: aviation_client,
         dhl: dhl_client,
@@ -371,21 +408,26 @@ pub async fn main() -> Result<()> {
         settings_store,
         irc_connected,
         web_spawner,
-        ping_actor_tx,
-        ping_actor_rx,
-        ping_manager,
-        ping_names_tx,
+        channel: config.twitch.channel.clone(),
+        bot_username: config.twitch.username.clone(),
+        ai: config.ai.clone(),
+        started_at,
+        ping: ping_handle,
         ping_names_rx,
         memory_store,
+        ai_memory,
+        chat_ctx,
+        emote_provider,
         leaderboard,
         hall_of_shame,
         aviation_tracker_tx,
-        aviation_tracker_rx,
         primary_history_tap: None,
         telemetry,
         emote_tracker,
         twitch_channel_id,
-        mouths_override: None,
+        mouths,
+        echo,
+        suspension,
         recap: recap_handle,
     };
 
@@ -395,7 +437,15 @@ pub async fn main() -> Result<()> {
         let _ = shutdown_tx.send(());
     });
 
-    run_bot(client, incoming, config, services, shutdown_rx).await
+    run_bot(
+        client,
+        incoming,
+        services,
+        ping_runtime,
+        aviation_tracker_rx,
+        shutdown_rx,
+    )
+    .await
 }
 
 /// Build the web-task spawn closure. Resolves the broadcaster id, builds

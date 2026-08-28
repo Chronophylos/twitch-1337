@@ -235,17 +235,32 @@ impl PingHandle {
     }
 }
 
-pub type PingActorChannel = (
-    Arc<mpsc::Sender<PingCommand>>,
-    mpsc::Receiver<PingCommand>,
-    watch::Sender<HashSet<String>>,
-    watch::Receiver<HashSet<String>>,
-);
+/// Consumed-once inputs for the ping actor. `run_bot` takes these by value,
+/// spawns the actor, and owns its `JoinHandle` for shutdown.
+pub struct PingRuntime {
+    pub rx: mpsc::Receiver<PingCommand>,
+    pub manager: PingManager,
+    pub names_tx: watch::Sender<HashSet<String>>,
+}
 
-pub fn ping_actor_channel_full() -> PingActorChannel {
+/// Create the ping actor channel from a loaded [`PingManager`].
+///
+/// Returns the actor inputs, the shared [`PingHandle`] for `Services` and
+/// `WebState`, and the live name-set receiver for `PingTriggerCommand`.
+pub fn ping_runtime(
+    manager: PingManager,
+) -> (PingRuntime, PingHandle, watch::Receiver<HashSet<String>>) {
     let (cmd_tx, cmd_rx) = mpsc::channel(PING_ACTOR_CHANNEL);
     let (names_tx, names_rx) = watch::channel(HashSet::new());
-    (Arc::new(cmd_tx), cmd_rx, names_tx, names_rx)
+    (
+        PingRuntime {
+            rx: cmd_rx,
+            manager,
+            names_tx,
+        },
+        PingHandle::new(cmd_tx),
+        names_rx,
+    )
 }
 
 pub async fn run_ping_actor(

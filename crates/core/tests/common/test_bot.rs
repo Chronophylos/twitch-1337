@@ -22,7 +22,7 @@ use twitch_1337::{
     aviation::AviationClient,
     config::{AiBootstrap, Configuration},
     load_hall_of_shame, load_leaderboard,
-    ping::{PingHandle, ping_actor_channel_full},
+    ping::{PingHandle, ping_runtime},
     run_bot,
     twitch::echo::{EchoGuard, MouthIdentities},
     twitch::mouth::{Agent, Mouth, MouthRouter, SpeakError, SpeakRequest, SpokenMessage},
@@ -421,8 +421,7 @@ impl TestBotBuilder {
 
             let ping_manager =
                 twitch_1337::ping::PingManager::load(data_dir.path()).expect("load ping manager");
-            let (ping_actor_tx, ping_actor_rx, ping_names_tx, ping_names_rx) =
-                ping_actor_channel_full();
+            let (ping_runtime, ping_handle, ping_names_rx) = ping_runtime(ping_manager);
 
             let memory_store = twitch_1337::ai::memory::store::MemoryStore::open(
                 data_dir.path(),
@@ -430,7 +429,15 @@ impl TestBotBuilder {
             )
             .await
             .expect("open memory store");
-            // Build the telemetry store once; share the Arc with Services, web, and TestBot.
+
+            let ai_memory = twitch_1337::ai::command::build_ai_memory_v2(
+                self.config.ai.is_some(),
+                &settings_handle.load_full(),
+                memory_store.clone(),
+            )
+            .await
+            .expect("build ai memory v2");
+
             let telemetry_store = twitch_1337::schedule::TelemetryStore::open(data_dir.path());
 
             let recap_handle = if self.config.ai.is_some() {
@@ -440,6 +447,13 @@ impl TestBotBuilder {
             } else {
                 None
             };
+            let chat_ctx = twitch_1337::ai::command::ChatContext::build(
+                &settings_handle,
+                self.config.ai.is_some(),
+                &channel,
+                recap_handle.as_deref(),
+            )
+            .await;
 
             let web_spawner = if self.config.web.enabled {
                 let bind_addr: std::net::SocketAddr = self
@@ -452,7 +466,7 @@ impl TestBotBuilder {
                 let state = build_test_web_state(
                     &self.config,
                     irc_connected.clone(),
-                    PingHandle::new((*ping_actor_tx).clone()),
+                    ping_handle.clone(),
                     memory_store.clone(),
                     settings_handle.clone(),
                     settings_store.clone(),
@@ -520,6 +534,28 @@ impl TestBotBuilder {
                 Some(handle)
             };
 
+            // Per-agent mouths + echo suppression. Tests with a configured
+            // mouth identity / fake mouths bypass production `build_mouths`
+            // (which performs live Helix I/O) via the stub pair.
+            let (mouths, echo) = match build_mouths_override(self.mouth_identity, self.fake_mouths)
+            {
+                Some(pair) => pair,
+                None => {
+                    twitch_1337::twitch::mouth_setup::build_mouths(&self.config, data_dir.path())
+                        .await
+                }
+            };
+
+            // 7TV emote grounding; `None` unless AI + `ai.emotes` + tracker.
+            let emote_provider = twitch_1337::twitch::seventv::build_emote_provider(
+                self.config.ai.is_some(),
+                &settings_handle,
+                emote_tracker.clone(),
+            );
+
+            let suspension = Arc::new(twitch_1337::suspend::SuspensionManager::new());
+            let started_at = std::time::Instant::now();
+
             let services = Services {
                 clock: clock.clone(),
                 llm: Arc::new(twitch_1337::llm_factory::LlmRegistry::fixed(
@@ -547,12 +583,16 @@ impl TestBotBuilder {
                 settings_store: settings_store.clone(),
                 irc_connected: irc_connected.clone(),
                 web_spawner,
-                ping_actor_tx,
-                ping_actor_rx,
-                ping_manager,
-                ping_names_tx,
+                channel: channel.clone(),
+                bot_username: self.config.twitch.username.clone(),
+                ai: self.config.ai.clone(),
+                started_at,
+                ping: ping_handle,
                 ping_names_rx,
                 memory_store,
+                ai_memory,
+                chat_ctx,
+                emote_provider,
                 leaderboard: Arc::new(tokio::sync::RwLock::new(
                     load_leaderboard(data_dir.path()).await,
                 )),
@@ -560,12 +600,13 @@ impl TestBotBuilder {
                     load_hall_of_shame(data_dir.path()).await,
                 )),
                 aviation_tracker_tx,
-                aviation_tracker_rx,
                 primary_history_tap: Some(primary_history_tap.clone()),
                 telemetry: telemetry_store.clone(),
                 emote_tracker,
                 twitch_channel_id: None,
-                mouths_override: build_mouths_override(self.mouth_identity, self.fake_mouths),
+                mouths,
+                echo,
+                suspension,
                 recap: recap_handle.clone(),
             };
 
@@ -573,8 +614,9 @@ impl TestBotBuilder {
             let bot_task = tokio::spawn(run_bot(
                 client,
                 incoming,
-                self.config,
                 services,
+                ping_runtime,
+                aviation_tracker_rx,
                 shutdown_rx,
             ));
 

@@ -11,23 +11,16 @@ use twitch_irc::{
 };
 
 use crate::{
-    ChatHistory, ChatHistoryBuffer, PersonalBest, PersonalWorst, ai,
-    ai::chat_history::{ai_channel_history_capacity, primary_history_capacity},
+    ChatHistory, PersonalBest, PersonalWorst, ai,
     ai::command::{AI_TRIGGER, GROK_ALIAS_TRIGGER, is_ai_trigger},
     ai::recap::RecapHandle,
     aviation, commands,
     config::AiBootstrap,
-    ping::{PingCommand, PingHandle},
+    ping::PingHandle,
     settings::SettingsHandle,
     suspend::SuspensionManager,
     twitch::{ChatSender, mouth::Agent, seventv::SevenTvEmoteProvider, whisper::WhisperSender},
 };
-
-/// Chat-history buffers handed from the command handler to the recap batcher.
-pub(crate) struct RecapBatcherHistories {
-    pub primary: Option<ChatHistory>,
-    pub ai_channel: Option<ChatHistory>,
-}
 
 /// Configuration for the generic command handler.
 pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
@@ -47,7 +40,7 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub ai_memory_v2: Option<ai::command::AiMemoryV2>,
     pub leaderboard: Arc<tokio::sync::RwLock<HashMap<String, PersonalBest>>>,
     pub hall_of_shame: Arc<tokio::sync::RwLock<HashMap<String, PersonalWorst>>>,
-    pub ping_actor_tx: tokio::sync::mpsc::Sender<PingCommand>,
+    pub ping_handle: PingHandle,
     pub ping_names_rx: tokio::sync::watch::Receiver<std::collections::HashSet<String>>,
     pub settings: SettingsHandle,
     pub tracker_tx: Option<tokio::sync::mpsc::Sender<aviation::TrackerCommand>>,
@@ -59,7 +52,6 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub admin_channel: Option<String>,
     pub ai_channel: Option<String>,
     pub bot_username: String,
-    pub channel: String,
     pub data_dir: std::path::PathBuf,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
     /// Per-agent Helix chat-send mouths, built at startup from configured
@@ -84,9 +76,9 @@ pub struct CommandHandlerConfig<T: Transport, L: LoginCredentials> {
     pub started_at: std::time::Instant,
     /// Shared chat-recap handle. `None` when AI / LLM is disabled.
     pub recap: Option<std::sync::Arc<RecapHandle>>,
-    /// One-shot sender for chat-history buffers once allocated. Consumed by the
-    /// recap batcher task spawned in `spawn_handlers`.
-    pub(crate) recap_histories_tx: Option<tokio::sync::oneshot::Sender<RecapBatcherHistories>>,
+    /// Shared chat-history buffers built at composition. `None` when AI or
+    /// chat history is disabled.
+    pub chat_ctx: Option<ai::command::ChatContext>,
 }
 
 /// Handler for generic text commands that start with `!`.
@@ -105,7 +97,7 @@ where
         ai_memory_v2,
         leaderboard,
         hall_of_shame,
-        ping_actor_tx,
+        ping_handle,
         ping_names_rx,
         settings,
         tracker_tx,
@@ -116,7 +108,6 @@ where
         admin_channel,
         ai_channel,
         bot_username,
-        channel,
         data_dir,
         doener,
         suspension_manager,
@@ -127,10 +118,8 @@ where
         mouths,
         echo,
         recap,
-        recap_histories_tx,
+        chat_ctx,
     } = cfg;
-
-    let ping_handle = PingHandle::new(ping_actor_tx);
 
     // Snapshot of the dashboard-managed settings at startup. Reads below use
     // these values; Tasks 6+ make selected commands consume the handle live.
@@ -146,61 +135,23 @@ where
         debug!("AI not configured, AI commands disabled");
     }
 
-    // Create chat history buffer for AI context. Capacity is read live from
-    // the settings handle on every push; the initial snapshot is only used to
-    // decide whether to allocate the buffer at all and to run the one-shot
-    // prefill (which is restart-required for off↔on transitions anyway).
-    let primary_history: Option<ChatHistory> = if ai_configured && snapshot.ai.history.length > 0 {
-        let history_length = snapshot.ai.history.length as usize;
-        let prefill_cfg = snapshot
-            .ai
-            .prefill
-            .as_ref()
-            .map(ai::prefill::HistoryPrefillConfig::from);
-        let buffer = if let Some(ref cfg) = prefill_cfg {
-            let prefilled = ai::prefill::prefill_chat_history(&channel, history_length, cfg).await;
-            ChatHistoryBuffer::from_prefill(settings.clone(), primary_history_capacity, prefilled)
-        } else {
-            ChatHistoryBuffer::new(settings.clone(), primary_history_capacity)
-        };
-        Some(Arc::new(tokio::sync::Mutex::new(buffer)))
-    } else {
-        None
-    };
-
     // Hand the primary history Arc to the (test-only) tap so integration
     // tests can peek at chat-history entries. Production wires `None`.
-    if let (Some(tap), Some(ph)) = (primary_history_tap.as_ref(), primary_history.as_ref()) {
-        *tap.lock().await = Some(ph.clone());
+    if let (Some(tap), Some(ctx)) = (primary_history_tap.as_ref(), chat_ctx.as_ref()) {
+        *tap.lock().await = Some(ctx.primary_history.clone());
     }
 
-    // ai_channel buffer: allocated only when an ai_channel is configured AND
-    // chat history is enabled. Capacity is read live from the settings handle.
-    let ai_channel_history: Option<ChatHistory> = match (&ai_channel, primary_history.is_some()) {
-        (Some(_), true) if snapshot.ai.history.ai_channel_length > 0 => {
-            Some(Arc::new(tokio::sync::Mutex::new(ChatHistoryBuffer::new(
-                settings.clone(),
-                ai_channel_history_capacity,
-            ))))
-        }
-        _ => None,
-    };
-
-    if let (Some(handle), Some(ph)) = (recap.as_ref(), primary_history.as_ref()) {
-        let entries = ph.lock().await.snapshot();
-        handle.rebind_primary(&entries).await;
-        if let Some(ai_hist) = ai_channel_history.as_ref() {
-            let ai_entries = ai_hist.lock().await.snapshot();
-            handle.rebind_ai_channel(&ai_entries).await;
-        }
-    }
-
-    if let Some(tx) = recap_histories_tx {
-        let _ = tx.send(RecapBatcherHistories {
-            primary: primary_history.clone(),
-            ai_channel: ai_channel_history.clone(),
-        });
-    }
+    // Snapshot the shared history buffers for the dispatcher before the
+    // individual commands consume `chat_ctx`.
+    let (primary_history_for_dispatch, ai_channel_history_for_dispatch) = chat_ctx
+        .as_ref()
+        .map(|ctx| {
+            (
+                Some(ctx.primary_history.clone()),
+                ctx.ai_channel_history.clone(),
+            )
+        })
+        .unwrap_or((None, None));
 
     let mut cmd_list: Vec<Box<dyn commands::Command<T, L>>> = vec![
         Box::new(commands::version::VersionCommand::new(started_at)),
@@ -300,15 +251,6 @@ where
             None
         };
 
-        let chat_ctx = primary_history
-            .clone()
-            .map(|history| ai::command::ChatContext {
-                primary_history: history,
-                primary_login: channel.clone(),
-                ai_channel_history: ai_channel_history.clone(),
-                ai_channel_login: ai_channel.clone(),
-            });
-
         let news_cooldown = Arc::new(crate::cooldown::PerUserCooldown::live(
             settings.clone(),
             commands::news_cooldown_duration,
@@ -389,8 +331,8 @@ where
         cmd_list,
         admin_channel,
         ai_channel,
-        primary_history,
-        ai_channel_history,
+        primary_history_for_dispatch,
+        ai_channel_history_for_dispatch,
         suspension_manager,
         echo,
     )

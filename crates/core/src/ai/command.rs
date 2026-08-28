@@ -14,7 +14,9 @@ use llm::{
     ToolExecutor, ToolResultMessage, TraceIds, run_agent,
 };
 
-use crate::ai::chat_history::ChatHistory;
+use crate::ai::chat_history::{
+    ChatHistory, ChatHistoryBuffer, ai_channel_history_capacity, primary_history_capacity,
+};
 use crate::ai::content;
 use crate::ai::memory::inject;
 use crate::ai::memory::store::MemoryStore;
@@ -56,6 +58,70 @@ impl ChatContext {
     /// `true` iff `channel_login` matches the configured ai_channel.
     pub fn is_ai_channel(&self, channel_login: &str) -> bool {
         matches!(&self.ai_channel_login, Some(login) if login == channel_login)
+    }
+
+    /// Build the shared chat-history buffers once at composition (main /
+    /// `TestBotBuilder`). Every consumer — `!ai`, `!news`, `!haiku`, the
+    /// dispatcher's history recording, and the recap batcher — clones the
+    /// same buffers out of `Services` instead of relaying them through
+    /// handler configs.
+    ///
+    /// Returns `None` when AI is disabled or chat history is off. Rebinds
+    /// `recap` to the freshly built buffers so a restart resumes the recap
+    /// without a gap.
+    pub async fn build(
+        settings: &SettingsHandle,
+        ai_enabled: bool,
+        channel: &str,
+        recap: Option<&RecapHandle>,
+    ) -> Option<ChatContext> {
+        let snapshot = settings.load_full();
+        if !(ai_enabled && snapshot.ai.history.length > 0) {
+            return None;
+        }
+        let history_length = snapshot.ai.history.length as usize;
+        let prefill_cfg = snapshot
+            .ai
+            .prefill
+            .as_ref()
+            .map(super::prefill::HistoryPrefillConfig::from);
+        let buffer = if let Some(cfg) = &prefill_cfg {
+            let prefilled =
+                super::prefill::prefill_chat_history(channel, history_length, cfg).await;
+            ChatHistoryBuffer::from_prefill(settings.clone(), primary_history_capacity, prefilled)
+        } else {
+            ChatHistoryBuffer::new(settings.clone(), primary_history_capacity)
+        };
+        let primary_history: ChatHistory = Arc::new(tokio::sync::Mutex::new(buffer));
+
+        // ai_channel buffer: allocated only when an ai_channel is configured
+        // AND chat history is enabled. Capacity is read live from the
+        // settings handle.
+        let ai_channel_history: Option<ChatHistory> =
+            if snapshot.twitch.ai_channel.is_some() && snapshot.ai.history.ai_channel_length > 0 {
+                Some(Arc::new(tokio::sync::Mutex::new(ChatHistoryBuffer::new(
+                    settings.clone(),
+                    ai_channel_history_capacity,
+                ))))
+            } else {
+                None
+            };
+
+        if let Some(handle) = recap {
+            let entries = primary_history.lock().await.snapshot();
+            handle.rebind_primary(&entries).await;
+            if let Some(ai_hist) = ai_channel_history.as_ref() {
+                let ai_entries = ai_hist.lock().await.snapshot();
+                handle.rebind_ai_channel(&ai_entries).await;
+            }
+        }
+
+        Some(ChatContext {
+            primary_history,
+            primary_login: channel.to_owned(),
+            ai_channel_history,
+            ai_channel_login: snapshot.twitch.ai_channel.clone(),
+        })
     }
 }
 
