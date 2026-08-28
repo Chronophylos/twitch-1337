@@ -206,9 +206,13 @@ where
     T: Transport + Send + Sync + 'static,
     L: LoginCredentials + Send + Sync + 'static,
 {
-    // The ping actor is owned by `run_bot`: spawned here, drained by
-    // awaiting its handle after the handler tasks wind down. Senders live
-    // in `Services.ping` (dispatcher, `WebState`) and die with their owners.
+    // The ping actor is owned by `run_bot` and supervised by
+    // `await_shutdown`'s select (an actor crash trips `HandlerExited`). It
+    // is NOT drained on shutdown: every handler task holds an
+    // `Arc<Services>` (hence a `PingHandle` sender) and is detached — not
+    // stopped — by `await_shutdown`, so the sender count never reaches
+    // zero before process exit. The runtime reaps the actor; ping state
+    // is persisted per command, not on drain.
     let mut ping_actor = tokio::spawn(crate::ping::run_ping_actor(
         ping.rx,
         ping.manager,
@@ -306,22 +310,7 @@ where
         tracing::warn!(target: "twitch_1337_web", ?e, "Web task did not shut down within 5s");
     }
 
-    // Handler and web tasks are gone; dropping the Arc releases `Services.ping`,
-    // the last live sender, so the actor's `recv()` loop winds down and the
-    // drain below actually finishes. A short timeout avoids blocking shutdown
-    // when a stray clone lingers; the runtime will clean up on exit.
-    let langfuse = services.langfuse.clone();
-    drop(services);
-    if let Err(e) =
-        tokio::time::timeout(std::time::Duration::from_millis(500), &mut ping_actor).await
-    {
-        tracing::debug!(
-            ?e,
-            "Ping actor did not drain within 500ms; runtime will clean up"
-        );
-    }
-
-    if let Some(handle) = &langfuse {
+    if let Some(handle) = &services.langfuse {
         handle.flush(std::time::Duration::from_secs(2)).await;
     }
 

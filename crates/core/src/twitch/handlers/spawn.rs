@@ -267,10 +267,14 @@ pub(crate) enum ShutdownOutcome {
 /// On shutdown, notifies `shutdown_notify` (so the scheduled-message handler
 /// drains in-flight `say()` calls) and waits up to 5s for the scheduled
 /// handler before returning. Returns a [`ShutdownOutcome`] telling the
-/// caller whether the exit was graceful. The ping actor is owned by
-/// `run_bot` and drained there after the handler tasks wind down — but its
-/// exit races this select: an actor crash trips `HandlerExited` just like
-/// any other handler.
+/// caller whether the exit was graceful.
+///
+/// The ping actor is owned by `run_bot` and only supervised here: its exit
+/// races this select, and an actor crash trips `HandlerExited` like any
+/// other handler. It is not drained on shutdown — the handler tasks hold
+/// `Arc<Services>` clones (hence live `PingHandle` senders) and are
+/// detached, not stopped, by this function, so a drain could never
+/// complete before process exit.
 ///
 /// The scheduled-message handler subscribes directly to
 /// `SettingsStore::change_notify` and reconciles per-schedule tasks
