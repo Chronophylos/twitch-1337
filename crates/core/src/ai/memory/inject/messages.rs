@@ -16,7 +16,7 @@ pub struct SystemParts {
     /// its own leading separator (the consts are `\n\n…`-prefixed): Konten/
     /// Accounts (mouth mapping), then emote-tools, packages/shipment, grok/web.
     pub appendices: Vec<String>,
-    /// SOUL/LORE/user fences from [`build_chat_turn_context`]. Stable while the
+    /// SOUL/LORE/user fences from [`super::build_chat_turn_context`]. Stable while the
     /// memory content and the (per-process) nonce are unchanged.
     pub memory: String,
     /// Recap Notes suffix. Appended after `memory` when non-empty; omitted
@@ -31,7 +31,7 @@ pub struct UserParts {
     /// Relevant-emotes block for this turn (`prompt_block_for_turn`). `None`
     /// when the emote provider is inactive or produced nothing.
     pub emote_block: Option<String>,
-    /// `scratch/<slug>` fences from [`build_chat_turn_context`].
+    /// `scratch/<slug>` fences from [`super::build_chat_turn_context`].
     pub scratch: String,
     /// Rolling chat history for this turn.
     pub recent_chat: String,
