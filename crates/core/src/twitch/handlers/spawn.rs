@@ -71,24 +71,21 @@ where
     // main.rs; tests: TestBotBuilder) so the sender Arc can be shared with
     // WebState and the command handler before handlers are spawned.
     let flight_tracker = match (services.aviation.clone(), tracker_rx) {
-        (Some(av), Some(rx)) => {
-            let handle = tokio::spawn({
-                let services = services.clone();
-                let sender = chat_sender.clone();
-                async move {
-                    aviation::run_flight_tracker(
-                        rx,
-                        sender,
-                        services.channel.clone(),
-                        av,
-                        services.data_dir.clone(),
-                        services.clock.clone(),
-                    )
-                    .await;
-                }
-            });
-            handle
-        }
+        (Some(av), Some(rx)) => tokio::spawn({
+            let services = services.clone();
+            let sender = chat_sender.clone();
+            async move {
+                aviation::run_flight_tracker(
+                    rx,
+                    sender,
+                    services.channel.clone(),
+                    av,
+                    services.data_dir.clone(),
+                    services.clock.clone(),
+                )
+                .await;
+            }
+        }),
         _ => tokio::spawn(std::future::pending::<()>()),
     };
 

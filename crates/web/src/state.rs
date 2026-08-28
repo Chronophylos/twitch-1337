@@ -96,6 +96,166 @@ pub struct WebState {
     pub recap: Option<Arc<RecapHandle>>,
 }
 
+/// Web-owned construction inputs for [`WebState::new`]: everything the
+/// dashboard needs that is not a bot handle. Built once by the bin (or
+/// test fixture) at startup.
+pub struct WebBoot {
+    pub sessions: Arc<SessionTable>,
+    pub helix: Arc<dyn HelixClient>,
+    pub config: Arc<WebConfig>,
+    pub clock: Arc<dyn Clock>,
+    /// Resolved at startup via helix users by login.
+    pub broadcaster_id: Arc<str>,
+    /// Twitch developer-app client id (used in `Client-Id` headers when the
+    /// callback fetches the caller's user record).
+    pub client_id: SecretString,
+    pub oauth: Arc<OAuthCtx>,
+    /// HMAC key for signed cookies (sid + csrf), derived from
+    /// `[web].session_secret` via [`derive_session_key`].
+    pub signed_key: Key,
+    pub avatar_cache: Arc<AvatarCache>,
+    /// Twitch user ID with full dashboard access (bootstrap-only).
+    pub owner: Arc<ArcSwap<Option<String>>>,
+    /// Append-only audit log for dashboard memory mutations.
+    pub memory_audit: Arc<FileAuditLog>,
+}
+
+impl WebState {
+    /// Build the dashboard state from the bot's `Services` plus the
+    /// web-owned inputs. Every bot handle (settings, ping, memory,
+    /// leaderboard, tracker, telemetry, recap, irc_connected, channel) is
+    /// cloned from `core`, so the dashboard and the bot share one source
+    /// of truth. Typeable without generics: `WebState` stores zero
+    /// generic fields.
+    pub fn new(core: &twitch_1337_core::Services, web: WebBoot) -> Self {
+        Self {
+            sessions: web.sessions,
+            helix: web.helix,
+            irc_connected: core.irc_connected.clone(),
+            config: web.config,
+            clock: web.clock,
+            channel: Arc::from(core.channel.as_str()),
+            broadcaster_id: web.broadcaster_id,
+            client_id: web.client_id,
+            oauth: web.oauth,
+            ping_actor: core.ping.clone(),
+            memory_store: core.memory_store.clone(),
+            memory_audit: web.memory_audit,
+            signed_key: web.signed_key,
+            leaderboard: core.leaderboard.clone(),
+            tracker_tx: core.aviation_tracker_tx.clone(),
+            emote_tracker: core.emote_tracker.clone(),
+            avatar_cache: web.avatar_cache,
+            owner: web.owner,
+            settings: core.settings.clone(),
+            settings_store: core.settings_store.clone(),
+            telemetry: core.telemetry.clone(),
+            recap: core.recap.clone(),
+        }
+    }
+}
+
+/// Stub-backed construction inputs for [`for_tests`]: which stub helix /
+/// clock to use and which on-disk dirs back the ping, memory, and settings
+/// stores.
+pub struct WebTestConfig {
+    pub helix: Arc<dyn HelixClient>,
+    pub clock: Arc<dyn Clock>,
+    /// Ping store dir; also hosts the telemetry store.
+    pub ping_dir: std::path::PathBuf,
+    /// Memory-tree dir.
+    pub memory_dir: std::path::PathBuf,
+    /// settings.ron dir.
+    pub settings_dir: std::path::PathBuf,
+    pub owner: Option<String>,
+    pub irc_connected: bool,
+    pub channel: String,
+}
+
+/// Stub-backed dashboard state for tests and the dev-login bin: owns its
+/// ping actor (spawned internally from `ping_dir`), opens settings/memory
+/// stores from the given dirs, and uses fixed test OAuth/client-id values.
+/// Callers keep the temp dirs alive.
+///
+/// Deliberately ungated (no cargo feature): no bin references it, so
+/// production builds never instantiate it, and gating would force
+/// `required-features` onto the web test targets — silently skipping them
+impl WebState {
+    pub async fn for_tests(cfg: WebTestConfig) -> WebState {
+        // Spawn the ping actor for the lifetime of the returned state: the
+        // task owns the receiver half, so it only exits once every
+        // `WebState.ping_actor` clone (and thus the state) is dropped.
+        let pings = twitch_1337_core::ping::PingManager::load(&cfg.ping_dir)
+            .expect("load ping manager for web tests");
+        let (ping_runtime, ping_actor, _ping_names_rx) =
+            twitch_1337_core::ping::ping_runtime(pings);
+        let _ping_actor_task = tokio::spawn(twitch_1337_core::ping::run_ping_actor(
+            ping_runtime.rx,
+            ping_runtime.manager,
+            ping_runtime.names_tx,
+        ));
+
+        let sessions = Arc::new(SessionTable::new(cfg.clock.clone()));
+        let oauth = Arc::new(
+            OAuthCtx::new(
+                "test-client-id",
+                &SecretString::new("test-secret".to_owned().into()),
+                "https://test.invalid",
+            )
+            .expect("test oauth"),
+        );
+        let config = Arc::new(WebConfig {
+            bind_addr: "127.0.0.1:0".into(),
+            public_url: "https://test.invalid".into(),
+            session_secret: SecretString::new("0".repeat(64).into()),
+        });
+        // Tests don't need a real production secret; a fixed key keeps
+        // signed-cookie round-trips deterministic across reruns.
+        let signed_key = Key::from(&[0x42u8; 64]);
+
+        let audit: Arc<dyn twitch_1337_core::settings::AuditLog> = Arc::new(FileAuditLog::new(
+            cfg.settings_dir.join("settings_audit.log"),
+        ));
+        let (settings_store, settings) =
+            twitch_1337_core::settings::SettingsStore::open(&cfg.settings_dir, audit, &cfg.channel)
+                .expect("open settings store for web tests");
+        let memory_store = MemoryStore::open(&cfg.memory_dir, settings.clone())
+            .await
+            .expect("open memory store for web tests");
+        let memory_audit = Arc::new(FileAuditLog::new(cfg.memory_dir.join("memory_audit.log")));
+        // Reuse ping_dir for telemetry: TelemetryStore only writes on flush,
+        // and ping_dir is owned by the caller so it stays alive for the test.
+        let telemetry = twitch_1337_core::schedule::TelemetryStore::open(&cfg.ping_dir);
+
+        WebState {
+            sessions,
+            helix: cfg.helix,
+            irc_connected: Arc::new(AtomicBool::new(cfg.irc_connected)),
+            config,
+            clock: cfg.clock,
+            channel: Arc::from(cfg.channel.as_str()),
+            broadcaster_id: Arc::from("100"),
+            client_id: SecretString::new("test-client-id".to_owned().into()),
+            oauth,
+            ping_actor,
+            memory_store,
+            memory_audit,
+            signed_key,
+            leaderboard: Arc::new(RwLock::new(HashMap::new())),
+            tracker_tx: None,
+            emote_tracker: None,
+            avatar_cache: Arc::new(crate::helix::AvatarCache::new(
+                std::time::Duration::from_secs(3600),
+            )),
+            owner: Arc::new(ArcSwap::from_pointee(cfg.owner)),
+            settings,
+            settings_store,
+            telemetry,
+            recap: None,
+        }
+    }
+}
+
 /// Derive the signed-cookie [`Key`] from `[web].session_secret`.
 ///
 /// `Key::derive_from` panics on secrets shorter than 32 bytes; this helper

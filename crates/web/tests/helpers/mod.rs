@@ -9,22 +9,18 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use secrecy::SecretString;
 use tempfile::TempDir;
-use tokio::sync::RwLock;
-use twitch_1337_core::ai::memory::store::MemoryStore;
-use twitch_1337_core::ping::{PingManager, ping_runtime, run_ping_actor};
 use twitch_1337_web::WebState;
 use twitch_1337_web::auth::OAuthCtx;
-use twitch_1337_web::auth::session::SessionTable;
 use twitch_1337_web::clock::Clock;
-use twitch_1337_web::config::WebConfig;
 use twitch_1337_web::helix::{HelixClient, HelixUser};
+use twitch_1337_web::state::WebTestConfig;
 
 pub struct FixedClock(pub DateTime<Utc>);
 
@@ -180,89 +176,29 @@ async fn build_state_inner_keep_settings(
 ) -> (WebState, TempDir, TempDir, TempDir) {
     let pings_dir = TempDir::new().expect("pings tempdir");
     let memory_dir = TempDir::new().expect("memory tempdir");
-    let pings = PingManager::load(pings_dir.path()).expect("load empty ping manager");
-    let (_ping_runtime, ping_actor, _ping_names_rx) = ping_runtime(pings);
-    // The actor must actually run for the lifetime of the fixture: without a
-    // spawned `run_ping_actor`, WebState's `PingHandle` dangles once the
-    // runtime (holding the receiver half) drops at the end of this function,
-    // and every ping route degrades to "Ping-System ist gerade nicht
-    // verfügbar".
-    let _ping_actor_task = tokio::spawn(run_ping_actor(
-        _ping_runtime.rx,
-        _ping_runtime.manager,
-        _ping_runtime.names_tx,
-    ));
-    let sessions = Arc::new(SessionTable::new(clock.clone()));
-    let oauth = Arc::new(
-        OAuthCtx::new(
-            "test-client-id",
-            &SecretString::new("test-secret".to_owned().into()),
-            "https://test.invalid",
-        )
-        .expect("test oauth"),
-    );
-    let config = Arc::new(WebConfig {
-        bind_addr: "127.0.0.1:0".into(),
-        public_url: "https://test.invalid".into(),
-        session_secret: SecretString::new("0".repeat(64).into()),
-    });
-    // Tests don't need a real production secret; a fixed 32-byte key keeps
-    // signed-cookie round-trips deterministic across reruns.
-    let signed_key = tower_cookies::Key::from(&[0x42u8; 64]);
     let settings_dir = TempDir::new().expect("settings tempdir");
-    let audit: Arc<dyn twitch_1337_core::settings::AuditLog> =
-        Arc::new(twitch_1337_core::settings::FileAuditLog::new(
-            settings_dir.path().join("settings_audit.log"),
-        ));
-    let (settings_store, settings_handle) =
-        twitch_1337_core::settings::SettingsStore::open(settings_dir.path(), audit, "testchannel")
-            .expect("open settings store");
+    let state = WebState::for_tests(WebTestConfig {
+        helix,
+        clock,
+        ping_dir: pings_dir.path().to_path_buf(),
+        memory_dir: memory_dir.path().to_path_buf(),
+        settings_dir: settings_dir.path().to_path_buf(),
+        owner: None,
+        irc_connected: true,
+        channel: "testchannel".into(),
+    })
+    .await;
     // Inject web timing values into the live in-memory settings snapshot.
     // `mod_check_refresh_secs` may be 0 (force-recheck) which is below the
     // validator's 30 s floor; we write via the raw ArcSwap handle so
     // validation is bypassed in tests (same pattern as `set_owner`).
     // `session_ttl_secs` is fixed at 7200 s (2 h) for all tests.
     {
-        let mut s = (*settings_handle.load_full()).clone();
+        let mut s = (*state.settings.load_full()).clone();
         s.web.mod_check_refresh_secs = mod_check_refresh_secs;
         s.web.session_ttl_secs = 7200;
-        settings_handle.store(std::sync::Arc::new(s));
+        state.settings.store(std::sync::Arc::new(s));
     }
-    let memory_store = MemoryStore::open(memory_dir.path(), settings_handle.clone())
-        .await
-        .expect("open memory store");
-    let memory_audit = Arc::new(twitch_1337_core::settings::FileAuditLog::new(
-        memory_dir.path().join("memory_audit.log"),
-    ));
-    // Reuse pings_dir for telemetry: TelemetryStore only writes on flush, and
-    // pings_dir is returned to callers so it stays alive for the test lifetime.
-    let telemetry = twitch_1337_core::schedule::TelemetryStore::open(pings_dir.path());
-    let state = WebState {
-        sessions,
-        helix,
-        irc_connected: Arc::new(AtomicBool::new(true)),
-        config,
-        clock,
-        channel: Arc::from("testchannel"),
-        broadcaster_id: Arc::from("100"),
-        client_id: SecretString::new("test-client-id".to_owned().into()),
-        oauth,
-        ping_actor,
-        memory_store,
-        memory_audit,
-        signed_key,
-        leaderboard: Arc::new(RwLock::new(HashMap::new())),
-        tracker_tx: None,
-        emote_tracker: None,
-        avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
-            Duration::from_secs(3600),
-        )),
-        owner: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
-        settings: settings_handle,
-        settings_store,
-        telemetry,
-        recap: None,
-    };
     (state, pings_dir, memory_dir, settings_dir)
 }
 

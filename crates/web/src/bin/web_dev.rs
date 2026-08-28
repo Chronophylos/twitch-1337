@@ -15,30 +15,24 @@
 //! persist, so two processes against the same dir will not corrupt each
 //! other's writes — but a last-writer-wins race is real. Don't run this
 //! against the same dev-data the production bot is actively writing to
-//! unless you're aware of that.
+//!
+//! OAuth client-id, public_url, and the session secret are fixed test
+//! values (`WebState::for_tests`): dev-login bypasses the OAuth callback
+//! entirely, so nothing here performs a real OAuth round-trip.
 
-use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use eyre::{Result, WrapErr as _};
-use secrecy::SecretString;
-use tokio::sync::{Notify, RwLock};
-use twitch_1337_core::ai::memory::store::MemoryStore;
-use twitch_1337_core::ping::{PingHandle, PingManager, ping_actor_channel_full, run_ping_actor};
+use tokio::sync::Notify;
 use twitch_1337_core::{install_crypto_provider, install_tracing};
-use twitch_1337_web::auth::OAuthCtx;
-use twitch_1337_web::auth::session::SessionTable;
 use twitch_1337_web::clock::SystemClock;
-use twitch_1337_web::config::WebConfig;
 use twitch_1337_web::dev::{DEV_CSRF, DEV_SID, DEV_USER_ID, StubHelix, dev_new_session};
-use twitch_1337_web::helix::HelixClient;
-use twitch_1337_web::state::derive_session_key;
-use twitch_1337_web::{WebState, bind, build_router, serve_app};
+use twitch_1337_web::state::{WebState, WebTestConfig};
+use twitch_1337_web::{bind, build_router, serve_app};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -61,80 +55,24 @@ async fn main() -> Result<()> {
         "web-dev starting (StubHelix, /_dev/login, no IRC) — DO NOT EXPOSE",
     );
 
-    let pings = PingManager::load(&data_dir).wrap_err("load ping manager")?;
-    let (ping_actor_tx, ping_actor_rx, ping_names_tx, _ping_names_rx) = ping_actor_channel_full();
-    tokio::spawn(run_ping_actor(ping_actor_rx, pings, ping_names_tx));
-    let ping_actor = PingHandle::new((*ping_actor_tx).clone());
+    let state = WebState::for_tests(WebTestConfig {
+        helix: Arc::new(StubHelix),
+        clock: Arc::new(SystemClock),
+        ping_dir: data_dir.clone(),
+        memory_dir: data_dir.clone(),
+        settings_dir: data_dir.clone(),
+        owner: Some(DEV_USER_ID.to_owned()),
+        irc_connected: true,
+        channel: channel.clone(),
+    })
+    .await;
 
-    let audit_log: Arc<dyn twitch_1337_core::settings::AuditLog> = Arc::new(
-        twitch_1337_core::settings::FileAuditLog::new(data_dir.join("settings_audit.log")),
-    );
-    let (settings_store, settings_handle) =
-        twitch_1337_core::settings::SettingsStore::open(&data_dir, audit_log, &channel)
-            .wrap_err("open settings store")?;
-
-    let memory_store = MemoryStore::open(&data_dir, settings_handle.clone())
-        .await
-        .wrap_err("open memory store")?;
-
-    let clock = Arc::new(SystemClock);
-    let sessions = Arc::new(SessionTable::new(clock.clone()));
-
-    // Pair with the fixed signed_key below: stable signed cookie across
-    // restarts means no re-login when iterating.
-    sessions.insert_with_id(DEV_SID, DEV_CSRF, dev_new_session());
-
-    let session_secret = SecretString::new("0".repeat(64).into());
-    let signed_key = derive_session_key(&session_secret)?;
-
-    let oauth = Arc::new(OAuthCtx::new(
-        "dev-client-id",
-        &SecretString::new("dev-secret".to_owned().into()),
-        &public_url,
-    )?);
-
-    let web_config = Arc::new(WebConfig {
-        bind_addr: bind_addr.to_string(),
-        public_url,
-        session_secret,
-    });
-
-    let helix: Arc<dyn HelixClient> = Arc::new(StubHelix);
-
-    let memory_audit = Arc::new(twitch_1337_core::settings::FileAuditLog::new(
-        data_dir.join("memory_audit.log"),
-    ));
-    let state = WebState {
-        sessions,
-        helix,
-        irc_connected: Arc::new(AtomicBool::new(true)),
-        config: web_config,
-        clock,
-        channel: Arc::from(channel.as_str()),
-        broadcaster_id: Arc::from("0"),
-        client_id: SecretString::new("dev-client-id".to_owned().into()),
-        oauth,
-        ping_actor,
-        memory_store,
-        memory_audit,
-        telemetry: twitch_1337_core::schedule::TelemetryStore::open(&data_dir),
-        signed_key,
-        leaderboard: Arc::new(RwLock::new(HashMap::new())),
-        tracker_tx: None,
-        emote_tracker: None,
-        avatar_cache: Arc::new(twitch_1337_web::helix::AvatarCache::new(
-            Duration::from_secs(3600),
-        )),
-        // Inject DEV_USER_ID as the bootstrap owner so the role-recheck gate
-        // admits the dev session. Stored directly in `state.owner` (not
-        // settings.ron) because owner is now bootstrap-only.
-        owner: Arc::new(arc_swap::ArcSwap::from_pointee(Some(
-            DEV_USER_ID.to_owned(),
-        ))),
-        settings: settings_handle,
-        settings_store,
-        recap: None,
-    };
+    // Inject the fixed dev session (bootstrap owner via DEV_USER_ID above so
+    // the role-recheck gate admits it). Stored in the session table, not
+    // settings.ron, because owner is bootstrap-only.
+    state
+        .sessions
+        .insert_with_id(DEV_SID, DEV_CSRF, dev_new_session());
 
     let listener = bind(bind_addr).await?;
     let shutdown = Arc::new(Notify::new());
