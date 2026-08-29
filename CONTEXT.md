@@ -162,7 +162,8 @@ _Avoid_: main bot, IRC bot.
 **Turn**:
 One agent invocation: a fresh completion with Memory, Recent Chat, and this
 instruction. Continuity comes from those, not from the previous model's
-transcript.
+transcript. Lives in `crates/core/src/ai/turn.rs` (`TurnRunner::run_turn`);
+`AiCommand` is the Twitch adapter around it.
 _Avoid_: thread, session (the per-call `session_id` is a tracing nonce),
 conversation.
 
