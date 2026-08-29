@@ -9,7 +9,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use arc_swap::ArcSwap;
-use eyre::{WrapErr as _, eyre};
+#[cfg(any(test, feature = "testing", feature = "dev-login"))]
+use eyre::WrapErr as _;
+use eyre::eyre;
 use secrecy::ExposeSecret;
 use secrecy::SecretString;
 use tokio::sync::RwLock;
