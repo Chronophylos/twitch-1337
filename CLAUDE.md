@@ -162,10 +162,8 @@ turn — no restart. Each profile declares an
 `service_tier` applies — see `crates/core/src/settings/provider.rs`. Memory
 caps, dreamer schedule, web/emote/media tool toggles, history caps, and every
 other runtime knob live in the dashboard (`/settings`, owner only) and
-persist to `$DATA_DIR/settings.ron` (schema v2). On first v2 launch any
-legacy hoisted `[ai]` keys in `config.toml` are migrated into
-`settings.ron` once (sentinel: `$DATA_DIR/.ai_migrated_v2`); subsequent
-edits to those legacy keys are ignored.
+persist to `$DATA_DIR/settings.ron`. A leftover legacy `[ai]` table in
+`config.toml` is ignored — runtime AI knobs are dashboard-managed only.
 
 `[aviationstack]` keeps only `api_key` in config.toml. `enabled`, `base_url`,
 and `timeout_secs` live in `settings.ron` (restart-required for connection
@@ -191,19 +189,13 @@ lives in `settings.ron`, managed via `/settings → Suspend`.
 stay in config.toml; `session_ttl` and `mod_check_refresh` live in `settings.ron`,
 managed via `/settings → Web · Sessions`.
 
-On first v3 launch, `[twitch]` permission/channel keys and `[aviationstack]`/`[suspend]`/`[web]`
-non-secret keys are migrated into `settings.ron` once (sentinel: `$DATA_DIR/.config_migrated_v3`);
-subsequent edits to those legacy keys in config.toml are ignored.
-
 Schedules live in `settings.ron`, managed via `/schedules` (mod-gated). Each
 row carries name, message, hh:mm interval, optional ISO 8601 date range, optional
 HH:MM active-time window, and an enabled toggle. Validation runs on save
 (unique non-blank names, parseable interval, paired active-time fields).
 Changes apply within ~30s via a `SettingsHandle` change-`Notify` signal that
-the `ScheduleCache` sync task subscribes to. On first launch any legacy
-`[[schedules]]` in config.toml are migrated into `settings.ron` once
-(separate sentinel: `$DATA_DIR/.schedules_migrated_v3`); subsequent edits to
-the legacy section are ignored.
+the `ScheduleCache` sync task subscribes to. A leftover legacy `[[schedules]]`
+in config.toml is ignored.
 
 AI profile edits (provider, base URL, model, timeout, reasoning_effort,
 service_tier) apply live via `SettingsHandle` and `LlmRegistry` — no restart,

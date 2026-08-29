@@ -14,7 +14,6 @@ pub mod ai;
 pub mod audit;
 pub mod aviationstack;
 pub mod emote_tracker;
-pub mod migrate;
 pub mod overrides;
 pub mod provider;
 mod resolve;
