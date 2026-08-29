@@ -75,18 +75,17 @@ client_secret = "your_client_secret"
 # in named profiles, managed at /ai-profiles (owner only — a profile carries
 # base_url/key, so it's gated the same as /settings). Memory caps, dreamer
 # schedule, and web/emote/media tool toggles live in the dashboard at
-# /settings (owner only). Both persist to $DATA_DIR/settings.ron. Legacy
-# [ai].* keys from earlier versions are migrated into settings.ron once on
-# first v2 launch (sentinel: $DATA_DIR/.ai_migrated_v2).
+# /settings (owner only). Both persist to $DATA_DIR/settings.ron. A leftover
+# [ai].* table from earlier versions is ignored — runtime AI knobs are
+# dashboard-managed only.
 #
 # [ai.keys]
 # openrouter = "sk-or-..."
 # openai = "sk-..."
 # groq = "gsk_..."
 
-# Schedules now live in the dashboard at /schedules.
-# settings.ron stores the canonical list; legacy [[schedules]] in this
-# file are ignored on every boot after the first.
+# Schedules live in the dashboard at /schedules; settings.ron stores the
+# canonical list. A leftover [[schedules]] in this file is ignored.
 
 # [web]                            # uncomment to enable the dashboard
 # enabled = true

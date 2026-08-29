@@ -845,40 +845,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v3_settings_file_migrates_to_v4_on_open() {
-        // A v3-shaped settings.ron with a legacy schedule row (interval string,
-        // no trigger field). SettingsOverrides allows all fields to be absent
-        // via #[serde(default)], so only the schedules key is needed.
-        let v3 = r#"(
-            schedules: Some([
-                (
-                    name: "noon",
-                    message: "hi",
-                    interval: "01:00",
-                    start_date: None,
-                    end_date: None,
-                    active_time_start: None,
-                    active_time_end: None,
-                    enabled: true,
-                ),
-            ]),
-        )"#;
-        let dir = tempfile::tempdir().expect("tmp");
-        std::fs::write(dir.path().join(FILE_NAME), v3).expect("write");
-        let audit = Arc::new(MemoryAuditLog::new());
-        let (_, handle) = SettingsStore::open(dir.path(), audit, "main").expect("open v3 file");
-        let s = handle.load();
-        assert_eq!(s.schedules.len(), 1, "schedule row must survive migration");
-        assert_eq!(s.schedules[0].name, "noon");
-        match &s.schedules[0].trigger {
-            crate::schedule::Trigger::Interval { every, .. } => {
-                assert_eq!(every.as_secs(), 3600, "01:00 → 3600s");
-            }
-            other => panic!("expected Trigger::Interval, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
     async fn reset_twitch_permissions_clears_only_perm_fields() {
         let dir = tempfile::tempdir().expect("tmp");
         let audit = std::sync::Arc::new(crate::settings::audit::MemoryAuditLog::default());

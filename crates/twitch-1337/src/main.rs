@@ -77,8 +77,7 @@ pub async fn main() -> Result<()> {
     color_eyre::install()?;
     install_tracing();
     install_crypto_provider();
-
-    let (config, raw_toml) = load_configuration().await?;
+    let config = load_configuration().await?;
 
     ensure_data_dir().await?;
 
@@ -97,65 +96,6 @@ pub async fn main() -> Result<()> {
         &config.twitch.channel,
     )
     .wrap_err("Failed to open settings store")?;
-
-    // One-shot migration: promote legacy [ai] keys from config.toml into
-    // settings.ron on first v2 launch. A sentinel file prevents re-migration
-    // on subsequent boots so later admin edits aren't clobbered.
-    let migrated_marker = get_data_dir().join(".ai_migrated_v2");
-    if !migrated_marker.exists() {
-        let ai_patch = twitch_1337::settings::migrate::migrate_legacy_ai(&raw_toml)
-            .wrap_err("ai migration")?;
-        if ai_patch != twitch_1337::settings::overrides::AiOverrides::default() {
-            let patch = twitch_1337::settings::overrides::SettingsOverrides {
-                ai: ai_patch,
-                ..twitch_1337::settings::overrides::SettingsOverrides::default()
-            };
-            let actor = twitch_1337::settings::Actor {
-                user_id: "migrate".into(),
-                user_login: "migrate".into(),
-            };
-            settings_store
-                .apply(patch, actor)
-                .await
-                .wrap_err("ai migration apply")?;
-            info!("migrated legacy [ai] keys into settings.ron");
-        }
-        std::fs::write(&migrated_marker, "").wrap_err("write .ai_migrated_v2 marker")?;
-    }
-
-    // One-shot v3 migration: promote remaining non-secret, non-bootstrap keys
-    // from config.toml into settings.ron. Sentinel `.config_migrated_v3`
-    // prevents re-migration so later dashboard edits aren't clobbered.
-    // This MUST happen before the extra_channels capture so that
-    // admin_channel/ai_channel are populated from config.toml on the first v3
-    // boot and don't require an extra restart to take effect.
-    let v3_marker = get_data_dir().join(".config_migrated_v3");
-    let was_first_v3_boot = !v3_marker.exists();
-    if was_first_v3_boot {
-        let patch = twitch_1337::settings::migrate::migrate_legacy_config(&raw_toml)
-            .wrap_err("v3 migration")?;
-        let twitch_empty =
-            patch.twitch == twitch_1337::settings::overrides::TwitchOverrides::default();
-        let aviation_empty = patch.aviationstack
-            == twitch_1337::settings::overrides::AviationstackOverrides::default();
-        let suspend_empty =
-            patch.suspend == twitch_1337::settings::overrides::SuspendOverrides::default();
-        let web_empty =
-            patch.web == twitch_1337::settings::overrides::WebRuntimeOverrides::default();
-        if !(twitch_empty && aviation_empty && suspend_empty && web_empty) {
-            let actor = twitch_1337::settings::Actor {
-                user_id: "migrate".into(),
-                user_login: "v3-migration".into(),
-            };
-            settings_store
-                .apply(patch, actor)
-                .await
-                .wrap_err("v3 migration apply")?;
-            info!("migrated legacy config.toml keys into settings.ron (v3)");
-        }
-        std::fs::write(&v3_marker, "").wrap_err("write .config_migrated_v3 marker")?;
-    }
-
     let local = Utc::now().with_timezone(&chrono_tz::Europe::Berlin);
     let initial_schedule_count = settings_handle.load().schedules.len();
     info!(
@@ -167,9 +107,7 @@ pub async fn main() -> Result<()> {
         "Starting twitch-1337 bot"
     );
 
-    // Collect restart-required channel list from the now-post-migration snapshot.
-    // Placed here (after v3 migration) so admin_channel/ai_channel set by the
-    // migration are available on the first v3 boot, not just subsequent ones.
+    // Collect restart-required channel list for IRC channel joins.
     let twitch_runtime = settings_handle.load().twitch.clone();
     let extra_channels: Vec<String> = [
         twitch_runtime.admin_channel.clone(),
@@ -201,46 +139,6 @@ pub async fn main() -> Result<()> {
     let ping_manager =
         PingManager::load(&get_data_dir()).wrap_err("Failed to load ping manager")?;
     let (ping_runtime, ping_handle, ping_names_rx) = ping_runtime(ping_manager);
-
-    // Warn on subsequent boots if any migrated key still appears in config.toml
-    // — it's silently ignored after the v3 marker has been written. Skipped on
-    // the migration boot itself so we don't shout before the user can clean up.
-    let legacy_v3_keys: &[(&str, &[&str])] = &[
-        ("twitch.expected_latency", &["twitch", "expected_latency"]),
-        ("twitch.hidden_admins", &["twitch", "hidden_admins"]),
-        ("twitch.viewer_allowlist", &["twitch", "viewer_allowlist"]),
-        ("twitch.admin_channel", &["twitch", "admin_channel"]),
-        ("twitch.ai_channel", &["twitch", "ai_channel"]),
-        (
-            "suspend.default_duration_secs",
-            &["suspend", "default_duration_secs"],
-        ),
-        ("aviationstack.enabled", &["aviationstack", "enabled"]),
-        ("aviationstack.base_url", &["aviationstack", "base_url"]),
-        (
-            "aviationstack.timeout_secs",
-            &["aviationstack", "timeout_secs"],
-        ),
-        ("web.session_ttl", &["web", "session_ttl"]),
-        ("web.mod_check_refresh", &["web", "mod_check_refresh"]),
-        ("schedules", &["schedules"]),
-    ];
-    let stale: Vec<&str> = legacy_v3_keys
-        .iter()
-        .filter_map(|(name, path)| {
-            let mut node = &raw_toml;
-            for seg in *path {
-                node = node.get(seg)?;
-            }
-            Some(*name)
-        })
-        .collect();
-    if !was_first_v3_boot && !stale.is_empty() {
-        tracing::warn!(
-            ?stale,
-            "legacy config.toml keys are now ignored after v3 migration; remove them from config.toml"
-        );
-    }
 
     // Build aviation client from settings (restart-required fields).
     // `enabled`, `base_url`, and `timeout_secs` come from the settings store;
@@ -615,7 +513,7 @@ impl AccessTokenProvider for CredsTokenProvider {
 /// disabled, exits 0 without touching the network so the container is still
 /// considered healthy.
 async fn run_healthcheck() -> Result<()> {
-    let (config, _raw_toml) = load_configuration().await?;
+    let config = load_configuration().await?;
     if !config.web.enabled {
         return Ok(());
     }
