@@ -631,8 +631,8 @@ impl TurnRunner {
 /// executor (write_file/write_scratch/delete_scratch), the web search executor
 /// (web_search/read_url) when web tools are configured, the on-demand
 /// `search_emotes` tool when the emote provider is active, the always-on
-/// doener_index tool, the Aurora-only draw_tarot tool, or the Aurora-only
-/// search_packages tool.
+/// doener_index tool, the Aurora-only draw_tarot and plan_flight tools, or the
+/// Aurora-only search_packages tool.
 struct V2Executor<'a> {
     chat: &'a ChatTurnExecutor,
     web: Option<&'a content::ContentToolExecutor>,

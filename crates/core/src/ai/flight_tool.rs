@@ -19,6 +19,16 @@ struct PlanFlightArgs {
     towards: Option<String>,
 }
 
+/// The ICAO type codes the baked aircraft DB knows, as a comma-separated list.
+/// Shared by the tool schema and the `unknown_aircraft` error so the two can
+/// never drift from the DB or from each other.
+fn known_aircraft() -> Vec<&'static str> {
+    twitch_1337_data::flight::aircraft()
+        .iter()
+        .map(|a| a.icao_type)
+        .collect()
+}
+
 pub fn plan_flight_tool() -> ToolDefinition {
     ToolDefinition {
         name: PLAN_FLIGHT_TOOL_NAME.into(),
@@ -34,7 +44,10 @@ irgendwo auf dieser Peilung, nicht in Berlin."
             "properties": {
                 "aircraft": {
                     "type": "string",
-                    "description": "ICAO-Typcode des Flugzeugs. Bekannt sind nur: A20N, A320, A333, A388, B350, B738, B772, B789, C152, C172, C208, CRJ7, E190, SR22, TBM9. Weglassen für ein zufälliges Flugzeug."
+                    "description": format!(
+                        "ICAO-Typcode des Flugzeugs. Bekannt sind nur: {}. Weglassen für ein zufälliges Flugzeug.",
+                        known_aircraft().join(", "),
+                    )
                 },
                 "duration": {
                     "type": "string",
@@ -56,7 +69,7 @@ irgendwo auf dieser Peilung, nicht in Berlin."
 
 /// Compass words to bearings. German included, the chat is German.
 fn cardinal_bearing(s: &str) -> Option<f64> {
-    let b = match s.to_ascii_lowercase().as_str() {
+    let b = match s.to_lowercase().as_str() {
         "n" | "north" | "nord" | "norden" => 0.0,
         "ne" | "northeast" | "nordost" | "nordosten" => 45.0,
         "e" | "east" | "ost" | "osten" => 90.0,
@@ -113,10 +126,7 @@ pub async fn execute_plan_flight(call: &ToolCall) -> ToolResultMessage {
                     json!({
                         "error": "unknown_aircraft",
                         "aircraft": code,
-                        "known": twitch_1337_data::flight::aircraft()
-                            .iter()
-                            .map(|a| a.icao_type)
-                            .collect::<Vec<_>>(),
+                        "known": known_aircraft(),
                     }),
                 );
             }
@@ -268,6 +278,37 @@ mod tests {
             diff <= random_flight::DIRECTION_TOLERANCE_DEG + 0.5,
             "bearing {got} is {diff} deg off the bearing to EDDB ({wanted})"
         );
+    }
+
+    #[test]
+    fn compass_words_fold_case_including_umlauts() {
+        // to_ascii_lowercase() leaves U+00DC alone, so "SÜDEN" used to miss the
+        // table and fall through to the airport lookup as an unknown target.
+        for (word, want) in [
+            ("SÜDEN", 180.0),
+            ("Südost", 135.0),
+            ("SÜDWESTEN", 225.0),
+            ("Nord", 0.0),
+            ("EAST", 90.0),
+        ] {
+            assert_eq!(cardinal_bearing(word), Some(want), "word: {word}");
+        }
+        assert_eq!(cardinal_bearing("nowhere"), None);
+    }
+
+    #[test]
+    fn tool_schema_lists_every_known_aircraft() {
+        let def = plan_flight_tool();
+        let listed = def.parameters["properties"]["aircraft"]["description"]
+            .as_str()
+            .expect("aircraft description");
+        for ac in twitch_1337_data::flight::aircraft() {
+            assert!(
+                listed.contains(ac.icao_type),
+                "{} missing from the tool schema: {listed}",
+                ac.icao_type
+            );
+        }
     }
 
     #[tokio::test]

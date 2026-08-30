@@ -269,8 +269,8 @@ mod tests {
     #[test]
     fn impossible_direction_fails_loudly() {
         let ac = aircraft_by_icao_type("B738").expect("B738");
-        // Due east of Frankfurt at ~4h block time is deep in Russia/Kazakhstan;
-        // due west is the open Atlantic with nothing in the band.
+        // Due north of Honolulu at a 1h block time is open Pacific: nothing
+        // sits in the distance band inside the heading wedge.
         let err = generate_flight_plan(&FlightRequest {
             departure: Some("PHNL"),
             direction: Some(Direction::Bearing(0.0)),
