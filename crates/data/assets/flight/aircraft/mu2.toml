@@ -1,0 +1,26 @@
+[aircraft]
+name = "Mitsubishi MU-2"           # MSFS Famous Flyer 7 (iniBuilds)
+icao_type = "MU2"
+
+[performance]
+cruise_speed_ktas = 295            # MSFS top speed 340 mph ≈ 295 KTAS (max cruise)
+cruise_altitude_ft = 25000         # typical trip cruise; max cruise is lower
+service_ceiling_ft = 29590         # MSFS / type data
+min_runway_length_ft = 2500        # 2,170 ft takeoff roll + margin; dirt-strip capable
+
+[performance.climb]
+speed_ktas = 170                   # TAS average through climb
+rate_fpm = 1800                    # mid-altitude average (SL 2,360 fpm)
+
+[performance.descent]
+speed_ktas = 180
+rate_fpm = 1200
+
+[fuel]
+capacity_kg = 1107.0               # 364 US gal usable × 6.7 lb/gal Jet-A
+fuel_type = "jet"
+
+[fuel.flow]
+climb_kg_per_hour = 320.0          # ~105 gph
+cruise_kg_per_hour = 230.0         # ~70–76 gph typical
+descent_kg_per_hour = 140.0
