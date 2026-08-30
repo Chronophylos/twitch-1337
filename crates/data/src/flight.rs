@@ -89,6 +89,16 @@ mod tests {
     }
 
     #[test]
+    fn mu2_is_listed() {
+        let ac = aircraft_by_icao_type("MU2").expect("MU2");
+        assert_eq!(ac.icao_type, "MU2");
+        assert_eq!(ac.name, "Mitsubishi MU-2");
+        assert_eq!(ac.fuel_type, FuelType::Jet);
+        assert!(ac.cruise_speed_ktas > 0);
+        assert!(ac.range_nm() > 0.0);
+    }
+
+    #[test]
     fn airport_has_no_name_field() {
         assert!(find_by_icao("EDDF").is_some());
         let db = include_str!(concat!(env!("OUT_DIR"), "/airport_db.rs"));
