@@ -15,10 +15,33 @@ pub fn generate_flight_plan(
     target_block_time: Duration,
 ) -> Result<FlightPlan, Error> {
     let mut rng = rand::rng();
-    generate_flight_plan_with_rng(aircraft, target_block_time, &mut rng)
+    generate_flight_plan_with_rng(None, aircraft, target_block_time, &mut rng)
+}
+
+/// Same as [`generate_flight_plan`], but departing from a fixed airport.
+pub fn generate_flight_plan_from(
+    departure_icao: &str,
+    aircraft: &Aircraft,
+    target_block_time: Duration,
+) -> Result<FlightPlan, Error> {
+    let Some(departure) = flight::find_by_icao(departure_icao) else {
+        return Err(Error::UnknownAirport {
+            icao: departure_icao.to_string(),
+        });
+    };
+    if departure.runway_length_ft < aircraft.min_runway_length_ft {
+        return Err(Error::RunwayTooShort {
+            airport_icao: departure.icao.to_string(),
+            required_ft: aircraft.min_runway_length_ft,
+            available_ft: departure.runway_length_ft,
+        });
+    }
+    let mut rng = rand::rng();
+    generate_flight_plan_with_rng(Some(departure), aircraft, target_block_time, &mut rng)
 }
 
 pub(crate) fn generate_flight_plan_with_rng(
+    pinned_departure: Option<&'static Airport>,
     aircraft: &Aircraft,
     target_block_time: Duration,
     rng: &mut impl Rng,
@@ -38,7 +61,8 @@ pub(crate) fn generate_flight_plan_with_rng(
     let mut candidates: Vec<&'static Airport> = Vec::new();
 
     for _attempt in 0..MAX_RETRIES {
-        let departure = eligible[rng.random_range(0..eligible.len())];
+        let departure =
+            pinned_departure.unwrap_or_else(|| eligible[rng.random_range(0..eligible.len())]);
 
         candidates.clear();
         candidates.extend(eligible.iter().copied().filter(|a| {
@@ -55,6 +79,9 @@ pub(crate) fn generate_flight_plan_with_rng(
         }));
 
         if candidates.is_empty() {
+            if pinned_departure.is_some() {
+                return Err(Error::NoCandidateArrivals);
+            }
             continue;
         }
 
@@ -88,12 +115,40 @@ mod tests {
         let target = Duration::from_secs(2 * 3600);
 
         let mut rng = seeded_rng();
-        let fp = generate_flight_plan_with_rng(ac, target, &mut rng).expect("should find a flight");
+        let fp = generate_flight_plan_with_rng(None, ac, target, &mut rng)
+            .expect("should find a flight");
 
         assert!(
             fp.block_time.abs_diff(target) <= Duration::from_secs(15 * 60),
             "block time {} min not within tolerance of target 120 min",
             fp.block_time.as_secs() / 60
         );
+    }
+
+    #[test]
+    fn pinned_departure_is_respected() {
+        let ac = aircraft_by_icao_type("B738").expect("B738");
+        let fp = generate_flight_plan_from("EDDF", ac, Duration::from_secs(3600))
+            .expect("should find a flight from EDDF");
+        assert_eq!(fp.departure.icao, "EDDF");
+        assert!(fp.block_time.abs_diff(Duration::from_secs(3600)) <= TOLERANCE);
+    }
+
+    #[test]
+    fn pinned_departure_rejects_unknown_icao() {
+        let ac = aircraft_by_icao_type("B738").expect("B738");
+        let err = generate_flight_plan_from("ZZZZ", ac, Duration::from_secs(3600)).unwrap_err();
+        assert!(matches!(err, Error::UnknownAirport { .. }));
+    }
+
+    #[test]
+    fn pinned_departure_rejects_short_runway() {
+        let ac = aircraft_by_icao_type("B738").expect("B738");
+        let short = flight::airports()
+            .iter()
+            .find(|a| a.runway_length_ft < ac.min_runway_length_ft)
+            .expect("some short runway exists");
+        let err = generate_flight_plan_from(short.icao, ac, Duration::from_secs(3600)).unwrap_err();
+        assert!(matches!(err, Error::RunwayTooShort { .. }));
     }
 }

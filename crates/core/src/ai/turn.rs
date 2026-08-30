@@ -503,6 +503,7 @@ impl TurnRunner {
         tools.push(crate::ai::doener_tool::doener_tool());
         if !grok_alias {
             tools.push(crate::ai::tarot_tool::tarot_tool());
+            tools.push(crate::ai::random_flight_tool::random_flight_tool());
             tools.push(crate::ai::packages_tool::search_packages_tool());
             if self.dhl.is_some() {
                 tools.push(crate::ai::dhl_tool::track_shipment_tool());
@@ -652,6 +653,9 @@ impl ToolExecutor for V2Executor<'_> {
         }
         if call.name == crate::ai::tarot_tool::TAROT_TOOL_NAME {
             return crate::ai::tarot_tool::execute_draw_tarot(call).await;
+        }
+        if call.name == crate::ai::random_flight_tool::RANDOM_FLIGHT_TOOL_NAME {
+            return crate::ai::random_flight_tool::execute_random_flight(call).await;
         }
         if call.name == crate::ai::packages_tool::SEARCH_PACKAGES_TOOL_NAME {
             return crate::ai::packages_tool::execute_search_packages(self.repology, call).await;

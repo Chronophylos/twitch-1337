@@ -5,4 +5,4 @@ mod selection;
 
 pub use error::Error;
 pub use flight_plan::FlightPlan;
-pub use selection::generate_flight_plan;
+pub use selection::{generate_flight_plan, generate_flight_plan_from};
