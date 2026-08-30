@@ -64,7 +64,12 @@ where
 
     // Can take many retries internally
     let result = tokio::task::spawn_blocking(move || {
-        random_flight::generate_flight_plan(aircraft, duration)
+        random_flight::generate_flight_plan(&random_flight::FlightRequest {
+            aircraft,
+            block_time: duration,
+            departure: None,
+            direction: None,
+        })
     })
     .await
     .wrap_err("Flight plan generation task panicked")?;

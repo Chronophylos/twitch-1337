@@ -503,6 +503,7 @@ impl TurnRunner {
         tools.push(crate::ai::doener_tool::doener_tool());
         if !grok_alias {
             tools.push(crate::ai::tarot_tool::tarot_tool());
+            tools.push(crate::ai::flight_tool::plan_flight_tool());
             tools.push(crate::ai::packages_tool::search_packages_tool());
             if self.dhl.is_some() {
                 tools.push(crate::ai::dhl_tool::track_shipment_tool());
@@ -630,8 +631,8 @@ impl TurnRunner {
 /// executor (write_file/write_scratch/delete_scratch), the web search executor
 /// (web_search/read_url) when web tools are configured, the on-demand
 /// `search_emotes` tool when the emote provider is active, the always-on
-/// doener_index tool, the Aurora-only draw_tarot tool, or the Aurora-only
-/// search_packages tool.
+/// doener_index tool, the Aurora-only draw_tarot and plan_flight tools, or the
+/// Aurora-only search_packages tool.
 struct V2Executor<'a> {
     chat: &'a ChatTurnExecutor,
     web: Option<&'a content::ContentToolExecutor>,
@@ -652,6 +653,9 @@ impl ToolExecutor for V2Executor<'_> {
         }
         if call.name == crate::ai::tarot_tool::TAROT_TOOL_NAME {
             return crate::ai::tarot_tool::execute_draw_tarot(call).await;
+        }
+        if call.name == crate::ai::flight_tool::PLAN_FLIGHT_TOOL_NAME {
+            return crate::ai::flight_tool::execute_plan_flight(call).await;
         }
         if call.name == crate::ai::packages_tool::SEARCH_PACKAGES_TOOL_NAME {
             return crate::ai::packages_tool::execute_search_packages(self.repology, call).await;
