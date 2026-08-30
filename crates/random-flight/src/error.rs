@@ -17,6 +17,12 @@ pub enum Error {
     #[error("flight distance {distance_nm:.0} nm exceeds aircraft range of {range_nm:.0} nm")]
     RangeExceeded { distance_nm: f64, range_nm: f64 },
 
+    #[error("no arrival airports in the requested direction")]
+    NoRouteInDirection,
+
+    #[error("the direction target is the departure airport")]
+    TargetIsDeparture,
+
     #[error("runway at {airport_icao} is {available_ft} ft, aircraft requires {required_ft} ft")]
     RunwayTooShort {
         airport_icao: String,

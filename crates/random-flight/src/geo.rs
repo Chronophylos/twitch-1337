@@ -34,6 +34,11 @@ pub fn cardinal_direction(bearing: f64) -> &'static str {
     DIRECTIONS[index]
 }
 
+/// Smallest absolute angle between two bearings, in degrees (0-180).
+pub fn bearing_difference(a: f64, b: f64) -> f64 {
+    ((a - b + 540.0).rem_euclid(360.0) - 180.0).abs()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +183,13 @@ mod tests {
         assert_eq!(cardinal_direction(-180.0), "S");
         assert_eq!(cardinal_direction(360.0), "N");
         assert_eq!(cardinal_direction(450.0), "E");
+    }
+
+    #[test]
+    fn bearing_difference_wraps_around_north() {
+        assert!((bearing_difference(350.0, 10.0) - 20.0).abs() < 1e-9);
+        assert!((bearing_difference(10.0, 350.0) - 20.0).abs() < 1e-9);
+        assert!((bearing_difference(0.0, 180.0) - 180.0).abs() < 1e-9);
+        assert!((bearing_difference(90.0, 90.0)).abs() < 1e-9);
     }
 }
