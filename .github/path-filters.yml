@@ -3,5 +3,6 @@ code:
   - 'Cargo.toml'
   - 'Cargo.lock'
   - '.cargo/**'
+  - 'rust-toolchain.toml'
   - 'Dockerfile'
   - '.dockerignore'

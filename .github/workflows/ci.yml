@@ -44,10 +44,12 @@ jobs:
         with:
           persist-credentials: false
 
+      # dtolnay/rust-toolchain requires `toolchain:` — it does not read
+      # rust-toolchain.toml. Grep the root pin so CI tracks that file.
       - name: Read Rust toolchain channel
         id: rust-toolchain
         run: |
-          channel=$(grep '^channel' crates/twitch-1337/rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          channel=$(grep '^channel' rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@master # zizmor: ignore[unpinned-uses]
@@ -73,7 +75,7 @@ jobs:
       - name: Read Rust toolchain channel
         id: rust-toolchain
         run: |
-          channel=$(grep '^channel' crates/twitch-1337/rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          channel=$(grep '^channel' rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@master # zizmor: ignore[unpinned-uses]
@@ -112,7 +114,7 @@ jobs:
       - name: Read Rust toolchain channel
         id: rust-toolchain
         run: |
-          channel=$(grep '^channel' crates/twitch-1337/rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          channel=$(grep '^channel' rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@master # zizmor: ignore[unpinned-uses]
@@ -155,7 +157,7 @@ jobs:
       - name: Read Rust toolchain channel
         id: rust-toolchain
         run: |
-          channel=$(grep '^channel' crates/twitch-1337/rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          channel=$(grep '^channel' rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@master # zizmor: ignore[unpinned-uses]

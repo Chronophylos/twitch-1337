@@ -2,7 +2,9 @@
 # Uses cargo-chef for efficient dependency caching
 # Final image is FROM scratch with statically linked musl binary
 
-FROM docker.io/lukemathwalker/cargo-chef:latest-rust-1@sha256:3a1dd6010466c1cf591607a75c6e144ba9f099e7f3790d595c6a611a9c78f387 AS base
+# Pin matches rust-toolchain.toml (1.98.0). Tag + digest so Dependabot
+# can bump the hash when the chef image for this Rust version rebuilds.
+FROM docker.io/lukemathwalker/cargo-chef:latest-rust-1.98.0@sha256:d21902576546863995017609e991178939e6f151f6b35fb00f3c0fa97a616ef5 AS base
 
 WORKDIR /app
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=clang
@@ -49,7 +51,7 @@ COPY --from=cacher /app/target target
 COPY --from=cacher /usr/local/cargo /usr/local/cargo
 
 # Copy source code and embedded data
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY .cargo .cargo
 COPY crates crates
 
