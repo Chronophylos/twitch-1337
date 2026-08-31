@@ -49,16 +49,6 @@ where
     // these values; selected commands consume the handle live.
     let snapshot = services.settings.load_full();
 
-    // Registration depends only on bootstrap AI being present. Each command
-    // resolves its own profile per turn, so one stale agent pointer cannot
-    // disable the others and profile repairs take effect without a restart.
-    let ai_configured = services.ai_enabled;
-    if ai_configured {
-        info!("AI commands enabled; agent profiles resolve per turn");
-    } else {
-        debug!("AI not configured, AI commands disabled");
-    }
-
     // Hand the primary history Arc to the (test-only) tap so integration
     // tests can peek at chat-history entries. Production wires `None`.
     if let (Some(tap), Some(ctx)) = (
@@ -68,6 +58,37 @@ where
         *tap.lock().await = Some(ctx.primary_history.clone());
     }
 
+    let cmd_list = build_commands(&services, &snapshot);
+
+    run_command_dispatcher(broadcast_rx, services, snapshot, sender, cmd_list).await;
+}
+/// Builds the full list of built-in commands, including every gated command
+/// whose service is present. `snapshot` is the settings snapshot the handler
+/// already loaded; AI-gated commands consult `snapshot.ai.web`.
+///
+/// Drift guard: every registered command except the `PingTriggerCommand`
+/// catch-all must have a row in `commands::RESERVED_PING_NAMES`, otherwise a
+/// ping could be created that the dispatcher always loses to the built-in.
+/// The assertion derives from `name()`, so there is no second literal to
+/// forget. Debug builds (`just dev`, CI, integration tests) trip on drift;
+/// release builds keep the pre-guard behavior.
+pub(crate) fn build_commands<T, L>(
+    services: &Arc<Services>,
+    snapshot: &crate::settings::Settings,
+) -> Vec<Box<dyn commands::Command<T, L>>>
+where
+    T: Transport + Send + Sync + 'static,
+    L: LoginCredentials + Send + Sync + 'static,
+{
+    // Registration depends only on bootstrap AI being present. Each command
+    // resolves its own profile per turn, so one stale agent pointer cannot
+    // disable the others and profile repairs take effect without a restart.
+    let ai_configured = services.ai_enabled;
+    if ai_configured {
+        info!("AI commands enabled; agent profiles resolve per turn");
+    } else {
+        debug!("AI not configured, AI commands disabled");
+    }
     let mut cmd_list: Vec<Box<dyn commands::Command<T, L>>> = vec![
         Box::new(commands::version::VersionCommand::new(services.started_at)),
         Box::new(commands::ping_admin::PingAdminCommand::new(
@@ -238,13 +259,26 @@ where
         services.ping_names_rx.clone(),
     )));
 
-    // A ping may not be named after a built-in trigger, or the scan above
-    // would always hand the word to the command and the ping would never
-    // fire. `PingManager::create_ping` rejects such a name at creation
-    // (`commands::RESERVED_PING_NAMES`), which is where someone can still be
-    // told about it.
+    // A ping may not be named after a built-in trigger, or the scan would
+    // always hand the word to the command and the ping would never fire.
+    // `PingManager::create_ping` rejects such a name at creation
+    // (`commands::RESERVED_PING_NAMES`); this guard keeps that list from
+    // drifting out of sync with the commands registered above. Only the
+    // missing-row direction matters: a stale row merely keeps a dead name
+    // reserved, which is harmless.
+    for command in &cmd_list {
+        // The catch-all's name is the placeholder "!<ping>", not a trigger.
+        if command.name() == "!<ping>" {
+            continue;
+        }
+        debug_assert!(
+            commands::is_reserved_ping_name(&commands::normalize_command_name(command.name())),
+            "{} is registered but missing from RESERVED_PING_NAMES",
+            command.name(),
+        );
+    }
 
-    run_command_dispatcher(broadcast_rx, services, snapshot, sender, cmd_list).await;
+    cmd_list
 }
 
 struct CommandInvocation<'a> {
