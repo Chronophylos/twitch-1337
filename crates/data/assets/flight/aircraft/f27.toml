@@ -1,0 +1,26 @@
+[aircraft]
+name = "Fokker F27 Friendship"     # Microsoft / iniBuilds (Ghostrunner)
+icao_type = "F27"
+
+[performance]
+cruise_speed_ktas = 250            # Wikipedia / MSFS manual: 250 KTAS at 15,000 ft
+cruise_altitude_ft = 15000         # MSFS published TAS point; typical airline FL140–FL200
+service_ceiling_ft = 29500         # SimBrief airframe (EASA TCDS max operating is 25,000 ft)
+min_runway_length_ft = 4600        # SimBrief airframe
+
+[performance.climb]
+speed_ktas = 165                   # SimBrief 150-KIAS climb; TAS average through climb
+rate_fpm = 1200                    # Wikipedia 1,451 fpm sea-level; mid-climb average
+
+[performance.descent]
+speed_ktas = 180                   # MSFS: hold ~180–200 KIAS
+rate_fpm = 1000                    # SimBrief default descent 1000-FPM
+
+[fuel]
+capacity_kg = 4124.0               # EASA TCDS bulletin 2: 1,357 US gal usable × 6.7 lb/gal Jet-A
+fuel_type = "jet"                  # RR Dart (kerosene)
+
+[fuel.flow]
+climb_kg_per_hour = 800.0          # ~1.3× cruise
+cruise_kg_per_hour = 600.0         # ~500 kg/h community tables; Dart SFC at cruise power
+descent_kg_per_hour = 360.0        # ~0.6× cruise

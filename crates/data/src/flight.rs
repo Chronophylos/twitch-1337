@@ -99,6 +99,24 @@ mod tests {
     }
 
     #[test]
+    fn f27_is_listed() {
+        let ac = aircraft_by_icao_type("F27").expect("F27");
+        assert_eq!(ac.icao_type, "F27");
+        assert_eq!(ac.name, "Fokker F27 Friendship");
+        assert_eq!(ac.fuel_type, FuelType::Jet);
+        assert_eq!(ac.cruise_speed_ktas, 250);
+        assert_eq!(ac.cruise_altitude_ft, 15000);
+        assert_eq!(ac.service_ceiling_ft, 29500);
+        assert_eq!(ac.min_runway_length_ft, 4600);
+        // Ferry-range ballpark: TCDS tanks + cruise burn, not the YS-11 13,100 lb SimBrief leftover.
+        let range = ac.range_nm();
+        assert!(
+            (800.0..2500.0).contains(&range),
+            "F27 range_nm()={range} outside 800–2500 nm"
+        );
+    }
+
+    #[test]
     fn airport_has_no_name_field() {
         assert!(find_by_icao("EDDF").is_some());
         let db = include_str!(concat!(env!("OUT_DIR"), "/airport_db.rs"));
