@@ -4,10 +4,13 @@ use rand::{Rng, RngExt};
 use twitch_1337_data::flight::{self, Aircraft, Airport};
 
 use crate::error::Error;
-use crate::flight_plan::{FlightPlan, calculate_flight_plan, estimate_distance_for_block_time};
+use crate::flight_plan::{
+    FlightPlan, calculate_flight_plan, estimate_distance_for_block_time, max_block_time,
+};
 use crate::geo::{bearing_difference, haversine_distance_nm, initial_bearing};
 
-const TOLERANCE: Duration = Duration::from_secs(15 * 60);
+/// Accepted deviation between a generated plan's block time and the target.
+const BLOCK_TIME_TOLERANCE: Duration = Duration::from_secs(15 * 60);
 const MAX_RETRIES: u32 = 100;
 
 /// Half-width of the accepted heading wedge, matching the 45 degree buckets of
@@ -44,6 +47,17 @@ pub(crate) fn generate_flight_plan_with_rng(
 ) -> Result<FlightPlan, Error> {
     let aircraft = req.aircraft;
 
+    // Requests within one tolerance of the ceiling cannot reliably find a
+    // route within tolerance, so reject them up front with the honest
+    // achievable maximum instead of burning retries (both call sites map
+    // this to a user-facing hint).
+    let achievable_max = max_block_time(aircraft) - BLOCK_TIME_TOLERANCE;
+    if req.block_time > achievable_max {
+        return Err(Error::BlockTimeTooLong {
+            max: achievable_max,
+        });
+    }
+
     let pinned = match req.departure {
         Some(icao) => {
             let Some(airport) = flight::find_by_icao(icao) else {
@@ -69,7 +83,7 @@ pub(crate) fn generate_flight_plan_with_rng(
     }
 
     let target_dist = estimate_distance_for_block_time(aircraft, req.block_time);
-    let tolerance_hrs = TOLERANCE.as_secs_f64() / 3600.0;
+    let tolerance_hrs = BLOCK_TIME_TOLERANCE.as_secs_f64() / 3600.0;
     let dist_margin = f64::from(aircraft.cruise_speed_ktas) * tolerance_hrs;
 
     let min_dist = (target_dist - dist_margin).max(1.0);
@@ -144,7 +158,7 @@ pub(crate) fn generate_flight_plan_with_rng(
         let arrival = candidates[rng.random_range(0..candidates.len())];
         let fp = calculate_flight_plan(departure, arrival, aircraft);
 
-        if fp.block_time.abs_diff(req.block_time) <= TOLERANCE {
+        if fp.block_time.abs_diff(req.block_time) <= BLOCK_TIME_TOLERANCE {
             return Ok(fp);
         }
     }
@@ -192,7 +206,7 @@ mod tests {
             .expect("F27 should find a 1h route");
         assert_eq!(fp.aircraft.icao_type, "F27");
         assert!(
-            fp.block_time.abs_diff(target) <= TOLERANCE,
+            fp.block_time.abs_diff(target) <= BLOCK_TIME_TOLERANCE,
             "block time {} min not within tolerance of 60 min",
             fp.block_time.as_secs() / 60
         );
@@ -220,7 +234,7 @@ mod tests {
             generate_flight_plan_with_rng(&req(ac, 2), &mut rng).expect("should find a flight");
 
         assert!(
-            fp.block_time.abs_diff(target) <= TOLERANCE,
+            fp.block_time.abs_diff(target) <= BLOCK_TIME_TOLERANCE,
             "block time {} min not within tolerance of target 120 min",
             fp.block_time.as_secs() / 60
         );
@@ -235,7 +249,7 @@ mod tests {
         })
         .expect("should find a flight from EDDF");
         assert_eq!(fp.departure.icao, "EDDF");
-        assert!(fp.block_time.abs_diff(Duration::from_secs(3600)) <= TOLERANCE);
+        assert!(fp.block_time.abs_diff(Duration::from_secs(3600)) <= BLOCK_TIME_TOLERANCE);
     }
 
     #[test]
@@ -324,5 +338,89 @@ mod tests {
         })
         .unwrap_err();
         assert!(matches!(err, Error::TargetIsDeparture));
+    }
+    #[test]
+    fn a388_finds_ten_hour_plan() {
+        // Regression for issue #500: the old proportional distance estimate
+        // drifted ~44 min off at 10h, so every retry missed the ±15 min
+        // block-time tolerance and !fl A388 10h always failed.
+        let ac = aircraft_by_icao_type("A388").expect("A388");
+        let target = Duration::from_secs(10 * 3600);
+
+        let fp = generate_flight_plan_with_rng(&req(ac, 10), &mut seeded_rng())
+            .expect("A388 should find a 10h route");
+
+        assert!(
+            fp.block_time.abs_diff(target) <= BLOCK_TIME_TOLERANCE,
+            "block time {} min not within tolerance of 600 min",
+            fp.block_time.as_secs() / 60
+        );
+    }
+
+    #[test]
+    fn grid_across_aircraft_and_durations() {
+        // Every aircraft must find plans across its feasible duration range —
+        // short hops (reduced-altitude regime) and the long end where the old
+        // estimate broke down. The skip predicate mirrors the generator's
+        // up-front guard exactly, so the tested band and the accepted band
+        // are the same thing by construction.
+        let durations = [20 * 60, 45 * 60, 2 * 3600, 6 * 3600, 10 * 3600];
+        for ac in flight::aircraft() {
+            let max = max_block_time(ac);
+            for secs in durations {
+                let target = Duration::from_secs(secs);
+                if target > max - BLOCK_TIME_TOLERANCE {
+                    continue; // generator's BlockTimeTooLong band
+                }
+                let request = FlightRequest {
+                    aircraft: ac,
+                    block_time: target,
+                    departure: None,
+                    direction: None,
+                };
+                let fp = generate_flight_plan_with_rng(&request, &mut seeded_rng()).unwrap_or_else(
+                    |e| panic!("{} at {}s should find a route: {e:?}", ac.icao_type, secs),
+                );
+                assert!(
+                    fp.block_time.abs_diff(target) <= BLOCK_TIME_TOLERANCE,
+                    "{} at {}s: block time {} min off target",
+                    ac.icao_type,
+                    secs,
+                    fp.block_time.as_secs() / 60
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn achievable_ceiling_generates_for_every_aircraft() {
+        // The advertised achievable maximum must actually be achievable. For
+        // the A388 the fuel ceiling exceeds the longest realizable pair on
+        // the planet (10,793 nm SCAR-ZJSY among eligible airports), so the
+        // bounds clamp to Earth's great-circle extent — without that clamp,
+        // the top of the A388's advertised range fails all retries, i.e.
+        // issue #500's failure mode surviving at the ceiling.
+        for ac in flight::aircraft() {
+            let target = max_block_time(ac) - BLOCK_TIME_TOLERANCE;
+            let request = FlightRequest {
+                aircraft: ac,
+                block_time: target,
+                departure: None,
+                direction: None,
+            };
+            let fp =
+                generate_flight_plan_with_rng(&request, &mut seeded_rng()).unwrap_or_else(|e| {
+                    panic!(
+                        "{} at {:?} should find a route: {e:?}",
+                        ac.icao_type, target
+                    )
+                });
+            assert!(
+                fp.block_time.abs_diff(target) <= BLOCK_TIME_TOLERANCE,
+                "{} at ceiling: block time {} min off target",
+                ac.icao_type,
+                fp.block_time.as_secs() / 60
+            );
+        }
     }
 }

@@ -176,6 +176,16 @@ pub async fn execute_plan_flight(call: &ToolCall) -> ToolResultMessage {
                 random_flight::Error::RunwayTooShort { .. } => "runway_too_short",
                 random_flight::Error::NoRouteInDirection => "no_route_in_direction",
                 random_flight::Error::TargetIsDeparture => "target_is_departure",
+                random_flight::Error::BlockTimeTooLong { max } => {
+                    return err(
+                        call,
+                        json!({
+                            "error": "impossible_duration",
+                            "achievable_max": crate::cooldown::format_duration_hm(max),
+                            "details": e.to_string(),
+                        }),
+                    );
+                }
                 _ => "no_route_found",
             };
             return err(call, json!({"error": code, "details": e.to_string()}));

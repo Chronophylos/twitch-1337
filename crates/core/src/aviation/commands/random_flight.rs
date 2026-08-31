@@ -76,6 +76,19 @@ where
 
     let fp = match result {
         Ok(fp) => fp,
+        Err(random_flight::Error::BlockTimeTooLong { max }) => {
+            sender
+                .reply(
+                    privmsg,
+                    &format!(
+                        "Mit dem {} schaffste maximal {}, da geht keine Minute mehr FDM",
+                        aircraft.icao_type,
+                        crate::cooldown::format_duration_hm(max)
+                    ),
+                )
+                .await;
+            return Ok(());
+        }
         Err(e) => {
             warn!(error = ?e, "Flight plan generation failed");
             sender
