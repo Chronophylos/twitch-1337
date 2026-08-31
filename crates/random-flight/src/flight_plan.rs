@@ -20,10 +20,74 @@ fn taxi_in_for(size: AirportSize) -> Duration {
     }
 }
 
-/// Climb/descent time and distance for a full-altitude profile, ignoring
-/// airport elevations. Shared by the distance estimate and the feasibility
-/// bounds, which both run before actual airports (and their elevations) are
-/// known.
+/// Phase breakdown of a flight of a given distance, before taxi is added.
+struct Phases {
+    climb_time: Duration,
+    climb_dist: f64,
+    descent_time: Duration,
+    descent_dist: f64,
+    cruise_time: Duration,
+    cruise_dist: f64,
+    cruise_alt: u32,
+}
+
+/// Block-time model shared by [`calculate_flight_plan`] (real airports) and
+/// the distance estimate / feasibility bounds (nominal profile). Cruise
+/// altitude is reduced in 1000 ft steps until climb + descent fit within the
+/// distance, mirroring real short-hop profiles.
+fn phases_for_distance(
+    aircraft: &Aircraft,
+    distance_nm: f64,
+    dep_elevation_ft: i32,
+    arr_elevation_ft: i32,
+) -> Phases {
+    let dep_elev = dep_elevation_ft.max(0) as u32;
+    let arr_elev = arr_elevation_ft.max(0) as u32;
+    let cruise_speed = f64::from(aircraft.cruise_speed_ktas);
+    let climb_speed = f64::from(aircraft.climb_speed_ktas);
+    let descent_speed = f64::from(aircraft.descent_speed_ktas);
+
+    let mut cruise_alt = aircraft.cruise_altitude_ft;
+    let min_alt = dep_elev.max(arr_elev) + 1000;
+
+    loop {
+        let climb_ft = f64::from(cruise_alt.saturating_sub(dep_elev));
+        let descent_ft = f64::from(cruise_alt.saturating_sub(arr_elev));
+
+        let climb_time_hrs = climb_ft / f64::from(aircraft.climb_rate_fpm) / 60.0;
+        let descent_time_hrs = descent_ft / f64::from(aircraft.descent_rate_fpm) / 60.0;
+
+        let climb_dist = climb_speed * climb_time_hrs;
+        let descent_dist = descent_speed * descent_time_hrs;
+
+        if climb_dist + descent_dist < distance_nm || cruise_alt <= min_alt {
+            let cruise_dist = (distance_nm - climb_dist - descent_dist).max(0.0);
+            let cruise_time_hrs = cruise_dist / cruise_speed;
+
+            let to_duration = |hrs: f64| Duration::from_secs_f64(hrs * 3600.0);
+
+            return Phases {
+                climb_time: to_duration(climb_time_hrs),
+                climb_dist,
+                descent_time: to_duration(descent_time_hrs),
+                descent_dist,
+                cruise_time: to_duration(cruise_time_hrs),
+                cruise_dist,
+                cruise_alt,
+            };
+        }
+
+        // Reduce altitude and retry
+        cruise_alt = cruise_alt.saturating_sub(1000).max(min_alt);
+    }
+}
+
+fn nominal_taxi() -> Duration {
+    taxi_out_for(AirportSize::Medium) + taxi_in_for(AirportSize::Medium)
+}
+
+/// Climb/descent for the full cruise altitude, used by the fuel-limited
+/// ceiling in [`max_block_time`].
 fn nominal_climb_descent(aircraft: &Aircraft) -> (Duration, f64, Duration, f64) {
     let alt_ft = f64::from(aircraft.cruise_altitude_ft);
     let climb_time = Duration::from_secs_f64(alt_ft / f64::from(aircraft.climb_rate_fpm) * 60.0);
@@ -32,10 +96,6 @@ fn nominal_climb_descent(aircraft: &Aircraft) -> (Duration, f64, Duration, f64) 
         Duration::from_secs_f64(alt_ft / f64::from(aircraft.descent_rate_fpm) * 60.0);
     let descent_dist = f64::from(aircraft.descent_speed_ktas) * descent_time.as_secs_f64() / 3600.0;
     (climb_time, climb_dist, descent_time, descent_dist)
-}
-
-fn nominal_taxi() -> Duration {
-    taxi_out_for(AirportSize::Medium) + taxi_in_for(AirportSize::Medium)
 }
 
 #[derive(Debug, Clone)]
@@ -81,84 +141,84 @@ pub fn calculate_flight_plan(
         arrival.longitude,
     );
 
-    let cruise_speed = f64::from(aircraft.cruise_speed_ktas);
-    let climb_speed = f64::from(aircraft.climb_speed_ktas);
-    let descent_speed = f64::from(aircraft.descent_speed_ktas);
+    let p = phases_for_distance(
+        aircraft,
+        distance_nm,
+        departure.elevation_ft,
+        arrival.elevation_ft,
+    );
+    let taxi_out = taxi_out_for(departure.size);
+    let taxi_in = taxi_in_for(arrival.size);
+    let block_time = p.climb_time + p.descent_time + p.cruise_time + taxi_out + taxi_in;
 
-    let mut cruise_alt = aircraft.cruise_altitude_ft;
-    let min_alt = (departure.elevation_ft.max(arrival.elevation_ft) + 1000).max(0) as u32;
-
-    loop {
-        let climb_ft = f64::from(cruise_alt.saturating_sub(departure.elevation_ft.max(0) as u32));
-        let descent_ft = f64::from(cruise_alt.saturating_sub(arrival.elevation_ft.max(0) as u32));
-
-        let climb_time_hrs = climb_ft / f64::from(aircraft.climb_rate_fpm) / 60.0;
-        let descent_time_hrs = descent_ft / f64::from(aircraft.descent_rate_fpm) / 60.0;
-
-        let climb_dist = climb_speed * climb_time_hrs;
-        let descent_dist = descent_speed * descent_time_hrs;
-
-        if climb_dist + descent_dist < distance_nm || cruise_alt <= min_alt {
-            let cruise_dist = (distance_nm - climb_dist - descent_dist).max(0.0);
-            let cruise_time_hrs = cruise_dist / cruise_speed;
-
-            let to_duration = |hrs: f64| Duration::from_secs_f64(hrs * 3600.0);
-
-            let climb_time = to_duration(climb_time_hrs);
-            let descent_time = to_duration(descent_time_hrs);
-            let cruise_time = to_duration(cruise_time_hrs);
-            let taxi_out = taxi_out_for(departure.size);
-            let taxi_in = taxi_in_for(arrival.size);
-            let block_time = climb_time + descent_time + cruise_time + taxi_out + taxi_in;
-
-            return FlightPlan {
-                departure,
-                arrival,
-                aircraft: aircraft.clone(),
-                distance_nm,
-                block_time,
-                taxi_out,
-                taxi_in,
-                cruise_altitude_ft: cruise_alt,
-                climb_time,
-                climb_distance_nm: climb_dist,
-                descent_time,
-                descent_distance_nm: descent_dist,
-                cruise_time,
-                cruise_distance_nm: cruise_dist,
-            };
-        }
-
-        // Reduce altitude and retry
-        cruise_alt = cruise_alt.saturating_sub(1000).max(min_alt);
+    FlightPlan {
+        departure,
+        arrival,
+        aircraft: aircraft.clone(),
+        distance_nm,
+        block_time,
+        taxi_out,
+        taxi_in,
+        cruise_altitude_ft: p.cruise_alt,
+        climb_time: p.climb_time,
+        climb_distance_nm: p.climb_dist,
+        descent_time: p.descent_time,
+        descent_distance_nm: p.descent_dist,
+        cruise_time: p.cruise_time,
+        cruise_distance_nm: p.cruise_dist,
     }
+}
+
+/// Block time of the nominal profile (sea-level airports, medium taxi) at a
+/// given distance. Monotonically increasing in distance apart from downward
+/// jumps of a few seconds at the altitude-reduction boundaries, which is far
+/// below the resolution the bisection needs.
+fn nominal_block_time(aircraft: &Aircraft, distance_nm: f64) -> Duration {
+    let p = phases_for_distance(aircraft, distance_nm, 0, 0);
+    p.climb_time + p.descent_time + p.cruise_time + nominal_taxi()
 }
 
 /// Estimate the total flight distance for a target block time.
 /// Used by the selection algorithm to narrow the airport search band.
 ///
-/// This is the exact inverse of [`calculate_flight_plan`]'s block-time model
-/// for a nominal (full-altitude, medium-taxi) profile:
-/// `block = climb + descent + taxi + cruise`, where climb/descent cover fixed
-/// distances at their own speeds. The old `0.9 × speed` approximation treated
-/// the climb/descent overhead as proportional to duration, so its error grew
-/// linearly and made long requests (>= ~6h) deterministically miss the
-/// block-time tolerance no matter how often they were retried.
+/// Numerical inverse (bisection) of [`nominal_block_time`]. Exact for the
+/// nominal profile in both regimes — full-altitude cruise and
+/// reduced-altitude short hops — where the previous `0.9 × speed`
+/// approximation's error grew linearly and made long requests
+/// deterministically miss the block-time tolerance regardless of retry
+/// count. Residual error against real plans is bounded by the profile
+/// variance that airport elevations and taxi sizes introduce.
 pub fn estimate_distance_for_block_time(aircraft: &Aircraft, target_block_time: Duration) -> f64 {
-    let (climb_time, climb_dist, descent_time, descent_dist) = nominal_climb_descent(aircraft);
-    let fixed_time = climb_time + descent_time + nominal_taxi();
-    let cruise_time = target_block_time.saturating_sub(fixed_time);
+    // Selection never picks distances beyond the aircraft's fuel range, so
+    // there is nothing to find past `hi`; targets that large fail via the
+    // block-time tolerance the same way as any other impossible request.
+    let mut lo = 1.0_f64;
+    let mut hi = aircraft.range_nm().max(2.0);
+    if nominal_block_time(aircraft, hi) < target_block_time {
+        return hi;
+    }
 
-    climb_dist
-        + descent_dist
-        + f64::from(aircraft.cruise_speed_ktas) * cruise_time.as_secs_f64() / 3600.0
+    for _ in 0..40 {
+        let mid = (lo + hi) / 2.0;
+        if nominal_block_time(aircraft, mid) < target_block_time {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) / 2.0
 }
 
-/// Shortest physically possible block time: climb, descent, and minimum taxi
-/// with zero cruise time. Requests below this can never produce a plan.
+/// Shortest physically possible block time: the minimum-altitude short-hop
+/// profile (1000 ft of climb and descent at `min_alt`) plus minimum taxi.
+/// [`phases_for_distance`] never flies lower than that, so requests below
+/// this can never produce a plan.
 pub fn min_block_time(aircraft: &Aircraft) -> Duration {
-    let (climb_time, _, descent_time, _) = nominal_climb_descent(aircraft);
-    climb_time + descent_time + taxi_out_for(AirportSize::Small) + taxi_in_for(AirportSize::Small)
+    let p = phases_for_distance(aircraft, 1.0, 0, 0);
+    p.climb_time
+        + p.descent_time
+        + taxi_out_for(AirportSize::Small)
+        + taxi_in_for(AirportSize::Small)
 }
 
 /// Longest sustainable block time: climb and descent plus cruising until the
@@ -294,6 +354,9 @@ mod tests {
         // error comes from the nominal profile (airport elevation and taxi
         // size are unknown before selection; taxi varies by ±12 min between
         // small and large), so assert in the time domain, not distance.
+        // High-elevation airports push the real block a few more minutes
+        // below the nominal target; production absorbs that by re-rolling
+        // departures across the 100 retries.
         let cases = [
             ("KJFK", "KLAX", "B738"),
             ("EDDF", "EGLL", "B738"),

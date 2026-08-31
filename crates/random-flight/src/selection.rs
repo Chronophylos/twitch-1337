@@ -7,7 +7,8 @@ use crate::error::Error;
 use crate::flight_plan::{FlightPlan, calculate_flight_plan, estimate_distance_for_block_time};
 use crate::geo::{bearing_difference, haversine_distance_nm, initial_bearing};
 
-const TOLERANCE: Duration = Duration::from_secs(15 * 60);
+/// Accepted deviation between a generated plan's block time and the target.
+pub const BLOCK_TIME_TOLERANCE: Duration = Duration::from_secs(15 * 60);
 const MAX_RETRIES: u32 = 100;
 
 /// Half-width of the accepted heading wedge, matching the 45 degree buckets of
@@ -69,7 +70,7 @@ pub(crate) fn generate_flight_plan_with_rng(
     }
 
     let target_dist = estimate_distance_for_block_time(aircraft, req.block_time);
-    let tolerance_hrs = TOLERANCE.as_secs_f64() / 3600.0;
+    let tolerance_hrs = BLOCK_TIME_TOLERANCE.as_secs_f64() / 3600.0;
     let dist_margin = f64::from(aircraft.cruise_speed_ktas) * tolerance_hrs;
 
     let min_dist = (target_dist - dist_margin).max(1.0);
@@ -144,7 +145,7 @@ pub(crate) fn generate_flight_plan_with_rng(
         let arrival = candidates[rng.random_range(0..candidates.len())];
         let fp = calculate_flight_plan(departure, arrival, aircraft);
 
-        if fp.block_time.abs_diff(req.block_time) <= TOLERANCE {
+        if fp.block_time.abs_diff(req.block_time) <= BLOCK_TIME_TOLERANCE {
             return Ok(fp);
         }
     }
@@ -192,7 +193,7 @@ mod tests {
             .expect("F27 should find a 1h route");
         assert_eq!(fp.aircraft.icao_type, "F27");
         assert!(
-            fp.block_time.abs_diff(target) <= TOLERANCE,
+            fp.block_time.abs_diff(target) <= BLOCK_TIME_TOLERANCE,
             "block time {} min not within tolerance of 60 min",
             fp.block_time.as_secs() / 60
         );
@@ -220,7 +221,7 @@ mod tests {
             generate_flight_plan_with_rng(&req(ac, 2), &mut rng).expect("should find a flight");
 
         assert!(
-            fp.block_time.abs_diff(target) <= TOLERANCE,
+            fp.block_time.abs_diff(target) <= BLOCK_TIME_TOLERANCE,
             "block time {} min not within tolerance of target 120 min",
             fp.block_time.as_secs() / 60
         );
@@ -235,7 +236,7 @@ mod tests {
         })
         .expect("should find a flight from EDDF");
         assert_eq!(fp.departure.icao, "EDDF");
-        assert!(fp.block_time.abs_diff(Duration::from_secs(3600)) <= TOLERANCE);
+        assert!(fp.block_time.abs_diff(Duration::from_secs(3600)) <= BLOCK_TIME_TOLERANCE);
     }
 
     #[test]
@@ -333,10 +334,11 @@ mod tests {
         let ac = aircraft_by_icao_type("A388").expect("A388");
         let target = Duration::from_secs(10 * 3600);
 
-        let fp = generate_flight_plan(&req(ac, 10)).expect("A388 should find a 10h route");
+        let fp = generate_flight_plan_with_rng(&req(ac, 10), &mut seeded_rng())
+            .expect("A388 should find a 10h route");
 
         assert!(
-            fp.block_time.abs_diff(target) <= TOLERANCE,
+            fp.block_time.abs_diff(target) <= BLOCK_TIME_TOLERANCE,
             "block time {} min not within tolerance of 600 min",
             fp.block_time.as_secs() / 60
         );
@@ -346,13 +348,13 @@ mod tests {
     fn long_haul_grid_across_aircraft() {
         // Every aircraft must find plans across its feasible duration range,
         // including the long end where the old estimate broke down.
-        let durations = [45 * 60, 2 * 3600, 6 * 3600, 10 * 3600];
+        let durations = [20 * 60, 45 * 60, 2 * 3600, 6 * 3600, 10 * 3600];
         for ac in flight::aircraft() {
             let min = crate::min_block_time(ac);
             let max = crate::max_block_time(ac);
             for secs in durations {
                 let target = Duration::from_secs(secs);
-                if target < min + TOLERANCE || target > max - TOLERANCE {
+                if target < min + BLOCK_TIME_TOLERANCE || target > max - BLOCK_TIME_TOLERANCE {
                     continue; // outside the feasible band; bounds check rejects these
                 }
                 let request = FlightRequest {
@@ -361,11 +363,11 @@ mod tests {
                     departure: None,
                     direction: None,
                 };
-                let fp = generate_flight_plan(&request).unwrap_or_else(|e| {
-                    panic!("{} at {}s should find a route: {e:?}", ac.icao_type, secs)
-                });
+                let fp = generate_flight_plan_with_rng(&request, &mut seeded_rng()).unwrap_or_else(
+                    |e| panic!("{} at {}s should find a route: {e:?}", ac.icao_type, secs),
+                );
                 assert!(
-                    fp.block_time.abs_diff(target) <= TOLERANCE,
+                    fp.block_time.abs_diff(target) <= BLOCK_TIME_TOLERANCE,
                     "{} at {}s: block time {} min off target",
                     ac.icao_type,
                     secs,

@@ -70,14 +70,18 @@ where
             .await;
         return Ok(());
     }
-    if duration > random_flight::max_block_time(aircraft) {
-        let max = crate::cooldown::format_duration_hm(random_flight::max_block_time(aircraft));
+    // Requests within one tolerance of the fuel ceiling cannot reliably find
+    // a route within tolerance, so reject them with the honest achievable max.
+    let max_block = random_flight::max_block_time(aircraft);
+    if duration > max_block - random_flight::BLOCK_TIME_TOLERANCE {
+        let achievable = max_block - random_flight::BLOCK_TIME_TOLERANCE;
         sender
             .reply(
                 privmsg,
                 &format!(
                     "Mit dem {} schaffste maximal {}, da geht keine Minute mehr FDM",
-                    aircraft.icao_type, max
+                    aircraft.icao_type,
+                    crate::cooldown::format_duration_hm(achievable)
                 ),
             )
             .await;
