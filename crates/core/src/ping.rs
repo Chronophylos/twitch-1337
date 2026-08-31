@@ -434,6 +434,13 @@ impl PingManager {
         {
             bail!("Ping-Name darf nur Buchstaben, Zahlen, - und _ enthalten");
         }
+        // A ping named after a built-in command never fires: the dispatcher
+        // scans commands in order and the ping catch-all is last, so the
+        // command always wins. Reject it here rather than letting it sit in
+        // pings.ron looking registered but silently dead.
+        if crate::commands::RESERVED_PING_NAMES.contains(&name.as_str()) {
+            bail!("Ping \"{}\" ist schon ein Befehl", name);
+        }
         validate_template(&template)?;
         if self.store.pings.contains_key(&name) {
             bail!("Ping \"{}\" gibt es schon", name);
@@ -617,6 +624,32 @@ mod tests {
         .await
         .unwrap();
         mgr
+    }
+
+    #[tokio::test]
+    async fn create_ping_rejects_a_built_in_command_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut mgr = empty_manager(dir.path());
+
+        // `!lb` is a registered command, so the dispatcher would always win
+        // this word and the ping would never fire.
+        let err = mgr
+            .create_ping("lb".into(), "Hey {mentions}!".into(), "admin".into(), None)
+            .await
+            .expect_err("a built-in command name must be rejected");
+        assert!(err.to_string().contains("schon ein Befehl"), "{err}");
+
+        // The name is lowercased before the check, so casing is no escape.
+        assert!(
+            mgr.create_ping("LB".into(), "Hey {mentions}!".into(), "admin".into(), None)
+                .await
+                .is_err()
+        );
+
+        // A name that is not a command is still fine.
+        mgr.create_ping("uwu".into(), "Hey {mentions}!".into(), "admin".into(), None)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

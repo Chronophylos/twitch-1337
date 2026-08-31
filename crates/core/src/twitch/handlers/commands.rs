@@ -230,10 +230,6 @@ where
         )));
     }
 
-    // Everything registered so far is a real trigger. PingTriggerCommand, the
-    // one catch-all, is pushed below and is excluded from the shadowing check.
-    let builtins_end = cmd_list.len();
-
     // PingTriggerCommand must be last: it matches any !<name> that is a registered ping,
     // so built-in commands earlier in the list take priority and can't be shadowed.
     cmd_list.push(Box::new(commands::ping_trigger::PingTriggerCommand::new(
@@ -242,40 +238,13 @@ where
         services.ping_names_rx.clone(),
     )));
 
-    // A ping registered under a built-in command's trigger would silently
-    // steal traffic from that command: `find_enabled_command` scans in
-    // order and PingTriggerCommand's catch-all is last, so the built-in
-    // wins here, but nothing stops someone naming a ping `lb` from the
-    // dashboard. That's a config mistake, not a crash-worthy fault, so it
-    // only surfaces in dev/test builds rather than taking prod down.
-    #[cfg(debug_assertions)]
-    {
-        let ping_names = services.ping_names_rx.borrow();
-        if let Some(ping) = first_shadowed_ping(ping_names.iter(), |trigger| {
-            cmd_list[..builtins_end].iter().any(|c| c.matches(trigger))
-        }) {
-            panic!("ping `{ping}` shadows a built-in command trigger");
-        }
-    }
+    // A ping may not be named after a built-in trigger, or the scan above
+    // would always hand the word to the command and the ping would never
+    // fire. `PingManager::create_ping` rejects such a name at creation
+    // (`commands::RESERVED_PING_NAMES`), which is where someone can still be
+    // told about it.
 
     run_command_dispatcher(broadcast_rx, services, snapshot, sender, cmd_list).await;
-}
-
-/// First ping name that a built-in command would claim, if any.
-///
-/// `matches_builtin` receives the full `!<ping>` trigger and should ask the
-/// registered commands' own [`Command::matches`] — the same predicate
-/// [`find_enabled_command`] runs. Re-deriving the rule here instead (say, by
-/// normalizing names and comparing strings) drifts from real dispatch: a
-/// command is free to override `matches` with its own casing rules, as
-/// `doener_calc` does for `!döner`/`!doener`.
-fn first_shadowed_ping<'a>(
-    ping_names: impl IntoIterator<Item = &'a String>,
-    matches_builtin: impl Fn(&str) -> bool,
-) -> Option<&'a String> {
-    ping_names
-        .into_iter()
-        .find(|ping| matches_builtin(&format!("!{ping}")))
 }
 
 struct CommandInvocation<'a> {
@@ -690,34 +659,5 @@ mod tests {
     fn skip_leading_mentions_all_mentions_yields_empty() {
         let words = ["@aurora_bot"];
         assert!(skip_leading_mentions(&words).is_empty());
-    }
-
-    #[test]
-    fn first_shadowed_ping_reports_the_colliding_name() {
-        // Stands in for a registered command's own `matches`, including one
-        // that accepts several spellings the way `doener_calc` does.
-        let matches_builtin = |trigger: &str| {
-            let lowered = trigger.to_lowercase();
-            lowered == "!lb" || lowered == "!döner" || lowered == "!doener"
-        };
-
-        let free = ["uwu".to_owned(), "kappa".to_owned()];
-        assert_eq!(first_shadowed_ping(free.iter(), matches_builtin), None);
-
-        // The ping is stored without the `!`; the helper adds it back before
-        // asking, so a plain collision is caught.
-        let collides = ["uwu".to_owned(), "lb".to_owned()];
-        assert_eq!(
-            first_shadowed_ping(collides.iter(), matches_builtin),
-            Some(&"lb".to_owned())
-        );
-
-        // Casing and the alternate spelling are the command's business, not
-        // ours — delegating to `matches` means both are covered for free.
-        let umlaut = ["DÖNER".to_owned()];
-        assert_eq!(
-            first_shadowed_ping(umlaut.iter(), matches_builtin),
-            Some(&"DÖNER".to_owned())
-        );
     }
 }
