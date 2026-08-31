@@ -37,13 +37,12 @@ pub fn class_rank(class: &str) -> Option<u8> {
 }
 
 /// Parse a feed body, keeping only flares at or above `min_rank`.
-/// This feed has no id field, so the dedupe key is begin_time + satellite,
-/// which is unique per flare per spacecraft.
-pub(crate) fn parse(body: &str, min_rank: u8) -> Vec<Candidate> {
-    let Ok(flares) = serde_json::from_str::<Vec<Flare>>(body) else {
-        return Vec::new();
-    };
-    flares
+/// A body that does not parse at all is an error; the handler logs and
+/// skips this tick. This feed has no id field, so the dedupe key is
+/// begin_time + satellite, which is unique per flare per spacecraft.
+pub(crate) fn parse(body: &str, min_rank: u8) -> Result<Vec<Candidate>, serde_json::Error> {
+    let flares = serde_json::from_str::<Vec<Flare>>(body)?;
+    Ok(flares
         .into_iter()
         .filter_map(|f| {
             let class = f.max_class?;
@@ -66,7 +65,7 @@ pub(crate) fn parse(body: &str, min_rank: u8) -> Vec<Candidate> {
                 ),
             })
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -89,7 +88,7 @@ mod tests {
     #[test]
     fn threshold_filters_below_min_class() {
         let m = class_rank("M").expect("M is valid");
-        let out = parse(FIXTURE, m);
+        let out = parse(FIXTURE, m).expect("fixture is valid SWPC JSON");
         assert_eq!(out.len(), 2, "the C-class flare must be filtered out");
         assert_eq!(out[0].id, "2026-08-19T13:27:00Z-18");
         // 14:07 UTC in August is 16:07 Berlin (CEST, UTC+2)
@@ -104,8 +103,14 @@ mod tests {
     }
 
     #[test]
-    fn malformed_body_yields_nothing_and_does_not_panic() {
-        assert!(parse("not json", 3).is_empty());
-        assert!(parse("[]", 3).is_empty());
+    fn unparseable_body_is_an_error() {
+        assert!(parse("not json", 3).is_err());
+        assert!(parse("{}", 3).is_err());
+        assert!(parse("<html>nope</html>", 3).is_err());
+    }
+
+    #[test]
+    fn empty_array_is_ok_empty() {
+        assert!(parse("[]", 3).unwrap().is_empty());
     }
 }

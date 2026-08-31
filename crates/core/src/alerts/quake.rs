@@ -22,7 +22,6 @@ const LIMIT: u32 = 20;
 
 #[derive(Debug, Deserialize)]
 struct FeatureCollection {
-    #[serde(default)]
     features: Vec<Feature>,
 }
 
@@ -56,13 +55,13 @@ pub(crate) fn url(base: &str, min_mag_tenths: u32) -> String {
 }
 
 /// Parse a feed body into candidates. Any record missing a field the copy
-/// needs is skipped; a body that does not parse at all yields nothing.
-/// Neither case is an error worth propagating — the next poll is the retry.
-pub(crate) fn parse(body: &str) -> Vec<Candidate> {
-    let Ok(fc) = serde_json::from_str::<FeatureCollection>(body) else {
-        return Vec::new();
-    };
-    fc.features
+/// needs is skipped. A body that does not parse at all is an error — the
+/// handler logs and skips this tick so a 200 HTML page never looks like
+/// "no earthquakes."
+pub(crate) fn parse(body: &str) -> Result<Vec<Candidate>, serde_json::Error> {
+    let fc = serde_json::from_str::<FeatureCollection>(body)?;
+    Ok(fc
+        .features
         .into_iter()
         .filter_map(|f| {
             let p = f.properties?;
@@ -84,7 +83,7 @@ pub(crate) fn parse(body: &str) -> Vec<Candidate> {
                 ),
             })
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -95,7 +94,7 @@ mod tests {
 
     #[test]
     fn parses_and_formats_german_line() {
-        let out = parse(FIXTURE);
+        let out = parse(FIXTURE).expect("fixture is valid GeoJSON");
         assert_eq!(out.len(), 2, "the mag-less feature must be skipped");
         assert_eq!(out[0].id, "20260825_0000276");
         // 19:03:58 UTC in August is 21:03 Berlin (CEST, UTC+2)
@@ -106,9 +105,21 @@ mod tests {
     }
 
     #[test]
-    fn malformed_body_yields_nothing_and_does_not_panic() {
-        assert!(parse("not json").is_empty());
-        assert!(parse("{}").is_empty());
+    fn unparseable_body_is_an_error() {
+        assert!(parse("not json").is_err());
+        assert!(
+            parse("{}").is_err(),
+            "a missing features array is not an empty feed"
+        );
+        assert!(
+            parse(r#"{"status":"error"}"#).is_err(),
+            "an error object must not look like zero earthquakes"
+        );
+    }
+
+    #[test]
+    fn empty_feature_collection_is_ok_empty() {
+        assert!(parse(r#"{"features":[]}"#).unwrap().is_empty());
     }
 
     #[test]
@@ -116,7 +127,7 @@ mod tests {
         let body = r#"{"features":[{"properties":{"unid":"x","time":"yesterday-ish",
             "mag":5.0,"depth":3.0,"flynn_region":"GERMANY"}}]}"#;
         assert!(
-            parse(body).is_empty(),
+            parse(body).expect("envelope parses").is_empty(),
             "a record we cannot date must never reach chat as if it just happened"
         );
     }

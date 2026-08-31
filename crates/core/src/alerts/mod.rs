@@ -33,24 +33,29 @@ pub struct Candidate {
 /// absorbed into the seen-set silently, instead of arriving in chat as if
 /// it had all just happened. It also means a stale event is considered
 /// exactly once rather than re-evaluated on every poll forever.
+/// Returns `(chat lines, whether the seen-set grew)`. The bool is what
+/// decides whether to rewrite `alerts.ron`: a stale-only catch-up must
+/// persist even though nothing went to chat.
 pub(crate) fn select_announcements(
     candidates: Vec<Candidate>,
     seen: &mut VecDeque<String>,
     now: DateTime<Utc>,
     max_age: Duration,
-) -> Vec<String> {
+) -> (Vec<String>, bool) {
     let mut out = Vec::new();
+    let mut changed = false;
     for c in candidates {
         if seen.contains(&c.id) {
             continue;
         }
         let fresh = now - c.at <= max_age;
         state::mark(seen, c.id);
+        changed = true;
         if fresh {
             out.push(c.line);
         }
     }
-    out
+    (out, changed)
 }
 
 /// Per-feed poll gate. Tracked on the wall clock rather than a tokio
@@ -125,10 +130,11 @@ pub async fn run_alerts_handler<T, L>(
 
         if cfg.quake.enabled && quake_due.ready(now, cfg.quake.poll_secs) {
             let url = quake::url(quake::DEFAULT_BASE_URL, cfg.quake.min_mag_tenths);
-            if let Some(body) = fetch(&http, &url).await {
-                let lines =
-                    select_announcements(quake::parse(&body), &mut seen.quake, now, max_age);
-                dirty |= !lines.is_empty();
+            if let Some(body) = fetch(&http, &url).await
+                && let Some(cands) = parsed_or_skip("quake", quake::parse(&body))
+            {
+                let (lines, marked) = select_announcements(cands, &mut seen.quake, now, max_age);
+                dirty |= marked;
                 for line in lines {
                     sender.say(channel.clone(), line).await;
                 }
@@ -139,14 +145,11 @@ pub async fn run_alerts_handler<T, L>(
             // Validation guarantees a parseable class; fall back to M rather
             // than skipping the feed if that ever stops holding.
             let min_rank = class_rank(&cfg.solar.min_class).unwrap_or(3);
-            if let Some(body) = fetch(&http, solar::DEFAULT_URL).await {
-                let lines = select_announcements(
-                    solar::parse(&body, min_rank),
-                    &mut seen.solar,
-                    now,
-                    max_age,
-                );
-                dirty |= !lines.is_empty();
+            if let Some(body) = fetch(&http, solar::DEFAULT_URL).await
+                && let Some(cands) = parsed_or_skip("solar", solar::parse(&body, min_rank))
+            {
+                let (lines, marked) = select_announcements(cands, &mut seen.solar, now, max_age);
+                dirty |= marked;
                 for line in lines {
                     sender.say(channel.clone(), line).await;
                 }
@@ -155,6 +158,21 @@ pub async fn run_alerts_handler<T, L>(
 
         if dirty {
             seen.save(&data_dir).await;
+        }
+    }
+}
+
+/// Parse a feed body. Any failure logs and yields `None`; the caller skips
+/// this tick so a 200 with HTML (or a shape change) never looks like "no events."
+fn parsed_or_skip<E: std::fmt::Debug>(
+    feed: &'static str,
+    parsed: Result<Vec<Candidate>, E>,
+) -> Option<Vec<Candidate>> {
+    match parsed {
+        Ok(v) => Some(v),
+        Err(error) => {
+            tracing::warn!(?error, feed, "alerts feed body could not be parsed");
+            None
         }
     }
 }
@@ -209,7 +227,8 @@ mod tests {
     #[test]
     fn fresh_unseen_event_is_announced() {
         let mut seen = VecDeque::new();
-        let out = select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
+        let (out, _) =
+            select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
         assert_eq!(out, vec!["line-a".to_string()]);
         assert!(seen.contains(&"a".to_string()));
     }
@@ -217,7 +236,7 @@ mod tests {
     #[test]
     fn stale_event_is_marked_seen_but_not_announced() {
         let mut seen = VecDeque::new();
-        let out =
+        let (out, _) =
             select_announcements(vec![cand("old", 500)], &mut seen, now(), Duration::hours(2));
         assert!(
             out.is_empty(),
@@ -232,8 +251,10 @@ mod tests {
     #[test]
     fn same_event_across_two_polls_announces_once() {
         let mut seen = VecDeque::new();
-        let first = select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
-        let second = select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
+        let (first, _) =
+            select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
+        let (second, _) =
+            select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
         assert_eq!(first.len(), 1);
         assert!(second.is_empty());
     }
@@ -241,7 +262,7 @@ mod tests {
     #[test]
     fn mixed_batch_announces_only_the_fresh_ones() {
         let mut seen = VecDeque::new();
-        let out = select_announcements(
+        let (out, _) = select_announcements(
             vec![cand("old", 500), cand("new", 1), cand("older", 9000)],
             &mut seen,
             now(),
@@ -254,9 +275,51 @@ mod tests {
     #[test]
     fn future_timestamps_are_treated_as_fresh() {
         let mut seen = VecDeque::new();
-        let out =
+        let (out, _) =
             select_announcements(vec![cand("soon", -5)], &mut seen, now(), Duration::hours(2));
         assert_eq!(out, vec!["line-soon".to_string()]);
+    }
+
+    #[test]
+    fn stale_only_batch_reports_the_seen_set_changed() {
+        let mut seen = VecDeque::new();
+        let (out, changed) =
+            select_announcements(vec![cand("old", 500)], &mut seen, now(), Duration::hours(2));
+        assert!(out.is_empty(), "stale catch-up stays out of chat");
+        assert!(
+            changed,
+            "must persist, or a restart can replay after max_age is raised"
+        );
+    }
+
+    #[test]
+    fn already_seen_batch_does_not_report_change() {
+        let mut seen = VecDeque::new();
+        let _ = select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
+        let (out, changed) =
+            select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
+        assert!(out.is_empty());
+        assert!(!changed, "an idle poll must not rewrite alerts.ron");
+    }
+
+    #[tokio::test]
+    async fn stale_only_poll_writes_alerts_ron() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut state = state::SeenState::default();
+        let (lines, changed) = select_announcements(
+            vec![cand("old", 500)],
+            &mut state.quake,
+            now(),
+            Duration::hours(2),
+        );
+        assert!(lines.is_empty());
+        assert!(changed);
+        state.save(dir.path()).await;
+        let loaded = state::SeenState::load(dir.path());
+        assert!(
+            loaded.quake.contains(&"old".to_string()),
+            "stale catch-up must survive a restart"
+        );
     }
 
     #[test]
