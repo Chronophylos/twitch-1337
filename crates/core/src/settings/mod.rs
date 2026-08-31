@@ -90,10 +90,20 @@ impl SettingsHandle {
         self.snap.load_full()
     }
 
-    /// Swap the live snapshot. The store's commit path uses this; tests use
-    /// it to simulate live settings edits.
-    pub fn store(&self, snapshot: Arc<Settings>) {
+    /// Swap the live snapshot without validation, persistence, audit, or
+    /// change notification. The store's internal commit path uses this;
+    /// all other writes must go through [`crate::settings::SettingsStore`].
+    pub(crate) fn swap(&self, snapshot: Arc<Settings>) {
         self.snap.store(snapshot);
+    }
+
+    /// Swap the live snapshot. Test-only escape hatch: production writes must
+    /// go through `SettingsStore` (validate → persist → audit → notify), which
+    /// this bypasses entirely. Gated so the handle's public API stays the
+    /// complete read side.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn store(&self, snapshot: Arc<Settings>) {
+        self.swap(snapshot);
     }
 
     /// Subscribe to settings changes. The subscription is armed at

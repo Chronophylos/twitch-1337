@@ -38,9 +38,10 @@ pub(crate) const LATENCY_LOG_THRESHOLD: u32 = 10;
 /// handlers (e.g., the 1337 handler) read for timing adjustments.
 ///
 /// The EMA is seeded from `twitch.expected_latency` and re-based whenever that
-/// setting is edited via the dashboard: the edit is authoritative, so the EMA
-/// and the shared cell jump straight to the new value instead of converging
-/// over multiple measurements.
+/// setting's value actually changes via the dashboard: the edit is
+/// authoritative, so the EMA and the shared cell jump straight to the new value
+/// instead of converging over multiple measurements. Unrelated settings
+/// commits (no-op writes, other knobs) leave the EMA untouched.
 ///
 /// The handler is fully independent — PING failures or PONG timeouts are logged
 /// but never crash the handler or affect the EMA.
@@ -65,9 +66,10 @@ pub async fn run_latency_handler<T, L>(
     // Armed at construction: a settings commit fired between here and the
     // first `sub.next()` await cannot be lost.
     let mut sub = settings.subscribe();
+    let mut last_seen: u32 = initial;
     let mut ema: f64 = f64::from(initial);
-    let mut last_logged_ema: u32 = initial;
     let mut consecutive_misses: u32 = 0;
+    let mut last_logged_ema: u32 = initial;
 
     loop {
         tokio::select! {
@@ -146,15 +148,24 @@ pub async fn run_latency_handler<T, L>(
                 }
             }
             () = sub.next() => {
-                // Dashboard edit of `expected_latency`: re-base unconditionally.
-                // The edit is authoritative even when the new value is numerically
-                // unchanged from the current EMA. Reset `last_logged_ema` to the
-                // new value so the next *significant* EMA shift still logs.
-                let rebased = settings.load().twitch.expected_latency;
-                ema = f64::from(rebased);
-                latency.store(rebased, Ordering::Relaxed);
-                last_logged_ema = rebased;
-                info!(rebased_ms = rebased, "expected_latency edited; EMA re-based");
+                // Every commit notifies, including no-op writes and unrelated
+                // edits (cooldowns, toggles). Only a genuine change to
+                // `twitch.expected_latency` re-bases the EMA; the new value is
+                // authoritative and applies immediately, no PONG required.
+                let latest = settings.load().twitch.expected_latency;
+                let changed = latest != last_seen;
+                last_seen = latest;
+                if !changed {
+                    continue;
+                }
+                // The edit is authoritative even when the new value is
+                // numerically unchanged from the current EMA. Reset
+                // `last_logged_ema` to the new value so the next *significant*
+                // EMA shift still logs.
+                ema = f64::from(latest);
+                latency.store(latest, Ordering::Relaxed);
+                last_logged_ema = latest;
+                info!(rebased_ms = latest, "expected_latency edited; EMA re-based");
             }
         }
     }

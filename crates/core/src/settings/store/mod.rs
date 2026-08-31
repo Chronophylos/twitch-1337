@@ -121,7 +121,7 @@ impl SettingsStore {
     ) -> Result<Settings, SettingsError> {
         current.schema_version = SCHEMA_VERSION;
         crate::util::persist::atomic_save_ron_async(current, &self.path).await?;
-        self.handle.store(Arc::new(resolved.clone()));
+        self.handle.swap(Arc::new(resolved.clone()));
         let changes = diff_changes(prior_resolved, &resolved);
         if !changes.is_empty() {
             let entry = AuditEntry {
