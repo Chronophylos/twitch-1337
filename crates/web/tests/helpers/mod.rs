@@ -196,7 +196,7 @@ async fn build_state_inner_keep_settings(
     // validation is bypassed in tests (same pattern as `set_owner`).
     // `session_ttl_secs` is fixed at 7200 s (2 h) for all tests.
     {
-        let mut s = (*state.settings.load_full()).clone();
+        let mut s = (*state.settings.load()).clone();
         s.web.mod_check_refresh_secs = mod_check_refresh_secs;
         s.web.session_ttl_secs = 7200;
         state.settings.store(std::sync::Arc::new(s));

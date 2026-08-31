@@ -1168,7 +1168,6 @@ mod turn_tests {
     //! is the whole assertion surface.
     use std::sync::{Arc, Mutex};
 
-    use arc_swap::ArcSwap;
     use async_trait::async_trait;
     use llm::{
         ChatCompletionRequest, LlmClient, LlmError, ToolChatCompletionRequest,
@@ -1241,7 +1240,7 @@ mod turn_tests {
         s.ai.profiles[0].provider = AiProvider::OpenAiCompatible;
         s.ai.profiles[0].model = "test-model".into();
         s.ai.profiles[0].timeout = timeout_secs;
-        let settings: SettingsHandle = Arc::new(ArcSwap::from_pointee(s));
+        let settings: SettingsHandle = SettingsHandle::from_settings(s);
 
         let store = MemoryStore::open(dir.path(), settings.clone())
             .await

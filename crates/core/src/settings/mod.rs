@@ -1,9 +1,10 @@
 //! Dashboard-managed runtime settings.
 //!
 //! `Settings` is the fully-resolved snapshot read by command handlers via
-//! a `SettingsHandle = Arc<ArcSwap<Settings>>`. Sparse `SettingsOverrides`
-//! (see `overrides.rs`) live on disk at `$DATA_DIR/settings.ron`; missing
-//! fields fall through to `compiled_defaults()`.
+//! a `SettingsHandle` (snapshot slot plus the store's change signal). Sparse
+//! `SettingsOverrides` (see `overrides.rs`) live on disk at
+//! `$DATA_DIR/settings.ron`; missing fields fall through to
+//! `compiled_defaults()`.
 //!
 //! Writes go through `SettingsStore::apply` (see `store.rs`) which
 //! validates, atomically persists, swaps the handle, and appends an audit
@@ -45,13 +46,89 @@ pub use twitch::TwitchRuntime;
 pub use validation::ValidationContext;
 pub use web::WebRuntime;
 
+use std::pin::Pin;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::sync::Notify;
 
-pub type SettingsHandle = Arc<ArcSwap<Settings>>;
+/// Read side of the runtime settings: a snapshot slot plus the change signal
+/// fired by `SettingsStore` on every commit. Handlers hold a clone and read
+/// [`Self::load`] per use; long-running tasks [`Self::subscribe`] to reload
+/// on dashboard edits.
+#[derive(Debug, Clone)]
+pub struct SettingsHandle {
+    snap: Arc<ArcSwap<Settings>>,
+    changes: Arc<Notify>,
+}
+
+impl SettingsHandle {
+    /// Wrap `settings` in an ad-hoc handle.
+    ///
+    /// No store is attached, so [`Self::subscribe`] never fires: the private
+    /// `Notify` is never notified. Intended for tests and ad-hoc handles.
+    pub fn from_settings(settings: Settings) -> Self {
+        Self {
+            snap: Arc::new(ArcSwap::from_pointee(settings)),
+            changes: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Build a handle sharing `changes` with a store. Used by
+    /// `SettingsStore::open` so store commits wake handle subscribers.
+    pub(crate) fn with_changes(settings: Settings, changes: Arc<Notify>) -> Self {
+        Self {
+            snap: Arc::new(ArcSwap::from_pointee(settings)),
+            changes,
+        }
+    }
+
+    /// Current effective settings snapshot.
+    pub fn load(&self) -> Arc<Settings> {
+        self.snap.load_full()
+    }
+
+    /// Swap the live snapshot. The store's commit path uses this; tests use
+    /// it to simulate live settings edits.
+    pub fn store(&self, snapshot: Arc<Settings>) {
+        self.snap.store(snapshot);
+    }
+
+    /// Subscribe to settings changes. The subscription is armed at
+    /// construction, so a commit between subscribing and the first `await`
+    /// is not lost.
+    pub fn subscribe(&self) -> Subscription {
+        Subscription::new(Arc::clone(&self.changes))
+    }
+}
+
+/// Change subscription from [`SettingsHandle::subscribe`].
+pub struct Subscription {
+    changes: Arc<Notify>,
+    notified: Pin<Box<tokio::sync::futures::OwnedNotified>>,
+}
+
+impl Subscription {
+    fn new(changes: Arc<Notify>) -> Self {
+        let mut notified = Box::pin(changes.clone().notified_owned());
+        // Register the waiter before the caller's first await so a
+        // `notify_waiters()` fired in between cannot be lost.
+        notified.as_mut().enable();
+        Self { changes, notified }
+    }
+
+    /// Wait for the next settings change.
+    pub async fn next(&mut self) {
+        self.notified.as_mut().await;
+        // Re-arm: fresh notified future, registered via enable() BEFORE
+        // returning, so the waiter spans the caller's non-await work
+        // (notify_waiters is not latching).
+        self.notified = Box::pin(self.changes.clone().notified_owned());
+        self.notified.as_mut().enable();
+    }
+}
 
 pub const SCHEMA_VERSION: u32 = 7;
 
@@ -164,7 +241,7 @@ impl Settings {
 
 #[cfg(any(test, feature = "testing"))]
 pub fn test_handle() -> SettingsHandle {
-    Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
+    SettingsHandle::from_settings(Settings::compiled_defaults())
 }
 
 #[cfg(test)]
@@ -208,5 +285,13 @@ mod tests {
         assert_eq!(s.alerts.quake.min_mag_tenths, 25);
         assert_eq!(s.alerts.solar.min_class, "M");
         assert_eq!(s.alerts.max_age_secs, 7_200);
+    }
+
+    #[test]
+    fn handle_and_subscription_are_send() {
+        // Handlers are tokio::spawn-ed with these, so they must stay Send.
+        fn assert_send<T: Send>() {}
+        assert_send::<SettingsHandle>();
+        assert_send::<Subscription>();
     }
 }

@@ -391,7 +391,7 @@ mod tests {
         let mut s = crate::settings::Settings::compiled_defaults();
         s.ai.profiles = profiles;
         s.ai.aurora.profile = aurora.to_string();
-        crate::settings::SettingsHandle::new(arc_swap::ArcSwap::from_pointee(s))
+        crate::settings::SettingsHandle::from_settings(s)
     }
 
     #[test]
@@ -405,7 +405,7 @@ mod tests {
             "chat",
         );
         {
-            let mut s = (*handle.load_full()).clone();
+            let mut s = (*handle.load()).clone();
             s.ai.media.profile = "vision".into();
             handle.store(Arc::new(s));
         }
@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(mc.base_url(), "https://example.test/v1");
 
         // A live edit is picked up without rebuilding the executor.
-        let mut s = (*handle.load_full()).clone();
+        let mut s = (*handle.load()).clone();
         s.ai.profiles
             .iter_mut()
             .find(|p| p.name == "vision")
@@ -441,7 +441,7 @@ mod tests {
             cache_ttl_secs: 300,
             cache_capacity: 32,
         });
-        let handle = crate::settings::SettingsHandle::new(arc_swap::ArcSwap::from_pointee(base));
+        let handle = crate::settings::SettingsHandle::from_settings(base);
 
         let client = SearchClient::new_with_client(
             "http://127.0.0.1:65535/search".to_string(),
@@ -491,7 +491,7 @@ mod tests {
         crate::install_crypto_provider();
 
         let base = Settings::compiled_defaults();
-        let handle = crate::settings::SettingsHandle::new(arc_swap::ArcSwap::from_pointee(base));
+        let handle = crate::settings::SettingsHandle::from_settings(base);
 
         let client = SearchClient::new_with_client(
             "http://127.0.0.1:65535/search".to_string(),

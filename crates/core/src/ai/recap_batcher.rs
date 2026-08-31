@@ -614,7 +614,6 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use arc_swap::ArcSwap;
     use async_trait::async_trait;
     use chrono::Utc;
     use tokio::sync::Mutex;
@@ -681,7 +680,7 @@ mod tests {
         }
         s.ai.history.n = 2;
         s.ai.recap.batch_size = 1;
-        Arc::new(ArcSwap::from_pointee(s))
+        SettingsHandle::from_settings(s)
     }
 
     fn grok_entry(seq: u64) -> crate::ai::chat_history::ChatHistoryEntry {
@@ -705,7 +704,7 @@ mod tests {
         };
         let settings = test_settings("tiny-model");
         let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-            Arc::clone(&settings),
+            settings.clone(),
             crate::ai::chat_history::primary_history_capacity,
         )));
         {
@@ -965,7 +964,7 @@ mod tests {
 
         let settings = test_settings("tiny-model");
         let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-            Arc::clone(&settings),
+            settings.clone(),
             crate::ai::chat_history::primary_history_capacity,
         )));
         {
@@ -1022,7 +1021,7 @@ mod tests {
 
         let settings = test_settings("tiny-model");
         let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-            Arc::clone(&settings),
+            settings.clone(),
             crate::ai::chat_history::primary_history_capacity,
         )));
         {

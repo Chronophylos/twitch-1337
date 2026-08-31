@@ -494,15 +494,13 @@ mod schema_tests {
 mod exec_tests {
     use std::sync::Arc;
 
-    use arc_swap::ArcSwap;
-
     use super::*;
     use crate::ai::memory::store::MemoryStore;
     use crate::ai::memory::types::Caps;
     use crate::settings::Settings;
 
     fn test_handle() -> crate::settings::SettingsHandle {
-        Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
+        crate::settings::SettingsHandle::from_settings(Settings::compiled_defaults())
     }
 
     fn handle_with_caps(caps: Caps) -> crate::settings::SettingsHandle {
@@ -512,7 +510,7 @@ mod exec_tests {
         s.ai.memory.user_bytes = caps.user_bytes;
         s.ai.memory.scratch_bytes = caps.scratch_bytes;
         s.ai.memory.max_scratch_files = caps.max_scratch_files;
-        Arc::new(ArcSwap::from_pointee(s))
+        crate::settings::SettingsHandle::from_settings(s)
     }
 
     fn call(name: &str, args: serde_json::Value) -> ToolCall {

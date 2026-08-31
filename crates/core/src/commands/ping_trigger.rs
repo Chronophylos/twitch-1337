@@ -116,7 +116,7 @@ mod settings_live_tests {
     async fn reads_cooldown_and_public_from_handle_at_call_time() {
         let initial = Settings::compiled_defaults();
         let handle: crate::settings::SettingsHandle =
-            Arc::new(arc_swap::ArcSwap::from_pointee(initial));
+            crate::settings::SettingsHandle::from_settings(initial);
         let mgr = PingManager::empty();
         let (ping_runtime, ping, names_rx) = ping_runtime(mgr);
         tokio::spawn(crate::ping::run_ping_actor(

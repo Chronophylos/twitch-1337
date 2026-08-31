@@ -11,7 +11,6 @@ mod merge;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
 use chrono::Utc;
 use tokio::sync::{Mutex, Notify};
 use tracing::{error, info, warn};
@@ -64,26 +63,28 @@ impl SettingsStore {
                 "settings.ron failed validation; falling back to compile defaults"
             );
             quarantine(&path)?;
-            let handle = Arc::new(ArcSwap::from_pointee(defaults.clone()));
+            let changes = Arc::new(Notify::new());
+            let handle = SettingsHandle::with_changes(defaults.clone(), Arc::clone(&changes));
             let store = Arc::new(Self {
                 path,
                 defaults,
                 handle: handle.clone(),
                 audit,
                 write_lock: Mutex::new(()),
-                change_notify: Arc::new(Notify::new()),
+                change_notify: changes,
                 boot_channel: boot_channel.to_owned(),
             });
             return Ok((store, handle));
         }
-        let handle = Arc::new(ArcSwap::from_pointee(resolved));
+        let changes = Arc::new(Notify::new());
+        let handle = SettingsHandle::with_changes(resolved, Arc::clone(&changes));
         let store = Arc::new(Self {
             path,
             defaults,
             handle: handle.clone(),
             audit,
             write_lock: Mutex::new(()),
-            change_notify: Arc::new(Notify::new()),
+            change_notify: changes,
             boot_channel: boot_channel.to_owned(),
         });
         info!("settings store opened");
@@ -94,6 +95,9 @@ impl SettingsStore {
         &self.handle
     }
 
+    /// Legacy raw change signal. Prefer `handle.subscribe()`; the remaining
+    /// callers (spawn.rs, schedule_runner) are migrating in Task 2, after
+    /// which this is deleted.
     pub fn change_notify(&self) -> Arc<Notify> {
         self.change_notify.clone()
     }
@@ -261,7 +265,7 @@ mod tests {
     #[tokio::test]
     async fn empty_dir_yields_compile_defaults() {
         let (_dir, _store, handle, _log) = fixture();
-        assert_eq!(**handle.load(), Settings::compiled_defaults());
+        assert_eq!(*handle.load(), Settings::compiled_defaults());
     }
 
     #[tokio::test]
@@ -426,7 +430,7 @@ mod tests {
         let log = Arc::new(MemoryAuditLog::new());
         let (_store, handle) =
             SettingsStore::open(dir.path(), log, "test_chan").expect("open should not fail");
-        assert_eq!(**handle.load(), Settings::compiled_defaults());
+        assert_eq!(*handle.load(), Settings::compiled_defaults());
         // settings.ron has been renamed away
         assert!(!dir.path().join(FILE_NAME).exists());
         let quarantined = std::fs::read_dir(dir.path())
@@ -703,12 +707,10 @@ mod tests {
 
     #[tokio::test]
     async fn apply_signals_change_notify() {
-        let (_dir, store, _handle, _log) = fixture();
-        let notify = store.change_notify();
-        let mut notified = Box::pin(notify.notified());
-        // `enable()` registers the waker before the trigger so the wake-up
+        let (_dir, store, handle, _log) = fixture();
+        let mut sub = handle.subscribe();
+        // `subscribe()` arms the waiter at construction, so the wake-up
         // cannot be lost to a race with notify_waiters().
-        notified.as_mut().enable();
         let patch = SettingsOverrides {
             cooldowns: CooldownsOverrides {
                 ai: Some(15),
@@ -726,14 +728,14 @@ mod tests {
             )
             .await
             .expect("apply");
-        tokio::time::timeout(std::time::Duration::from_millis(500), notified)
+        tokio::time::timeout(std::time::Duration::from_millis(500), sub.next())
             .await
             .expect("apply must notify change waiters within 500ms");
     }
 
     #[tokio::test]
     async fn reset_signals_change_notify() {
-        let (_dir, store, _handle, _log) = fixture();
+        let (_dir, store, handle, _log) = fixture();
         // Seed a non-default cooldowns override so reset has something to clear.
         store
             .apply(
@@ -751,9 +753,7 @@ mod tests {
             )
             .await
             .expect("apply");
-        let notify = store.change_notify();
-        let mut notified = Box::pin(notify.notified());
-        notified.as_mut().enable();
+        let mut sub = handle.subscribe();
         store
             .reset(
                 SettingsSection::Cooldowns,
@@ -764,7 +764,7 @@ mod tests {
             )
             .await
             .expect("reset");
-        tokio::time::timeout(std::time::Duration::from_millis(500), notified)
+        tokio::time::timeout(std::time::Duration::from_millis(500), sub.next())
             .await
             .expect("reset must notify change waiters within 500ms");
     }

@@ -314,15 +314,13 @@ impl ChatHistoryBuffer {
 mod tests {
     use std::sync::Arc;
 
-    use arc_swap::ArcSwap;
-
     use super::*;
 
     /// Build a `SettingsHandle` whose `ai.history.length` is set to `cap`.
     fn make_handle(cap: u64) -> SettingsHandle {
         let mut s = Settings::compiled_defaults();
         s.ai.history.length = cap;
-        Arc::new(ArcSwap::from_pointee(s))
+        SettingsHandle::from_settings(s)
     }
 
     fn sample_buffer() -> ChatHistoryBuffer {

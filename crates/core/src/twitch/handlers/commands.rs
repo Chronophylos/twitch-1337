@@ -47,7 +47,7 @@ where
 
     // Snapshot of the dashboard-managed settings at startup. Reads below use
     // these values; selected commands consume the handle live.
-    let snapshot = services.settings.load_full();
+    let snapshot = services.settings.load();
 
     // Hand the primary history Arc to the (test-only) tap so integration
     // tests can peek at chat-history entries. Production wires `None`.

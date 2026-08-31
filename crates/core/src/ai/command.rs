@@ -65,7 +65,7 @@ impl ChatContext {
         channel: &str,
         recap: Option<&RecapHandle>,
     ) -> Option<ChatContext> {
-        let snapshot = settings.load_full();
+        let snapshot = settings.load();
         if !(ai_enabled && snapshot.ai.history.length > 0) {
             return None;
         }

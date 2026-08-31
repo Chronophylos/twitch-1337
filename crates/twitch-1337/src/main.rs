@@ -205,7 +205,7 @@ pub async fn main() -> Result<()> {
     // composition; `run_bot` reads it from `Services`. `None` when AI is off.
     let ai_memory = twitch_1337::ai::command::build_ai_memory_v2(
         config.ai.is_some(),
-        &settings_handle.load_full(),
+        &settings_handle.load(),
         memory_store.clone(),
     )
     .await

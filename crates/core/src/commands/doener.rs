@@ -291,7 +291,7 @@ mod settings_live_tests {
         crate::install_crypto_provider();
         let initial = Settings::compiled_defaults();
         let handle: crate::settings::SettingsHandle =
-            Arc::new(arc_swap::ArcSwap::from_pointee(initial));
+            crate::settings::SettingsHandle::from_settings(initial);
         let cmd = DoenerCommand::new(
             Arc::new(crate::doener::DoeneratlasClient::with_base_url(
                 reqwest::Client::new(),

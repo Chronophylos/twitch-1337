@@ -1094,10 +1094,6 @@ mod tests {
     }
 
     fn make_emotes_handle(max_prompt_emotes: usize) -> crate::settings::SettingsHandle {
-        use std::sync::Arc;
-
-        use arc_swap::ArcSwap;
-
         use crate::settings::Settings;
 
         let mut s = Settings::compiled_defaults();
@@ -1106,13 +1102,11 @@ mod tests {
             min_baseline_emotes: 0,
             ..AiEmotes::default()
         });
-        Arc::new(ArcSwap::from_pointee(s))
+        SettingsHandle::from_settings(s)
     }
 
     #[test]
     fn live_caps_max_prompt_emotes_respected_and_live_rebindable() {
-        use std::sync::Arc;
-
         let emotes: Vec<PromptEmote> = ["A", "B", "C", "D", "E"]
             .into_iter()
             .map(|name| prompt_emote(name, "entry"))
@@ -1126,7 +1120,7 @@ mod tests {
         assert!(prompt5.contains("- A;"));
         assert!(prompt5.contains("- E;"));
 
-        let mut s = (*handle.load_full()).clone();
+        let mut s = (*handle.load()).clone();
         s.ai.emotes.as_mut().unwrap().max_prompt_emotes = 2;
         s.ai.emotes.as_mut().unwrap().min_baseline_emotes = 2;
         handle.store(Arc::new(s));
@@ -1154,10 +1148,6 @@ mod tests {
         mock_uri: &str,
         include_global: bool,
     ) -> crate::settings::SettingsHandle {
-        use std::sync::Arc;
-
-        use arc_swap::ArcSwap;
-
         use crate::settings::Settings;
 
         let mut s = Settings::compiled_defaults();
@@ -1167,7 +1157,7 @@ mod tests {
             refresh_interval_secs: 0,
             ..AiEmotes::default()
         });
-        Arc::new(ArcSwap::from_pointee(s))
+        SettingsHandle::from_settings(s)
     }
 
     async fn seed_tracker_emote(
