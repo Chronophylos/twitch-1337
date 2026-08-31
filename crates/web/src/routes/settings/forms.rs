@@ -610,6 +610,7 @@ impl AlertsForm {
                 poll_secs: self.alerts_solar_poll_secs,
                 min_class: self.alerts_solar_min_class,
             },
+            cme: Default::default(),
             max_age_secs: self.alerts_max_age_secs,
         }
     }
