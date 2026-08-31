@@ -119,20 +119,19 @@ where
     // Notify lets the scheduled-message handler drain in-flight sends before exiting.
     let shutdown_notify = Arc::new(Notify::new());
 
-    // Schedules orchestrator: subscribes to SettingsStore::change_notify
-    // and reconciles per-schedule tasks. No cache, no 30s poll.
+    // Schedules orchestrator: subscribes to settings changes via
+    // `SettingsHandle::subscribe()` and reconciles per-schedule tasks.
+    // No cache, no 30s poll.
     // `telemetry` comes from the caller (constructed in run_bot so WebState
     // and the orchestrator share the same Arc).
     let scheduled_messages = tokio::spawn({
         let services = services.clone();
         let sender = chat_sender.clone();
-        let change_notify = services.settings_store.change_notify();
         let notify = shutdown_notify.clone();
         async move {
             run_orchestrator(
                 sender,
                 services.settings.clone(),
-                change_notify,
                 services.telemetry.clone(),
                 services.channel.clone(),
                 notify,
@@ -142,6 +141,9 @@ where
         }
     });
 
+    // Shared latency cell. Initialized from settings; the latency handler
+    // re-bases it live when `twitch.expected_latency` is edited, so the 1337
+    // handler always reads the current estimate.
     let latency_value = Arc::new(AtomicU32::new(
         services.settings.load().twitch.expected_latency,
     ));
@@ -149,10 +151,11 @@ where
     let latency = tokio::spawn({
         let client = client.clone();
         let btx = broadcast_tx.clone();
+        let settings = services.settings.clone();
         let lat = latency_value.clone();
         let conn = services.irc_connected.clone();
         async move {
-            run_latency_handler(client, btx, lat, conn).await;
+            run_latency_handler(client, btx, settings, lat, conn).await;
         }
     });
 
@@ -289,8 +292,8 @@ pub(crate) enum ShutdownOutcome {
 /// detached, not stopped, by this function, so a drain could never
 /// complete before process exit.
 ///
-/// The scheduled-message handler subscribes directly to
-/// `SettingsStore::change_notify` and reconciles per-schedule tasks
+/// The scheduled-message handler subscribes directly to settings changes
+/// via `SettingsHandle::subscribe()` and reconciles per-schedule tasks
 /// internally — there is no separate settings-sync task.
 pub(crate) async fn await_shutdown(
     handlers: HandlerSet,

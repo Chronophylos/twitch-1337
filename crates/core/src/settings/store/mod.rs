@@ -95,13 +95,6 @@ impl SettingsStore {
         &self.handle
     }
 
-    /// Legacy raw change signal. Prefer `handle.subscribe()`; the remaining
-    /// callers (spawn.rs, schedule_runner) are migrating in Task 2, after
-    /// which this is deleted.
-    pub fn change_notify(&self) -> Arc<Notify> {
-        self.change_notify.clone()
-    }
-
     pub fn defaults(&self) -> &Settings {
         &self.defaults
     }

@@ -1,10 +1,11 @@
 //! Schedules engine.
 //!
-//! One `run_orchestrator` task watches `SettingsStore::change_notify`
-//! and reconciles a `HashMap<String, (CancellationToken, Schedule)>` of
-//! per-schedule child tasks. Each child computes its next fire from the
-//! absolute clock, sleeps until then, fires, repeats. Cancellation is
-//! cooperative — in-flight `say()` is never aborted mid-call.
+//! One `run_orchestrator` task subscribes to settings changes via
+//! `SettingsHandle::subscribe()` and reconciles a
+//! `HashMap<String, (CancellationToken, Schedule)>` of per-schedule child
+//! tasks. Each child computes its next fire from the absolute clock, sleeps
+//! until then, fires, repeats. Cancellation is cooperative — in-flight
+//! `say()` is never aborted mid-call.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,7 +24,6 @@ use crate::util::clock::Clock;
 pub async fn run_orchestrator<T, L>(
     sender: Arc<ChatSender<T, L>>,
     settings: SettingsHandle,
-    change_notify: Arc<Notify>,
     telemetry: Arc<TelemetryStore>,
     channel: String,
     shutdown: Arc<Notify>,
@@ -35,11 +35,10 @@ pub async fn run_orchestrator<T, L>(
     info!("Schedules orchestrator started");
     let mut running: HashMap<String, (CancellationToken, Schedule)> = HashMap::new();
 
-    // Enable the notification future BEFORE the initial reconcile so that any
-    // `notify_waiters()` fired between reconcile returning and the first loop
-    // iteration is not lost.
-    let mut notified = Box::pin(change_notify.notified());
-    notified.as_mut().enable();
+    // Subscribe BEFORE the initial reconcile so any commit fired while
+    // reconcile is running is not lost: the Subscription arms its waiter at
+    // construction, before the first await.
+    let mut sub = settings.subscribe();
 
     reconcile(
         &sender,
@@ -52,10 +51,8 @@ pub async fn run_orchestrator<T, L>(
 
     loop {
         tokio::select! {
-            () = &mut notified => {
+            () = sub.next() => {
                 reconcile(&sender, &settings, &telemetry, &channel, &clock, &mut running);
-                notified = Box::pin(change_notify.notified());
-                notified.as_mut().enable();
             }
             () = shutdown.notified() => {
                 info!("Schedules orchestrator: shutdown");

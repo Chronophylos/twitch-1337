@@ -16,6 +16,8 @@ use twitch_irc::{
     transport::Transport,
 };
 
+use crate::settings::SettingsHandle;
+
 /// Interval between PING measurements
 pub(crate) const LATENCY_PING_INTERVAL: Duration = Duration::from_secs(300);
 
@@ -35,18 +37,24 @@ pub(crate) const LATENCY_LOG_THRESHOLD: u32 = 10;
 /// of the one-way latency. The EMA is stored in a shared `AtomicU32` that other
 /// handlers (e.g., the 1337 handler) read for timing adjustments.
 ///
+/// The EMA is seeded from `twitch.expected_latency` and re-based whenever that
+/// setting is edited via the dashboard: the edit is authoritative, so the EMA
+/// and the shared cell jump straight to the new value instead of converging
+/// over multiple measurements.
+///
 /// The handler is fully independent — PING failures or PONG timeouts are logged
 /// but never crash the handler or affect the EMA.
 pub async fn run_latency_handler<T, L>(
     client: Arc<TwitchIRCClient<T, L>>,
     broadcast_tx: broadcast::Sender<ServerMessage>,
+    settings: SettingsHandle,
     latency: Arc<AtomicU32>,
     irc_connected: Arc<AtomicBool>,
 ) where
     T: Transport,
     L: LoginCredentials,
 {
-    let initial = latency.load(Ordering::Relaxed);
+    let initial = settings.load().twitch.expected_latency;
     info!(initial_latency_ms = initial, "Latency handler started");
 
     // Spawned only after the IRC client authenticated and joined channels, so the
@@ -54,84 +62,100 @@ pub async fn run_latency_handler<T, L>(
     // this, /healthz returns 503 for the full 5-min ping interval after start.
     irc_connected.store(true, Ordering::Relaxed);
 
+    // Armed at construction: a settings commit fired between here and the
+    // first `sub.next()` await cannot be lost.
+    let mut sub = settings.subscribe();
     let mut ema: f64 = f64::from(initial);
     let mut last_logged_ema: u32 = initial;
     let mut consecutive_misses: u32 = 0;
 
     loop {
-        sleep(LATENCY_PING_INTERVAL).await;
+        tokio::select! {
+            () = sleep(LATENCY_PING_INTERVAL) => {
+                let nonce = Utc::now().timestamp_nanos_opt().unwrap_or(0).to_string();
 
-        let nonce = Utc::now().timestamp_nanos_opt().unwrap_or(0).to_string();
+                // Subscribe before sending so we don't miss the PONG on fast connections
+                let mut broadcast_rx = broadcast_tx.subscribe();
 
-        // Subscribe before sending so we don't miss the PONG on fast connections
-        let mut broadcast_rx = broadcast_tx.subscribe();
+                let send_time = tokio::time::Instant::now();
+                if let Err(e) = client.send_message(irc!["PING", nonce.clone()]).await {
+                    warn!(error = ?e, "Failed to send PING");
+                    continue;
+                }
+                let pong_result = tokio::time::timeout(LATENCY_PING_TIMEOUT, async {
+                    loop {
+                        match broadcast_rx.recv().await {
+                            // Pongs with mismatched nonces (library keepalives) fall
+                            // through the guard to the wildcard arm and keep waiting.
+                            Ok(ServerMessage::Pong(PongMessage { source, .. }))
+                                if source.params.get(1).map(String::as_str) == Some(nonce.as_str()) =>
+                            {
+                                return send_time.elapsed();
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                warn!("Broadcast channel closed during PONG wait");
+                                return send_time.elapsed();
+                            }
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                warn!(skipped = n, "Latency handler lagged during PONG wait");
+                            }
+                            _ => {}
+                        }
+                    }
+                })
+                .await;
 
-        let send_time = tokio::time::Instant::now();
-        if let Err(e) = client.send_message(irc!["PING", nonce.clone()]).await {
-            warn!(error = ?e, "Failed to send PING");
-            continue;
-        }
-        let pong_result = tokio::time::timeout(LATENCY_PING_TIMEOUT, async {
-            loop {
-                match broadcast_rx.recv().await {
-                    // Pongs with mismatched nonces (library keepalives) fall
-                    // through the guard to the wildcard arm and keep waiting.
-                    Ok(ServerMessage::Pong(PongMessage { source, .. }))
-                        if source.params.get(1).map(String::as_str) == Some(nonce.as_str()) =>
-                    {
-                        return send_time.elapsed();
+                let rtt = match pong_result {
+                    Ok(elapsed) => {
+                        consecutive_misses = 0;
+                        irc_connected.store(true, Ordering::Relaxed);
+                        elapsed
                     }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        warn!("Broadcast channel closed during PONG wait");
-                        return send_time.elapsed();
+                    Err(_) => {
+                        warn!("PONG timeout after {:?}", LATENCY_PING_TIMEOUT);
+                        consecutive_misses += 1;
+                        if consecutive_misses >= 3 {
+                            irc_connected.store(false, Ordering::Relaxed);
+                            warn!("3 consecutive PONG timeouts; marking IRC disconnected");
+                        }
+                        continue;
                     }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!(skipped = n, "Latency handler lagged during PONG wait");
-                    }
-                    _ => {}
+                };
+
+                let one_way_ms = rtt.as_millis() as f64 / 2.0;
+                ema = LATENCY_EMA_ALPHA * one_way_ms + (1.0 - LATENCY_EMA_ALPHA) * ema;
+                let ema_rounded = ema.round() as u32;
+
+                latency.store(ema_rounded, Ordering::Relaxed);
+
+                debug!(
+                    rtt_ms = rtt.as_millis() as u64,
+                    one_way_ms = one_way_ms as u64,
+                    ema_ms = ema_rounded,
+                    "Latency measurement"
+                );
+
+                // Log at info level only when EMA shifts significantly
+                if ema_rounded.abs_diff(last_logged_ema) >= LATENCY_LOG_THRESHOLD {
+                    info!(
+                        previous_ms = last_logged_ema,
+                        current_ms = ema_rounded,
+                        "Latency EMA changed"
+                    );
+                    last_logged_ema = ema_rounded;
                 }
             }
-        })
-        .await;
-
-        let rtt = match pong_result {
-            Ok(elapsed) => {
-                consecutive_misses = 0;
-                irc_connected.store(true, Ordering::Relaxed);
-                elapsed
+            () = sub.next() => {
+                // Dashboard edit of `expected_latency`: re-base unconditionally.
+                // The edit is authoritative even when the new value is numerically
+                // unchanged from the current EMA. Reset `last_logged_ema` to the
+                // new value so the next *significant* EMA shift still logs.
+                let rebased = settings.load().twitch.expected_latency;
+                ema = f64::from(rebased);
+                latency.store(rebased, Ordering::Relaxed);
+                last_logged_ema = rebased;
+                info!(rebased_ms = rebased, "expected_latency edited; EMA re-based");
             }
-            Err(_) => {
-                warn!("PONG timeout after {:?}", LATENCY_PING_TIMEOUT);
-                consecutive_misses += 1;
-                if consecutive_misses >= 3 {
-                    irc_connected.store(false, Ordering::Relaxed);
-                    warn!("3 consecutive PONG timeouts; marking IRC disconnected");
-                }
-                continue;
-            }
-        };
-
-        let one_way_ms = rtt.as_millis() as f64 / 2.0;
-        ema = LATENCY_EMA_ALPHA * one_way_ms + (1.0 - LATENCY_EMA_ALPHA) * ema;
-        let ema_rounded = ema.round() as u32;
-
-        latency.store(ema_rounded, Ordering::Relaxed);
-
-        debug!(
-            rtt_ms = rtt.as_millis() as u64,
-            one_way_ms = one_way_ms as u64,
-            ema_ms = ema_rounded,
-            "Latency measurement"
-        );
-
-        // Log at info level only when EMA shifts significantly
-        if ema_rounded.abs_diff(last_logged_ema) >= LATENCY_LOG_THRESHOLD {
-            info!(
-                previous_ms = last_logged_ema,
-                current_ms = ema_rounded,
-                "Latency EMA changed"
-            );
-            last_logged_ema = ema_rounded;
         }
     }
 }
