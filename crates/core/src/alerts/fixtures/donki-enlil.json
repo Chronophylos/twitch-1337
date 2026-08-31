@@ -1,0 +1,62 @@
+[
+  {
+    "simulationID": "WSA-ENLIL/48223/1",
+    "estimatedShockArrivalTime": "2026-08-28T06:00Z",
+    "isEarthGB": false,
+    "isEarthMinorImpact": false,
+    "cmeInputs": [
+      {"speed": 400.0, "isMostAccurate": false},
+      {"speed": 650.0, "isMostAccurate": true}
+    ],
+    "impactList": [{"location": "Juice", "isGlancingBlow": false}]
+  },
+  {
+    "simulationID": "WSA-ENLIL/48223/2",
+    "estimatedShockArrivalTime": "2026-08-28T07:00Z",
+    "isEarthGB": false,
+    "isEarthMinorImpact": false,
+    "cmeInputs": [{"speed": 650.0, "isMostAccurate": true}]
+  },
+  {
+    "simulationID": "WSA-ENLIL/47918/1",
+    "estimatedShockArrivalTime": "2026-08-04T08:00Z",
+    "isEarthGB": true,
+    "isEarthMinorImpact": false,
+    "cmeInputs": [{"speed": 406.0, "isMostAccurate": true}]
+  },
+  {
+    "simulationID": "WSA-ENLIL/48303/1",
+    "estimatedShockArrivalTime": "2026-08-30T07:00Z",
+    "isEarthGB": false,
+    "isEarthMinorImpact": true,
+    "cmeInputs": [{"speed": 500.0, "isMostAccurate": true}]
+  },
+  {
+    "simulationID": "WSA-ENLIL/48001/1",
+    "estimatedShockArrivalTime": "2026-08-20T12:00Z",
+    "isEarthGB": true,
+    "isEarthMinorImpact": true,
+    "cmeInputs": [{"speed": 300.0, "isMostAccurate": true}]
+  },
+  {
+    "simulationID": "WSA-ENLIL/47000/1",
+    "estimatedShockArrivalTime": null,
+    "isEarthGB": true,
+    "isEarthMinorImpact": false,
+    "cmeInputs": [{"speed": 900.0, "isMostAccurate": true}]
+  },
+  {
+    "simulationID": "WSA-ENLIL/48026/1",
+    "estimatedShockArrivalTime": "2026-08-11T12:56:00Z",
+    "isEarthGB": false,
+    "isEarthMinorImpact": false,
+    "cmeInputs": []
+  },
+  {
+    "simulationID": "WSA-ENLIL/unversioned",
+    "estimatedShockArrivalTime": "bogus",
+    "isEarthGB": false,
+    "isEarthMinorImpact": false,
+    "cmeInputs": [{"speed": 100.0, "isMostAccurate": true}]
+  }
+]

@@ -5,6 +5,7 @@
 //! ponytail: two feeds share helpers, not a trait. Introduce the
 //! abstraction when a third feed shows up.
 
+pub mod cme;
 pub mod quake;
 pub mod solar;
 pub mod state;
