@@ -228,12 +228,12 @@ where
 
     let generic_commands = tokio::spawn({
         let services = services.clone();
-        let client = client.clone();
+        let sender = chat_sender.clone();
         async move {
             run_generic_command_handler(CommandConfig {
                 broadcast_rx: commands_broadcast_rx,
                 services,
-                client,
+                sender,
             })
             .await;
         }

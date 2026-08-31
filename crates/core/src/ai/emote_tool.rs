@@ -40,12 +40,11 @@ pub fn search_emotes_tool() -> ToolDefinition {
     }
 }
 
-/// Execute a `search_emotes` call against the live emote provider for the given
-/// Twitch channel. Always returns a `ToolResultMessage` — malformed args and
-/// no-match cases degrade to a plain instructional string rather than erroring.
+/// Execute a `search_emotes` call against the live emote provider. Always
+/// returns a `ToolResultMessage` — malformed args and no-match cases degrade
+/// to a plain instructional string rather than erroring.
 pub async fn execute_search_emotes(
     provider: &SevenTvEmoteProvider,
-    twitch_channel_id: &str,
     call: &ToolCall,
 ) -> ToolResultMessage {
     let args = match call.parse_args::<SearchEmotesArgs>() {
@@ -66,7 +65,7 @@ pub async fn execute_search_emotes(
         );
     }
 
-    let block = provider.search_emotes(twitch_channel_id, query).await;
+    let block = provider.search_emotes(query).await;
     ToolResultMessage::for_call(call, block)
 }
 

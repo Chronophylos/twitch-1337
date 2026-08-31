@@ -41,7 +41,10 @@ superseded by `emotes.db`.
 `DEPRECATED(emote-meanings)` / `MIGRATION(emote-meanings)` and feature exit
 criteria in the design spec table. Cleanup PRs delete by grep once criteria hold.
 The one-shot TOML→SQLite seed and baked `7tv_emotes.toml` were removed after the
-prod seed landed (exit criteria met).
+prod seed landed (exit criteria met). The `MIGRATION(emote-meanings)`
+rename-on-open bridge and its dual gitignore were removed 2026-08-31, after prod
+`$DATA_DIR` was verified to hold `emotes.db` and no `emote_tracker.sqlite`
+(exit criteria met). `resolve_db_path` now just joins `DB_FILENAME`.
 
 ## Consequences
 
