@@ -1,9 +1,9 @@
-//! Passive event monitors: German earthquakes (EMSC) and GOES solar flares
-//! (NOAA SWPC). Both are poll-a-JSON-feed, filter, announce-once, so they
-//! share one handler task and one seen-id store.
+//! Passive event monitors: German earthquakes (EMSC), GOES solar flares
+//! (NOAA SWPC), and Earth-directed CMEs (CCMC DONKI). All are
+//! poll-a-JSON-feed, filter, announce-once, so they share one handler
+//! task and one seen-id store.
 //!
-//! ponytail: two feeds share helpers, not a trait. Introduce the
-//! abstraction when a third feed shows up.
+//! ponytail: three feeds share `poll_feed`, not a trait.
 
 pub mod cme;
 pub mod quake;
@@ -82,13 +82,14 @@ impl Due {
     }
 }
 
-/// How often the loop wakes to re-check both feeds' gates. Far shorter than
+/// How often the loop wakes to re-check all feeds' gates. Far shorter than
 /// any sane `poll_secs`, so a dashboard edit takes effect within a minute.
 const TICK: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Poll the earthquake and solar feeds and announce new events.
+/// Poll the earthquake, solar flare, and Earth-directed CME feeds and announce
+/// new events.
 ///
-/// One task, two independent cadences. Every failure mode degrades to
+/// One task, three independent cadences. Every failure mode degrades to
 /// "skip this tick" — the next poll is the retry. The loop never returns,
 /// so it never trips the shutdown select in `await_shutdown`.
 pub async fn run_alerts_handler<T, L>(
@@ -120,6 +121,7 @@ pub async fn run_alerts_handler<T, L>(
     let mut seen = state::SeenState::load(&data_dir);
     let mut quake_due = Due::default();
     let mut solar_due = Due::default();
+    let mut cme_due = Due::default();
     tracing::info!("Alerts handler started");
 
     loop {
@@ -131,30 +133,49 @@ pub async fn run_alerts_handler<T, L>(
 
         if cfg.quake.enabled && quake_due.ready(now, cfg.quake.poll_secs) {
             let url = quake::url(quake::DEFAULT_BASE_URL, cfg.quake.min_mag_tenths);
-            if let Some(body) = fetch(&http, &url).await
-                && let Some(cands) = parsed_or_skip("quake", quake::parse(&body))
-            {
-                let (lines, marked) = select_announcements(cands, &mut seen.quake, now, max_age);
-                dirty |= marked;
-                for line in lines {
-                    sender.say(channel.clone(), line).await;
-                }
-            }
+            dirty |= poll_feed(
+                &sender,
+                &channel,
+                &http,
+                "quake",
+                &url,
+                quake::parse,
+                &mut seen.quake,
+                now,
+                max_age,
+            )
+            .await;
         }
 
         if cfg.solar.enabled && solar_due.ready(now, cfg.solar.poll_secs) {
-            // Validation guarantees a parseable class; fall back to M rather
-            // than skipping the feed if that ever stops holding.
             let min_rank = class_rank(&cfg.solar.min_class).unwrap_or((3, 0.0));
-            if let Some(body) = fetch(&http, solar::DEFAULT_URL).await
-                && let Some(cands) = parsed_or_skip("solar", solar::parse(&body, min_rank))
-            {
-                let (lines, marked) = select_announcements(cands, &mut seen.solar, now, max_age);
-                dirty |= marked;
-                for line in lines {
-                    sender.say(channel.clone(), line).await;
-                }
-            }
+            dirty |= poll_feed(
+                &sender,
+                &channel,
+                &http,
+                "solar",
+                solar::DEFAULT_URL,
+                |body| solar::parse(body, min_rank),
+                &mut seen.solar,
+                now,
+                max_age,
+            )
+            .await;
+        }
+
+        if cfg.cme.enabled && cme_due.ready(now, cfg.cme.poll_secs) {
+            dirty |= poll_feed(
+                &sender,
+                &channel,
+                &http,
+                "cme",
+                cme::DEFAULT_URL,
+                cme::parse,
+                &mut seen.cme,
+                now,
+                max_age,
+            )
+            .await;
         }
 
         if dirty {
@@ -176,6 +197,35 @@ fn parsed_or_skip<E: std::fmt::Debug>(
             None
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)] // one-shot poll: fetch, parse, dedupe, say
+async fn poll_feed<T, L, E: std::fmt::Debug>(
+    sender: &Arc<crate::twitch::ChatSender<T, L>>,
+    channel: &str,
+    http: &reqwest::Client,
+    feed: &'static str,
+    url: &str,
+    parse: impl FnOnce(&str) -> Result<Vec<Candidate>, E>,
+    seen: &mut VecDeque<String>,
+    now: DateTime<Utc>,
+    max_age: Duration,
+) -> bool
+where
+    T: twitch_irc::transport::Transport,
+    L: twitch_irc::login::LoginCredentials,
+{
+    let Some(body) = fetch(http, url).await else {
+        return false;
+    };
+    let Some(cands) = parsed_or_skip(feed, parse(&body)) else {
+        return false;
+    };
+    let (lines, marked) = select_announcements(cands, seen, now, max_age);
+    for line in lines {
+        sender.say(channel.to_owned(), line).await;
+    }
+    marked
 }
 
 /// Fetch a feed body. Any failure logs and yields `None`; the caller skips

@@ -121,11 +121,11 @@ mod tests {
             ]
         );
         assert!(
-            !ids.iter().any(|id| *id == "WSA-ENLIL/47000"),
+            !ids.contains(&"WSA-ENLIL/47000"),
             "null arrival must drop even when isEarthGB is true"
         );
         assert!(
-            !ids.iter().any(|id| *id == "WSA-ENLIL/unversioned"),
+            !ids.contains(&"WSA-ENLIL/unversioned"),
             "unparseable arrival must drop"
         );
     }
