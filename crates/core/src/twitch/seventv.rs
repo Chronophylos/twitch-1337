@@ -187,12 +187,11 @@ impl SevenTvEmoteProvider {
     /// and the user instruction can influence which entries the model sees.
     pub async fn prompt_block_for_turn(
         &self,
-        twitch_channel_id: &str,
         instruction: &str,
         scoring_chat: &str,
     ) -> Option<String> {
         let caps = self.live_caps();
-        let emotes = self.prompt_emotes(twitch_channel_id, &caps).await?;
+        let emotes = self.prompt_emotes(&caps).await?;
         build_prompt_block(
             &emotes,
             caps.max_prompt_emotes,
@@ -209,19 +208,15 @@ impl SevenTvEmoteProvider {
     /// note when nothing matches / the catalog is unavailable. Unlike the
     /// per-turn block this ignores `max_prompt_emotes` and does not dedupe
     /// against the current turn's window.
-    pub async fn search_emotes(&self, twitch_channel_id: &str, query: &str) -> String {
+    pub async fn search_emotes(&self, query: &str) -> String {
         let caps = self.live_caps();
-        match self.prompt_emotes(twitch_channel_id, &caps).await {
+        match self.prompt_emotes(&caps).await {
             Some(emotes) => build_search_block(&emotes, query, SEARCH_EMOTES_LIMIT),
             None => "Emote catalog is unavailable right now; use only the emote codes already provided in this turn's context.".to_string(),
         }
     }
 
-    async fn prompt_emotes(
-        &self,
-        twitch_channel_id: &str,
-        caps: &EmotesLiveCaps,
-    ) -> Option<Vec<PromptEmote>> {
+    async fn prompt_emotes(&self, caps: &EmotesLiveCaps) -> Option<Vec<PromptEmote>> {
         let mut cache = self.cache.lock().await;
         let now = Instant::now();
 
@@ -232,7 +227,7 @@ impl SevenTvEmoteProvider {
             return cache.emotes.clone();
         }
 
-        match self.refresh_prompt_emotes(twitch_channel_id, caps).await {
+        match self.refresh_prompt_emotes(caps).await {
             Ok(emotes) => {
                 cache.last_refresh = Some(now);
                 cache.emotes = emotes;
@@ -251,7 +246,6 @@ impl SevenTvEmoteProvider {
 
     async fn refresh_prompt_emotes(
         &self,
-        _twitch_channel_id: &str,
         caps: &EmotesLiveCaps,
     ) -> Result<Option<Vec<PromptEmote>>> {
         let mut had_error = false;
@@ -1241,7 +1235,7 @@ mod tests {
 
         let provider = tracker_test_provider(&mock.uri(), handle, false).await;
         let prompt = provider
-            .prompt_block_for_turn(channel_id, "hi", "")
+            .prompt_block_for_turn("hi", "")
             .await
             .expect("prompt block should be available");
 
@@ -1262,7 +1256,6 @@ mod tests {
         crate::install_crypto_provider();
 
         let mock = wiremock::MockServer::start().await;
-        let channel_id = "12345";
 
         let dir = tempfile::tempdir().unwrap();
         let handle = Arc::new(
@@ -1270,12 +1263,7 @@ mod tests {
         );
 
         let provider = tracker_test_provider(&mock.uri(), handle, false).await;
-        assert!(
-            provider
-                .prompt_block_for_turn(channel_id, "hi", "")
-                .await
-                .is_none()
-        );
+        assert!(provider.prompt_block_for_turn("hi", "").await.is_none());
     }
 
     #[tokio::test]
@@ -1283,7 +1271,6 @@ mod tests {
         crate::install_crypto_provider();
 
         let mock = wiremock::MockServer::start().await;
-        let channel_id = "12345";
 
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/emote-sets/global"))
@@ -1327,7 +1314,7 @@ mod tests {
 
         let provider = tracker_test_provider(&mock.uri(), handle, true).await;
         let prompt = provider
-            .prompt_block_for_turn(channel_id, "hi", "")
+            .prompt_block_for_turn("hi", "")
             .await
             .expect("prompt block should be available");
 
@@ -1352,7 +1339,6 @@ mod tests {
         crate::install_crypto_provider();
 
         let mock = wiremock::MockServer::start().await;
-        let channel_id = "12345";
         let dir = tempfile::tempdir().unwrap();
         let handle = Arc::new(
             EmoteTrackerHandle::open(&dir.path().join(crate::emote_tracker::DB_FILENAME)).unwrap(),
@@ -1367,11 +1353,6 @@ mod tests {
             .unwrap();
 
         let provider = tracker_test_provider(&mock.uri(), handle, false).await;
-        assert!(
-            provider
-                .prompt_block_for_turn(channel_id, "hi", "")
-                .await
-                .is_none()
-        );
+        assert!(provider.prompt_block_for_turn("hi", "").await.is_none());
     }
 }

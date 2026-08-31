@@ -402,7 +402,7 @@ impl TurnRunner {
         // so it goes in the user message, never the cached system prefix.
         let emote_block = if let Some(ref emotes) = self.emotes {
             emotes
-                .prompt_block_for_turn(&input.channel_id, &instruction_for_prompt, &scoring_chat)
+                .prompt_block_for_turn(&instruction_for_prompt, &scoring_chat)
                 .await
         } else {
             None
@@ -561,7 +561,6 @@ impl TurnRunner {
                     chat: &exec,
                     web: self.web.as_ref().map(|w| w.executor.as_ref()),
                     emotes: self.emotes.as_deref(),
-                    emote_channel_id: &input.channel_id,
                     doener: self.doener.as_ref(),
                     repology: self.repology.as_ref(),
                     dhl: self.dhl.as_deref(),
@@ -637,7 +636,6 @@ struct V2Executor<'a> {
     chat: &'a ChatTurnExecutor,
     web: Option<&'a content::ContentToolExecutor>,
     emotes: Option<&'a SevenTvEmoteProvider>,
-    emote_channel_id: &'a str,
     doener: &'a crate::doener::DoeneratlasClient,
     repology: &'a crate::repology::RepologyClient,
     dhl: Option<&'a crate::dhl::DhlClient>,
@@ -674,10 +672,7 @@ impl ToolExecutor for V2Executor<'_> {
         }
         if call.name == crate::ai::emote_tool::SEARCH_EMOTES_TOOL_NAME {
             return match self.emotes {
-                Some(p) => {
-                    crate::ai::emote_tool::execute_search_emotes(p, self.emote_channel_id, call)
-                        .await
-                }
+                Some(p) => crate::ai::emote_tool::execute_search_emotes(p, call).await,
                 None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
             };
         }
