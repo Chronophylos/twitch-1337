@@ -6,9 +6,7 @@ use std::sync::Arc;
 
 use tokio::{sync::broadcast, time::Duration};
 use tracing::{debug, error, info};
-use twitch_irc::{
-    TwitchIRCClient, login::LoginCredentials, message::ServerMessage, transport::Transport,
-};
+use twitch_irc::{login::LoginCredentials, message::ServerMessage, transport::Transport};
 
 use crate::{
     ChatHistory, Services, ai,
@@ -27,7 +25,10 @@ pub struct CommandConfig<T: Transport, L: LoginCredentials> {
     /// are buffered instead of lost (subscribe-before-router invariant).
     pub broadcast_rx: broadcast::Receiver<ServerMessage>,
     pub services: Arc<Services>,
-    pub client: Arc<TwitchIRCClient<T, L>>,
+    /// The one sanitizing chat sender shared by every PRIVMSG-emitting
+    /// handler (built once in `spawn_handlers`); never construct a second
+    /// `ChatSender` from a client here.
+    pub sender: Arc<ChatSender<T, L>>,
 }
 
 /// Handler for generic text commands that start with `!`.
@@ -41,7 +42,7 @@ where
     let CommandConfig {
         broadcast_rx,
         services,
-        client,
+        sender,
     } = cfg;
 
     // Snapshot of the dashboard-managed settings at startup. Reads below use
@@ -236,8 +237,6 @@ where
         services.settings.clone(),
         services.ping_names_rx.clone(),
     )));
-
-    let sender = ChatSender::new(client.clone());
 
     run_command_dispatcher(broadcast_rx, services, snapshot, sender, cmd_list).await;
 }
