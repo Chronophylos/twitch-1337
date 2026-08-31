@@ -7,9 +7,9 @@ use serde::Deserialize;
 use twitch_1337_core::settings::overrides::{
     AiAuroraOverrides, AiConnectionOverrides, AiDreamerOverrides, AiEmotesOverrides,
     AiGrokOverrides, AiHistoryOverrides, AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides,
-    AiRecapOverrides, AiWebOverrides, AlertsOverrides, AviationstackOverrides, EmoteTrackerOverrides,
-    PotatAttributionOverrides, QuakeAlertsOverrides, SolarAlertsOverrides, SuspendOverrides,
-    TwitchOverrides, WebRuntimeOverrides,
+    AiRecapOverrides, AiWebOverrides, AlertsOverrides, AviationstackOverrides,
+    EmoteTrackerOverrides, PotatAttributionOverrides, QuakeAlertsOverrides, SolarAlertsOverrides,
+    SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
 };
 use twitch_1337_core::settings::{
     AiOverrides, CooldownsOverrides, FieldError, PingsOverrides, SettingsOverrides,
