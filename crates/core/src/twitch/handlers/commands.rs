@@ -2,6 +2,7 @@
 //! Owns the long-running task that filters PRIVMSGs from the broadcast channel
 //! and routes them to the matching `Command` implementation.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use tokio::{sync::broadcast, time::Duration};
@@ -230,6 +231,13 @@ where
         )));
     }
 
+    // Snapshot built-in trigger names before PingTriggerCommand (a catch-all
+    // over ping names, not a real trigger) is pushed below.
+    let builtin_names: HashSet<String> = cmd_list
+        .iter()
+        .map(|c| commands::normalize_command_name(c.name()))
+        .collect();
+
     // PingTriggerCommand must be last: it matches any !<name> that is a registered ping,
     // so built-in commands earlier in the list take priority and can't be shadowed.
     cmd_list.push(Box::new(commands::ping_trigger::PingTriggerCommand::new(
@@ -238,7 +246,38 @@ where
         services.ping_names_rx.clone(),
     )));
 
+    // A ping registered under a built-in command's trigger would silently
+    // steal traffic from that command: `find_enabled_command` scans in
+    // order and PingTriggerCommand's catch-all is last, so the built-in
+    // wins here, but nothing stops someone naming a ping `lb` from the
+    // dashboard. That's a config mistake, not a crash-worthy fault, so it
+    // only surfaces in dev/test builds rather than taking prod down.
+    debug_assert!(
+        {
+            let shadowed = services
+                .ping_names_rx
+                .borrow()
+                .iter()
+                .find(|name| shadows_builtin_command(name, &builtin_names))
+                .cloned();
+            if let Some(name) = shadowed {
+                panic!("ping `{name}` shadows a built-in command trigger");
+            }
+            true
+        },
+        "unreachable: panics above on collision"
+    );
+
     run_command_dispatcher(broadcast_rx, services, snapshot, sender, cmd_list).await;
+}
+
+/// True if `ping_name` (already normalized: lowercase, no `!`) collides
+/// with a built-in command's normalized trigger, so `PingTriggerCommand`'s
+/// catch-all would never see it. `builtin_names` must be built from
+/// `Command::name()` via `normalize_command_name`, which also collapses
+/// `doener_calc`'s `döner`/`doener` alias onto a single key.
+fn shadows_builtin_command(ping_name: &str, builtin_names: &HashSet<String>) -> bool {
+    builtin_names.contains(&commands::normalize_command_name(ping_name))
 }
 
 struct CommandInvocation<'a> {
@@ -653,5 +692,25 @@ mod tests {
     fn skip_leading_mentions_all_mentions_yields_empty() {
         let words = ["@aurora_bot"];
         assert!(skip_leading_mentions(&words).is_empty());
+    }
+
+    #[test]
+    fn shadows_builtin_command_detects_collision_and_stays_quiet_otherwise() {
+        let builtin_names: HashSet<String> = ["!lb", "!döner"]
+            .into_iter()
+            .map(commands::normalize_command_name)
+            .collect();
+
+        // Exact collision with a plain built-in trigger.
+        assert!(shadows_builtin_command("lb", &builtin_names));
+        // Case doesn't save it.
+        assert!(shadows_builtin_command("LB", &builtin_names));
+        // doener_calc's alternate spelling collapses onto the same key via
+        // normalize_command_name, so a ping named the ASCII spelling must
+        // also be caught, not just the umlaut one.
+        assert!(shadows_builtin_command("doener", &builtin_names));
+
+        // A genuinely free name is quiet.
+        assert!(!shadows_builtin_command("uwu", &builtin_names));
     }
 }
