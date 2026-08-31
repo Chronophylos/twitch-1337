@@ -191,6 +191,29 @@ mod tests {
     }
 
     #[test]
+    fn f27_simbrief_url_eddf_eham() {
+        let dep = find_by_icao("EDDF").expect("EDDF");
+        let arr = find_by_icao("EHAM").expect("EHAM");
+        let ac = aircraft_by_icao_type("F27").expect("F27");
+
+        let fp = calculate_flight_plan(dep, arr, ac);
+        let url = fp.simbrief_url();
+
+        assert!(url.contains("orig=EDDF"), "missing orig: {url}");
+        assert!(url.contains("dest=EHAM"), "missing dest: {url}");
+        assert!(url.contains("type=F27"), "missing type: {url}");
+        assert!(
+            url.contains(&format!("fl={}", fp.cruise_altitude_ft)),
+            "missing or wrong fl: {url}"
+        );
+        eprintln!(
+            "F27 EDDF-EHAM: {:.0} nm | FL{} | {url}",
+            fp.distance_nm,
+            fp.cruise_altitude_ft / 100
+        );
+    }
+
+    #[test]
     fn c172_short_hop() {
         let dep = find_by_icao("EDDF").expect("EDDF");
         let arr = find_by_icao("EDDM").expect("EDDM");
