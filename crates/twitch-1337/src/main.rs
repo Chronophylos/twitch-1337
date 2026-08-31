@@ -285,6 +285,12 @@ pub async fn main() -> Result<()> {
         }
     };
 
+    // Shared latency cell, seeded from settings. The latency handler re-bases
+    // it live when `twitch.expected_latency` is edited; the 1337 handler reads
+    // it for timing adjustments.
+    let latency_value = Arc::new(std::sync::atomic::AtomicU32::new(
+        settings_handle.load().twitch.expected_latency,
+    ));
     let services = Services {
         clock: Arc::new(SystemClock),
         llm,
@@ -297,6 +303,7 @@ pub async fn main() -> Result<()> {
         settings: settings_handle,
         settings_store,
         irc_connected,
+        latency_value,
         channel: config.twitch.channel.clone(),
         bot_username: config.twitch.username.clone(),
         ai_enabled: config.ai.is_some(),

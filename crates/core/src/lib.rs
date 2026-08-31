@@ -103,6 +103,12 @@ pub struct Services {
     /// Shared connectivity flag flipped by the latency monitor. Read by the
     /// web dashboard's `/healthz` endpoint.
     pub irc_connected: Arc<std::sync::atomic::AtomicBool>,
+    /// Shared EMA latency estimate. Seeded from `twitch.expected_latency` at
+    /// composition; the latency handler re-bases it live when that setting is
+    /// edited on the dashboard, and the 1337 handler reads it for timing
+    /// adjustments. Composition-time so tests can observe the same cell the
+    /// handlers use.
+    pub latency_value: Arc<std::sync::atomic::AtomicU32>,
     /// Primary channel login (config `[twitch].channel`).
     pub channel: String,
     /// The utility bot's own login (config `[twitch].username`).

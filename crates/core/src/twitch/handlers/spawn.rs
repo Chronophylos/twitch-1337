@@ -5,7 +5,7 @@
 //! `JoinHandle` plus the shared `Arc<Notify>` post-spawn code uses to drain
 //! the scheduled-message handler on shutdown.
 
-use std::sync::{Arc, atomic::AtomicU32};
+use std::sync::Arc;
 
 use tokio::{
     sync::{Notify, broadcast, mpsc, oneshot},
@@ -141,12 +141,10 @@ where
         }
     });
 
-    // Shared latency cell. Initialized from settings; the latency handler
-    // re-bases it live when `twitch.expected_latency` is edited, so the 1337
-    // handler always reads the current estimate.
-    let latency_value = Arc::new(AtomicU32::new(
-        services.settings.load().twitch.expected_latency,
-    ));
+    // Shared latency cell. Composed in `Services` (seeded from settings); the
+    // latency handler re-bases it live when `twitch.expected_latency` is
+    // edited, so the 1337 handler always reads the current estimate.
+    let latency_value = services.latency_value.clone();
 
     let latency = tokio::spawn({
         let client = client.clone();

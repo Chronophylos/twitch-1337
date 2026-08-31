@@ -294,4 +294,79 @@ mod tests {
         assert_send::<SettingsHandle>();
         assert_send::<Subscription>();
     }
+
+    const SUB_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+    fn actor() -> Actor {
+        Actor {
+            user_id: "1".into(),
+            user_login: "tester".into(),
+        }
+    }
+
+    fn latency_patch(ms: u32) -> SettingsOverrides {
+        SettingsOverrides {
+            twitch: crate::settings::overrides::TwitchOverrides {
+                expected_latency: Some(ms),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Store-backed handle: `apply` wakes every waiter armed before the
+    /// commit, and the snapshot swap is visible via `load` right after.
+    #[tokio::test]
+    async fn subscription_delivers_store_apply() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (store, handle) =
+            SettingsStore::open(dir.path(), Arc::new(MemoryAuditLog::new()), "test_chan")
+                .expect("open store");
+
+        // Both waiters are armed (registered) at construction, BEFORE the
+        // commit below — neither wake can be lost.
+        let mut sub = handle.subscribe();
+        let mut unawaited = handle.subscribe();
+
+        store
+            .apply(latency_patch(300), actor())
+            .await
+            .expect("apply");
+
+        tokio::time::timeout(SUB_DEADLINE, sub.next())
+            .await
+            .expect("subscription created before the apply must resolve");
+        assert_eq!(handle.load().twitch.expected_latency, 300);
+
+        // A subscription created (and thus armed) before the commit but never
+        // awaited still catches it: its construction-time waiter was already
+        // registered when `notify_waiters()` fired.
+        tokio::time::timeout(SUB_DEADLINE, unawaited.next())
+            .await
+            .expect("waiter armed at construction catches a commit before its first await");
+
+        // `next()` re-arms a fresh waiter BEFORE returning, so a commit
+        // landing between two awaits is caught by the next `next()` call.
+        store
+            .apply(latency_patch(350), actor())
+            .await
+            .expect("apply");
+        tokio::time::timeout(SUB_DEADLINE, sub.next())
+            .await
+            .expect("re-armed waiter catches a commit between awaits");
+        assert_eq!(handle.load().twitch.expected_latency, 350);
+    }
+
+    /// `from_settings` handles carry a private `Notify` nobody notifies, so
+    /// subscribers must never wake — a timeout on `next()` must elapse.
+    #[tokio::test]
+    async fn from_settings_subscription_never_fires() {
+        let handle = SettingsHandle::from_settings(Settings::compiled_defaults());
+        let mut sub = handle.subscribe();
+        let fired = tokio::time::timeout(std::time::Duration::from_millis(100), sub.next()).await;
+        assert!(
+            fired.is_err(),
+            "from_settings handle has no store behind it and must never signal"
+        );
+    }
 }
