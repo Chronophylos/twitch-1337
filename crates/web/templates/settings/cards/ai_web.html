@@ -6,17 +6,24 @@
     <div>
       <h2>AI · Web tools</h2>
       <p>Lets the model search a SearXNG instance. Enabling requires a restart.</p>
-      <label class="toggle">
-        <input type="checkbox" name="ai_web_enabled" data-card-toggle value="1"
-               data-key="ai.web.enabled"
-               {% if current.ai.web.is_some() %}checked{% endif %}>
-        <span class="toggle-thumb" aria-hidden="true"></span>
-      </label>
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
   <input type="hidden" name="ai_web_card_visible" value="1">
   <div class="settings-rows">
+    <div class="settings-row" data-section="ai_web">
+      {% call m::row_head("enabled", "Let the model search a SearXNG instance. Enabling requires a restart.") %}{% endcall %}
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">{% if current.ai.web.is_some() %}On{% else %}Off{% endif %}</span>
+        <label class="toggle">
+          <input type="checkbox" name="ai_web_enabled" data-card-toggle value="1"
+                 data-key="ai.web.enabled"
+                 {% if current.ai.web.is_some() %}checked{% endif %}>
+          <span class="toggle-thumb" aria-hidden="true"></span>
+        </label>
+      </div>
+      <div class="row-right"></div>
+    </div>
     {% match current.ai.web %}
     {% when Some with (w) %}
     {% call m::text_row("ai_web", "ai_web_base_url", "base_url",
