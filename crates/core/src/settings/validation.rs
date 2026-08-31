@@ -197,6 +197,7 @@ impl Settings {
                 });
             }
         }
+        validate_alerts(&self.alerts, &mut errs);
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
 }
@@ -588,6 +589,36 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
                 "must be non-empty when set".into(),
             );
         }
+    }
+}
+
+fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldError>) {
+    bound(
+        "alerts.quake.poll_secs",
+        a.quake.poll_secs,
+        60,
+        86_400,
+        errs,
+    );
+    bound(
+        "alerts.solar.poll_secs",
+        a.solar.poll_secs,
+        60,
+        86_400,
+        errs,
+    );
+    bound("alerts.max_age_secs", a.max_age_secs, 60, 604_800, errs);
+    if a.quake.min_mag_tenths > 100 {
+        errs.push(FieldError {
+            field: "alerts.quake.min_mag_tenths".into(),
+            message: format!("must be 0..=100 (got {})", a.quake.min_mag_tenths),
+        });
+    }
+    if crate::alerts::class_rank(&a.solar.min_class).is_none() {
+        errs.push(FieldError {
+            field: "alerts.solar.min_class".into(),
+            message: format!("must be one of A, B, C, M, X (got {:?})", a.solar.min_class),
+        });
     }
 }
 
@@ -1408,5 +1439,24 @@ mod tests {
             })
             .expect_err("should fail");
         assert!(errs.iter().any(|e| e.field == "schedules[0].name"));
+    }
+
+    #[test]
+    fn alerts_defaults_validate() {
+        let s = Settings::compiled_defaults();
+        assert!(s.validate(&ctx()).is_ok());
+    }
+
+    #[test]
+    fn alerts_rejects_bad_class_and_out_of_range() {
+        let mut s = Settings::compiled_defaults();
+        s.alerts.solar.min_class = "Q".into();
+        s.alerts.quake.min_mag_tenths = 500;
+        s.alerts.quake.poll_secs = 5;
+        let errs = s.validate(&ctx()).expect_err("must fail");
+        let fields: Vec<&str> = errs.iter().map(|e| e.field.as_str()).collect();
+        assert!(fields.contains(&"alerts.solar.min_class"));
+        assert!(fields.contains(&"alerts.quake.min_mag_tenths"));
+        assert!(fields.contains(&"alerts.quake.poll_secs"));
     }
 }

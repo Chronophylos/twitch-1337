@@ -5,9 +5,9 @@ use super::ai::{AiBackendKind, AiProfile};
 use super::overrides;
 use super::provider::AiProvider;
 use super::{
-    AiEmotes, AiPrefill, AiSettings, AiWeb, AviationstackSettings, Cooldowns, EmoteTrackerSettings,
-    PingsSettings, PotatAttributionSettings, SCHEMA_VERSION, Settings, SuspendSettings,
-    TwitchRuntime, WebRuntime,
+    AiEmotes, AiPrefill, AiSettings, AiWeb, AlertsSettings, AviationstackSettings, Cooldowns,
+    EmoteTrackerSettings, PingsSettings, PotatAttributionSettings, QuakeAlerts, SCHEMA_VERSION,
+    Settings, SolarAlerts, SuspendSettings, TwitchRuntime, WebRuntime,
 };
 
 impl Settings {
@@ -116,6 +116,47 @@ impl Settings {
                                 .clone()
                         }),
                 },
+            },
+            alerts: AlertsSettings {
+                quake: QuakeAlerts {
+                    enabled: overrides
+                        .alerts
+                        .quake
+                        .enabled
+                        .unwrap_or(defaults.alerts.quake.enabled),
+                    poll_secs: overrides
+                        .alerts
+                        .quake
+                        .poll_secs
+                        .unwrap_or(defaults.alerts.quake.poll_secs),
+                    min_mag_tenths: overrides
+                        .alerts
+                        .quake
+                        .min_mag_tenths
+                        .unwrap_or(defaults.alerts.quake.min_mag_tenths),
+                },
+                solar: SolarAlerts {
+                    enabled: overrides
+                        .alerts
+                        .solar
+                        .enabled
+                        .unwrap_or(defaults.alerts.solar.enabled),
+                    poll_secs: overrides
+                        .alerts
+                        .solar
+                        .poll_secs
+                        .unwrap_or(defaults.alerts.solar.poll_secs),
+                    min_class: overrides
+                        .alerts
+                        .solar
+                        .min_class
+                        .clone()
+                        .unwrap_or_else(|| defaults.alerts.solar.min_class.clone()),
+                },
+                max_age_secs: overrides
+                    .alerts
+                    .max_age_secs
+                    .unwrap_or(defaults.alerts.max_age_secs),
             },
             web: WebRuntime {
                 session_ttl_secs: overrides
@@ -854,6 +895,29 @@ mod tests {
             s.ai.by_name(&s.ai.aurora.profile).unwrap().model,
             "qwen3:8b"
         );
+    }
+
+    #[test]
+    fn alerts_resolve_and_fallthrough() {
+        let defaults = Settings::compiled_defaults();
+        let overrides = crate::settings::overrides::SettingsOverrides {
+            alerts: crate::settings::overrides::AlertsOverrides {
+                quake: crate::settings::overrides::QuakeAlertsOverrides {
+                    enabled: Some(true),
+                    min_mag_tenths: Some(40),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let r = Settings::resolve(&defaults, &overrides);
+        assert!(r.alerts.quake.enabled);
+        assert_eq!(r.alerts.quake.min_mag_tenths, 40);
+        // untouched fields fall through to defaults
+        assert_eq!(r.alerts.quake.poll_secs, 300);
+        assert_eq!(r.alerts.solar.min_class, "M");
+        assert_eq!(r.alerts.max_age_secs, 7_200);
     }
 
     #[test]

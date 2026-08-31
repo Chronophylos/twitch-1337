@@ -1,0 +1,91 @@
+{# crates/web/templates/settings/cards/alerts_quake.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-alerts_quake" class="settings-card" data-section="alerts_quake">
+  <input type="hidden" name="alerts_quake_card_visible" value="1">
+  <header class="settings-card-head">
+    <div>
+      <h2>Alerts · Erdbeben</h2>
+      <p>Meldet Erdbeben in Deutschland aus dem EMSC-Feed. Änderungen gelten sofort.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    <div class="settings-row" data-section="alerts_quake">
+      <div class="row-left">
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">enabled</code></div>
+        <div class="row-hint">Erdbeben in Deutschland in den Chat melden.</div>
+      </div>
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">{% if current.alerts.quake.enabled %}On{% else %}Off{% endif %}</span>
+        <label class="toggle">
+          <input
+            type="checkbox"
+            name="alerts_quake_enabled"
+            value="1"
+            data-default="{{ defaults.alerts.quake.enabled }}"
+            data-key="enabled"
+            role="switch"
+            aria-label="enabled"
+            {% if current.alerts.quake.enabled %}checked{% endif %}>
+          <span class="toggle-thumb" aria-hidden="true"></span>
+        </label>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("enabled") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{% if defaults.alerts.quake.enabled %}on{% else %}off{% endif %}</span></span>
+      </div>
+    </div>
+    <div class="settings-row" data-section="alerts_quake">
+      <div class="row-left">
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">poll_secs</code></div>
+        <div class="row-hint">Wie oft der EMSC-Feed abgefragt wird.</div>
+      </div>
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true" data-pretty-unit="s">{{ current.alerts.quake.poll_secs }} s</span>
+        <div class="num-wrap">
+          <input
+            type="number"
+            class="num-input"
+            name="alerts_quake_poll_secs"
+            min="60"
+            max="86400"
+            value="{{ current.alerts.quake.poll_secs }}"
+            data-default="{{ defaults.alerts.quake.poll_secs }}"
+            data-key="poll_secs">
+          <span class="num-unit">s</span>
+        </div>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("poll_secs") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{{ defaults.alerts.quake.poll_secs }}s</span></span>
+      </div>
+    </div>
+    <div class="settings-row" data-section="alerts_quake">
+      <div class="row-left">
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">min_mag_tenths</code></div>
+        <div class="row-hint">Mindestmagnitude mal zehn — 25 bedeutet M2.5.</div>
+      </div>
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true">{{ current.alerts.quake.min_mag_tenths }}</span>
+        <div class="num-wrap">
+          <input
+            type="number"
+            class="num-input"
+            name="alerts_quake_min_mag_tenths"
+            min="0"
+            max="100"
+            value="{{ current.alerts.quake.min_mag_tenths }}"
+            data-default="{{ defaults.alerts.quake.min_mag_tenths }}"
+            data-key="min_mag_tenths">
+        </div>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("min_mag_tenths") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{{ defaults.alerts.quake.min_mag_tenths }}</span></span>
+      </div>
+    </div>
+  </div>
+</section>

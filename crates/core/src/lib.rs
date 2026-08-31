@@ -5,6 +5,7 @@
 //! fake transport, fake clock, and fake LLM against the same handlers.
 
 pub mod ai;
+pub mod alerts;
 pub mod aviation;
 pub mod commands;
 pub mod config;

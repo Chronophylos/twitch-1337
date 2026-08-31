@@ -244,6 +244,28 @@ struct SaveForm {
     #[serde(default)]
     emote_tracker_potat_7tv_user_id: Option<String>,
 
+    // ---- Alerts · Earthquakes card ----
+    #[serde(default)]
+    alerts_quake_card_visible: Option<String>,
+    #[serde(default)]
+    alerts_quake_enabled: Option<String>,
+    #[serde(default)]
+    alerts_quake_poll_secs: Option<u64>,
+    #[serde(default)]
+    alerts_quake_min_mag_tenths: Option<u32>,
+
+    // ---- Alerts · Solar flares card ----
+    #[serde(default)]
+    alerts_solar_card_visible: Option<String>,
+    #[serde(default)]
+    alerts_solar_enabled: Option<String>,
+    #[serde(default)]
+    alerts_solar_poll_secs: Option<u64>,
+    #[serde(default)]
+    alerts_solar_min_class: Option<String>,
+    #[serde(default)]
+    alerts_max_age_secs: Option<u64>,
+
     // ---- Web · Sessions card ----
     #[serde(default)]
     web_session_ttl_secs: Option<u64>,
@@ -411,6 +433,8 @@ async fn reset(
         "aviationstack" => SettingsSection::Aviationstack,
         "suspend" => SettingsSection::Suspend,
         "emote_tracker_potat" => SettingsSection::EmoteTrackerPotat,
+        "alerts_quake" => SettingsSection::AlertsQuake,
+        "alerts_solar" => SettingsSection::AlertsSolar,
         "web_runtime" => SettingsSection::WebRuntime,
         "ai_behavior" | "ai_aurora" => SettingsSection::AiAurora,
         "ai_recap" => SettingsSection::AiRecap,

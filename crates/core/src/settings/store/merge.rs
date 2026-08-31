@@ -335,6 +335,28 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     {
         into.emote_tracker.potat_attribution.potat_7tv_user_id = Some(v.clone());
     }
+    // Alerts
+    if let Some(v) = patch.alerts.quake.enabled {
+        into.alerts.quake.enabled = Some(v);
+    }
+    if let Some(v) = patch.alerts.quake.poll_secs {
+        into.alerts.quake.poll_secs = Some(v);
+    }
+    if let Some(v) = patch.alerts.quake.min_mag_tenths {
+        into.alerts.quake.min_mag_tenths = Some(v);
+    }
+    if let Some(v) = patch.alerts.solar.enabled {
+        into.alerts.solar.enabled = Some(v);
+    }
+    if let Some(v) = patch.alerts.solar.poll_secs {
+        into.alerts.solar.poll_secs = Some(v);
+    }
+    if let Some(v) = patch.alerts.solar.min_class.as_ref() {
+        into.alerts.solar.min_class = Some(v.clone());
+    }
+    if let Some(v) = patch.alerts.max_age_secs {
+        into.alerts.max_age_secs = Some(v);
+    }
     // Web
     if let Some(v) = patch.web.session_ttl_secs {
         into.web.session_ttl_secs = Some(v);
@@ -355,7 +377,8 @@ mod tests {
     use super::*;
     use crate::schedule::{Schedule, Trigger, WeekdaySet};
     use crate::settings::overrides::{
-        AviationstackOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
+        AlertsOverrides, AviationstackOverrides, QuakeAlertsOverrides, SolarAlertsOverrides,
+        SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
     };
 
     #[test]
@@ -428,6 +451,45 @@ mod tests {
         assert_eq!(into.suspend.default_duration_secs, Some(900));
         assert_eq!(into.web.session_ttl_secs, Some(3600));
         assert_eq!(into.web.mod_check_refresh_secs, Some(60));
+    }
+
+    #[test]
+    fn merge_alerts_overrides() {
+        let mut into = SettingsOverrides::default();
+        let patch = SettingsOverrides {
+            alerts: AlertsOverrides {
+                quake: QuakeAlertsOverrides {
+                    enabled: Some(true),
+                    poll_secs: Some(90),
+                    min_mag_tenths: Some(45),
+                },
+                solar: SolarAlertsOverrides {
+                    enabled: Some(false),
+                    poll_secs: Some(120),
+                    min_class: Some("M".into()),
+                },
+                max_age_secs: Some(7200),
+            },
+            ..Default::default()
+        };
+        merge_into(&mut into, &patch);
+        assert_eq!(into.alerts.quake.enabled, Some(true));
+        assert_eq!(into.alerts.quake.poll_secs, Some(90));
+        assert_eq!(into.alerts.quake.min_mag_tenths, Some(45));
+        assert_eq!(into.alerts.solar.enabled, Some(false));
+        assert_eq!(into.alerts.solar.poll_secs, Some(120));
+        assert_eq!(into.alerts.solar.min_class.as_deref(), Some("M"));
+        assert_eq!(into.alerts.max_age_secs, Some(7200));
+
+        let default_patch = SettingsOverrides::default();
+        merge_into(&mut into, &default_patch);
+        assert_eq!(into.alerts.quake.enabled, Some(true));
+        assert_eq!(into.alerts.quake.poll_secs, Some(90));
+        assert_eq!(into.alerts.quake.min_mag_tenths, Some(45));
+        assert_eq!(into.alerts.solar.enabled, Some(false));
+        assert_eq!(into.alerts.solar.poll_secs, Some(120));
+        assert_eq!(into.alerts.solar.min_class.as_deref(), Some("M"));
+        assert_eq!(into.alerts.max_age_secs, Some(7200));
     }
 
     fn make_schedule(name: &str, message: &str) -> Schedule {
