@@ -7,8 +7,9 @@ use serde::Deserialize;
 use twitch_1337_core::settings::overrides::{
     AiAuroraOverrides, AiConnectionOverrides, AiDreamerOverrides, AiEmotesOverrides,
     AiGrokOverrides, AiHistoryOverrides, AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides,
-    AiRecapOverrides, AiWebOverrides, AviationstackOverrides, EmoteTrackerOverrides,
-    PotatAttributionOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
+    AiRecapOverrides, AiWebOverrides, AlertsOverrides, AviationstackOverrides, EmoteTrackerOverrides,
+    PotatAttributionOverrides, QuakeAlertsOverrides, SolarAlertsOverrides, SuspendOverrides,
+    TwitchOverrides, WebRuntimeOverrides,
 };
 use twitch_1337_core::settings::{
     AiOverrides, CooldownsOverrides, FieldError, PingsOverrides, SettingsOverrides,
@@ -568,6 +569,52 @@ impl WebRuntimeForm {
     }
 }
 
+#[derive(Default, Deserialize)]
+struct AlertsForm {
+    #[serde(default)]
+    alerts_quake_card_visible: Option<String>,
+    #[serde(default)]
+    alerts_quake_enabled: Option<String>,
+    #[serde(default)]
+    alerts_quake_poll_secs: Option<u64>,
+    #[serde(default)]
+    alerts_quake_min_mag_tenths: Option<u32>,
+    #[serde(default)]
+    alerts_solar_card_visible: Option<String>,
+    #[serde(default)]
+    alerts_solar_enabled: Option<String>,
+    #[serde(default)]
+    alerts_solar_poll_secs: Option<u64>,
+    #[serde(default)]
+    alerts_solar_min_class: Option<String>,
+    #[serde(default)]
+    alerts_max_age_secs: Option<u64>,
+}
+
+impl AlertsForm {
+    fn into_overrides(self) -> AlertsOverrides {
+        AlertsOverrides {
+            quake: QuakeAlertsOverrides {
+                enabled: enabled_from_card(
+                    &self.alerts_quake_card_visible,
+                    &self.alerts_quake_enabled,
+                ),
+                poll_secs: self.alerts_quake_poll_secs,
+                min_mag_tenths: self.alerts_quake_min_mag_tenths,
+            },
+            solar: SolarAlertsOverrides {
+                enabled: enabled_from_card(
+                    &self.alerts_solar_card_visible,
+                    &self.alerts_solar_enabled,
+                ),
+                poll_secs: self.alerts_solar_poll_secs,
+                min_class: self.alerts_solar_min_class,
+            },
+            max_age_secs: self.alerts_max_age_secs,
+        }
+    }
+}
+
 /// Bundle the flat submitted [`SaveForm`] into a single sparse
 /// `SettingsOverrides` patch. Schedules are managed via the dedicated
 /// `/schedules` CRUD endpoint, so the settings form must not overwrite them.
@@ -724,13 +771,23 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             emote_tracker_potat_7tv_user_id: form.emote_tracker_potat_7tv_user_id,
         }
         .into_overrides(),
+        alerts: AlertsForm {
+            alerts_quake_card_visible: form.alerts_quake_card_visible,
+            alerts_quake_enabled: form.alerts_quake_enabled,
+            alerts_quake_poll_secs: form.alerts_quake_poll_secs,
+            alerts_quake_min_mag_tenths: form.alerts_quake_min_mag_tenths,
+            alerts_solar_card_visible: form.alerts_solar_card_visible,
+            alerts_solar_enabled: form.alerts_solar_enabled,
+            alerts_solar_poll_secs: form.alerts_solar_poll_secs,
+            alerts_solar_min_class: form.alerts_solar_min_class,
+            alerts_max_age_secs: form.alerts_max_age_secs,
+        }
+        .into_overrides(),
         web: WebRuntimeForm {
             web_session_ttl_secs: form.web_session_ttl_secs,
             web_mod_check_refresh_secs: form.web_mod_check_refresh_secs,
         }
         .into_overrides(),
-        // No dashboard card for alerts yet; this form never touches it.
-        alerts: Default::default(),
         // Schedules are managed via the dedicated /schedules CRUD endpoint;
         // the settings form must not overwrite them.
         schedules: None,
