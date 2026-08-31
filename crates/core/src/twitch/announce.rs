@@ -2,7 +2,7 @@
 //!
 //! `version_line` / `format_uptime` and the three message builders are pure and
 //! unit-tested here. `announce_startup` / `announce_shutdown` are thin
-//! `client.say` wrappers exercised by integration tests (`tests/announce.rs`).
+//! `client.say` wrappers exercised by integration tests (`tests/irc/announce.rs`).
 
 use std::time::Duration;
 

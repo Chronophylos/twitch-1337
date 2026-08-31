@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# Each tests/*.rs file is its own crate (recompiles TestBotBuilder every time).
+# Explicit [[test]] targets group by domain instead. See
+# docs/superpowers/specs/2026-08-31-group-integration-tests-design.md
+autotests = false
 
 [features]
 testing = []
@@ -64,3 +68,19 @@ wiremock = "0.6"
 
 [lints]
 workspace = true
+
+[[test]]
+name = "ai"
+path = "tests/ai/main.rs"
+
+[[test]]
+name = "aviation"
+path = "tests/aviation/main.rs"
+
+[[test]]
+name = "tracker"
+path = "tests/tracker/main.rs"
+
+[[test]]
+name = "irc"
+path = "tests/irc/main.rs"

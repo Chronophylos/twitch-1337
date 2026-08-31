@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# Same integration-test tax as core: group route/auth tests so helpers/
+# compiles twice instead of ~22 times. e2e stays its own gated target.
+autotests = false
 
 [dependencies]
 twitch-1337-core = { path = "../core" }
@@ -77,6 +80,14 @@ wiremock = { workspace = true }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "auth"
+path = "tests/auth/main.rs"
+
+[[test]]
+name = "routes"
+path = "tests/routes/main.rs"
 
 [[test]]
 name = "e2e"
