@@ -1,0 +1,515 @@
+use super::common;
+
+use std::time::Duration;
+
+use chrono::{Duration as ChronoDuration, TimeZone};
+use chrono_tz::Europe::Berlin;
+use common::TestBotBuilder;
+use common::irc_line::privmsg_at;
+
+use crate::common::test_bot::TestBot;
+
+/// ms timestamp for 2026-04-18 13:37:00 Berlin (UTC+2 in April).
+/// 2026-04-18 13:37:00 Berlin = 2026-04-18 11:37:00 UTC
+const TMI_TS_13_37_BERLIN: i64 = 1_776_512_220_000;
+
+async fn yield_a_bit() {
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::sleep(Duration::from_millis(30)).await;
+}
+
+/// Advance the clock through the 13:35→13:36:30 window, consume the reminder,
+/// and return the bot ready for message injection in the 13:36:30–13:38 window.
+async fn advance_to_1337_window(bot: &mut TestBot) {
+    // 13:35 → 13:36: handler wakes from wait_until_schedule and spawns monitor.
+    bot.clock.advance(ChronoDuration::seconds(60));
+    yield_a_bit().await;
+
+    // 13:36 → 13:36:30: handler wakes from sleep_until_hms(13:36:30) and says reminder.
+    bot.clock.advance(ChronoDuration::seconds(30));
+    yield_a_bit().await;
+
+    let reminder = bot.expect_say(Duration::from_secs(2)).await;
+    assert!(
+        reminder.contains("PausersHype"),
+        "expected PausersHype reminder, got: {reminder}"
+    );
+}
+
+#[tokio::test]
+async fn tracker_1337_posts_reminder_and_stats() {
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    // Inject with tmi-sent-ts=13:37 Berlin so the monitor's hour/minute guard passes.
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", TMI_TS_13_37_BERLIN);
+    let msg_charlie = privmsg_at(&bot.channel, "charlie", "DANKIES", TMI_TS_13_37_BERLIN);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    bot.transport
+        .inject
+        .send(msg_charlie)
+        .await
+        .expect("inject charlie");
+    yield_a_bit().await;
+
+    // 13:36:30 → 13:38:00: handler aborts monitor and posts stats.
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let stats = bot.expect_say(Duration::from_secs(3)).await;
+    // 2 users, neither "gargoyletec" → generate_stats_message produces "2 … gnocci …"
+    assert!(
+        stats.contains('2') || stats.to_lowercase().contains("gnocci"),
+        "expected 2-user stats, got: {stats}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn tracker_1337_updates_leaderboard_with_sub_second_time() {
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    // Inject "1337" with tmi-sent-ts at 13:37:00.234 Berlin. The monitor
+    // computes ms_since_minute = seconds*1000 + subsec_millis; alice should
+    // be recorded as 234ms and persisted to leaderboard.ron.
+    let ts_alice_234ms = TMI_TS_13_37_BERLIN + 234;
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", ts_alice_234ms);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    yield_a_bit().await;
+
+    // Advance to 13:38:00 so the handler computes stats + persists leaderboard.
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let _stats = bot.expect_say(Duration::from_secs(3)).await;
+
+    // leaderboard.ron written under DATA_DIR.
+    let lb_path = bot.data_dir.path().join("leaderboard.ron");
+    let contents = tokio::fs::read_to_string(&lb_path)
+        .await
+        .expect("read leaderboard.ron");
+    assert!(
+        contents.contains("alice"),
+        "leaderboard missing alice: {contents}"
+    );
+    assert!(
+        contents.contains("ms:234") || contents.contains("ms: 234"),
+        "leaderboard missing sub-second time 234: {contents}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn tracker_1337_announces_overall_record_when_no_faster_entry_exists() {
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    // Empty leaderboard: any sub-second time is the new all-time record.
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", TMI_TS_13_37_BERLIN + 234);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    yield_a_bit().await;
+
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let stats = bot.expect_say(Duration::from_secs(3)).await;
+    assert!(
+        stats.contains("neuer Rekord"),
+        "expected overall-record announce, got: {stats}"
+    );
+    assert!(
+        !stats.contains("neue PB!"),
+        "record should not be downgraded to a plain PB, got: {stats}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn tracker_1337_announces_personal_best_when_record_is_held_by_another() {
+    use chrono::NaiveDate;
+    use common::seed_leaderboard;
+
+    let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    // bob holds the all-time record; alice has a slower standing best.
+    let seeded = seed_leaderboard(&[("bob", 100, date), ("alice", 400, date)]);
+
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .with_seeded_leaderboard(seeded)
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    // alice improves her own best (400 → 250) but does not beat bob's 100ms record.
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", TMI_TS_13_37_BERLIN + 250);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    yield_a_bit().await;
+
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let stats = bot.expect_say(Duration::from_secs(3)).await;
+    assert!(
+        stats.contains("neue PB!"),
+        "expected personal-best announce, got: {stats}"
+    );
+    assert!(
+        !stats.contains("neuer Rekord"),
+        "beating only one's own best must not announce a record, got: {stats}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn tracker_1337_posts_slowest_only_for_final_ten_seconds() {
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    let ts_alice_49999ms = TMI_TS_13_37_BERLIN + 49_999;
+    let ts_charlie_58700ms = TMI_TS_13_37_BERLIN + 58_700;
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", ts_alice_49999ms);
+    let msg_charlie = privmsg_at(&bot.channel, "charlie", "DANKIES", ts_charlie_58700ms);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    bot.transport
+        .inject
+        .send(msg_charlie)
+        .await
+        .expect("inject charlie");
+    yield_a_bit().await;
+
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let stats = bot.expect_say(Duration::from_secs(3)).await;
+    assert!(
+        stats.contains("Am langsamsten war charlie mit 1.3s übrig"),
+        "expected slowest remaining as tenths of seconds, got: {stats}"
+    );
+    assert!(
+        !stats.contains("1300ms"),
+        "slowest must not show raw remaining ms when >999, got: {stats}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn tracker_1337_persists_qualifying_personal_worst() {
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    let ts_alice_49999ms = TMI_TS_13_37_BERLIN + 49_999;
+    let ts_charlie_58700ms = TMI_TS_13_37_BERLIN + 58_700;
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", ts_alice_49999ms);
+    let msg_charlie = privmsg_at(&bot.channel, "charlie", "DANKIES", ts_charlie_58700ms);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    bot.transport
+        .inject
+        .send(msg_charlie)
+        .await
+        .expect("inject charlie");
+    yield_a_bit().await;
+
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let _stats = bot.expect_say(Duration::from_secs(3)).await;
+
+    let shame_path = bot.data_dir.path().join("hall_of_shame.ron");
+    let contents = tokio::fs::read_to_string(&shame_path)
+        .await
+        .expect("read hall_of_shame.ron");
+    assert!(
+        contents.contains("charlie"),
+        "hall of shame missing charlie: {contents}"
+    );
+    assert!(
+        contents.contains("ms:58700") || contents.contains("ms: 58700"),
+        "hall of shame missing elapsed 58700: {contents}"
+    );
+    assert!(
+        !contents.contains("alice"),
+        "alice below 50s threshold must not be persisted: {contents}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn tracker_1337_personal_worst_updates_only_when_slower() {
+    use chrono::NaiveDate;
+    use common::seed_hall_of_shame;
+
+    let date_d1 = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let seeded = seed_hall_of_shame(&[("alice", 55_000, date_d1)]);
+
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .with_seeded_hall_of_shame(seeded)
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", TMI_TS_13_37_BERLIN + 56_000);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    yield_a_bit().await;
+
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let _stats = bot.expect_say(Duration::from_secs(3)).await;
+
+    let shame_path = bot.data_dir.path().join("hall_of_shame.ron");
+    let contents = tokio::fs::read_to_string(&shame_path)
+        .await
+        .expect("read hall_of_shame.ron");
+    assert!(
+        contents.contains("ms:56000") || contents.contains("ms: 56000"),
+        "alice slower run should update to 56000: {contents}"
+    );
+    assert!(
+        contents.contains("2026-04-18"),
+        "updated entry should carry today's date: {contents}"
+    );
+
+    bot.shutdown().await;
+
+    // Second session: alice at 55500 must not beat stored 56000.
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 19, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .with_seeded_hall_of_shame(seed_hall_of_shame(&[("alice", 56_000, date_d1)]))
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", TMI_TS_13_37_BERLIN + 55_500);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    yield_a_bit().await;
+
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let _stats = bot.expect_say(Duration::from_secs(3)).await;
+
+    let shame_path = bot.data_dir.path().join("hall_of_shame.ron");
+    let contents = tokio::fs::read_to_string(&shame_path)
+        .await
+        .expect("read hall_of_shame.ron");
+    assert!(
+        contents.contains("ms:56000") || contents.contains("ms: 56000"),
+        "faster repeat must not lower stored worst: {contents}"
+    );
+    assert!(
+        !contents.contains("ms:55500") && !contents.contains("ms: 55500"),
+        "55500 must not replace 56000: {contents}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn tracker_1337_does_not_post_slowest_before_final_ten_seconds() {
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    let ts_alice_1200ms = TMI_TS_13_37_BERLIN + 1_200;
+    let ts_charlie_49999ms = TMI_TS_13_37_BERLIN + 49_999;
+    let msg_alice = privmsg_at(&bot.channel, "alice", "1337", ts_alice_1200ms);
+    let msg_charlie = privmsg_at(&bot.channel, "charlie", "DANKIES", ts_charlie_49999ms);
+    bot.transport
+        .inject
+        .send(msg_alice)
+        .await
+        .expect("inject alice");
+    bot.transport
+        .inject
+        .send(msg_charlie)
+        .await
+        .expect("inject charlie");
+    yield_a_bit().await;
+
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let stats = bot.expect_say(Duration::from_secs(3)).await;
+    assert!(
+        !stats.contains("Am langsamsten"),
+        "did not expect slowest before final ten seconds, got: {stats}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn tracker_1337_zero_users_posts_erm_or_fuh() {
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    // 13:36:30 → 13:38:00 with no messages injected.
+    bot.clock.advance(ChronoDuration::seconds(90));
+    yield_a_bit().await;
+
+    let stats = bot.expect_say(Duration::from_secs(3)).await;
+    // twitch-irc say() prepends ". " to prevent slash-command execution.
+    let stats_body = stats.trim_start_matches(". ").trim();
+    assert!(
+        stats_body == "Erm" || stats_body == "fuh",
+        "expected zero-user stats (Erm/fuh), got: {stats:?}"
+    );
+
+    bot.shutdown().await;
+}
+
+/// Regression: latency compensation must not close the scoring window early.
+///
+/// With expected_latency=200 the compensated wake is 13:37:59.800. A message
+/// stamped at 13:37:59.900 (still inside :37) that arrives after that wake
+/// must still count — otherwise hall-of-shame finishes get dropped.
+#[tokio::test]
+async fn tracker_1337_counts_message_after_compensated_wake_before_true_138() {
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .with_settings(|o| {
+            o.twitch.expected_latency = Some(200);
+        })
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    // 13:36:30 → 13:37:59.800 (past compensated 13:38−200ms, before true :00).
+    bot.clock.advance(ChronoDuration::milliseconds(89_800));
+    yield_a_bit().await;
+
+    let msg_late = privmsg_at(
+        &bot.channel,
+        "chronophylos",
+        "1337 DANKIES",
+        TMI_TS_13_37_BERLIN + 59_900,
+    );
+    bot.transport
+        .inject
+        .send(msg_late)
+        .await
+        .expect("inject late window message");
+    yield_a_bit().await;
+
+    // Reach true 13:38:00 — scoring window closes, stats post.
+    bot.clock.advance(ChronoDuration::milliseconds(200));
+    yield_a_bit().await;
+
+    let stats = bot.expect_say(Duration::from_secs(3)).await;
+    assert!(
+        stats.contains("chronophylos"),
+        "late-window chatter must be counted despite latency compensation, got: {stats}"
+    );
+    assert!(
+        stats.contains("Am langsamsten war chronophylos"),
+        "expected hall-of-shame-eligible slowest announce, got: {stats}"
+    );
+
+    bot.shutdown().await;
+}

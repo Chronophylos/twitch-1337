@@ -9,16 +9,16 @@ alwaysApply: true
 
 - Use `TestBotBuilder` in `crates/core/tests/common/test_bot.rs`
 - Handlers are generic over `Transport` + `LoginCredentials` for fake transports
-- Integration tests live in `crates/core/tests/` and `crates/twitch-1337/tests/`
+- Integration tests live under `crates/core/tests/{ai,aviation,tracker,irc}/` (`autotests = false`; `mod` new files from that group's `main.rs`)
 
 ## HTTP / aviation
 
 - Use `wiremock` for external API boundaries
-- Flight tracker tests in `crates/core/tests/flight_tracker.rs`
+- Flight tracker tests in `crates/core/tests/aviation/flight_tracker.rs`
 
 ## Web routes
 
-- Route tests in `crates/web/tests/` with helpers in `tests/helpers/mod.rs`
+- Route tests in `crates/web/tests/{auth,routes}/` with helpers in `tests/helpers/mod.rs`
 - `dev-login` feature for auth bypass in tests
 
 ## E2e

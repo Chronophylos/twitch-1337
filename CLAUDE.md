@@ -269,7 +269,7 @@ pub async fn run_my_handler<T, L>(
 // )), add the JoinHandle to HandlerSet, add an exit arm to await_shutdown's select!
 ```
 
-Integration-testable via `TestBotBuilder` in `crates/core/tests/common/`.
+Integration-testable via `TestBotBuilder` in `crates/core/tests/common/`. Core itests are grouped into `[[test]]` targets (`ai`, `aviation`, `tracker`, `irc`); add a new file under the matching `crates/core/tests/<group>/` directory and `mod` it from that group's `main.rs`. Web itests are `auth` / `routes` / gated `e2e`.
 
 ## Key constants
 

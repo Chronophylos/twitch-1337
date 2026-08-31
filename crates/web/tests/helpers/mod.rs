@@ -1,9 +1,8 @@
 //! Shared fixtures for route-level integration tests in `crates/web/tests/`.
 //!
-//! Each test binary in `crates/web/tests/*.rs` includes this module via
-//! `mod helpers;`, so cargo treats it as a separate compilation unit per
-//! binary and dead-code warnings fire for any helper a given binary
-//! doesn't use. The `#![allow(dead_code)]` here is the cheapest fix.
+//! `auth` and `routes` (and e2e via `e2e_support/harness.rs`) include this
+//! module once per test crate. `#![allow(dead_code)]` still applies: not every
+//! grouped crate uses every helper.
 
 #![allow(dead_code)]
 
