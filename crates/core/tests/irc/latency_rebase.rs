@@ -1,7 +1,8 @@
 //! Issue #474 live-apply claim, end to end: a dashboard edit of
 //! `twitch.expected_latency` (delivered through `SettingsStore::apply`) must
 //! re-base the shared EMA cell immediately. The latency handler's change
-//! branch stores unconditionally, so no PING/PONG round trip is involved.
+//! branch re-bases and stores as soon as the value actually changes, so no
+//! PING/PONG round trip is involved.
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -11,7 +12,8 @@ use twitch_1337_core::settings::{Actor, SettingsOverrides};
 
 /// Spawn a bot seeded with `expected_latency = 100`, apply `= 300` through
 /// the store, and poll the shared latency cell. The handler's change branch
-/// stores unconditionally, so the cell must reach 300 without any PONG.
+/// re-bases on a genuine value change, so the cell must reach 300 without
+/// any PONG.
 ///
 /// Fails if the re-base branch were removed: the cell would stay at 100
 /// (the EMA tick only writes it 300 s after spawn, far outside the window).
