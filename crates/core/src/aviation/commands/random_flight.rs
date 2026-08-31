@@ -62,32 +62,6 @@ where
         return Ok(());
     };
 
-    // Reject physically impossible requests up front instead of burning
-    // generation retries on them.
-    if duration < random_flight::min_block_time(aircraft) {
-        sender
-            .reply(privmsg, "Das is zu kurz, kleiner wird nicht FDM")
-            .await;
-        return Ok(());
-    }
-    // Requests within one tolerance of the fuel ceiling cannot reliably find
-    // a route within tolerance, so reject them with the honest achievable max.
-    let max_block = random_flight::max_block_time(aircraft);
-    if duration > max_block - random_flight::BLOCK_TIME_TOLERANCE {
-        let achievable = max_block - random_flight::BLOCK_TIME_TOLERANCE;
-        sender
-            .reply(
-                privmsg,
-                &format!(
-                    "Mit dem {} schaffste maximal {}, da geht keine Minute mehr FDM",
-                    aircraft.icao_type,
-                    crate::cooldown::format_duration_hm(achievable)
-                ),
-            )
-            .await;
-        return Ok(());
-    }
-
     // Can take many retries internally
     let result = tokio::task::spawn_blocking(move || {
         random_flight::generate_flight_plan(&random_flight::FlightRequest {
@@ -102,6 +76,19 @@ where
 
     let fp = match result {
         Ok(fp) => fp,
+        Err(random_flight::Error::BlockTimeTooLong { max }) => {
+            sender
+                .reply(
+                    privmsg,
+                    &format!(
+                        "Mit dem {} schaffste maximal {}, da geht keine Minute mehr FDM",
+                        aircraft.icao_type,
+                        crate::cooldown::format_duration_hm(max)
+                    ),
+                )
+                .await;
+            return Ok(());
+        }
         Err(e) => {
             warn!(error = ?e, "Flight plan generation failed");
             sender

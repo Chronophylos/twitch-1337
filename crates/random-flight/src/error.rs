@@ -11,6 +11,9 @@ pub enum Error {
     #[error("exhausted {attempts} retries without finding a valid pair")]
     RetriesExhausted { attempts: u32 },
 
+    #[error("no achievable route: requested block time exceeds the aircraft's maximum of {max:?}")]
+    BlockTimeTooLong { max: std::time::Duration },
+
     #[error("unknown airport ICAO code: {icao}")]
     UnknownAirport { icao: String },
 

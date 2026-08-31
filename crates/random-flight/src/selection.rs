@@ -4,11 +4,13 @@ use rand::{Rng, RngExt};
 use twitch_1337_data::flight::{self, Aircraft, Airport};
 
 use crate::error::Error;
-use crate::flight_plan::{FlightPlan, calculate_flight_plan, estimate_distance_for_block_time};
+use crate::flight_plan::{
+    FlightPlan, calculate_flight_plan, estimate_distance_for_block_time, max_block_time,
+};
 use crate::geo::{bearing_difference, haversine_distance_nm, initial_bearing};
 
 /// Accepted deviation between a generated plan's block time and the target.
-pub const BLOCK_TIME_TOLERANCE: Duration = Duration::from_secs(15 * 60);
+const BLOCK_TIME_TOLERANCE: Duration = Duration::from_secs(15 * 60);
 const MAX_RETRIES: u32 = 100;
 
 /// Half-width of the accepted heading wedge, matching the 45 degree buckets of
@@ -44,6 +46,17 @@ pub(crate) fn generate_flight_plan_with_rng(
     rng: &mut impl Rng,
 ) -> Result<FlightPlan, Error> {
     let aircraft = req.aircraft;
+
+    // Requests within one tolerance of the ceiling cannot reliably find a
+    // route within tolerance, so reject them up front with the honest
+    // achievable maximum instead of burning retries (both call sites map
+    // this to a user-facing hint).
+    let achievable_max = max_block_time(aircraft) - BLOCK_TIME_TOLERANCE;
+    if req.block_time > achievable_max {
+        return Err(Error::BlockTimeTooLong {
+            max: achievable_max,
+        });
+    }
 
     let pinned = match req.departure {
         Some(icao) => {
@@ -345,17 +358,19 @@ mod tests {
     }
 
     #[test]
-    fn long_haul_grid_across_aircraft() {
-        // Every aircraft must find plans across its feasible duration range,
-        // including the long end where the old estimate broke down.
+    fn grid_across_aircraft_and_durations() {
+        // Every aircraft must find plans across its feasible duration range —
+        // short hops (reduced-altitude regime) and the long end where the old
+        // estimate broke down. The skip predicate mirrors the generator's
+        // up-front guard exactly, so the tested band and the accepted band
+        // are the same thing by construction.
         let durations = [20 * 60, 45 * 60, 2 * 3600, 6 * 3600, 10 * 3600];
         for ac in flight::aircraft() {
-            let min = crate::min_block_time(ac);
-            let max = crate::max_block_time(ac);
+            let max = max_block_time(ac);
             for secs in durations {
                 let target = Duration::from_secs(secs);
-                if target < min + BLOCK_TIME_TOLERANCE || target > max - BLOCK_TIME_TOLERANCE {
-                    continue; // outside the feasible band; bounds check rejects these
+                if target > max - BLOCK_TIME_TOLERANCE {
+                    continue; // generator's BlockTimeTooLong band
                 }
                 let request = FlightRequest {
                     aircraft: ac,
@@ -374,6 +389,38 @@ mod tests {
                     fp.block_time.as_secs() / 60
                 );
             }
+        }
+    }
+
+    #[test]
+    fn achievable_ceiling_generates_for_every_aircraft() {
+        // The advertised achievable maximum must actually be achievable. For
+        // the A388 the fuel ceiling exceeds the longest realizable pair on
+        // the planet (10,793 nm SCAR-ZJSY among eligible airports), so the
+        // bounds clamp to Earth's great-circle extent — without that clamp,
+        // the top of the A388's advertised range fails all retries, i.e.
+        // issue #500's failure mode surviving at the ceiling.
+        for ac in flight::aircraft() {
+            let target = max_block_time(ac) - BLOCK_TIME_TOLERANCE;
+            let request = FlightRequest {
+                aircraft: ac,
+                block_time: target,
+                departure: None,
+                direction: None,
+            };
+            let fp =
+                generate_flight_plan_with_rng(&request, &mut seeded_rng()).unwrap_or_else(|e| {
+                    panic!(
+                        "{} at {:?} should find a route: {e:?}",
+                        ac.icao_type, target
+                    )
+                });
+            assert!(
+                fp.block_time.abs_diff(target) <= BLOCK_TIME_TOLERANCE,
+                "{} at ceiling: block time {} min off target",
+                ac.icao_type,
+                fp.block_time.as_secs() / 60
+            );
         }
     }
 }

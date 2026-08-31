@@ -86,17 +86,12 @@ fn nominal_taxi() -> Duration {
     taxi_out_for(AirportSize::Medium) + taxi_in_for(AirportSize::Medium)
 }
 
-/// Climb/descent for the full cruise altitude, used by the fuel-limited
-/// ceiling in [`max_block_time`].
-fn nominal_climb_descent(aircraft: &Aircraft) -> (Duration, f64, Duration, f64) {
-    let alt_ft = f64::from(aircraft.cruise_altitude_ft);
-    let climb_time = Duration::from_secs_f64(alt_ft / f64::from(aircraft.climb_rate_fpm) * 60.0);
-    let climb_dist = f64::from(aircraft.climb_speed_ktas) * climb_time.as_secs_f64() / 3600.0;
-    let descent_time =
-        Duration::from_secs_f64(alt_ft / f64::from(aircraft.descent_rate_fpm) * 60.0);
-    let descent_dist = f64::from(aircraft.descent_speed_ktas) * descent_time.as_secs_f64() / 3600.0;
-    (climb_time, climb_dist, descent_time, descent_dist)
-}
+/// Half the great-circle circumference of the Earth. No airport pair is
+/// farther apart, so the fuel-limited ceiling must never be computed from a
+/// longer distance: the A388's fuel range exceeds this, and without the clamp
+/// requests just under its ceiling would pass the bounds check and then fail
+/// all retries (issue #500's failure mode, surviving at the top of the range).
+const EARTH_MAX_GC_NM: f64 = 10_800.0;
 
 #[derive(Debug, Clone)]
 pub struct FlightPlan {
@@ -170,9 +165,12 @@ pub fn calculate_flight_plan(
 }
 
 /// Block time of the nominal profile (sea-level airports, medium taxi) at a
-/// given distance. Monotonically increasing in distance apart from downward
-/// jumps of a few seconds at the altitude-reduction boundaries, which is far
-/// below the resolution the bisection needs.
+/// given distance. Monotone non-decreasing in distance: at the
+/// altitude-reduction boundaries the function jumps *up* (climb and descent
+/// are slower than cruise, so each 1000 ft step adds more phase time than it
+/// removes cruise time) by at most about 70 s on the slowest airframes —
+/// which is exactly what keeps the bisection below valid, and is far below
+/// the block-time tolerance.
 fn nominal_block_time(aircraft: &Aircraft, distance_nm: f64) -> Duration {
     let p = phases_for_distance(aircraft, distance_nm, 0, 0);
     p.climb_time + p.descent_time + p.cruise_time + nominal_taxi()
@@ -183,17 +181,17 @@ fn nominal_block_time(aircraft: &Aircraft, distance_nm: f64) -> Duration {
 ///
 /// Numerical inverse (bisection) of [`nominal_block_time`]. Exact for the
 /// nominal profile in both regimes — full-altitude cruise and
-/// reduced-altitude short hops — where the previous `0.9 × speed`
-/// approximation's error grew linearly and made long requests
-/// deterministically miss the block-time tolerance regardless of retry
-/// count. Residual error against real plans is bounded by the profile
+/// reduced-altitude short hops, up to the ≤ 70 s step gaps — where the
+/// previous `0.9 × speed` approximation's error grew linearly and made long
+/// requests deterministically miss the block-time tolerance regardless of
+/// retry count. Residual error against real plans is bounded by the profile
 /// variance that airport elevations and taxi sizes introduce.
 pub fn estimate_distance_for_block_time(aircraft: &Aircraft, target_block_time: Duration) -> f64 {
-    // Selection never picks distances beyond the aircraft's fuel range, so
-    // there is nothing to find past `hi`; targets that large fail via the
-    // block-time tolerance the same way as any other impossible request.
+    // Nothing findable beyond the smaller of the aircraft's fuel range and
+    // the planet's own extent; targets that large fail via the block-time
+    // tolerance the same way as any other impossible request.
     let mut lo = 1.0_f64;
-    let mut hi = aircraft.range_nm().max(2.0);
+    let mut hi = aircraft.range_nm().clamp(2.0, EARTH_MAX_GC_NM);
     if nominal_block_time(aircraft, hi) < target_block_time {
         return hi;
     }
@@ -209,30 +207,16 @@ pub fn estimate_distance_for_block_time(aircraft: &Aircraft, target_block_time: 
     (lo + hi) / 2.0
 }
 
-/// Shortest physically possible block time: the minimum-altitude short-hop
-/// profile (1000 ft of climb and descent at `min_alt`) plus minimum taxi.
-/// [`phases_for_distance`] never flies lower than that, so requests below
-/// this can never produce a plan.
-pub fn min_block_time(aircraft: &Aircraft) -> Duration {
-    let p = phases_for_distance(aircraft, 1.0, 0, 0);
+/// Longest sustainable block time: climb and descent plus cruising until the
+/// usable fuel (the same 95% reserve [`Aircraft::range_nm`] assumes) is
+/// spent, with maximum taxi on both ends. Requests above this can never
+/// produce a plan. The distance is clamped to [`EARTH_MAX_GC_NM`]: fuel can
+/// outlast the planet for long-range types, and no route can cover more.
+pub fn max_block_time(aircraft: &Aircraft) -> Duration {
+    let p = phases_for_distance(aircraft, aircraft.range_nm().min(EARTH_MAX_GC_NM), 0, 0);
     p.climb_time
         + p.descent_time
-        + taxi_out_for(AirportSize::Small)
-        + taxi_in_for(AirportSize::Small)
-}
-
-/// Longest sustainable block time: climb and descent plus cruising until the
-/// usable fuel (the same 95% reserve [`Aircraft::range_nm`] assumes) is spent,
-/// with maximum taxi on both ends. Requests above this can never produce a
-/// plan.
-pub fn max_block_time(aircraft: &Aircraft) -> Duration {
-    let (climb_time, climb_dist, descent_time, descent_dist) = nominal_climb_descent(aircraft);
-    let cruise_dist = (aircraft.range_nm() - climb_dist - descent_dist).max(0.0);
-    let cruise_time =
-        Duration::from_secs_f64(cruise_dist / f64::from(aircraft.cruise_speed_ktas) * 3600.0);
-    climb_time
-        + descent_time
-        + cruise_time
+        + p.cruise_time
         + taxi_out_for(AirportSize::Large)
         + taxi_in_for(AirportSize::Large)
 }
@@ -384,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn bounds_bracket_realistic_block_times() {
+    fn realistic_block_times_within_ceiling() {
         let cases = [
             ("KJFK", "KLAX", "B738"),
             ("EDDF", "EDDM", "C172"),
@@ -396,15 +380,12 @@ mod tests {
             let ac = aircraft_by_icao_type(ac_icao).expect(ac_icao);
 
             let fp = calculate_flight_plan(dep, arr, ac);
-            let min = min_block_time(ac);
             let max = max_block_time(ac);
 
-            assert!(min < max, "{ac_icao}: min block must be below max block");
             assert!(
-                fp.block_time >= min && fp.block_time <= max,
-                "{ac_icao}: actual block {:?} outside [{:?}, {:?}]",
+                fp.block_time <= max,
+                "{ac_icao}: actual block {:?} above ceiling {:?}",
                 fp.block_time,
-                min,
                 max
             );
         }
@@ -415,8 +396,10 @@ mod tests {
         let ac = aircraft_by_icao_type("A388").expect("A388");
         let max = max_block_time(ac);
 
-        // range_nm() ≈ 11581 nm at 480 kts ≈ 24.1h of cruise; fixed phases
-        // (climb/descent/taxi) add roughly half an hour on top.
+        // With the Earth-extent clamp: usable range is the lesser of the
+        // ~11,582 nm fuel range and the 10,800 nm great-circle maximum,
+        // i.e. ~23.6h of cruise once climb/descent distance comes out;
+        // fixed phases and Large/Large taxi add roughly half an hour on top.
         assert!(
             max > Duration::from_secs(23 * 3600) && max < Duration::from_secs(25 * 3600),
             "A388 max block was {:?}",
