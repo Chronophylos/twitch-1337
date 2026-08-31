@@ -144,7 +144,7 @@ pub async fn run_alerts_handler<T, L>(
         if cfg.solar.enabled && solar_due.ready(now, cfg.solar.poll_secs) {
             // Validation guarantees a parseable class; fall back to M rather
             // than skipping the feed if that ever stops holding.
-            let min_rank = class_rank(&cfg.solar.min_class).unwrap_or(3);
+            let min_rank = class_rank(&cfg.solar.min_class).unwrap_or((3, 0.0));
             if let Some(body) = fetch(&http, solar::DEFAULT_URL).await
                 && let Some(cands) = parsed_or_skip("solar", solar::parse(&body, min_rank))
             {

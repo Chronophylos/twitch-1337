@@ -617,7 +617,10 @@ fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldErro
     if crate::alerts::class_rank(&a.solar.min_class).is_none() {
         errs.push(FieldError {
             field: "alerts.solar.min_class".into(),
-            message: format!("must be one of A, B, C, M, X (got {:?})", a.solar.min_class),
+            message: format!(
+                "must be a GOES class like A, B, C, M, X or M6, M6.5 (got {:?})",
+                a.solar.min_class
+            ),
         });
     }
 }
