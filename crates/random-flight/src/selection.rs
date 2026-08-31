@@ -184,6 +184,33 @@ mod tests {
     }
 
     #[test]
+    fn f27_generates_one_hour_plan() {
+        let ac = aircraft_by_icao_type("F27").expect("F27");
+        let target = Duration::from_secs(3600);
+        let mut rng = seeded_rng();
+        let fp = generate_flight_plan_with_rng(&req(ac, 1), &mut rng)
+            .expect("F27 should find a 1h route");
+        assert_eq!(fp.aircraft.icao_type, "F27");
+        assert!(
+            fp.block_time.abs_diff(target) <= TOLERANCE,
+            "block time {} min not within tolerance of 60 min",
+            fp.block_time.as_secs() / 60
+        );
+        assert!(fp.departure.runway_length_ft >= ac.min_runway_length_ft);
+        assert!(fp.arrival.runway_length_ft >= ac.min_runway_length_ft);
+        assert!(fp.simbrief_url().contains("type=F27"));
+        eprintln!(
+            "F27 sample: {} → {} | {:.0} nm | {} min | FL{} | {}",
+            fp.departure.icao,
+            fp.arrival.icao,
+            fp.distance_nm,
+            fp.block_time.as_secs() / 60,
+            fp.cruise_altitude_ft / 100,
+            fp.simbrief_url()
+        );
+    }
+
+    #[test]
     fn generates_plan_within_tolerance() {
         let ac = aircraft_by_icao_type("B738").expect("B738");
         let target = Duration::from_secs(2 * 3600);
