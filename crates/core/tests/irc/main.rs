@@ -9,6 +9,7 @@ mod feedback;
 mod haiku;
 mod news;
 mod ping;
+mod ping_name_guard;
 mod schedules_engine;
 mod smoke;
 mod suspend;

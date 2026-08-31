@@ -58,10 +58,16 @@ pub fn is_admin(privmsg: &PrivmsgMessage, hidden_admin_ids: &[String]) -> bool {
 ///
 /// Kept by hand because every trigger lives in its own `Command::name()` and
 /// the registered list is built from `Services` at handler start, so there is
-/// nothing to derive this from inside `PingManager`. **Add a row when you add
-/// a command** — see the "Adding handler" section in `CLAUDE.md`. A missed row
-/// means a ping can shadow that command, which is the behavior that existed
-/// before this list.
+/// nothing to derive this from inside `PingManager`. A missed row means a
+/// ping can shadow that command — the behavior that existed before this list.
+///
+/// The guard is one-directional: `build_commands` debug-asserts that every
+/// registered command has a row (so drift trips in debug builds — `just dev`,
+/// CI, and the `ping_name_guard` integration test), while a stale row is
+/// harmless and may simply be deleted. Aliases are not covered by the guard:
+/// rows mirror `Command::name()` only, so a command trigger that does not
+/// equal its `name()` (e.g. the `!doener` alias normalizing onto `!döner`)
+/// must still be kept in `normalize_command_name` by hand.
 pub const RESERVED_PING_NAMES: &[&str] = &[
     "!ai",
     "!döner",
