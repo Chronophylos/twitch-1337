@@ -5,9 +5,9 @@ use super::ai::{AiBackendKind, AiProfile};
 use super::overrides;
 use super::provider::AiProvider;
 use super::{
-    AiEmotes, AiPrefill, AiSettings, AiWeb, AlertsSettings, AviationstackSettings, Cooldowns,
-    EmoteTrackerSettings, PingsSettings, PotatAttributionSettings, QuakeAlerts, SCHEMA_VERSION,
-    Settings, SolarAlerts, SuspendSettings, TwitchRuntime, WebRuntime,
+    AiEmotes, AiPrefill, AiSettings, AiWeb, AlertsSettings, AviationstackSettings, CmeAlerts,
+    Cooldowns, EmoteTrackerSettings, PingsSettings, PotatAttributionSettings, QuakeAlerts,
+    SCHEMA_VERSION, Settings, SolarAlerts, SuspendSettings, TwitchRuntime, WebRuntime,
 };
 
 impl Settings {
@@ -152,6 +152,18 @@ impl Settings {
                         .min_class
                         .clone()
                         .unwrap_or_else(|| defaults.alerts.solar.min_class.clone()),
+                },
+                cme: CmeAlerts {
+                    enabled: overrides
+                        .alerts
+                        .cme
+                        .enabled
+                        .unwrap_or(defaults.alerts.cme.enabled),
+                    poll_secs: overrides
+                        .alerts
+                        .cme
+                        .poll_secs
+                        .unwrap_or(defaults.alerts.cme.poll_secs),
                 },
                 max_age_secs: overrides
                     .alerts
@@ -916,6 +928,8 @@ mod tests {
         assert_eq!(r.alerts.quake.min_mag_tenths, 40);
         // untouched fields fall through to defaults
         assert_eq!(r.alerts.quake.poll_secs, 300);
+        assert!(!r.alerts.cme.enabled);
+        assert_eq!(r.alerts.cme.poll_secs, 900);
         assert_eq!(r.alerts.solar.min_class, "M");
         assert_eq!(r.alerts.max_age_secs, 7_200);
     }

@@ -7,7 +7,7 @@ use serde::Deserialize;
 use twitch_1337_core::settings::overrides::{
     AiAuroraOverrides, AiConnectionOverrides, AiDreamerOverrides, AiEmotesOverrides,
     AiGrokOverrides, AiHistoryOverrides, AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides,
-    AiRecapOverrides, AiWebOverrides, AlertsOverrides, AviationstackOverrides,
+    AiRecapOverrides, AiWebOverrides, AlertsOverrides, AviationstackOverrides, CmeAlertsOverrides,
     EmoteTrackerOverrides, PotatAttributionOverrides, QuakeAlertsOverrides, SolarAlertsOverrides,
     SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
 };
@@ -588,6 +588,12 @@ struct AlertsForm {
     #[serde(default)]
     alerts_solar_min_class: Option<String>,
     #[serde(default)]
+    alerts_cme_card_visible: Option<String>,
+    #[serde(default)]
+    alerts_cme_enabled: Option<String>,
+    #[serde(default)]
+    alerts_cme_poll_secs: Option<u64>,
+    #[serde(default)]
     alerts_max_age_secs: Option<u64>,
 }
 
@@ -609,6 +615,10 @@ impl AlertsForm {
                 ),
                 poll_secs: self.alerts_solar_poll_secs,
                 min_class: self.alerts_solar_min_class,
+            },
+            cme: CmeAlertsOverrides {
+                enabled: enabled_from_card(&self.alerts_cme_card_visible, &self.alerts_cme_enabled),
+                poll_secs: self.alerts_cme_poll_secs,
             },
             max_age_secs: self.alerts_max_age_secs,
         }
@@ -780,6 +790,9 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             alerts_solar_enabled: form.alerts_solar_enabled,
             alerts_solar_poll_secs: form.alerts_solar_poll_secs,
             alerts_solar_min_class: form.alerts_solar_min_class,
+            alerts_cme_card_visible: form.alerts_cme_card_visible,
+            alerts_cme_enabled: form.alerts_cme_enabled,
+            alerts_cme_poll_secs: form.alerts_cme_poll_secs,
             alerts_max_age_secs: form.alerts_max_age_secs,
         }
         .into_overrides(),

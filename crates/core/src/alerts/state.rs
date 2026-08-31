@@ -22,6 +22,8 @@ pub struct SeenState {
     pub quake: VecDeque<String>,
     #[serde(default)]
     pub solar: VecDeque<String>,
+    #[serde(default)]
+    pub cme: VecDeque<String>,
 }
 
 impl SeenState {
@@ -39,6 +41,7 @@ impl SeenState {
                 info!(
                     quake = state.quake.len(),
                     solar = state.solar.len(),
+                    cme = state.cme.len(),
                     "Loaded alert state"
                 );
                 state
@@ -85,6 +88,7 @@ mod tests {
         let mut s = SeenState::default();
         mark(&mut s.quake, "a".into());
         mark(&mut s.solar, "b".into());
+        mark(&mut s.cme, "c".into());
         s.save(dir.path()).await;
 
         let loaded = SeenState::load(dir.path());
@@ -97,6 +101,24 @@ mod tests {
         let s = SeenState::load(dir.path());
         assert!(s.quake.is_empty());
         assert!(s.solar.is_empty());
+        assert!(s.cme.is_empty());
+    }
+
+    #[test]
+    fn old_file_without_cme_field_loads_empty_cme() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(FILENAME),
+            "(quake: [\"q\"], solar: [\"s\"])",
+        )
+        .expect("write");
+        let s = SeenState::load(dir.path());
+        assert_eq!(s.quake.front().map(String::as_str), Some("q"));
+        assert_eq!(s.solar.front().map(String::as_str), Some("s"));
+        assert!(
+            s.cme.is_empty(),
+            "missing cme must default, not fail the file"
+        );
     }
 
     #[test]

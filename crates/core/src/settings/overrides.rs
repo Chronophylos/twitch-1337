@@ -409,6 +409,8 @@ pub struct AlertsOverrides {
     #[serde(default)]
     pub solar: SolarAlertsOverrides,
     #[serde(default)]
+    pub cme: CmeAlertsOverrides,
+    #[serde(default)]
     pub max_age_secs: Option<u64>,
 }
 
@@ -430,4 +432,12 @@ pub struct SolarAlertsOverrides {
     pub poll_secs: Option<u64>,
     #[serde(default)]
     pub min_class: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CmeAlertsOverrides {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub poll_secs: Option<u64>,
 }

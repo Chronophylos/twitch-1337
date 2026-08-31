@@ -1,0 +1,67 @@
+{# crates/web/templates/settings/cards/alerts_cme.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-alerts_cme" class="settings-card" data-section="alerts_cme">
+  <input type="hidden" name="alerts_cme_card_visible" value="1">
+  <header class="settings-card-head">
+    <div>
+      <h2>Alerts · CMEs</h2>
+      <p>Announces Earth-directed coronal mass ejections from CCMC DONKI WSA-ENLIL forecasts (research / prototyping quality). Changes apply immediately.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    <div class="settings-row" data-section="alerts_cme">
+      <div class="row-left">
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">enabled</code></div>
+        <div class="row-hint">Announce Earth-directed CMEs in chat.</div>
+      </div>
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">{% if current.alerts.cme.enabled %}On{% else %}Off{% endif %}</span>
+        <label class="toggle">
+          <input
+            type="checkbox"
+            name="alerts_cme_enabled"
+            value="1"
+            data-default="{{ defaults.alerts.cme.enabled }}"
+            data-key="enabled"
+            role="switch"
+            aria-label="enabled"
+            {% if current.alerts.cme.enabled %}checked{% endif %}>
+          <span class="toggle-thumb" aria-hidden="true"></span>
+        </label>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("enabled") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{% if defaults.alerts.cme.enabled %}on{% else %}off{% endif %}</span></span>
+      </div>
+    </div>
+    <div class="settings-row" data-section="alerts_cme">
+      <div class="row-left">
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">poll_secs</code></div>
+        <div class="row-hint">How often the DONKI ENLIL feed is polled.</div>
+      </div>
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true" data-pretty-unit="s">{{ current.alerts.cme.poll_secs }} s</span>
+        <div class="num-wrap">
+          <input
+            type="number"
+            class="num-input"
+            name="alerts_cme_poll_secs"
+            min="60"
+            max="86400"
+            value="{{ current.alerts.cme.poll_secs }}"
+            data-default="{{ defaults.alerts.cme.poll_secs }}"
+            data-key="poll_secs">
+          <span class="num-unit">s</span>
+        </div>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("poll_secs") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{{ defaults.alerts.cme.poll_secs }}s</span></span>
+      </div>
+    </div>
+  </div>
+</section>

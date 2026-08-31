@@ -4,7 +4,7 @@ Guide Claude Code work repo.
 
 ## Project
 
-Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), feedback (`!fb`), alerts (earthquake + solar flare monitors, passive, configured at `/settings → Alerts`), version (`!v`).
+Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), feedback (`!fb`), alerts (earthquake + solar flare + Earth-directed CME monitors, passive, configured at `/settings → Alerts`), version (`!v`).
 
 Single persistent IRC connection, broadcast channel routes to independent handler tasks.
 
@@ -170,13 +170,15 @@ and `timeout_secs` live in `settings.ron` (restart-required for connection
 changes), managed via `/settings → Aviationstack`.
 
 Alert monitors live entirely in `settings.ron` — there is no config.toml
-section and no API key, because both feeds (EMSC seismicportal.eu and NOAA
-SWPC) are free and keyless. `alerts.quake` and `alerts.solar` each carry
-`enabled` + `poll_secs`; quake adds `min_mag_tenths` (integer tenths, so
-`Settings` keeps its `Eq` derive) and solar adds `min_class`. The shared
-`alerts.max_age_secs` is the catch-up cutoff. All apply live — no restart.
-The Germany bounding box is a const in `crates/core/src/alerts/quake.rs`,
-deliberately not a setting.
+section and no API key, because all three feeds (EMSC seismicportal.eu, NOAA
+SWPC, and CCMC DONKI WSA-ENLIL) are free and keyless. `alerts.quake` and
+`alerts.solar` each carry `enabled` + `poll_secs`; quake adds
+`min_mag_tenths` (integer tenths, so `Settings` keeps its `Eq` derive) and
+solar adds `min_class`. `alerts.cme` has `enabled` + `poll_secs` only —
+Earth-directed means a parseable shock-arrival time from the ENLIL forecast,
+not flare class. The shared `alerts.max_age_secs` is the catch-up cutoff.
+All apply live — no restart. The Germany bounding box is a const in
+`crates/core/src/alerts/quake.rs`, deliberately not a setting.
 
 `[dhl]` holds only `api_key` and is optional. Its presence enables Aurora's
 `track_shipment` tool; absent, the tool is never registered with the model.
@@ -250,9 +252,9 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - AI clients are resolved per call through `LlmRegistry` (`crates/core/src/llm_factory.rs`), keyed by (provider, base_url, key name). Editing a profile's model or changing an agent's profile selection takes effect on the next turn; changing a provider or base URL builds a new cached client, still no restart. Secrets never leave config.toml — a profile stores a key name, not the key.
 - AI mouths speak over Helix `POST /helix/chat/messages` and never join IRC, so their messages come back in over the normal broadcast channel. `EchoGuard` (`crates/core/src/twitch/echo.rs`) keeps them out of the bot's own input. Two mechanisms, both needed: the Helix `message_id` of every sent reply is registered and peeked on the way back (30s TTL, 512 cap, peeked not removed — the transcript tap and the command dispatcher each check the same id), plus a mouth login/user-id identity backstop for when the id doesn't match. History and transcript writes use `is_echo` (both mechanisms); command dispatch, the 1337 tracker, and emote counting use `is_mouth` (identity only) so a viewer can never be filtered by a stale pending id. Neither is dead code. Chat-turn prompts name the mapping via a runtime Konten/Accounts system appendix; a reply parent from a Mouth is labeled `(self)` / the other agent, not an untrusted viewer.
 - Scheduled messages: list loaded from `settings.ron` into `ScheduleCache`; the `run_schedule_settings_sync` task subscribes to `SettingsStore`'s change-`Notify` and updates the cache when the dashboard saves. The message handler polls the cache every 30s. On Ctrl+C, main notifies `Arc<Notify>`; children finish in-flight `say()` then exit; main awaits handler with 5s timeout.
-- Alerts: one handler task, two feeds, wall-clock due-gates per feed so
+- Alerts: one handler task, three feeds, wall-clock due-gates per feed so
   `poll_secs` edits apply within a tick. Seen ids persist to
-  `$DATA_DIR/alerts.ron` (FIFO, 500/feed). An unseen event older than
+  `$DATA_DIR/alerts.ron` (FIFO, 500/feed, including `cme`). An unseen event older than
   `max_age_secs` is marked seen **without** being announced — that is what
   keeps a post-outage backlog out of chat. Feed failures skip the tick;
   there is no retry, because the next poll is the retry.

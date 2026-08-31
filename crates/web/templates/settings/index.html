@@ -92,11 +92,12 @@
     </div>
 
     <div class="settings-nav-group" data-group="alerts">
-      {% call m::nav_group_head("alerts", "Alerts", 2) %}{% endcall %}
+      {% call m::nav_group_head("alerts", "Alerts", 3) %}{% endcall %}
       <div class="settings-nav-group-body" id="nav-group-body-alerts">
         <ul class="settings-nav-group-items">
           {% call m::nav_section_item("alerts_quake", "alerts_quake", "Earthquakes") %}{% endcall %}
           {% call m::nav_section_item("alerts_solar", "alerts_solar", "Solar flares") %}{% endcall %}
+          {% call m::nav_section_item("alerts_cme", "alerts_cme", "CMEs") %}{% endcall %}
         </ul>
       </div>
     </div>
@@ -140,6 +141,7 @@
       <div class="settings-group-divider" data-group="alerts"><span>ALERTS</span></div>
       {% include "settings/cards/alerts_quake.html" %}
       {% include "settings/cards/alerts_solar.html" %}
+      {% include "settings/cards/alerts_cme.html" %}
       <div class="settings-group-divider" data-group="system"><span>SYSTEM</span></div>
       {% include "settings/cards/web_runtime.html" %}
     </form>

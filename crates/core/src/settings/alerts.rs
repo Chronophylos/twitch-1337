@@ -1,5 +1,6 @@
-//! Earthquake + solar-flare alert settings. Both monitors are
-//! poll-a-JSON-feed, filter, announce-once; the dashboard owns every knob.
+//! Earthquake, solar-flare, and earth-directed CME alert settings. All three
+//! monitors are poll-a-JSON-feed, filter, announce-once; the dashboard owns
+//! every knob.
 
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct AlertsSettings {
     pub quake: QuakeAlerts,
     pub solar: SolarAlerts,
+    pub cme: CmeAlerts,
     /// Shared catch-up cutoff. An unseen event older than this is marked
     /// seen without being announced, so a long outage is absorbed quietly.
     pub max_age_secs: u64,
@@ -17,6 +19,7 @@ impl Default for AlertsSettings {
         Self {
             quake: QuakeAlerts::default(),
             solar: SolarAlerts::default(),
+            cme: CmeAlerts::default(),
             max_age_secs: 7_200,
         }
     }
@@ -57,6 +60,21 @@ impl Default for SolarAlerts {
             enabled: false,
             poll_secs: 900,
             min_class: "M".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CmeAlerts {
+    pub enabled: bool,
+    pub poll_secs: u64,
+}
+
+impl Default for CmeAlerts {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            poll_secs: 900,
         }
     }
 }

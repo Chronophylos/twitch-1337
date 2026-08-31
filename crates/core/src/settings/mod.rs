@@ -31,7 +31,7 @@ pub use ai::{
     AiAurora, AiBackendKind, AiDreamer, AiEmotes, AiGrok, AiHistory, AiMedia, AiMemory, AiPrefill,
     AiProfile, AiRecap, AiSettings, AiWeb,
 };
-pub use alerts::{AlertsSettings, QuakeAlerts, SolarAlerts};
+pub use alerts::{AlertsSettings, CmeAlerts, QuakeAlerts, SolarAlerts};
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
 pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
@@ -194,6 +194,7 @@ pub enum SettingsSection {
     EmoteTrackerPotat,
     AlertsQuake,
     AlertsSolar,
+    AlertsCme,
     WebRuntime,
     Schedules,
 }
@@ -292,6 +293,8 @@ mod tests {
         assert_eq!(s.alerts, AlertsSettings::default());
         assert!(!s.alerts.quake.enabled);
         assert!(!s.alerts.solar.enabled);
+        assert!(!s.alerts.cme.enabled);
+        assert_eq!(s.alerts.cme.poll_secs, 900);
         assert_eq!(s.alerts.quake.min_mag_tenths, 25);
         assert_eq!(s.alerts.solar.min_class, "M");
         assert_eq!(s.alerts.max_age_secs, 7_200);

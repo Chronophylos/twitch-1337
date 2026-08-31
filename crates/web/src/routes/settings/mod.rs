@@ -263,6 +263,14 @@ struct SaveForm {
     alerts_solar_poll_secs: Option<u64>,
     #[serde(default)]
     alerts_solar_min_class: Option<String>,
+
+    // ---- Alerts · CMEs card ----
+    #[serde(default)]
+    alerts_cme_card_visible: Option<String>,
+    #[serde(default)]
+    alerts_cme_enabled: Option<String>,
+    #[serde(default)]
+    alerts_cme_poll_secs: Option<u64>,
     #[serde(default)]
     alerts_max_age_secs: Option<u64>,
 
@@ -435,6 +443,7 @@ async fn reset(
         "emote_tracker_potat" => SettingsSection::EmoteTrackerPotat,
         "alerts_quake" => SettingsSection::AlertsQuake,
         "alerts_solar" => SettingsSection::AlertsSolar,
+        "alerts_cme" => SettingsSection::AlertsCme,
         "web_runtime" => SettingsSection::WebRuntime,
         "ai_behavior" | "ai_aurora" => SettingsSection::AiAurora,
         "ai_recap" => SettingsSection::AiRecap,
