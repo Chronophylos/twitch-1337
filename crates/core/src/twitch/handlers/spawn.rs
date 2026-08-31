@@ -43,6 +43,7 @@ pub(crate) struct HandlerSet {
     pub flight_tracker: JoinHandle<()>,
     pub emote_set_ingest: JoinHandle<()>,
     pub emote_usage: JoinHandle<()>,
+    pub alerts: JoinHandle<()>,
     pub scheduled_messages: JoinHandle<()>,
     pub recap: JoinHandle<()>,
     /// Shared notify so consolidation/shutdown code can drain in-flight
@@ -199,6 +200,17 @@ where
         }
     });
 
+    let alerts = tokio::spawn({
+        let sender = chat_sender.clone();
+        let channel = services.channel.clone();
+        let settings = services.settings.clone();
+        let dir = services.data_dir.clone();
+        let clk = services.clock.clone();
+        async move {
+            crate::alerts::run_alerts_handler(sender, channel, settings, dir, clk).await;
+        }
+    });
+
     let recap_task = match (services.recap.clone(), services.chat_ctx.clone()) {
         (Some(handle), Some(ctx)) => {
             let settings = services.settings.clone();
@@ -247,6 +259,7 @@ where
         flight_tracker,
         emote_set_ingest,
         emote_usage,
+        alerts,
         scheduled_messages,
         recap: recap_task,
         shutdown_notify,
@@ -292,6 +305,7 @@ pub(crate) async fn await_shutdown(
         flight_tracker,
         emote_set_ingest,
         emote_usage,
+        alerts,
         scheduled_messages: mut sched,
         mut recap,
         shutdown_notify,
@@ -314,6 +328,7 @@ pub(crate) async fn await_shutdown(
         result = flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = emote_set_ingest => { error!("Emote set ingest exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = emote_usage => { error!("Emote usage handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
+        result = alerts => { error!("Alerts handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut sched => { error!("Scheduled message handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut recap => { error!("Recap batcher exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut *ping_actor => { error!("Ping actor exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }

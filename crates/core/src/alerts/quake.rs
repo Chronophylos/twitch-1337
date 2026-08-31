@@ -1,14 +1,6 @@
 //! EMSC seismic feed. Bounding box and magnitude filter server-side, so
 //! there is no client-side geo check.
 
-// TDD-before-wiring: `url` and `parse` are exercised by this file's own
-// tests but have no production caller yet — the handler task lands in a
-// later task and calls both.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired up by the alert handler task")
-)]
-
 use chrono::DateTime;
 use chrono_tz::Europe::Berlin;
 use serde::Deserialize;

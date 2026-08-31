@@ -1,13 +1,6 @@
 //! NOAA SWPC GOES X-ray flare feed. A flare is a whole-sun event, so the
 //! only filter is class — there is no region.
 
-// TDD-before-wiring: `parse` is exercised by this file's own tests but has
-// no production caller yet — the handler task lands in a later task.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired up by the alert handler task")
-)]
-
 use chrono::DateTime;
 use chrono_tz::Europe::Berlin;
 use serde::Deserialize;
