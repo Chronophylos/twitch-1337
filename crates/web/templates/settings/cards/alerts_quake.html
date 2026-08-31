@@ -5,8 +5,8 @@
   <input type="hidden" name="alerts_quake_card_visible" value="1">
   <header class="settings-card-head">
     <div>
-      <h2>Alerts · Erdbeben</h2>
-      <p>Meldet Erdbeben in Deutschland aus dem EMSC-Feed. Änderungen gelten sofort.</p>
+      <h2>Alerts · Earthquakes</h2>
+      <p>Announces earthquakes in Germany from the EMSC feed. Changes apply immediately.</p>
     </div>
     <div class="settings-card-tag">
       <span class="card-dirty" hidden>0 modified</span>
@@ -16,7 +16,7 @@
     <div class="settings-row" data-section="alerts_quake">
       <div class="row-left">
         <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">enabled</code></div>
-        <div class="row-hint">Erdbeben in Deutschland in den Chat melden.</div>
+        <div class="row-hint">Announce earthquakes in Germany in chat.</div>
       </div>
       <div class="row-control-cell">
         <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">{% if current.alerts.quake.enabled %}On{% else %}Off{% endif %}</span>
@@ -41,7 +41,7 @@
     <div class="settings-row" data-section="alerts_quake">
       <div class="row-left">
         <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">poll_secs</code></div>
-        <div class="row-hint">Wie oft der EMSC-Feed abgefragt wird.</div>
+        <div class="row-hint">How often the EMSC feed is polled.</div>
       </div>
       <div class="row-control-cell">
         <span class="row-pretty" aria-hidden="true" data-pretty-unit="s">{{ current.alerts.quake.poll_secs }} s</span>
@@ -63,28 +63,37 @@
         <span class="row-default">default <span class="mono">{{ defaults.alerts.quake.poll_secs }}s</span></span>
       </div>
     </div>
-    <div class="settings-row" data-section="alerts_quake">
+    <div class="settings-row" data-section="alerts_quake" data-mag-row>
       <div class="row-left">
         <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">min_mag_tenths</code></div>
-        <div class="row-hint">Mindestmagnitude mal zehn — 25 bedeutet M2.5.</div>
+        <div class="row-hint">Minimum magnitude — 2.5 means M2.5 and above.</div>
       </div>
       <div class="row-control-cell">
-        <span class="row-pretty" aria-hidden="true">{{ current.alerts.quake.min_mag_tenths }}</span>
+        <span class="row-pretty" aria-hidden="true" data-pretty-unit="mag">{{ current.alerts.quake.min_mag_tenths }}</span>
         <div class="num-wrap">
           <input
             type="number"
-            class="num-input"
-            name="alerts_quake_min_mag_tenths"
+            class="num-input mag-display"
             min="0"
-            max="100"
-            value="{{ current.alerts.quake.min_mag_tenths }}"
-            data-default="{{ defaults.alerts.quake.min_mag_tenths }}"
-            data-key="min_mag_tenths">
+            max="10"
+            step="0.1"
+            value=""
+            aria-label="min_mag_tenths">
+          <span class="num-unit">M</span>
         </div>
+        {# Hidden canonical input stores integer tenths (schema `u32`); the
+           visible input shows the decimal magnitude and JS keeps them in
+           sync — same pattern as bytesize_row. #}
+        <input type="hidden"
+               class="mag-canonical"
+               name="alerts_quake_min_mag_tenths"
+               value="{{ current.alerts.quake.min_mag_tenths }}"
+               data-default="{{ defaults.alerts.quake.min_mag_tenths }}"
+               data-key="min_mag_tenths">
       </div>
       <div class="row-right">
         {% call m::row_reset("min_mag_tenths") %}{% endcall %}
-        <span class="row-default">default <span class="mono">{{ defaults.alerts.quake.min_mag_tenths }}</span></span>
+        <span class="row-default">default <span class="mono" data-mag-default="{{ defaults.alerts.quake.min_mag_tenths }}">{{ defaults.alerts.quake.min_mag_tenths }}</span></span>
       </div>
     </div>
   </div>

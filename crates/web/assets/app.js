@@ -143,6 +143,7 @@ document.addEventListener(
   function formatPretty(input, prettyEl) {
     const unit = prettyEl?.dataset.prettyUnit ?? '';
     if (unit === 'bytes' || unit === 'B') return formatBytesIec(input.value);
+    if (unit === 'mag') return formatMag(input.value);
     if (unit === 'bool') return input.checked ? 'On' : 'Off';
     if (input.tagName === 'TEXTAREA') {
       // ID-list rows: mirror the server's comma-joined pretty (textarea holds
@@ -288,6 +289,37 @@ document.addEventListener(
     return parseFloat((bytes / BYTES_UNIT_FACTOR[unit]).toFixed(6)).toString();
   }
 
+  // Magnitude rows (alerts.quake): hidden canonical input stores integer
+  // tenths, the visible input shows the decimal magnitude.
+  const magRows = Array.from(form.querySelectorAll('[data-mag-row]'))
+    .map((el) => ({
+      el,
+      hidden: el.querySelector('.mag-canonical'),
+      display: el.querySelector('.mag-display'),
+    }))
+    .filter((m) => m.hidden && m.display);
+  const magRowByHidden = new Map(magRows.map((m) => [m.hidden, m]));
+
+  function formatMag(tenths) {
+    return (Number(tenths) / 10).toFixed(1);
+  }
+
+
+  function commitMag(m, magnitude) {
+    const clamped = Math.max(0, Math.min(100, Math.round(magnitude * 10)));
+    if (Number(m.hidden.value) === clamped) return;
+    m.hidden.value = String(clamped);
+    m.hidden.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function syncMagRow(m) {
+    if (document.activeElement === m.display) return;
+    const value = formatMag(m.hidden.value);
+    m.display.value = value;
+    const pretty = m.el.querySelector('.row-pretty');
+    if (pretty) pretty.textContent = value;
+  }
+
   function activeUnit(b) {
     return b.buttons.find((btn) => btn.classList.contains('is-active'))?.dataset.unit
       ?? pickBestBytesUnit(Number(b.hidden.value) || 0);
@@ -343,6 +375,31 @@ document.addEventListener(
     syncBytesRow(b);
   }
 
+  for (const m of magRows) {
+    m.display.addEventListener('input', () => {
+      const v = Number(m.display.value);
+      if (!Number.isFinite(v) || v < 0) return;
+      commitMag(m, v);
+    });
+    m.display.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        syncMagRow(m);
+        m.display.blur();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        m.display.blur();
+      }
+    });
+    m.display.addEventListener('blur', () => syncMagRow(m));
+  }
+
+  for (const m of magRows) {
+    const def = m.el.querySelector('[data-mag-default]');
+    if (def) def.textContent = formatMag(def.dataset.magDefault);
+    syncMagRow(m);
+  }
+
   form.addEventListener('input', refreshAll);
   form.addEventListener('change', (e) => {
     const t = e.target;
@@ -363,6 +420,8 @@ document.addEventListener(
     applyDefault(r);
     const b = bytesRowByHidden.get(r.input);
     if (b) syncBytesRow(b);
+    const m = magRowByHidden.get(r.input);
+    if (m) syncMagRow(m);
     refreshAll();
     r.input.focus();
   });

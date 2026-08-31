@@ -6,12 +6,6 @@
     <div>
       <h2>Dreamer</h2>
       <p>Nightly ritual that rewrites memory from yesterday's transcript. Model, effort and tier come from the selected profile.</p>
-      <label class="toggle">
-        <input type="checkbox" name="ai_dreamer_enabled" data-card-toggle value="1"
-               data-key="ai.dreamer.enabled"
-               {% if current.ai.dreamer.enabled %}checked{% endif %}>
-        <span class="toggle-thumb" aria-hidden="true"></span>
-      </label>
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
@@ -20,6 +14,20 @@
      the same hidden input is kept for symmetry with the optional cards. #}
   <input type="hidden" name="ai_dreamer_card_visible" value="1">
   <div class="settings-rows">
+    <div class="settings-row" data-section="ai_dreamer">
+      {% call m::row_head("enabled", "Run the nightly ritual. Model, effort and tier come from the selected profile.") %}{% endcall %}
+      <div class="row-control-cell">
+        <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">{% if current.ai.dreamer.enabled %}On{% else %}Off{% endif %}</span>
+        <label class="toggle">
+          <input type="checkbox" name="ai_dreamer_enabled" data-card-toggle value="1"
+                 data-key="ai.dreamer.enabled"
+                 {% if current.ai.dreamer.enabled %}checked{% endif %}>
+          <span class="toggle-thumb" aria-hidden="true"></span>
+        </label>
+      </div>
+      <div class="row-right"></div>
+    </div>
+
     {% let dreamer_profile = current.ai.dreamer.profile.as_str() %}
     <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
       {% call m::row_head("profile", "Which provider profile this agent runs on.") %}{% endcall %}

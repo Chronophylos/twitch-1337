@@ -1003,6 +1003,9 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   display: flex;
   flex-direction: column;
   gap: 18px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .settings-nav-group { display: flex; flex-direction: column; }

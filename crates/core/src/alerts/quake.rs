@@ -75,11 +75,9 @@ pub(crate) fn parse(body: &str) -> Result<Vec<Candidate>, serde_json::Error> {
                 id: p.unid?,
                 at,
                 line: format!(
-                    "🌍 Erdbeben M{:.1} — {}, {:.0} km tief, {} Uhr",
-                    mag,
-                    region,
-                    depth,
-                    at.with_timezone(&Berlin).format("%H:%M")
+                    "HuggingButTheresAnEarthquake Die Erde hat gewackelt: \
+                     M{mag:.1} bei {region}, {depth:.0} km tief, um {} Uhr",
+                    at.with_timezone(&Berlin).format("%H:%M"),
                 ),
             })
         })
@@ -100,7 +98,7 @@ mod tests {
         // 19:03:58 UTC in August is 21:03 Berlin (CEST, UTC+2)
         assert_eq!(
             out[0].line,
-            "🌍 Erdbeben M4.2 — NORTHERN ITALY, 6 km tief, 21:03 Uhr"
+            "HuggingButTheresAnEarthquake Die Erde hat gewackelt: M4.2 bei NORTHERN ITALY, 6 km tief, um 21:03 Uhr"
         );
     }
 
