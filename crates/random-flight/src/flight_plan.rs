@@ -20,6 +20,24 @@ fn taxi_in_for(size: AirportSize) -> Duration {
     }
 }
 
+/// Climb/descent time and distance for a full-altitude profile, ignoring
+/// airport elevations. Shared by the distance estimate and the feasibility
+/// bounds, which both run before actual airports (and their elevations) are
+/// known.
+fn nominal_climb_descent(aircraft: &Aircraft) -> (Duration, f64, Duration, f64) {
+    let alt_ft = f64::from(aircraft.cruise_altitude_ft);
+    let climb_time = Duration::from_secs_f64(alt_ft / f64::from(aircraft.climb_rate_fpm) * 60.0);
+    let climb_dist = f64::from(aircraft.climb_speed_ktas) * climb_time.as_secs_f64() / 3600.0;
+    let descent_time =
+        Duration::from_secs_f64(alt_ft / f64::from(aircraft.descent_rate_fpm) * 60.0);
+    let descent_dist = f64::from(aircraft.descent_speed_ktas) * descent_time.as_secs_f64() / 3600.0;
+    (climb_time, climb_dist, descent_time, descent_dist)
+}
+
+fn nominal_taxi() -> Duration {
+    taxi_out_for(AirportSize::Medium) + taxi_in_for(AirportSize::Medium)
+}
+
 #[derive(Debug, Clone)]
 pub struct FlightPlan {
     pub departure: &'static Airport,
@@ -118,14 +136,45 @@ pub fn calculate_flight_plan(
 
 /// Estimate the total flight distance for a target block time.
 /// Used by the selection algorithm to narrow the airport search band.
+///
+/// This is the exact inverse of [`calculate_flight_plan`]'s block-time model
+/// for a nominal (full-altitude, medium-taxi) profile:
+/// `block = climb + descent + taxi + cruise`, where climb/descent cover fixed
+/// distances at their own speeds. The old `0.9 × speed` approximation treated
+/// the climb/descent overhead as proportional to duration, so its error grew
+/// linearly and made long requests (>= ~6h) deterministically miss the
+/// block-time tolerance no matter how often they were retried.
 pub fn estimate_distance_for_block_time(aircraft: &Aircraft, target_block_time: Duration) -> f64 {
-    let taxi_estimate = taxi_out_for(AirportSize::Medium) + taxi_in_for(AirportSize::Medium);
-    let flight_time_hrs = target_block_time
-        .saturating_sub(taxi_estimate)
-        .as_secs_f64()
-        / 3600.0;
-    let effective_speed = f64::from(aircraft.cruise_speed_ktas) * 0.90;
-    effective_speed * flight_time_hrs
+    let (climb_time, climb_dist, descent_time, descent_dist) = nominal_climb_descent(aircraft);
+    let fixed_time = climb_time + descent_time + nominal_taxi();
+    let cruise_time = target_block_time.saturating_sub(fixed_time);
+
+    climb_dist
+        + descent_dist
+        + f64::from(aircraft.cruise_speed_ktas) * cruise_time.as_secs_f64() / 3600.0
+}
+
+/// Shortest physically possible block time: climb, descent, and minimum taxi
+/// with zero cruise time. Requests below this can never produce a plan.
+pub fn min_block_time(aircraft: &Aircraft) -> Duration {
+    let (climb_time, _, descent_time, _) = nominal_climb_descent(aircraft);
+    climb_time + descent_time + taxi_out_for(AirportSize::Small) + taxi_in_for(AirportSize::Small)
+}
+
+/// Longest sustainable block time: climb and descent plus cruising until the
+/// usable fuel (the same 95% reserve [`Aircraft::range_nm`] assumes) is spent,
+/// with maximum taxi on both ends. Requests above this can never produce a
+/// plan.
+pub fn max_block_time(aircraft: &Aircraft) -> Duration {
+    let (climb_time, climb_dist, descent_time, descent_dist) = nominal_climb_descent(aircraft);
+    let cruise_dist = (aircraft.range_nm() - climb_dist - descent_dist).max(0.0);
+    let cruise_time =
+        Duration::from_secs_f64(cruise_dist / f64::from(aircraft.cruise_speed_ktas) * 3600.0);
+    climb_time
+        + descent_time
+        + cruise_time
+        + taxi_out_for(AirportSize::Large)
+        + taxi_in_for(AirportSize::Large)
 }
 
 #[cfg(test)]
@@ -233,8 +282,83 @@ mod tests {
 
         let est = estimate_distance_for_block_time(ac, target);
 
-        // B738 at ~414 kts effective * ~1.73h ≈ 717 nm
+        // ~1h cruise at 460 kts + climb/descent distance ≈ 690 nm
         assert!(est > 500.0 && est < 900.0, "estimate was {est} nm");
+    }
+
+    #[test]
+    fn estimate_inverts_block_time_model() {
+        // The estimate must invert calculate_flight_plan's block-time model:
+        // feed it a plan's actual block time and the reproduced distance must
+        // map back to that block time within the selection tolerance. Residual
+        // error comes from the nominal profile (airport elevation and taxi
+        // size are unknown before selection; taxi varies by ±12 min between
+        // small and large), so assert in the time domain, not distance.
+        let cases = [
+            ("KJFK", "KLAX", "B738"),
+            ("EDDF", "EGLL", "B738"),
+            ("EDDF", "EDDM", "B738"),
+            ("EDDF", "EDDM", "C172"),
+            ("EDDF", "EHAM", "F27"),
+            ("KJFK", "EGLL", "A388"),
+        ];
+        for (dep_icao, arr_icao, ac_icao) in cases {
+            let dep = find_by_icao(dep_icao).expect(dep_icao);
+            let arr = find_by_icao(arr_icao).expect(arr_icao);
+            let ac = aircraft_by_icao_type(ac_icao).expect(ac_icao);
+
+            let fp = calculate_flight_plan(dep, arr, ac);
+            let est = estimate_distance_for_block_time(ac, fp.block_time);
+
+            let err_min = (est - fp.distance_nm).abs() / f64::from(ac.cruise_speed_ktas) * 60.0;
+            assert!(
+                err_min <= 15.0,
+                "{dep_icao}-{arr_icao} {ac_icao}: estimate {est:.0} nm vs actual {:.0} nm \
+                 ({err_min:.1} min of block time off)",
+                fp.distance_nm
+            );
+        }
+    }
+
+    #[test]
+    fn bounds_bracket_realistic_block_times() {
+        let cases = [
+            ("KJFK", "KLAX", "B738"),
+            ("EDDF", "EDDM", "C172"),
+            ("KJFK", "EGLL", "A388"),
+        ];
+        for (dep_icao, arr_icao, ac_icao) in cases {
+            let dep = find_by_icao(dep_icao).expect(dep_icao);
+            let arr = find_by_icao(arr_icao).expect(arr_icao);
+            let ac = aircraft_by_icao_type(ac_icao).expect(ac_icao);
+
+            let fp = calculate_flight_plan(dep, arr, ac);
+            let min = min_block_time(ac);
+            let max = max_block_time(ac);
+
+            assert!(min < max, "{ac_icao}: min block must be below max block");
+            assert!(
+                fp.block_time >= min && fp.block_time <= max,
+                "{ac_icao}: actual block {:?} outside [{:?}, {:?}]",
+                fp.block_time,
+                min,
+                max
+            );
+        }
+    }
+
+    #[test]
+    fn a388_max_block_reflects_fuel_range() {
+        let ac = aircraft_by_icao_type("A388").expect("A388");
+        let max = max_block_time(ac);
+
+        // range_nm() ≈ 11581 nm at 480 kts ≈ 24.1h of cruise; fixed phases
+        // (climb/descent/taxi) add roughly half an hour on top.
+        assert!(
+            max > Duration::from_secs(23 * 3600) && max < Duration::from_secs(25 * 3600),
+            "A388 max block was {:?}",
+            max
+        );
     }
 
     #[test]

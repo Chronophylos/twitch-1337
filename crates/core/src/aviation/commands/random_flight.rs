@@ -62,6 +62,28 @@ where
         return Ok(());
     };
 
+    // Reject physically impossible requests up front instead of burning
+    // generation retries on them.
+    if duration < random_flight::min_block_time(aircraft) {
+        sender
+            .reply(privmsg, "Das is zu kurz, kleiner wird nicht FDM")
+            .await;
+        return Ok(());
+    }
+    if duration > random_flight::max_block_time(aircraft) {
+        let max = crate::cooldown::format_duration_hm(random_flight::max_block_time(aircraft));
+        sender
+            .reply(
+                privmsg,
+                &format!(
+                    "Mit dem {} schaffste maximal {}, da geht keine Minute mehr FDM",
+                    aircraft.icao_type, max
+                ),
+            )
+            .await;
+        return Ok(());
+    }
+
     // Can take many retries internally
     let result = tokio::task::spawn_blocking(move || {
         random_flight::generate_flight_plan(&random_flight::FlightRequest {

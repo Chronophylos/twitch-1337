@@ -325,4 +325,53 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, Error::TargetIsDeparture));
     }
+    #[test]
+    fn a388_finds_ten_hour_plan() {
+        // Regression for issue #500: the old proportional distance estimate
+        // drifted ~44 min off at 10h, so every retry missed the ±15 min
+        // block-time tolerance and !fl A388 10h always failed.
+        let ac = aircraft_by_icao_type("A388").expect("A388");
+        let target = Duration::from_secs(10 * 3600);
+
+        let fp = generate_flight_plan(&req(ac, 10)).expect("A388 should find a 10h route");
+
+        assert!(
+            fp.block_time.abs_diff(target) <= TOLERANCE,
+            "block time {} min not within tolerance of 600 min",
+            fp.block_time.as_secs() / 60
+        );
+    }
+
+    #[test]
+    fn long_haul_grid_across_aircraft() {
+        // Every aircraft must find plans across its feasible duration range,
+        // including the long end where the old estimate broke down.
+        let durations = [45 * 60, 2 * 3600, 6 * 3600, 10 * 3600];
+        for ac in flight::aircraft() {
+            let min = crate::min_block_time(ac);
+            let max = crate::max_block_time(ac);
+            for secs in durations {
+                let target = Duration::from_secs(secs);
+                if target < min + TOLERANCE || target > max - TOLERANCE {
+                    continue; // outside the feasible band; bounds check rejects these
+                }
+                let request = FlightRequest {
+                    aircraft: ac,
+                    block_time: target,
+                    departure: None,
+                    direction: None,
+                };
+                let fp = generate_flight_plan(&request).unwrap_or_else(|e| {
+                    panic!("{} at {}s should find a route: {e:?}", ac.icao_type, secs)
+                });
+                assert!(
+                    fp.block_time.abs_diff(target) <= TOLERANCE,
+                    "{} at {}s: block time {} min off target",
+                    ac.icao_type,
+                    secs,
+                    fp.block_time.as_secs() / 60
+                );
+            }
+        }
+    }
 }
