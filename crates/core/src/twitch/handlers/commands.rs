@@ -2,7 +2,6 @@
 //! Owns the long-running task that filters PRIVMSGs from the broadcast channel
 //! and routes them to the matching `Command` implementation.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use tokio::{sync::broadcast, time::Duration};
@@ -231,12 +230,9 @@ where
         )));
     }
 
-    // Snapshot built-in trigger names before PingTriggerCommand (a catch-all
-    // over ping names, not a real trigger) is pushed below.
-    let builtin_names: HashSet<String> = cmd_list
-        .iter()
-        .map(|c| commands::normalize_command_name(c.name()))
-        .collect();
+    // Everything registered so far is a real trigger. PingTriggerCommand, the
+    // one catch-all, is pushed below and is excluded from the shadowing check.
+    let builtins_end = cmd_list.len();
 
     // PingTriggerCommand must be last: it matches any !<name> that is a registered ping,
     // so built-in commands earlier in the list take priority and can't be shadowed.
@@ -252,32 +248,34 @@ where
     // wins here, but nothing stops someone naming a ping `lb` from the
     // dashboard. That's a config mistake, not a crash-worthy fault, so it
     // only surfaces in dev/test builds rather than taking prod down.
-    debug_assert!(
-        {
-            let shadowed = services
-                .ping_names_rx
-                .borrow()
-                .iter()
-                .find(|name| shadows_builtin_command(name, &builtin_names))
-                .cloned();
-            if let Some(name) = shadowed {
-                panic!("ping `{name}` shadows a built-in command trigger");
-            }
-            true
-        },
-        "unreachable: panics above on collision"
-    );
+    #[cfg(debug_assertions)]
+    {
+        let ping_names = services.ping_names_rx.borrow();
+        if let Some(ping) = first_shadowed_ping(ping_names.iter(), |trigger| {
+            cmd_list[..builtins_end].iter().any(|c| c.matches(trigger))
+        }) {
+            panic!("ping `{ping}` shadows a built-in command trigger");
+        }
+    }
 
     run_command_dispatcher(broadcast_rx, services, snapshot, sender, cmd_list).await;
 }
 
-/// True if `ping_name` (already normalized: lowercase, no `!`) collides
-/// with a built-in command's normalized trigger, so `PingTriggerCommand`'s
-/// catch-all would never see it. `builtin_names` must be built from
-/// `Command::name()` via `normalize_command_name`, which also collapses
-/// `doener_calc`'s `döner`/`doener` alias onto a single key.
-fn shadows_builtin_command(ping_name: &str, builtin_names: &HashSet<String>) -> bool {
-    builtin_names.contains(&commands::normalize_command_name(ping_name))
+/// First ping name that a built-in command would claim, if any.
+///
+/// `matches_builtin` receives the full `!<ping>` trigger and should ask the
+/// registered commands' own [`Command::matches`] — the same predicate
+/// [`find_enabled_command`] runs. Re-deriving the rule here instead (say, by
+/// normalizing names and comparing strings) drifts from real dispatch: a
+/// command is free to override `matches` with its own casing rules, as
+/// `doener_calc` does for `!döner`/`!doener`.
+fn first_shadowed_ping<'a>(
+    ping_names: impl IntoIterator<Item = &'a String>,
+    matches_builtin: impl Fn(&str) -> bool,
+) -> Option<&'a String> {
+    ping_names
+        .into_iter()
+        .find(|ping| matches_builtin(&format!("!{ping}")))
 }
 
 struct CommandInvocation<'a> {
@@ -695,22 +693,31 @@ mod tests {
     }
 
     #[test]
-    fn shadows_builtin_command_detects_collision_and_stays_quiet_otherwise() {
-        let builtin_names: HashSet<String> = ["!lb", "!döner"]
-            .into_iter()
-            .map(commands::normalize_command_name)
-            .collect();
+    fn first_shadowed_ping_reports_the_colliding_name() {
+        // Stands in for a registered command's own `matches`, including one
+        // that accepts several spellings the way `doener_calc` does.
+        let matches_builtin = |trigger: &str| {
+            let lowered = trigger.to_lowercase();
+            lowered == "!lb" || lowered == "!döner" || lowered == "!doener"
+        };
 
-        // Exact collision with a plain built-in trigger.
-        assert!(shadows_builtin_command("lb", &builtin_names));
-        // Case doesn't save it.
-        assert!(shadows_builtin_command("LB", &builtin_names));
-        // doener_calc's alternate spelling collapses onto the same key via
-        // normalize_command_name, so a ping named the ASCII spelling must
-        // also be caught, not just the umlaut one.
-        assert!(shadows_builtin_command("doener", &builtin_names));
+        let free = ["uwu".to_owned(), "kappa".to_owned()];
+        assert_eq!(first_shadowed_ping(free.iter(), matches_builtin), None);
 
-        // A genuinely free name is quiet.
-        assert!(!shadows_builtin_command("uwu", &builtin_names));
+        // The ping is stored without the `!`; the helper adds it back before
+        // asking, so a plain collision is caught.
+        let collides = ["uwu".to_owned(), "lb".to_owned()];
+        assert_eq!(
+            first_shadowed_ping(collides.iter(), matches_builtin),
+            Some(&"lb".to_owned())
+        );
+
+        // Casing and the alternate spelling are the command's business, not
+        // ours — delegating to `matches` means both are covered for free.
+        let umlaut = ["DÖNER".to_owned()];
+        assert_eq!(
+            first_shadowed_ping(umlaut.iter(), matches_builtin),
+            Some(&"DÖNER".to_owned())
+        );
     }
 }
