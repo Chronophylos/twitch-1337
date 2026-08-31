@@ -61,7 +61,7 @@ pub(crate) fn select_announcements(
 
 /// Per-feed poll gate. Tracked on the wall clock rather than a tokio
 /// `Interval` so a `poll_secs` change from the dashboard applies on the
-/// next tick without rebuilding anything.
+/// very next wake — immediate via the settings change signal.
 #[derive(Debug, Default)]
 struct Due {
     last: Option<DateTime<Utc>>,
@@ -82,8 +82,10 @@ impl Due {
     }
 }
 
-/// How often the loop wakes to re-check all feeds' gates. Far shorter than
-/// any sane `poll_secs`, so a dashboard edit takes effect within a minute.
+/// Fallback wake for the loop's `select!`. A settings-commit notification
+/// wakes the loop immediately, so a dashboard edit takes effect at once;
+/// the heartbeat only bounds staleness if a notification is missed and
+/// drives ad-hoc handles, whose change signal never fires (e.g. tests).
 const TICK: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Poll the earthquake, solar flare, and Earth-directed CME feeds and announce
@@ -122,10 +124,14 @@ pub async fn run_alerts_handler<T, L>(
     let mut quake_due = Due::default();
     let mut solar_due = Due::default();
     let mut cme_due = Due::default();
+    let mut changes = settings.subscribe();
     tracing::info!("Alerts handler started");
 
     loop {
-        tokio::time::sleep(TICK).await;
+        tokio::select! {
+            _ = tokio::time::sleep(TICK) => {}
+            _ = changes.next() => {}
+        }
         let now = clock.now_utc();
         let cfg = settings.load().alerts.clone();
         let max_age = Duration::seconds(i64::try_from(cfg.max_age_secs).unwrap_or(i64::MAX));
