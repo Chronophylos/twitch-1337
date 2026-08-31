@@ -607,6 +607,7 @@ fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldErro
         86_400,
         errs,
     );
+    bound("alerts.cme.poll_secs", a.cme.poll_secs, 60, 86_400, errs);
     bound("alerts.max_age_secs", a.max_age_secs, 60, 604_800, errs);
     if a.quake.min_mag_tenths > 100 {
         errs.push(FieldError {
@@ -1456,10 +1457,12 @@ mod tests {
         s.alerts.solar.min_class = "Q".into();
         s.alerts.quake.min_mag_tenths = 500;
         s.alerts.quake.poll_secs = 5;
+        s.alerts.cme.poll_secs = 5;
         let errs = s.validate(&ctx()).expect_err("must fail");
         let fields: Vec<&str> = errs.iter().map(|e| e.field.as_str()).collect();
         assert!(fields.contains(&"alerts.solar.min_class"));
         assert!(fields.contains(&"alerts.quake.min_mag_tenths"));
         assert!(fields.contains(&"alerts.quake.poll_secs"));
+        assert!(fields.contains(&"alerts.cme.poll_secs"));
     }
 }

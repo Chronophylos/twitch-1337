@@ -222,10 +222,11 @@ impl SettingsStore {
             SettingsSection::AlertsQuake => current.alerts.quake = Default::default(),
             SettingsSection::AlertsSolar => {
                 current.alerts.solar = Default::default();
-                // max_age_secs is shared by both feeds and has no card of its
-                // own; it rides with the solar card so a reset can clear it.
+                // max_age_secs is shared by all alert feeds and has no card of
+                // its own; it rides with the solar card so a reset can clear it.
                 current.alerts.max_age_secs = None;
             }
+            SettingsSection::AlertsCme => current.alerts.cme = Default::default(),
             SettingsSection::WebRuntime => current.web = Default::default(),
             SettingsSection::Schedules => current.schedules = None,
         }
@@ -360,6 +361,40 @@ mod tests {
         assert_eq!(
             s.cooldowns.news,
             Settings::compiled_defaults().cooldowns.news
+        );
+    }
+
+    #[tokio::test]
+    async fn alerts_cme_reset_does_not_clear_max_age() {
+        let (_dir, store, handle, _log) = fixture();
+        let actor = Actor {
+            user_id: "1".into(),
+            user_login: "tester".into(),
+        };
+        let patch = SettingsOverrides {
+            alerts: crate::settings::overrides::AlertsOverrides {
+                cme: crate::settings::overrides::CmeAlertsOverrides {
+                    enabled: Some(true),
+                    poll_secs: Some(600),
+                },
+                max_age_secs: Some(99),
+                ..Default::default()
+            },
+            ..SettingsOverrides::default()
+        };
+        store.apply(patch, actor.clone()).await.expect("apply");
+        assert!(handle.load().alerts.cme.enabled);
+        assert_eq!(handle.load().alerts.max_age_secs, 99);
+        store
+            .reset(SettingsSection::AlertsCme, actor)
+            .await
+            .expect("reset");
+        let s = handle.load();
+        assert!(!s.alerts.cme.enabled);
+        assert_eq!(s.alerts.cme.poll_secs, 900);
+        assert_eq!(
+            s.alerts.max_age_secs, 99,
+            "max_age rides with the solar card"
         );
     }
 

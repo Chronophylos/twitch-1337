@@ -354,6 +354,12 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.alerts.solar.min_class.as_ref() {
         into.alerts.solar.min_class = Some(v.clone());
     }
+    if let Some(v) = patch.alerts.cme.enabled {
+        into.alerts.cme.enabled = Some(v);
+    }
+    if let Some(v) = patch.alerts.cme.poll_secs {
+        into.alerts.cme.poll_secs = Some(v);
+    }
     if let Some(v) = patch.alerts.max_age_secs {
         into.alerts.max_age_secs = Some(v);
     }
@@ -377,8 +383,8 @@ mod tests {
     use super::*;
     use crate::schedule::{Schedule, Trigger, WeekdaySet};
     use crate::settings::overrides::{
-        AlertsOverrides, AviationstackOverrides, QuakeAlertsOverrides, SolarAlertsOverrides,
-        SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
+        AlertsOverrides, AviationstackOverrides, CmeAlertsOverrides, QuakeAlertsOverrides,
+        SolarAlertsOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
     };
 
     #[test]
@@ -468,6 +474,10 @@ mod tests {
                     poll_secs: Some(120),
                     min_class: Some("M".into()),
                 },
+                cme: CmeAlertsOverrides {
+                    enabled: Some(true),
+                    poll_secs: Some(600),
+                },
                 max_age_secs: Some(7200),
             },
             ..Default::default()
@@ -479,6 +489,8 @@ mod tests {
         assert_eq!(into.alerts.solar.enabled, Some(false));
         assert_eq!(into.alerts.solar.poll_secs, Some(120));
         assert_eq!(into.alerts.solar.min_class.as_deref(), Some("M"));
+        assert_eq!(into.alerts.cme.enabled, Some(true));
+        assert_eq!(into.alerts.cme.poll_secs, Some(600));
         assert_eq!(into.alerts.max_age_secs, Some(7200));
 
         let default_patch = SettingsOverrides::default();
@@ -489,6 +501,8 @@ mod tests {
         assert_eq!(into.alerts.solar.enabled, Some(false));
         assert_eq!(into.alerts.solar.poll_secs, Some(120));
         assert_eq!(into.alerts.solar.min_class.as_deref(), Some("M"));
+        assert_eq!(into.alerts.cme.enabled, Some(true));
+        assert_eq!(into.alerts.cme.poll_secs, Some(600));
         assert_eq!(into.alerts.max_age_secs, Some(7200));
     }
 
