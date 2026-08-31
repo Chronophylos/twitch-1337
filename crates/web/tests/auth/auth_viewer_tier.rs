@@ -151,7 +151,7 @@ async fn viewer_dropped_from_allowlist_after_recheck_window() {
     // Inject viewer allowlist into the live settings handle before building
     // the router so the role-recheck gate reads it from settings.
     {
-        let mut s = (*state.settings.load_full()).clone();
+        let mut s = (*state.settings.load()).clone();
         s.twitch.viewer_allowlist = vec!["42".to_owned()];
         state.settings.store(std::sync::Arc::new(s));
     }
@@ -177,7 +177,7 @@ async fn viewer_dropped_from_allowlist_after_recheck_window() {
     // Now clear the allowlist in settings — the same handle is shared by the
     // router, so the next role-recheck will see an empty list.
     {
-        let mut s = (*state.settings.load_full()).clone();
+        let mut s = (*state.settings.load()).clone();
         s.twitch.viewer_allowlist = vec![];
         state.settings.store(std::sync::Arc::new(s));
     }

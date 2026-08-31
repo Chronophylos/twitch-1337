@@ -1,11 +1,12 @@
 //! Dashboard-managed runtime settings.
 //!
 //! `Settings` is the fully-resolved snapshot read by command handlers via
-//! a `SettingsHandle = Arc<ArcSwap<Settings>>`. Sparse `SettingsOverrides`
-//! (see `overrides.rs`) live on disk at `$DATA_DIR/settings.ron`; missing
-//! fields fall through to `compiled_defaults()`.
+//! a `SettingsHandle` (snapshot slot plus the store's change signal). Sparse
+//! `SettingsOverrides` (see `overrides.rs`) live on disk at
+//! `$DATA_DIR/settings.ron`; missing fields fall through to
+//! `compiled_defaults()`.
 //!
-//! Writes go through `SettingsStore::apply` (see `store.rs`) which
+//! Writes go through `SettingsStore::apply` (see `store/mod.rs`) which
 //! validates, atomically persists, swaps the handle, and appends an audit
 //! entry. Override → effective resolution lives in `resolve.rs`; per-field
 //! validation lives in `validation.rs`.
@@ -45,13 +46,99 @@ pub use twitch::TwitchRuntime;
 pub use validation::ValidationContext;
 pub use web::WebRuntime;
 
+use std::pin::Pin;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::sync::Notify;
 
-pub type SettingsHandle = Arc<ArcSwap<Settings>>;
+/// Read side of the runtime settings: a snapshot slot plus the change signal
+/// fired by `SettingsStore` on every commit. Handlers hold a clone and read
+/// [`Self::load`] per use; long-running tasks [`Self::subscribe`] to reload
+/// on dashboard edits.
+#[derive(Debug, Clone)]
+pub struct SettingsHandle {
+    snap: Arc<ArcSwap<Settings>>,
+    changes: Arc<Notify>,
+}
+
+impl SettingsHandle {
+    /// Wrap `settings` in an ad-hoc handle.
+    ///
+    /// No store is attached, so [`Self::subscribe`] never fires: the private
+    /// `Notify` is never notified. Intended for tests and ad-hoc handles.
+    pub fn from_settings(settings: Settings) -> Self {
+        Self {
+            snap: Arc::new(ArcSwap::from_pointee(settings)),
+            changes: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Build a handle sharing `changes` with a store. Used by
+    /// `SettingsStore::open` so store commits wake handle subscribers.
+    pub(crate) fn with_changes(settings: Settings, changes: Arc<Notify>) -> Self {
+        Self {
+            snap: Arc::new(ArcSwap::from_pointee(settings)),
+            changes,
+        }
+    }
+
+    /// Current effective settings snapshot.
+    pub fn load(&self) -> Arc<Settings> {
+        self.snap.load_full()
+    }
+
+    /// Swap the live snapshot without validation, persistence, audit, or
+    /// change notification. The store's internal commit path uses this;
+    /// all other writes must go through [`crate::settings::SettingsStore`].
+    pub(crate) fn swap(&self, snapshot: Arc<Settings>) {
+        self.snap.store(snapshot);
+    }
+
+    /// Swap the live snapshot. Test-only escape hatch: production writes must
+    /// go through `SettingsStore` (validate → persist → audit → notify), which
+    /// this bypasses entirely. Gated so the handle's public API stays the
+    /// complete read side.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn store(&self, snapshot: Arc<Settings>) {
+        self.swap(snapshot);
+    }
+
+    /// Subscribe to settings changes. The subscription is armed at
+    /// construction, so a commit between subscribing and the first `await`
+    /// is not lost.
+    pub fn subscribe(&self) -> Subscription {
+        Subscription::new(Arc::clone(&self.changes))
+    }
+}
+
+/// Change subscription from [`SettingsHandle::subscribe`].
+pub struct Subscription {
+    changes: Arc<Notify>,
+    notified: Pin<Box<tokio::sync::futures::OwnedNotified>>,
+}
+
+impl Subscription {
+    fn new(changes: Arc<Notify>) -> Self {
+        let mut notified = Box::pin(changes.clone().notified_owned());
+        // Register the waiter before the caller's first await so a
+        // `notify_waiters()` fired in between cannot be lost.
+        notified.as_mut().enable();
+        Self { changes, notified }
+    }
+
+    /// Wait for the next settings change.
+    pub async fn next(&mut self) {
+        self.notified.as_mut().await;
+        // Re-arm: fresh notified future, registered via enable() BEFORE
+        // returning, so the waiter spans the caller's non-await work
+        // (notify_waiters is not latching).
+        self.notified = Box::pin(self.changes.clone().notified_owned());
+        self.notified.as_mut().enable();
+    }
+}
 
 pub const SCHEMA_VERSION: u32 = 7;
 
@@ -164,7 +251,7 @@ impl Settings {
 
 #[cfg(any(test, feature = "testing"))]
 pub fn test_handle() -> SettingsHandle {
-    Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
+    SettingsHandle::from_settings(Settings::compiled_defaults())
 }
 
 #[cfg(test)]
@@ -208,5 +295,88 @@ mod tests {
         assert_eq!(s.alerts.quake.min_mag_tenths, 25);
         assert_eq!(s.alerts.solar.min_class, "M");
         assert_eq!(s.alerts.max_age_secs, 7_200);
+    }
+
+    #[test]
+    fn handle_and_subscription_are_send() {
+        // Handlers are tokio::spawn-ed with these, so they must stay Send.
+        fn assert_send<T: Send>() {}
+        assert_send::<SettingsHandle>();
+        assert_send::<Subscription>();
+    }
+
+    const SUB_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+    fn actor() -> Actor {
+        Actor {
+            user_id: "1".into(),
+            user_login: "tester".into(),
+        }
+    }
+
+    fn latency_patch(ms: u32) -> SettingsOverrides {
+        SettingsOverrides {
+            twitch: crate::settings::overrides::TwitchOverrides {
+                expected_latency: Some(ms),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Store-backed handle: `apply` wakes every waiter armed before the
+    /// commit, and the snapshot swap is visible via `load` right after.
+    #[tokio::test]
+    async fn subscription_delivers_store_apply() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (store, handle) =
+            SettingsStore::open(dir.path(), Arc::new(MemoryAuditLog::new()), "test_chan")
+                .expect("open store");
+
+        // Both waiters are armed (registered) at construction, BEFORE the
+        // commit below — neither wake can be lost.
+        let mut sub = handle.subscribe();
+        let mut unawaited = handle.subscribe();
+
+        store
+            .apply(latency_patch(300), actor())
+            .await
+            .expect("apply");
+
+        tokio::time::timeout(SUB_DEADLINE, sub.next())
+            .await
+            .expect("subscription created before the apply must resolve");
+        assert_eq!(handle.load().twitch.expected_latency, 300);
+
+        // A subscription created (and thus armed) before the commit but never
+        // awaited still catches it: its construction-time waiter was already
+        // registered when `notify_waiters()` fired.
+        tokio::time::timeout(SUB_DEADLINE, unawaited.next())
+            .await
+            .expect("waiter armed at construction catches a commit before its first await");
+
+        // `next()` re-arms a fresh waiter BEFORE returning, so a commit
+        // landing between two awaits is caught by the next `next()` call.
+        store
+            .apply(latency_patch(350), actor())
+            .await
+            .expect("apply");
+        tokio::time::timeout(SUB_DEADLINE, sub.next())
+            .await
+            .expect("re-armed waiter catches a commit between awaits");
+        assert_eq!(handle.load().twitch.expected_latency, 350);
+    }
+
+    /// `from_settings` handles carry a private `Notify` nobody notifies, so
+    /// subscribers must never wake — a timeout on `next()` must elapse.
+    #[tokio::test]
+    async fn from_settings_subscription_never_fires() {
+        let handle = SettingsHandle::from_settings(Settings::compiled_defaults());
+        let mut sub = handle.subscribe();
+        let fired = tokio::time::timeout(std::time::Duration::from_millis(100), sub.next()).await;
+        assert!(
+            fired.is_err(),
+            "from_settings handle has no store behind it and must never signal"
+        );
     }
 }

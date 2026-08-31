@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
-
 use super::*;
 use crate::ai::chat_history::ChatHistorySource;
 use crate::ai::memory::store::MemoryStore;
@@ -126,7 +124,7 @@ fn format_entry_line_untagged_bot_login_is_self() {
 }
 
 fn test_handle() -> crate::settings::SettingsHandle {
-    Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
+    crate::settings::SettingsHandle::from_settings(Settings::compiled_defaults())
 }
 
 async fn test_store() -> (MemoryStore, tempfile::TempDir) {

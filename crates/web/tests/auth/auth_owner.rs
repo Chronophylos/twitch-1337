@@ -130,7 +130,7 @@ async fn owner_dropped_when_owner_id_cleared() {
         "first request should be 200 while owner matches settings",
     );
 
-    // `state.settings` is an Arc<ArcSwap<…>> shared by all clones; clearing
+    // `state.settings` is a `SettingsHandle` shared by all clones; clearing
     // owner here is visible to any router already built from a clone.
     set_owner(&state, None);
     let app2 = owner_app(state.clone());

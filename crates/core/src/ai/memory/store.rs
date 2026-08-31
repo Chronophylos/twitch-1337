@@ -680,14 +680,12 @@ async fn count_scratch_files(memories_dir: &Path) -> Result<usize, WriteError> {
 mod tests {
     use std::sync::Arc;
 
-    use arc_swap::ArcSwap;
-
     use super::*;
     use crate::ai::memory::types::Caps;
     use crate::settings::{Settings, SettingsHandle};
 
     fn test_handle() -> SettingsHandle {
-        Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()))
+        SettingsHandle::from_settings(Settings::compiled_defaults())
     }
 
     fn handle_with_caps(caps: Caps) -> SettingsHandle {
@@ -697,7 +695,7 @@ mod tests {
         s.ai.memory.user_bytes = caps.user_bytes;
         s.ai.memory.scratch_bytes = caps.scratch_bytes;
         s.ai.memory.max_scratch_files = caps.max_scratch_files;
-        Arc::new(ArcSwap::from_pointee(s))
+        SettingsHandle::from_settings(s)
     }
 
     /// ADR-0003 migration. This is the regression guard for the ordering trap:

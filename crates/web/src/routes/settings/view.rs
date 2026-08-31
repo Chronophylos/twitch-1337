@@ -46,7 +46,7 @@ pub(super) async fn show(
     Extension(session): Extension<Session>,
     cookies: Cookies,
 ) -> Result<Response, WebError> {
-    let current = (**state.settings.load()).clone();
+    let current = (*state.settings.load()).clone();
     let defaults = state.settings_store.defaults().clone();
     let recap_parked = recap_parked(&state).await;
     render(&ShowTpl {

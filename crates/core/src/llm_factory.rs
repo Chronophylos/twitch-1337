@@ -174,7 +174,7 @@ mod tests {
         let mut s = crate::settings::Settings::compiled_defaults();
         s.ai.profiles = profiles;
         s.ai.aurora.profile = aurora.to_string();
-        Arc::new(arc_swap::ArcSwap::from_pointee(s))
+        SettingsHandle::from_settings(s)
     }
 
     fn p(name: &str, provider: AiProvider, model: &str) -> AiProfile {

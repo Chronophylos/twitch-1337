@@ -2,9 +2,10 @@
 //!
 //! Two tests at different depths:
 //!
-//! 1. `settings_save_signals_change_notify` (variant c) — proves save→notify
-//!    fires and the new typed `Schedule` round-trips through `SettingsStore`
-//!    without spawning the full bot.
+//! 1. `settings_save_signals_subscription` (variant c) — proves save→change
+//!    signal fires (via `SettingsHandle::subscribe()`) and the new typed
+//!    `Schedule` round-trips through `SettingsStore` without spawning the
+//!    full bot.
 //!
 //! 2. `schedule_fires_after_clock_advance` (variant a) — spawns the full bot
 //!    via `TestBotBuilder` with a `FakeClock`, pre-seeds an interval schedule,
@@ -23,22 +24,21 @@ use twitch_1337_core::schedule::{Schedule, Trigger, WeekdaySet};
 use twitch_1337_core::settings::{Actor, MemoryAuditLog, SettingsOverrides, SettingsStore};
 
 // ---------------------------------------------------------------------------
-// Test 1: save → change_notify fires within 500ms; schedule round-trips
+// Test 1: save → subscription fires within 500ms; schedule round-trips
 // ---------------------------------------------------------------------------
 
-/// Prove that `SettingsStore::apply` fires `change_notify` and the new typed
-/// schedule is visible in the handle immediately after apply returns.
+/// Prove that `SettingsStore::apply` wakes `SettingsHandle::subscribe()`
+/// waiters and the new typed schedule is visible in the handle immediately
+/// after apply returns.
 #[tokio::test]
-async fn settings_save_signals_change_notify() {
+async fn settings_save_signals_subscription() {
     let dir = tempfile::tempdir().expect("tmp");
     let audit = Arc::new(MemoryAuditLog::new());
     let (store, settings_handle) =
         SettingsStore::open(dir.path(), audit, "main").expect("open settings");
-    let change_notify = store.change_notify();
-
-    // Subscribe BEFORE we apply, to avoid the lost-wakeup race.
-    let mut waiter = Box::pin(change_notify.notified());
-    waiter.as_mut().enable();
+    // Subscribe BEFORE we apply, to avoid the lost-wakeup race: the
+    // Subscription arms its waiter at construction.
+    let mut waiter = settings_handle.subscribe();
 
     store
         .apply(
@@ -64,9 +64,9 @@ async fn settings_save_signals_change_notify() {
         .await
         .expect("apply");
 
-    tokio::time::timeout(Duration::from_millis(500), &mut waiter)
+    tokio::time::timeout(Duration::from_millis(500), waiter.next())
         .await
-        .expect("change_notify must fire within 500ms of apply()");
+        .expect("subscription must fire within 500ms of apply()");
 
     let s = settings_handle.load();
     assert_eq!(s.schedules.len(), 1, "schedule count after apply");

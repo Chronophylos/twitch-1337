@@ -310,7 +310,7 @@ async fn save(
         return Err(WebError::CsrfMismatch);
     }
 
-    let before = (**state.settings.load()).clone();
+    let before = (*state.settings.load()).clone();
 
     // Capture submitted cooldown/ping values for validation-error re-render
     // before handing the form to the patch builder (which consumes it).

@@ -56,9 +56,7 @@ e2e = []
 
 # Test-only fixture surface (`WebState::for_tests` / `WebTestConfig`). Mirrors
 # the core crate's pattern: the self dev-dependency below turns it on for this
-# crate's own test targets without `required-features`, so CI's feature-less
-# nextest run still compiles and runs the web test targets.
-testing = []
+testing = ["twitch-1337-core/testing"]
 
 # Standalone dashboard runner — skips IRC, uses StubHelix.
 # `cargo run -p twitch-1337-web --bin web-dev --features dev-login`

@@ -583,9 +583,8 @@ mod tests {
     use crate::emote_tracker::eventapi::ParsedEvent;
     use crate::emote_tracker::{DB_FILENAME, types::SetEventKind};
     use crate::settings::{PotatAttributionSettings, Settings};
-    use arc_swap::ArcSwap;
     use rusqlite::Connection;
-    use std::sync::Arc;
+
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -797,7 +796,7 @@ mod tests {
             window_secs: 15,
             potat_7tv_user_id: "01GNRG2MDG0000DM7N933JH49Y".into(),
         };
-        Arc::new(ArcSwap::from_pointee(s))
+        SettingsHandle::from_settings(s)
     }
 
     fn add_event(emote_id: &str, actor_7tv_id: Option<&str>) -> NewSetEvent {

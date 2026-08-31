@@ -128,7 +128,7 @@ pub async fn run_ritual(
     langfuse: Option<&Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) -> Result<()> {
     // Snapshot once at top; build local config from live settings values.
-    let snap = settings.load_full();
+    let snap = settings.load();
     let ai = &snap.ai;
     let dreamer_profile = ai.dreamer.profile.clone();
     let timeout_secs = ai.dreamer.timeout_secs;
@@ -354,7 +354,6 @@ not a transcript line
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        use arc_swap::ArcSwap;
         use async_trait::async_trait;
         use llm::{
             ChatCompletionRequest, LlmClient, LlmError, ToolChatCompletionRequest,
@@ -386,8 +385,7 @@ not a transcript line
 
         // ── Wire up a temp data dir + store + transcript ──
         let dir = TempDir::new().unwrap();
-        let settings: SettingsHandle =
-            Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()));
+        let settings: SettingsHandle = SettingsHandle::from_settings(Settings::compiled_defaults());
         let store = crate::ai::memory::store::MemoryStore::open(dir.path(), settings.clone())
             .await
             .unwrap();
@@ -406,7 +404,7 @@ not a transcript line
         // ── First call: uses the profile's model ──
         // compiled_defaults has an empty profile model; set it explicitly.
         {
-            let mut s = (*settings.load_full()).clone();
+            let mut s = (*settings.load()).clone();
             s.ai.profiles[0].model = "model-v1".into();
             settings.store(Arc::new(s));
         }
@@ -428,7 +426,7 @@ not a transcript line
 
         // ── Second call: change model in settings (simulates a live dashboard edit) ──
         {
-            let mut s = (*settings.load_full()).clone();
+            let mut s = (*settings.load()).clone();
             s.ai.profiles[0].model = "model-v2".into();
             settings.store(Arc::new(s));
         }
@@ -468,7 +466,6 @@ not a transcript line
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        use arc_swap::ArcSwap;
         use async_trait::async_trait;
         use llm::{
             ChatCompletionRequest, LlmClient, LlmError, Role, ToolChatCompletionRequest,
@@ -506,7 +503,7 @@ not a transcript line
         s.ai.memory.user_bytes = 12_345;
         s.ai.memory.scratch_bytes = 4321;
         s.ai.memory.inject_byte_budget = 131_072;
-        let settings: SettingsHandle = Arc::new(ArcSwap::from_pointee(s));
+        let settings: SettingsHandle = SettingsHandle::from_settings(s);
         let store = crate::ai::memory::store::MemoryStore::open(dir.path(), settings.clone())
             .await
             .unwrap();
@@ -553,7 +550,6 @@ not a transcript line
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        use arc_swap::ArcSwap;
         use async_trait::async_trait;
         use llm::{
             ChatCompletionRequest, LlmClient, LlmError, ToolChatCompletionRequest,
@@ -583,8 +579,7 @@ not a transcript line
 
         let dir = TempDir::new().unwrap();
         // compiled_defaults already carries an empty connection.model.
-        let settings: SettingsHandle =
-            Arc::new(ArcSwap::from_pointee(Settings::compiled_defaults()));
+        let settings: SettingsHandle = SettingsHandle::from_settings(Settings::compiled_defaults());
         let store = crate::ai::memory::store::MemoryStore::open(dir.path(), settings.clone())
             .await
             .unwrap();

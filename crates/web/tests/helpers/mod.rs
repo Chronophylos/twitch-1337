@@ -192,11 +192,12 @@ async fn build_state_inner_keep_settings(
     .expect("build web test state");
     // Inject web timing values into the live in-memory settings snapshot.
     // `mod_check_refresh_secs` may be 0 (force-recheck) which is below the
-    // validator's 30 s floor; we write via the raw ArcSwap handle so
-    // validation is bypassed in tests (same pattern as `set_owner`).
+    // validator's 30 s floor; we write the live snapshot via
+    // `SettingsHandle::store` (bypassing `SettingsStore::apply`'s
+    // validation) in tests, the same way `set_owner` writes the owner slot.
     // `session_ttl_secs` is fixed at 7200 s (2 h) for all tests.
     {
-        let mut s = (*state.settings.load_full()).clone();
+        let mut s = (*state.settings.load()).clone();
         s.web.mod_check_refresh_secs = mod_check_refresh_secs;
         s.web.session_ttl_secs = 7200;
         state.settings.store(std::sync::Arc::new(s));

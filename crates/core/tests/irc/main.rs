@@ -7,6 +7,7 @@ mod emote_lookup;
 mod emote_usage;
 mod feedback;
 mod haiku;
+mod latency_rebase;
 mod news;
 mod ping;
 mod ping_name_guard;

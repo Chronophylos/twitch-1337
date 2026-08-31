@@ -5,7 +5,7 @@ use twitch_1337_core as twitch_1337;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -92,6 +92,12 @@ pub struct TestBot {
     /// Live settings handle. Exposes the overrides applied via `with_settings`
     /// so that helpers such as `run_ritual_for` read the same config the bot uses.
     pub settings: twitch_1337::settings::SettingsHandle,
+    /// Owner of `settings.ron`. Tests call `.apply()` on it to simulate
+    /// dashboard edits and observe live-apply behavior.
+    pub settings_store: Arc<twitch_1337::settings::SettingsStore>,
+    /// Shared EMA latency cell — the same `Arc<AtomicU32>` the latency
+    /// handler re-bases and the 1337 handler reads.
+    latency_value: Arc<AtomicU32>,
     shutdown: Option<oneshot::Sender<()>>,
     bot_task: Option<JoinHandle<EyreResult<()>>>,
 }
@@ -432,7 +438,7 @@ impl TestBotBuilder {
 
             let ai_memory = twitch_1337::ai::command::build_ai_memory_v2(
                 self.config.ai.is_some(),
-                &settings_handle.load_full(),
+                &settings_handle.load(),
                 memory_store.clone(),
             )
             .await
@@ -525,6 +531,12 @@ impl TestBotBuilder {
             let suspension = Arc::new(twitch_1337::suspend::SuspensionManager::new());
             let started_at = std::time::Instant::now();
 
+            // Shared latency cell, seeded from the (already-applied) settings.
+            // Composed in `Services` so tests observe the same cell the
+            // latency handler re-bases.
+            let latency_value = Arc::new(AtomicU32::new(
+                settings_handle.load().twitch.expected_latency,
+            ));
             let services = Services {
                 clock: clock.clone(),
                 llm: Arc::new(twitch_1337::llm_factory::LlmRegistry::fixed(
@@ -551,6 +563,7 @@ impl TestBotBuilder {
                 settings: settings_handle.clone(),
                 settings_store: settings_store.clone(),
                 irc_connected: irc_connected.clone(),
+                latency_value: latency_value.clone(),
                 channel: channel.clone(),
                 bot_username: self.config.twitch.username.clone(),
                 ai_enabled: self.config.ai.is_some(),
@@ -674,6 +687,8 @@ impl TestBotBuilder {
                 primary_history_tap,
                 telemetry: telemetry_store,
                 settings: settings_handle,
+                settings_store: settings_store.clone(),
+                latency_value,
                 shutdown: Some(shutdown_tx),
                 bot_task: Some(bot_task),
             }
@@ -688,6 +703,13 @@ impl Default for TestBotBuilder {
 }
 
 impl TestBot {
+    /// Shared EMA latency cell. The latency handler re-bases this on
+    /// dashboard edits of `twitch.expected_latency`; tests poll it to
+    /// observe live-apply.
+    pub fn latency_value(&self) -> Arc<AtomicU32> {
+        Arc::clone(&self.latency_value)
+    }
+
     pub async fn send(&self, user: &str, text: &str) {
         let line = privmsg(&self.channel, user, text);
         self.transport.inject.send(line).await.expect("inject");

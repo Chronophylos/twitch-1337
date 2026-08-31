@@ -29,7 +29,7 @@ fn profile_with_timeout(name: &str, model: &str, timeout: u64) -> AiProfile {
 async fn switching_aurora_profile_changes_the_model_sent() {
     let mut bot = TestBotBuilder::new().with_ai().spawn().await;
 
-    let mut s = (*bot.settings.load_full()).clone();
+    let mut s = (*bot.settings.load()).clone();
     s.ai.profiles = vec![profile("a", "model-a"), profile("b", "model-b")];
     s.ai.aurora.profile = "a".into();
     s.ai.grok.profile = "a".into();
@@ -40,7 +40,7 @@ async fn switching_aurora_profile_changes_the_model_sent() {
     let _ = bot.expect_reply(Duration::from_secs(2)).await;
     assert_eq!(bot.llm.last_model().as_deref(), Some("model-a"));
 
-    let mut s = (*bot.settings.load_full()).clone();
+    let mut s = (*bot.settings.load()).clone();
     s.ai.aurora.profile = "b".into();
     bot.settings.store(Arc::new(s));
 
@@ -55,7 +55,7 @@ async fn switching_aurora_profile_changes_the_model_sent() {
 #[tokio::test]
 async fn grok_does_not_follow_aurora_profile() {
     let mut bot = TestBotBuilder::new().with_ai().spawn().await;
-    let mut s = (*bot.settings.load_full()).clone();
+    let mut s = (*bot.settings.load()).clone();
     s.ai.profiles = vec![profile("a", "model-a"), profile("g", "model-g")];
     s.ai.aurora.profile = "a".into();
     s.ai.grok.profile = "g".into();
@@ -93,7 +93,7 @@ async fn grok_registers_when_aurora_is_unusable_and_aurora_can_recover_live() {
         "Grok must be registered independently of Aurora"
     );
 
-    let mut settings = (*bot.settings.load_full()).clone();
+    let mut settings = (*bot.settings.load()).clone();
     settings.ai.aurora.profile = "working".into();
     bot.settings.store(Arc::new(settings));
 
@@ -135,7 +135,7 @@ async fn chat_turn_timeout_comes_from_each_freshly_resolved_profile() {
         "Grok must use its own one-second timeout"
     );
 
-    let mut settings = (*bot.settings.load_full()).clone();
+    let mut settings = (*bot.settings.load()).clone();
     settings
         .ai
         .profiles
