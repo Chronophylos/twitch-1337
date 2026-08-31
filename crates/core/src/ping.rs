@@ -438,7 +438,7 @@ impl PingManager {
         // scans commands in order and the ping catch-all is last, so the
         // command always wins. Reject it here rather than letting it sit in
         // pings.ron looking registered but silently dead.
-        if crate::commands::RESERVED_PING_NAMES.contains(&name.as_str()) {
+        if crate::commands::is_reserved_ping_name(&name) {
             bail!("Ping \"{}\" ist schon ein Befehl", name);
         }
         validate_template(&template)?;
