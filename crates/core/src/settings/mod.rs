@@ -6,7 +6,7 @@
 //! `$DATA_DIR/settings.ron`; missing fields fall through to
 //! `compiled_defaults()`.
 //!
-//! Writes go through `SettingsStore::apply` (see `store.rs`) which
+//! Writes go through `SettingsStore::apply` (see `store/mod.rs`) which
 //! validates, atomically persists, swaps the handle, and appends an audit
 //! entry. Override → effective resolution lives in `resolve.rs`; per-field
 //! validation lives in `validation.rs`.
