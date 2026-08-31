@@ -5,8 +5,8 @@
   <input type="hidden" name="alerts_solar_card_visible" value="1">
   <header class="settings-card-head">
     <div>
-      <h2>Alerts · Sonneneruptionen</h2>
-      <p>Meldet GOES-Röntgenflares aus dem NOAA-SWPC-Feed. Änderungen gelten sofort.</p>
+      <h2>Alerts · Solar flares</h2>
+      <p>Announces GOES X-ray flares from the NOAA SWPC feed. Changes apply immediately.</p>
     </div>
     <div class="settings-card-tag">
       <span class="card-dirty" hidden>0 modified</span>
@@ -16,7 +16,7 @@
     <div class="settings-row" data-section="alerts_solar">
       <div class="row-left">
         <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">enabled</code></div>
-        <div class="row-hint">Sonneneruptionen in den Chat melden.</div>
+        <div class="row-hint">Announce solar flares in chat.</div>
       </div>
       <div class="row-control-cell">
         <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">{% if current.alerts.solar.enabled %}On{% else %}Off{% endif %}</span>
@@ -41,7 +41,7 @@
     <div class="settings-row" data-section="alerts_solar">
       <div class="row-left">
         <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">poll_secs</code></div>
-        <div class="row-hint">Wie oft der NOAA-SWPC-Feed abgefragt wird.</div>
+        <div class="row-hint">How often the NOAA SWPC feed is polled.</div>
       </div>
       <div class="row-control-cell">
         <span class="row-pretty" aria-hidden="true" data-pretty-unit="s">{{ current.alerts.solar.poll_secs }} s</span>
@@ -66,7 +66,7 @@
     <div class="settings-row" data-section="alerts_solar">
       <div class="row-left">
         <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">min_class</code></div>
-        <div class="row-hint">Mindestklasse: A, B, C, M oder X.</div>
+        <div class="row-hint">Minimum class: A, B, C, M or X — optionally with a magnitude, e.g. M6 or M6.5.</div>
       </div>
       <div class="row-control-cell">
         <span class="row-pretty" aria-hidden="true">{{ current.alerts.solar.min_class }}</span>
@@ -85,7 +85,7 @@
     <div class="settings-row" data-section="alerts_solar">
       <div class="row-left">
         <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">max_age_secs</code></div>
-        <div class="row-hint">Ereignisse älter als das werden still abgehakt statt gemeldet. Gilt für beide Alert-Typen.</div>
+        <div class="row-hint">Events older than this are marked seen silently instead of announced. Applies to both alert types.</div>
       </div>
       <div class="row-control-cell">
         <span class="row-pretty" aria-hidden="true" data-pretty-unit="s">{{ current.alerts.max_age_secs }} s</span>
