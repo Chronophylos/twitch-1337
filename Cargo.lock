@@ -3338,6 +3338,7 @@ dependencies = [
  "twitch-1337-data",
  "twitch-1337-web",
  "twitch-irc",
+ "url",
  "wiremock",
 ]
 
