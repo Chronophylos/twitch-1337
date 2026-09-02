@@ -27,6 +27,7 @@ use crate::{
             commands::{CommandConfig, run_generic_command_handler},
             emote_usage::run_emote_usage_handler,
             latency::run_latency_handler,
+            mydealz::run_mydealz_handler,
             router::run_message_router,
             schedule_runner::run_orchestrator,
             tracker_1337::run_1337_handler,
@@ -43,6 +44,7 @@ pub(crate) struct HandlerSet {
     pub flight_tracker: JoinHandle<()>,
     pub emote_set_ingest: JoinHandle<()>,
     pub emote_usage: JoinHandle<()>,
+    pub mydealz: JoinHandle<()>,
     pub alerts: JoinHandle<()>,
     pub scheduled_messages: JoinHandle<()>,
     pub recap: JoinHandle<()>,
@@ -186,6 +188,16 @@ where
         None => tokio::spawn(std::future::pending::<()>()),
     };
 
+    let mydealz = tokio::spawn({
+        let rx = broadcast_tx.subscribe();
+        let sender = chat_sender.clone();
+        let channel = services.channel.clone();
+        let echo_mydealz = services.echo.clone();
+        async move {
+            run_mydealz_handler(rx, sender, channel, echo_mydealz).await;
+        }
+    });
+
     let tracker_1337 = tokio::spawn({
         let btx = broadcast_tx.clone();
         let sender = chat_sender.clone();
@@ -260,6 +272,7 @@ where
         flight_tracker,
         emote_set_ingest,
         emote_usage,
+        mydealz,
         alerts,
         scheduled_messages,
         recap: recap_task,
@@ -306,6 +319,7 @@ pub(crate) async fn await_shutdown(
         flight_tracker,
         emote_set_ingest,
         emote_usage,
+        mydealz,
         alerts,
         scheduled_messages: mut sched,
         mut recap,
@@ -329,6 +343,7 @@ pub(crate) async fn await_shutdown(
         result = flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = emote_set_ingest => { error!("Emote set ingest exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = emote_usage => { error!("Emote usage handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
+        result = mydealz => { error!("mydealz handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = alerts => { error!("Alerts handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut sched => { error!("Scheduled message handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = &mut recap => { error!("Recap batcher exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }

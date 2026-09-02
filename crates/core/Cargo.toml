@@ -51,6 +51,7 @@ twitch-irc = { git = "https://github.com/Chronophylos/twitch-irc-rs", rev = "515
   "refreshing-token-rustls-webpki-roots",
   "transport-tcp-rustls-webpki-roots",
 ] }
+url.workspace = true
 
 [dev-dependencies]
 twitch-1337-core = { path = ".", features = ["testing"] }
