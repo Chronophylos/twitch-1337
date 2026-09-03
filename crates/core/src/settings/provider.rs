@@ -123,7 +123,10 @@ impl AiProvider {
             },
             Self::OpenAiCompatible => ProviderCaps {
                 efforts: Efforts::FreeText,
-                service_tier: false,
+                // OpenAI-wire aggregators like NanoGPT accept `service_tier`;
+                // profiles pointed at servers that don't simply leave it
+                // unset, and the field is then omitted from the request.
+                service_tier: true,
                 default_base_url: None,
             },
             Self::Ollama => ProviderCaps {
@@ -156,10 +159,10 @@ mod tests {
     }
 
     #[test]
-    fn compatible_takes_any_effort_but_no_tier() {
+    fn compatible_takes_any_effort_and_a_tier() {
         let caps = AiProvider::OpenAiCompatible.caps();
         assert!(caps.allows_effort("whatever-the-vendor-calls-it"));
-        assert!(!caps.service_tier);
+        assert!(caps.service_tier);
         assert_eq!(caps.default_base_url, None);
     }
 

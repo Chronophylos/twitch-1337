@@ -249,9 +249,10 @@
 </label>
 {% endmacro %}
 
-{# Segmented radio item for the OpenRouter `service_tier` selector. Distinct
-   from `effort_segment` because the displayed label ("Default" / "Flex" /
-   "Priority") differs from the wire value ("none" / "flex" / "priority"). #}
+{# Segmented radio item for the `service_tier` selector (OpenRouter and
+   OpenAI-compatible aggregators). Distinct from `effort_segment` because the
+   displayed label ("Default" / "Flex" / "Priority") differs from the wire
+   value ("none" / "flex" / "priority"). #}
 {% macro tier_segment(field, key, value, label, selected) %}
 <label class="segment{% if value == selected %} is-active{% endif %}">
   <input type="radio" name="{{ field }}" value="{{ value }}"

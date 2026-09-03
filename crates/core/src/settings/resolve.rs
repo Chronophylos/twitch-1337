@@ -453,8 +453,8 @@ fn legacy_profile(o: &overrides::AiOverrides) -> Option<AiProfile> {
         // stale value from a since-abandoned backend can't fail the new,
         // stricter caps validation and quarantine the whole file — the
         // client already dropped these on the wire under the old caps-blind
-        // validation (`OllamaClient` never serialises either field,
-        // `OpenAiClient::map_service_tier` returns `None` off OpenRouter),
+        // validation (`OllamaClient` never serialises either field, and the
+        // old `OpenAiClient` stripped the tier off non-OpenRouter dialects),
         // so this changes nothing an operator could observe.
         reasoning_effort: c
             .reasoning_effort
