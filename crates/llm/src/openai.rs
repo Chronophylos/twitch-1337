@@ -948,6 +948,7 @@ mod tests {
         assert_eq!(value["user"], "u");
         assert_eq!(value["session_id"], "s");
     }
+
     #[test]
     fn openrouter_dialect_is_explicit_not_sniffed() {
         ensure_crypto_provider();
@@ -966,6 +967,41 @@ mod tests {
         let (flat, obj) = c.map_reasoning(Some("high".into()));
         assert_eq!(flat, Some("high".to_string()));
         assert!(obj.is_none());
+    }
+
+    /// Regression: the wire layer must not re-introduce an OpenRouter-only
+    /// tier gate. Settings validation is the single gate; a compatible
+    /// (non-OpenRouter) client sends the tier verbatim.
+    #[tokio::test]
+    async fn compatible_dialect_sends_service_tier_verbatim() {
+        ensure_crypto_provider();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{ "message": { "role": "assistant", "content": "ok" } }]
+                })),
+            )
+            .mount(&server)
+            .await;
+        let client =
+            OpenAiClient::new("k", Some(&format!("{}/v1", server.uri())), "ua", false).unwrap();
+        let req = ChatCompletionRequest {
+            model: "m".to_string(),
+            messages: vec![crate::types::Message::user("hi")],
+            reasoning_effort: None,
+            service_tier: Some("flex".to_string()),
+            trace: TraceIds::default(),
+        };
+        let text = crate::client::LlmClient::chat_completion(&client, req)
+            .await
+            .unwrap();
+        assert_eq!(text, "ok");
+        let received = server.received_requests().await.expect("recorded requests");
+        assert_eq!(received.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).expect("json body");
+        assert_eq!(body["service_tier"], "flex");
     }
 
     #[test]

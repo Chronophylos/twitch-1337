@@ -449,13 +449,12 @@ fn legacy_profile(o: &overrides::AiOverrides) -> Option<AiProfile> {
         // The old dashboard hid these rows for backends that couldn't use
         // them rather than clearing the stored value (a hidden row is
         // absent from the POST, which the tri-state merge reads as
-        // "unchanged"). Drop what the mapped provider can't accept so a
         // stale value from a since-abandoned backend can't fail the new,
-        // stricter caps validation and quarantine the whole file — the
-        // client already dropped these on the wire under the old caps-blind
-        // validation (`OllamaClient` never serialises either field, and the
-        // old `OpenAiClient` stripped the tier off non-OpenRouter dialects),
-        // so this changes nothing an operator could observe.
+        // stricter caps validation and quarantine the whole file. The tier
+        // is narrowed further to OpenRouter: the old dashboard only ever
+        // offered a tier while the connection pointed at OpenRouter, so a
+        // legacy tier on a compatible-mapped fold is stale, and keeping it
+        // would push a field that endpoint never received.
         reasoning_effort: c
             .reasoning_effort
             .clone()
@@ -465,7 +464,7 @@ fn legacy_profile(o: &overrides::AiOverrides) -> Option<AiProfile> {
             .service_tier
             .clone()
             .flatten()
-            .filter(|_| caps.service_tier),
+            .filter(|_| provider == AiProvider::OpenRouter),
     })
 }
 
@@ -860,6 +859,10 @@ mod tests {
         assert_eq!(p.provider, AiProvider::OpenRouter);
         assert_eq!(p.model, "z-ai/glm-4.6");
         assert_eq!(p.reasoning_effort.as_deref(), Some("high"));
+        o.ai.connection.service_tier = Some(Some("priority".into()));
+        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
+        let p = s.ai.by_name(&s.ai.aurora.profile).unwrap();
+        assert_eq!(p.service_tier.as_deref(), Some("priority"));
     }
 
     #[test]
@@ -883,6 +886,21 @@ mod tests {
             s.ai.by_name(&s.ai.aurora.profile).unwrap().provider,
             AiProvider::OpenAiCompatible
         );
+    }
+
+    #[test]
+    fn legacy_tier_is_dropped_when_the_fold_maps_to_compatible() {
+        // Pre-profiles dashboards only offered a tier while the connection
+        // pointed at OpenRouter; a tier surviving a later base_url change is
+        // stale and must not reach the folded compatible profile.
+        let mut o = SettingsOverrides::default();
+        o.ai.connection.backend = Some(AiBackendKind::OpenAi);
+        o.ai.connection.base_url = Some(Some("https://api.deepseek.com/v1".into()));
+        o.ai.connection.service_tier = Some(Some("priority".into()));
+        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
+        let p = s.ai.by_name(&s.ai.aurora.profile).unwrap();
+        assert_eq!(p.provider, AiProvider::OpenAiCompatible);
+        assert!(p.service_tier.is_none());
     }
 
     #[test]

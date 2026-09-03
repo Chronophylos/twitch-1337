@@ -124,8 +124,9 @@ impl AiProvider {
             Self::OpenAiCompatible => ProviderCaps {
                 efforts: Efforts::FreeText,
                 // OpenAI-wire aggregators like NanoGPT accept `service_tier`;
-                // profiles pointed at servers that don't simply leave it
-                // unset, and the field is then omitted from the request.
+                // profiles pointed at servers that don't support it simply
+                // leave it unset, and the field is then omitted from the
+                // request body.
                 service_tier: true,
                 default_base_url: None,
             },
