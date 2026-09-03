@@ -120,8 +120,10 @@ pub struct ChatCompletionRequest {
     pub messages: Vec<Message>,
     /// Optional reasoning effort hint (provider/model-specific values).
     pub reasoning_effort: Option<String>,
-    /// Optional OpenRouter `service_tier` (`"flex"` | `"priority"`). Stripped
-    /// at serialize time when the client is not OpenRouter.
+    /// Optional `service_tier` (`"flex"` | `"priority"`). Accepted by
+    /// OpenRouter and OpenAI-compatible aggregators (NanoGPT); gated by
+    /// `caps().service_tier` in settings validation, so the wire layer
+    /// passes it through verbatim.
     pub service_tier: Option<String>,
     pub trace: TraceIds,
 }

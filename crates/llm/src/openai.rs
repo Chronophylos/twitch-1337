@@ -311,16 +311,9 @@ impl OpenAiClient {
         }
     }
 
-    /// Return the tier verbatim when the client is OpenRouter, otherwise
-    /// `None`. Defence-in-depth so a stale value in settings can't leak into
-    /// a stock OpenAI or Ollama request body.
-    fn map_service_tier(&self, tier: Option<String>) -> Option<String> {
-        if self.is_openrouter { tier } else { None }
-    }
-
-    /// `is_openrouter` selects the reasoning/service-tier dialect. It is an
-    /// explicit argument rather than a URL sniff because a self-hosted proxy
-    /// can speak OpenRouter's dialect from any hostname, and because the
+    /// `is_openrouter` selects the reasoning dialect. It is an explicit
+    /// argument rather than a URL sniff because a self-hosted proxy can
+    /// speak OpenRouter's dialect from any hostname, and because the
     /// caller (a settings profile) already knows which provider it picked.
     #[instrument(skip(api_key))]
     pub fn new(
@@ -374,8 +367,6 @@ impl OpenAiClient {
             trace,
         } = request;
         let (reasoning_effort, reasoning) = self.map_reasoning(reasoning_effort);
-        let service_tier = self.map_service_tier(service_tier);
-
         let api_request = ApiRequest {
             model,
             messages: messages
@@ -450,8 +441,6 @@ impl OpenAiClient {
             trace,
         } = request;
         let (reasoning_effort, reasoning) = self.map_reasoning(reasoning_effort);
-        let service_tier = self.map_service_tier(service_tier);
-
         let wire_messages = build_openai_messages(&messages, &prior_rounds);
 
         let api_tools: Vec<ApiTool> = tools
@@ -961,33 +950,6 @@ mod tests {
     }
 
     #[test]
-    fn map_service_tier_attached_when_openrouter() {
-        let client = test_client(true);
-        assert_eq!(
-            client.map_service_tier(Some("flex".to_string())).as_deref(),
-            Some("flex")
-        );
-        assert_eq!(
-            client
-                .map_service_tier(Some("priority".to_string()))
-                .as_deref(),
-            Some("priority")
-        );
-    }
-
-    #[test]
-    fn map_service_tier_stripped_when_not_openrouter() {
-        let client = test_client(false);
-        assert!(client.map_service_tier(Some("flex".to_string())).is_none());
-    }
-
-    #[test]
-    fn map_service_tier_omitted_when_none() {
-        let client = test_client(true);
-        assert!(client.map_service_tier(None).is_none());
-    }
-
-    #[test]
     fn openrouter_dialect_is_explicit_not_sniffed() {
         ensure_crypto_provider();
         // A self-hosted OpenRouter-compatible proxy has no "openrouter.ai" in
@@ -996,10 +958,6 @@ mod tests {
         let (flat, obj) = c.map_reasoning(Some("high".into()));
         assert!(flat.is_none());
         assert_eq!(obj.map(|r| r.effort), Some("high".to_string()));
-        assert_eq!(
-            c.map_service_tier(Some("flex".into())),
-            Some("flex".to_string())
-        );
     }
 
     #[test]
@@ -1009,7 +967,41 @@ mod tests {
         let (flat, obj) = c.map_reasoning(Some("high".into()));
         assert_eq!(flat, Some("high".to_string()));
         assert!(obj.is_none());
-        assert_eq!(c.map_service_tier(Some("flex".into())), None);
+    }
+
+    /// Regression: the wire layer must not re-introduce an OpenRouter-only
+    /// tier gate. Settings validation is the single gate; a compatible
+    /// (non-OpenRouter) client sends the tier verbatim.
+    #[tokio::test]
+    async fn compatible_dialect_sends_service_tier_verbatim() {
+        ensure_crypto_provider();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{ "message": { "role": "assistant", "content": "ok" } }]
+                })),
+            )
+            .mount(&server)
+            .await;
+        let client =
+            OpenAiClient::new("k", Some(&format!("{}/v1", server.uri())), "ua", false).unwrap();
+        let req = ChatCompletionRequest {
+            model: "m".to_string(),
+            messages: vec![crate::types::Message::user("hi")],
+            reasoning_effort: None,
+            service_tier: Some("flex".to_string()),
+            trace: TraceIds::default(),
+        };
+        let text = crate::client::LlmClient::chat_completion(&client, req)
+            .await
+            .unwrap();
+        assert_eq!(text, "ok");
+        let received = server.received_requests().await.expect("recorded requests");
+        assert_eq!(received.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).expect("json body");
+        assert_eq!(body["service_tier"], "flex");
     }
 
     #[test]
