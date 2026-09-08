@@ -65,8 +65,8 @@ async fn tracker_1337_posts_reminder_and_stats() {
         .expect("inject charlie");
     yield_a_bit().await;
 
-    // 13:36:30 → 13:38:00: handler aborts monitor and posts stats.
-    bot.clock.advance(ChronoDuration::seconds(90));
+    // 13:36:30 → 13:38:01: grace window ends, handler aborts monitor, posts stats.
+    bot.clock.advance(ChronoDuration::seconds(91));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -103,8 +103,8 @@ async fn tracker_1337_updates_leaderboard_with_sub_second_time() {
         .expect("inject alice");
     yield_a_bit().await;
 
-    // Advance to 13:38:00 so the handler computes stats + persists leaderboard.
-    bot.clock.advance(ChronoDuration::seconds(90));
+    // Advance past the 13:38:01 grace end so the handler computes stats + persists leaderboard.
+    bot.clock.advance(ChronoDuration::seconds(91));
     yield_a_bit().await;
 
     let _stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -147,7 +147,7 @@ async fn tracker_1337_announces_overall_record_when_no_faster_entry_exists() {
         .expect("inject alice");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(90));
+    bot.clock.advance(ChronoDuration::seconds(91));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -192,7 +192,7 @@ async fn tracker_1337_announces_personal_best_when_record_is_held_by_another() {
         .expect("inject alice");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(90));
+    bot.clock.advance(ChronoDuration::seconds(91));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -236,7 +236,7 @@ async fn tracker_1337_posts_slowest_only_for_final_ten_seconds() {
         .expect("inject charlie");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(90));
+    bot.clock.advance(ChronoDuration::seconds(91));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -280,7 +280,7 @@ async fn tracker_1337_persists_qualifying_personal_worst() {
         .expect("inject charlie");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(90));
+    bot.clock.advance(ChronoDuration::seconds(91));
     yield_a_bit().await;
 
     let _stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -332,7 +332,7 @@ async fn tracker_1337_personal_worst_updates_only_when_slower() {
         .expect("inject alice");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(90));
+    bot.clock.advance(ChronoDuration::seconds(91));
     yield_a_bit().await;
 
     let _stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -372,7 +372,7 @@ async fn tracker_1337_personal_worst_updates_only_when_slower() {
         .expect("inject alice");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(90));
+    bot.clock.advance(ChronoDuration::seconds(91));
     yield_a_bit().await;
 
     let _stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -421,7 +421,7 @@ async fn tracker_1337_does_not_post_slowest_before_final_ten_seconds() {
         .expect("inject charlie");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(90));
+    bot.clock.advance(ChronoDuration::seconds(91));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -445,8 +445,8 @@ async fn tracker_1337_zero_users_posts_erm_or_fuh() {
 
     advance_to_1337_window(&mut bot).await;
 
-    // 13:36:30 → 13:38:00 with no messages injected.
-    bot.clock.advance(ChronoDuration::seconds(90));
+    // 13:36:30 → 13:38:01 with no messages injected.
+    bot.clock.advance(ChronoDuration::seconds(91));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -497,8 +497,8 @@ async fn tracker_1337_counts_message_after_compensated_wake_before_true_138() {
         .expect("inject late window message");
     yield_a_bit().await;
 
-    // Reach true 13:38:00 — scoring window closes, stats post.
-    bot.clock.advance(ChronoDuration::milliseconds(200));
+    // Reach true 13:38:00 + 1s grace — monitor closes, stats post.
+    bot.clock.advance(ChronoDuration::milliseconds(1_200));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -508,6 +508,62 @@ async fn tracker_1337_counts_message_after_compensated_wake_before_true_138() {
     );
     assert!(
         stats.contains("Am langsamsten war chronophylos"),
+        "expected hall-of-shame-eligible slowest announce, got: {stats}"
+    );
+
+    bot.shutdown().await;
+}
+
+/// Regression: a message stamped inside :37 but delivered after the 13:38:00
+/// wall must still be scored.
+///
+/// Real-world shape (2026-09-08, channel `euterheissgetraenk`): magie_023's
+/// message carried `tmi-sent-ts=13:37:59.952` but arrived on the wire at
+/// 13:38:00.156 (rm-received-ts). The old handler aborted the monitor exactly
+/// at 13:38:00.000, so the qualifying message was never read. With the grace
+/// window the monitor keeps collecting; the server_timestamp minute guard
+/// rejects anything stamped outside :37.
+#[tokio::test]
+async fn tracker_1337_scores_message_delivered_after_1338_wall() {
+    let mut bot = TestBotBuilder::new()
+        .at(Berlin
+            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc))
+        .spawn()
+        .await;
+
+    advance_to_1337_window(&mut bot).await;
+
+    // Past the 13:38:00 wall — under the old logic the monitor is already
+    // dead here.
+    bot.clock.advance(ChronoDuration::milliseconds(90_100));
+    yield_a_bit().await;
+
+    let msg_late = privmsg_at(
+        &bot.channel,
+        "magie",
+        "1337 DANKIES",
+        TMI_TS_13_37_BERLIN + 59_952,
+    );
+    bot.transport
+        .inject
+        .send(msg_late)
+        .await
+        .expect("inject post-wall message stamped inside :37");
+    yield_a_bit().await;
+
+    // Past the 13:38:01 grace end — monitor aborts, stats post.
+    bot.clock.advance(ChronoDuration::milliseconds(900));
+    yield_a_bit().await;
+
+    let stats = bot.expect_say(Duration::from_secs(3)).await;
+    assert!(
+        stats.contains("magie"),
+        "post-wall message stamped inside :37 must be scored, got: {stats}"
+    );
+    assert!(
+        stats.contains("Am langsamsten war magie"),
         "expected hall-of-shame-eligible slowest announce, got: {stats}"
     );
 
