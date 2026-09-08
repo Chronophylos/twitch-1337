@@ -35,6 +35,14 @@ pub const TARGET_MINUTE: u32 = 37;
 
 const SLOWEST_CHATTER_MIN_MS: u64 = 50_000;
 
+/// Seconds the monitor keeps collecting after the 13:38:00 wall.
+///
+/// Messages stamped in the last milliseconds of :37 can still be in flight
+/// when the wall passes (relay latency between tmi-sent-ts and wire arrival).
+/// The minute guard on `server_timestamp` rejects anything stamped outside
+/// :37, so the grace window cannot admit false positives.
+const SCORING_GRACE_SECS: u32 = 1;
+
 /// Maximum number of unique users to track (prevents unbounded memory growth)
 pub(crate) const MAX_USERS: usize = 10_000;
 
@@ -571,11 +579,20 @@ pub async fn run_1337_handler<T, L>(
         info!("Posting reminder to channel");
         sender.say(channel.clone(), "PausersHype").await;
 
-        // Close the scoring window at exact 13:38:00 wall — do not subtract
-        // latency. Compensated early wake is only for outbound appearance
-        // (reminder above); cutting the monitor early drops late qualifying
-        // messages (e.g. hall-of-shame finishes in the last EMA ms of :37).
+        // Close the scoring wall at exact 13:38:00 — do not subtract latency.
+        // Compensated early wake is only for outbound appearance (reminder
+        // above). Keep collecting for SCORING_GRACE_SECS afterwards: messages
+        // stamped inside :37 can still arrive after the wall, and the minute
+        // guard on server_timestamp rejects anything stamped outside :37.
         sleep_until_hms(clock.as_ref(), TARGET_HOUR, TARGET_MINUTE + 1, 0, 0).await;
+        sleep_until_hms(
+            clock.as_ref(),
+            TARGET_HOUR,
+            TARGET_MINUTE + 1,
+            SCORING_GRACE_SECS,
+            0,
+        )
+        .await;
 
         // Abort the monitor and wait for it to fully stop before reading results
         monitor_handle.abort();
