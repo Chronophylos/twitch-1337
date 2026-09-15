@@ -167,6 +167,7 @@
 02TA,,Matagorda Shore Facility Heliport,28.722177,-95.875813
 02TE,,Baylor Medical Center Heliport,32.39540100097656,-96.86419677734375
 02TN,,Ellis Field,35.780355,-86.585521
+02TT,,Lunacity Ranch Airfield,33.08273,-95.861507
 02UT,,Lucin Airport,41.369336,-113.841019
 02VA,,The Greenhouse Airport,38.435699462890625,-77.8572006225586
 02VG,,Northstar Aviation Heliport,36.63880157470703,-82.11669921875
@@ -263,6 +264,7 @@
 04NC,,Western Wake Medical Center Heliport,35.739200592,-78.7822036743
 04NE,,Mc Connell Field Airport,41.159999847399995,-101.299003601
 04NJ,,Emmanuel Airport,39.596801757799994,-75.2334976196
+04NM,,Lincoln County Medical Center Heliport,33.32171,-105.629497
 04NR,,McGee 04 Heliport,34.775671,-77.392244
 04NV,,Kingston Ranch Airport,35.7555007935,-115.665000916
 04NY,,Klaverack Airport,42.262298584,-73.6961975098
@@ -1197,7 +1199,7 @@
 12IA,,Plueger Airfield,42.800498962402344,-96.13780212402344
 12ID,,Flying B Ranch Landing Strip,44.96799850463867,-114.73300170898438
 12II,,Pentecost Airport,39.856272,-84.973464
-12IL,,Hawker Airport,41.20000076293945,-88.0167007446289
+12IL,,Hawker Airport,41.200001,-88.016701
 12IN,,J & S Field,38.11859893798828,-87.64749908447266
 12IS,,Mercer County Hospital Heliport,41.206084,-90.759419
 12JY,,Clinton Elks Lodge Balloonport,40.604587,-74.921538
@@ -2075,7 +2077,7 @@
 1TX3,,Beggs Ranch Airport,33.42509841918945,-100.54199981689453
 1TX5,,Laney Farm Airport,34.126017,-101.908751
 1TX6,,Muxworthy Airport,31.69849967956543,-98.09639739990234
-1TX7,,Killion Ranch Airport,32.80569839477539,-100.18399810791016
+1TX7,,Killion Ranch Airport,32.805661,-100.18416
 1TX8,,Hart Aerial Airport,34.36949920654297,-102.08399963378906
 1TX9,,Hawk Ranch Airport,32.63759994506836,-95.16130065917969
 1U0,,Bear Trap Airport,42.97489929199219,-113.35099792480469
@@ -2579,7 +2581,7 @@
 28CO,,Blm Fire Center Heliport,39.117801666259766,-108.53900146484375
 28FA,,North Broward Medical Center Heliport,26.278245,-80.122025
 28FD,,Jackson County Hospital Heliport,30.787313,-85.240914
-28FL,,Jim Finlay Farm Airport,29.4419002532959,-81.58309936523438
+28FL,,Mount Up with Wings Airpark,29.441219,-81.584416
 28GE,,Mike Roberson Heliport,34.2,-85.416667
 28ID,,D Bar C Airport,45.513484,-115.440288
 28II,,Cedar Farm Airport,37.974700927734375,-86.05619812011719
@@ -2849,7 +2851,7 @@
 2IN7,,Columbus Regional Hospital Heliport,39.217263,-85.893445
 2IN8,,Franciscan Health Crown Point Heliport,41.393527,-87.365448
 2IN9,,Berry Field,39.56669998168945,-86.11810302734375
-2IS1,,Proctor Hospital Heliport,40.75059890749999,-89.5944976807
+2IS1,,Carle Health - Proctor Heliport,40.753463,-89.598791
 2IS3,,Jackson Field,41.17169952392578,-89.80680084228516
 2IS4,,Ritter Field,41.337831,-91.013507
 2IS9,,Pontiac Flying/Cooksville Airport,40.578098,-88.707802
@@ -3247,6 +3249,7 @@
 2WV3,,Hales Landing Airport,39.11631,-81.392512
 2WV5,,Willow Bend Airport,37.545445,-80.534163
 2WV6,,West Virginia State Police Heliport,40.0531005859375,-80.72470092773438
+2WV8,,Pikewood Inernational Golf Club Heliport,39.536814,-79.855599
 2WY3,,Haas Airport,43.007198333740234,-110.31700134277344
 2WY4,,Raco 1 Heliport,41.15810012817383,-104.44599914550781
 2WY8,,Bar Flying E Airport,44.40439987182617,-109.28199768066406
@@ -3315,6 +3318,7 @@
 30OK,,Lobo Field,34.908091,-96.24362
 30OR,,Bero Field,45.802601,-123.279999
 30PN,,Pittsburgh Children'S Hospital Heliport,40.466389,-79.953056
+30SC,,Conway Medical Center Heliport,33.784371,-79.001374
 30SD,,Barber Field,45.504811,-98.595539
 30TA,,Tri-Modal Air Park,30.585468,-97.717552
 30TE,,Cone Airport,33.811199,-101.396003
@@ -3444,7 +3448,7 @@
 33LS,,Our Lady of Lourdes Heart Hospital Heliport,30.173383,-92.026253
 33MA,,Seagate Heliport,42.55979919433594,-70.77230072021484
 33MS,,Freedom Strip,31.102297,-89.418755
-33MT,,Kruger Heliport,48.48059844970703,-114.0009994506836
+33MT,,Kruger Heliport,48.480408,-114.00083
 33NC,,Easley Acres Airport,35.63473,-78.013601
 33NE,,Orr Ranch Airport,42.382895,-102.574239
 33NH,,Bear Hill Heliport,43.144345,-71.853634
@@ -3602,7 +3606,7 @@
 36NR,,ECU Health Roanoke Chowan Heliport,36.284621,-76.995537
 36OH,,Wright's Field,40.19029998779297,-81.9739990234375
 36OI,,Verhoff Airport,41.07310104370117,-84.21269989013672
-36OK,,Jones Air Park,35.272300720214844,-96.88169860839844
+36OK,,Jones Air Park,35.270688,-96.881747
 36OR,,Jasper Ridge Airstrip,44.003619,-122.880642
 36PA,,Episcopal Hospital Heliport,39.9901008605957,-75.13050079345703
 36PN,,Us Army Reserve Center Heliport,39.966800689697266,-75.45240020751953
@@ -3639,7 +3643,7 @@
 37LS,,Vortex 2 Heliport,30.03019905090332,-91.87210083007812
 37M,,Hornersville Memorial Airport,36.04169845581055,-90.15010070800781
 37MA,,Hanson Heliport,42.122778,-72.423611
-37MI,,Handleman Sky Ranch Airport,42.85279846191406,-83.22769927978516
+37MI,,Handleman Sky Ranch Airport,42.852798,-83.227699
 37MO,,Mayes Homestead Airport,39.57500076293945,-94.18360137939453
 37MS,,P2 Landing Airport,32.389828,-90.350779
 37N,,Garrison Dam Recreational Airpark,47.48310089111328,-101.40899658203125
@@ -3653,7 +3657,7 @@
 37OH,,Southwest General Hospital Heliport,41.371141,-81.831367
 37OK,,Mercy Hospital Heliport,34.777329,-96.633577
 37OR,,Vey Sheep Ranch Airport,45.09320068359375,-118.39900207519531
-37PA,,Roadcap Airport,40.78839874267578,-77.1061019897461
+37PA,,Roadcap Airport,40.788399,-77.106102
 37PN,,UPMC Hanover Hospital Heliport,39.808025,-76.982344
 37S,,Fort Peck Airport,48.005001068115234,-106.48200225830078
 37TA,,Texas Health Presbyterian Hospital Dallas Heliport,32.880451,-96.761044
@@ -3894,7 +3898,7 @@
 3H5,,Erie Air Park,41.679199,-90.078697
 3IA0,,Washington County Hospital Heliport,41.28919982910156,-91.68769836425781
 3IA2,,Greene County Medical Center Heliport,42.016700744628906,-94.38770294189453
-3IA3,,Des Moines General Hospital Heliport,41.594200134277344,-93.60079956054688
+3IA3,,Des Moines General Hospital Heliport,41.5942,-93.6008
 3IA6,,Ottumwa Hospital Heliport,41.028900146484375,-92.39070129394531
 3IA7,,Daec Heliport,42.101898193359375,-91.777099609375
 3IA8,,UnityPoint Keokuk Heliport,40.40721,-91.387968
@@ -3958,7 +3962,7 @@
 3KY5,,Carroll County Hospital Heliport,38.680497,-85.168043
 3KY8,,Fidelity Heliport,39.02790069580078,-84.52439880371094
 3KY9,,Miles Field,38.122265,-85.126166
-3L7,,Flying M Ranch Airport,44.7383,-83.3797
+3L7,,Milwrick Flying M Airport,44.73853,-83.379619
 3LA0,,Harrington Flying Service Airport,29.919700622558594,-92.24739837646484
 3LA1,,Wilder Airport,30.558500289916992,-92.8042984008789
 3LA2,,Southern Natural Gas Co. Seaplane Base,30.280831,-89.953243
@@ -4321,7 +4325,7 @@
 40MN,,Turner Field,43.866600036621094,-95.01419830322266
 40MT,,Silver Creek Airport,46.706601,-112.06909
 40NC,,Heavenly Flights Heliport,36.180301666259766,-81.5239028930664
-40ND,,Gorder Farm Heliport,46.384700775146484,-96.82260131835938
+40ND,,Gorder Farm Airport,46.387778,-96.819993
 40NE,,Landgren Ranch Airport,41.975636,-98.515287
 40NJ,,Osterman Heliport,40.48619842529297,-74.73570251464844
 40NK,,Central Government Center Heliport,38.138906,-85.62941
@@ -5580,7 +5584,7 @@
 57LA,,Acadia Saint Landry Hospital Heliport,30.395147,-92.210568
 57LS,,Prairie Creek Airport,31.205025,-93.277166
 57MA,,Nantucket Cottage Hospital Helipad,41.275778,-70.101833
-57MD,,St Michaels Seaplane Base,38.790278,-76.205833
+57MD,,St Michaels Seaplane Base,38.786786,-76.192847
 57ME,,Dyer's Landing Airport,43.91780090332031,-70.85440063476562
 57MN,,Namakan Seaplane Base,48.40679931640625,-92.66680145263672
 57MT,,Flying K Field,46.201911,-114.083029
@@ -6464,7 +6468,7 @@
 66TA,,Bradair Heliport,29.590499877929688,-95.28299713134766
 66TE,,The Landings Airport,32.365267,-97.644989
 66TN,,Basham Field,35.523383,-85.846472
-66TS,,Khou-Tv Heliport,29.760499954223633,-95.38739776611328
+66TS,,KHOU-TV Heliport,29.7605,-95.387398
 66TX,,Loma de Cometa Airport,28.674972,-100.023234
 66VA,,Ibm Building 110 Heliport,38.753700256347656,-77.49749755859375
 66VG,,Bon Secours Mercy Health Petersburg LLC Heliport,37.182166,-77.360722
@@ -7037,7 +7041,7 @@
 70B,,Millinocket Seaplane Base,45.728381,-68.844486
 70CA,,The Wilshire Thayer Heliport,34.062597,-118.432328
 70CL,,Amargosa Airport,36.295799255371094,-116.4260025024414
-70CO,,Greystone Heliport,39.64080047607422,-105.39600372314453
+70CO,,Greystone Heliport,39.640295,-105.396558
 70D,,Titus Field,39.49869918823242,-79.85260009765625
 70FA,,Wee Bee Sky Ranch Airport,27.562175,-80.5993694
 70FD,,Gulf Coast Helicopters Heliport,30.23889923095703,-85.55780029296875
@@ -8203,7 +8207,7 @@
 88NY,,Zelazny Airport,43.157798767089844,-78.3583984375
 88OH,,Chippewa Field,41.599998474121094,-83.31659698486328
 88OI,,Akron City Hospital Heliport,41.080736,-81.500164
-88OR,,Tallman Airport,44.56829833984375,-122.97100067138672
+88OR,,Tallman Airport,44.567792,-122.972145
 88PA,,Mc Coy Airport,40.539199829100006,-80.4131011963
 88PN,,Coal Township Heliport,40.803842,-76.557822
 88PS,,Indian Springs Airport,40.122661,-76.419255
@@ -8275,7 +8279,7 @@
 8AL6,,Air Evac 32 Heliport,34.660352,-86.049279
 8AL8,,Woodland Clinic Heliport,33.373278,-85.396754
 8AL9,,Wiregrass Hospital Heliport,31.04960060119629,-85.8916015625
-8AN6,,Isaacson Airport,47.65919876098633,-117.68199920654297
+8AN6,,Isaacson Airport,47.656974,-117.683399
 8AR1,,Totty Field Airport,36.4893989563,-92.6421966553
 8AZ5,,Lizzy Lizard Airport,31.892427,-109.05407
 8B2,,Twin Mountain Airport,44.263995,-71.546981
@@ -8908,6 +8912,7 @@
 95Z,,Bradley Sky-Ranch Airport,64.758904,-147.392235
 96AK,,Hackney Landing Seaplane Base,60.28779983520508,-151.3459930419922
 96AL,,Bent Oak Airport,30.827684,-87.889177
+96AR,,Baptist Health Arkadelphia Heliport,34.122619,-93.089114
 96C,,Fox River Airport,42.75,-88.2509
 96CA,,Warner Center Plaza I Helipad,34.178276,-118.60032
 96CL,,Ranch Heliport,34.157704,-118.917802
@@ -11022,6 +11027,19 @@ AR-0805,,10 de Mayo Airport,-27.093839,-61.572653
 AR-0806,,Estancia San Joaquin Airstrip,-30.755496,-59.997364
 AR-0807,,Estancia Nina,-29.453876,-58.597505
 AR-0808,,Aeroclub Tupungato,-33.353901,-69.133272
+AR-0809,,ACA Delta Heliport,-34.376348,-58.665353
+AR-0810,,Lahuen - Có Airstrip,-35.164326,-69.888945
+AR-0811,,Santa Clara Airstrip,-35.361737,-60.466022
+AR-0812,,Dlife Heliport,-41.128735,-71.265504
+AR-0813,,Garello – Pilar Airport,-31.743648,-63.930502
+AR-0814,,Sauce Co Airport,-36.393631,-61.37488
+AR-0815,,Estancia San Miguel Airstrip,-39.112446,-62.376709
+AR-0816,,Bandini Airport,-29.326072,-59.975014
+AR-0817,,Martinez Airport,-26.318814,-60.668907
+AR-0818,,Aeroclub Caraguatay,-26.652605,-54.750793
+AR-0819,,La Elisa Airstrip,-34.799108,-62.349208
+AR-0820,,Romang Airfield,-29.488495,-59.767069
+AR-0821,,Establicimiento Las Teresas Airfield,-34.614442,-62.089557
 AR02,,Johnson Regional Medical Center Heliport,35.461216,-93.445383
 AR03,,Centerville Airstrip,35.128718,-93.205798
 AR05,,John Harris Field,35.21590042114258,-93.30490112304688
@@ -16116,7 +16134,7 @@ BR-2981,,Alberto Bertelli Airport,-21.678611755371,-48.211944580078
 BR-2982,,SBC Trans Heliport,-23.698610305786,-46.55277633667
 BR-2983,,Bom dia Café Heliport,-21.59694480896,-45.4377784729
 BR-2984,,Fazenda Cachoeirão Heliport,-21.950826,-42.900292
-BR-2985,,ITC Heliport,-23.594932,-46.687667
+BR-2985,,ITC Heliport,-23.595073,-46.687753
 BR-2986,,Fazenda Santa Olinda Airport,-20.757508,-55.032374
 BR-2987,,Fazenda Agrofel Airport,-14.4496,-58.294859
 BR-2988,,Fazenda Vista Alegre Airport,-20.661666870117,-50.841667175293
@@ -16431,6 +16449,9 @@ BR-3297,,Fazenda Santa Matilde Heliport,-22.267964,-43.002454
 BR-3298,,Fazenda Café da Roça Airport,-10.349333,-49.856714
 BR-3299,,Fazenda Jaburú Airport,-13.803651,-48.894319
 BR-3300,,Base Arpão Heliport,-3.94781,-63.15682
+BR-3301,,Fazenda Filadélfia Airport,-3.336803,-42.874894
+BR-3302,,Fazenda Sol Nascente Airport,-9.291947,-50.077004
+BR-3303,,Grupo Barcelona Airport,-7.093441,-50.428314
 BR-ALT,ALT,Alenquer Municipal Airport,-1.917,-54.7231
 BS-0001,,Fowl Cay Airstrip,24.2707432941,-76.5409862995
 BS-0002,,Port Nelson Airstrip,23.651411,-74.845051
@@ -16526,7 +16547,7 @@ BW-0057,,Banoka Airstrip,-19.0925,23.6481
 BW-0058,,Gorokwe Airport,-19.58672,23.47126
 BW-0059,,Satawani Airstrip,-19.517889,23.63512
 BW-0060,,Ngarangi Airport,-18.38705,22.01159
-BW-0061,,Gaborone Notwane Airport,-24.683001,25.933001
+BW-0061,,Gaborone Notwane Airport,-24.657803,25.941049
 BW-0062,,Molepolole Airport,-24.389444444,25.498611111
 BW-0063,,Makalamabedi Airport,-20.310743,23.907773
 BW-0064,,Rakops Airport,-21,24.333
@@ -16540,6 +16561,7 @@ BW-0071,,Kiri-Waka Airstrip,-19.776683,23.221215
 BW-0072,,Leopard Plains Airstrip,-20.18091,24.16769
 BW-0073,,Sir Seretse Khama Barracks Heliport,-24.600006,25.86664
 BW-0074,,Botswana International University of Science and Technology Drone Port and Heliport,-22.59488,27.12772
+BW-0075,,Kasane Airport (old),-17.786574,25.160344
 BW-HUK,HUK,Hukuntsi Airport,-23.9897,21.758101
 BWJ,BWJ,Bawan Airport,-6.396944444440001,146.881666667
 BXL,BXL,Blue Lagoon Seaplane Base,-16.943,177.368
@@ -17958,6 +17980,7 @@ CA-1293,,Orillia-Mara Airport,44.606049,-79.33485
 CA-1294,,Brown Bear Airstrip,55.801703,-128.878834
 CA-1295,,Burns Lake Water Aerodrome,54.228,-125.771
 CA-1296,,Elie Acres Heliport,48.56,-123.602833
+CA-1297,,Spencerville STOLport (Private Aerodrome),44.857894,-75.532537
 CA-CAB5,,Abbotsford (Regional Hospital & Cancer Centre) Heliport,49.0361500085,-122.314048558
 CA00,,Platform Hermosa Heliport,34.455299377441406,-120.64700317382812
 CA01,,Burney Sheriff's Station Heliport,40.885121,-121.669368
@@ -20645,6 +20668,7 @@ CST7,,St-Lambert-De-Lauzon Airport,46.560298919677734,-71.18250274658203
 CST8,,Montreal / Marina Venise Seaplane Base,45.632856,-73.782409
 CSU2,YKU,Chisasibi Airport,53.805599212646484,-78.91690063476562
 CSU3,,Saint-Hyacinthe Aerodrome,45.60687,-73.015146
+CSU4,,Shubenacadie Heliport,45.093228,-63.396957
 CSU5,,Weymontachie Airport,47.937133,-73.818004
 CSU6,,Spout Lake Seaplane Base,52.0075,-121.445
 CSU7,,Lac-à-la-Tortue Water Aerodrome,46.616699,-72.625801
@@ -21200,7 +21224,7 @@ CYHF,YHF,Hearst René Fontaine Municipal Airport,49.71419906616211,-83.686096191
 CYHH,YNS,Nemiscau Airport,51.691101,-76.135597
 CYHI,YHI,Ulukhaktok Holman Airport,70.762802,-117.806
 CYHK,YHK,Gjoa Haven Airport,68.635597,-95.849701
-CYHM,YHM,John C. Munro Hamilton International Airport,43.17348,-79.931185
+CYHM,YHM,John C. Munro Hamilton International Airport,43.171308,-79.929416
 CYHN,YHN,Hornepayne Municipal Airport,49.19309997558594,-84.75890350341797
 CYHO,YHO,Hopedale Airport,55.448757,-60.228124
 CYHP,YHP,Poplar Hill Airport,52.1133,-94.2556
@@ -21222,7 +21246,7 @@ CYJM,,Fort St James Airport,54.39720153808594,-124.26300048828125
 CYJN,YJN,St Jean Airport,45.29439926147461,-73.28109741210938
 CYJP,,Fort Providence Airport,61.319400787353516,-117.60600280761719
 CYJQ,,Denny Island Airport,52.136474,-128.056182
-CYJT,YJT,Stephenville Dymond International Airport,48.54339,-58.552892
+CYJT,,Stephenville Dymond International Airport,48.54339,-58.552892
 CYKA,YKA,Kamloops John Moose Fulton Field Regional Airport,50.703038,-120.448641
 CYKC,YKC,Collins Bay Airport,58.236099243199995,-103.678001404
 CYKD,LAK,Aklavik/Freddie Carmichael Airport,68.223297,-135.00599
@@ -23059,6 +23083,7 @@ DK-0064,,Avnø Air Base,55.083,11.783
 DK-0065,,Rømø Beach Airstrip,55.144154,8.482475
 DK-0066,,Skovlunde Flyveplads,55.7176,12.382579
 DK-0067,,Lille Gjerndrupholm Airstrip,55.531163,9.009519
+DK-0068,,Vejrø Helipad,55.036793,11.373333
 DLR,DLR,Dalnerechensk Airport,45.879857,133.737629
 DM-0001,,Dominica International Airport (Under Construction),15.572906,-61.31357
 DM2,DIO,Diomede Heliport,65.758367,-168.953676
@@ -25769,7 +25794,7 @@ FADL,,Delareyville Airport,-26.67919921875,25.474700927734375
 FADM,,Kokstad Airport,-30.556499481201172,29.408199310302734
 FADO,,Dendron Airport,-23.380599975585938,29.32080078125
 FADP,,Darlington Dam Lodge Airport,-33.18320083618164,25.193199157714844
-FADQ,PZL,Zulu Inyala Airport,-27.84939956665039,32.30970001220703
+FADQ,PZL,Zulu Inyala Airport,-27.8494,32.3097
 FADS,,De Doorns Airport,-33.455557,19.684493
 FADU,,Walkersons Field,-25.36278,30.18778
 FADV,,Devon Airport,-26.358999252319336,28.78969955444336
@@ -25945,41 +25970,41 @@ FARB,RCB,Richards Bay Airport,-28.740999221800003,32.0920982361
 FARD,,Riversdale Airport,-34.111698150634766,21.262800216674805
 FARG,,Rustenburg Airport,-25.6443,27.271099
 FARI,RVO,Reivilo Airport,-27.547199249267578,24.172500610351562
-FARM,,Richmond Airport,-31.423500061035156,23.978200912475586
+FARM,,Richmond Airport,-31.4235,23.978201
 FARO,,Rooiberg Airport,-24.7777888889,27.7523361111
 FARS,ROD,Robertson Airport,-33.812199,19.9028
-FARZ,,Reitz Airport,-22.78420066833496,28.430299758911133
+FARZ,,Reitz Airport,-22.784201,28.4303
 FASB,SBU,Springbok Airport,-29.689300537109375,17.939599990844727
 FASC,ZEC,Secunda Airport,-26.52409935,29.170099258399997
 FASD,,Saldanha/Vredenburg Airport,-32.9641,17.969299
 FASE,GSS,Sabi Sabi Airport,-24.947375434199998,31.4488477707
-FASG,,Schweizer Reneke Airport,-27.16309928894043,25.286100387573242
+FASG,,Schweizer Reneke Airport,-27.163099,25.2861
 FASH,,Stellenbosch Airport,-33.980983,18.822327
 FASI,,Springs Airfield,-26.2494,28.398272
-FASJ,,Saffier Airport,-26.760000228881836,27.760000228881836
+FASJ,,Saffier Airport,-26.760531,27.761699
 FASK,,Swartkop Air Force Base,-25.8097,28.1646
-FASL,,Sutherland Airport,-32.48820114135742,20.697099685668945
-FASM,,Siteka Airport,-29.325000762939453,30.149200439453125
-FASN,,Senekal Airport,-28.31220054626465,27.646099090576172
+FASL,,Sutherland Airport,-32.493205,20.701762
+FASM,,Siteka Airport,-29.324103,30.149519
+FASN,,Senekal Airport,-28.312201,27.646099
 FASR,,Standerton Airport,-26.927,29.209999
 FASS,SIS,Sishen Airport,-27.6486,22.9993
-FAST,,Somerset East Airport,-32.75019836425781,25.594999313354492
-FASU,,Sace Airport,-25.956899642944336,29.211700439453125
-FASW,,Slurry Airport,-25.81559944152832,25.88640022277832
+FAST,,Somerset East Airport,-32.750198,25.594999
+FASU,,Sace Airport,-25.9569,29.2117
+FASW,,Slurry Airport,-25.815599,25.8864
 FASX,,Hendrik Swellengrebel Airport,-34.048199,20.4746
 FASZ,SZK,Skukuza Airport,-24.96085,31.588587
-FATA,,Tedderfield Air Park,-26.352037738499998,27.9681630135
+FATA,,Tedderfield Air Park,-26.352038,27.968163
 FATB,,Thorny Bush Game Lodge Airport,-24.416086,31.164232
 FATF,,Tommys Field Airport,-28.26,22.9932
 FATG,,Thaba Tholo Airport,-24.2811,27.2294
 FATH,THY,Thohoyandou Airport,-23.0769,30.3836
-FATI,,Thabazimbi Airport,-24.5760850299,27.4196863174
-FATM,,Stutterheim Airport,-32.56666564941406,27.450000762939453
+FATI,,Thabazimbi Airport,-24.576085,27.419686
+FATM,,Stutterheim Airport,-32.563173,27.374932
 FATN,TCU,Thaba Nchu Tar Airport,-29.317800521850586,26.822799682617188
 FATP,,New Tempe Airport,-29.035109,26.16268
 FATR,,Trennery's Airport,-32.639682,28.422969
 FATT,,Tutuka Power Station Airport,-26.775128,29.337542
-FATW,,Witberg Tswalu Airport,-27.204999923706055,22.48189926147461
+FATW,,Witberg Tswalu Airport,-27.205,22.481899
 FATZ,LTA,Tzaneen Airport,-23.8244,30.3293
 FAUB,,Underberg Airport,-29.788400650024414,29.498300552368164
 FAUC,,Ulco Airport,-28.35449981689453,24.22909927368164
@@ -26007,23 +26032,25 @@ FAVW,,Victoria West Airport,-31.399401,23.156401
 FAVY,VYD,Vryheid Airport,-27.78689956665039,30.79640007019043
 FAWA,,Warmbaths Airport,-24.90999984741211,28.299999237060547
 FAWB,PRY,Wonderboom Airport,-25.6539,28.224199
-FAWC,,Worcester Glider Airport,-33.66310119628906,19.415300369262695
-FAWD,,Wolmeransstad Airport,-27.170000076293945,25.979999542236328
+FAWC,,Worcester Glider Airport,-33.663101,19.4153
+FAWD,,Wolmeransstad Airport,-27.173195,25.976252
 FAWE,,Welgevonden Reserve,-24.2046,27.9
 FAWI,,Witbank Airport,-25.8323,29.191999
 FAWK,WKF,Waterkloof Air Force Base,-25.829999923699997,28.222499847399998
-FAWL,,Williston Airport,-31.38360023498535,20.93280029296875
+FAWL,,Williston Airport,-31.3836,20.9328
 FAWM,WEL,Welkom Airport,-27.996825,26.663334
 FAWN,,Cape Winelands Airport,-33.77,18.74
-FAWO,,Willowmore Airport,-33.263301849365234,23.4906005859375
+FAWO,,Willowmore Airport,-33.263302,23.490601
 FAWP,,Wepener Airport,-29.741801,27.023349
-FAWR,,Wavecrest Airport,-32.589906,28.518491
-FAWS,,Wesselbronn Af Airport,-27.84670066833496,26.35059928894043
+FAWR,,Wavecrest Airport,-32.589318,28.519384
+FAWS,,Wesselbronn Airport,-27.846701,26.350599
 FAWT,,Winterveldt Mine Airport,-24.660091,30.180422
 FAWV,,White River Mercy Air,-25.319676,30.970782
 FAYP,,Ysterplaat Air Force Base,-33.9002,18.498301
+FAZC,,Zululand Anthracite Colliery Airstrip,-28.216513,31.657851
+FAZG,,Swartberg Airport,-30.23432,29.337135
 FAZP,,Mazeppa Bay Airport,-32.472152,28.65052
-FAZQ,,Star Airport,-26.89310073852539,27.690000534057617
+FAZQ,,Star Airport,-26.893508,27.687263
 FAZR,,Zeerust Airport,-25.599001,26.042299
 FBAB,,Abu Airport,-19.4159,22.5526
 FBBP,,Bottle Pan Airport,-18.7704,25.2458
@@ -26229,7 +26256,7 @@ FD99,,Dr. P. Phillips Hospital Heliport,28.429591,-81.477099
 FDBM,,Matata Airport,-26.867000579833984,31.933000564575195
 FDBS,,Big Bend Sugar E Airport,-26.836111,31.92
 FDBT,,Tambuti Airport,-26.735201,31.7759
-FDGL,,Lavumisa Airport,-27.320100784301758,31.889799118041992
+FDGL,,Lavumisa Airport,-27.311158,31.892581
 FDKB,,Kubuta Airport,-26.881528,31.488889
 FDMH,,Mhlume Airport,-26.0242,31.809999
 FDMS,MTS,Matsapha International Airport,-26.528919,31.307577
@@ -26457,7 +26484,7 @@ FL88,,Bob Paul Airport,26.683700561523438,-81.44979858398438
 FL90,,Salty Approach Airport,26.603585,-82.220055
 FL91,,Big Cypress Ranch Airfield,26.309799,-81.227303
 FL92,,L M Hughey Heliport,27.9414005279541,-82.535400390625
-FL93,,Mount Sinai Medical Center Heliport,25.81450080871582,-80.14119720458984
+FL93,,Mount Sinai Medical Center Heliport,25.814283,-80.141053
 FL94,,Florida Power & Light County Heliport,25.7682331637,-80.34499235450001
 FL95,,Broocke Air Patch Airport,27.708599090576172,-80.45279693603516
 FL96,,Baptist St Augustine Heliport,29.923861,-81.413692
@@ -28087,6 +28114,13 @@ FR-1348,,LINZEUX DZ,50.342835,2.197005
 FR-1349,,Peronne Philippe DZ,49.934592,2.923713
 FR-1350,,Audruicq HLS,50.897579,2.074722
 FR-1351,,DROUVILLE DZ,48.661969,6.410988
+FR-1352,,RIEUX EN CIS DZ,50.198388,3.346515
+FR-1353,,Hélicentre,47.896004,2.519852
+FR-1354,,Quéant DZ,50.182217,2.987265
+FR-1355,,Metz en couture DZ,50.063442,3.056556
+FR-1356,,Villers-Plouich Heliport,50.081707,3.134132
+FR-1357,,Bourlon HLS,50.17815,3.127184
+FR-1358,,Ecourt-St-Quentin HLS,50.254787,3.081254
 FR-JCA,,Cannes Croisette Heliport,43.535287,7.038296
 FSAL,,Alphonse Airport,-7.00478,52.7262
 FSAS,,Assomption Airport,-9.74222,46.506802
@@ -33084,7 +33118,7 @@ IS45,,Mast Field,39.97669982910156,-91.33399963378906
 IS46,,CGH Medical Center Heliport,41.802856,-89.697154
 IS47,,Willis Airport,42.030601501464844,-88.70179748535156
 IS48,,Il State Police District 22 Heliport,37.271400451699996,-89.1647033691
-IS49,,Illinois Valley Community Hospital Heliport,41.329200744628906,-89.12370300292969
+IS49,,Saint Elizabeth Medical Center-Peru Helistop,41.329006,-89.123784
 IS50,,Rend Lake Conservancy District Heliport,38.082000732421875,-88.91699981689453
 IS51,,Schilson Field,40.45140075683594,-91.20379638671875
 IS54,,Mc Christy Airport,39.6431007385,-89.14450073239999
@@ -33562,7 +33596,7 @@ IT-0443,,Costa del Monte Flying Field,42.733207,13.891703
 IT-0444,,Roma East Airfield,41.914691,12.769538
 IT-0445,,Santarcangelo Airfield,44.030537,12.426701
 IT-0446,,Policoro Airfield,40.170967,16.6628
-IT-0447,,Policoro Saline Flying Field,40.216161,16.731721
+IT-0447,,Policoro Saline Flying Field,40.21582,16.731682
 IT-0448,,Campo di Volo MedFly,37.1055,14.220061
 IT-0449,,Campo di Volo Club Aeronautico Gela,37.11314,14.18929
 IT-0450,,"Campo di Volo ""Palazzone di Narni""",42.536609,12.553635
@@ -34126,9 +34160,12 @@ IT-1010,,Umberto Nobile Airfield,41.262517,13.782853
 IT-1011,,Easy Flyte,42.126217,12.60985
 IT-1012,,Vall'Ornara Airfield,42.04065,12.538278
 IT-1013,,Fonte di Papa,42.052272,12.566569
-IT-1014,,Elisuperficie Coppa,45.109544,8.452156
+IT-1014,,Coppa HLS,45.109453,8.452196
 IT-1015,,Elisuperficie Cascina Marta,45.120117,8.418671
 IT-1016,,Elisuperficie Cicengo,45.094505,8.164301
+IT-1017,,elisuperficie Lauriano,45.167152,7.984883
+IT-1018,,Ferrero Heliport,45.049308,7.773791
+IT-1019,,Elisuperficie Pininfarina,44.970521,7.765167
 IT-TQR,TQR,San Domino Island Heliport,42.117775,15.490655
 ITK,ITK,Itokama Airport,-9.201527,148.264261
 IVI,IVI,Viveros Island Airport,8.4693,-79.0016
@@ -39994,7 +40031,7 @@ KGAO,,South Lafourche Leonard Miller Jr Airport,29.441052,-90.261129
 KGAS,,Gallia Meigs Regional Airport,38.834099,-82.163399
 KGAX,,Williams Auxiliary Air Field 6,32.884669,-112.816544
 KGBD,GBD,Great Bend Municipal Airport,38.344299,-98.8592
-KGBG,GBG,Galesburg Municipal Airport,40.937999725299996,-90.431098938
+KGBG,GBG,Galesburg Regional HW Timmons  Airport,40.938,-90.431099
 KGBN,,Gila Bend Air Force Auxiliary Airport,32.887501,-112.720001
 KGBR,GBR,Walter J. Koladza Airport,42.18420029,-73.40319824
 KGCC,GCC,Northeast Wyoming Regional Airport,44.3489,-105.539001
@@ -40092,7 +40129,7 @@ KGWB,,De Kalb County Airport,41.307201,-85.0644
 KGWN,,Winn Army Community Hospital Helipad,31.874278,-81.596618
 KGWO,GWO,Greenwood–Leflore Airport,33.495025,-90.088204
 KGWR,,Gwinner Roger Melroe Field,46.2187,-97.643204
-KGWS,GWS,Glenwood Springs Municipal Airport,39.5083007812,-107.310997009
+KGWS,GWS,Sumers Airpark,39.506083,-107.309232
 KGWW,,Wayne Executive Jetport,35.460602,-77.964897
 KGX,KGX,Grayling Airport,62.895187,-160.066289
 KGXY,GXY,Greeley–Weld County Airport,40.4374008179,-104.633003235
@@ -43385,6 +43422,8 @@ LA-0004,,Muang Souy Airfield,19.5238888889,102.889166667
 LA-0005,,Khoksa Airfield,18.068039,102.910591
 LA-0006,BOR,Bokeo International Airport,20.323986,100.165392
 LA-0007,,Above Laos Ballooning,18.911778,102.405238
+LA-0008,,Vang Vieng Flying Camp,18.910593,102.446198
+LA-0009,,Vang Vieng,18.904156,102.400528
 LA00,,Baton Rouge General Medical Center Heliport,30.395334,-91.094924
 LA01,,Millers Flying Service Airport,30.48349952697754,-92.54679870605469
 LA02,,Hammond Developmental Center Heliport,30.518400192260742,-90.56649780273438
@@ -44951,7 +44990,7 @@ LS02,,North Oaks Medical Center Heliport,30.465981,-90.462588
 LS06,,Pointe Coupee General Hospital Heliport,30.68320083618164,-91.46119689941406
 LS07,,Lsu Health Science Center Heliport,32.48059844970703,-93.76219940185547
 LS08,,Boothville Heliport,29.353982,-89.437355
-LS10,,Reynolds Airport,30.2721004486084,-93.31179809570312
+LS10,,Reynolds Airport,30.2721,-93.311798
 LS12,,Bastian Bay Heliport,29.31410026550293,-89.61419677734375
 LS13,,Omni Heliport,30.347900390625,-92.04119873046875
 LS14,,Lyon Airport,30.070999,-92.825104
@@ -45329,6 +45368,7 @@ LV-8048,,Gulbene Airfield,57.163525,26.77052
 LV-8049,,Liepāja,56.501819,20.997697
 LV-8050,,Rujiena Airfield,57.887663,25.333786
 LV-8051,,Ječi Airfield,56.265229,21.202622
+LV-8052,,Nīca Airfield,56.34863,21.11936
 LW66,,Malo Konjari Sport Airfield,41.333099,21.4491
 LW67,,Kumanovo Airfield,42.154242,21.699328
 LW70,,Veles Airfield,41.758796,21.842451
@@ -46082,7 +46122,7 @@ ML-0010,,Morila Airport,11.912778,-6.2775
 MLIP,MIJ,Mili Island Airport,6.084754,171.731419
 MLLJ,,La Javilla Airport,9.81112003326416,-85.29550170898438
 MM-0001,,Hanthawaddy International Airport (under construction),17.3005,96.4276
-MM-0002,HEB,Hinthada Airport,17.633329391500002,95.4666976929
+MM-0002,HEB,Hinthada Airport,17.633329,95.466698
 MM-0003,,Langkho Airport,20.350000381469727,98.01667022705078
 MM-0004,,Myoungmya Airport,16.570999145507812,94.93229675292969
 MM-0005,,Shinbweyang Airport,26.68600082397461,96.21040344238281
@@ -47443,7 +47483,7 @@ MX-0474,,El Rincon Airstrip,25.235992,-106.769275
 MX-0475,,Los Violines Poniente Airport,30.305161,-106.479226
 MX-0476,,General Roberto Fierro Airport,28.568056,-107.467221
 MX-0477,,Rancho La Escondida Airport,28.858056,-101.873888
-MX-0478,,Helipuerto Palacio de Hierro -Durango,19.418739,-99.169072
+MX-0478,,Palacio de Hierro Durango Heliport,19.418739,-99.169072
 MX-0479,,El Contadero Airport,23.786944,-97.878056
 MX-0480,,Ingenio de Huixtla Airport,15.086121,-92.502777
 MX-0481,,Rancho Santa Anita Airport,29.673203,-105.280751
@@ -47851,7 +47891,7 @@ MX-0882,,Familia Baldenebro Jaimes Airport,27.374776,-109.937428
 MX-0883,,El Zopilote Airport,18.246933,-95.721035
 MX-0884,,Helipuerto Tribunal Superior de Justicia,19.433914,-99.143475
 MX-0885,,El Dorado Airport,24.321481,-107.398628
-MX-0886,,Hospital Angeles Ciudad Juárez Heliport,31.71365,-106.392306
+MX-0886,,Angeles Hospital Helistop,31.713657,-106.39219
 MX-0887,,Helipuerto Hospital de Alta Especialidad Ixtapaluca,19.318226,-98.855597
 MX-0888,,Helipuerto Magnocentro 26,19.407061,-99.271753
 MX-0889,,Cahuisori Airport,28.247351,-108.273105
@@ -48089,7 +48129,7 @@ MX-1120,,Palmarejo Airport,24.696077,-106.422672
 MX-1121,,Najucal Heliport,18.354538,-95.325275
 MX-1122,,La Campana Airport,24.556453,-106.223845
 MX-1123,,Helipuerto Aero Servicios,19.349063,-99.190965
-MX-1124,,Helipuerto Bardahl Ajusco,19.2078,-99.219033
+MX-1124,,Bardahl Ajusco Heliport,19.2078,-99.219033
 MX-1125,,El Zapatero Airstrip,24.598065,-106.381871
 MX-1126,,La Campanilla Airstrip,24.633872,-106.152005
 MX-1127,,Coorporativo Blanco Helipad,20.613932,-100.411332
@@ -48992,7 +49032,6 @@ MX-2023,,Helipuerto Campo Militar 37-B Temamatla N°2,19.1842,-98.866407
 MX-2024,,Helipuerto Campo Militar 37-B Temamatla N°3,19.184261,-98.865758
 MX-2025,,Helipuerto Campo Militar 37-B Temamatla N°4,19.194844,-98.853462
 MX-2026,,Base Nº8 de la Fuerza Aérea Mexicana,20.93629,-89.647161
-MX-2027,,Base Nº19 de la Fuerza Aérea Mexicana,19.423969,-99.074589
 MX-2028,,Potrero del Llano Airport,29.20715,-104.44619
 MX-2029,,Ciudad Tula Airport,22.96638,-99.77224
 MX-2030,,Cerro Chapala Airport,29.4042,-114.36459
@@ -49087,7 +49126,7 @@ MX-2118,,Base N°1 de la Fuerza Aérea Mexicana (General Alfredo Lezama Álvarez
 MX-2119,,Helipuerto Campo Militar 37/D - Santa Lucía,19.752188,-98.981398
 MX-2120,,Churubusco Tower Helipad,19.359113,-99.169278
 MX-2121,,Helipuerto Guardia Nacional -Cuartel General,19.447706,-99.209257
-MX-2122,,Mexico City Air Base,19.426074,-99.076606
+MX-2122,,Mexico City Air Base,19.424699,-99.076126
 MX-2123,,Helipuerto Campo Militar 1-A Naucalpan N°1,19.43517,-99.243021
 MX-2124,,Helipuerto Campo Militar 1-J Predio Reforma,19.44182,-99.21523
 MX-2125,,Helipuerto Hospital Central Militar N°1,19.436539,-99.214524
@@ -49749,6 +49788,7 @@ MZ-0059,,Emboqui Airport,-15.60454,32.41439
 MZ-0060,,Nairrubi Airstrip,-13.4929,36.0764
 MZ-0061,,Mandimba Airport,-14.33943,35.663
 MZ-0062,,Bananalândia Airport,-26.046478,32.278177
+MZ-0063,,Mateus Airstrip,-26.802928,32.883521
 MZ-TGS,TGS,Chokwé Airport,-24.520599365234375,32.965301513671875
 MZBZ,BZE,Philip S. W. Goldson International Airport,17.539951,-88.303556
 MZE,MZE,Manatee Airport,17.27846,-89.0238
@@ -52314,7 +52354,7 @@ OP36,,Robray Airport,26.251688,63.129933
 OP37,,Pano Aqil Southeast Airport,27.813100814819336,69.16709899902344
 OPBG,BHW,Bhagatanwala Airport,32.056098938,72.94840240479999
 OPBL,,Bela Airport,29.49220085144043,71.11840057373047
-OPBN,BNP,Bannu Airport,32.9729,70.527901
+OPBN,,Bannu Airport,32.972001,70.524779
 OPBR,WGB,Bahawalnagar Airport,29.946300506591797,73.24909973144531
 OPBW,BHV,Bahawalpur Airport,29.348100662231445,71.71800231933594
 OPCH,CJL,Chitral Airport,35.886213,71.799922
@@ -52671,6 +52711,7 @@ PA92,,Blue Mountain Academy (Private) Airport,40.55289840698242,-76.028800964355
 PA93,,Cherokee Heliport,40.685001373291016,-79.45670318603516
 PA94,,Sharon General Hospital Heliport,41.232601165771484,-80.49649810791016
 PA95,,Turnpike Number 1 Heliport,40.215115,-76.790217
+PA96,,Monroeville Volunteer Fire Co 4 Heliport,40.433103,-79.746119
 PA97,,Warren General Hospital Heliport,41.84389877319336,-79.15480041503906
 PA98,,WNEP-TV Heliport,41.370658,-75.681885
 PA99,,St Lukes/Gnaden Huetten Heliport,40.83263,-75.727088
@@ -52941,6 +52982,8 @@ PEC,PEC,Pelican Seaplane Base,57.9552,-136.235992
 PF-0001,,Anuanuaro Airstrip,-20.453313,-143.529167
 PF-0002,,Moruroa South Airport,-21.85855,-138.82015
 PF-0003,,Fangataufa Airport,-22.2002,-138.7429
+PF-0004,,PAGO HELIPAD,-16.51825,-151.734939
+PF-0005,,TAIOHAE HELIPAD,-8.919554,-140.092887
 PFAK,AKI,Akiak Airport,60.902646,-161.23106
 PFAL,AET,Allakaket Airport,66.551804,-152.621994
 PFCB,NCN,Chenega Bay Airport,60.077602,-147.99468
@@ -53111,6 +53154,8 @@ PG-0158,,Amboin Airstrip,-4.605642,143.485308
 PG-0159,,Nutuve Airport,-5.35485,151.6695
 PG-0160,,Ningerum Airstrip,-5.669808,141.143214
 PG-0161,PAW,Pambwa Airstrip,-11.402966,154.011701
+PG-0162,,Dimansigan Airstrip,-4.802766,141.136431
+PG-0163,,Umanap Airstrip,-5.308741,142.147369
 PG-ATP,TAJ,Tadji Airport,-3.198192,142.430964
 PG-IHU,IHU,Ihu Airport,-7.89756,145.395996
 PG-JAQ,JAQ,Jacquinot Bay Airport,-5.6525,151.507004
@@ -54287,6 +54332,8 @@ PL-0288,,Rypin Airfield,53.04709,19.42536
 PL-0289,,Krzywina Airfield,50.71386,17.16418
 PL-0290,,Sieraków-Lutomek Airfield,52.60866,16.15035
 PL-0291,,Bucharzewo Airstrip,52.67846,16.11214
+PL-0292,,Kiełpin Airfield,52.62053,15.20084
+PL-0293,,Lelów Airstrip,50.70846,19.63953
 PLCH,CXI,Cassidy International Airport,1.986278,-157.350011
 PLFA,TNV,Tabuaeran Island Airport,3.89944,-159.389008
 PLPA,,Palmyra (Cooper) Airport,5.888748,-162.077866
@@ -56832,6 +56879,7 @@ RU-10177,,Nizhne-Kvakchinskoye Gas Field Helipad,54.689449,155.854202
 RU-10178,,Roshchino Airport,45.90343,134.87632
 RU-10179,,Nudol Airfield,56.0964,36.55477
 RU-1018,,Chaika Coal Terminal Helipad,73.379354,80.59003
+RU-10180,,South Tabagan Oil Field Heliport,57.291693,78.89163
 RU-1019,,Khralov junction Helipad,68.486875,69.521978
 RU-1020,,Roman Trebs field,68.624032,57.891887
 RU-1021,,Roman Trebs field,68.609969,57.715387
@@ -58803,6 +58851,7 @@ SDRZ,,Fazenda Marabá Airport,-21.690967,-57.365214
 SDS2,,Fazenda Macaúba Airport,-14.29264,-46.406655
 SDS3,,Fazenda Iracema Airstrip,-11.619956,-55.122026
 SDS4,,Fazenda Sankara Airport,-14.61367,-59.629317
+SDS5,,Ricardo Nascimento Tulha Airport,-10.569376,-52.249272
 SDS6,,Fazenda Caraíbas Airstrip,-3.751667,-42.297778
 SDS7,,Fazenda Membeca Airstrip,-12.7309,-57.8721
 SDS8,,Fazenda Garrote Airstrip,-18.024762,-53.262527
@@ -59873,6 +59922,7 @@ SIAP,,Roso Airport,-31.73442,-54.089186
 SIAQ,,Bom Futuro Airport,-15.506389,-56.098333
 SIAV,,Helicentro Helipark,-23.564818,-46.830227
 SIAW,,Sítio Gurupi Airport,-3.739167,-47.516389
+SIB1,,Rubens Tavares Cotrim Airport,-16.512769,-51.142647
 SIB3,,Fazenda Tapera Airstrip,-20.304436,-56.828096
 SIB4,,ASL - Fazenda São Francisco Airport,-13.345067,-54.487507
 SIB5,,Fazenda Anacã do Corixão Airport,-18.103333,-56.213333
@@ -59925,6 +59975,7 @@ SICW,,Fazenda Santa Fé Airport,-17.453632,-47.825008
 SICX,,Edifício Salvador Trade Center Heliport,-12.983928,-38.453608
 SICY,,Fazenda do Cedro Airport,-28.108334,-53.196388
 SICZ,,Edifício Comercial Lorena Helipad,-23.573334,-46.655443
+SID1,,Fazenda Santa Bárbara Airstrip,-10.778719,-49.396881
 SID2,,Caju Heliport,-26.838989,-49.228267
 SID3,,Fazenda Produtiva Airport,-11.99213,-51.190147
 SID4,,Fazenda Boa Esperança Airstrip,2.650533,-61.462678
@@ -59948,6 +59999,7 @@ SIDX,,Polícia Federal - Florianópolis Heliport,-27.572937,-48.531638
 SIDY,,Fazenda Yanduy Airport,-24.07771,-51.819447
 SIE2,,Fazenda Marape Airport,-13.164972,-56.176833
 SIE3,,Taiga Agropecuária Airport,-9.060556,-59.120047
+SIE5,,Confinamento Adão Airport,-4.338594,-47.526115
 SIE6,,Fazenda São Francisco da Nhecolândia Airport,-18.793827,-56.905176
 SIE7,,Animalia Park Heliport,-23.621772,-46.969446
 SIE8,,Fazenda Planalto Airport,-7.89655,-56.684725
@@ -60329,6 +60381,7 @@ SIUU,,Fazenda Santa Eulalia Airport,-16.518436,-57.041305
 SIUW,,Candote Airport,-20.839112,-52.301478
 SIV3,,Fazenda Eldorado Airport,-13.962158,-46.804631
 SIV4,,Astolfi Agropecuária Airport,-11.641339,-45.801692
+SIV5,,Fazenda Paraíso Airport,-16.453211,-52.755754
 SIV6,,Fazenda Lagoa Grande Heliport,-18.790325,-44.95035
 SIV7,,Fazenda Boa Vista Airport,-12.846298,-54.225275
 SIV8,,Fazenda Santa Amélia Airport,-21.323333,-52.606389
@@ -60415,6 +60468,7 @@ SIYU,,Edifício Ronaldo Sampaio Ferreira Helistop,-23.602145,-46.692504
 SIYV,,Mário Henrique Simonsen Heliport,-22.996973,-43.346549
 SIYY,,Ilha do Caracará Airport,-17.456944,-56.841111
 SIYZ,,Condomínio Edifício Berrini 1681 Heliport,-23.611512,-46.694695
+SIZ1,,Fazenda Berro D'Água Airport,-12.453725,-55.141242
 SIZ4,,São Matheus Airport,2.089656,-61.824728
 SIZ6,,Fazenda Tarumã Airstrip,-10.229688,-47.879113
 SIZ7,,Usina Cedro Airstrip,-19.406111,-51.25
@@ -60443,12 +60497,18 @@ SJ09,,Senhor do Bonfim Airport,-10.51862,-40.084642
 SJ0C,,Fazenda Calixbento Airport,-10.8272,-55.959839
 SJ10,,Fazenda Progresso Airport,-19.138229,-57.528604
 SJ12,,Fazenda São José da Terra Roxa Airport,-20.330833,-51.382778
+SJ13,,Fazenda Dona Gema Airport,-13.2522,-56.402783
 SJ14,,Fazenda Sucupira Airport,-12.461196,-49.388322
 SJ15,,Lizete & Odair Airport,-16.665515,-47.389187
+SJ16,,São Pedro da Canastra Airport,-19.971156,-46.629819
+SJ17,,Fazenda Pássaro Preto Airport,-17.460747,-53.908897
+SJ19,,Fazenda Acari Airport,-8.912358,-62.45485
 SJ1B,,Fazenda Barrocal Airport,-29.473525,-55.509455
+SJ1C,,Fazenda Cruz Alta Airport,-19.038725,-55.73741
 SJ1D,,Fazenda Água Doce Heliport,-26.894265,-51.677368
 SJ1E,,Estância Magalhães Airport,-11.103315,-62.430717
 SJ1F,,Fazenda Fortaleza Airstrip,-18.157339,-50.813104
+SJ1G,,Fazenda Vale do São Pedro Airport,-17.446111,-51.693705
 SJ1K,,Ilha do Caju Heliport,-2.748636,-42.042203
 SJ1M,,Fazenda Maravilha Airport,-19.736861,-43.410786
 SJ1N,,Condomínio Nirvana Village Heliport,-18.249353,-48.862201
@@ -60747,6 +60807,7 @@ SJCV,,Roots Heliport,-22.865024,-46.036706
 SJCW,,Jatapu Airport,-1.71205,-58.5112
 SJCY,,Estância Santa Rita Airport,-15.680085,-55.95603
 SJCZ,,Fazenda Paraíso Airport,-12.430112,-54.250435
+SJD1,,Fazenda Delfin Airport,-11.168569,-45.814358
 SJD2,,Fazenda Cabeceira do Pontal Airstrip,-17.850856,-53.29886
 SJD4,,Fazenda Santo André Airstrip,-14.635,-46.406944
 SJD6,,Blumen Park Heliport,-29.433768,-52.01745
@@ -62282,6 +62343,7 @@ SN1A,,ECJBSA Heliport,-20.159106,-44.388056
 SN1B,,Fazenda Brejo Seco Airport,-8.596029,-45.205915
 SN1C,,Fazenda Colina Airstrip,-20.490556,-50.430528
 SN1F,,Fazenda Barreiro Holding Formoso Airstrip,-17.008149,-50.430576
+SN1H,,Hamares Milagres Heliport,-9.269592,-35.373951
 SN1K,,Artivinco Skyport Heliport,-22.982872,-46.739606
 SN1L,,Domoluz Heliport,-23.210437,-46.500174
 SN1M,,Riacho do Mel Airstrip,-9.593878,-37.409671
@@ -62385,8 +62447,9 @@ SN52,,Pilot Pointe Estates Airport,37.48139954,-97.01200104
 SN53,,Bonner Field,37.43339920043945,-95.91690063476562
 SN54,,Overland Park Regional Medical Center Heliport,38.936905,-94.725906
 SN55,,R J C Farms Inc Airport,38.215301513671875,-101.00299835205078
-SN57,,Witham Airport,38.69860076904297,-95.30030059814453
-SN58,,Foster Field,37.869998931884766,-96.64669799804688
+SN56,,Fazenda Sonho Meu Airport,-9.128719,-51.209253
+SN57,,Witham Airport,38.698601,-95.300301
+SN58,,Foster Field,37.871401,-96.646879
 SN59,,Hermon Farm Airport,38.85279846191406,-94.91000366210938
 SN5J,,Fazenda São Joaquim Airport,-13.996923,-50.532103
 SN5R,,Fazenda Rincão Airstrip,-21.994232,-54.316331
@@ -62770,7 +62833,7 @@ SNKF,,Das Bandeirinhas Airport,-20.738585,-43.797444
 SNKH,,Creputiá Airport,-8.116944,-57.117222
 SNKI,CDI,Cachoeiro do Itapemirim - Raimundo de Andrade Airport,-20.834299,-41.1856
 SNKJ,,Fazenda Rio Dourado Airport,-8.33482,-51.446711
-SNKK,,Caicó Airport,-6.43917,-37.0783
+SNKK,,Rui Mariz Airport,-6.439164,-37.078078
 SNKN,QCP,Currais Novos Airport,-6.280832767486572,-36.540279388427734
 SNKO,,Brotas de Macaúbas Airport,-11.9994,-42.634899
 SNKP,,Conquista do Pontal Airport,-22.385159,-52.110901
@@ -63413,11 +63476,13 @@ SS-0077,,Deim Zubeir Airstrip,7.71196,26.18828
 SS07,,Fazenda Lote 07 Airport,-12.707482,-56.809923
 SS0L,,Parque São Lourenço II Heliport,-22.766792,-47.245392
 SS1,,North Country Seaplane Base,46.369833,-91.798
+SS1A,,Fazenda Rancho Alegre Airport,-8.707453,-49.206672
 SS1B,,B & J (Balestrin e Jakomel) Sky Haven Heliport,-27.177669,-51.521656
 SS1F,,Fazenda Porto Novo Airport,-18.650515,-50.10556
 SS1L,,Fazenda Laguna Airstrip,-14.724292,-45.409781
 SS1M,,Fazenda Santa Marcia Airport,-16.5785,-52.52288
 SS1P,,Fazenda Formosa Principal Airstrip,-10.706835,-45.409719
+SS1R,,Fazenda Agro Ribeiro Airport,-11.459386,-46.304675
 SS1X,,Santa Cruz do Xingú Airport,-10.156953,-52.39515
 SS22,,Fazenda Pintassilgo Airport,-11.63365,-56.181522
 SS23,,Aero Zolet Airstrip,-28.860255,-51.334424
@@ -64025,7 +64090,7 @@ SSUG,,Aurora Heliport,-21.460757,-42.698064
 SSUH,,Porto Frade Heliport,-22.969999,-44.444443
 SSUI,,Fazenda Novo Horizonte Airport,-7.096976,-48.760541
 SSUJ,,Estrada do Iate Clube Heliport,-23.607221603393555,-47.263057708740234
-SSUL,,Ultraleve Clube Curitiba Airport,-25.476944,-49.154167
+SSUL,,Ultraleve Clube Curitiba Airport,-25.477596,-49.154545
 SSUM,UMU,Orlando de Carvalho Airport,-23.7987,-53.313801
 SSUN,,Terminal Petrobrás - Guarulhos Heliport,-23.470277786254883,-46.44694519042969
 SSUO,ZFU,Unifly Heliport,-23.4086112976,-46.330554962200004
@@ -65915,6 +65980,8 @@ TR-0342,,Pamukkale Pamair Airfield,37.918416,29.107445
 TR-0343,,Muş Heliport,38.775307,41.503338
 TR-0344,,Private Airfield,36.88025,31.033266
 TR-0345,,Private Airfield,38.440279,28.456564
+TR-0346,,Yozgat Airport (Under Construction),39.88939,34.98363
+TR-0347,,Private Airfield (Closed),39.704358,32.754214
 TRPG,MNI,John A. Osborne Airport,16.791835,-62.193204
 TS00,,Fuller Airport,32.787314,-97.180499
 TS02,,One Sixty Four Place Airport,33.119598388671875,-98.23059844970703
@@ -70862,7 +70929,7 @@ US-12460,,H M Ranch Airport,29.598801,-98.171097
 US-12461,,Flying B Ranch Airport,32.298501,-97.149498
 US-12462,,Aransas National Wildlife Refuge Airport,28.124533,-96.798692
 US-12463,,Y O Ranch Airport,30.203326,-99.67682
-US-12464,,Farm Air Service Airport,30.037248,-94.397303
+US-12464,,Farm Air Service Airport,30.036152,-94.397231
 US-12465,,North Willis Airport,30.0266,-94.4627
 US-12466,,Sonny Broussard Landing Strip,29.990801,-94.422401
 US-12467,,Skylark Airport,32.312183,-96.487355
@@ -71488,6 +71555,11 @@ US-13037,,Cumming Airfield,34.25445,-84.203557
 US-13038,,Steward & Sons Heliport,35.985833,-87.355278
 US-13039,,Bear Lake North Beach Emergency Heliport,42.12,-111.266609
 US-1304,,Hoover Dam Lodge Heliport,36.010463,-114.782017
+US-13040,,Keystone Building Helistop,40.266474,-76.883506
+US-13041,,Evaro Hills Estates Airpark,47.053615,-114.074713
+US-13042,,Fannin Field,28.691742,-97.288264
+US-13043,,Exceptional Community Hospital Heliport,36.119764,-97.163289
+US-13044,,Davia Heliport,41.569626,-90.52408
 US-1305,,Bouse Airport,33.930167,-114.000487
 US-1306,,Quartzsite Airport,33.66185,-114.249
 US-1307,,Desert Gardens Airport,33.6573,-114.2357
@@ -78125,7 +78197,7 @@ US-7934,,Roy Browder Airport,36.07893,-101.78025
 US-7935,,Berkeley Plantation Airport,37.31839,-77.17323
 US-7936,,Skinkle Airport,37.38436,-105.48793
 US-7937,,Turkey Ridge Ranch Airport,37.80851,-104.58431
-US-7938,,Villa Grove Flight Park,38.265487,-105.948522
+US-7938,,Bonanza Airpark,38.265487,-105.948522
 US-7939,,Cave Valley Ranch Airport,38.65471,-114.8096
 US-7940,,Gardner Ranch Airport,38.96646,-115.19911
 US-7941,,Smith Airport,44.75488,-73.27821
@@ -81554,7 +81626,7 @@ VIUT,,Uttarlai Airport,25.813,71.4823
 VIUX,,Udhampur Air Force Station,32.902152,75.155709
 VIV,VIV,Vivigani Airfield,-9.30333333333,150.318888889
 VJQ,VJQ,Gurue Airport,-15.5062,36.9904
-VKX,,Potomac Airfield,38.74760056,-76.9571991
+VKX,,Potomac Airfield,38.748392,-76.95624
 VLAP,AOU,Attopeu Airport,14.793056,107.045278
 VLHS,HOE,Ban Huoeisay Airport,20.257299,100.436996
 VLLB,LPQ,Luang Phabang International Airport,19.904273,102.167191
@@ -81915,7 +81987,7 @@ VVKP,,Kep Air Base,21.3946,106.261002
 VVN,VVN,Las Malvinas/Echarate Airport,-11.854861,-72.939332
 VVNB,HAN,Noi Bai International Airport,21.221201,105.806999
 VVNS,SQH,Na San Airport,21.215301,104.032803
-VVPB,HUI,Phu Bai International Airport,16.400628,107.703094
+VVPB,HUI,Phu Bai International Airport,16.400581,107.704094
 VVPC,UIH,Phu Cat Airport,13.955,109.042
 VVPK,PXU,Pleiku Airport,14.004500389099121,108.01699829101562
 VVPQ,PQC,Phú Quốc International Airport,10.169783,103.99353
@@ -82528,7 +82600,7 @@ WMAE,,Bidor Airport,4.11638879776001,101.28199768066406
 WMAG,,Dungun Airport,4.786290168762207,103.38200378417969
 WMAH,,Grik Airport,5.432849,101.123658
 WMAJ,,Jendarata Airport,3.89972,100.948997
-WMAL,,Kuala Kerai Airport,5.538680076599121,102.19499969482422
+WMAL,,Kuala Kerai Airport,5.53868,102.195
 WMAN,SXT,Sungai Tiang Airport,4.330277919769287,102.3949966430664
 WMAP,,Kluang Airport,2.04138994217,103.306999207
 WMAQ,,Labis Airport,2.38024,103.03393
@@ -85245,7 +85317,6 @@ ZA-0063,,Amphitheatre Lodge Airport,-28.639941,29.147501
 ZA-0064,,Riverview Airport,-28.433332443237305,32.150001525878906
 ZA-0065,,St Lucia Estuary,-28.350000381469727,32.41666793823242
 ZA-0066,,Battlefields Airport,-28.131526947021484,30.290416717529297
-ZA-0067,,Jozini Airport,-27.350000381469727,32.13333511352539
 ZA-0068,,Bonwa Phala Airport,-24.886667251586914,28.047222137451172
 ZA-0069,,Riverside Airport,-25.428948,31.577033
 ZA-0070,,Batavia Airport,-24.668333053588867,26.536666870117188
@@ -85358,7 +85429,7 @@ ZA-0176,,Scottburgh Airfield,-30.30557,30.736022
 ZA-0177,,Delta Golf Airstrip,-30.773168,30.423876
 ZA-0178,,Port Grosvenor Airfield,-31.371355,29.911104
 ZA-0179,,The Haven Airstrip,-32.242606,28.910072
-ZA-0180,,Whats Landing Airport,-32.9019,28.0491
+ZA-0180,,Watts Landing Airport,-32.9019,28.0491
 ZA-0181,,Kwelega Road Airstrip,-32.905791,28.039851
 ZA-0182,,Wings Park Airfield,-32.8248,27.83568
 ZA-0183,,Mtwentwe Farm Airfield,-32.74585,28.22815
@@ -85539,6 +85610,16 @@ ZA-0360,,Suiderland Airstrip,-32.1035,18.81724
 ZA-0361,,Trawal Airstrip,-31.90827,18.69869
 ZA-0362,,Klippunt Airstrip,-28.57991,21.13157
 ZA-0363,,Karos Airstrip,-28.37984,21.58413
+ZA-0364,,White Elephant Airport,-27.41078,31.88074
+ZA-0365,,Tamboti Ridge Ranch Airstrip,-27.37484,31.81211
+ZA-0366,,Jozini Airport,-27.45416,32.130005
+ZA-0367,,Ronald Shay Airport,-27.714785,32.27945
+ZA-0368,,Mantuma Airport,-27.594576,32.253136
+ZA-0369,,Unknown airstrip,-24.447111,30.941083
+ZA-0370,,Sabie Airfield,-25.096685,30.795702
+ZA-0371,,Nzumba Lodge Airstrip,-24.114364,31.135554
+ZA-0372,,Ximuwu Lodge Airstrip,-24.300423,31.087028
+ZA-0373,,N’tsiri Airstrip,-24.164315,31.345818
 ZA-KIG,KIG,Koingnaas Airport,-30.187136,17.282706
 ZA49,,Ilyinskoye-Khovanskoye Airstrip,56.959436,39.781629
 ZBAA,PEK,Beijing Capital International Airport,40.077349,116.596702
