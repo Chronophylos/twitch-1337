@@ -4,7 +4,7 @@
 
 # Pin matches rust-toolchain.toml (1.98.0). Tag + digest so Dependabot
 # can bump the hash when the chef image for this Rust version rebuilds.
-FROM docker.io/lukemathwalker/cargo-chef:latest-rust-1.98.0@sha256:d21902576546863995017609e991178939e6f151f6b35fb00f3c0fa97a616ef5 AS base
+FROM docker.io/lukemathwalker/cargo-chef:latest-rust-1.98.1@sha256:b8cfeff0a392bc4bf5066210875728562b5b6ba66fe3b67aae0c6b7d56df1043 AS base
 
 WORKDIR /app
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=clang
