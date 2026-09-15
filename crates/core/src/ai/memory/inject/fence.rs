@@ -1,6 +1,15 @@
 //! FILE fence rendering: sentinel-matched blocks the model can quote back.
 
+use rand::Rng as _;
+
 use crate::ai::memory::types::Frontmatter;
+
+/// Generate a 16-hex-char nonce for one prompt build.
+pub fn fresh_nonce() -> String {
+    let mut bytes = [0u8; 8];
+    rand::rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
 
 const FENCE_OPEN: &str = "<<<FILE";
 const FENCE_CLOSE: &str = "<<<ENDFILE";

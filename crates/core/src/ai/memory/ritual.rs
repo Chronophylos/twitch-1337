@@ -15,13 +15,14 @@ use tokio::sync::Notify;
 use tracing::{error, info, warn};
 
 use crate::ai::memory::inject::{
-    BuildOpts, FenceLabel, InvocationChannel, PROMPT_DREAMER, SubstitutionVars,
-    build_chat_turn_context, fence_block, fresh_nonce, scrub_for_inject, substitute,
+    BuildOpts, FenceLabel, InvocationChannel, build_chat_turn_context, fence_block, fresh_nonce,
+    scrub_for_inject,
 };
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::{DreamerExecutor, DreamerExecutorOpts, dreamer_tools};
 use crate::ai::memory::transcript::TranscriptWriter;
 use crate::ai::memory::types::FileKind;
+use crate::ai::preset::render_standalone;
 use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
@@ -46,7 +47,6 @@ pub fn spawn_ritual(
     store: MemoryStore,
     transcript: TranscriptWriter,
     settings: SettingsHandle,
-    channel: String,
     shutdown: Arc<Notify>,
     langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) -> tokio::task::JoinHandle<()> {
@@ -90,7 +90,6 @@ pub fn spawn_ritual(
                 &store,
                 &transcript,
                 &settings,
-                &channel,
                 yesterday,
                 langfuse.as_ref(),
             )
@@ -123,7 +122,6 @@ pub async fn run_ritual(
     store: &MemoryStore,
     transcript: &TranscriptWriter,
     settings: &SettingsHandle,
-    channel: &str,
     rotate_to: NaiveDate,
     langfuse: Option<&Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) -> Result<()> {
@@ -204,22 +202,10 @@ pub async fn run_ritual(
         .format("%Y-%m-%d")
         .to_string();
     // Prompt template is baked into the binary (#321), not read from disk.
-    let head = substitute(
-        PROMPT_DREAMER,
-        SubstitutionVars {
-            speaker_username: "dreamer",
-            speaker_display: "dreamer",
-            speaker_user_id: "",
-            speaker_role: "dreamer",
-            channel,
-            date: &now_str,
-            model: "",
-            model_id: "",
-            reply_target: "",
-            reply_hard: "",
-        },
-    )
-    .replace("{caps}", &caps_line);
+    let head = render_standalone(
+        twitch_1337_data::prompts::DREAMER,
+        minijinja::context! { date => &now_str, caps => &caps_line },
+    )?;
     // The dreamer wants every file in one shot, so glue memory + scratch
     // blocks back together for its system prompt. The cache-hygiene
     // split only matters for the chat-turn loop.
@@ -412,17 +398,9 @@ not a transcript line
             recorder.clone() as Arc<dyn LlmClient>,
             settings.clone(),
         );
-        run_ritual(
-            &registry,
-            &store,
-            &transcript,
-            &settings,
-            "testchan",
-            yesterday,
-            None,
-        )
-        .await
-        .unwrap();
+        run_ritual(&registry, &store, &transcript, &settings, yesterday, None)
+            .await
+            .unwrap();
 
         // ── Second call: change model in settings (simulates a live dashboard edit) ──
         {
@@ -432,17 +410,9 @@ not a transcript line
         }
         // Use a different date so rotate_to doesn't conflict with the already-rotated file.
         let yesterday2 = NaiveDate::from_ymd_opt(2026, 4, 16).unwrap();
-        run_ritual(
-            &registry,
-            &store,
-            &transcript,
-            &settings,
-            "testchan",
-            yesterday2,
-            None,
-        )
-        .await
-        .unwrap();
+        run_ritual(&registry, &store, &transcript, &settings, yesterday2, None)
+            .await
+            .unwrap();
 
         let models = recorder.0.lock().unwrap().clone();
         assert_eq!(
@@ -522,7 +492,6 @@ not a transcript line
             &store,
             &transcript,
             &settings,
-            "testchan",
             NaiveDate::from_ymd_opt(2026, 4, 17).unwrap(),
             None,
         )
@@ -594,17 +563,9 @@ not a transcript line
             settings.clone(),
         );
         let yesterday = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
-        run_ritual(
-            &registry,
-            &store,
-            &transcript,
-            &settings,
-            "testchan",
-            yesterday,
-            None,
-        )
-        .await
-        .unwrap();
+        run_ritual(&registry, &store, &transcript, &settings, yesterday, None)
+            .await
+            .unwrap();
 
         assert_eq!(
             *client.0.lock().unwrap(),

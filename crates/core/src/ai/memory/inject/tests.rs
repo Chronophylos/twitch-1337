@@ -561,181 +561,6 @@ fn fence_block_strips_quote_breakers_from_display_name() {
 }
 
 #[test]
-fn substitute_only_replaces_known_tokens() {
-    let s = substitute(
-        "hi {speaker_username} on {channel} {date} {speaker_role} {unknown}",
-        SubstitutionVars {
-            speaker_username: "alice",
-            speaker_display: "Alice",
-            speaker_user_id: "42",
-            speaker_role: "regular",
-            channel: "ch",
-            date: "2026-04-30",
-            model: "Google Gemma 3 4B",
-            model_id: "google/gemma-3-4b-it",
-            reply_target: "480",
-            reply_hard: "490",
-        },
-    );
-    assert_eq!(s, "hi alice on ch 2026-04-30 regular {unknown}");
-}
-
-#[test]
-fn substitute_renders_speaker_marker_block() {
-    // Mirror the shape of the bundled `ai_instructions.md` marker line so
-    // this test fails if the prompt format drifts from substitute()'s tokens.
-    let tmpl = ">>> Antwort auf {speaker_display} (login={speaker_username}, id={speaker_user_id}, role={speaker_role}):\n";
-    let out = substitute(
-        tmpl,
-        SubstitutionVars {
-            speaker_username: "magie_023",
-            speaker_display: "MagieDisplay",
-            speaker_user_id: "141690010",
-            speaker_role: "regular",
-            channel: "euterheissgetraenk",
-            date: "2026-05-16",
-            model: "Google Gemma 3 4B",
-            model_id: "google/gemma-3-4b-it",
-            reply_target: "480",
-            reply_hard: "490",
-        },
-    );
-    assert!(
-        out.contains(">>> Antwort auf MagieDisplay (login=magie_023, id=141690010, role=regular):")
-    );
-}
-
-#[test]
-fn substitute_replaces_model_tokens() {
-    let out = substitute(
-        "model={model} id={model_id}",
-        SubstitutionVars {
-            speaker_username: "a",
-            speaker_display: "A",
-            speaker_user_id: "1",
-            speaker_role: "regular",
-            channel: "ch",
-            date: "2026-05-16",
-            model: "Google Gemma 3 4B",
-            model_id: "google/gemma-3-4b-it",
-            reply_target: "480",
-            reply_hard: "490",
-        },
-    );
-    assert_eq!(out, "model=Google Gemma 3 4B id=google/gemma-3-4b-it");
-}
-
-#[test]
-fn substitute_replaces_reply_length_tokens() {
-    let out = substitute(
-        "Ziel: {reply_target}. Hard: {reply_hard}. leftover {unknown}",
-        SubstitutionVars {
-            speaker_username: "a",
-            speaker_display: "A",
-            speaker_user_id: "1",
-            speaker_role: "regular",
-            channel: "ch",
-            date: "2026-05-16",
-            model: "m",
-            model_id: "m",
-            reply_target: "200",
-            reply_hard: "400",
-        },
-    );
-    assert_eq!(out, "Ziel: 200. Hard: 400. leftover {unknown}");
-}
-
-/// The substitution tokens `substitute` knows about. None may survive in
-/// a bundled prompt's rendered output — a leak means a typo'd token in the
-/// template or a renamed var. (`{0,63}` and other literal braces in the
-/// prompts are not in this set and are left as-is by design.)
-const KNOWN_TOKENS: [&str; 10] = [
-    "{speaker_username}",
-    "{speaker_display}",
-    "{speaker_user_id}",
-    "{speaker_role}",
-    "{channel}",
-    "{date}",
-    "{model}",
-    "{model_id}",
-    "{reply_target}",
-    "{reply_hard}",
-];
-
-fn sample_vars() -> SubstitutionVars<'static> {
-    SubstitutionVars {
-        speaker_username: "magie_023",
-        speaker_display: "MagieDisplay",
-        speaker_user_id: "141690010",
-        speaker_role: "regular",
-        channel: "euterheissgetraenk",
-        date: "2026-05-16",
-        model: "Google Gemma 3 4B",
-        model_id: "google/gemma-3-4b-it",
-        reply_target: "480",
-        reply_hard: "490",
-    }
-}
-
-#[test]
-fn bundled_ai_instructions_substitutes_cleanly() {
-    // Drive the bundled prompt through substitute(): the speaker/date tokens
-    // it uses must render with real values, and no known token may leak.
-    let out = substitute(PROMPT_INSTRUCTIONS, sample_vars());
-    assert!(
-        out.contains("Nachricht von magie_023"),
-        "speaker_username did not substitute:\n{out}"
-    );
-    assert!(
-        out.contains("Aktuelles Datum: 2026-05-16"),
-        "date did not substitute:\n{out}"
-    );
-    for tok in KNOWN_TOKENS {
-        assert!(
-            !out.contains(tok),
-            "bundled prompt leaked unsubstituted token {tok}:\n{out}"
-        );
-    }
-}
-
-#[test]
-fn bundled_system_substitutes_cleanly() {
-    // The system prompt uses {channel}; {speaker_role} must be absent
-    // (interpolating it would split the stable cache prefix three ways).
-    let out = substitute(PROMPT_SYSTEM, sample_vars());
-    assert!(
-        out.contains("höchstens 480 Zeichen"),
-        "reply_target did not substitute:\n{out}"
-    );
-    assert!(
-        out.contains("490 Zeichen ist die harte Grenze"),
-        "reply_hard did not substitute:\n{out}"
-    );
-    // {speaker_role} must not live in system.md — interpolating it splits
-    // the cache prefix three ways (regular/moderator/broadcaster).
-    assert!(
-        !PROMPT_SYSTEM.contains("{speaker_role}"),
-        "system.md must not interpolate {{speaker_role}}"
-    );
-    for tok in KNOWN_TOKENS {
-        assert!(
-            !out.contains(tok),
-            "bundled system prompt leaked unsubstituted token {tok}:\n{out}"
-        );
-    }
-}
-
-#[test]
-fn grok_prompt_does_not_interpolate_speaker_role() {
-    // {speaker_role} in the cached system prefix would vary it per speaker
-    // and defeat the prompt cache. Speaker vars belong in ai_instructions.md.
-    assert!(
-        !PROMPT_GROK.contains("{speaker_role}"),
-        "grok.md must not interpolate {{speaker_role}}"
-    );
-}
-
-#[test]
 fn bundled_recap_mentions_no_quotes() {
     let recap = twitch_1337_data::prompts::RECAP;
     assert!(
@@ -756,17 +581,23 @@ fn bundled_recap_keeps_names_verbatim() {
 
 #[test]
 fn grok_prompt_keeps_baked_length_copy() {
+    let grok = twitch_1337_data::prompts::PRESET_FILES
+        .iter()
+        .find(|(p, _)| *p == "grok/core.md")
+        .map(|(_, b)| *b)
+        .expect("grok head is baked");
     assert!(
-        PROMPT_GROK.contains("Stay at or under 480 characters"),
-        "grok.md must keep the baked 480 target"
+        grok.contains("Stay at or under 480 characters"),
+        "grok/core.md must keep the baked 480 target"
     );
     assert!(
-        PROMPT_GROK.contains("500 is the hard limit"),
-        "grok.md must keep the baked 500 hard limit"
+        grok.contains("500 is the hard limit"),
+        "grok/core.md must keep the baked 500 hard limit"
     );
+    // Grok's limits are baked copy, not Aurora's live settings.
     assert!(
-        !PROMPT_GROK.contains("{reply_target}") && !PROMPT_GROK.contains("{reply_hard}"),
-        "grok.md must not interpolate Aurora length tokens"
+        !grok.contains("limits.reply_target") && !grok.contains("limits.reply_hard"),
+        "grok/core.md must not interpolate Aurora length tokens"
     );
 }
 
@@ -1306,117 +1137,6 @@ async fn recap_only_identity_included_when_budget_allows() {
         "recap-only lurker must be included when budget allows:\n{}",
         ctx.memory
     );
-}
-
-#[test]
-fn build_chat_turn_messages_assembles_in_order() {
-    let (system, user) = build_chat_turn_messages(
-        SystemParts {
-            head: "HEAD".to_string(),
-            appendices: vec!["\n\nAPP".to_string()],
-            memory: "MEMORY".to_string(),
-            recap: String::new(),
-        },
-        UserParts {
-            emote_block: None,
-            scratch: String::new(),
-            recent_chat: String::new(),
-            instructions: "INSTR".to_string(),
-            instruction: "INSTRUCTION".to_string(),
-        },
-    );
-    assert_eq!(system.role, llm::Role::System);
-    assert_eq!(user.role, llm::Role::User);
-    assert_eq!(system.content, "HEAD\n\nAPP\n\nMEMORY");
-    assert_eq!(user.content, "INSTR\n\nINSTRUCTION");
-}
-
-#[test]
-fn build_chat_turn_messages_system_is_stable_across_volatile_changes() {
-    let sys = || SystemParts {
-        head: "SYS HEAD".to_string(),
-        appendices: vec!["\n\nAPP1".to_string(), "\n\nAPP2".to_string()],
-        memory: "<<<FILE kind=soul nonce=abc>>>\nsoul\n<<<ENDFILE nonce=abc>>>".to_string(),
-        recap: String::new(),
-    };
-    let (sys_a, user_a) = build_chat_turn_messages(
-        sys(),
-        UserParts {
-            emote_block: Some("\n\n7TV emotes available: EMOTES_A".to_string()),
-            scratch: "SCRATCH A".to_string(),
-            recent_chat: "CHAT A".to_string(),
-            instructions: "INSTR".to_string(),
-            instruction: "do A".to_string(),
-        },
-    );
-    let (sys_b, _user_b) = build_chat_turn_messages(
-        sys(),
-        UserParts {
-            emote_block: Some("\n\n7TV emotes available: EMOTES_B totally different".to_string()),
-            scratch: "SCRATCH B different".to_string(),
-            recent_chat: "CHAT B different".to_string(),
-            instructions: "INSTR".to_string(),
-            instruction: "do B different".to_string(),
-        },
-    );
-    // The whole point: volatile turn data must not perturb the system prefix.
-    assert_eq!(
-        sys_a.content, sys_b.content,
-        "system message must be byte-identical across turns"
-    );
-    // Volatile data lands in the user message...
-    assert!(user_a.content.contains("EMOTES_A"));
-    assert!(user_a.content.contains("SCRATCH A"));
-    assert!(user_a.content.contains("CHAT A"));
-    assert!(user_a.content.contains("do A"));
-    // ...and never leaks into the cached system prefix.
-    assert!(!sys_a.content.contains("EMOTES_A"));
-    assert!(!sys_a.content.contains("SCRATCH A"));
-}
-
-#[test]
-fn recap_appends_after_memory() {
-    let (system, _) = build_chat_turn_messages(
-        SystemParts {
-            head: "HEAD".into(),
-            appendices: vec![],
-            memory: "MEMORY".into(),
-            recap: "## Recap (#main)\nraid vorbei".into(),
-        },
-        UserParts {
-            emote_block: None,
-            scratch: String::new(),
-            recent_chat: String::new(),
-            instructions: "I".into(),
-            instruction: "x".into(),
-        },
-    );
-    assert!(system.content.ends_with("## Recap (#main)\nraid vorbei"));
-    assert!(system.content.find("MEMORY").unwrap() < system.content.find("## Recap").unwrap());
-}
-
-#[test]
-fn prefix_without_recap_stable_when_recap_changes() {
-    let prefix = |recap: &str| {
-        let (s, _) = build_chat_turn_messages(
-            SystemParts {
-                head: "H".into(),
-                appendices: vec!["\n\nA".into()],
-                memory: "M".into(),
-                recap: recap.into(),
-            },
-            UserParts {
-                emote_block: None,
-                scratch: String::new(),
-                recent_chat: "c".into(),
-                instructions: "i".into(),
-                instruction: "u".into(),
-            },
-        );
-        let idx = s.content.find("\n\nM").unwrap();
-        s.content[..idx + 3].to_string() // "H\n\nA\n\nM"
-    };
-    assert_eq!(prefix(""), prefix("## Recap (#x)\nnope"));
 }
 
 #[test]

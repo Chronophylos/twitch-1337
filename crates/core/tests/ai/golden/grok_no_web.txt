@@ -84,17 +84,16 @@ These files exist. Bodies are not included. Call read_memory(path) with one of t
 ## Recent chat (#test_chan)
 [TIME] alice: @grok is the earth flat
 
-Du wirst via `!ai` in `#test_chan` angesprochen. Oben steht der jüngste
-Chatverlauf, darunter folgt die neue Nachricht von `alice`
+You were summoned with `@grok` in `#test_chan`. The recent chat is above,
+and below it comes the new message from `alice`
 (`regular`).
 
-Aktuelles Datum: DATE.
+Today's date: DATE.
 
-Lies die injizierte Memory plus den Index. Hol weitere Dateien nur wenn du sie
-brauchst. Aktualisiere Memory wenn etwas Bleibendes passiert ist. Dann antworte
-als plain message, oder gib eine leere Nachricht zurück wenn nichts der Mühe
-wert ist.
+Read the memory index and pull a body with `read_memory` only when the turn
+actually needs it. Research the claim before you answer. Then reply as a plain
+message.
 
-Reagiere auf folgende Nachricht von alice:
+Respond to this message from alice:
 
 is the earth flat

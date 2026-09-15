@@ -44,12 +44,16 @@ Consequences:
 
 - Runtime/dashboard editing of prompts. Prompts stay code (#321), baked via
   `include_str!`, reviewed in PRs.
-- Rewriting prompt prose, fixing the German/English appendix mismatch, giving
-  Grok an `instructions` block, or deduplicating the FILE-fence documentation.
-  All deferred to a follow-up PR, which the goldens will then show as a
-  deliberate diff.
+- Rewriting prompt prose, fixing the German/English appendix mismatch, or
+  deduplicating the FILE-fence documentation. Deferred to a follow-up PR, which
+  the goldens will then show as a deliberate diff.
 - Touching context *building* (`fence.rs`, `recent_chat.rs`, `aurora.rs`,
   `grok.rs`). Only assembly into messages changes.
+
+One exception was pulled in on request during implementation: the instructions
+block, which the port revealed Grok has been receiving in German all along, is
+split into `aurora/instructions.md` and `grok/instructions.md`. It shows up as a
+scoped diff in the two grok goldens and nowhere else.
 
 ## Decisions
 
@@ -173,14 +177,23 @@ Order preserves today's assembly.
 | 11 | `emote_block` | User | present | `{{ inject.emote_block }}` |
 | 12 | `scratch` | User | non-empty | `{{ inject.scratch }}` |
 | 13 | `recent_chat` | User | non-empty | `{{ inject.recent_chat }}` |
-| 14 | `instructions` | User | `agent == "aurora"` | `File("aurora/instructions.md")` |
+| 14 | `aurora_instructions` | User | `agent != "grok"` | `File("aurora/instructions.md")` |
+| 14b | `grok_instructions` | User | `agent == "grok"` | `File("grok/instructions.md")` |
 | 15 | `trigger` | User | always | Inline — `{{ message.text }}` + reply-context prose |
 
 Two heads rather than one `{% if %}/{% else %}`: a 133-line and a 70-line body
 in one conditional is the worst of both, and separate entries let each point at
 its own file.
 
-Grok has no `instructions` counterpart today and does not gain one here.
+The original plan recorded that Grok had no `instructions` counterpart. That was
+wrong — `ai_instructions.md` was substituted into the user message for both
+agents unconditionally, so `@grok` read a German preamble under a system head
+telling it to write English only. The golden for `grok_no_web` is what caught
+it. Grok now has its own English counterpart.
+
+A `File(...)` block cannot carry an inline `{% if %}` without a body to put it
+in, so the condition lives on the first and last line of each prose file. Two
+lines at the edges of a 133-line file, and still one mechanism.
 
 ## Kill list
 
@@ -193,7 +206,7 @@ Grok has no `instructions` counterpart today and does not gain one here.
 | `turn.rs` — `format_reply_context()` | `trigger` block + `message.reply_to` |
 | `turn.rs:414-440` — the `appendices.push(…)` ladder | `tools.*` booleans + block conditions |
 | `inject/tests.rs:704-770` — `{speaker_role}`-absence tests | slot-scoped context |
-| `ai_instructions.md` as a standalone const | `aurora/instructions.md`, a User block |
+| `ai_instructions.md` as a standalone const | `aurora/instructions.md` + `grok/instructions.md`, User blocks |
 
 `dreamer.md`, `recap.md`, `seed_soul.md` survive as plain single templates but
 migrate from `{x}` to `{{ x }}` so `prompts/` carries one macro syntax and
@@ -210,11 +223,16 @@ Golden tests, `include_str!` + `assert_eq!`, no `insta`. Cases:
 - aurora × all tools
 - grok × no web
 - grok × web
-- aurora with reply-to-self
-- aurora with reply-to-grok
-- aurora with recap
+- aurora with a reply parent
 
-Both sides collapse `\n{3,}` → `\n\n` before comparing.
+Both sides collapse `\n{3,}` → `\n\n` before comparing, and scrub the inject
+nonce plus the two wall-clock values the turn reads from `Utc::now()`.
+
+Dropped from the planned set: a reply-to-self case (the reply tag carries no
+parent user-id, so it renders identically to the viewer case — the agent-labelled
+paths are covered by unit tests on the `trigger` block instead) and a recap case
+(seeding recap notes needs a `chat-recap.ron` fixture the harness has no helper
+for; `render_suffix` is tested directly).
 
 The three existing cache tests
 (`build_chat_turn_messages_system_is_stable_across_volatile_changes`,
