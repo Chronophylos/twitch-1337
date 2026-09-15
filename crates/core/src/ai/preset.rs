@@ -17,7 +17,7 @@
 use std::sync::LazyLock;
 
 use eyre::{Context as _, Result, eyre};
-use minijinja::{Environment, UndefinedBehavior, Value, context};
+use minijinja::{AutoEscape, Environment, UndefinedBehavior, Value, context};
 use serde::Deserialize;
 
 use llm::Message;
@@ -77,9 +77,19 @@ impl Preset {
 
         let mut env = Environment::new();
         env.set_undefined_behavior(UndefinedBehavior::Strict);
+        // Block names double as template names, and minijinja's default
+        // callback turns escaping on for names ending in .html/.json/.yaml.
+        // A prompt is never markup: escaping would mangle the `<<<FILE` memory
+        // fences and every quote a viewer types.
+        env.set_auto_escape_callback(|_| AutoEscape::None);
 
-        let mut blocks = Vec::with_capacity(file.blocks.len());
+        let mut blocks: Vec<ResolvedBlock> = Vec::with_capacity(file.blocks.len());
         for block in file.blocks {
+            // Names address templates, so a duplicate would silently overwrite
+            // the earlier body and render the later one twice.
+            if blocks.iter().any(|b| b.name == block.name) {
+                return Err(eyre!("duplicate preset block name `{}`", block.name));
+            }
             let source = match &block.body {
                 Body::Inline(text) => text.clone(),
                 Body::File(path) => twitch_1337_data::prompts::PRESET_FILES
@@ -130,8 +140,10 @@ impl Preset {
         Ok(out.trim().to_string())
     }
 
-    /// Render the whole preset into one message per slot, in the order the
-    /// slots first appear. Blocks rendering to nothing are dropped.
+    /// Render the whole preset top to bottom. Blocks rendering to nothing are
+    /// dropped; each run of consecutive same-slot blocks joins into one
+    /// message, so file order is message order and a later `System` block can
+    /// never be hoisted into an earlier one.
     pub fn render(&self, ctx: &PromptContext<'_>) -> Result<Vec<Message>> {
         let mut groups: Vec<(Slot, Vec<String>)> = Vec::new();
         for block in &self.blocks {
@@ -139,9 +151,9 @@ impl Preset {
             if text.is_empty() {
                 continue;
             }
-            match groups.iter_mut().find(|(slot, _)| *slot == block.slot) {
-                Some((_, parts)) => parts.push(text),
-                None => groups.push((block.slot, vec![text])),
+            match groups.last_mut() {
+                Some((slot, parts)) if *slot == block.slot => parts.push(text),
+                _ => groups.push((block.slot, vec![text])),
             }
         }
         Ok(groups
@@ -400,16 +412,32 @@ mod tests {
         }
     }
 
+    /// Exactly one head per agent. Asserting only the aurora side would let an
+    /// inverted `{% if %}` in `grok/core.md` stack both heads into one system
+    /// message.
     #[test]
     fn agent_heads_are_mutually_exclusive() {
-        let aurora = preset()
-            .render_block("aurora_head", &ctx("aurora", no_tools()))
-            .expect("render");
-        let grok = preset()
-            .render_block("aurora_head", &ctx("grok", no_tools()))
-            .expect("render");
-        assert!(!aurora.is_empty(), "aurora head must render for aurora");
-        assert!(grok.is_empty(), "aurora head must be empty for grok");
+        let head = |block: &str, agent: &str| {
+            preset()
+                .render_block(block, &ctx(agent, no_tools()))
+                .expect("render")
+        };
+        assert!(
+            !head("aurora_head", "aurora").is_empty(),
+            "aurora head must render for aurora"
+        );
+        assert!(
+            head("aurora_head", "grok").is_empty(),
+            "aurora head must be empty for grok"
+        );
+        assert!(
+            !head("grok_head", "grok").is_empty(),
+            "grok head must render for grok"
+        );
+        assert!(
+            head("grok_head", "aurora").is_empty(),
+            "grok head must be empty for aurora"
+        );
     }
 
     fn reply_ctx<'a>(

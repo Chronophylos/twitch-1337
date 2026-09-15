@@ -766,3 +766,298 @@ mod recap_wiring_tests {
         assert!(suffix.contains("existing recap note"));
     }
 }
+
+#[cfg(test)]
+mod turn_tests {
+    //! Prompt-assembly tests that drive [`TurnRunner::run_turn`] directly.
+    //! No IRC, no `TestBotBuilder` — a captured `ToolChatCompletionRequest`
+    //! is the whole assertion surface.
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use llm::{
+        ChatCompletionRequest, LlmClient, LlmError, ToolChatCompletionRequest,
+        ToolChatCompletionResponse,
+    };
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::ai::command::AiMemoryV2;
+    use crate::ai::memory::store::MemoryStore;
+    use crate::ai::memory::transcript::TranscriptWriter;
+    use crate::settings::Settings;
+    use crate::settings::provider::AiProvider;
+    use crate::twitch::echo::MouthIdentities;
+    use crate::twitch::mouth::MouthRouter;
+
+    /// Records every tool request and answers with a canned outcome.
+    struct CapturingLlm {
+        calls: Mutex<Vec<ToolChatCompletionRequest>>,
+        answer: Answer,
+    }
+
+    #[derive(Clone)]
+    enum Answer {
+        Text(String),
+        /// Sleep past the per-round timeout so `run_agent` gives up.
+        Hang,
+        Provider(u16),
+    }
+
+    #[async_trait]
+    impl LlmClient for CapturingLlm {
+        async fn chat_completion(&self, _r: ChatCompletionRequest) -> llm::Result<String> {
+            // Only reached by the reword pass, which these tests stay under.
+            Ok("reworded".into())
+        }
+
+        async fn chat_completion_with_tools(
+            &self,
+            request: ToolChatCompletionRequest,
+        ) -> llm::Result<ToolChatCompletionResponse> {
+            self.calls.lock().unwrap().push(request);
+            match &self.answer {
+                Answer::Text(t) => Ok(ToolChatCompletionResponse::Message(t.clone())),
+                Answer::Hang => {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    Ok(ToolChatCompletionResponse::Message(String::new()))
+                }
+                Answer::Provider(status) => Err(LlmError::Provider {
+                    status: *status,
+                    body: "nope".into(),
+                }),
+            }
+        }
+    }
+
+    struct Fixture {
+        runner: TurnRunner,
+        llm: Arc<CapturingLlm>,
+        _dir: TempDir,
+    }
+
+    async fn fixture(answer: Answer, timeout_secs: u64) -> Fixture {
+        crate::install_crypto_provider();
+        let dir = TempDir::new().unwrap();
+        let mut s = Settings::compiled_defaults();
+        // OpenRouter would make `ModelCatalog::display_name` reach the
+        // network for the `{model}` substitution; any other provider
+        // short-circuits to the raw model id.
+        s.ai.profiles[0].provider = AiProvider::OpenAiCompatible;
+        s.ai.profiles[0].model = "test-model".into();
+        s.ai.profiles[0].timeout = timeout_secs;
+        let settings: SettingsHandle = SettingsHandle::from_settings(s);
+
+        let store = MemoryStore::open(dir.path(), settings.clone())
+            .await
+            .unwrap();
+        let transcript = TranscriptWriter::open(store.memories_dir()).await.unwrap();
+        let llm = Arc::new(CapturingLlm {
+            calls: Mutex::new(Vec::new()),
+            answer,
+        });
+
+        let runner = TurnRunner::new(AiCommandDeps {
+            registry: Arc::new(crate::llm_factory::LlmRegistry::fixed(
+                llm.clone() as Arc<dyn LlmClient>,
+                settings.clone(),
+            )),
+            settings: settings.clone(),
+            chat_ctx: None,
+            memory: AiMemoryV2 {
+                store,
+                transcript,
+                inject_byte_budget: 8192,
+                max_turn_rounds: 3,
+                max_writes_per_turn: 2,
+                min_response_delay: Duration::ZERO,
+            },
+            web: None,
+            emotes: None,
+            bot_username: "utilitybot".into(),
+            doener: Arc::new(crate::doener::DoeneratlasClient::with_base_url(
+                reqwest::Client::new(),
+                "http://127.0.0.1:1".to_string(),
+            )),
+            repology: Arc::new(crate::repology::RepologyClient::new().unwrap()),
+            pronouns: Arc::new(crate::pronouns::PronounsClient::new().unwrap()),
+            model_catalog: Arc::new(ModelCatalog::new(reqwest::Client::new())),
+            mouths: Arc::new(MouthRouter {
+                aurora: None,
+                grok: None,
+            }),
+            echo: Arc::new(crate::twitch::echo::EchoGuard::new(
+                MouthIdentities::default(),
+            )),
+            dhl: None,
+            emote_tracker: None,
+            recap: None,
+            langfuse: None,
+        });
+
+        Fixture {
+            runner,
+            llm,
+            _dir: dir,
+        }
+    }
+
+    fn input(agent: Agent, instruction: &str) -> TurnInput {
+        TurnInput {
+            agent,
+            instruction: instruction.into(),
+            speaker: TurnSpeaker {
+                login: "alice".into(),
+                display_name: "Alice".into(),
+                user_id: "111".into(),
+                role: Role::Regular,
+            },
+            channel_login: "testchan".into(),
+            channel_id: "222".into(),
+            reply_parent: None,
+        }
+    }
+
+    fn part(req: &ToolChatCompletionRequest, role: llm::Role) -> String {
+        req.messages
+            .iter()
+            .find(|m| m.role == role)
+            .expect("message for role")
+            .content
+            .clone()
+    }
+
+    /// Memory belongs in the cached system prefix; scratch, recent chat and
+    /// the instruction belong in the volatile user message. Getting this
+    /// backwards busts the prompt cache on every turn.
+    #[tokio::test]
+    async fn memory_lands_in_system_and_instruction_in_user() {
+        let f = fixture(Answer::Text("moin".into()), 30).await;
+        let out = f
+            .runner
+            .run_turn(input(Agent::Aurora, "sag hallo"))
+            .await
+            .unwrap();
+        assert!(matches!(out, TurnOutcome::Reply { .. }));
+
+        let calls = f.llm.calls.lock().unwrap();
+        let system = part(&calls[0], llm::Role::System);
+        let user = part(&calls[0], llm::Role::User);
+
+        assert!(
+            system.contains("kind=soul"),
+            "memory bodies belong in system"
+        );
+        assert!(
+            !user.contains("kind=soul"),
+            "memory must not leak into user"
+        );
+        assert!(user.contains("sag hallo"), "instruction belongs in user");
+        assert!(
+            !system.contains("sag hallo"),
+            "instruction must not enter the cached prefix"
+        );
+    }
+
+    /// The per-process nonce is stable, so two turns whose memory has not
+    /// changed must produce a byte-identical system message — that identity
+    /// is the entire prompt-cache contract.
+    #[tokio::test]
+    async fn system_prefix_is_byte_stable_across_turns() {
+        let f = fixture(Answer::Text("moin".into()), 30).await;
+        f.runner
+            .run_turn(input(Agent::Aurora, "erste frage"))
+            .await
+            .unwrap();
+        f.runner
+            .run_turn(input(Agent::Aurora, "zweite frage"))
+            .await
+            .unwrap();
+
+        let calls = f.llm.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            part(&calls[0], llm::Role::System),
+            part(&calls[1], llm::Role::System),
+            "system prefix drifted between turns"
+        );
+        assert_ne!(
+            part(&calls[0], llm::Role::User),
+            part(&calls[1], llm::Role::User),
+        );
+    }
+
+    /// Two agents, two memory postures: Aurora gets bodies injected, grok
+    /// gets a paths-only manifest plus `read_memory`, and no write tools.
+    #[tokio::test]
+    async fn grok_gets_a_manifest_and_no_write_tools() {
+        let aurora = fixture(Answer::Text("moin".into()), 30).await;
+        aurora
+            .runner
+            .run_turn(input(Agent::Aurora, "hi"))
+            .await
+            .unwrap();
+        let grok = fixture(Answer::Text("yep".into()), 30).await;
+        grok.runner
+            .run_turn(input(Agent::Grok, "hi"))
+            .await
+            .unwrap();
+
+        let a = aurora.llm.calls.lock().unwrap();
+        let g = grok.llm.calls.lock().unwrap();
+
+        assert!(part(&a[0], llm::Role::System).contains("kind=soul"));
+        assert!(
+            !part(&g[0], llm::Role::System).contains("kind=soul"),
+            "grok must not receive memory bodies"
+        );
+
+        let names = |r: &ToolChatCompletionRequest| {
+            r.tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>()
+        };
+        assert!(names(&a[0]).contains(&"write_file".to_string()));
+        assert!(!names(&g[0]).contains(&"write_file".to_string()));
+        assert!(names(&g[0]).contains(&"read_memory".to_string()));
+    }
+
+    /// A per-round timeout and a provider failure both owe the viewer a
+    /// short notice; a blank answer owes them nothing.
+    #[tokio::test(start_paused = true)]
+    async fn timeout_maps_to_a_notice() {
+        let f = fixture(Answer::Hang, 1).await;
+        let out = f.runner.run_turn(input(Agent::Aurora, "hi")).await.unwrap();
+        assert_eq!(out, TurnOutcome::Notice(TIMEOUT_NOTICE));
+    }
+
+    #[tokio::test]
+    async fn provider_failure_and_blank_answer_map_to_notice_and_silence() {
+        let paid = fixture(Answer::Provider(402), 30).await;
+        assert_eq!(
+            paid.runner
+                .run_turn(input(Agent::Aurora, "hi"))
+                .await
+                .unwrap(),
+            TurnOutcome::Notice("KI-Konto leer FeelsBadMan"),
+        );
+
+        // 500 stays silent: transient, already logged at error!.
+        let boom = fixture(Answer::Provider(500), 30).await;
+        assert_eq!(
+            boom.runner
+                .run_turn(input(Agent::Aurora, "hi"))
+                .await
+                .unwrap(),
+            TurnOutcome::Silent,
+        );
+
+        let blank = fixture(Answer::Text("   ".into()), 30).await;
+        assert_eq!(
+            blank
+                .runner
+                .run_turn(input(Agent::Aurora, "hi"))
+                .await
+                .unwrap(),
+            TurnOutcome::Silent,
+        );
+    }
+}

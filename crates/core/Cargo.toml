@@ -27,6 +27,10 @@ humantime = "2"
 humantime-serde = { workspace = true }
 infer = { workspace = true }
 llm = { path = "../llm" }
+minijinja = { version = "2.24.0", default-features = false, features = [
+  "builtins",
+  "serde",
+] }
 random-flight = { path = "../random-flight" }
 rand = { workspace = true }
 reqwest = { workspace = true }
@@ -52,7 +56,6 @@ twitch-irc = { git = "https://github.com/Chronophylos/twitch-irc-rs", rev = "515
   "transport-tcp-rustls-webpki-roots",
 ] }
 url.workspace = true
-minijinja = { version = "2.24.0", default-features = false, features = ["builtins", "serde"] }
 
 [dev-dependencies]
 twitch-1337-core = { path = ".", features = ["testing"] }
