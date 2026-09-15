@@ -27,6 +27,10 @@ humantime = "2"
 humantime-serde = { workspace = true }
 infer = { workspace = true }
 llm = { path = "../llm" }
+minijinja = { version = "2.24.0", default-features = false, features = [
+  "builtins",
+  "serde",
+] }
 random-flight = { path = "../random-flight" }
 rand = { workspace = true }
 reqwest = { workspace = true }

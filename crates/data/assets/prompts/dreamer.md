@@ -35,7 +35,7 @@ Einzige Ausnahme: ein Block in `SOUL.md` oder `LORE.md`, der mit der Zeile `Noti
 
 **Inaktive User** (keine Transkript-Aktivität, alter `updated_at`): Aktuelles und Rauschen wegkomprimieren. Steckbrief-Instanzen (Verein, Name, Spiele, Bits) behalten. User-Dateien niemals löschen, rückkehrende User behalten ihren Bogen.
 
-**Byte-Caps**: {caps}. Gemessen wird die ganze Datei inklusive Frontmatter. Dateien über dem Cap müssen diesen Run unter den Cap geschrieben werden. Unter dem Cap gibt es keinen Grund zu kürzen — komprimiere nur was wirklich anstößt.
+**Byte-Caps**: {{ caps }}. Gemessen wird die ganze Datei inklusive Frontmatter. Dateien über dem Cap müssen diesen Run unter den Cap geschrieben werden. Unter dem Cap gibt es keinen Grund zu kürzen — komprimiere nur was wirklich anstößt.
 
 **Stimme**: schreib in der Stimme des Bots. Steckbrief als knappe Instanz-Bullets; Beziehungen, Interessen und Aktuelles als kurze Prosa. Keine Persönlichkeitsadjektive. Kurz.
 
@@ -53,4 +53,4 @@ Kein `say`, kein Terminal-Tool. Der Ritual-Driver wendet deine Writes an und log
 
 ## Run
 
-date: {date}
+date: {{ date }}

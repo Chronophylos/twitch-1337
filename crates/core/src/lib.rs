@@ -271,7 +271,6 @@ where
             mem.store.clone(),
             mem.transcript.clone(),
             services.settings.clone(),
-            services.channel.clone(),
             shutdown_notify.clone(),
             services.langfuse.clone(),
         );
