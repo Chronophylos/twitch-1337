@@ -2,11 +2,16 @@
 # Uses cargo-chef for efficient dependency caching
 # Final image is FROM scratch with statically linked musl binary
 
-# Pin matches rust-toolchain.toml (1.98.0). Tag + digest so Dependabot
-# can bump the hash when the chef image for this Rust version rebuilds.
+# Tag + digest so Dependabot can bump the hash when the chef image for
+# this Rust version rebuilds. rust-toolchain.toml is the real pin — it is
+# copied in below so every stage resolves the same toolchain regardless of
+# which Rust the base image ships.
 FROM docker.io/lukemathwalker/cargo-chef:latest-rust-1.98.1@sha256:b8cfeff0a392bc4bf5066210875728562b5b6ba66fe3b67aae0c6b7d56df1043 AS base
 
 WORKDIR /app
+# Before `rustup target add`: the musl std must land on the pinned toolchain,
+# not whatever the base image defaults to.
+COPY rust-toolchain.toml .
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=clang
 ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 # hadolint ignore=DL3008
