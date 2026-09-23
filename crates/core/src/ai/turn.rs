@@ -31,6 +31,7 @@ use crate::ai::memory::types::Role;
 use crate::ai::model_catalog::ModelCatalog;
 use crate::ai::recap::{RECAP_SHEET_LOGINS, RecapChannel, RecapHandle};
 use crate::ai::reply::{ReplyLimits, RewordOpts, prepare_agent_reply};
+use crate::commands::CommandCancellation;
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
 use crate::twitch::seventv::SevenTvEmoteProvider;
@@ -73,6 +74,7 @@ pub struct TurnInput {
     pub channel_login: String,
     pub channel_id: String,
     pub reply_parent: Option<TurnReplyParent>,
+    pub cancellation: CommandCancellation,
 }
 
 /// What the turn produced. Transport-free — the caller decides how any of
@@ -144,6 +146,7 @@ impl TurnRunner {
     /// Run one agent turn: resolve the profile, assemble the prompt, drive
     /// the agent loop, shape the reply.
     pub async fn run_turn(&self, input: TurnInput) -> Result<TurnOutcome> {
+        input.cancellation.check()?;
         // Which logical agent is speaking this turn. Drives chat-history
         // `(self)` tagging, reply-parent copy, memory posture, and the
         // Konten/Accounts system appendix.
@@ -194,7 +197,9 @@ impl TurnRunner {
         let recap = snap.ai.recap.clone();
         drop(snap);
 
+        input.cancellation.check()?;
         let model_display = self.model_catalog.display_name(&connection, &model).await;
+        input.cancellation.check()?;
 
         let mem = &self.memory;
         let cc = self.chat_ctx.as_ref();
@@ -317,6 +322,7 @@ impl TurnRunner {
 
         // Aurora gets bodies injected; grok gets an index and pulls what it
         // needs. Two agents, two memory postures.
+        input.cancellation.check()?;
         let (recent_chat, memory, scratch, readable_paths) = if grok_alias {
             let g = inject::build_grok_turn_context(
                 &mem.store,
@@ -493,6 +499,9 @@ impl TurnRunner {
                 tags: vec![turn_name.to_string(), connection.name.clone()],
             },
             async {
+                if input.cancellation.is_cancelled() {
+                    return TurnOutcome::Silent;
+                }
                 let prior_rounds = if grok_alias && let Some(ref w) = self.web {
                     vec![forced_web_search_round(w, &instruction_for_prompt, &trace).await]
                 } else {
@@ -521,7 +530,11 @@ impl TurnRunner {
                     dhl: self.dhl.as_deref(),
                     emote_tracker: self.emote_tracker.as_ref(),
                     trace: &trace,
+                    cancellation: &input.cancellation,
                 };
+                if input.cancellation.is_cancelled() {
+                    return TurnOutcome::Silent;
+                }
                 let final_text = match run_agent(&*llm_client, req, &combined_exec, opts).await {
                     Ok(AgentOutcome::Text(text)) => Ok(Some(text)),
                     Ok(AgentOutcome::MaxRoundsExceeded) => {
@@ -548,6 +561,9 @@ impl TurnRunner {
 
                 match final_text {
                     Ok(Some(text)) => {
+                        if input.cancellation.is_cancelled() {
+                            return TurnOutcome::Silent;
+                        }
                         let line = prepare_agent_reply(
                             &*llm_client,
                             &text,
@@ -577,6 +593,9 @@ impl TurnRunner {
         )
         .await;
 
+        if input.cancellation.is_cancelled() {
+            return Err(crate::commands::CommandCancelled.into());
+        }
         Ok(outcome)
     }
 }
@@ -596,11 +615,15 @@ struct V2Executor<'a> {
     dhl: Option<&'a crate::dhl::DhlClient>,
     emote_tracker: Option<&'a Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     trace: &'a TraceIds,
+    cancellation: &'a CommandCancellation,
 }
 
 #[async_trait]
 impl ToolExecutor for V2Executor<'_> {
     async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
+        if self.cancellation.is_cancelled() {
+            return ToolResultMessage::for_call(call, "cancelled".to_string());
+        }
         if call.name == crate::ai::doener_tool::DOENER_TOOL_NAME {
             return crate::ai::doener_tool::execute_doener_index(self.doener, call).await;
         }
@@ -915,6 +938,7 @@ mod turn_tests {
             channel_login: "testchan".into(),
             channel_id: "222".into(),
             reply_parent: None,
+            cancellation: CommandCancellation::new(),
         }
     }
 

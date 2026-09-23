@@ -18,7 +18,7 @@ use crate::ai::memory::types::Role;
 use crate::ai::model_catalog::ModelCatalog;
 use crate::ai::recap::RecapHandle;
 use crate::ai::turn::{TurnInput, TurnOutcome, TurnReplyParent, TurnRunner, TurnSpeaker};
-use crate::commands::{Command, CommandContext};
+use crate::commands::{Command, CommandContext, CommandId, ExecutionClass};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
 use crate::twitch::mouth::{Agent, SpeakError};
@@ -224,8 +224,16 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> CommandId {
+        CommandId::new("ai").expect("command ID is valid")
+    }
+
     fn name(&self) -> &str {
         "!ai"
+    }
+
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Background
     }
 
     fn matches(&self, word: &str) -> bool {
@@ -241,10 +249,11 @@ where
     /// on the way in, mouth / EchoGuard / history / transcript on the way
     /// out. Everything between is the Turn's business.
     #[instrument(skip(self, ctx))]
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
+        ctx.cancellation.check()?;
         let turn_started = Instant::now();
         let user = &ctx.privmsg.sender.login;
-        let grok_alias = is_grok_alias(ctx.trigger);
+        let grok_alias = is_grok_alias(&ctx.trigger);
         let agent = if grok_alias {
             Agent::Grok
         } else {
@@ -252,10 +261,11 @@ where
         };
 
         if let Some(remaining) = self.cooldown.check(user).await {
+            ctx.cancellation.check()?;
             debug!(user = %user, remaining_secs = remaining.as_secs(), "AI command on cooldown");
             ctx.sender
                 .reply(
-                    ctx.privmsg,
+                    &ctx.privmsg,
                     format!(
                         "Bitte warte noch {} Waiting",
                         format_cooldown_remaining(remaining)
@@ -276,7 +286,7 @@ where
             } else {
                 "Benutzung: !ai <anweisung>"
             };
-            ctx.sender.reply(ctx.privmsg, usage).await;
+            ctx.sender.reply(&ctx.privmsg, usage).await;
             return Ok(());
         }
 
@@ -285,6 +295,7 @@ where
         // Record before any outbound I/O so a slow catalog fetch cannot widen
         // the window between cooldown.check and cooldown.record.
         self.cooldown.record(user).await;
+        ctx.cancellation.check()?;
 
         let input = TurnInput {
             agent,
@@ -302,12 +313,13 @@ where
                 login: p.reply_parent_user.login.clone(),
                 text: p.message_text.clone(),
             }),
+            cancellation: ctx.cancellation.clone(),
         };
 
         let (line, display_name) = match self.turn.run_turn(input).await? {
             TurnOutcome::Reply { text, display_name } => (text, display_name),
             TurnOutcome::Notice(msg) => {
-                ctx.sender.reply(ctx.privmsg, msg).await;
+                ctx.sender.reply(&ctx.privmsg, msg).await;
                 return Ok(());
             }
             TurnOutcome::Silent => return Ok(()),
@@ -323,6 +335,7 @@ where
             debug!(pad_ms = pad.as_millis(), "padding AI response delay");
             tokio::time::sleep(pad).await;
         }
+        ctx.cancellation.check()?;
         let ts = Utc::now();
         let req = crate::twitch::mouth::SpeakRequest {
             broadcaster_id: &ctx.privmsg.channel_id,
@@ -339,7 +352,7 @@ where
             }
             Ok(crate::twitch::mouth::SpeakOutcome::NoMouth) => {
                 ctx.sender
-                    .reply_no_byte_clamp(ctx.privmsg, line.clone())
+                    .reply_no_byte_clamp(&ctx.privmsg, line.clone())
                     .await;
                 (self.turn.bot_username.clone(), None)
             }
@@ -352,12 +365,13 @@ where
                 // realistic failure (mouth timed out, channel-restricted) is persistent,
                 // so without this the command is a black hole for every user.
                 if let Some(msg) = user_facing_mouth_message(&e) {
-                    ctx.sender.reply(ctx.privmsg, msg).await;
+                    ctx.sender.reply(&ctx.privmsg, msg).await;
                 }
                 return Ok(());
             }
         };
         let _ = message_id; // reserved for future dashboard/debug surfacing
+        ctx.cancellation.check()?;
         if let Some(ref chat) = self.turn.chat_ctx {
             chat.buffer_for(&ctx.privmsg.channel_login)
                 .lock()
@@ -375,15 +389,17 @@ where
             .chat_ctx
             .as_ref()
             .is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));
-        if is_primary_source
-            && let Err(e) = self
+        if is_primary_source {
+            ctx.cancellation.check()?;
+            if let Err(e) = self
                 .turn
                 .memory
                 .transcript
                 .append_line(ts, &recorded_login, None, &line)
                 .await
-        {
-            error!(error = ?e, "transcript bot-reply append failed");
+            {
+                error!(error = ?e, "transcript bot-reply append failed");
+            }
         }
 
         Ok(())

@@ -27,7 +27,10 @@ use async_trait::async_trait;
 use eyre::Result;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{ADMIN_DENIED_MSG, Command, CommandContext, is_admin, normalize_command_name};
+use super::{
+    ADMIN_DENIED_MSG, Command, CommandContext, CommandId, ExecutionClass, is_admin,
+    normalize_command_name,
+};
 use crate::cooldown::format_cooldown_remaining;
 use crate::settings::SettingsHandle;
 use crate::suspend::{ParseDurationError, SuspensionManager, parse_duration};
@@ -68,26 +71,34 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> CommandId {
+        CommandId::new("suspend").expect("command ID is valid")
+    }
+
     fn name(&self) -> &str {
         "!suspend"
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Inline
+    }
+
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let s = self.settings.load();
-        let is_admin_user = is_admin(ctx.privmsg, &s.twitch.hidden_admins);
+        let is_admin_user = is_admin(&ctx.privmsg, &s.twitch.hidden_admins);
         let default_duration_secs = s.suspend.default_duration_secs;
         drop(s);
 
         if !is_admin_user {
-            ctx.sender.reply(ctx.privmsg, ADMIN_DENIED_MSG).await;
+            ctx.sender.reply(&ctx.privmsg, ADMIN_DENIED_MSG).await;
             return Ok(());
         }
 
         let raw_cmd = match ctx.args.first() {
-            Some(c) => *c,
+            Some(c) => c.as_str(),
             None => {
                 ctx.sender
-                    .reply(ctx.privmsg, "Nutze: !suspend <command> [dauer]")
+                    .reply(&ctx.privmsg, "Nutze: !suspend <command> [dauer]")
                     .await;
                 return Ok(());
             }
@@ -97,18 +108,18 @@ where
 
         if EXEMPT_COMMANDS.contains(&cmd.as_str()) {
             ctx.sender
-                .reply(ctx.privmsg, "Das kann nicht gesperrt werden FDM")
+                .reply(&ctx.privmsg, "Das kann nicht gesperrt werden FDM")
                 .await;
             return Ok(());
         }
 
         let duration = match ctx.args.get(1) {
             None => Duration::from_secs(default_duration_secs),
-            Some(s) => match parse_duration(s) {
+            Some(s) => match parse_duration(s.as_str()) {
                 Ok(d) => d,
                 Err(err) => {
                     ctx.sender
-                        .reply(ctx.privmsg, duration_error_message(&err))
+                        .reply(&ctx.privmsg, duration_error_message(&err))
                         .await;
                     return Ok(());
                 }
@@ -119,7 +130,7 @@ where
 
         ctx.sender
             .reply(
-                ctx.privmsg,
+                &ctx.privmsg,
                 format!(
                     "!{cmd} gesperrt für {}",
                     format_cooldown_remaining(duration)
@@ -148,23 +159,31 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> CommandId {
+        CommandId::new("unsuspend").expect("command ID is valid")
+    }
+
     fn name(&self) -> &str {
         "!unsuspend"
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Inline
+    }
+
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let s = self.settings.load();
-        if !is_admin(ctx.privmsg, &s.twitch.hidden_admins) {
-            ctx.sender.reply(ctx.privmsg, ADMIN_DENIED_MSG).await;
+        if !is_admin(&ctx.privmsg, &s.twitch.hidden_admins) {
+            ctx.sender.reply(&ctx.privmsg, ADMIN_DENIED_MSG).await;
             return Ok(());
         }
         drop(s);
 
         let raw_cmd = match ctx.args.first() {
-            Some(c) => *c,
+            Some(c) => c.as_str(),
             None => {
                 ctx.sender
-                    .reply(ctx.privmsg, "Nutze: !unsuspend <command>")
+                    .reply(&ctx.privmsg, "Nutze: !unsuspend <command>")
                     .await;
                 return Ok(());
             }
@@ -178,7 +197,7 @@ where
             format!("!{cmd} war nicht gesperrt FDM")
         };
 
-        ctx.sender.reply(ctx.privmsg, reply).await;
+        ctx.sender.reply(&ctx.privmsg, reply).await;
 
         Ok(())
     }

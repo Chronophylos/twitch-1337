@@ -7,20 +7,22 @@
 
 use std::sync::Arc;
 
+use eyre::{Result, WrapErr as _};
 use tokio::{
     sync::{Notify, broadcast, mpsc, oneshot},
     task::JoinHandle,
     time::{Duration, timeout},
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use twitch_irc::{
     TwitchIRCClient, login::LoginCredentials, message::ServerMessage, transport::Transport,
 };
 
 use crate::{
-    Services,
+    Services, ai,
     ai::recap_batcher::run_recap_batcher,
     aviation,
+    commands::{self, CommandRegistry},
     twitch::{
         ChatSender,
         handlers::{
@@ -35,12 +37,223 @@ use crate::{
     },
 };
 
+/// Build the static production registry at the process composition seam.
+///
+/// Optional clients are constructed exactly once here, before any runtime task
+/// is registered. Construction failures are returned to `run_bot`; invalid
+/// command metadata fails through `CommandRegistry::from_commands` rather than
+/// being silently skipped.
+pub(crate) fn build_command_registry<T, L>(
+    services: &Services,
+    snapshot: &crate::settings::Settings,
+) -> Result<Arc<CommandRegistry<T, L>>>
+where
+    T: Transport + Send + Sync + 'static,
+    L: LoginCredentials + Send + Sync + 'static,
+{
+    // Registration depends only on bootstrap AI being present. Each command
+    // resolves its own profile per turn, so one stale agent pointer cannot
+    // disable the others and profile repairs take effect without a restart.
+    let ai_configured = services.ai_enabled;
+    if ai_configured {
+        info!("AI commands enabled; agent profiles resolve per turn");
+    } else {
+        debug!("AI not configured, AI commands disabled");
+    }
+
+    let mut command_list: Vec<Arc<dyn commands::Command<T, L>>> = vec![
+        Arc::new(commands::version::VersionCommand::new(services.started_at)),
+        Arc::new(commands::ping_admin::PingAdminCommand::new(
+            services.ping.clone(),
+            services.settings.clone(),
+        )),
+        Arc::new(commands::suspend::SuspendCommand::new(
+            services.suspension.clone(),
+            services.settings.clone(),
+        )),
+        Arc::new(commands::suspend::UnsuspendCommand::new(
+            services.suspension.clone(),
+            services.settings.clone(),
+        )),
+        Arc::new(aviation::commands::random_flight::RandomFlightCommand),
+        Arc::new(aviation::commands::flights_above::FlightsAboveCommand::new(
+            services.aviation.clone(),
+            services.settings.clone(),
+        )),
+        Arc::new(commands::leaderboard::LeaderboardCommand::new(
+            services.leaderboard.clone(),
+        )),
+        Arc::new(commands::hall_of_shame::HallOfShameCommand::new(
+            services.hall_of_shame.clone(),
+        )),
+        Arc::new(commands::pw::PwCommand::new(services.hall_of_shame.clone())),
+        Arc::new(commands::pb::PbCommand::new(services.leaderboard.clone())),
+        Arc::new(commands::feedback::FeedbackCommand::new(
+            services.data_dir.clone(),
+            services.settings.clone(),
+        )),
+        Arc::new(commands::doener::DoenerCommand::new(
+            services.doener.clone(),
+            services.settings.clone(),
+        )),
+        Arc::new(commands::doener_calc::DoenerCalcCommand::new(
+            services.doener.clone(),
+            services.settings.clone(),
+        )),
+    ];
+
+    if let Some(tx) = services
+        .aviation_tracker_tx
+        .as_ref()
+        .map(|tx| (**tx).clone())
+    {
+        command_list.push(Arc::new(aviation::commands::track::TrackCommand::new(
+            tx.clone(),
+        )));
+        command_list.push(Arc::new(aviation::commands::untrack::UntrackCommand::new(
+            tx.clone(),
+        )));
+        command_list.push(Arc::new(aviation::commands::flights::FlightsCommand::new(
+            tx.clone(),
+        )));
+        command_list.push(Arc::new(aviation::commands::flights::FlightCommand::new(
+            tx.clone(),
+        )));
+        command_list.push(Arc::new(aviation::commands::info::InfoCommand::new(tx)));
+    }
+
+    if let Some(tracker) = services.emote_tracker.clone() {
+        command_list.push(Arc::new(commands::emote::EmoteCommand::new(tracker)));
+    }
+
+    if let Some(memory) = services.ai_memory.clone().filter(|_| ai_configured) {
+        let web = if let Some(web_config) = snapshot.ai.web.as_ref() {
+            let search = match ai::content::SearchClient::new(
+                &web_config.base_url,
+                Duration::from_secs(web_config.timeout),
+            ) {
+                Ok(client) => Some(client),
+                Err(error) => {
+                    error!(
+                        ?error,
+                        "Failed to initialize ai.web search client; disabling web tools"
+                    );
+                    None
+                }
+            };
+
+            // The media client is built once at composition. It is independent
+            // of SearchClient construction, so a bad search URL only disables
+            // web tools rather than hiding the rest of the AI command.
+            let media_http = reqwest::Client::builder()
+                .user_agent(crate::APP_USER_AGENT)
+                .build()
+                .wrap_err("build media HTTP client for command composition")?;
+            search.map(|client| ai::command::AiWeb {
+                executor: Arc::new(ai::content::ContentToolExecutor::new(
+                    client,
+                    media_http,
+                    services.llm.clone(),
+                    services.settings.clone(),
+                    Duration::from_secs(web_config.cache_ttl_secs),
+                    web_config.cache_capacity,
+                )),
+                settings: services.settings.clone(),
+            })
+        } else {
+            None
+        };
+
+        let news_cooldown = Arc::new(crate::cooldown::PerUserCooldown::live(
+            services.settings.clone(),
+            commands::news_cooldown_duration,
+        ));
+
+        let catalog_http = reqwest::Client::builder()
+            .user_agent(crate::APP_USER_AGENT)
+            .build()
+            .wrap_err("build model catalog HTTP client for command composition")?;
+        let model_catalog = Arc::new(ai::model_catalog::ModelCatalog::new(catalog_http));
+        let repology = Arc::new(
+            crate::repology::RepologyClient::new()
+                .wrap_err("build repology HTTP client for command composition")?,
+        );
+        let pronouns = Arc::new(
+            crate::pronouns::PronounsClient::new()
+                .wrap_err("build pronouns HTTP client for command composition")?,
+        );
+
+        command_list.push(Arc::new(ai::command::AiCommand::new(
+            ai::command::AiCommandDeps {
+                registry: services.llm.clone(),
+                settings: services.settings.clone(),
+                chat_ctx: services.chat_ctx.clone(),
+                memory,
+                web,
+                emotes: services.emote_provider.clone(),
+                bot_username: services.bot_username.clone(),
+                doener: services.doener.clone(),
+                repology,
+                pronouns,
+                dhl: services.dhl.clone(),
+                emote_tracker: services.emote_tracker.clone(),
+                langfuse: services.langfuse.clone(),
+                model_catalog,
+                mouths: services.mouths.clone(),
+                echo: services.echo.clone(),
+                recap: services.recap.clone(),
+            },
+        )));
+        command_list.push(Arc::new(commands::news::NewsCommand::new(
+            services.llm.clone(),
+            services.settings.clone(),
+            commands::news::NewsMode::News,
+            services.chat_ctx.clone(),
+            services.whisper.clone(),
+            news_cooldown.clone(),
+            services.langfuse.clone(),
+        )));
+        command_list.push(Arc::new(commands::news::NewsCommand::new(
+            services.llm.clone(),
+            services.settings.clone(),
+            commands::news::NewsMode::Tldr,
+            services.chat_ctx.clone(),
+            services.whisper.clone(),
+            news_cooldown.clone(),
+            services.langfuse.clone(),
+        )));
+        command_list.push(Arc::new(commands::haiku::HaikuCommand::new(
+            services.llm.clone(),
+            services.settings.clone(),
+            services.chat_ctx.clone(),
+            news_cooldown,
+            services.langfuse.clone(),
+        )));
+    }
+
+    // PingTriggerCommand must stay last: built-ins earlier in the IndexMap win
+    // matching priority, including when a configured ping has the same name.
+    command_list.push(Arc::new(commands::ping_trigger::PingTriggerCommand::new(
+        services.ping.clone(),
+        services.settings.clone(),
+        services.ping_names_rx.clone(),
+    )));
+
+    CommandRegistry::from_commands(command_list)
+        .map(Arc::new)
+        .wrap_err("build built-in command registry")
+}
+
 /// All `JoinHandle`s plus the shared state `run_bot` keeps after spawn.
 pub(crate) struct HandlerSet {
     pub router: JoinHandle<()>,
     pub latency: JoinHandle<()>,
     pub tracker_1337: JoinHandle<()>,
-    pub generic_commands: JoinHandle<()>,
+    pub generic_commands: JoinHandle<Result<()>>,
+    pub command_execution: JoinHandle<Result<()>>,
+    /// Explicit adapter Candidate 08 can join or abort after its global drain
+    /// deadline. The manager owns the same dynamic command tasks internally.
+    pub command_task_group: commands::CommandTaskGroup,
     pub flight_tracker: JoinHandle<()>,
     pub emote_set_ingest: JoinHandle<()>,
     pub emote_usage: JoinHandle<()>,
@@ -59,6 +272,7 @@ pub(crate) struct HandlerSet {
 pub(crate) fn spawn_handlers<T, L>(
     services: Arc<Services>,
     client: Arc<TwitchIRCClient<T, L>>,
+    command_registry: Arc<CommandRegistry<T, L>>,
     incoming: tokio::sync::mpsc::UnboundedReceiver<ServerMessage>,
     tracker_rx: Option<mpsc::Receiver<aviation::TrackerCommand>>,
 ) -> HandlerSet
@@ -251,6 +465,16 @@ where
         _ => tokio::spawn(std::future::pending::<()>()),
     };
 
+    // The admission handoff and its execution manager are composed here, but
+    // only the manager may spawn dynamic command tasks. Ingress never calls
+    // `tokio::spawn` for an invocation.
+    let command_cancellation = commands::CommandCancellation::new();
+    let (command_admission, command_receiver) = commands::command_admission_channel();
+    let command_manager =
+        commands::CommandExecutionManager::new(command_receiver, Arc::clone(&command_registry));
+    let command_task_group = command_manager.task_group();
+    let command_execution = tokio::spawn(command_manager.run(command_cancellation.clone()));
+
     let generic_commands = tokio::spawn({
         let services = services.clone();
         let sender = chat_sender.clone();
@@ -259,8 +483,11 @@ where
                 broadcast_rx: commands_broadcast_rx,
                 services,
                 sender,
+                registry: command_registry,
+                admission: command_admission,
+                cancellation: command_cancellation,
             })
-            .await;
+            .await
         }
     });
 
@@ -269,6 +496,8 @@ where
         latency,
         tracker_1337,
         generic_commands,
+        command_execution,
+        command_task_group,
         flight_tracker,
         emote_set_ingest,
         emote_usage,
@@ -287,6 +516,31 @@ pub(crate) enum ShutdownOutcome {
     Graceful,
     /// A handler task exited unexpectedly — the bot is faulting, not a clean stop.
     HandlerExited,
+    /// Command ingress or execution returned/panicked with an error. Kept as a
+    /// distinct propagation point for Candidate 08's lifecycle supervisor.
+    CommandRuntimeFailed(eyre::Report),
+}
+
+fn command_runtime_outcome(
+    task_name: &str,
+    result: std::result::Result<Result<()>, tokio::task::JoinError>,
+) -> ShutdownOutcome {
+    match result {
+        Ok(Ok(())) => {
+            error!("{task_name} exited unexpectedly");
+            ShutdownOutcome::HandlerExited
+        }
+        Ok(Err(error)) => {
+            error!(?error, "{task_name} failed");
+            ShutdownOutcome::CommandRuntimeFailed(error)
+        }
+        Err(error) => {
+            error!(?error, "{task_name} task join failed");
+            ShutdownOutcome::CommandRuntimeFailed(eyre::eyre!(
+                "{task_name} task join failed: {error}"
+            ))
+        }
+    }
 }
 
 /// Awaits whichever happens first: shutdown signal, or any handler exiting.
@@ -316,6 +570,10 @@ pub(crate) async fn await_shutdown(
         latency,
         tracker_1337,
         generic_commands,
+        command_execution,
+        // Candidate 08 takes ownership of this adapter. This legacy
+        // composition keeps only a clone until its supervisor merge.
+        command_task_group: _command_task_group,
         flight_tracker,
         emote_set_ingest,
         emote_usage,
@@ -338,7 +596,8 @@ pub(crate) async fn await_shutdown(
         }
         result = router => { error!("Message router exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = tracker_1337 => { error!("1337 handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = generic_commands => { error!("Generic Command Handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
+        result = generic_commands => command_runtime_outcome("Generic command ingress", result),
+        result = command_execution => command_runtime_outcome("Command execution manager", result),
         result = latency => { error!("Latency handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
         result = emote_set_ingest => { error!("Emote set ingest exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }

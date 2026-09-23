@@ -6,7 +6,7 @@ use tokio::time::Duration;
 use tracing::error;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext};
+use super::{Command, CommandContext, CommandId, ExecutionClass};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::doener::format::{
     api_down_message, format_city, format_did_you_mean, format_global, format_not_found,
@@ -48,13 +48,23 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> CommandId {
+        CommandId::new("dpi").expect("command ID is valid")
+    }
+
     fn name(&self) -> &str {
         "!dpi"
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Background
+    }
+
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
+        ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
         if let Some(remaining) = self.cooldown.check(user).await {
+            ctx.cancellation.check()?;
             send(
                 &ctx,
                 format!(
@@ -70,6 +80,7 @@ where
         let query = ctx.args.join(" ");
         let query = query.trim();
 
+        ctx.cancellation.check()?;
         let response = if query.is_empty() {
             match self.client.stats().await {
                 Ok(s) => format_global(&s),
@@ -88,6 +99,7 @@ where
             }
         };
 
+        ctx.cancellation.check()?;
         send(&ctx, response).await;
         Ok(())
     }
@@ -118,12 +130,12 @@ fn equal_case_insensitive(left: &str, right: &str) -> bool {
         .eq(right.chars().flat_map(char::to_lowercase))
 }
 
-async fn send<T, L>(ctx: &CommandContext<'_, T, L>, line: String)
+async fn send<T, L>(ctx: &CommandContext<T, L>, line: String)
 where
     T: Transport,
     L: LoginCredentials,
 {
-    ctx.sender.reply(ctx.privmsg, line).await;
+    ctx.sender.reply(&ctx.privmsg, line).await;
 }
 
 #[cfg(test)]

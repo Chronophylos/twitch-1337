@@ -5,7 +5,7 @@ use eyre::Result;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::AviationClient;
-use crate::commands::{Command, CommandContext};
+use crate::commands::{Command, CommandContext, CommandId, ExecutionClass};
 use crate::cooldown::PerUserCooldown;
 use crate::settings::{Settings, SettingsHandle};
 
@@ -33,20 +33,36 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> CommandId {
+        CommandId::new("flights_above").expect("command ID is valid")
+    }
+
     fn name(&self) -> &str {
         "!up"
+    }
+
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Background
     }
 
     fn enabled(&self) -> bool {
         self.aviation_client.is_some()
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let client = self
             .aviation_client
             .as_ref()
             .ok_or_else(|| eyre::eyre!("aviation client not available"))?;
         let input: String = ctx.args.join(" ");
-        crate::aviation::up_command(ctx.privmsg, ctx.sender, client, &input, &self.cooldown).await
+        crate::aviation::up_command(
+            &ctx.privmsg,
+            &ctx.sender,
+            client,
+            &input,
+            &self.cooldown,
+            ctx.cancellation.clone(),
+        )
+        .await
     }
 }

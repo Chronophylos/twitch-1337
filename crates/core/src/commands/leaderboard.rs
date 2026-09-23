@@ -6,7 +6,7 @@ use eyre::Result;
 use tokio::sync::RwLock;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext};
+use super::{Command, CommandContext, CommandId, ExecutionClass};
 pub use crate::twitch::handlers::tracker_1337::PersonalBest;
 
 pub struct LeaderboardCommand {
@@ -25,11 +25,19 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> CommandId {
+        CommandId::new("leaderboard").expect("command ID is valid")
+    }
+
     fn name(&self) -> &str {
         "!lb"
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Inline
+    }
+
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let leaderboard = self.leaderboard.read().await;
 
         let response = if let Some((username, pb)) = leaderboard.iter().min_by_key(|(_, pb)| pb.ms)
@@ -43,7 +51,7 @@ where
             "Noch keine Einträge vorhanden".to_string()
         };
 
-        ctx.sender.reply(ctx.privmsg, response).await;
+        ctx.sender.reply(&ctx.privmsg, response).await;
 
         Ok(())
     }

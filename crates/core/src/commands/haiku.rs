@@ -13,7 +13,7 @@ use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 
-use super::{Command, CommandContext};
+use super::{Command, CommandContext, CommandId, ExecutionClass};
 
 const HAIKU_CONTEXT_MESSAGES: usize = 80;
 const HAIKU_LINE_MAX_CHARS: usize = 80;
@@ -125,19 +125,29 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> CommandId {
+        CommandId::new("haiku").expect("command ID is valid")
+    }
+
     fn name(&self) -> &str {
         "!haiku"
     }
 
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Background
+    }
+
     #[instrument(skip(self, ctx))]
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
+        ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
 
         if let Some(remaining) = self.cooldown.check(user).await {
+            ctx.cancellation.check()?;
             debug!(user = %user, remaining_secs = remaining.as_secs(), "Haiku command on cooldown");
             ctx.sender
                 .reply(
-                    ctx.privmsg,
+                    &ctx.privmsg,
                     format!(
                         "Bitte warte noch {} Waiting",
                         format_cooldown_remaining(remaining)
@@ -147,9 +157,10 @@ where
             return Ok(());
         }
 
+        ctx.cancellation.check()?;
         let Some(history_lines) = self.relevant_history(user, &ctx.privmsg.message_text).await
         else {
-            ctx.sender.reply(ctx.privmsg, EMPTY_HISTORY_MESSAGE).await;
+            ctx.sender.reply(&ctx.privmsg, EMPTY_HISTORY_MESSAGE).await;
             return Ok(());
         };
 
@@ -160,7 +171,7 @@ where
             .resolve_named(&self.settings.load().ai.aurora.profile)
         else {
             error!("Haiku AI skipped, no usable LLM profile");
-            ctx.sender.reply(ctx.privmsg, LLM_ERROR_MESSAGE).await;
+            ctx.sender.reply(&ctx.privmsg, LLM_ERROR_MESSAGE).await;
             return Ok(());
         };
         let model = profile.model.clone();
@@ -185,6 +196,7 @@ where
             },
         };
 
+        ctx.cancellation.check()?;
         let result = llm::with_optional_turn(
             crate::ai::langfuse::LangfuseHandle::observer_from(&self.langfuse),
             llm::TurnParams {
@@ -215,7 +227,8 @@ where
             }
         };
 
-        ctx.sender.reply(ctx.privmsg, response).await;
+        ctx.cancellation.check()?;
+        ctx.sender.reply(&ctx.privmsg, response).await;
 
         Ok(())
     }

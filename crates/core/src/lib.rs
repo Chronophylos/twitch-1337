@@ -42,7 +42,7 @@ use crate::{
     aviation::AviationClient,
     ping::PingRuntime,
     twitch::handlers::{
-        spawn::spawn_handlers,
+        spawn::{build_command_registry, spawn_handlers},
         tracker_1337::{TARGET_HOUR, TARGET_MINUTE},
     },
     twitch::whisper::WhisperSender,
@@ -213,6 +213,84 @@ where
     T: Transport + Send + Sync + 'static,
     L: LoginCredentials + Send + Sync + 'static,
 {
+    run_bot_inner(BotRun {
+        client,
+        incoming,
+        services,
+        ping,
+        tracker_rx,
+        web_spawner,
+        shutdown,
+        command_registry: None,
+    })
+    .await
+}
+
+/// Test-only composition seam for dispatcher integration tests.
+///
+/// This injects the same concrete `CommandRegistry` used by production; it does
+/// not add a second executor abstraction. The registry remains shared by
+/// ingress and `CommandExecutionManager`.
+#[cfg(any(test, feature = "testing"))]
+#[allow(clippy::too_many_arguments)]
+pub async fn run_bot_with_command_registry<T, L>(
+    client: Arc<TwitchIRCClient<T, L>>,
+    incoming: UnboundedReceiver<ServerMessage>,
+    services: Services,
+    ping: PingRuntime,
+    tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
+    web_spawner: Option<WebSpawner>,
+    shutdown: oneshot::Receiver<()>,
+    registry: Arc<commands::CommandRegistry<T, L>>,
+) -> Result<()>
+where
+    T: Transport + Send + Sync + 'static,
+    L: LoginCredentials + Send + Sync + 'static,
+{
+    run_bot_inner(BotRun {
+        client,
+        incoming,
+        services,
+        ping,
+        tracker_rx,
+        web_spawner,
+        shutdown,
+        command_registry: Some(registry),
+    })
+    .await
+}
+
+struct BotRun<T, L>
+where
+    T: Transport,
+    L: LoginCredentials,
+{
+    client: Arc<TwitchIRCClient<T, L>>,
+    incoming: UnboundedReceiver<ServerMessage>,
+    services: Services,
+    ping: PingRuntime,
+    tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
+    web_spawner: Option<WebSpawner>,
+    shutdown: oneshot::Receiver<()>,
+    command_registry: Option<Arc<commands::CommandRegistry<T, L>>>,
+}
+
+async fn run_bot_inner<T, L>(runtime: BotRun<T, L>) -> Result<()>
+where
+    T: Transport + Send + Sync + 'static,
+    L: LoginCredentials + Send + Sync + 'static,
+{
+    let BotRun {
+        client,
+        incoming,
+        services,
+        ping,
+        tracker_rx,
+        web_spawner,
+        shutdown,
+        command_registry: injected_registry,
+    } = runtime;
+
     // The flight-tracker boot guard ties all three values together —
     // `Services.aviation`, `Services.aviation_tracker_tx`, and `tracker_rx` —
     // restoring the invariant the deleted
@@ -232,6 +310,17 @@ where
         );
     }
 
+    let services = Arc::new(services);
+
+    // Construct the registry and every command-owned optional client before
+    // registering runtime tasks. Startup errors therefore return before the
+    // ping actor or any handler can detach. Tests may inject the same concrete
+    // registry type through the feature-gated composition seam above.
+    let command_registry = match injected_registry {
+        Some(registry) => registry,
+        None => build_command_registry(&services, &services.settings.load())?,
+    };
+
     // The ping actor is owned by `run_bot` and supervised by
     // `await_shutdown`'s select (an actor crash trips `HandlerExited`). It
     // is NOT drained on shutdown: every handler task holds an
@@ -245,15 +334,19 @@ where
         ping.names_tx,
     ));
 
-    let services = Arc::new(services);
-
     // Cloned Arc retained for the startup/shutdown announces; `client` itself is
     // moved into spawn_handlers below.
     let client_for_announce = client.clone();
 
     let admin_channel = services.settings.load().twitch.admin_channel.clone();
 
-    let handlers = spawn_handlers(Arc::clone(&services), client, incoming, tracker_rx);
+    let handlers = spawn_handlers(
+        Arc::clone(&services),
+        client,
+        command_registry,
+        incoming,
+        tracker_rx,
+    );
 
     let shutdown_notify = handlers.shutdown_notify.clone();
 
@@ -300,19 +393,26 @@ where
     // Shutdown initiated; best-effort line before draining web/ping actor. A
     // handler fault posts a distinct message so operators don't read it as a
     // graceful, intentional stop. Both are timeout-bounded internally.
-    match shutdown_outcome {
+    let command_runtime_failure = match shutdown_outcome {
         crate::twitch::handlers::spawn::ShutdownOutcome::Graceful => {
             crate::twitch::announce::announce_shutdown(
                 &client_for_announce,
                 admin_channel.as_deref(),
             )
             .await;
+            None
         }
         crate::twitch::handlers::spawn::ShutdownOutcome::HandlerExited => {
             crate::twitch::announce::announce_crash(&client_for_announce, admin_channel.as_deref())
                 .await;
+            None
         }
-    }
+        crate::twitch::handlers::spawn::ShutdownOutcome::CommandRuntimeFailed(error) => {
+            crate::twitch::announce::announce_crash(&client_for_announce, admin_channel.as_deref())
+                .await;
+            Some(error)
+        }
+    };
 
     // After handler shutdown, drain the web task. The graceful shutdown future
     // is wired to the same `shutdown_notify` notified by `await_shutdown`, so
@@ -325,6 +425,10 @@ where
 
     if let Some(handle) = &services.langfuse {
         handle.flush(std::time::Duration::from_secs(2)).await;
+    }
+
+    if let Some(error) = command_runtime_failure {
+        return Err(error);
     }
 
     info!("Bot shutdown complete");

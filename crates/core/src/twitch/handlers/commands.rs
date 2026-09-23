@@ -1,17 +1,21 @@
-//! Wires the `CommandDispatcher` and registers all `!`-prefixed commands.
-//! Owns the long-running task that filters PRIVMSGs from the broadcast channel
-//! and routes them to the matching `Command` implementation.
+//! Twitch command ingress. Filters PRIVMSGs from the broadcast channel,
+//! resolves commands in registry order, executes bounded commands inline, and
+//! hands background invocations to the bounded execution manager.
 
 use std::sync::Arc;
 
-use tokio::{sync::broadcast, time::Duration};
+use eyre::{Result, eyre};
+use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 use twitch_irc::{login::LoginCredentials, message::ServerMessage, transport::Transport};
 
 use crate::{
-    ChatHistory, Services, ai,
+    ChatHistory, Services,
     ai::command::{AI_TRIGGER, GROK_ALIAS_TRIGGER, is_ai_trigger},
-    aviation, commands,
+    commands::{
+        self, CommandAdmissionError, CommandAdmissionSender, CommandCancellation, CommandEntry,
+        CommandId, CommandInvocation, CommandRegistry, ExecutionClass,
+    },
     suspend::SuspensionManager,
     twitch::{ChatSender, mouth::Agent},
 };
@@ -29,10 +33,17 @@ pub struct CommandConfig<T: Transport, L: LoginCredentials> {
     /// handler (built once in `spawn_handlers`); never construct a second
     /// `ChatSender` from a client here.
     pub sender: Arc<ChatSender<T, L>>,
+    /// Static registry constructed once at composition and shared with the
+    /// background execution manager.
+    pub registry: Arc<CommandRegistry<T, L>>,
+    /// Bounded, non-blocking handoff to the background execution manager.
+    pub admission: CommandAdmissionSender<T, L>,
+    /// Candidate 08-derived cancellation shared by ingress and execution.
+    pub cancellation: CommandCancellation,
 }
 
 /// Handler for generic text commands that start with `!`.
-pub async fn run_generic_command_handler<T, L>(cfg: CommandConfig<T, L>)
+pub async fn run_generic_command_handler<T, L>(cfg: CommandConfig<T, L>) -> Result<()>
 where
     T: Transport + Send + Sync + 'static,
     L: LoginCredentials + Send + Sync + 'static,
@@ -43,6 +54,9 @@ where
         broadcast_rx,
         services,
         sender,
+        registry,
+        admission,
+        cancellation,
     } = cfg;
 
     // Snapshot of the dashboard-managed settings at startup. Reads below use
@@ -58,254 +72,42 @@ where
         *tap.lock().await = Some(ctx.primary_history.clone());
     }
 
-    let cmd_list = build_commands(&services, &snapshot);
-
-    run_command_dispatcher(broadcast_rx, services, snapshot, sender, cmd_list).await;
+    run_command_dispatcher(
+        broadcast_rx,
+        services,
+        snapshot,
+        sender,
+        registry,
+        admission,
+        cancellation,
+    )
+    .await
 }
-/// Builds the full list of built-in commands, including every gated command
-/// whose service is present. `snapshot` is the settings snapshot the handler
-/// already loaded; AI-gated commands consult `snapshot.ai.web`.
-///
-/// Drift guard: every registered command except the `PingTriggerCommand`
-/// catch-all must have a row in `commands::RESERVED_PING_NAMES`, otherwise a
-/// ping could be created that the dispatcher always loses to the built-in.
-/// The assertion derives from `name()`, so there is no second literal to
-/// forget. Debug builds (`just dev`, CI, integration tests) trip on drift;
-/// release builds keep the pre-guard behavior.
-pub(crate) fn build_commands<T, L>(
-    services: &Arc<Services>,
-    snapshot: &crate::settings::Settings,
-) -> Vec<Box<dyn commands::Command<T, L>>>
-where
-    T: Transport + Send + Sync + 'static,
-    L: LoginCredentials + Send + Sync + 'static,
-{
-    // Registration depends only on bootstrap AI being present. Each command
-    // resolves its own profile per turn, so one stale agent pointer cannot
-    // disable the others and profile repairs take effect without a restart.
-    let ai_configured = services.ai_enabled;
-    if ai_configured {
-        info!("AI commands enabled; agent profiles resolve per turn");
-    } else {
-        debug!("AI not configured, AI commands disabled");
-    }
-    let mut cmd_list: Vec<Box<dyn commands::Command<T, L>>> = vec![
-        Box::new(commands::version::VersionCommand::new(services.started_at)),
-        Box::new(commands::ping_admin::PingAdminCommand::new(
-            services.ping.clone(),
-            services.settings.clone(),
-        )),
-        Box::new(commands::suspend::SuspendCommand::new(
-            services.suspension.clone(),
-            services.settings.clone(),
-        )),
-        Box::new(commands::suspend::UnsuspendCommand::new(
-            services.suspension.clone(),
-            services.settings.clone(),
-        )),
-        Box::new(aviation::commands::random_flight::RandomFlightCommand),
-        Box::new(aviation::commands::flights_above::FlightsAboveCommand::new(
-            services.aviation.clone(),
-            services.settings.clone(),
-        )),
-        Box::new(commands::leaderboard::LeaderboardCommand::new(
-            services.leaderboard.clone(),
-        )),
-        Box::new(commands::hall_of_shame::HallOfShameCommand::new(
-            services.hall_of_shame.clone(),
-        )),
-        Box::new(commands::pw::PwCommand::new(services.hall_of_shame.clone())),
-        Box::new(commands::pb::PbCommand::new(services.leaderboard.clone())),
-        Box::new(commands::feedback::FeedbackCommand::new(
-            services.data_dir.clone(),
-            services.settings.clone(),
-        )),
-        Box::new(commands::doener::DoenerCommand::new(
-            services.doener.clone(),
-            services.settings.clone(),
-        )),
-        Box::new(commands::doener_calc::DoenerCalcCommand::new(
-            services.doener.clone(),
-            services.settings.clone(),
-        )),
-    ];
-
-    if let Some(tx) = services.aviation_tracker_tx.as_ref().map(|a| (**a).clone()) {
-        cmd_list.push(Box::new(aviation::commands::track::TrackCommand::new(
-            tx.clone(),
-        )));
-        cmd_list.push(Box::new(aviation::commands::untrack::UntrackCommand::new(
-            tx.clone(),
-        )));
-        cmd_list.push(Box::new(aviation::commands::flights::FlightsCommand::new(
-            tx.clone(),
-        )));
-        cmd_list.push(Box::new(aviation::commands::flights::FlightCommand::new(
-            tx.clone(),
-        )));
-        cmd_list.push(Box::new(aviation::commands::info::InfoCommand::new(tx)));
-    }
-
-    if let Some(tracker) = services.emote_tracker.clone() {
-        cmd_list.push(Box::new(commands::emote::EmoteCommand::new(tracker)));
-    }
-
-    if let Some(ai_memory_v2) = services.ai_memory.clone().filter(|_| ai_configured) {
-        let web = if let Some(web_cfg) = snapshot.ai.web.as_ref() {
-            let search = match ai::content::SearchClient::new(
-                &web_cfg.base_url,
-                Duration::from_secs(web_cfg.timeout),
-            ) {
-                Ok(c) => Some(c),
-                Err(e) => {
-                    error!(error = ?e, "Failed to initialize ai.web search client; disabling web tools");
-                    None
-                }
-            };
-
-            // The media client used to be built here once at startup, which
-            // meant an unresolvable media base URL took web search down with
-            // it too. It is now built per call inside the executor (see
-            // `ContentToolExecutor::media_client`), so search stays up
-            // regardless of whether media can currently resolve.
-            let media_http = reqwest::Client::builder()
-                .user_agent(crate::APP_USER_AGENT)
-                .build()
-                .expect("build media HTTP client");
-            search.map(|client| ai::command::AiWeb {
-                executor: Arc::new(ai::content::ContentToolExecutor::new(
-                    client,
-                    media_http,
-                    services.llm.clone(),
-                    services.settings.clone(),
-                    Duration::from_secs(web_cfg.cache_ttl_secs),
-                    web_cfg.cache_capacity,
-                )),
-                settings: services.settings.clone(),
-            })
-        } else {
-            None
-        };
-
-        let news_cooldown = Arc::new(crate::cooldown::PerUserCooldown::live(
-            services.settings.clone(),
-            commands::news_cooldown_duration,
-        ));
-
-        let model_catalog = Arc::new(ai::model_catalog::ModelCatalog::new(
-            reqwest::Client::builder()
-                .user_agent(crate::APP_USER_AGENT)
-                .build()
-                .expect("build model catalog HTTP client"),
-        ));
-        let repology =
-            Arc::new(crate::repology::RepologyClient::new().expect("build repology HTTP client"));
-        let pronouns =
-            Arc::new(crate::pronouns::PronounsClient::new().expect("build pronouns HTTP client"));
-
-        cmd_list.push(Box::new(ai::command::AiCommand::new(
-            ai::command::AiCommandDeps {
-                registry: services.llm.clone(),
-                settings: services.settings.clone(),
-                chat_ctx: services.chat_ctx.clone(),
-                memory: ai_memory_v2,
-                web,
-                emotes: services.emote_provider.clone(),
-                bot_username: services.bot_username.clone(),
-                doener: services.doener.clone(),
-                repology,
-                pronouns,
-                dhl: services.dhl.clone(),
-                emote_tracker: services.emote_tracker.clone(),
-                langfuse: services.langfuse.clone(),
-                model_catalog,
-                mouths: services.mouths.clone(),
-                echo: services.echo.clone(),
-                recap: services.recap.clone(),
-            },
-        )));
-        cmd_list.push(Box::new(commands::news::NewsCommand::new(
-            services.llm.clone(),
-            services.settings.clone(),
-            commands::news::NewsMode::News,
-            services.chat_ctx.clone(),
-            services.whisper.clone(),
-            news_cooldown.clone(),
-            services.langfuse.clone(),
-        )));
-        cmd_list.push(Box::new(commands::news::NewsCommand::new(
-            services.llm.clone(),
-            services.settings.clone(),
-            commands::news::NewsMode::Tldr,
-            services.chat_ctx.clone(),
-            services.whisper.clone(),
-            news_cooldown.clone(),
-            services.langfuse.clone(),
-        )));
-        cmd_list.push(Box::new(commands::haiku::HaikuCommand::new(
-            services.llm.clone(),
-            services.settings.clone(),
-            services.chat_ctx.clone(),
-            news_cooldown,
-            services.langfuse.clone(),
-        )));
-    }
-
-    // PingTriggerCommand must be last: it matches any !<name> that is a registered ping,
-    // so built-in commands earlier in the list take priority and can't be shadowed.
-    cmd_list.push(Box::new(commands::ping_trigger::PingTriggerCommand::new(
-        services.ping.clone(),
-        services.settings.clone(),
-        services.ping_names_rx.clone(),
-    )));
-
-    // A ping may not be named after a built-in trigger, or the scan would
-    // always hand the word to the command and the ping would never fire.
-    // `PingManager::create_ping` rejects such a name at creation
-    // (`commands::RESERVED_PING_NAMES`); this guard keeps that list from
-    // drifting out of sync with the commands registered above. Only the
-    // missing-row direction matters: a stale row merely keeps a dead name
-    // reserved, which is harmless.
-    for command in &cmd_list {
-        // The catch-all's name is the placeholder "!<ping>", not a trigger.
-        if command.name() == "!<ping>" {
-            continue;
-        }
-        debug_assert!(
-            commands::is_reserved_ping_name(&commands::normalize_command_name(command.name())),
-            "{} is registered but missing from RESERVED_PING_NAMES",
-            command.name(),
-        );
-    }
-
-    cmd_list
-}
-
-struct CommandInvocation<'a> {
+struct ParsedCommandInvocation<'a> {
     trigger: &'a str,
     args: Vec<&'a str>,
 }
 
 #[cfg(test)]
-fn command_invocation(message_text: &str) -> Option<CommandInvocation<'_>> {
+fn command_invocation(message_text: &str) -> Option<ParsedCommandInvocation<'_>> {
     let words: Vec<&str> = message_text.split_whitespace().collect();
     invocation_from_words(&words)
 }
 
-fn invocation_from_words<'a>(words: &[&'a str]) -> Option<CommandInvocation<'a>> {
+fn invocation_from_words<'a>(words: &[&'a str]) -> Option<ParsedCommandInvocation<'a>> {
     let first_word = *words.first()?;
 
     if let Some((idx, trigger)) = words.iter().enumerate().find(|(idx, word)| {
         word.eq_ignore_ascii_case(GROK_ALIAS_TRIGGER)
             && words[..*idx].iter().all(|word| is_twitch_mention(word))
     }) {
-        return Some(CommandInvocation {
+        return Some(ParsedCommandInvocation {
             trigger,
             args: words[idx + 1..].to_vec(),
         });
     }
 
-    Some(CommandInvocation {
+    Some(ParsedCommandInvocation {
         trigger: first_word,
         args: words[1..].to_vec(),
     })
@@ -321,21 +123,22 @@ fn skip_leading_mentions<'a, 'b>(words: &'a [&'b str]) -> &'a [&'b str] {
 }
 
 fn find_enabled_command<'a, 'w, T, L>(
-    commands: &'a [Box<dyn crate::commands::Command<T, L>>],
+    registry: &'a CommandRegistry<T, L>,
     words: &[&'w str],
 ) -> Option<(
-    &'a dyn crate::commands::Command<T, L>,
-    CommandInvocation<'w>,
+    CommandId,
+    &'a CommandEntry<T, L>,
+    ParsedCommandInvocation<'w>,
 )>
 where
     T: Transport,
     L: LoginCredentials,
 {
     let inv = invocation_from_words(words)?;
-    let cmd = commands
+    let (id, entry) = registry
         .iter()
-        .find(|c| c.enabled() && c.matches(inv.trigger))?;
-    Some((cmd.as_ref(), inv))
+        .find(|(_, entry)| entry.command().enabled() && entry.command().matches(inv.trigger))?;
+    Some((*id, entry, inv))
 }
 
 fn is_twitch_mention(word: &str) -> bool {
@@ -357,47 +160,103 @@ fn followup_trigger(agent: Agent) -> Option<&'static str> {
     }
 }
 
-async fn dispatch_command<T, L>(
-    cmd: &dyn crate::commands::Command<T, L>,
-    privmsg: &twitch_irc::message::PrivmsgMessage,
-    sender: &Arc<ChatSender<T, L>>,
-    trigger: &str,
-    args: Vec<&str>,
-    suspension_manager: &SuspensionManager,
-) where
+struct CommandDispatch<'a, T, L>
+where
     T: Transport,
     L: LoginCredentials,
 {
+    command_id: CommandId,
+    entry: &'a CommandEntry<T, L>,
+    privmsg: twitch_irc::message::PrivmsgMessage,
+    sender: Arc<ChatSender<T, L>>,
+    admission: &'a CommandAdmissionSender<T, L>,
+    trigger: String,
+    args: Vec<String>,
+    suspension_manager: &'a SuspensionManager,
+    cancellation: &'a CommandCancellation,
+}
+
+async fn dispatch_command<T, L>(request: CommandDispatch<'_, T, L>) -> Result<()>
+where
+    T: Transport,
+    L: LoginCredentials,
+{
+    let CommandDispatch {
+        command_id,
+        entry,
+        privmsg,
+        sender,
+        admission,
+        trigger,
+        args,
+        suspension_manager,
+        cancellation,
+    } = request;
+    let command = entry.command();
     // Contract: `SuspendCommand` normalizes user input via
     // `normalize_command_name`; commands expose `suspend_key()`
     // that must match. The trigger word is fed in so commands
     // whose `name()` is a placeholder (e.g. `PingTriggerCommand`
     // returns `!<ping>`) can still produce the right key.
-    let suspend_key = cmd.suspend_key(trigger);
+    let suspend_key = command.suspend_key(&trigger);
     if suspension_manager
         .is_suspended(&suspend_key)
         .await
         .is_some()
     {
         debug!(command = %trigger, "Skipping suspended command");
-        return;
+        return Ok(());
     }
 
-    let ctx = crate::commands::CommandContext {
+    // Lifecycle may be cancelled while the suspension lookup is in flight.
+    // No new invocation may cross either execution boundary after that point.
+    if cancellation.is_cancelled() {
+        return Ok(());
+    }
+
+    let user = privmsg.sender.login.clone();
+    let invocation = match CommandInvocation::new(
+        command_id,
         privmsg,
         sender,
-        trigger,
+        trigger.clone(),
         args,
+        cancellation.clone(),
+    ) {
+        Ok(invocation) => invocation,
+        Err(e) => {
+            error!(error = %e, "Skipping command without a stable user key");
+            return Ok(());
+        }
     };
 
-    if let Err(e) = cmd.execute(ctx).await {
-        error!(
-            error = ?e,
-            user = %privmsg.sender.login,
-            command = %trigger,
-            "Error handling command"
-        );
+    match entry.execution_policy() {
+        ExecutionClass::Inline => {
+            if let Err(e) = command.execute(invocation.context).await {
+                if e.downcast_ref::<commands::CommandCancelled>().is_some() {
+                    debug!(command = %trigger, "Inline command cancelled");
+                } else {
+                    error!(
+                        error = ?e,
+                        user = %user,
+                        command = %trigger,
+                        "Error handling command"
+                    );
+                }
+            }
+        }
+        ExecutionClass::Background => match admission.try_admit(invocation).await {
+            Ok(()) => {}
+            Err(CommandAdmissionError::Capacity) => {}
+            Err(CommandAdmissionError::Closed) => {
+                return Err(eyre!(
+                    "command admission channel closed while ingress was running"
+                ));
+            }
+        },
     }
+
+    Ok(())
 }
 
 /// Main dispatch loop for trait-based commands.
@@ -406,8 +265,11 @@ pub(crate) async fn run_command_dispatcher<T, L>(
     services: Arc<Services>,
     snapshot: Arc<crate::settings::Settings>,
     sender: Arc<ChatSender<T, L>>,
-    commands: Vec<Box<dyn crate::commands::Command<T, L>>>,
-) where
+    registry: Arc<CommandRegistry<T, L>>,
+    admission: CommandAdmissionSender<T, L>,
+    cancellation: CommandCancellation,
+) -> Result<()>
+where
     T: Transport,
     L: LoginCredentials,
 {
@@ -436,7 +298,16 @@ pub(crate) async fn run_command_dispatcher<T, L>(
     let echo = services.echo.clone();
 
     loop {
-        match broadcast_rx.recv().await {
+        let received = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => {
+                info!("Command cancellation requested, ingress exiting");
+                return Ok(());
+            }
+            received = broadcast_rx.recv() => received,
+        };
+
+        match received {
             Ok(message) => {
                 let ServerMessage::Privmsg(privmsg) = message else {
                     continue;
@@ -485,28 +356,31 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                         privmsg.server_timestamp,
                     );
                 }
-                if is_mouth {
-                    // Mouths are speak-only: never dispatch a command from their own echo.
+                if skip_history {
+                    // Mouths and echoed output are never fresh command input.
                     continue;
                 }
 
                 let words: Vec<&str> = privmsg.message_text.split_whitespace().collect();
-                if let Some((cmd, inv)) = find_enabled_command(&commands, &words) {
+                if let Some((command_id, entry, inv)) = find_enabled_command(&registry, &words) {
                     // In the ai channel, only `!ai` / `@grok` are reachable as
                     // commands. Follow-ups are handled below, after no command
                     // matched, so they still get through.
                     if is_ai_channel && !is_ai_trigger(inv.trigger) {
                         continue;
                     }
-                    dispatch_command(
-                        cmd,
-                        &privmsg,
-                        &sender,
-                        inv.trigger,
-                        inv.args,
-                        &suspension_manager,
-                    )
-                    .await;
+                    dispatch_command(CommandDispatch {
+                        command_id,
+                        entry,
+                        privmsg: privmsg.clone(),
+                        sender: sender.clone(),
+                        admission: &admission,
+                        trigger: inv.trigger.to_owned(),
+                        args: inv.args.into_iter().map(str::to_owned).collect(),
+                        suspension_manager: &suspension_manager,
+                        cancellation: &cancellation,
+                    })
+                    .await?;
                     continue;
                 }
 
@@ -516,20 +390,23 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                 let rest = skip_leading_mentions(&words);
                 if privmsg.reply_parent.is_some()
                     && rest.len() != words.len()
-                    && let Some((cmd, inv)) = find_enabled_command(&commands, rest)
+                    && let Some((command_id, entry, inv)) = find_enabled_command(&registry, rest)
                 {
                     if is_ai_channel && !is_ai_trigger(inv.trigger) {
                         continue;
                     }
-                    dispatch_command(
-                        cmd,
-                        &privmsg,
-                        &sender,
-                        inv.trigger,
-                        inv.args,
-                        &suspension_manager,
-                    )
-                    .await;
+                    dispatch_command(CommandDispatch {
+                        command_id,
+                        entry,
+                        privmsg: privmsg.clone(),
+                        sender: sender.clone(),
+                        admission: &admission,
+                        trigger: inv.trigger.to_owned(),
+                        args: inv.args.into_iter().map(str::to_owned).collect(),
+                        suspension_manager: &suspension_manager,
+                        cancellation: &cancellation,
+                    })
+                    .await?;
                     continue;
                 }
 
@@ -550,7 +427,9 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                 if rest.is_empty() || rest[0].starts_with('!') {
                     continue;
                 }
-                let Some(cmd) = commands.iter().find(|c| c.enabled() && c.matches(trigger)) else {
+                let Some((command_id, entry)) = registry.iter().find(|(_, entry)| {
+                    entry.command().enabled() && entry.command().matches(trigger)
+                }) else {
                     continue;
                 };
                 debug!(
@@ -558,22 +437,25 @@ pub(crate) async fn run_command_dispatcher<T, L>(
                     user = %privmsg.sender.login,
                     "Mouth-parent reply starting Follow-up Turn"
                 );
-                dispatch_command(
-                    cmd.as_ref(),
-                    &privmsg,
-                    &sender,
-                    trigger,
-                    rest.to_vec(),
-                    &suspension_manager,
-                )
-                .await;
+                dispatch_command(CommandDispatch {
+                    command_id: *command_id,
+                    entry,
+                    privmsg: privmsg.clone(),
+                    sender: sender.clone(),
+                    admission: &admission,
+                    trigger: trigger.to_owned(),
+                    args: rest.iter().map(|arg| (*arg).to_owned()).collect(),
+                    suspension_manager: &suspension_manager,
+                    cancellation: &cancellation,
+                })
+                .await?;
             }
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
                 error!(skipped, "Command handler lagged, skipped messages");
             }
             Err(broadcast::error::RecvError::Closed) => {
-                debug!("Broadcast channel closed, command handler exiting");
-                break;
+                debug!("Broadcast channel closed, command ingress exiting");
+                return Ok(());
             }
         }
     }

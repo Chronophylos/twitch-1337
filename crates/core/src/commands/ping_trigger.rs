@@ -7,7 +7,7 @@ use tokio::sync::watch;
 use tracing::debug;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext};
+use super::{Command, CommandContext, CommandId, ExecutionClass};
 use crate::cooldown::format_cooldown_remaining;
 use crate::ping::{PingHandle, TriggerDecision};
 
@@ -52,8 +52,16 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> CommandId {
+        CommandId::new("ping_trigger").expect("command ID is valid")
+    }
+
     fn name(&self) -> &str {
         "!<ping>"
+    }
+
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Inline
     }
 
     fn matches(&self, word: &str) -> bool {
@@ -67,8 +75,8 @@ where
         names.iter().any(|k| k.eq_ignore_ascii_case(name))
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
-        let Some(ping_name) = parse_ping_trigger(ctx.trigger) else {
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
+        let Some(ping_name) = parse_ping_trigger(&ctx.trigger) else {
             return Ok(());
         };
         let invoker = ctx.privmsg.sender.login.clone();
@@ -87,7 +95,7 @@ where
                 debug!(ping = %ping_name, "Ping on cooldown");
                 ctx.sender
                     .reply(
-                        ctx.privmsg,
+                        &ctx.privmsg,
                         format!(
                             "Bitte warte noch {} Waiting",
                             format_cooldown_remaining(remaining)

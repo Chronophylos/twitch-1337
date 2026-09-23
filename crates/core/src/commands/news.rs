@@ -16,7 +16,7 @@ use crate::settings::SettingsHandle;
 use crate::twitch::whisper::{WHISPER_MAX_CHARS, WhisperSender};
 use crate::util::truncate_response;
 
-use super::{Command, CommandContext};
+use super::{Command, CommandContext, CommandId, ExecutionClass};
 
 const NEWS_PREFIX: &str = "ICYMI:";
 const NEWS_SYSTEM_PROMPT: &str = "Du fasst Twitch-Chat-Verläufe hilfreich zusammen. Antworte auf Deutsch, erfinde keine Details und konzentriere dich auf Themen, Highlights und wichtige Antworten. Beginne die Antwort mit \"ICYMI:\". Wenn du mehrere Themen auflistest, trenne sie mit \" | \". Bleibe kompakt, aber du musst dich nicht auf eine einzelne Twitch-Chatnachricht beschränken.";
@@ -143,16 +143,17 @@ impl NewsCommand {
 
     async fn send_news_response<T, L>(
         &self,
-        ctx: &CommandContext<'_, T, L>,
+        ctx: &CommandContext<T, L>,
         response: &str,
-    ) -> String
+    ) -> Result<String>
     where
         T: Transport,
         L: LoginCredentials,
     {
+        ctx.cancellation.check()?;
         if let Some(whisper) = &self.whisper {
             match whisper.send_whisper(&ctx.privmsg.sender.id, response).await {
-                Ok(sent) => return sent,
+                Ok(sent) => return Ok(sent),
                 Err(error) => {
                     warn!(
                         error = ?error,
@@ -168,8 +169,8 @@ impl NewsCommand {
             );
         }
 
-        ctx.sender.reply(ctx.privmsg, response).await;
-        response.to_string()
+        ctx.sender.reply(&ctx.privmsg, response).await;
+        Ok(response.to_string())
     }
 }
 
@@ -193,19 +194,32 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> CommandId {
+        match self.mode {
+            NewsMode::News => CommandId::new("news").expect("command ID is valid"),
+            NewsMode::Tldr => CommandId::new("tldr").expect("command ID is valid"),
+        }
+    }
+
     fn name(&self) -> &str {
         self.mode.trigger()
     }
 
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Background
+    }
+
     #[instrument(skip(self, ctx))]
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
+        ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
 
         if let Some(remaining) = self.cooldown.check(user).await {
+            ctx.cancellation.check()?;
             debug!(user = %user, remaining_secs = remaining.as_secs(), "News command on cooldown");
             ctx.sender
                 .reply(
-                    ctx.privmsg,
+                    &ctx.privmsg,
                     format!(
                         "Bitte warte noch {} Waiting",
                         format_cooldown_remaining(remaining)
@@ -215,10 +229,11 @@ where
             return Ok(());
         }
 
+        ctx.cancellation.check()?;
         let Some(history_lines) = self.relevant_history(user, &ctx.privmsg.message_text).await
         else {
             ctx.sender
-                .reply(ctx.privmsg, self.mode.empty_message())
+                .reply(&ctx.privmsg, self.mode.empty_message())
                 .await;
             return Ok(());
         };
@@ -226,7 +241,7 @@ where
         if history_lines.is_empty() {
             ctx.sender
                 .reply(
-                    ctx.privmsg,
+                    &ctx.privmsg,
                     match self.mode {
                         NewsMode::News => NO_NEW_MESSAGES_MESSAGE,
                         NewsMode::Tldr => NO_TLDR_MESSAGES_MESSAGE,
@@ -245,7 +260,7 @@ where
         else {
             error!("News AI skipped, no usable LLM profile");
             ctx.sender
-                .reply(ctx.privmsg, "Da ist was schiefgelaufen FDM")
+                .reply(&ctx.privmsg, "Da ist was schiefgelaufen FDM")
                 .await;
             return Ok(());
         };
@@ -279,6 +294,7 @@ where
             },
         };
 
+        ctx.cancellation.check()?;
         let result = llm::with_optional_turn(
             crate::ai::langfuse::LangfuseHandle::observer_from(&self.langfuse),
             llm::TurnParams {
@@ -307,9 +323,11 @@ where
         };
 
         if success {
-            self.send_news_response(&ctx, &response).await;
+            ctx.cancellation.check()?;
+            self.send_news_response(&ctx, &response).await?;
         } else {
-            ctx.sender.reply(ctx.privmsg, response).await;
+            ctx.cancellation.check()?;
+            ctx.sender.reply(&ctx.privmsg, response).await;
         }
 
         Ok(())

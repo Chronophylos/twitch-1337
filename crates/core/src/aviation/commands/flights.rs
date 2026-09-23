@@ -5,7 +5,7 @@ use tracing::error;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::TrackerCommand;
-use crate::commands::{Command, CommandContext};
+use crate::commands::{Command, CommandContext, CommandId, ExecutionClass};
 
 pub struct FlightsCommand {
     tracker_tx: mpsc::Sender<TrackerCommand>,
@@ -23,11 +23,19 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> CommandId {
+        CommandId::new("flights").expect("command ID is valid")
+    }
+
     fn name(&self) -> &str {
         "!flights"
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Inline
+    }
+
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let cmd = TrackerCommand::Status {
             identifier: None,
             reply_to: ctx.privmsg.clone(),
@@ -57,15 +65,23 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> CommandId {
+        CommandId::new("flight").expect("command ID is valid")
+    }
+
     fn name(&self) -> &str {
         "!flight"
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Inline
+    }
+
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let input = ctx.args.join(" ");
         if input.trim().is_empty() {
             ctx.sender
-                .reply(ctx.privmsg, "Benutzung: !flight <callsign/hex> FDM")
+                .reply(&ctx.privmsg, "Benutzung: !flight <callsign/hex> FDM")
                 .await;
             return Ok(());
         }
