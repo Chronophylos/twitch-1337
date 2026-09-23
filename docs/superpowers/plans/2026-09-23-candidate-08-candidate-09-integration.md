@@ -1,7 +1,7 @@
 # Candidate 08 ↔ Candidate 09 Integration Plan
 
 **Date:** 2026-09-23  
-**Status:** Revised — implementation-ready after C08 blocker correction
+**Status:** Executed — integrated branch verified
 **C08 worktree:** `/tmp/opencode/twitch-1337-candidate08`  
 **C09 worktree:** `/tmp/opencode/twitch-1337-candidate09`
 
@@ -425,7 +425,24 @@ only to make the merged runtime test reach private C09 internals.
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` passes.
 - [ ] `cargo fmt --all -- --check` passes.
 
-## Non-Goals
+## Execution result
+
+The integration was executed by merging the C09 command-execution branch into
+C08 and resolving the three expected composition conflicts in `lib.rs`,
+`handlers/commands.rs`, and `handlers/spawn.rs`.
+
+Verification completed on the integrated branch:
+
+- `cargo fmt --all -- --check`
+- `cargo check --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo nextest run --workspace` — **1594 passed, 2 skipped**
+
+The known five-second value is a cooperative drain deadline. Already-running
+C09 `spawn_blocking` work is joined rather than detached, so an uninterruptible
+blocking closure may extend total shutdown time while preserving the no-detach
+guarantee.
+
 
 - Do not create a second lifecycle supervisor.
 - Do not add a generic scheduler timeout.
