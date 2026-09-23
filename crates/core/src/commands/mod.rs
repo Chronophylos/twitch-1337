@@ -1,16 +1,14 @@
 use std::borrow::Cow;
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use eyre::Result;
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
-use crate::twitch::ChatSender;
-
 pub mod doener;
 pub mod doener_calc;
 pub mod emote;
+pub mod execution;
 pub mod feedback;
 pub mod haiku;
 pub mod hall_of_shame;
@@ -20,8 +18,17 @@ pub mod pb;
 pub mod ping_admin;
 pub mod ping_trigger;
 pub mod pw;
+pub mod registry;
 pub mod suspend;
 pub mod version;
+
+pub use execution::{
+    CAPACITY_REJECTION_MESSAGE, CommandAdmissionError, CommandAdmissionReceiver,
+    CommandAdmissionSender, CommandCancellation, CommandCancelled, CommandContext,
+    CommandExecutionManager, CommandInvocation, CommandTaskGroup, TaskCompletion, TaskGroupError,
+    TaskResult, UserKey, UserKeyError, command_admission_channel,
+};
+pub use registry::{CommandEntry, CommandId, CommandRegistry, ExecutionClass, RegistryBuildError};
 
 /// German rejection reply used by admin-gated commands when the sender
 /// lacks the required badge or id.
@@ -61,10 +68,10 @@ pub fn is_admin(privmsg: &PrivmsgMessage, hidden_admin_ids: &[String]) -> bool {
 /// nothing to derive this from inside `PingManager`. A missed row means a
 /// ping can shadow that command — the behavior that existed before this list.
 ///
-/// The guard is one-directional: `build_commands` debug-asserts that every
-/// registered command has a row (so drift trips in debug builds — `just dev`,
-/// CI, and the `ping_name_guard` integration test), while a stale row is
-/// harmless and may simply be deleted. Aliases are not covered by the guard:
+/// The guard is one-directional: command-registry construction rejects a
+/// registered command with no row (so drift trips in every build and is covered
+/// by the `ping_name_guard` integration test), while a stale row is harmless and
+/// may simply be deleted. Aliases are not covered by the guard:
 /// rows mirror `Command::name()` only, so a command trigger that does not
 /// equal its `name()` (e.g. the `!doener` alias normalizing onto `!döner`)
 /// must still be kept in `normalize_command_name` by hand.
@@ -120,19 +127,6 @@ pub fn normalize_username(raw: &str) -> String {
     raw.trim_start_matches('@').to_ascii_lowercase()
 }
 
-/// Context passed to every command execution.
-pub struct CommandContext<'a, T: Transport, L: LoginCredentials> {
-    /// The chat message that triggered the command.
-    pub privmsg: &'a PrivmsgMessage,
-    /// Sanitizing chat sender for command responses. The only outbound
-    /// chat API commands are allowed to call.
-    pub sender: &'a Arc<ChatSender<T, L>>,
-    /// The first word of the message that matched the command.
-    pub trigger: &'a str,
-    /// Remaining words after the command name.
-    pub args: Vec<&'a str>,
-}
-
 /// Trait implemented by all bot commands.
 #[async_trait]
 pub trait Command<T, L>: Send + Sync
@@ -140,8 +134,15 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    /// Raw stable identity metadata. The registry validates and owns conversion
+    /// to the private `CommandId` boundary used for lookup and execution limits.
+    fn id(&self) -> &'static str;
+
     /// The command trigger including "!" prefix (e.g., "!lb").
     fn name(&self) -> &str;
+
+    /// Bounded execution class for this command.
+    fn execution_policy(&self) -> ExecutionClass;
 
     /// Whether the command is currently enabled.
     fn enabled(&self) -> bool {
@@ -164,8 +165,8 @@ where
         Cow::Owned(normalize_command_name(trigger))
     }
 
-    /// Execute the command with the given context.
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()>;
+    /// Execute the command with the given owned context.
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()>;
 }
 
 #[cfg(test)]

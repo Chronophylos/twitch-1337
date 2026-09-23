@@ -8,7 +8,7 @@ use tokio::time::Duration;
 use tracing::{error, info};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext};
+use super::{Command, CommandContext, ExecutionClass};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
 
@@ -38,18 +38,26 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> &'static str {
+        "feedback"
+    }
+
     fn name(&self) -> &str {
         "!fb"
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Inline
+    }
+
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let user = &ctx.privmsg.sender.login;
         let message: String = ctx.args.join(" ");
 
         // Check for empty message
         if message.trim().is_empty() {
             ctx.sender
-                .reply(ctx.privmsg, "Benutzung: !fb <nachricht>")
+                .reply(&ctx.privmsg, "Benutzung: !fb <nachricht>")
                 .await;
             return Ok(());
         }
@@ -58,7 +66,7 @@ where
         if let Some(remaining) = self.cooldown.check(user).await {
             ctx.sender
                 .reply(
-                    ctx.privmsg,
+                    &ctx.privmsg,
                     format!(
                         "Bitte warte noch {} Waiting",
                         format_cooldown_remaining(remaining)
@@ -87,7 +95,7 @@ where
                 if let Err(e) = file.write_all(line.as_bytes()).await {
                     error!(error = ?e, "Failed to write feedback to file");
                     ctx.sender
-                        .reply(ctx.privmsg, "Da ist was schiefgelaufen FDM")
+                        .reply(&ctx.privmsg, "Da ist was schiefgelaufen FDM")
                         .await;
                     return Ok(());
                 }
@@ -95,7 +103,7 @@ where
             Err(e) => {
                 error!(error = ?e, "Failed to open feedback file");
                 ctx.sender
-                    .reply(ctx.privmsg, "Da ist was schiefgelaufen FDM")
+                    .reply(&ctx.privmsg, "Da ist was schiefgelaufen FDM")
                     .await;
                 return Ok(());
             }
@@ -104,7 +112,7 @@ where
         info!(user = %user, "Feedback saved");
 
         ctx.sender
-            .reply(ctx.privmsg, "Feedback gespeichert Okayge")
+            .reply(&ctx.privmsg, "Feedback gespeichert Okayge")
             .await;
 
         Ok(())

@@ -2,6 +2,7 @@
 mod common;
 
 mod announce;
+mod command_execution;
 mod doener;
 mod emote_lookup;
 mod emote_usage;

@@ -17,7 +17,7 @@ fn doener_cooldown_duration(s: &Settings) -> Duration {
     Duration::from_secs(s.cooldowns.doener)
 }
 
-use super::{Command, CommandContext};
+use super::{Command, CommandContext, ExecutionClass};
 
 fn parse_euro_amount(raw: &str) -> Option<f64> {
     let mut t = raw.trim();
@@ -278,8 +278,16 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> &'static str {
+        "doener"
+    }
+
     fn name(&self) -> &str {
         "!döner"
+    }
+
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Background
     }
 
     fn matches(&self, word: &str) -> bool {
@@ -290,12 +298,14 @@ where
         Cow::Borrowed("doener")
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
+        ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
         if let Some(rem) = self.cooldown.check(user).await {
+            ctx.cancellation.check()?;
             ctx.sender
                 .reply(
-                    ctx.privmsg,
+                    &ctx.privmsg,
                     format!(
                         "Bitte warte noch {} Waiting",
                         format_cooldown_remaining(rem)
@@ -309,9 +319,10 @@ where
         self.cooldown.record(user).await;
 
         if ctx.args.is_empty() {
+            ctx.cancellation.check()?;
             ctx.sender
                 .reply(
-                    ctx.privmsg,
+                    &ctx.privmsg,
                     "Nutze: !döner <Zahl> — Umrechnung nutzt den Döneratlas-Deutschland-Ø. Stadtpreise: !dpi <Suche> FDM",
                 )
                 .await;
@@ -319,6 +330,7 @@ where
         }
 
         let amount_raw = ctx.args.join(" ");
+        ctx.cancellation.check()?;
         let response = match parse_euro_amount(&amount_raw) {
             None => "Das ist keine gültige Zahl FDM".to_string(),
             Some(amount_eur) => match self.client.national_average_eur().await {
@@ -341,7 +353,8 @@ where
             },
         };
 
-        ctx.sender.reply(ctx.privmsg, response).await;
+        ctx.cancellation.check()?;
+        ctx.sender.reply(&ctx.privmsg, response).await;
 
         Ok(())
     }

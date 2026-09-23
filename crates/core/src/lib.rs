@@ -44,7 +44,7 @@ use crate::{
     lifecycle::{Lifecycle, TaskSupervisor},
     ping::PingRuntime,
     twitch::handlers::{
-        spawn::spawn_handlers,
+        spawn::{build_command_registry, spawn_handlers},
         tracker_1337::{TARGET_HOUR, TARGET_MINUTE},
     },
     twitch::whisper::WhisperSender,
@@ -223,6 +223,84 @@ where
     T: Transport + Send + Sync + 'static,
     L: LoginCredentials + Send + Sync + 'static,
 {
+    run_bot_inner(BotRun {
+        client,
+        incoming,
+        services,
+        ping,
+        tracker_rx,
+        web_spawner,
+        shutdown,
+        command_registry: None,
+    })
+    .await
+}
+
+/// Test-only composition seam for dispatcher integration tests.
+///
+/// This injects the same concrete `CommandRegistry` used by production; it does
+/// not add a second executor abstraction. The registry remains shared by
+/// ingress and `CommandExecutionManager`.
+#[cfg(any(test, feature = "testing"))]
+#[allow(clippy::too_many_arguments)]
+pub async fn run_bot_with_command_registry<T, L>(
+    client: Arc<TwitchIRCClient<T, L>>,
+    incoming: UnboundedReceiver<ServerMessage>,
+    services: Services,
+    ping: PingRuntime,
+    tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
+    web_spawner: Option<WebSpawner>,
+    shutdown: oneshot::Receiver<()>,
+    registry: Arc<commands::CommandRegistry<T, L>>,
+) -> Result<()>
+where
+    T: Transport + Send + Sync + 'static,
+    L: LoginCredentials + Send + Sync + 'static,
+{
+    run_bot_inner(BotRun {
+        client,
+        incoming,
+        services,
+        ping,
+        tracker_rx,
+        web_spawner,
+        shutdown,
+        command_registry: Some(registry),
+    })
+    .await
+}
+
+struct BotRun<T, L>
+where
+    T: Transport,
+    L: LoginCredentials,
+{
+    client: Arc<TwitchIRCClient<T, L>>,
+    incoming: UnboundedReceiver<ServerMessage>,
+    services: Services,
+    ping: PingRuntime,
+    tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
+    web_spawner: Option<WebSpawner>,
+    shutdown: oneshot::Receiver<()>,
+    command_registry: Option<Arc<commands::CommandRegistry<T, L>>>,
+}
+
+async fn run_bot_inner<T, L>(runtime: BotRun<T, L>) -> Result<()>
+where
+    T: Transport + Send + Sync + 'static,
+    L: LoginCredentials + Send + Sync + 'static,
+{
+    let BotRun {
+        client,
+        incoming,
+        services,
+        ping,
+        tracker_rx,
+        web_spawner,
+        shutdown,
+        command_registry: injected_registry,
+    } = runtime;
+
     // The flight-tracker boot guard ties all three values together —
     // `Services.aviation`, `Services.aviation_tracker_tx`, and `tracker_rx` —
     // restoring the invariant the deleted
@@ -242,6 +320,16 @@ where
         );
     }
 
+    let services = Arc::new(services);
+
+    // Construct the registry and all command-owned optional clients before any
+    // runtime task is registered. A startup error therefore cannot leave the
+    // ping actor or another task behind.
+    let command_registry = match injected_registry {
+        Some(registry) => registry,
+        None => build_command_registry(&services, &services.settings.load())?,
+    };
+
     let lifecycle = Lifecycle::new();
     let mut supervisor = TaskSupervisor::new(lifecycle.clone());
 
@@ -256,8 +344,6 @@ where
         });
     }
 
-    let services = Arc::new(services);
-
     // Cloned Arc retained for the startup/shutdown announces; `client` itself is
     // moved into spawn_handlers below.
     let client_for_announce = client.clone();
@@ -269,6 +355,7 @@ where
         lifecycle.clone(),
         Arc::clone(&services),
         client,
+        command_registry,
         incoming,
         tracker_rx,
     );

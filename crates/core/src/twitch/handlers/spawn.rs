@@ -7,16 +7,20 @@
 
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
+use eyre::{Result, WrapErr as _};
 use tokio::sync::{Notify, broadcast, mpsc};
+use tracing::{debug, error, info};
 use twitch_irc::{
     TwitchIRCClient, login::LoginCredentials, message::ServerMessage, transport::Transport,
 };
 
 use crate::{
-    Services,
+    Services, ai,
     ai::recap_batcher::run_recap_batcher,
     aviation,
+    commands::{self, CommandRegistry},
     lifecycle::{Lifecycle, TaskSupervisor},
     twitch::{
         ChatSender,
@@ -31,6 +35,213 @@ use crate::{
         },
     },
 };
+
+/// Build the static production registry at the process composition seam.
+///
+/// Optional clients are constructed exactly once here, before any runtime task
+/// is registered. Construction failures are returned to `run_bot`; invalid
+/// command metadata fails through `CommandRegistry::from_commands` rather than
+/// being silently skipped.
+pub(crate) fn build_command_registry<T, L>(
+    services: &Services,
+    snapshot: &crate::settings::Settings,
+) -> Result<Arc<CommandRegistry<T, L>>>
+where
+    T: Transport + Send + Sync + 'static,
+    L: LoginCredentials + Send + Sync + 'static,
+{
+    // Registration depends only on bootstrap AI being present. Each command
+    // resolves its own profile per turn, so one stale agent pointer cannot
+    // disable the others and profile repairs take effect without a restart.
+    let ai_configured = services.ai_enabled;
+    if ai_configured {
+        info!("AI commands enabled; agent profiles resolve per turn");
+    } else {
+        debug!("AI not configured, AI commands disabled");
+    }
+
+    let mut command_list: Vec<Arc<dyn commands::Command<T, L>>> = vec![
+        Arc::new(commands::version::VersionCommand::new(services.started_at)),
+        Arc::new(commands::ping_admin::PingAdminCommand::new(
+            services.ping.clone(),
+            services.settings.clone(),
+        )),
+        Arc::new(commands::suspend::SuspendCommand::new(
+            services.suspension.clone(),
+            services.settings.clone(),
+        )),
+        Arc::new(commands::suspend::UnsuspendCommand::new(
+            services.suspension.clone(),
+            services.settings.clone(),
+        )),
+        Arc::new(aviation::commands::random_flight::RandomFlightCommand),
+        Arc::new(aviation::commands::flights_above::FlightsAboveCommand::new(
+            services.aviation.clone(),
+            services.settings.clone(),
+        )),
+        Arc::new(commands::leaderboard::LeaderboardCommand::new(
+            services.leaderboard.clone(),
+        )),
+        Arc::new(commands::hall_of_shame::HallOfShameCommand::new(
+            services.hall_of_shame.clone(),
+        )),
+        Arc::new(commands::pw::PwCommand::new(services.hall_of_shame.clone())),
+        Arc::new(commands::pb::PbCommand::new(services.leaderboard.clone())),
+        Arc::new(commands::feedback::FeedbackCommand::new(
+            services.data_dir.clone(),
+            services.settings.clone(),
+        )),
+        Arc::new(commands::doener::DoenerCommand::new(
+            services.doener.clone(),
+            services.settings.clone(),
+        )),
+        Arc::new(commands::doener_calc::DoenerCalcCommand::new(
+            services.doener.clone(),
+            services.settings.clone(),
+        )),
+    ];
+
+    if let Some(tx) = services
+        .aviation_tracker_tx
+        .as_ref()
+        .map(|tx| (**tx).clone())
+    {
+        command_list.push(Arc::new(aviation::commands::track::TrackCommand::new(
+            tx.clone(),
+        )));
+        command_list.push(Arc::new(aviation::commands::untrack::UntrackCommand::new(
+            tx.clone(),
+        )));
+        command_list.push(Arc::new(aviation::commands::flights::FlightsCommand::new(
+            tx.clone(),
+        )));
+        command_list.push(Arc::new(aviation::commands::flights::FlightCommand::new(
+            tx.clone(),
+        )));
+        command_list.push(Arc::new(aviation::commands::info::InfoCommand::new(tx)));
+    }
+
+    if let Some(tracker) = services.emote_tracker.clone() {
+        command_list.push(Arc::new(commands::emote::EmoteCommand::new(tracker)));
+    }
+
+    if let Some(memory) = services.ai_memory.clone().filter(|_| ai_configured) {
+        let web = if let Some(web_config) = snapshot.ai.web.as_ref() {
+            let search = match ai::content::SearchClient::new(
+                &web_config.base_url,
+                Duration::from_secs(web_config.timeout),
+            ) {
+                Ok(client) => Some(client),
+                Err(error) => {
+                    error!(
+                        ?error,
+                        "Failed to initialize ai.web search client; disabling web tools"
+                    );
+                    None
+                }
+            };
+
+            // The media client is built once at composition. It is independent
+            // of SearchClient construction, so a bad search URL only disables
+            // web tools rather than hiding the rest of the AI command.
+            let media_http = reqwest::Client::builder()
+                .user_agent(crate::APP_USER_AGENT)
+                .build()
+                .wrap_err("build media HTTP client for command composition")?;
+            search.map(|client| ai::command::AiWeb {
+                executor: Arc::new(ai::content::ContentToolExecutor::new(
+                    client,
+                    media_http,
+                    services.llm.clone(),
+                    services.settings.clone(),
+                    Duration::from_secs(web_config.cache_ttl_secs),
+                    web_config.cache_capacity,
+                )),
+                settings: services.settings.clone(),
+            })
+        } else {
+            None
+        };
+
+        let news_cooldown = Arc::new(crate::cooldown::PerUserCooldown::live(
+            services.settings.clone(),
+            commands::news_cooldown_duration,
+        ));
+
+        let catalog_http = reqwest::Client::builder()
+            .user_agent(crate::APP_USER_AGENT)
+            .build()
+            .wrap_err("build model catalog HTTP client for command composition")?;
+        let model_catalog = Arc::new(ai::model_catalog::ModelCatalog::new(catalog_http));
+        let repology = Arc::new(
+            crate::repology::RepologyClient::new()
+                .wrap_err("build repology HTTP client for command composition")?,
+        );
+        let pronouns = Arc::new(
+            crate::pronouns::PronounsClient::new()
+                .wrap_err("build pronouns HTTP client for command composition")?,
+        );
+
+        command_list.push(Arc::new(ai::command::AiCommand::new(
+            ai::command::AiCommandDeps {
+                registry: services.llm.clone(),
+                settings: services.settings.clone(),
+                chat_ctx: services.chat_ctx.clone(),
+                memory,
+                web,
+                emotes: services.emote_provider.clone(),
+                bot_username: services.bot_username.clone(),
+                doener: services.doener.clone(),
+                repology,
+                pronouns,
+                dhl: services.dhl.clone(),
+                emote_tracker: services.emote_tracker.clone(),
+                langfuse: services.langfuse.clone(),
+                model_catalog,
+                mouths: services.mouths.clone(),
+                echo: services.echo.clone(),
+                recap: services.recap.clone(),
+            },
+        )));
+        command_list.push(Arc::new(commands::news::NewsCommand::new(
+            services.llm.clone(),
+            services.settings.clone(),
+            commands::news::NewsMode::News,
+            services.chat_ctx.clone(),
+            services.whisper.clone(),
+            news_cooldown.clone(),
+            services.langfuse.clone(),
+        )));
+        command_list.push(Arc::new(commands::news::NewsCommand::new(
+            services.llm.clone(),
+            services.settings.clone(),
+            commands::news::NewsMode::Tldr,
+            services.chat_ctx.clone(),
+            services.whisper.clone(),
+            news_cooldown.clone(),
+            services.langfuse.clone(),
+        )));
+        command_list.push(Arc::new(commands::haiku::HaikuCommand::new(
+            services.llm.clone(),
+            services.settings.clone(),
+            services.chat_ctx.clone(),
+            news_cooldown,
+            services.langfuse.clone(),
+        )));
+    }
+
+    // PingTriggerCommand must stay last: built-ins earlier in the IndexMap win
+    // matching priority, including when a configured ping has the same name.
+    command_list.push(Arc::new(commands::ping_trigger::PingTriggerCommand::new(
+        services.ping.clone(),
+        services.settings.clone(),
+        services.ping_names_rx.clone(),
+    )));
+
+    CommandRegistry::from_commands(command_list)
+        .map(Arc::new)
+        .wrap_err("build built-in command registry")
+}
 
 /// Register a loop under one stable supervisor name.
 ///
@@ -114,6 +325,7 @@ pub(crate) fn spawn_handlers<T, L>(
     lifecycle: Lifecycle,
     services: Arc<Services>,
     client: Arc<TwitchIRCClient<T, L>>,
+    command_registry: Arc<CommandRegistry<T, L>>,
     incoming: tokio::sync::mpsc::UnboundedReceiver<ServerMessage>,
     tracker_rx: Option<mpsc::Receiver<aviation::TrackerCommand>>,
 ) where
@@ -376,18 +588,41 @@ pub(crate) fn spawn_handlers<T, L>(
         );
     }
 
+    // Command ingress and background execution are separate C08-owned direct
+    // tasks. Both observe the lifecycle's one cancellation token. The manager's
+    // explicit task-group adapter is retained by supervisor cleanup before the
+    // manager itself is spawned, so abort/join remains available even if the
+    // manager is stopped at the global drain deadline.
+    let command_cancellation =
+        commands::CommandCancellation::from_token(lifecycle.cancellation_token());
+    let (command_admission, command_receiver) = commands::command_admission_channel();
+    let command_manager =
+        commands::CommandExecutionManager::new(command_receiver, Arc::clone(&command_registry));
+    let command_task_group = command_manager.task_group();
+    supervisor.register_finalizer("command task group", async move {
+        command_task_group
+            .abort_and_join()
+            .await
+            .map_err(|error| format!("abort/join failed: {error}"))
+    });
+    supervisor.spawn_result(
+        "command execution manager",
+        command_manager.run(command_cancellation.clone()),
+    );
+
     {
         let services = services.clone();
         let sender = chat_sender.clone();
-        let command_lifecycle = lifecycle.clone();
-        register_loop(supervisor, lifecycle, "generic commands", async move {
+        supervisor.spawn_result(
+            "generic command ingress",
             run_generic_command_handler(CommandConfig {
-                lifecycle: command_lifecycle,
                 broadcast_rx: commands_broadcast_rx,
                 services,
                 sender,
-            })
-            .await;
-        });
+                registry: command_registry,
+                admission: command_admission,
+                cancellation: command_cancellation,
+            }),
+        );
     }
 }

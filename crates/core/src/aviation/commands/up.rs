@@ -7,6 +7,7 @@ use eyre::{Result, WrapErr as _};
 use tracing::{debug, error, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
+use crate::commands::{CommandCancellation, CommandTaskGroup};
 use crate::cooldown::format_cooldown_remaining;
 use crate::twitch::ChatSender;
 
@@ -47,16 +48,19 @@ pub async fn up_command<T, L>(
     aviation_client: &AviationClient,
     input: &str,
     cooldown: &crate::cooldown::PerUserCooldown,
+    cancellation: CommandCancellation,
 ) -> Result<()>
 where
     T: Transport,
     L: LoginCredentials,
 {
+    cancellation.check()?;
     let user = &privmsg.sender.login;
     let input = input.trim();
 
     // Empty input
     if input.is_empty() {
+        cancellation.check()?;
         sender
             .reply(privmsg, "Benutzung: !up <PLZ/ICAO/IATA/Ort> FDM")
             .await;
@@ -65,6 +69,7 @@ where
 
     // Check cooldown
     if let Some(remaining) = cooldown.check(user).await {
+        cancellation.check()?;
         debug!(user = %user, remaining_secs = remaining.as_secs(), "!up on cooldown");
         sender
             .reply(
@@ -79,25 +84,30 @@ where
     }
 
     cooldown.record(user).await;
+    cancellation.check()?;
 
     // Resolve location
     let location = match resolve_location(input, aviation_client).await {
         Ok(ResolveResult::Found(loc)) => loc,
         Ok(ResolveResult::PlzNotFound) => {
+            cancellation.check()?;
             sender.reply(privmsg, "Kenne ich nicht die PLZ FDM").await;
             return Ok(());
         }
         Ok(ResolveResult::NotFound) => {
+            cancellation.check()?;
             sender.reply(privmsg, "Kenne ich nicht FDM").await;
             return Ok(());
         }
         Err(e) => {
+            cancellation.check()?;
             error!(error = ?e, input = %input, "Location resolution failed");
             sender.reply(privmsg, "Da ist was schiefgelaufen FDM").await;
             return Ok(());
         }
     };
 
+    cancellation.check()?;
     let ResolvedLocation {
         lat,
         lon,
@@ -107,6 +117,7 @@ where
 
     // Wrap entire API flow in overall timeout
     let result = tokio::time::timeout(UP_COMMAND_TIMEOUT, async {
+        cancellation.check()?;
         // Fetch nearby aircraft
         let aircraft = tokio::time::timeout(
             UP_ADSB_TIMEOUT,
@@ -115,6 +126,7 @@ where
         .await
         .map_err(|_| eyre::eyre!("ADS-B request timed out"))?
         .wrap_err("ADS-B request failed")?;
+        cancellation.check()?;
 
         // Filter by cone visibility, then by identifier (callsign → registration → hex)
         let candidates: Vec<_> = aircraft
@@ -148,8 +160,12 @@ where
             return Ok(Vec::new());
         }
 
-        // Fetch routes concurrently
-        let mut join_set = tokio::task::JoinSet::new();
+        // Fetch routes concurrently through the command task group. A child
+        // panic/cleanup failure is surfaced to the command and also escalates
+        // through the manager's group event.
+        let group = CommandTaskGroup::current()
+            .ok_or_else(|| eyre::eyre!("!up has no active command task group"))?;
+        let mut receivers = Vec::with_capacity(candidates.len());
         for (id, callsign, ac, distance_nm) in &candidates {
             let av_client = aviation_client.clone();
             let id_owned = id.clone();
@@ -162,6 +178,7 @@ where
                 ac.lon.expect("lon guaranteed by cone_distance_nm"),
             );
             let bearing = random_flight::geo::initial_bearing(*lat, *lon, ac_lat, ac_lon);
+            let route_cancellation = cancellation.clone();
             let direction = match random_flight::geo::cardinal_direction(bearing) {
                 "N" => "⬆️",
                 "NE" => "↗️",
@@ -173,7 +190,10 @@ where
                 "NW" => "↖️",
                 _ => "?",
             };
-            join_set.spawn(async move {
+            let receiver = group.spawn_child(async move {
+                if route_cancellation.is_cancelled() {
+                    return (id_owned, icao_type, alt, None, dist, direction);
+                }
                 let route = match callsign_owned {
                     Some(cs) => {
                         let res = tokio::time::timeout(
@@ -196,14 +216,17 @@ where
                     None => None,
                 };
                 (id_owned, icao_type, alt, route, dist, direction)
-            });
+            })?;
+            receivers.push(receiver);
         }
 
-        let mut results = Vec::new();
-        while let Some(res) = join_set.join_next().await {
-            if let Ok(entry) = res {
-                results.push(entry);
-            }
+        let mut results = Vec::with_capacity(receivers.len());
+        for receiver in receivers {
+            results.push(
+                receiver
+                    .await
+                    .map_err(|_| eyre::eyre!("!up route child task ended unexpectedly"))?,
+            );
         }
 
         results.sort_by(|a, b| a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal));
@@ -212,6 +235,7 @@ where
     })
     .await;
 
+    cancellation.check()?;
     let response = match result {
         Ok(Ok(entries)) if entries.is_empty() => {
             format!("Nix los über {display_name}")
@@ -247,6 +271,7 @@ where
         }
     };
 
+    cancellation.check()?;
     sender.reply(privmsg, response).await;
 
     Ok(())

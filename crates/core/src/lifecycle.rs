@@ -51,6 +51,7 @@ impl LifecycleState {
 #[derive(Debug, Clone)]
 pub struct Lifecycle {
     state: watch::Sender<LifecycleState>,
+    cancellation: CancellationToken,
     faulted: Arc<AtomicBool>,
     child_tasks: ChildTaskRegistry,
 }
@@ -59,6 +60,7 @@ impl Lifecycle {
     pub fn new() -> Self {
         Self {
             state: watch::channel(LifecycleState::Running).0,
+            cancellation: CancellationToken::new(),
             faulted: Arc::new(AtomicBool::new(false)),
             child_tasks: ChildTaskRegistry::default(),
         }
@@ -74,6 +76,11 @@ impl Lifecycle {
 
     pub fn is_cancelled(&self) -> bool {
         !self.is_running()
+    }
+
+    /// Clone the lifecycle's single latched cancellation token.
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation.clone()
     }
 
     /// Whether a fault was ever latched. This remains true after the public
@@ -120,7 +127,7 @@ impl Lifecycle {
     }
 
     fn transition(&self, requested: LifecycleState) {
-        self.state.send_if_modified(|current| {
+        let transitioned = self.state.send_if_modified(|current| {
             let next = match (*current, requested) {
                 (LifecycleState::Running, LifecycleState::GracefulStop) => {
                     LifecycleState::GracefulStop
@@ -147,6 +154,13 @@ impl Lifecycle {
                 true
             }
         });
+
+        // Admission checks must observe the non-running state before any
+        // token-only observer is released. This ordering is part of the
+        // lifecycle contract shared by command ingress and execution.
+        if transitioned {
+            self.cancellation.cancel();
+        }
     }
 }
 
@@ -177,14 +191,10 @@ impl<T> TaskCompletion<T> {
         self.result
     }
 
+    #[cfg(test)]
     pub(crate) fn is_success(&self) -> bool {
         self.result.is_ok()
     }
-}
-
-struct NamedTask<T> {
-    name: String,
-    handle: JoinHandle<T>,
 }
 
 fn validate_task_name(name: &str) {
@@ -199,6 +209,12 @@ fn validate_task_name(name: &str) {
 #[derive(Debug, Clone, Default)]
 struct ChildTaskRegistry {
     inner: Arc<Mutex<ChildTasksInner>>,
+}
+
+impl TaskCompletion<Result<(), String>> {
+    fn is_clean(&self) -> bool {
+        matches!(&self.result, Ok(Ok(())))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -455,15 +471,18 @@ impl<T> Drop for TaskGroup<T> {
     }
 }
 
-/// Direct owner for top-level pre-spawned tasks. Nested application work uses
-/// [`TaskGroup`], whose handles are also retained in the global registry.
-pub(crate) struct LocalTaskGroup<T = ()> {
+type DirectTaskResult = Result<Result<(), String>, JoinError>;
+type DirectJoinFuture<'a> = Pin<Box<dyn Future<Output = (usize, DirectTaskResult)> + Send + 'a>>;
+
+/// Direct owner for top-level tasks. Nested application work uses [`TaskGroup`],
+/// whose handles are also retained in the global registry.
+pub(crate) struct LocalTaskGroup {
     name: String,
     cancellation: CancellationToken,
-    tasks: Vec<NamedTask<T>>,
+    tasks: Vec<NamedDirectTask>,
 }
 
-impl<T: Send + 'static> LocalTaskGroup<T> {
+impl LocalTaskGroup {
     fn new(name: impl Into<String>) -> Self {
         let name = name.into();
         assert!(!name.trim().is_empty(), "task group name must not be empty");
@@ -476,14 +495,26 @@ impl<T: Send + 'static> LocalTaskGroup<T> {
 
     fn spawn<F>(&mut self, name: impl Into<String>, future: F)
     where
-        F: Future<Output = T> + Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
     {
-        let name = name.into();
-        validate_task_name(&name);
         self.adopt(name, tokio::spawn(future));
     }
 
-    fn adopt(&mut self, name: impl Into<String>, handle: JoinHandle<T>) {
+    fn spawn_result<F, E>(&mut self, name: impl Into<String>, future: F)
+    where
+        F: Future<Output = Result<(), E>> + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
+    {
+        let name = self.validate_new_task_name(name);
+        self.tasks.push(NamedDirectTask {
+            name,
+            task: DirectTask::Result(tokio::spawn(async move {
+                future.await.map_err(|error| error.to_string())
+            })),
+        });
+    }
+
+    fn adopt(&mut self, name: impl Into<String>, handle: JoinHandle<()>) {
         let name = name.into();
         if name.trim().is_empty() {
             handle.abort();
@@ -493,7 +524,21 @@ impl<T: Send + 'static> LocalTaskGroup<T> {
             handle.abort();
             panic!("duplicate task name {name:?} in group {:?}", self.name);
         }
-        self.tasks.push(NamedTask { name, handle });
+        self.tasks.push(NamedDirectTask {
+            name,
+            task: DirectTask::Unit(handle),
+        });
+    }
+
+    fn validate_new_task_name(&self, name: impl Into<String>) -> String {
+        let name = name.into();
+        if name.trim().is_empty() {
+            panic!("task name must not be empty");
+        }
+        if self.tasks.iter().any(|task| task.name == name) {
+            panic!("duplicate task name {name:?} in group {:?}", self.name);
+        }
+        name
     }
 
     fn is_empty(&self) -> bool {
@@ -504,14 +549,23 @@ impl<T: Send + 'static> LocalTaskGroup<T> {
         self.cancellation.cancel();
     }
 
-    async fn join_next(&mut self) -> Option<TaskCompletion<T>> {
+    async fn join_next(&mut self) -> Option<TaskCompletion<Result<(), String>>> {
         if self.tasks.is_empty() {
             return None;
         }
         let completed = {
-            let mut handles = FuturesUnordered::new();
+            let mut handles: FuturesUnordered<DirectJoinFuture<'_>> = FuturesUnordered::new();
             for (index, task) in self.tasks.iter_mut().enumerate() {
-                handles.push(async move { (index, (&mut task.handle).await) });
+                match &mut task.task {
+                    DirectTask::Unit(handle) => {
+                        handles.push(Box::pin(
+                            async move { (index, handle.await.map(|_| Ok(()))) },
+                        ));
+                    }
+                    DirectTask::Result(handle) => {
+                        handles.push(Box::pin(async move { (index, handle.await) }));
+                    }
+                }
             }
             handles.next().await
         };
@@ -524,7 +578,7 @@ impl<T: Send + 'static> LocalTaskGroup<T> {
         })
     }
 
-    async fn join_all(&mut self) -> Vec<TaskCompletion<T>> {
+    async fn join_all(&mut self) -> Vec<TaskCompletion<Result<(), String>>> {
         let mut completions = Vec::with_capacity(self.tasks.len());
         while let Some(completion) = self.join_next().await {
             completions.push(completion);
@@ -534,21 +588,44 @@ impl<T: Send + 'static> LocalTaskGroup<T> {
 
     fn abort_all(&self) {
         for task in &self.tasks {
-            task.handle.abort();
+            task.task.abort();
         }
     }
 
-    async fn abort_and_join(&mut self) -> Vec<TaskCompletion<T>> {
+    async fn abort_and_join(&mut self) -> Vec<TaskCompletion<Result<(), String>>> {
         self.abort_all();
         self.join_all().await
     }
 }
 
-impl<T> Drop for LocalTaskGroup<T> {
-    fn drop(&mut self) {
-        for task in &self.tasks {
-            task.handle.abort();
+enum DirectTask {
+    Unit(JoinHandle<()>),
+    Result(JoinHandle<Result<(), String>>),
+}
+
+impl DirectTask {
+    fn abort(&self) {
+        match self {
+            Self::Unit(handle) => handle.abort(),
+            Self::Result(handle) => handle.abort(),
         }
+    }
+}
+
+impl Drop for DirectTask {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+
+struct NamedDirectTask {
+    name: String,
+    task: DirectTask,
+}
+
+impl Drop for LocalTaskGroup {
+    fn drop(&mut self) {
+        self.abort_all();
     }
 }
 
@@ -571,6 +648,9 @@ pub(crate) enum SupervisorError {
         source: JoinError,
     },
 
+    #[error("application task {task:?} returned an error: {error}")]
+    TaskReturnedError { task: String, error: String },
+
     #[error("task {task:?} in group {group:?} failed: {source}")]
     GroupTaskFailed {
         group: String,
@@ -589,9 +669,14 @@ pub(crate) enum SupervisorError {
     FinalizersFailed { failures: String },
 }
 
-struct OwnedTaskCompletion {
+enum OwnedTaskCompletion {
+    Direct(TaskCompletion<Result<(), String>>),
+    Child(TaskCompletion<()>),
+}
+
+struct OwnedTask {
     group: Option<String>,
-    completion: TaskCompletion<()>,
+    completion: OwnedTaskCompletion,
 }
 
 struct NamedFinalizer {
@@ -607,14 +692,14 @@ enum ShutdownRequest {
 enum StopReason {
     Shutdown(ShutdownRequest),
     Lifecycle(LifecycleState),
-    DirectTask(TaskCompletion),
+    DirectTask(TaskCompletion<Result<(), String>>),
 }
 
 /// Top-level owner for all long-running application tasks, globally registered
 /// descendants, and the finalizer phase.
 pub(crate) struct TaskSupervisor {
     lifecycle: Lifecycle,
-    tasks: LocalTaskGroup<()>,
+    tasks: LocalTaskGroup,
     finalizers: Vec<NamedFinalizer>,
     drain_timeout: Duration,
 }
@@ -638,7 +723,20 @@ impl TaskSupervisor {
         self.tasks.spawn(name, future);
     }
 
-    /// Adopt a pre-spawned top-level application task.
+    /// Spawn and register a result-bearing top-level application task.
+    /// `Err` is retained as a task failure during both initial supervision and
+    /// the graceful drain; it is never flattened into an ordinary clean exit.
+    pub(crate) fn spawn_result<F, E>(&mut self, name: impl Into<String>, future: F)
+    where
+        F: Future<Output = Result<(), E>> + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
+    {
+        self.assert_accepting_work();
+        self.tasks.spawn_result(name, future);
+    }
+
+    /// Adopt a pre-spawned top-level application task without wrapping its
+    /// handle in a detachable second task.
     pub(crate) fn adopt(&mut self, name: impl Into<String>, handle: JoinHandle<()>) {
         self.assert_accepting_work();
         self.tasks.adopt(name, handle);
@@ -691,21 +789,33 @@ impl TaskSupervisor {
             }
             StopReason::DirectTask(completion) => {
                 self.lifecycle.request_fault();
-                Some(completion_error(None, completion))
+                Some(direct_stop_error(completion))
             }
         };
 
-        self.request_child_cancellation().await;
-
-        let drain = tokio::time::timeout(self.drain_timeout, self.join_owned_work()).await;
+        let drain = tokio::time::timeout(self.drain_timeout, async {
+            // Cancellation registration is part of the same five-second
+            // cooperative window as joining. Slow group registration must not
+            // extend that window before work is even asked to stop.
+            self.request_child_cancellation().await;
+            self.join_owned_work().await
+        })
+        .await;
         match drain {
             Ok(completions) => {
                 for owned in completions {
-                    if !owned.completion.is_success() {
+                    let failure = match owned.completion {
+                        OwnedTaskCompletion::Direct(completion) => {
+                            direct_completion_error(completion)
+                        }
+                        OwnedTaskCompletion::Child(completion) => {
+                            child_completion_error(owned.group.as_deref(), completion)
+                        }
+                    };
+                    if let Some(failure) = failure {
                         self.lifecycle.request_fault();
                         if error.is_none() {
-                            error =
-                                Some(completion_error(owned.group.as_deref(), owned.completion));
+                            error = Some(failure);
                         }
                     }
                 }
@@ -782,7 +892,15 @@ impl TaskSupervisor {
         tokio::select! {
             biased;
             completion = self.tasks.join_next() => {
-                StopReason::DirectTask(completion.expect("non-empty task group must complete"))
+                let completion = completion.expect("non-empty task group must complete");
+                if completion.is_clean() && self.lifecycle.is_cancelled() {
+                    // Lifecycle state is latched before its cancellation token,
+                    // so a token-driven task return is expected even when the
+                    // supervisor observes both futures ready together.
+                    StopReason::Lifecycle(self.lifecycle.state())
+                } else {
+                    StopReason::DirectTask(completion)
+                }
             }
             state = self.lifecycle.wait_for_cancellation() => {
                 StopReason::Lifecycle(state)
@@ -801,25 +919,25 @@ impl TaskSupervisor {
         self.lifecycle.child_tasks.request_cancellation().await;
     }
 
-    async fn join_owned_work(&mut self) -> Vec<OwnedTaskCompletion> {
+    async fn join_owned_work(&mut self) -> Vec<OwnedTask> {
         let mut completions = self
             .tasks
             .join_all()
             .await
             .into_iter()
-            .map(|completion| OwnedTaskCompletion {
+            .map(|completion| OwnedTask {
                 group: None,
-                completion,
+                completion: OwnedTaskCompletion::Direct(completion),
             })
             .collect::<Vec<_>>();
 
         completions.extend(self.lifecycle.child_tasks.join_all().await.into_iter().map(
-            |completion| OwnedTaskCompletion {
+            |completion| OwnedTask {
                 group: Some(completion.group),
-                completion: TaskCompletion {
+                completion: OwnedTaskCompletion::Child(TaskCompletion {
                     name: completion.task,
                     result: completion.result,
-                },
+                }),
             },
         ));
         completions
@@ -848,18 +966,41 @@ impl TaskSupervisor {
     }
 }
 
-fn completion_error(group: Option<&str>, completion: TaskCompletion<()>) -> SupervisorError {
+fn direct_stop_error(completion: TaskCompletion<Result<(), String>>) -> SupervisorError {
     let task = completion.name().to_owned();
     match completion.into_result() {
-        Ok(()) => SupervisorError::TaskExited { task },
-        Err(source) => match group {
+        Ok(Ok(())) => SupervisorError::TaskExited { task },
+        Ok(Err(error)) => SupervisorError::TaskReturnedError { task, error },
+        Err(source) => SupervisorError::TaskFailed { task, source },
+    }
+}
+
+fn direct_completion_error(
+    completion: TaskCompletion<Result<(), String>>,
+) -> Option<SupervisorError> {
+    let task = completion.name().to_owned();
+    match completion.into_result() {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(SupervisorError::TaskReturnedError { task, error }),
+        Err(source) => Some(SupervisorError::TaskFailed { task, source }),
+    }
+}
+
+fn child_completion_error(
+    group: Option<&str>,
+    completion: TaskCompletion<()>,
+) -> Option<SupervisorError> {
+    let task = completion.name().to_owned();
+    match completion.into_result() {
+        Ok(()) => None,
+        Err(source) => Some(match group {
             Some(group) => SupervisorError::GroupTaskFailed {
                 group: group.to_owned(),
                 task,
                 source,
             },
             None => SupervisorError::TaskFailed { task, source },
-        },
+        }),
     }
 }
 
@@ -920,6 +1061,19 @@ mod tests {
         lifecycle.request_graceful_stop();
 
         assert_eq!(lifecycle.state(), LifecycleState::GracefulStop);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_token_is_cancelled_only_after_state_leaves_running() {
+        let lifecycle = Lifecycle::new();
+        let cancellation = lifecycle.cancellation_token();
+        assert!(!cancellation.is_cancelled());
+        assert_eq!(lifecycle.state(), LifecycleState::Running);
+
+        lifecycle.request_graceful_stop();
+
+        assert_eq!(lifecycle.state(), LifecycleState::GracefulStop);
+        assert!(cancellation.is_cancelled());
     }
 
     #[tokio::test]
@@ -1075,6 +1229,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn token_driven_clean_return_after_lifecycle_stop_is_expected() {
+        let lifecycle = Lifecycle::new();
+        let mut supervisor = TaskSupervisor::new(lifecycle.clone());
+        supervisor.spawn_result("token-driven", {
+            let lifecycle = lifecycle.clone();
+            async move {
+                lifecycle.wait_for_cancellation().await;
+                Ok::<_, std::convert::Infallible>(())
+            }
+        });
+        lifecycle.request_graceful_stop();
+        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        supervisor.run(shutdown_rx).await.unwrap();
+
+        assert_eq!(lifecycle.state(), LifecycleState::Stopped);
+    }
+
+    #[tokio::test]
     async fn direct_task_return_before_stop_is_a_fault() {
         let mut supervisor = TaskSupervisor::new(Lifecycle::new());
         supervisor.spawn("early-return", async {});
@@ -1085,6 +1258,57 @@ mod tests {
         assert!(matches!(
             error,
             SupervisorError::TaskExited { task } if task == "early-return"
+        ));
+    }
+
+    #[tokio::test]
+    async fn result_task_error_before_stop_is_preserved_as_a_fault() {
+        let mut supervisor = TaskSupervisor::new(Lifecycle::new());
+        supervisor.spawn_result("domain-failed", async { Err("domain failure") });
+        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let error = supervisor.run(shutdown_rx).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            SupervisorError::TaskReturnedError { ref task, ref error }
+                if task == "domain-failed" && error == "domain failure"
+        ));
+    }
+
+    #[tokio::test]
+    async fn nested_child_failure_is_reported_by_its_direct_owner() {
+        let lifecycle = Lifecycle::new();
+        let mut supervisor = TaskSupervisor::new(lifecycle.clone());
+        supervisor.spawn_result("child-owner", {
+            let lifecycle = lifecycle.clone();
+            async move {
+                let mut children = TaskGroup::<()>::new(&lifecycle, "owned child");
+                children
+                    .spawn("panicking child", async { panic!("nested failure") })
+                    .await;
+                let completions = children.join_all().await;
+                let child_panicked = completions.into_iter().any(|completion| {
+                    completion
+                        .into_result()
+                        .is_err_and(|source| source.is_panic())
+                });
+                if child_panicked {
+                    Err("owner observed nested child panic")
+                } else {
+                    Ok(())
+                }
+            }
+        });
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        shutdown_tx.send(()).unwrap();
+
+        let error = supervisor.run(shutdown_rx).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            SupervisorError::TaskReturnedError { ref task, ref error }
+                if task == "child-owner" && error == "owner observed nested child panic"
         ));
     }
 
