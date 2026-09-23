@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, CommandId, ExecutionClass};
+use super::{Command, CommandContext, ExecutionClass};
 use crate::twitch::announce;
 
 /// `!v` — report the running build (BUILD_NUM + GIT_SHA) and process uptime.
@@ -24,8 +24,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("version").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "version"
     }
 
     fn name(&self) -> &str {

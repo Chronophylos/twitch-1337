@@ -631,7 +631,7 @@ impl ToolExecutor for V2Executor<'_> {
             return crate::ai::tarot_tool::execute_draw_tarot(call).await;
         }
         if call.name == crate::ai::flight_tool::PLAN_FLIGHT_TOOL_NAME {
-            return crate::ai::flight_tool::execute_plan_flight(call).await;
+            return crate::ai::flight_tool::execute_plan_flight(call, self.cancellation).await;
         }
         if call.name == crate::ai::packages_tool::SEARCH_PACKAGES_TOOL_NAME {
             return crate::ai::packages_tool::execute_search_packages(self.repology, call).await;

@@ -143,13 +143,9 @@ where
         entries: &mut IndexMap<CommandId, CommandEntry<T, L>>,
         command: Arc<dyn Command<T, L>>,
     ) -> Result<(), RegistryBuildError> {
-        let id = command.id();
-
-        // `CommandId`'s constructor establishes this invariant. Rechecking it
-        // here keeps registry construction defensive if the type evolves.
-        if CommandId::new(id.as_str()).is_err() {
-            return Err(RegistryBuildError::InvalidCommandId { id: id.as_str() });
-        }
+        let raw_id = command.id();
+        let id = CommandId::new(raw_id)
+            .map_err(|_| RegistryBuildError::InvalidCommandId { id: raw_id })?;
         if entries.contains_key(&id) {
             return Err(RegistryBuildError::DuplicateCommandId { id });
         }
@@ -245,7 +241,7 @@ mod tests {
     type TestLogin = StaticLoginCredentials;
 
     struct FakeCommand {
-        id: CommandId,
+        id: &'static str,
         name: &'static str,
         execution_policy: ExecutionClass,
         aliases: &'static [&'static str],
@@ -258,7 +254,7 @@ mod tests {
             execution_policy: ExecutionClass,
         ) -> Arc<dyn Command<TestTransport, TestLogin>> {
             Arc::new(Self {
-                id: CommandId::new(id).expect("test command ID should be valid"),
+                id,
                 name,
                 execution_policy,
                 aliases: &[],
@@ -272,7 +268,7 @@ mod tests {
         TestTransport: Transport,
         TestLogin: LoginCredentials,
     {
-        fn id(&self) -> CommandId {
+        fn id(&self) -> &'static str {
             self.id
         }
 
@@ -383,7 +379,7 @@ mod tests {
     #[test]
     fn registry_rejects_invalid_ids_defensively() {
         let invalid = FakeCommand {
-            id: CommandId("Invalid"),
+            id: "Invalid",
             name: "!v",
             execution_policy: ExecutionClass::Inline,
             aliases: &[],
@@ -470,7 +466,7 @@ mod tests {
     #[test]
     fn aliases_share_the_canonical_registry_identity() {
         let ai = Arc::new(FakeCommand {
-            id: CommandId::new("ai").unwrap(),
+            id: "ai",
             name: "!ai",
             execution_policy: ExecutionClass::Background,
             aliases: &["@grok"],

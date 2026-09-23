@@ -13,7 +13,7 @@ use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 
-use super::{Command, CommandContext, CommandId, ExecutionClass};
+use super::{Command, CommandContext, ExecutionClass};
 
 const HAIKU_CONTEXT_MESSAGES: usize = 80;
 const HAIKU_LINE_MAX_CHARS: usize = 80;
@@ -125,8 +125,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("haiku").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "haiku"
     }
 
     fn name(&self) -> &str {
@@ -160,6 +160,7 @@ where
         ctx.cancellation.check()?;
         let Some(history_lines) = self.relevant_history(user, &ctx.privmsg.message_text).await
         else {
+            ctx.cancellation.check()?;
             ctx.sender.reply(&ctx.privmsg, EMPTY_HISTORY_MESSAGE).await;
             return Ok(());
         };
@@ -171,6 +172,7 @@ where
             .resolve_named(&self.settings.load().ai.aurora.profile)
         else {
             error!("Haiku AI skipped, no usable LLM profile");
+            ctx.cancellation.check()?;
             ctx.sender.reply(&ctx.privmsg, LLM_ERROR_MESSAGE).await;
             return Ok(());
         };

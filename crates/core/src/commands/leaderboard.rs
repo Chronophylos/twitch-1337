@@ -6,7 +6,7 @@ use eyre::Result;
 use tokio::sync::RwLock;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, CommandId, ExecutionClass};
+use super::{Command, CommandContext, ExecutionClass};
 pub use crate::twitch::handlers::tracker_1337::PersonalBest;
 
 pub struct LeaderboardCommand {
@@ -25,8 +25,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("leaderboard").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "leaderboard"
     }
 
     fn name(&self) -> &str {

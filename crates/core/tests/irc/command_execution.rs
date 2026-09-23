@@ -11,7 +11,7 @@ use twitch_irc::login::StaticLoginCredentials;
 use common::fake_transport::FakeTransport;
 use common::{TestBot, TestBotBuilder};
 
-use twitch_1337::commands::{Command, CommandContext, CommandId, CommandRegistry, ExecutionClass};
+use twitch_1337::commands::{Command, CommandContext, CommandRegistry, ExecutionClass};
 
 type TestRegistry = CommandRegistry<FakeTransport, StaticLoginCredentials>;
 type TestCommand = dyn Command<FakeTransport, StaticLoginCredentials>;
@@ -50,7 +50,7 @@ impl Action {
 }
 
 struct FakeCommand {
-    id: CommandId,
+    id: &'static str,
     name: &'static str,
     aliases: &'static [&'static str],
     policy: ExecutionClass,
@@ -78,7 +78,7 @@ impl FakeCommand {
         action: Action,
     ) -> Arc<TestCommand> {
         Arc::new(Self {
-            id: CommandId::new(id).expect("fake command ID"),
+            id,
             name,
             aliases,
             policy,
@@ -90,7 +90,7 @@ impl FakeCommand {
 
 #[async_trait]
 impl Command<FakeTransport, StaticLoginCredentials> for FakeCommand {
-    fn id(&self) -> CommandId {
+    fn id(&self) -> &'static str {
         self.id
     }
 

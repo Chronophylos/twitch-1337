@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, CommandId, ExecutionClass};
+use super::{Command, CommandContext, ExecutionClass};
 use crate::emote_tracker::{
     EMOTE_CMD_USAGE, EMOTE_NOT_FOUND, EmoteQueryParse, EmoteTrackerHandle, format_emote_chat_reply,
     parse_emote_query,
@@ -26,8 +26,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("emote").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "emote"
     }
 
     fn name(&self) -> &str {

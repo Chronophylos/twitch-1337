@@ -6,7 +6,7 @@ use eyre::Result;
 use tokio::sync::RwLock;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, CommandId, ExecutionClass};
+use super::{Command, CommandContext, ExecutionClass};
 use crate::twitch::handlers::tracker_1337::{PersonalWorst, format_remaining};
 
 pub struct HallOfShameCommand {
@@ -25,8 +25,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("hall_of_shame").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "hall_of_shame"
     }
 
     fn name(&self) -> &str {

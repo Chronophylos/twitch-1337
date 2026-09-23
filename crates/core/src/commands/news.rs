@@ -16,7 +16,7 @@ use crate::settings::SettingsHandle;
 use crate::twitch::whisper::{WHISPER_MAX_CHARS, WhisperSender};
 use crate::util::truncate_response;
 
-use super::{Command, CommandContext, CommandId, ExecutionClass};
+use super::{Command, CommandContext, ExecutionClass};
 
 const NEWS_PREFIX: &str = "ICYMI:";
 const NEWS_SYSTEM_PROMPT: &str = "Du fasst Twitch-Chat-Verläufe hilfreich zusammen. Antworte auf Deutsch, erfinde keine Details und konzentriere dich auf Themen, Highlights und wichtige Antworten. Beginne die Antwort mit \"ICYMI:\". Wenn du mehrere Themen auflistest, trenne sie mit \" | \". Bleibe kompakt, aber du musst dich nicht auf eine einzelne Twitch-Chatnachricht beschränken.";
@@ -169,6 +169,7 @@ impl NewsCommand {
             );
         }
 
+        ctx.cancellation.check()?;
         ctx.sender.reply(&ctx.privmsg, response).await;
         Ok(response.to_string())
     }
@@ -194,10 +195,10 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
+    fn id(&self) -> &'static str {
         match self.mode {
-            NewsMode::News => CommandId::new("news").expect("command ID is valid"),
-            NewsMode::Tldr => CommandId::new("tldr").expect("command ID is valid"),
+            NewsMode::News => "news",
+            NewsMode::Tldr => "tldr",
         }
     }
 
@@ -232,6 +233,7 @@ where
         ctx.cancellation.check()?;
         let Some(history_lines) = self.relevant_history(user, &ctx.privmsg.message_text).await
         else {
+            ctx.cancellation.check()?;
             ctx.sender
                 .reply(&ctx.privmsg, self.mode.empty_message())
                 .await;
@@ -239,6 +241,7 @@ where
         };
 
         if history_lines.is_empty() {
+            ctx.cancellation.check()?;
             ctx.sender
                 .reply(
                     &ctx.privmsg,
@@ -259,6 +262,7 @@ where
             .resolve_named(&self.settings.load().ai.aurora.profile)
         else {
             error!("News AI skipped, no usable LLM profile");
+            ctx.cancellation.check()?;
             ctx.sender
                 .reply(&ctx.privmsg, "Da ist was schiefgelaufen FDM")
                 .await;

@@ -17,7 +17,7 @@ fn doener_cooldown_duration(s: &Settings) -> Duration {
     Duration::from_secs(s.cooldowns.doener)
 }
 
-use super::{Command, CommandContext, CommandId, ExecutionClass};
+use super::{Command, CommandContext, ExecutionClass};
 
 fn parse_euro_amount(raw: &str) -> Option<f64> {
     let mut t = raw.trim();
@@ -278,8 +278,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("doener").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "doener"
     }
 
     fn name(&self) -> &str {
@@ -319,6 +319,7 @@ where
         self.cooldown.record(user).await;
 
         if ctx.args.is_empty() {
+            ctx.cancellation.check()?;
             ctx.sender
                 .reply(
                     &ctx.privmsg,

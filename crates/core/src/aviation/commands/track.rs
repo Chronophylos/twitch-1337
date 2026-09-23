@@ -5,7 +5,7 @@ use tracing::error;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::{FlightIdentifier, TrackerCommand};
-use crate::commands::{Command, CommandContext, CommandId, ExecutionClass};
+use crate::commands::{Command, CommandContext, ExecutionClass};
 
 pub struct TrackCommand {
     tracker_tx: mpsc::Sender<TrackerCommand>,
@@ -23,8 +23,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("track").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "track"
     }
 
     fn name(&self) -> &str {

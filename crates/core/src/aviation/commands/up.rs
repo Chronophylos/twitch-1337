@@ -7,7 +7,7 @@ use eyre::{Result, WrapErr as _};
 use tracing::{debug, error, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
-use crate::commands::CommandCancellation;
+use crate::commands::{CommandCancellation, CommandTaskGroup};
 use crate::cooldown::format_cooldown_remaining;
 use crate::twitch::ChatSender;
 
@@ -160,8 +160,12 @@ where
             return Ok(Vec::new());
         }
 
-        // Fetch routes concurrently
-        let mut join_set = tokio::task::JoinSet::new();
+        // Fetch routes concurrently through the command task group. A child
+        // panic/cleanup failure is surfaced to the command and also escalates
+        // through the manager's group event.
+        let group = CommandTaskGroup::current()
+            .ok_or_else(|| eyre::eyre!("!up has no active command task group"))?;
+        let mut receivers = Vec::with_capacity(candidates.len());
         for (id, callsign, ac, distance_nm) in &candidates {
             let av_client = aviation_client.clone();
             let id_owned = id.clone();
@@ -186,7 +190,7 @@ where
                 "NW" => "↖️",
                 _ => "?",
             };
-            join_set.spawn(async move {
+            let receiver = group.spawn_child(async move {
                 if route_cancellation.is_cancelled() {
                     return (id_owned, icao_type, alt, None, dist, direction);
                 }
@@ -212,14 +216,17 @@ where
                     None => None,
                 };
                 (id_owned, icao_type, alt, route, dist, direction)
-            });
+            })?;
+            receivers.push(receiver);
         }
 
-        let mut results = Vec::new();
-        while let Some(res) = join_set.join_next().await {
-            if let Ok(entry) = res {
-                results.push(entry);
-            }
+        let mut results = Vec::with_capacity(receivers.len());
+        for receiver in receivers {
+            results.push(
+                receiver
+                    .await
+                    .map_err(|_| eyre::eyre!("!up route child task ended unexpectedly"))?,
+            );
         }
 
         results.sort_by(|a, b| a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal));

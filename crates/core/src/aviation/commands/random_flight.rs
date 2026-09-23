@@ -6,7 +6,7 @@ use tracing::{instrument, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
 use crate::commands::{
-    Command, CommandCancellation, CommandContext, CommandId, CommandTaskGroup, ExecutionClass,
+    Command, CommandCancellation, CommandContext, CommandTaskGroup, ExecutionClass,
 };
 use crate::twitch::ChatSender;
 use crate::util::parse_flight_duration;
@@ -19,8 +19,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("random_flight").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "random_flight"
     }
 
     fn name(&self) -> &str {
@@ -78,34 +78,21 @@ where
         return Ok(());
     };
 
-    // Can take many retries internally. The blocking handle is owned by the
-    // manager's task group, so aborting the command parent cannot detach it.
-    let generated = if let Some(group) = CommandTaskGroup::current() {
-        group
-            .spawn_blocking(move || {
-                random_flight::generate_flight_plan(&random_flight::FlightRequest {
-                    aircraft,
-                    block_time: duration,
-                    departure: None,
-                    direction: None,
-                })
-            })
-            .await
-            .map_err(eyre::Report::new)
-    } else {
-        // The pre-manager inline dispatcher has no task-group scope yet. Keep
-        // that path functional until the ingress split installs the manager.
-        tokio::task::spawn_blocking(move || {
+    // Can take many retries internally. Command execution always runs inside
+    // the active manager task group, which owns and joins this blocking child.
+    let group = CommandTaskGroup::current()
+        .ok_or_else(|| eyre::eyre!("flight command has no active command task group"))?;
+    let generated = group
+        .spawn_blocking(move || {
             random_flight::generate_flight_plan(&random_flight::FlightRequest {
                 aircraft,
                 block_time: duration,
                 departure: None,
                 direction: None,
             })
-        })
+        })?
         .await
-        .map_err(|error| eyre::Report::new(error))
-    };
+        .map_err(eyre::Report::new);
     let result = generated.wrap_err("Flight plan generation task ended unexpectedly")?;
     cancellation.check()?;
 

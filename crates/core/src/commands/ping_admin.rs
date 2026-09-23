@@ -6,8 +6,7 @@ use crate::ping::PingHandle;
 use crate::settings::SettingsHandle;
 
 use super::{
-    ADMIN_DENIED_MSG, Command, CommandContext, CommandId, ExecutionClass, is_admin,
-    normalize_username,
+    ADMIN_DENIED_MSG, Command, CommandContext, ExecutionClass, is_admin, normalize_username,
 };
 
 fn normalize_ping_name(name: &str) -> String {
@@ -31,8 +30,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("ping_admin").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "ping_admin"
     }
 
     fn name(&self) -> &str {

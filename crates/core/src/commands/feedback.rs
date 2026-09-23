@@ -8,7 +8,7 @@ use tokio::time::Duration;
 use tracing::{error, info};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, CommandId, ExecutionClass};
+use super::{Command, CommandContext, ExecutionClass};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
 
@@ -38,8 +38,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("feedback").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "feedback"
     }
 
     fn name(&self) -> &str {

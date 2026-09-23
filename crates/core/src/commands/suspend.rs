@@ -28,8 +28,7 @@ use eyre::Result;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use super::{
-    ADMIN_DENIED_MSG, Command, CommandContext, CommandId, ExecutionClass, is_admin,
-    normalize_command_name,
+    ADMIN_DENIED_MSG, Command, CommandContext, ExecutionClass, is_admin, normalize_command_name,
 };
 use crate::cooldown::format_cooldown_remaining;
 use crate::settings::SettingsHandle;
@@ -71,8 +70,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("suspend").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "suspend"
     }
 
     fn name(&self) -> &str {
@@ -159,8 +158,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("unsuspend").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "unsuspend"
     }
 
     fn name(&self) -> &str {

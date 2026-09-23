@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use eyre::Result;
 use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc, oneshot};
-use tokio::task::{JoinError, JoinHandle, JoinSet};
+use tokio::task::{JoinError, JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
@@ -30,6 +30,10 @@ pub const MAX_PENDING_COMMANDS_PER_COMMAND: usize = 8;
 
 /// The only generic command response emitted by the execution layer.
 pub const CAPACITY_REJECTION_MESSAGE: &str = "zu viel zu tun";
+/// Upper bound on a capacity reply attempt before the manager resumes scheduling.
+const CAPACITY_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+/// Maximum number of login/ID pairs retained only for discrepancy tracing.
+const MAX_TRACKED_LOGIN_IDS: usize = 256;
 
 /// Cancellation capability checked at command operation boundaries.
 ///
@@ -223,11 +227,21 @@ where
         CAPACITY_REJECTION_MESSAGE,
         "command invocation rejected for capacity"
     );
-    invocation
-        .context
-        .sender
-        .reply(&invocation.context.privmsg, CAPACITY_REJECTION_MESSAGE)
-        .await;
+    if tokio::time::timeout(
+        CAPACITY_REPLY_TIMEOUT,
+        invocation
+            .context
+            .sender
+            .reply(&invocation.context.privmsg, CAPACITY_REJECTION_MESSAGE),
+    )
+    .await
+    .is_err()
+    {
+        warn!(
+            timeout_ms = CAPACITY_REPLY_TIMEOUT.as_millis(),
+            "capacity rejection reply did not complete before the scheduling bound"
+        );
+    }
 }
 
 /// Non-blocking send side of the bounded ingress-to-manager handoff.
@@ -363,7 +377,7 @@ where
     pending: VecDeque<CommandInvocation<T, L>>,
     users: HashMap<UserKey, UserCounters>,
     active_per_command: HashMap<CommandId, usize>,
-    login_ids: HashMap<String, String>,
+    recent_login_ids: VecDeque<(String, String)>,
     active: usize,
     task_group: CommandTaskGroup,
 }
@@ -392,7 +406,7 @@ where
             pending: VecDeque::with_capacity(limits.max_pending),
             users: HashMap::new(),
             active_per_command: HashMap::new(),
-            login_ids: HashMap::new(),
+            recent_login_ids: VecDeque::new(),
             active: 0,
             task_group: CommandTaskGroup::new(),
         }
@@ -406,32 +420,29 @@ where
 
     /// Run until Candidate 08 cancellation causes ingress to close admission.
     pub async fn run(mut self, cancellation: CommandCancellation) -> Result<()> {
+        if self.task_group.is_closed() {
+            return self.fail(ExecutionError::TaskGroupClosed).await;
+        }
+
         loop {
-            self.refill_pending()?;
+            if let Err(error) = self.refill_pending() {
+                return self.fail(error).await;
+            }
+            if self.task_group.is_closed() {
+                return self.fail(ExecutionError::TaskGroupClosed).await;
+            }
 
             tokio::select! {
-                completion = async {
+                biased;
+                event = async {
                     if self.task_group.is_empty() {
-                        std::future::pending::<Option<Result<TaskCompletion, JoinError>>>().await
+                        std::future::pending::<TaskGroupEvent>().await
                     } else {
-                        self.task_group.join_next().await
+                        self.task_group.join_next_event().await
                     }
                 } => {
-                    match completion {
-                        Some(Ok(completion)) => self.finish(completion)?,
-                        Some(Err(join_error)) => {
-                            if join_error.is_panic() {
-                                error!(error = %join_error, "command task panicked");
-                                return self.fail(ExecutionError::CommandPanicked).await;
-                            }
-                            if cancellation.is_cancelled() {
-                                debug!(error = %join_error, "command task aborted during shutdown");
-                            } else {
-                                error!(error = %join_error, "command task was aborted unexpectedly");
-                                return self.fail(ExecutionError::CommandAborted).await;
-                            }
-                        }
-                        None => {}
+                    if let Err(error) = self.handle_task_group_event(event) {
+                        return self.fail(error).await;
                     }
                 }
                 incoming = self.admission.recv() => {
@@ -443,8 +454,12 @@ where
                         break;
                     };
 
-                    self.admit(invocation).await?;
-                    self.refill_pending()?;
+                    if let Err(error) = self.admit(invocation).await {
+                        return self.fail(error).await;
+                    }
+                    if let Err(error) = self.refill_pending() {
+                        return self.fail(error).await;
+                    }
                 }
             }
         }
@@ -456,42 +471,111 @@ where
         );
         self.discard_pending();
         while !self.task_group.is_empty() {
-            match self.task_group.join_next().await {
-                Some(Ok(completion)) => self.finish(completion)?,
-                Some(Err(join_error)) if join_error.is_cancelled() => {}
-                Some(Err(join_error)) => {
-                    error!(error = %join_error, "command task panicked during shutdown");
-                    return Err(ExecutionError::CommandPanicked.into());
+            match self.task_group.join_next_event().await {
+                TaskGroupEvent::Command(Some(Ok(completion))) => {
+                    if let Err(error) = self.finish(completion) {
+                        return self.fail(error).await;
+                    }
                 }
-                None => break,
+                TaskGroupEvent::Command(Some(Err(join_error))) => {
+                    error!(error = %join_error, "command task panicked during shutdown");
+                    return self.fail(ExecutionError::CommandPanicked).await;
+                }
+                TaskGroupEvent::Command(None) => {}
+                TaskGroupEvent::Blocking(result) => {
+                    if let Err(join_error) = result {
+                        let error = if join_error.is_panic() {
+                            ExecutionError::BlockingChildPanicked
+                        } else {
+                            ExecutionError::TaskGroupCleanupFailed
+                        };
+                        return self.fail(error).await;
+                    }
+                }
+                TaskGroupEvent::Child(result) => {
+                    if let Err(join_error) = result {
+                        let error = if join_error.is_panic() {
+                            ExecutionError::ApplicationChildPanicked
+                        } else {
+                            ExecutionError::TaskGroupCleanupFailed
+                        };
+                        return self.fail(error).await;
+                    }
+                }
+                TaskGroupEvent::Closed => {
+                    return self.fail(ExecutionError::TaskGroupClosed).await;
+                }
             }
         }
-        self.task_group.join_all().await?;
+        if let Err(group_error) = self.task_group.join_all().await {
+            return self.fail(group_error.into()).await;
+        }
         info!("command execution manager drained");
         Ok(())
     }
 
-    async fn fail(&self, error: ExecutionError) -> Result<()> {
+    fn handle_task_group_event(&mut self, event: TaskGroupEvent) -> Result<(), ExecutionError> {
+        match event {
+            TaskGroupEvent::Command(Some(Ok(completion))) => self.finish(completion),
+            TaskGroupEvent::Command(Some(Err(join_error))) if join_error.is_panic() => {
+                error!(error = %join_error, "command task panicked");
+                Err(ExecutionError::CommandPanicked)
+            }
+            TaskGroupEvent::Command(Some(Err(join_error))) => {
+                error!(error = %join_error, "command task was aborted unexpectedly");
+                Err(ExecutionError::CommandAborted)
+            }
+            TaskGroupEvent::Command(None) => Ok(()),
+            TaskGroupEvent::Blocking(Err(join_error)) if join_error.is_panic() => {
+                error!(error = %join_error, "application-owned blocking command child panicked");
+                Err(ExecutionError::BlockingChildPanicked)
+            }
+            TaskGroupEvent::Blocking(Err(join_error)) => {
+                error!(error = %join_error, "application-owned blocking command child failed");
+                Err(ExecutionError::TaskGroupCleanupFailed)
+            }
+            TaskGroupEvent::Blocking(Ok(())) => Ok(()),
+            TaskGroupEvent::Child(Err(join_error)) if join_error.is_panic() => {
+                error!(error = %join_error, "application-owned command child panicked");
+                Err(ExecutionError::ApplicationChildPanicked)
+            }
+            TaskGroupEvent::Child(Err(join_error)) => {
+                error!(error = %join_error, "application-owned command child failed");
+                Err(ExecutionError::TaskGroupCleanupFailed)
+            }
+            TaskGroupEvent::Child(Ok(())) => Ok(()),
+            TaskGroupEvent::Closed => Err(ExecutionError::TaskGroupClosed),
+        }
+    }
+
+    /// The single invariant/teardown cleanup path. Pending work is discarded,
+    /// task admission is closed, and all command/application-owned children are
+    /// aborted and joined before the manager returns an error.
+    async fn fail(&mut self, error: ExecutionError) -> Result<()> {
+        error!(error = %error, "command execution manager failed");
+        self.task_group.close();
+        self.discard_pending();
         if let Err(group_error) = self.task_group.abort_and_join().await {
-            error!(error = %group_error, "command task group failed while handling manager error");
+            error!(error = %group_error, "command task group cleanup failed");
+            return Err(ExecutionError::TaskGroup(group_error).into());
         }
         Err(error.into())
     }
 
-    async fn admit(&mut self, invocation: CommandInvocation<T, L>) -> Result<()> {
+    async fn admit(&mut self, invocation: CommandInvocation<T, L>) -> Result<(), ExecutionError> {
         let entry = self
             .registry
             .get(&invocation.command_id)
             .ok_or(ExecutionError::UnknownCommandId(invocation.command_id))?;
         if entry.execution_policy() != ExecutionClass::Background {
-            return Err(ExecutionError::InlineCommandAdmitted(invocation.command_id).into());
+            return Err(ExecutionError::InlineCommandAdmitted(invocation.command_id));
         }
         let command = entry.command().clone();
 
         if self.can_start(&invocation) {
             self.record_identity(&invocation.context);
             self.trace_accepted(&invocation);
-            self.start(command, invocation);
+            self.start(command, invocation, false)?;
             return Ok(());
         }
 
@@ -522,11 +606,7 @@ where
                 reason = reason.as_str(),
                 "command invocation rejected for capacity"
             );
-            invocation
-                .context
-                .sender
-                .reply(&invocation.context.privmsg, CAPACITY_REJECTION_MESSAGE)
-                .await;
+            reject_capacity(&invocation, reason).await;
             return Ok(());
         }
 
@@ -551,7 +631,7 @@ where
         );
     }
 
-    fn refill_pending(&mut self) -> Result<()> {
+    fn refill_pending(&mut self) -> Result<(), ExecutionError> {
         while self.active < self.limits.max_active {
             let Some(invocation) = self.pending.front() else {
                 break;
@@ -560,21 +640,36 @@ where
                 break;
             }
 
-            let invocation = self.pending.pop_front().expect("front was present");
+            // Resolve before removing the accepted pending invocation. A lookup
+            // failure must leave queue/counter ownership intact for cleanup.
             let entry = self
                 .registry
                 .get(&invocation.command_id)
                 .ok_or(ExecutionError::UnknownCommandId(invocation.command_id))?;
+            if entry.execution_policy() != ExecutionClass::Background {
+                return Err(ExecutionError::InlineCommandAdmitted(invocation.command_id));
+            }
             let command = entry.command().clone();
-            self.start(command, invocation);
+            let invocation = self
+                .pending
+                .pop_front()
+                .expect("front was present after capacity checks");
+            self.start(command, invocation, true)?;
         }
         Ok(())
     }
 
-    fn start(&mut self, command: Arc<dyn Command<T, L>>, invocation: CommandInvocation<T, L>) {
+    fn start(
+        &mut self,
+        command: Arc<dyn Command<T, L>>,
+        invocation: CommandInvocation<T, L>,
+        was_pending: bool,
+    ) -> Result<(), ExecutionError> {
         let command_id = invocation.command_id;
         let user_key = invocation.context.user_key.clone();
-        self.decrement_pending(&command_id, &user_key);
+        if was_pending {
+            self.decrement_pending(&command_id, &user_key);
+        }
         self.increment_active(&command_id, &user_key);
         debug!(
             command_id = %command_id,
@@ -587,10 +682,14 @@ where
             per_user_active = self.per_user_active(&user_key),
             "command invocation started"
         );
-        self.task_group.spawn_command(command, invocation);
+        if let Err(error) = self.task_group.spawn_command(command, invocation) {
+            self.decrement_active(&command_id, &user_key);
+            return Err(error.into());
+        }
+        Ok(())
     }
 
-    fn finish(&mut self, completion: TaskCompletion) -> Result<()> {
+    fn finish(&mut self, completion: TaskCompletion) -> Result<(), ExecutionError> {
         let TaskCompletion {
             command_id,
             user_key,
@@ -669,11 +768,14 @@ where
     }
 
     fn decrement_active(&mut self, id: &CommandId, key: &UserKey) {
-        self.active = self.active.saturating_sub(1);
+        self.active = self
+            .active
+            .checked_sub(1)
+            .expect("global active command counter released below zero");
         let remove_command = if let Some(count) = self.active_per_command.get_mut(id) {
-            *count = count.checked_sub(1).unwrap_or_else(|| {
-                panic!("active command counter released below zero");
-            });
+            *count = count
+                .checked_sub(1)
+                .expect("active command counter released below zero");
             *count == 0
         } else {
             panic!("active command counter is missing")
@@ -682,10 +784,13 @@ where
             self.active_per_command.remove(id);
         }
         let remove_user = if let Some(counts) = self.users.get_mut(key) {
-            counts.active = counts.active.saturating_sub(1);
+            counts.active = counts
+                .active
+                .checked_sub(1)
+                .expect("per-user active command counter released below zero");
             counts.active == 0 && counts.pending == 0
         } else {
-            false
+            panic!("per-user active command counter is missing")
         };
         if remove_user {
             self.users.remove(key);
@@ -708,10 +813,13 @@ where
 
     fn decrement_pending(&mut self, _id: &CommandId, key: &UserKey) {
         let remove_user = if let Some(counts) = self.users.get_mut(key) {
-            counts.pending = counts.pending.saturating_sub(1);
+            counts.pending = counts
+                .pending
+                .checked_sub(1)
+                .expect("per-user pending command counter released below zero");
             counts.active == 0 && counts.pending == 0
         } else {
-            false
+            panic!("per-user pending command counter is missing")
         };
         if remove_user {
             self.users.remove(key);
@@ -727,17 +835,25 @@ where
         if login.is_empty() {
             return;
         }
-        if let Some(previous) = self.login_ids.get(&login)
-            && previous != id
+        if let Some((_, previous)) = self
+            .recent_login_ids
+            .iter()
+            .find(|(known_login, _)| known_login == &login)
         {
-            warn!(
-                login,
-                previous_user_id = previous,
-                user_id = id,
-                "Twitch login observed with multiple user IDs; using the ID as the stable key"
-            );
+            if previous != id {
+                warn!(
+                    login,
+                    previous_user_id = previous,
+                    user_id = id,
+                    "Twitch login observed with multiple user IDs; using the ID as the stable key"
+                );
+            }
+            return;
         }
-        self.login_ids.insert(login, id.to_owned());
+        if self.recent_login_ids.len() == MAX_TRACKED_LOGIN_IDS {
+            self.recent_login_ids.pop_front();
+        }
+        self.recent_login_ids.push_back((login, id.to_owned()));
     }
 }
 
@@ -747,12 +863,25 @@ pub struct CommandTaskGroup {
 }
 
 struct CommandTaskGroupInner {
-    active: Mutex<JoinSet<TaskCompletion>>,
+    tasks: Mutex<CommandTasks>,
     completed: Semaphore,
-    blocking: Mutex<Vec<JoinHandle<()>>>,
+}
+
+struct CommandTasks {
+    active: JoinSet<TaskCompletion>,
+    blocking: JoinSet<()>,
+    children: JoinSet<()>,
+    closed: bool,
 }
 
 struct CompletionSignal(Arc<CommandTaskGroupInner>);
+
+enum TaskGroupEvent {
+    Command(Option<Result<TaskCompletion, JoinError>>),
+    Blocking(Result<(), JoinError>),
+    Child(Result<(), JoinError>),
+    Closed,
+}
 
 impl Drop for CompletionSignal {
     fn drop(&mut self) {
@@ -764,9 +893,13 @@ impl Default for CommandTaskGroup {
     fn default() -> Self {
         Self {
             inner: Arc::new(CommandTaskGroupInner {
-                active: Mutex::new(JoinSet::new()),
+                tasks: Mutex::new(CommandTasks {
+                    active: JoinSet::new(),
+                    blocking: JoinSet::new(),
+                    children: JoinSet::new(),
+                    closed: false,
+                }),
                 completed: Semaphore::new(0),
-                blocking: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -777,6 +910,8 @@ impl std::fmt::Debug for CommandTaskGroup {
         f.debug_struct("CommandTaskGroup")
             .field("active", &self.active_len())
             .field("blocking", &self.blocking_len())
+            .field("children", &self.child_len())
+            .field("closed", &self.is_closed())
             .finish()
     }
 }
@@ -786,19 +921,20 @@ impl CommandTaskGroup {
         Self::default()
     }
 
-    fn spawn_command<T, L>(
+    pub fn spawn_command<T, L>(
         &self,
         command: Arc<dyn Command<T, L>>,
         invocation: CommandInvocation<T, L>,
-    ) where
+    ) -> std::result::Result<(), TaskGroupError>
+    where
         T: Transport + Send + Sync + 'static,
         L: LoginCredentials + Send + Sync + 'static,
     {
         let command_id = invocation.command_id;
         let user_key = invocation.context.user_key.clone();
-        let completion_signal = CompletionSignal(self.inner.clone());
+        let completion_signal = self.inner.clone();
         let task = async move {
-            let _completion_signal = completion_signal;
+            let _completion_signal = CompletionSignal(completion_signal);
             let result = match command.execute(invocation.context).await {
                 Ok(()) => TaskResult::Succeeded,
                 Err(error) if error.downcast_ref::<CommandCancelled>().is_some() => {
@@ -813,45 +949,119 @@ impl CommandTaskGroup {
             }
         };
         let task = CURRENT_COMMAND_TASK_GROUP.scope(self.clone(), task);
-        lock(&self.inner.active).spawn(task);
+        let mut tasks = lock(&self.inner.tasks);
+        if tasks.closed {
+            return Err(TaskGroupError::Closed);
+        }
+        tasks.active.spawn(task);
+        Ok(())
     }
 
     /// Register blocking work with this group and return its result receiver.
     /// Dropping or aborting the command parent does not detach the blocking
     /// handle: `join_all` / `abort_and_join` still own and join it.
-    pub(crate) fn spawn_blocking<F, R>(&self, task: F) -> oneshot::Receiver<R>
+    pub(crate) fn spawn_blocking<F, R>(
+        &self,
+        task: F,
+    ) -> std::result::Result<oneshot::Receiver<R>, TaskGroupError>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
         let (sender, receiver) = oneshot::channel();
-        let handle = tokio::task::spawn_blocking(move || {
+        let mut tasks = lock(&self.inner.tasks);
+        if tasks.closed {
+            return Err(TaskGroupError::Closed);
+        }
+        let completion_signal = CompletionSignal(self.inner.clone());
+        tasks.blocking.spawn_blocking(move || {
+            let _completion_signal = completion_signal;
             let _ = sender.send(task());
         });
-        lock(&self.inner.blocking).push(handle);
-        receiver
+        Ok(receiver)
+    }
+
+    /// Register an asynchronous application-owned child of a command.
+    pub(crate) fn spawn_child<F, R>(
+        &self,
+        task: F,
+    ) -> std::result::Result<oneshot::Receiver<R>, TaskGroupError>
+    where
+        F: std::future::Future<Output = R> + Send + 'static,
+        R: Send + 'static,
+    {
+        let (sender, receiver) = oneshot::channel();
+        let mut tasks = lock(&self.inner.tasks);
+        if tasks.closed {
+            return Err(TaskGroupError::Closed);
+        }
+        let completion_signal = CompletionSignal(self.inner.clone());
+        tasks.children.spawn(async move {
+            let _completion_signal = completion_signal;
+            let _ = sender.send(task.await);
+        });
+        Ok(receiver)
     }
 
     pub(crate) fn current() -> Option<Self> {
         CURRENT_COMMAND_TASK_GROUP.try_with(Clone::clone).ok()
     }
 
+    #[cfg(test)]
+    pub(crate) fn scope<F>(&self, future: F) -> impl std::future::Future<Output = F::Output>
+    where
+        F: std::future::Future,
+    {
+        CURRENT_COMMAND_TASK_GROUP.scope(self.clone(), future)
+    }
+
+    /// Permanently close admission to command and application-owned child work.
+    pub fn close(&self) {
+        let mut tasks = lock(&self.inner.tasks);
+        if !tasks.closed {
+            tasks.closed = true;
+            self.inner.completed.add_permits(1);
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        lock(&self.inner.tasks).closed
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.active_len() == 0 && self.blocking_len() == 0
+        let tasks = lock(&self.inner.tasks);
+        tasks.active.is_empty() && tasks.blocking.is_empty() && tasks.children.is_empty()
     }
 
     pub fn active_len(&self) -> usize {
-        lock(&self.inner.active).len()
+        lock(&self.inner.tasks).active.len()
     }
 
     pub fn blocking_len(&self) -> usize {
-        lock(&self.inner.blocking).len()
+        lock(&self.inner.tasks).blocking.len()
     }
 
-    async fn join_next(&self) -> Option<Result<TaskCompletion, JoinError>> {
+    pub fn child_len(&self) -> usize {
+        lock(&self.inner.tasks).children.len()
+    }
+
+    async fn join_next_event(&self) -> TaskGroupEvent {
         loop {
-            if lock(&self.inner.active).is_empty() {
-                return None;
+            let (empty, closed) = {
+                let tasks = lock(&self.inner.tasks);
+                (
+                    tasks.active.is_empty()
+                        && tasks.blocking.is_empty()
+                        && tasks.children.is_empty(),
+                    tasks.closed,
+                )
+            };
+            if empty {
+                return if closed {
+                    TaskGroupEvent::Closed
+                } else {
+                    std::future::pending().await
+                };
             }
             let permit = self
                 .inner
@@ -859,74 +1069,101 @@ impl CommandTaskGroup {
                 .acquire()
                 .await
                 .expect("command task semaphore is never closed");
-            if let Some(completion) = lock(&self.inner.active).try_join_next() {
-                drop(permit);
-                return Some(completion);
-            }
+            let event = {
+                let mut tasks = lock(&self.inner.tasks);
+                if let Some(result) = tasks.active.try_join_next() {
+                    Some(TaskGroupEvent::Command(Some(result)))
+                } else if let Some(result) = tasks.blocking.try_join_next() {
+                    Some(TaskGroupEvent::Blocking(result))
+                } else {
+                    tasks.children.try_join_next().map(TaskGroupEvent::Child)
+                }
+            };
             drop(permit);
+            if let Some(event) = event {
+                return event;
+            }
         }
     }
 
-    /// Wait for every active command and application-owned blocking child.
+    /// Close admission, then wait for every command and application-owned child.
     pub async fn join_all(&self) -> std::result::Result<(), TaskGroupError> {
-        let mut command_panicked = false;
-        while !lock(&self.inner.active).is_empty() {
-            match self.join_next().await {
-                Some(Ok(_)) => {}
-                Some(Err(error)) if error.is_cancelled() => {}
-                Some(Err(_error)) => command_panicked = true,
-                None => break,
-            }
-        }
-        let blocking_result = self.join_blocking().await;
-        if command_panicked {
-            Err(TaskGroupError::CommandPanicked)
-        } else {
-            blocking_result
-        }
+        let (mut active, mut blocking, mut children) = self.close_and_take();
+        Self::join_active(&mut active, false).await?;
+        Self::join_blocking(&mut blocking).await?;
+        Self::join_children(&mut children, false).await
     }
 
-    /// Abort dynamic command tasks where cancellation is possible, then join
-    /// every task and blocking child. Tokio cannot abort an already-running
-    /// blocking closure, so this method may wait for that computation to finish.
+    /// Close admission, abort dynamic command/application children where
+    /// cancellation is possible, then join every task and blocking child. Tokio
+    /// cannot abort an already-running blocking closure, so this may wait for it.
     pub async fn abort_and_join(&self) -> std::result::Result<(), TaskGroupError> {
-        // Move the set out before awaiting. Holding a std::sync::MutexGuard
-        // across an await would make the manager future non-Send and could
-        // block its concurrent completion poller during deadline teardown.
-        let mut active = {
-            let mut guard = lock(&self.inner.active);
-            std::mem::take(&mut *guard)
-        };
+        let (mut active, mut blocking, mut children) = self.close_and_take();
         active.abort_all();
-        let mut command_panicked = false;
-        while let Some(result) = active.join_next().await {
-            if let Err(error) = result
-                && error.is_panic()
-            {
-                command_panicked = true;
-            }
-        }
-        let blocking_result = self.join_blocking().await;
-        if command_panicked {
-            Err(TaskGroupError::CommandPanicked)
-        } else {
-            blocking_result
-        }
+        children.abort_all();
+        Self::join_active(&mut active, true).await?;
+        Self::join_blocking(&mut blocking).await?;
+        Self::join_children(&mut children, true).await
     }
 
-    async fn join_blocking(&self) -> std::result::Result<(), TaskGroupError> {
-        let handles = std::mem::take(&mut *lock(&self.inner.blocking));
-        let mut blocking_panicked = false;
-        for handle in handles {
-            if handle.await.is_err() {
-                blocking_panicked = true;
+    fn close_and_take(&self) -> (JoinSet<TaskCompletion>, JoinSet<()>, JoinSet<()>) {
+        let mut tasks = lock(&self.inner.tasks);
+        tasks.closed = true;
+        let sets = (
+            std::mem::take(&mut tasks.active),
+            std::mem::take(&mut tasks.blocking),
+            std::mem::take(&mut tasks.children),
+        );
+        drop(tasks);
+        self.inner.completed.add_permits(1);
+        sets
+    }
+
+    async fn join_active(
+        active: &mut JoinSet<TaskCompletion>,
+        cancellation_expected: bool,
+    ) -> std::result::Result<(), TaskGroupError> {
+        while let Some(result) = active.join_next().await {
+            match result {
+                Ok(_) => {}
+                Err(error) if error.is_panic() => {
+                    return Err(TaskGroupError::CommandPanicked);
+                }
+                Err(error) if cancellation_expected && error.is_cancelled() => {}
+                Err(_) => return Err(TaskGroupError::CleanupFailed),
             }
         }
-        if blocking_panicked {
-            Err(TaskGroupError::BlockingChildPanicked)
-        } else {
-            Ok(())
+        Ok(())
+    }
+
+    async fn join_blocking(blocking: &mut JoinSet<()>) -> std::result::Result<(), TaskGroupError> {
+        while let Some(result) = blocking.join_next().await {
+            if let Err(error) = result {
+                return if error.is_panic() {
+                    Err(TaskGroupError::BlockingChildPanicked)
+                } else {
+                    Err(TaskGroupError::CleanupFailed)
+                };
+            }
         }
+        Ok(())
+    }
+
+    async fn join_children(
+        children: &mut JoinSet<()>,
+        cancellation_expected: bool,
+    ) -> std::result::Result<(), TaskGroupError> {
+        while let Some(result) = children.join_next().await {
+            if let Err(error) = result {
+                if error.is_panic() {
+                    return Err(TaskGroupError::ApplicationChildPanicked);
+                }
+                if !(cancellation_expected && error.is_cancelled()) {
+                    return Err(TaskGroupError::CleanupFailed);
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -934,13 +1171,19 @@ tokio::task_local! {
     static CURRENT_COMMAND_TASK_GROUP: CommandTaskGroup;
 }
 
-/// Failure while explicitly joining the command task group.
+/// Failure while spawning into or explicitly joining the command task group.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum TaskGroupError {
+    #[error("the command task group is closed")]
+    Closed,
+    #[error("command task group cleanup failed")]
+    CleanupFailed,
     #[error("a command task panicked")]
     CommandPanicked,
     #[error("an application-owned blocking command child panicked")]
     BlockingChildPanicked,
+    #[error("an application-owned command child panicked")]
+    ApplicationChildPanicked,
 }
 
 /// Manager invariant or teardown failure.
@@ -954,13 +1197,29 @@ pub enum ExecutionError {
     InlineCommandAdmitted(CommandId),
     #[error("a command task panicked")]
     CommandPanicked,
+    #[error("an application-owned blocking command child panicked")]
+    BlockingChildPanicked,
+    #[error("an application-owned command child panicked")]
+    ApplicationChildPanicked,
     #[error("a command task was aborted while execution was running")]
     CommandAborted,
+    #[error("the command task group was closed while the manager was running")]
+    TaskGroupClosed,
+    #[error("the command task group cleanup failed")]
+    TaskGroupCleanupFailed,
+    #[error("command task group failure: {0}")]
+    TaskGroup(TaskGroupError),
 }
 
 impl From<TaskGroupError> for ExecutionError {
-    fn from(_: TaskGroupError) -> Self {
-        Self::CommandPanicked
+    fn from(error: TaskGroupError) -> Self {
+        match error {
+            TaskGroupError::Closed => Self::TaskGroupClosed,
+            TaskGroupError::CleanupFailed => Self::TaskGroupCleanupFailed,
+            TaskGroupError::CommandPanicked => Self::CommandPanicked,
+            TaskGroupError::BlockingChildPanicked => Self::BlockingChildPanicked,
+            TaskGroupError::ApplicationChildPanicked => Self::ApplicationChildPanicked,
+        }
     }
 }
 
@@ -977,6 +1236,7 @@ mod tests {
     use std::fmt;
     use std::io;
     use std::pin::Pin;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::task::{Context as TaskContext, Poll};
 
     use async_trait::async_trait;
@@ -996,9 +1256,16 @@ mod tests {
     type TestLogin = StaticLoginCredentials;
     type TestChat = ChatSender<TestTransport, TestLogin>;
 
+    struct CaptureOutput {
+        id: u64,
+        sender: mpsc::UnboundedSender<String>,
+        flush_gate: Option<Arc<Semaphore>>,
+    }
+
     #[derive(Debug)]
     struct CaptureTransport {
         output: mpsc::UnboundedSender<String>,
+        flush_gate: Option<Arc<Semaphore>>,
     }
 
     #[derive(Debug)]
@@ -1014,6 +1281,7 @@ mod tests {
 
     struct CaptureSink {
         output: mpsc::UnboundedSender<String>,
+        flush_gate: Option<Arc<Semaphore>>,
     }
 
     impl Sink<IRCMessage> for CaptureSink {
@@ -1036,6 +1304,13 @@ mod tests {
             self: Pin<&mut Self>,
             _: &mut TaskContext<'_>,
         ) -> Poll<Result<(), Self::Error>> {
+            if self
+                .flush_gate
+                .as_ref()
+                .is_some_and(|gate| gate.available_permits() == 0)
+            {
+                return Poll::Pending;
+            }
             Poll::Ready(Ok(()))
         }
 
@@ -1056,12 +1331,15 @@ mod tests {
         type Outgoing = CaptureSink;
 
         async fn new() -> Result<Self, Self::ConnectError> {
-            let output = CAPTURE_OUTPUTS
+            let capture = CAPTURE_OUTPUTS
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .pop_front()
                 .ok_or(CaptureConnectError)?;
-            Ok(Self { output })
+            Ok(Self {
+                output: capture.sender,
+                flush_gate: capture.flush_gate,
+            })
         }
 
         fn split(self) -> (Self::Incoming, Self::Outgoing) {
@@ -1069,6 +1347,7 @@ mod tests {
                 futures_util::stream::pending(),
                 CaptureSink {
                     output: self.output,
+                    flush_gate: self.flush_gate,
                 },
             )
         }
@@ -1077,25 +1356,35 @@ mod tests {
     // `Transport::new` has no arguments. Keep one capture sender queued per
     // test and hold TEST_LOCK until the client has consumed it; this makes
     // parallel unit tests independent without sharing an IRC connection.
-    static CAPTURE_OUTPUTS: Mutex<VecDeque<mpsc::UnboundedSender<String>>> =
-        Mutex::new(VecDeque::new());
+    static CAPTURE_OUTPUTS: Mutex<VecDeque<CaptureOutput>> = Mutex::new(VecDeque::new());
+    static NEXT_CAPTURE_ID: AtomicU64 = AtomicU64::new(1);
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct TestSender {
+        id: u64,
         sender: Arc<TestChat>,
         _output: mpsc::UnboundedReceiver<String>,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     fn test_sender() -> TestSender {
+        test_sender_with_flush_gate(None)
+    }
+
+    fn test_sender_with_flush_gate(flush_gate: Option<Arc<Semaphore>>) -> TestSender {
         let lock = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (output_tx, output) = mpsc::unbounded_channel();
+        let id = NEXT_CAPTURE_ID.fetch_add(1, Ordering::Relaxed);
         CAPTURE_OUTPUTS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(output_tx);
+            .push_back(CaptureOutput {
+                id,
+                sender: output_tx,
+                flush_gate,
+            });
         let config = ClientConfig::new_simple(StaticLoginCredentials::new(
             "bot".to_owned(),
             Some("token".to_owned()),
@@ -1103,9 +1392,28 @@ mod tests {
         let (incoming, client) = TwitchIRCClient::<TestTransport, TestLogin>::new(config);
         drop(incoming);
         TestSender {
+            id,
             sender: ChatSender::new(Arc::new(client)),
             _output: output,
             _lock: lock,
+        }
+    }
+
+    impl Drop for TestSender {
+        fn drop(&mut self) {
+            CAPTURE_OUTPUTS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .retain(|capture| capture.id != self.id);
+        }
+    }
+
+    impl TestSender {
+        async fn next_output(&mut self) -> String {
+            timeout(Duration::from_secs(1), self._output.recv())
+                .await
+                .expect("timed out waiting for captured IRC output")
+                .expect("captured IRC output sender closed")
         }
     }
 
@@ -1117,7 +1425,7 @@ mod tests {
     }
 
     struct TestCommand {
-        id: CommandId,
+        id: &'static str,
         name: &'static str,
         policy: ExecutionClass,
         started: Arc<AsyncMutex<Vec<String>>>,
@@ -1137,7 +1445,7 @@ mod tests {
             gate: Option<Arc<Semaphore>>,
         ) -> Arc<dyn Command<TestTransport, TestLogin>> {
             Arc::new(Self {
-                id: CommandId::new(id).unwrap(),
+                id,
                 name,
                 policy: ExecutionClass::Background,
                 started,
@@ -1156,7 +1464,7 @@ mod tests {
             started_notify: Arc<Notify>,
         ) -> Arc<dyn Command<TestTransport, TestLogin>> {
             Arc::new(Self {
-                id: CommandId::new(id).unwrap(),
+                id,
                 name,
                 policy: ExecutionClass::Background,
                 started,
@@ -1175,7 +1483,7 @@ mod tests {
             started_notify: Arc<Notify>,
         ) -> Arc<dyn Command<TestTransport, TestLogin>> {
             Arc::new(Self {
-                id: CommandId::new(id).unwrap(),
+                id,
                 name,
                 policy: ExecutionClass::Background,
                 started,
@@ -1194,7 +1502,7 @@ mod tests {
             started_notify: Arc<Notify>,
         ) -> Arc<dyn Command<TestTransport, TestLogin>> {
             Arc::new(Self {
-                id: CommandId::new(id).unwrap(),
+                id,
                 name,
                 policy: ExecutionClass::Background,
                 started,
@@ -1209,7 +1517,7 @@ mod tests {
 
     #[async_trait]
     impl Command<TestTransport, TestLogin> for TestCommand {
-        fn id(&self) -> CommandId {
+        fn id(&self) -> &'static str {
             self.id
         }
 
@@ -1230,8 +1538,11 @@ mod tests {
             if self.panic {
                 panic!("intentional command panic");
             }
-            if self.observe_cancellation && ctx.cancellation.is_cancelled() {
-                return Err(CommandCancelled.into());
+            if self.observe_cancellation {
+                ctx.cancellation.check()?;
+                ctx.sender
+                    .reply(&ctx.privmsg, "cancelled command must not reply")
+                    .await;
             }
             if self.fail {
                 return Err(eyre::eyre!("intentional command error"));
@@ -1244,7 +1555,7 @@ mod tests {
         commands: Vec<Arc<dyn Command<TestTransport, TestLogin>>>,
     ) -> Arc<CommandRegistry<TestTransport, TestLogin>> {
         let catch_all: Arc<dyn Command<TestTransport, TestLogin>> = Arc::new(TestCommand {
-            id: CommandId::new("ping_trigger").unwrap(),
+            id: "ping_trigger",
             name: "!<ping>",
             policy: ExecutionClass::Inline,
             started: Arc::new(AsyncMutex::new(Vec::new())),
@@ -1258,6 +1569,31 @@ mod tests {
             CommandRegistry::from_commands(commands.into_iter().chain(std::iter::once(catch_all)))
                 .unwrap(),
         )
+    }
+
+    struct BlockingPanicCommand;
+
+    #[async_trait]
+    impl Command<TestTransport, TestLogin> for BlockingPanicCommand {
+        fn id(&self) -> &'static str {
+            "ai"
+        }
+
+        fn name(&self) -> &'static str {
+            "!ai"
+        }
+
+        fn execution_policy(&self) -> ExecutionClass {
+            ExecutionClass::Background
+        }
+
+        async fn execute(&self, _ctx: CommandContext<TestTransport, TestLogin>) -> Result<()> {
+            let group = CommandTaskGroup::current().expect("command task group");
+            group
+                .spawn_blocking(|| panic!("intentional blocking panic"))
+                .unwrap();
+            Ok(())
+        }
     }
 
     fn invocation(
@@ -1297,6 +1633,20 @@ mod tests {
             .expect("command did not start");
     }
 
+    async fn next_command_completion(group: &CommandTaskGroup) -> TaskCompletion {
+        match group.join_next_event().await {
+            TaskGroupEvent::Command(Some(Ok(completion))) => completion,
+            TaskGroupEvent::Command(Some(Err(error))) => panic!("command task failed: {error}"),
+            TaskGroupEvent::Command(None) => panic!("command completion unexpectedly absent"),
+            TaskGroupEvent::Blocking(Ok(())) => panic!("blocking child completed first"),
+            TaskGroupEvent::Child(Ok(())) => panic!("application child completed first"),
+            TaskGroupEvent::Blocking(Err(error)) | TaskGroupEvent::Child(Err(error)) => {
+                panic!("application child failed: {error}")
+            }
+            TaskGroupEvent::Closed => panic!("task group closed while waiting for a command"),
+        }
+    }
+
     #[tokio::test]
     async fn user_key_prefers_twitch_id_and_normalizes_login_fallback() {
         let id_message = privmsg("Alice", "123");
@@ -1324,7 +1674,7 @@ mod tests {
 
     #[tokio::test]
     async fn full_admission_channel_is_rejected_without_blocking() {
-        let test_sender = test_sender();
+        let mut test_sender = test_sender();
         let (sender, _receiver) =
             command_admission_channel_with_capacity::<TestTransport, TestLogin>(1);
         sender
@@ -1340,7 +1690,113 @@ mod tests {
             ))
             .await;
         assert_eq!(result, Err(CommandAdmissionError::Capacity));
+        let line = loop {
+            let line = test_sender.next_output().await;
+            if line.contains(" PRIVMSG #test :") {
+                break line;
+            }
+        };
+        let body = line.rsplit_once(" :").expect("PRIVMSG body").1;
+        assert_eq!(
+            body.strip_prefix(". ").unwrap_or(body),
+            CAPACITY_REJECTION_MESSAGE
+        );
+    }
+
+    #[tokio::test]
+    async fn manager_capacity_reply_is_time_bounded_and_exact() {
+        let flush_gate = Arc::new(Semaphore::new(0));
+        let test_sender = test_sender_with_flush_gate(Some(flush_gate.clone()));
+        let command_gate = Arc::new(Semaphore::new(0));
+        let command = TestCommand::background(
+            "ai",
+            "!ai",
+            Arc::new(AsyncMutex::new(Vec::new())),
+            Arc::new(Notify::new()),
+            Some(command_gate),
+        );
+        let limits = ExecutionLimits {
+            max_active: 1,
+            max_pending: 0,
+            max_active_per_user: 1,
+            max_pending_per_user: 0,
+            max_active_per_command: 1,
+            max_pending_per_command: 0,
+        };
+        let (_sender, mut manager) = make_manager(registry(vec![command]), limits);
+        manager
+            .admit(invocation(
+                test_sender.sender.clone(),
+                "ai",
+                "one",
+                "active",
+            ))
+            .await
+            .unwrap();
+
+        timeout(
+            Duration::from_secs(1),
+            manager.admit(invocation(
+                test_sender.sender.clone(),
+                "ai",
+                "two",
+                "rejected",
+            )),
+        )
+        .await
+        .expect("capacity reply blocked the manager scheduling path")
+        .unwrap();
+
         assert_eq!(CAPACITY_REJECTION_MESSAGE, "zu viel zu tun");
+        flush_gate.add_permits(1);
+        manager.task_group.abort_and_join().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn per_command_pending_limit_is_independent_from_user_limit() {
+        let mut test_sender = test_sender();
+        let command_gate = Arc::new(Semaphore::new(0));
+        let command = TestCommand::background(
+            "ai",
+            "!ai",
+            Arc::new(AsyncMutex::new(Vec::new())),
+            Arc::new(Notify::new()),
+            Some(command_gate),
+        );
+        let limits = ExecutionLimits {
+            max_active: 1,
+            max_pending: 4,
+            max_active_per_user: 3,
+            max_pending_per_user: 3,
+            max_active_per_command: 1,
+            max_pending_per_command: 2,
+        };
+        let (_sender, mut manager) = make_manager(registry(vec![command]), limits);
+        manager
+            .admit(invocation(
+                test_sender.sender.clone(),
+                "ai",
+                "one",
+                "active",
+            ))
+            .await
+            .unwrap();
+        for user in ["two", "three", "four"] {
+            manager
+                .admit(invocation(test_sender.sender.clone(), "ai", user, "queued"))
+                .await
+                .unwrap();
+        }
+        assert_eq!(manager.pending.len(), 2);
+        let line = loop {
+            let line = test_sender.next_output().await;
+            if line.contains(" PRIVMSG #test :") {
+                break line;
+            }
+        };
+        let body = line.rsplit_once(" :").expect("PRIVMSG body").1;
+        assert_eq!(body.strip_prefix(". ").unwrap_or(body), "zu viel zu tun");
+        manager.task_group.abort_and_join().await.unwrap();
     }
 
     #[tokio::test]
@@ -1387,7 +1843,7 @@ mod tests {
 
         for _ in 0..3 {
             gate.add_permits(1);
-            let completion = manager.task_group.join_next().await.unwrap().unwrap();
+            let completion = next_command_completion(&manager.task_group).await;
             manager.finish(completion).unwrap();
             manager.refill_pending().unwrap();
         }
@@ -1493,7 +1949,7 @@ mod tests {
         gate.add_permits(2);
         timeout(Duration::from_secs(1), async {
             while !manager.task_group.is_empty() {
-                let completion = manager.task_group.join_next().await.unwrap().unwrap();
+                let completion = next_command_completion(&manager.task_group).await;
                 manager.finish(completion).unwrap();
                 manager.refill_pending().unwrap();
             }
@@ -1502,6 +1958,88 @@ mod tests {
         .unwrap();
         assert!(manager.users.is_empty());
         assert_eq!(manager.active, 0);
+    }
+
+    #[tokio::test]
+    async fn identity_discrepancy_tracking_is_bounded() {
+        let test_sender = test_sender();
+        let (_sender, mut manager) = make_manager(
+            registry(vec![TestCommand::background(
+                "ai",
+                "!ai",
+                Arc::new(AsyncMutex::new(Vec::new())),
+                Arc::new(Notify::new()),
+                None,
+            )]),
+            ExecutionLimits::default(),
+        );
+        for index in 0..(MAX_TRACKED_LOGIN_IDS * 2) {
+            let invocation = invocation(
+                test_sender.sender.clone(),
+                "ai",
+                &format!("user-{index}"),
+                "identity",
+            );
+            manager.record_identity(&invocation.context);
+        }
+        assert_eq!(manager.recent_login_ids.len(), MAX_TRACKED_LOGIN_IDS);
+    }
+
+    #[tokio::test]
+    async fn duplicate_active_completion_panics_instead_of_saturating() {
+        let test_sender = test_sender();
+        let (_sender, mut manager) = make_manager(
+            registry(vec![TestCommand::background(
+                "ai",
+                "!ai",
+                Arc::new(AsyncMutex::new(Vec::new())),
+                Arc::new(Notify::new()),
+                None,
+            )]),
+            ExecutionLimits::default(),
+        );
+        let invocation = invocation(test_sender.sender.clone(), "ai", "user", "done");
+        let command_id = invocation.command_id;
+        let user_key = invocation.context.user_key.clone();
+        manager.increment_active(&command_id, &user_key);
+        let completion = TaskCompletion {
+            command_id,
+            user_key,
+            result: TaskResult::Succeeded,
+        };
+        manager.finish(completion).unwrap();
+        let duplicate = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = manager.finish(TaskCompletion {
+                command_id: CommandId::new("ai").unwrap(),
+                user_key: UserKey::TwitchId("id-user".to_owned()),
+                result: TaskResult::Succeeded,
+            });
+        }));
+        assert!(duplicate.is_err());
+    }
+
+    #[tokio::test]
+    async fn mismatched_completion_identity_panics_instead_of_saturating() {
+        let (_sender, mut manager) = make_manager(
+            registry(vec![TestCommand::background(
+                "ai",
+                "!ai",
+                Arc::new(AsyncMutex::new(Vec::new())),
+                Arc::new(Notify::new()),
+                None,
+            )]),
+            ExecutionLimits::default(),
+        );
+        let id = CommandId::new("ai").unwrap();
+        manager.increment_active(&id, &UserKey::TwitchId("id-actual".to_owned()));
+        let mismatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = manager.finish(TaskCompletion {
+                command_id: id,
+                user_key: UserKey::TwitchId("id-other".to_owned()),
+                result: TaskResult::Succeeded,
+            });
+        }));
+        assert!(mismatch.is_err());
     }
 
     #[tokio::test]
@@ -1522,7 +2060,7 @@ mod tests {
                 .await
                 .unwrap();
             timeout(Duration::from_secs(1), async {
-                let completion = manager.task_group.join_next().await.unwrap().unwrap();
+                let completion = next_command_completion(&manager.task_group).await;
                 manager.finish(completion).unwrap();
             })
             .await
@@ -1531,7 +2069,7 @@ mod tests {
             assert!(manager.users.is_empty());
         }
 
-        let test_sender = test_sender();
+        let mut test_sender = test_sender();
         let started = Arc::new(AsyncMutex::new(Vec::new()));
         let notify = Arc::new(Notify::new());
         let command = TestCommand::cancelling("ai", "!ai", started, notify);
@@ -1540,10 +2078,14 @@ mod tests {
         let invocation = invocation(test_sender.sender.clone(), "ai", "user", "cancelled");
         invocation.context.cancellation.cancel();
         manager.admit(invocation).await.unwrap();
-        let completion = manager.task_group.join_next().await.unwrap().unwrap();
+        let completion = next_command_completion(&manager.task_group).await;
         manager.finish(completion).unwrap();
         assert_eq!(manager.active, 0);
         assert!(manager.users.is_empty());
+        assert!(
+            test_sender._output.try_recv().is_err(),
+            "cancelled command crossed its reply boundary"
+        );
     }
 
     #[tokio::test]
@@ -1587,7 +2129,7 @@ mod tests {
         assert!(manager.pending.is_empty());
 
         gate.add_permits(1);
-        let completion = manager.task_group.join_next().await.unwrap().unwrap();
+        let completion = next_command_completion(&manager.task_group).await;
         manager.finish(completion).unwrap();
         assert!(manager.users.is_empty());
         assert_eq!(manager.active, 0);
@@ -1626,6 +2168,71 @@ mod tests {
         let task = tokio::spawn(manager.run(cancellation));
         drop(sender);
         task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn invariant_failure_uses_single_cleanup_path() {
+        let test_sender = test_sender();
+        let command_gate = Arc::new(Semaphore::new(0));
+        let command = TestCommand::background(
+            "ai",
+            "!ai",
+            Arc::new(AsyncMutex::new(Vec::new())),
+            Arc::new(Notify::new()),
+            Some(command_gate),
+        );
+        let (sender, manager) = make_manager(registry(vec![command]), ExecutionLimits::default());
+        let group = manager.task_group();
+        sender
+            .sender
+            .try_send(invocation(
+                test_sender.sender.clone(),
+                "ai",
+                "active-user",
+                "active",
+            ))
+            .unwrap();
+        sender
+            .sender
+            .try_send(invocation(
+                test_sender.sender.clone(),
+                "missing",
+                "bad-user",
+                "unknown",
+            ))
+            .unwrap();
+        drop(sender);
+
+        let error = manager.run(CommandCancellation::new()).await.unwrap_err();
+        assert!(error.to_string().contains("unknown command ID"));
+        assert!(group.is_closed());
+        assert!(group.is_empty());
+    }
+
+    #[tokio::test]
+    async fn manager_escalates_blocking_panic_while_running() {
+        let test_sender = test_sender();
+        let (sender, manager) = make_manager(
+            registry(vec![Arc::new(BlockingPanicCommand)]),
+            ExecutionLimits::default(),
+        );
+        sender
+            .sender
+            .try_send(invocation(
+                test_sender.sender.clone(),
+                "ai",
+                "user",
+                "blocking-panic",
+            ))
+            .unwrap();
+
+        let error = manager.run(CommandCancellation::new()).await.unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<ExecutionError>()
+                .is_some_and(|error| *error == ExecutionError::BlockingChildPanicked),
+            "unexpected error: {error:?}"
+        );
     }
 
     #[tokio::test]
@@ -1678,9 +2285,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completed_blocking_child_is_reaped_without_an_empty_event_hot_loop() {
+        let group = CommandTaskGroup::new();
+        let receiver = group.spawn_blocking(|| 7_u8).unwrap();
+        assert_eq!(receiver.await.unwrap(), 7);
+        assert_eq!(group.blocking_len(), 1);
+        assert!(matches!(
+            timeout(Duration::from_secs(1), group.join_next_event())
+                .await
+                .expect("manager completion event timed out"),
+            TaskGroupEvent::Blocking(Ok(()))
+        ));
+        assert_eq!(group.blocking_len(), 0);
+        assert!(group.is_empty());
+    }
+
+    #[tokio::test]
+    async fn abort_and_join_closes_group_and_rejects_new_work() {
+        let test_sender = test_sender();
+        let group = CommandTaskGroup::new();
+        group.abort_and_join().await.unwrap();
+        assert!(group.is_closed());
+        assert_eq!(
+            group.spawn_blocking(|| 1_u8).unwrap_err(),
+            TaskGroupError::Closed
+        );
+        assert_eq!(
+            group.spawn_child(async { 1_u8 }).unwrap_err(),
+            TaskGroupError::Closed
+        );
+
+        let command = TestCommand::background(
+            "ai",
+            "!ai",
+            Arc::new(AsyncMutex::new(Vec::new())),
+            Arc::new(Notify::new()),
+            None,
+        );
+        assert_eq!(
+            group.spawn_command(
+                command,
+                invocation(test_sender.sender.clone(), "ai", "user", "late"),
+            ),
+            Err(TaskGroupError::Closed)
+        );
+    }
+
+    #[tokio::test]
+    async fn task_group_distinguishes_blocking_and_application_child_panics() {
+        let blocking = CommandTaskGroup::new();
+        let receiver = blocking
+            .spawn_blocking(|| panic!("intentional blocking panic"))
+            .unwrap();
+        assert!(receiver.await.is_err());
+        assert!(matches!(
+            timeout(Duration::from_secs(1), blocking.join_next_event())
+                .await
+                .unwrap(),
+            TaskGroupEvent::Blocking(Err(ref error)) if error.is_panic()
+        ));
+        blocking.join_all().await.unwrap();
+        assert_ne!(
+            ExecutionError::from(TaskGroupError::BlockingChildPanicked),
+            ExecutionError::from(TaskGroupError::ApplicationChildPanicked)
+        );
+
+        let child = CommandTaskGroup::new();
+        let receiver = child
+            .spawn_child(async { panic!("intentional child panic") })
+            .unwrap();
+        assert!(receiver.await.is_err());
+        assert!(matches!(
+            timeout(Duration::from_secs(1), child.join_next_event())
+                .await
+                .unwrap(),
+            TaskGroupEvent::Child(Err(ref error)) if error.is_panic()
+        ));
+        child.join_all().await.unwrap();
+        assert_eq!(
+            ExecutionError::from(TaskGroupError::ApplicationChildPanicked),
+            ExecutionError::ApplicationChildPanicked
+        );
+    }
+
+    #[tokio::test]
     async fn task_group_joins_blocking_children_and_aborts_commands() {
         let group = CommandTaskGroup::new();
-        let receiver = group.spawn_blocking(|| 7_u8);
+        let receiver = group.spawn_blocking(|| 7_u8).unwrap();
         assert_eq!(receiver.await.unwrap(), 7);
         group.join_all().await.unwrap();
         assert!(group.is_empty());
@@ -1690,10 +2381,13 @@ mod tests {
         let gate = Arc::new(Semaphore::new(0));
         let test_sender = test_sender();
         let command = TestCommand::background("ai", "!ai", started, notify.clone(), Some(gate));
-        group.spawn_command(
-            command,
-            invocation(test_sender.sender.clone(), "ai", "user", "blocked"),
-        );
+        let group = CommandTaskGroup::new();
+        group
+            .spawn_command(
+                command,
+                invocation(test_sender.sender.clone(), "ai", "user", "blocked"),
+            )
+            .unwrap();
         wait_started(&notify).await;
         group.abort_and_join().await.unwrap();
         assert!(group.is_empty());

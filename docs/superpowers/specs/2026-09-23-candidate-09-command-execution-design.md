@@ -284,9 +284,14 @@ The task-group adapter owns:
 Extend the command interface with:
 
 ```text
-fn id(&self) -> CommandId;
+fn id(&self) -> &'static str;
 fn execution_policy(&self) -> ExecutionClass;
 ```
+
+The raw ID is validated and converted to the private `CommandId` boundary by
+`CommandRegistry::from_commands`. This keeps invalid production metadata on the
+structured registry-construction error path instead of relying on command-local
+`expect()` calls.
 
 Keep:
 

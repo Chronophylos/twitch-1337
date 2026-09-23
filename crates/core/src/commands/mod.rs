@@ -134,8 +134,9 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    /// Stable identity used for registry lookup and execution limits.
-    fn id(&self) -> CommandId;
+    /// Raw stable identity metadata. The registry validates and owns conversion
+    /// to the private `CommandId` boundary used for lookup and execution limits.
+    fn id(&self) -> &'static str;
 
     /// The command trigger including "!" prefix (e.g., "!lb").
     fn name(&self) -> &str;

@@ -18,7 +18,7 @@ use crate::ai::memory::types::Role;
 use crate::ai::model_catalog::ModelCatalog;
 use crate::ai::recap::RecapHandle;
 use crate::ai::turn::{TurnInput, TurnOutcome, TurnReplyParent, TurnRunner, TurnSpeaker};
-use crate::commands::{Command, CommandContext, CommandId, ExecutionClass};
+use crate::commands::{Command, CommandContext, ExecutionClass};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
 use crate::twitch::mouth::{Agent, SpeakError};
@@ -224,8 +224,8 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    fn id(&self) -> CommandId {
-        CommandId::new("ai").expect("command ID is valid")
+    fn id(&self) -> &'static str {
+        "ai"
     }
 
     fn name(&self) -> &str {
@@ -286,6 +286,7 @@ where
             } else {
                 "Benutzung: !ai <anweisung>"
             };
+            ctx.cancellation.check()?;
             ctx.sender.reply(&ctx.privmsg, usage).await;
             return Ok(());
         }
@@ -316,9 +317,12 @@ where
             cancellation: ctx.cancellation.clone(),
         };
 
-        let (line, display_name) = match self.turn.run_turn(input).await? {
+        let outcome = self.turn.run_turn(input).await?;
+        ctx.cancellation.check()?;
+        let (line, display_name) = match outcome {
             TurnOutcome::Reply { text, display_name } => (text, display_name),
             TurnOutcome::Notice(msg) => {
+                ctx.cancellation.check()?;
                 ctx.sender.reply(&ctx.privmsg, msg).await;
                 return Ok(());
             }
@@ -351,6 +355,7 @@ where
                 (spoken.login, spoken.message_id)
             }
             Ok(crate::twitch::mouth::SpeakOutcome::NoMouth) => {
+                ctx.cancellation.check()?;
                 ctx.sender
                     .reply_no_byte_clamp(&ctx.privmsg, line.clone())
                     .await;
@@ -365,6 +370,7 @@ where
                 // realistic failure (mouth timed out, channel-restricted) is persistent,
                 // so without this the command is a black hole for every user.
                 if let Some(msg) = user_facing_mouth_message(&e) {
+                    ctx.cancellation.check()?;
                     ctx.sender.reply(&ctx.privmsg, msg).await;
                 }
                 return Ok(());

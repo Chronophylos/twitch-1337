@@ -4,6 +4,7 @@ use random_flight::{Direction, FlightRequest};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::commands::{CommandCancellation, CommandTaskGroup};
 use crate::util::parse_flight_duration;
 
 pub const PLAN_FLIGHT_TOOL_NAME: &str = "plan_flight";
@@ -99,7 +100,10 @@ fn err(call: &ToolCall, value: serde_json::Value) -> ToolResultMessage {
     ToolResultMessage::for_call(call, value.to_string())
 }
 
-pub async fn execute_plan_flight(call: &ToolCall) -> ToolResultMessage {
+pub async fn execute_plan_flight(
+    call: &ToolCall,
+    cancellation: &CommandCancellation,
+) -> ToolResultMessage {
     let args = match call.parse_args::<PlanFlightArgs>() {
         Ok(a) => a,
         Err(e) => {
@@ -156,16 +160,30 @@ pub async fn execute_plan_flight(call: &ToolCall) -> ToolResultMessage {
 
     let departure = trimmed(&args.departure);
 
-    // Retries internally, can block for a while.
-    let result = tokio::task::spawn_blocking(move || {
+    // Retries internally, can block for a while. The command task group owns
+    // and joins this child; command execution has no detached fallback.
+    if cancellation.is_cancelled() {
+        return err(call, json!({"error": "cancelled"}));
+    }
+    let Some(group) = CommandTaskGroup::current() else {
+        tracing::error!("plan_flight called without an active command task group");
+        return err(call, json!({"error": "task_group_unavailable"}));
+    };
+    let receiver = match group.spawn_blocking(move || {
         random_flight::generate_flight_plan(&FlightRequest {
             aircraft,
             block_time,
             departure: departure.as_deref(),
             direction,
         })
-    })
-    .await;
+    }) {
+        Ok(receiver) => receiver,
+        Err(error) => {
+            tracing::warn!(error = %error, "plan_flight could not register blocking child");
+            return err(call, json!({"error": "task_group_closed"}));
+        }
+    };
+    let result = receiver.await;
 
     let fp = match result {
         Ok(Ok(fp)) => fp,
@@ -235,7 +253,12 @@ mod tests {
     }
 
     async fn run(args: serde_json::Value) -> serde_json::Value {
-        let msg = execute_plan_flight(&call(args)).await;
+        let cancellation = CommandCancellation::new();
+        let group = CommandTaskGroup::new();
+        let msg = group
+            .scope(execute_plan_flight(&call(args), &cancellation))
+            .await;
+        group.join_all().await.expect("plan_flight task group");
         serde_json::from_str(&msg.content).expect("tool result is json")
     }
 
