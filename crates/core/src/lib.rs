@@ -317,40 +317,51 @@ where
         TARGET_HOUR,
         TARGET_MINUTE - 1
     );
+    // Finalizers are registered before supervision starts and run in order
+    // only after producers and globally registered descendants are joined.
+    // The supervisor marks the lifecycle Stopped after all of them return.
+    {
+        let client = Arc::clone(&client_for_announce);
+        let lifecycle = lifecycle.clone();
+        let admin_channel = admin_channel.clone();
+        supervisor.register_finalizer("shutdown announcement", async move {
+            if lifecycle.is_faulted() {
+                crate::twitch::announce::announce_crash(client.as_ref(), admin_channel.as_deref())
+                    .await;
+            } else {
+                crate::twitch::announce::announce_shutdown(
+                    client.as_ref(),
+                    admin_channel.as_deref(),
+                )
+                .await;
+            }
+            Ok(())
+        });
+    }
+    if let Some(handle) = services.langfuse.clone() {
+        supervisor.register_finalizer("Langfuse exporter", async move {
+            handle
+                .finalize()
+                .await
+                .map_err(|error| format!("flush/close/join failed: {error}"))
+        });
+    }
+    if let Some(handle) = services.emote_tracker.clone() {
+        supervisor.register_finalizer("emote SQLite writer", async move {
+            handle
+                .close_and_join()
+                .await
+                .map_err(|error| error.to_string())
+        });
+    }
+
     let supervisor_result = supervisor
         .run(shutdown)
         .await
         .map_err(|error| eyre::eyre!("application lifecycle supervision failed: {error}"));
     if let Err(error) = &supervisor_result {
         tracing::error!(?error, "Application lifecycle supervision failed");
-    }
-
-    // Supervisor teardown has already stopped and joined every producer. A
-    // distinct crash announcement preserves operator visibility, but the
-    // sticky lifecycle result below is the authoritative process outcome.
-    if lifecycle.is_faulted() {
-        crate::twitch::announce::announce_crash(&client_for_announce, admin_channel.as_deref())
-            .await;
-    } else {
-        crate::twitch::announce::announce_shutdown(&client_for_announce, admin_channel.as_deref())
-            .await;
-    }
-
-    // Finalization is intentionally after producer drain. `finalize` requests
-    // flush, requests close, and joins (or aborts and joins after its bounded
-    // fallback) the exporter task before `run_bot` returns.
-    let finalization_result = match &services.langfuse {
-        Some(handle) => handle
-            .finalize()
-            .await
-            .map_err(|error| eyre::eyre!("Langfuse finalization failed: {error}")),
-        None => Ok(()),
-    };
-
-    supervisor_result?;
-    if let Err(error) = finalization_result {
-        tracing::error!(?error, "Langfuse finalization failed");
-        return Err(error);
+        return Err(eyre::eyre!("{error}"));
     }
 
     info!("Bot shutdown complete");

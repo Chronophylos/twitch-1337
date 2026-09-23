@@ -26,7 +26,7 @@
 
 | File | Change |
 |---|---|
-| `crates/core/src/lifecycle.rs` **(new)** | Lifecycle state, latched stop, task supervisor, task groups, transition/error types, unit tests. |
+| `crates/core/src/lifecycle.rs` **(new)** | Lifecycle state, latched stop, task supervisor, global child-task registry, task groups, finalizer registry, transition/error types, unit tests. |
 | `crates/core/src/lib.rs` | Export lifecycle; register ping, handlers, web, Ritual; replace `await_shutdown`; return lifecycle errors. |
 | `crates/core/src/twitch/handlers/spawn.rs` | Replace partial `HandlerSet`; register transcript and all top-level tasks; pass lifecycle into task loops. |
 | `crates/twitch-1337/src/main.rs` | Ctrl-C/SIGTERM selection; supervise session persistence; supervise/close Langfuse; return runtime errors. |
@@ -147,6 +147,7 @@ cargo test -p twitch-1337-core lifecycle
 - [ ] Add the top-level supervisor for application-owned long-lived tasks.
 - [ ] Add task entries with stable names and completion results.
 - [ ] Support both futures spawned by the supervisor and adopted pre-spawned handles, or change callers to return futures so no wrapper detaches an inner task.
+- [ ] Add a global child-task registry so nested groups remain abort-and-joinable when their parent task is stopped.
 - [ ] Add a core-owned task-group abstraction with `join_all` and `abort_and_join`.
 - [ ] Ensure task groups propagate child panics/unexpected completions.
 - [ ] Ensure abort is always followed by joining every owned child.
@@ -161,6 +162,7 @@ cargo test -p twitch-1337-core lifecycle
   - timeout, abort, and confirmed termination;
   - pre-spawned handle ownership;
   - nested task-group abort-and-join;
+  - parent abort with globally registered descendants;
   - empty/disabled task set.
 
 **Verification:**
@@ -281,7 +283,9 @@ cargo nextest run -p twitch-1337-core --test irc ping
 - [ ] Own the web session-persistence loop and include it in the web task group.
 - [ ] Make the web task observe the latched lifecycle.
 - [ ] Make the Langfuse exporter lifecycle explicit.
-- [ ] Implement finalizer order: stop producers, drain tasks, flush, close exporter, join exporter.
+- [ ] Retain and close/join the named emote SQLite writer thread in `EmoteTrackerHandle`.
+- [ ] Register Langfuse and the emote writer with the supervisor finalizer phase.
+- [ ] Implement finalizer order: stop producers, drain tasks/descendants, run finalizers, mark lifecycle `Stopped`, return combined result.
 - [ ] Ensure finalization cannot start a new long-running application task.
 - [ ] Update all test web spawners to the new lifecycle contract.
 

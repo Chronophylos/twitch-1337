@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, instrument};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use crate::lifecycle::TaskGroup;
+use crate::lifecycle::{Lifecycle, TaskGroup};
 use crate::schedule::{Schedule, TelemetryStore};
 use crate::settings::SettingsHandle;
 use crate::twitch::ChatSender;
@@ -89,12 +89,15 @@ pub async fn run_orchestrator<T, L>(
     channel: String,
     shutdown: Arc<Notify>,
     clock: Arc<dyn Clock>,
+    lifecycle: Lifecycle,
 ) where
     T: Transport,
     L: LoginCredentials,
 {
-    if let Err(error) =
-        try_run_orchestrator(sender, settings, telemetry, channel, shutdown, clock).await
+    if let Err(error) = try_run_orchestrator(
+        sender, settings, telemetry, channel, shutdown, clock, &lifecycle,
+    )
+    .await
     {
         panic!("scheduled-message child supervision failed: {error}");
     }
@@ -110,6 +113,7 @@ pub(crate) async fn try_run_orchestrator<T, L>(
     channel: String,
     shutdown: Arc<Notify>,
     clock: Arc<dyn Clock>,
+    lifecycle: &Lifecycle,
 ) -> Result<(), ScheduleOrchestratorError>
 where
     T: Transport,
@@ -139,6 +143,7 @@ where
         &mut next_child_id,
         &completion_tx,
         &mut shutdown_request,
+        lifecycle,
     )
     .await;
     let initial = match initial {
@@ -175,6 +180,7 @@ where
                     &mut next_child_id,
                     &completion_tx,
                     &mut shutdown_request,
+                    lifecycle,
                 ).await {
                     Ok(ReconcileControl::Continue) => continue,
                     Ok(ReconcileControl::Shutdown) => ReconcileControl::Shutdown,
@@ -292,6 +298,7 @@ async fn reconcile<T, L, S>(
     next_child_id: &mut u64,
     completion_tx: &mpsc::UnboundedSender<ScheduleCompletionEvent>,
     shutdown: &mut S,
+    lifecycle: &Lifecycle,
 ) -> Result<ReconcileControl, ScheduleOrchestratorError>
 where
     T: Transport,
@@ -378,7 +385,9 @@ where
             channel.to_owned(),
             clock.clone(),
             completion_tx.clone(),
-        );
+            lifecycle,
+        )
+        .await;
         running.insert(name, child);
     }
 
@@ -396,7 +405,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_schedule_child<T, L>(
+async fn spawn_schedule_child<T, L>(
     id: u64,
     name: String,
     schedule: Schedule,
@@ -405,6 +414,7 @@ fn spawn_schedule_child<T, L>(
     channel: String,
     clock: Arc<dyn Clock>,
     completion_tx: mpsc::UnboundedSender<ScheduleCompletionEvent>,
+    lifecycle: &Lifecycle,
 ) -> RunningSchedule
 where
     T: Transport,
@@ -412,30 +422,32 @@ where
 {
     let event_name = name.clone();
     let child_schedule = schedule.clone();
-    let mut tasks = TaskGroup::new(format!("schedule child {name}"));
+    let mut tasks = TaskGroup::new(lifecycle, format!("schedule child {name}"));
     let child_cancellation = tasks.cancellation_token();
 
-    tasks.spawn(name, async move {
-        let completion = AssertUnwindSafe(run_schedule_task(
-            child_schedule,
-            sender,
-            telemetry,
-            channel,
-            clock,
-            child_cancellation,
-        ))
-        .catch_unwind()
-        .await
-        .unwrap_or(ScheduleCompletion::Panicked);
+    tasks
+        .spawn(name, async move {
+            let completion = AssertUnwindSafe(run_schedule_task(
+                child_schedule,
+                sender,
+                telemetry,
+                channel,
+                clock,
+                child_cancellation,
+            ))
+            .catch_unwind()
+            .await
+            .unwrap_or(ScheduleCompletion::Panicked);
 
-        // This channel is wake-up/classification only. The TaskGroup remains
-        // the owner and is joined before the result is acted upon.
-        let _ = completion_tx.send(ScheduleCompletionEvent {
-            id,
-            name: event_name,
-        });
-        completion
-    });
+            // This channel is wake-up/classification only. The TaskGroup remains
+            // the owner and is joined before the result is acted upon.
+            let _ = completion_tx.send(ScheduleCompletionEvent {
+                id,
+                name: event_name,
+            });
+            completion
+        })
+        .await;
 
     RunningSchedule {
         id,
@@ -590,11 +602,14 @@ where
         // before the externally visible send. If cancellation races after this
         // check, the atomic `say()` is allowed to finish before joining.
         sender.say(channel.clone(), schedule.message.clone()).await;
+        // The send completed, so record the fire before observing cancellation.
+        // A cancellation racing this await must not make a successful send
+        // disappear from telemetry.
+        telemetry.record_fire(&schedule.name, clock.now_utc()).await;
         if cancel.is_cancelled() {
             info!("cancelled after send, exiting");
             return ScheduleCompletion::Cancelled;
         }
-        telemetry.record_fire(&schedule.name, clock.now_utc()).await;
     }
 }
 
@@ -611,17 +626,18 @@ mod tests {
         ScheduleChildError, ScheduleCompletion, join_schedule_child, shutdown_is_ready,
         stop_and_join_all,
     };
-    use crate::lifecycle::{TaskCompletion, TaskGroup};
+    use crate::lifecycle::{Lifecycle, TaskCompletion, TaskGroup};
 
-    fn completion_task(completion: ScheduleCompletion) -> TaskGroup<ScheduleCompletion> {
-        let mut group = TaskGroup::new("test schedule child");
-        group.spawn("child", async move { completion });
+    async fn completion_task(completion: ScheduleCompletion) -> TaskGroup<ScheduleCompletion> {
+        let lifecycle = Lifecycle::new();
+        let mut group = TaskGroup::new(&lifecycle, "test schedule child");
+        group.spawn("child", async move { completion }).await;
         group
     }
 
     #[tokio::test]
     async fn explicit_expiry_and_requested_cancellation_are_normal() {
-        let mut expired = completion_task(ScheduleCompletion::Expired);
+        let mut expired = completion_task(ScheduleCompletion::Expired).await;
         assert_eq!(
             join_schedule_child("expired".into(), &mut expired, false)
                 .await
@@ -629,7 +645,7 @@ mod tests {
             ScheduleCompletion::Expired
         );
 
-        let mut cancelled = completion_task(ScheduleCompletion::Cancelled);
+        let mut cancelled = completion_task(ScheduleCompletion::Cancelled).await;
         assert_eq!(
             join_schedule_child("cancelled".into(), &mut cancelled, true)
                 .await
@@ -640,13 +656,13 @@ mod tests {
 
     #[tokio::test]
     async fn unexpected_completion_and_reported_panic_are_faults() {
-        let mut unexpected = completion_task(ScheduleCompletion::CompletedUnexpectedly);
+        let mut unexpected = completion_task(ScheduleCompletion::CompletedUnexpectedly).await;
         assert!(matches!(
             join_schedule_child("unexpected".into(), &mut unexpected, false).await,
             Err(ScheduleChildError::CompletedUnexpectedly { .. })
         ));
 
-        let mut panicked = completion_task(ScheduleCompletion::Panicked);
+        let mut panicked = completion_task(ScheduleCompletion::Panicked).await;
         assert!(matches!(
             join_schedule_child("panicked".into(), &mut panicked, false).await,
             Err(ScheduleChildError::Panicked { .. })
@@ -655,8 +671,11 @@ mod tests {
 
     #[tokio::test]
     async fn join_error_is_propagated_with_its_panic_classification() {
-        let mut group = TaskGroup::new("panicking schedule child");
-        group.spawn("child", async { panic!("poll child failed") });
+        let lifecycle = Lifecycle::new();
+        let mut group = TaskGroup::new(&lifecycle, "panicking schedule child");
+        group
+            .spawn("child", async { panic!("poll child failed") })
+            .await;
 
         let error = join_schedule_child("panic".into(), &mut group, false)
             .await
@@ -673,12 +692,15 @@ mod tests {
         let cancellation = CancellationToken::new();
         let child_cancellation = cancellation.clone();
         let (release_tx, release_rx) = oneshot::channel();
-        let mut group = TaskGroup::new("replacement child");
-        group.spawn("old", async move {
-            child_cancellation.cancelled().await;
-            release_rx.await.expect("test releases child");
-            ScheduleCompletion::Cancelled
-        });
+        let lifecycle = Lifecycle::new();
+        let mut group = TaskGroup::new(&lifecycle, "replacement child");
+        group
+            .spawn("old", async move {
+                child_cancellation.cancelled().await;
+                release_rx.await.expect("test releases child");
+                ScheduleCompletion::Cancelled
+            })
+            .await;
         cancellation.cancel();
 
         let joiner =
@@ -695,19 +717,22 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_cancels_then_joins_every_child() {
+        let lifecycle = Lifecycle::new();
         let mut running = HashMap::new();
         for (index, completion) in [ScheduleCompletion::Expired, ScheduleCompletion::Cancelled]
             .into_iter()
             .enumerate()
         {
-            let mut tasks = TaskGroup::new(format!("test child {index}"));
+            let mut tasks = TaskGroup::new(&lifecycle, format!("test child {index}"));
             let child_cancellation = tasks.cancellation_token();
-            tasks.spawn(format!("child-{index}"), async move {
-                if matches!(completion, ScheduleCompletion::Cancelled) {
-                    child_cancellation.cancelled().await;
-                }
-                completion
-            });
+            tasks
+                .spawn(format!("child-{index}"), async move {
+                    if matches!(completion, ScheduleCompletion::Cancelled) {
+                        child_cancellation.cancelled().await;
+                    }
+                    completion
+                })
+                .await;
             running.insert(
                 format!("schedule-{index}"),
                 super::RunningSchedule {
@@ -748,8 +773,9 @@ mod tests {
 
     #[tokio::test]
     async fn task_completion_exposes_the_preserved_result() {
-        let mut group = TaskGroup::new("result test");
-        group.spawn("child", async { 7_u8 });
+        let lifecycle = Lifecycle::new();
+        let mut group = TaskGroup::new(&lifecycle, "result test");
+        group.spawn("child", async { 7_u8 }).await;
         let records: Vec<TaskCompletion<u8>> = group.join_all().await;
 
         assert_eq!(records.len(), 1);

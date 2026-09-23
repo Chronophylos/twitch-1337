@@ -93,8 +93,9 @@ where
     }
 }
 
-fn spawn_usage_writer(
+async fn spawn_usage_writer(
     emote_tracker: Arc<EmoteTrackerHandle>,
+    lifecycle: &Lifecycle,
 ) -> (
     TaskGroup<UsageIngestCompletion>,
     mpsc::UnboundedSender<Vec<NewUsageEvent>>,
@@ -102,24 +103,27 @@ fn spawn_usage_writer(
 ) {
     let (events_tx, events_rx) = mpsc::unbounded_channel();
     let (completion_tx, completion_rx) = mpsc::unbounded_channel();
-    let mut tasks = TaskGroup::new("emote usage SQLite writer");
+    let mut tasks = TaskGroup::new(lifecycle, "emote usage SQLite writer");
     let cancellation = tasks.cancellation_token();
-    tasks.spawn("usage writer", async move {
-        let handle = emote_tracker.clone();
-        let completion = AssertUnwindSafe(run_usage_ingest(events_rx, cancellation, |events| {
-            let handle = handle.clone();
-            async move {
-                if let Err(error) = handle.insert_usage_events(events).await {
-                    error!(?error, "emote usage insert failed");
-                }
-            }
-        }))
-        .catch_unwind()
-        .await
-        .unwrap_or(UsageIngestCompletion::Panicked);
-        let _ = completion_tx.send(completion);
-        completion
-    });
+    tasks
+        .spawn("usage writer", async move {
+            let handle = emote_tracker.clone();
+            let completion =
+                AssertUnwindSafe(run_usage_ingest(events_rx, cancellation, |events| {
+                    let handle = handle.clone();
+                    async move {
+                        if let Err(error) = handle.insert_usage_events(events).await {
+                            error!(?error, "emote usage insert failed");
+                        }
+                    }
+                }))
+                .catch_unwind()
+                .await
+                .unwrap_or(UsageIngestCompletion::Panicked);
+            let _ = completion_tx.send(completion);
+            completion
+        })
+        .await;
     (tasks, events_tx, completion_rx)
 }
 
@@ -201,7 +205,7 @@ pub async fn run_emote_usage_handler(
     // deny-list merge below is just a cheap chain, not a re-clone of the guard's set.
     let mouth_logins: Vec<String> = echo.mouth_logins().iter().cloned().collect();
     let (mut usage_tasks, usage_tx, mut usage_completion_rx) =
-        spawn_usage_writer(emote_tracker.clone());
+        spawn_usage_writer(emote_tracker.clone(), &lifecycle).await;
 
     loop {
         tokio::select! {
@@ -312,19 +316,22 @@ mod tests {
     async fn cancellation_before_write_prevents_new_sqlite_work() {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let inserted = Arc::new(AtomicUsize::new(0));
-        let mut tasks = TaskGroup::new("test usage writer");
+        let lifecycle = Lifecycle::new();
+        let mut tasks = TaskGroup::new(&lifecycle, "test usage writer");
         let cancellation = tasks.cancellation_token();
         let task_inserted = inserted.clone();
-        tasks.spawn("usage writer", async move {
-            let inserted = task_inserted.clone();
-            run_usage_ingest(events_rx, cancellation, move |_events| {
-                let inserted = inserted.clone();
-                async move {
-                    inserted.fetch_add(1, Ordering::SeqCst);
-                }
+        tasks
+            .spawn("usage writer", async move {
+                let inserted = task_inserted.clone();
+                run_usage_ingest(events_rx, cancellation, move |_events| {
+                    let inserted = inserted.clone();
+                    async move {
+                        inserted.fetch_add(1, Ordering::SeqCst);
+                    }
+                })
+                .await
             })
-            .await
-        });
+            .await;
         events_tx
             .send(vec![NewUsageEvent {
                 at: 0,
@@ -350,8 +357,11 @@ mod tests {
 
     #[tokio::test]
     async fn usage_writer_join_error_is_preserved() {
-        let mut tasks = TaskGroup::new("panicking usage writer");
-        tasks.spawn("usage writer", async { panic!("SQLite writer failed") });
+        let lifecycle = Lifecycle::new();
+        let mut tasks = TaskGroup::new(&lifecycle, "panicking usage writer");
+        tasks
+            .spawn("usage writer", async { panic!("SQLite writer failed") })
+            .await;
 
         let error = stop_usage_writer(&mut tasks)
             .await

@@ -4,16 +4,17 @@
 //! application-owned tasks one cheap, cloneable way to observe and request
 //! runtime shutdown without missing an earlier request.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use futures_util::{StreamExt, stream::FuturesUnordered};
+use futures_util::{FutureExt, StreamExt, stream::FuturesUnordered};
 use tokio::{
-    sync::watch,
+    sync::{Mutex, watch},
     task::{JoinError, JoinHandle},
 };
 use tokio_util::sync::CancellationToken;
@@ -51,6 +52,7 @@ impl LifecycleState {
 pub struct Lifecycle {
     state: watch::Sender<LifecycleState>,
     faulted: Arc<AtomicBool>,
+    child_tasks: ChildTaskRegistry,
 }
 
 impl Lifecycle {
@@ -58,10 +60,11 @@ impl Lifecycle {
         Self {
             state: watch::channel(LifecycleState::Running).0,
             faulted: Arc::new(AtomicBool::new(false)),
+            child_tasks: ChildTaskRegistry::default(),
         }
     }
 
-    pub(crate) fn state(&self) -> LifecycleState {
+    pub fn state(&self) -> LifecycleState {
         *self.state.borrow()
     }
 
@@ -75,7 +78,7 @@ impl Lifecycle {
 
     /// Whether a fault was ever latched. This remains true after the public
     /// state advances to terminal `Stopped`, preserving the final outcome.
-    pub(crate) fn is_faulted(&self) -> bool {
+    pub fn is_faulted(&self) -> bool {
         self.faulted.load(Ordering::SeqCst)
     }
 
@@ -188,66 +191,207 @@ fn validate_task_name(name: &str) {
     assert!(!name.trim().is_empty(), "task name must not be empty");
 }
 
-/// Explicit owner for a set of named child tasks.
+/// Global ownership for application-created descendants.
 ///
-/// A completion channel is deliberately not used as ownership: the group
-/// retains every [`JoinHandle`], can join every child, and can abort and then
-/// join every child. Child futures that need cooperative cancellation receive
-/// [`Self::cancellation_token`] and apply cancellation at their own operation
-/// boundaries.
+/// Child handles live here, rather than only in the parent task's local data.
+/// That lets the top-level supervisor cancel, abort, and join descendants even
+/// when the parent that created them is forcibly aborted first.
+#[derive(Debug, Clone, Default)]
+struct ChildTaskRegistry {
+    inner: Arc<Mutex<ChildTasksInner>>,
+}
+
+#[derive(Debug, Default)]
+struct ChildTasksInner {
+    tasks: Vec<Option<RegisteredChildTask>>,
+    free_ids: Vec<usize>,
+}
+
+#[derive(Debug)]
+struct RegisteredChildTask {
+    group: String,
+    task: String,
+    cancellation: CancellationToken,
+    handle: JoinHandle<()>,
+}
+
+struct GlobalTaskCompletion {
+    id: usize,
+    group: String,
+    task: String,
+    result: Result<(), JoinError>,
+}
+
+impl ChildTaskRegistry {
+    async fn request_cancellation(&self) {
+        for task in self.inner.lock().await.tasks.iter().flatten() {
+            task.cancellation.cancel();
+        }
+    }
+
+    async fn join_next_for(&self, ids: &BTreeSet<usize>) -> Option<GlobalTaskCompletion> {
+        if ids.is_empty() {
+            return None;
+        }
+
+        let mut inner = self.inner.lock().await;
+        let mut handles = FuturesUnordered::new();
+        for (id, task) in inner.tasks.iter_mut().enumerate() {
+            if !ids.contains(&id) {
+                continue;
+            }
+            let task = task
+                .as_mut()
+                .expect("task group and child registry ownership diverged");
+            handles.push(async move { (id, (&mut task.handle).await) });
+        }
+        let (id, result) = handles.next().await?;
+        drop(handles);
+        let task = inner.tasks[id]
+            .take()
+            .expect("completed child task disappeared from registry");
+        inner.free_ids.push(id);
+        Some(GlobalTaskCompletion {
+            id,
+            group: task.group,
+            task: task.task,
+            result,
+        })
+    }
+
+    async fn join_next(&self) -> Option<GlobalTaskCompletion> {
+        let inner = self.inner.lock().await;
+        let ids = inner
+            .tasks
+            .iter()
+            .enumerate()
+            .filter_map(|(id, task)| task.as_ref().map(|_| id))
+            .collect::<BTreeSet<_>>();
+        drop(inner);
+        self.join_next_for(&ids).await
+    }
+
+    async fn join_all(&self) -> Vec<GlobalTaskCompletion> {
+        let mut completions = Vec::new();
+        while let Some(completion) = self.join_next().await {
+            completions.push(completion);
+        }
+        completions
+    }
+
+    async fn abort_all(&self) {
+        for task in self.inner.lock().await.tasks.iter().flatten() {
+            task.handle.abort();
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "TaskGroup::abort_and_join is part of the explicit child-owner contract"
+    )]
+    async fn abort_group(&self, ids: &BTreeSet<usize>) {
+        let inner = self.inner.lock().await;
+        for id in ids {
+            inner.tasks[*id]
+                .as_ref()
+                .expect("task group and child registry ownership diverged")
+                .handle
+                .abort();
+        }
+    }
+}
+
+impl Drop for ChildTaskRegistry {
+    fn drop(&mut self) {
+        // Correct supervision removes completed children. Aborting the actual
+        // registered handles here is only a last-resort guard if composition
+        // unwinds before the supervisor takes over. Only the final registry
+        // owner may do this; dropping one task group's clone must not abort
+        // unrelated groups.
+        if Arc::strong_count(&self.inner) == 1
+            && let Ok(inner) = self.inner.try_lock()
+        {
+            for task in inner.tasks.iter().flatten() {
+                task.handle.abort();
+            }
+        }
+    }
+}
+
+struct RegisteredTask<T> {
+    name: String,
+    output: Arc<Mutex<Option<T>>>,
+}
+
+/// Explicit owner for a set of named nested child tasks.
+///
+/// The parent keeps typed output slots and a stable group name for normal
+/// reconciliation. The lifecycle's global registry owns the actual task
+/// handles, so dropping or aborting the parent cannot detach descendants.
 pub(crate) struct TaskGroup<T = ()> {
     name: String,
     cancellation: CancellationToken,
-    tasks: Vec<NamedTask<T>>,
+    registry: ChildTaskRegistry,
+    tasks: BTreeMap<usize, RegisteredTask<T>>,
 }
 
 impl<T: Send + 'static> TaskGroup<T> {
-    pub(crate) fn new(name: impl Into<String>) -> Self {
+    pub(crate) fn new(lifecycle: &Lifecycle, name: impl Into<String>) -> Self {
         let name = name.into();
         assert!(!name.trim().is_empty(), "task group name must not be empty");
         Self {
             name,
             cancellation: CancellationToken::new(),
-            tasks: Vec::new(),
+            registry: lifecycle.child_tasks.clone(),
+            tasks: BTreeMap::new(),
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn name(&self) -> &str {
-        &self.name
     }
 
     pub(crate) fn cancellation_token(&self) -> CancellationToken {
         self.cancellation.clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
 
-    /// Spawn and register a named child.
-    pub(crate) fn spawn<F>(&mut self, name: impl Into<String>, future: F)
+    /// Spawn and register a named child with both its parent group and the
+    /// global child registry. The spawned future is the registered task itself;
+    /// no inner pre-spawned handle is hidden behind a detachable wrapper.
+    pub(crate) async fn spawn<F>(&mut self, name: impl Into<String>, future: F)
     where
         F: Future<Output = T> + Send + 'static,
     {
         let name = name.into();
         validate_task_name(&name);
-        self.adopt(name, tokio::spawn(future));
-    }
-
-    /// Adopt a pre-spawned handle. The returned handle remains owned by this
-    /// group, so aborting the group's owner cannot detach the child.
-    pub(crate) fn adopt(&mut self, name: impl Into<String>, handle: JoinHandle<T>) {
-        let name = name.into();
-        if name.trim().is_empty() {
-            handle.abort();
-            panic!("task name must not be empty");
-        }
-        if self.tasks.iter().any(|task| task.name == name) {
-            handle.abort();
+        if self.tasks.values().any(|task| task.name == name) {
             panic!("duplicate task name {name:?} in group {:?}", self.name);
         }
-        self.tasks.push(NamedTask { name, handle });
+
+        // Acquire the registry lock before spawning. After the handle exists,
+        // registration is synchronous: parent cancellation can never drop a
+        // completed or still-running inner task between spawn and adoption.
+        let mut registry = self.registry.inner.lock().await;
+        let output = Arc::new(Mutex::new(None));
+        let task_output = Arc::clone(&output);
+        let handle = tokio::spawn(async move {
+            *task_output.lock().await = Some(future.await);
+        });
+        let id = registry.free_ids.pop().unwrap_or(registry.tasks.len());
+        let task = RegisteredChildTask {
+            group: self.name.clone(),
+            task: name.clone(),
+            cancellation: self.cancellation.clone(),
+            handle,
+        };
+        if id == registry.tasks.len() {
+            registry.tasks.push(Some(task));
+        } else {
+            registry.tasks[id] = Some(task);
+        }
+        drop(registry);
+        self.tasks.insert(id, RegisteredTask { name, output });
     }
 
     /// Request cooperative cancellation of children. Joining remains the
@@ -256,30 +400,24 @@ impl<T: Send + 'static> TaskGroup<T> {
         self.cancellation.cancel();
     }
 
-    /// Join the next child to finish, reporting its stable name and full
-    /// [`JoinError`] when it panicked or was cancelled.
     async fn join_next(&mut self) -> Option<TaskCompletion<T>> {
         if self.tasks.is_empty() {
             return None;
         }
-
-        // Polling wrapper futures here is safe because they are not spawned:
-        // cancelling this wait drops only the references. The original handles
-        // remain in the group, avoiding the detached-inner-task trap.
-        let completed = {
-            let mut handles = FuturesUnordered::new();
-            for (index, task) in self.tasks.iter_mut().enumerate() {
-                handles.push(async move { (index, (&mut task.handle).await) });
-            }
-            handles.next().await
+        let ids = self.tasks.keys().copied().collect::<BTreeSet<_>>();
+        let completed = self.registry.join_next_for(&ids).await?;
+        let task = self
+            .tasks
+            .remove(&completed.id)
+            .expect("completed task disappeared from parent group");
+        let output = task.output.lock().await.take();
+        let result = match completed.result {
+            Ok(()) => Ok(output.expect("successful child task must publish its output")),
+            Err(error) => Err(error),
         };
-
-        completed.map(|(index, result)| {
-            let task = self.tasks.remove(index);
-            TaskCompletion {
-                name: task.name,
-                result,
-            }
+        Some(TaskCompletion {
+            name: completed.task,
+            result,
         })
     }
 
@@ -293,27 +431,121 @@ impl<T: Send + 'static> TaskGroup<T> {
         completions
     }
 
-    /// Request abortion of every unfinished child without waiting yet. This
-    /// lets an owner stop all groups before it starts joining any of them.
-    fn abort_all(&self) {
-        for task in &self.tasks {
-            task.handle.abort();
-        }
-    }
-
     /// Abort every unfinished child, then wait until every handle has been
     /// joined. The returned records include the abort-induced cancellation
     /// errors so callers cannot mistake this for a clean join.
+    #[allow(
+        dead_code,
+        reason = "explicit abort-and-join is part of the TaskGroup ownership contract"
+    )]
     pub(crate) async fn abort_and_join(&mut self) -> Vec<TaskCompletion<T>> {
-        self.abort_all();
+        self.cancel();
+        let ids = self.tasks.keys().copied().collect::<BTreeSet<_>>();
+        self.registry.abort_group(&ids).await;
         self.join_all().await
     }
 }
 
 impl<T> Drop for TaskGroup<T> {
     fn drop(&mut self) {
-        // This is a last-resort guard against detaching children. Correct
-        // owners still await abort_and_join so termination is confirmed.
+        // Handles stay globally registered and are cancelled rather than
+        // removed. The supervisor can still abort and join them after this
+        // parent future is dropped.
+        self.cancellation.cancel();
+    }
+}
+
+/// Direct owner for top-level pre-spawned tasks. Nested application work uses
+/// [`TaskGroup`], whose handles are also retained in the global registry.
+pub(crate) struct LocalTaskGroup<T = ()> {
+    name: String,
+    cancellation: CancellationToken,
+    tasks: Vec<NamedTask<T>>,
+}
+
+impl<T: Send + 'static> LocalTaskGroup<T> {
+    fn new(name: impl Into<String>) -> Self {
+        let name = name.into();
+        assert!(!name.trim().is_empty(), "task group name must not be empty");
+        Self {
+            name,
+            cancellation: CancellationToken::new(),
+            tasks: Vec::new(),
+        }
+    }
+
+    fn spawn<F>(&mut self, name: impl Into<String>, future: F)
+    where
+        F: Future<Output = T> + Send + 'static,
+    {
+        let name = name.into();
+        validate_task_name(&name);
+        self.adopt(name, tokio::spawn(future));
+    }
+
+    fn adopt(&mut self, name: impl Into<String>, handle: JoinHandle<T>) {
+        let name = name.into();
+        if name.trim().is_empty() {
+            handle.abort();
+            panic!("task name must not be empty");
+        }
+        if self.tasks.iter().any(|task| task.name == name) {
+            handle.abort();
+            panic!("duplicate task name {name:?} in group {:?}", self.name);
+        }
+        self.tasks.push(NamedTask { name, handle });
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    fn cancel(&self) {
+        self.cancellation.cancel();
+    }
+
+    async fn join_next(&mut self) -> Option<TaskCompletion<T>> {
+        if self.tasks.is_empty() {
+            return None;
+        }
+        let completed = {
+            let mut handles = FuturesUnordered::new();
+            for (index, task) in self.tasks.iter_mut().enumerate() {
+                handles.push(async move { (index, (&mut task.handle).await) });
+            }
+            handles.next().await
+        };
+        completed.map(|(index, result)| {
+            let task = self.tasks.remove(index);
+            TaskCompletion {
+                name: task.name,
+                result,
+            }
+        })
+    }
+
+    async fn join_all(&mut self) -> Vec<TaskCompletion<T>> {
+        let mut completions = Vec::with_capacity(self.tasks.len());
+        while let Some(completion) = self.join_next().await {
+            completions.push(completion);
+        }
+        completions
+    }
+
+    fn abort_all(&self) {
+        for task in &self.tasks {
+            task.handle.abort();
+        }
+    }
+
+    async fn abort_and_join(&mut self) -> Vec<TaskCompletion<T>> {
+        self.abort_all();
+        self.join_all().await
+    }
+}
+
+impl<T> Drop for LocalTaskGroup<T> {
+    fn drop(&mut self) {
         for task in &self.tasks {
             task.handle.abort();
         }
@@ -352,11 +584,19 @@ pub(crate) enum SupervisorError {
 
     #[error("task teardown exceeded {timeout:?}; unfinished work was aborted and joined")]
     DrainTimeout { timeout: Duration },
+
+    #[error("one or more lifecycle finalizers failed: {failures}")]
+    FinalizersFailed { failures: String },
 }
 
 struct OwnedTaskCompletion {
     group: Option<String>,
     completion: TaskCompletion<()>,
+}
+
+struct NamedFinalizer {
+    name: String,
+    future: Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'static>>,
 }
 
 enum ShutdownRequest {
@@ -368,23 +608,14 @@ enum StopReason {
     Shutdown(ShutdownRequest),
     Lifecycle(LifecycleState),
     DirectTask(TaskCompletion),
-    GroupTask {
-        group: String,
-        completion: TaskCompletion,
-    },
 }
 
-/// Top-level owner for all long-running application tasks and their explicit
-/// child task groups.
-///
-/// Registration accepts both futures spawned by the supervisor and
-/// pre-spawned [`JoinHandle`]s. The original handles are owned directly, so
-/// the teardown fallback aborts and joins tasks rather than detaching inner
-/// tasks behind wrapper futures.
+/// Top-level owner for all long-running application tasks, globally registered
+/// descendants, and the finalizer phase.
 pub(crate) struct TaskSupervisor {
     lifecycle: Lifecycle,
-    tasks: TaskGroup<()>,
-    groups: BTreeMap<String, TaskGroup<()>>,
+    tasks: LocalTaskGroup<()>,
+    finalizers: Vec<NamedFinalizer>,
     drain_timeout: Duration,
 }
 
@@ -392,8 +623,8 @@ impl TaskSupervisor {
     pub(crate) fn new(lifecycle: Lifecycle) -> Self {
         Self {
             lifecycle,
-            tasks: TaskGroup::new("application tasks"),
-            groups: BTreeMap::new(),
+            tasks: LocalTaskGroup::new("application tasks"),
+            finalizers: Vec::new(),
             drain_timeout: DRAIN_TIMEOUT,
         }
     }
@@ -403,28 +634,40 @@ impl TaskSupervisor {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.assert_accepting_tasks();
+        self.assert_accepting_work();
         self.tasks.spawn(name, future);
     }
 
     /// Adopt a pre-spawned top-level application task.
     pub(crate) fn adopt(&mut self, name: impl Into<String>, handle: JoinHandle<()>) {
-        self.assert_accepting_tasks();
+        self.assert_accepting_work();
         self.tasks.adopt(name, handle);
     }
 
-    /// Transfer ownership of an explicit child task group to the supervisor.
-    #[cfg(test)]
-    pub(crate) fn register_group(&mut self, group: TaskGroup<()>) {
-        self.assert_accepting_tasks();
-        let name = group.name().to_owned();
-        let previous = self.groups.insert(name.clone(), group);
-        assert!(previous.is_none(), "duplicate task group name {name:?}");
+    /// Register ordered, application-owned cleanup to run only after all task
+    /// producers and globally registered descendants have been joined.
+    pub(crate) fn register_finalizer<F>(&mut self, name: impl Into<String>, future: F)
+    where
+        F: Future<Output = Result<(), String>> + Send + 'static,
+    {
+        self.assert_accepting_work();
+        let name = name.into();
+        validate_task_name(&name);
+        assert!(
+            self.finalizers
+                .iter()
+                .all(|finalizer| finalizer.name != name),
+            "duplicate finalizer name {name:?}"
+        );
+        self.finalizers.push(NamedFinalizer {
+            name,
+            future: Box::pin(future),
+        });
     }
 
     /// Run until external shutdown, a lifecycle fault, or any direct task
-    /// completion. Then perform one bounded cooperative drain and join every
-    /// remaining handle.
+    /// completion. Then drain all owned work, run finalizers, and only then
+    /// enter terminal `Stopped`.
     pub(crate) async fn run(
         mut self,
         mut shutdown: tokio::sync::oneshot::Receiver<()>,
@@ -450,13 +693,9 @@ impl TaskSupervisor {
                 self.lifecycle.request_fault();
                 Some(completion_error(None, completion))
             }
-            StopReason::GroupTask { group, completion } => {
-                self.lifecycle.request_fault();
-                Some(completion_error(Some(&group), completion))
-            }
         };
 
-        self.request_group_cancellation();
+        self.request_child_cancellation().await;
 
         let drain = tokio::time::timeout(self.drain_timeout, self.join_owned_work()).await;
         match drain {
@@ -487,8 +726,18 @@ impl TaskSupervisor {
             }
         }
 
-        // A timeout still enters Stopped only after abort_and_join confirms
-        // that every application-owned handle has terminated.
+        let finalizer_failures = self.run_finalizers().await;
+        if !finalizer_failures.is_empty() {
+            self.lifecycle.request_fault();
+            if error.is_none() {
+                error = Some(SupervisorError::FinalizersFailed {
+                    failures: finalizer_failures.join("; "),
+                });
+            }
+        }
+
+        // A timeout or finalizer fault still enters Stopped only after every
+        // owned task and finalizer has completed or been joined.
         self.lifecycle.mark_stopped();
         let lifecycle_faulted = self.lifecycle.is_faulted();
         match error {
@@ -503,10 +752,10 @@ impl TaskSupervisor {
         }
     }
 
-    fn assert_accepting_tasks(&self) {
+    fn assert_accepting_work(&self) {
         assert!(
             self.lifecycle.is_running(),
-            "cannot register task after lifecycle entered {:?}",
+            "cannot register task or finalizer after lifecycle entered {:?}",
             self.lifecycle.state()
         );
     }
@@ -515,63 +764,7 @@ impl TaskSupervisor {
         &mut self,
         shutdown: &mut tokio::sync::oneshot::Receiver<()>,
     ) -> StopReason {
-        loop {
-            let has_group_work = self.groups.values().any(|group| !group.is_empty());
-            if !self.tasks.is_empty() || has_group_work {
-                // Poll every direct and nested ownership source in one select.
-                // Waiting on the first non-empty source would let a later task
-                // or nested child fault without waking the supervisor.
-                let mut completions = FuturesUnordered::<
-                    Pin<
-                        Box<
-                            dyn Future<Output = (Option<String>, Option<TaskCompletion<()>>)>
-                                + Send
-                                + '_,
-                        >,
-                    >,
-                >::new();
-                if !self.tasks.is_empty() {
-                    completions.push(Box::pin(async { (None, self.tasks.join_next().await) }));
-                }
-                for (group_name, group) in &mut self.groups {
-                    if group.is_empty() {
-                        continue;
-                    }
-                    let group_name = group_name.clone();
-                    completions.push(Box::pin(async move {
-                        (Some(group_name), group.join_next().await)
-                    }));
-                }
-
-                let (group_name, completion) = tokio::select! {
-                    biased;
-                    completion = completions.select_next_some() => completion,
-                    state = self.lifecycle.wait_for_cancellation() => {
-                        return StopReason::Lifecycle(state);
-                    }
-                    request = &mut *shutdown => {
-                        return StopReason::Shutdown(match request {
-                            Ok(()) => ShutdownRequest::Graceful,
-                            Err(_) => ShutdownRequest::Dropped,
-                        });
-                    }
-                };
-
-                let Some(completion) = completion else {
-                    continue;
-                };
-                match group_name {
-                    None => return StopReason::DirectTask(completion),
-                    Some(group) if !completion.is_success() => {
-                        return StopReason::GroupTask { group, completion };
-                    }
-                    Some(_) => {}
-                }
-                // A bounded child's clean completion is expected. Rebuild the
-                // source set so the group's remaining children stay observed.
-                continue;
-            }
-
+        if self.tasks.is_empty() {
             return tokio::select! {
                 biased;
                 state = self.lifecycle.wait_for_cancellation() => {
@@ -585,13 +778,27 @@ impl TaskSupervisor {
                 }
             };
         }
+
+        tokio::select! {
+            biased;
+            completion = self.tasks.join_next() => {
+                StopReason::DirectTask(completion.expect("non-empty task group must complete"))
+            }
+            state = self.lifecycle.wait_for_cancellation() => {
+                StopReason::Lifecycle(state)
+            }
+            request = &mut *shutdown => {
+                StopReason::Shutdown(match request {
+                    Ok(()) => ShutdownRequest::Graceful,
+                    Err(_) => ShutdownRequest::Dropped,
+                })
+            }
+        }
     }
 
-    fn request_group_cancellation(&self) {
+    async fn request_child_cancellation(&mut self) {
         self.tasks.cancel();
-        for group in self.groups.values() {
-            group.cancel();
-        }
+        self.lifecycle.child_tasks.request_cancellation().await;
     }
 
     async fn join_owned_work(&mut self) -> Vec<OwnedTaskCompletion> {
@@ -606,30 +813,38 @@ impl TaskSupervisor {
             })
             .collect::<Vec<_>>();
 
-        for (group_name, group) in &mut self.groups {
-            completions.extend(group.join_all().await.into_iter().map(|completion| {
-                OwnedTaskCompletion {
-                    group: Some(group_name.clone()),
-                    completion,
-                }
-            }));
-        }
+        completions.extend(self.lifecycle.child_tasks.join_all().await.into_iter().map(
+            |completion| OwnedTaskCompletion {
+                group: Some(completion.group),
+                completion: TaskCompletion {
+                    name: completion.task,
+                    result: completion.result,
+                },
+            },
+        ));
         completions
     }
 
     async fn abort_and_join_owned_work(&mut self) {
-        let nested = self
-            .groups
-            .values_mut()
-            .map(TaskGroup::abort_and_join)
-            .collect::<Vec<_>>();
-        let (direct, nested) = futures_util::future::join(
-            self.tasks.abort_and_join(),
-            futures_util::future::join_all(nested),
-        )
-        .await;
-        drop(direct);
-        drop(nested);
+        // Abort and join direct tasks first. Dropping each aborted parent
+        // releases any registry lock held while that parent joined a child.
+        // The child handles then remain owned by the global registry and are
+        // explicitly aborted and joined here as a complete descendant graph.
+        let _ = self.tasks.abort_and_join().await;
+        self.lifecycle.child_tasks.abort_all().await;
+        let _ = self.lifecycle.child_tasks.join_all().await;
+    }
+
+    async fn run_finalizers(&mut self) -> Vec<String> {
+        let mut failures = Vec::new();
+        for finalizer in std::mem::take(&mut self.finalizers) {
+            match AssertUnwindSafe(finalizer.future).catch_unwind().await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => failures.push(format!("{}: {error}", finalizer.name)),
+                Err(_) => failures.push(format!("{}: panicked", finalizer.name)),
+            }
+        }
+        failures
     }
 }
 
@@ -659,7 +874,8 @@ mod tests {
     };
 
     use super::{
-        DRAIN_TIMEOUT, Lifecycle, LifecycleState, SupervisorError, TaskGroup, TaskSupervisor,
+        DRAIN_TIMEOUT, Lifecycle, LifecycleState, LocalTaskGroup, SupervisorError, TaskGroup,
+        TaskSupervisor,
     };
 
     #[test]
@@ -746,9 +962,10 @@ mod tests {
 
     #[tokio::test]
     async fn task_group_joins_every_child_with_stable_names() {
-        let mut group = TaskGroup::new("bounded work");
-        group.spawn("second", async {});
-        group.spawn("first", async {});
+        let lifecycle = Lifecycle::new();
+        let mut group = TaskGroup::new(&lifecycle, "bounded work");
+        group.spawn("second", async {}).await;
+        group.spawn("first", async {}).await;
 
         let mut completions = group.join_all().await;
         completions.sort_by(|left, right| left.name().cmp(right.name()));
@@ -762,8 +979,9 @@ mod tests {
 
     #[tokio::test]
     async fn task_group_preserves_domain_completion_values() {
-        let mut group = TaskGroup::new("typed work");
-        group.spawn("classified", async { 42 });
+        let lifecycle = Lifecycle::new();
+        let mut group = TaskGroup::new(&lifecycle, "typed work");
+        group.spawn("classified", async { 42 }).await;
 
         let completions = group.join_all().await;
 
@@ -780,8 +998,11 @@ mod tests {
 
     #[tokio::test]
     async fn task_group_reports_a_child_panic() {
-        let mut group = TaskGroup::new("bounded work");
-        group.spawn("panicking", async { panic!("child failed") });
+        let lifecycle = Lifecycle::new();
+        let mut group = TaskGroup::new(&lifecycle, "bounded work");
+        group
+            .spawn("panicking", async { panic!("child failed") })
+            .await;
 
         let completions = group.join_all().await;
 
@@ -793,11 +1014,14 @@ mod tests {
 
     #[tokio::test]
     async fn task_group_cancellation_is_cooperative_and_latched() {
-        let mut group = TaskGroup::new("bounded work");
+        let lifecycle = Lifecycle::new();
+        let mut group = TaskGroup::new(&lifecycle, "bounded work");
         let cancellation = group.cancellation_token();
-        group.spawn("cooperative", async move {
-            cancellation.cancelled().await;
-        });
+        group
+            .spawn("cooperative", async move {
+                cancellation.cancelled().await;
+            })
+            .await;
 
         group.cancel();
         group.cancel();
@@ -819,7 +1043,7 @@ mod tests {
 
         let dropped = Arc::new(AtomicBool::new(false));
         let flag = DropFlag(Arc::clone(&dropped));
-        let mut group = TaskGroup::new("bounded work");
+        let mut group = LocalTaskGroup::new("bounded work");
         group.adopt(
             "pre-spawned",
             tokio::spawn(async move {
@@ -972,8 +1196,8 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn registered_group_is_cancelled_and_its_descendants_are_joined() {
+    #[tokio::test(start_paused = true)]
+    async fn parent_abort_joins_globally_registered_descendants() {
         struct DropFlag(Arc<AtomicBool>);
 
         impl Drop for DropFlag {
@@ -982,70 +1206,99 @@ mod tests {
             }
         }
 
-        let joined = Arc::new(AtomicBool::new(false));
-        let flag = DropFlag(Arc::clone(&joined));
-        let mut group = TaskGroup::new("nested");
-        let cancellation = group.cancellation_token();
-        group.spawn("descendant", async move {
-            let _flag = flag;
-            cancellation.cancelled().await;
-        });
-
+        let descendant_dropped = Arc::new(AtomicBool::new(false));
         let lifecycle = Lifecycle::new();
         let mut supervisor = TaskSupervisor::new(lifecycle.clone());
-        supervisor.register_group(group);
+        supervisor.spawn("parent", {
+            let lifecycle = lifecycle.clone();
+            let descendant_dropped = Arc::clone(&descendant_dropped);
+            async move {
+                let mut children = TaskGroup::new(&lifecycle, "nested");
+                let flag = DropFlag(descendant_dropped);
+                children
+                    .spawn("descendant", async move {
+                        let _flag = flag;
+                        std::future::pending::<()>().await;
+                    })
+                    .await;
+                std::future::pending::<()>().await;
+            }
+        });
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        shutdown_tx.send(()).unwrap();
+
+        let error = supervisor.run(shutdown_rx).await.unwrap_err();
+
+        assert!(matches!(error, SupervisorError::DrainTimeout { .. }));
+        assert!(descendant_dropped.load(Ordering::SeqCst));
+        assert_eq!(lifecycle.state(), LifecycleState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn finalizers_run_after_drain_and_before_stopped() {
+        let lifecycle = Lifecycle::new();
+        let task_joined = Arc::new(AtomicBool::new(false));
+        let observed_state = Arc::new(std::sync::Mutex::new(None));
+        let mut supervisor = TaskSupervisor::new(lifecycle.clone());
+        supervisor.spawn("producer", {
+            let lifecycle = lifecycle.clone();
+            let task_joined = Arc::clone(&task_joined);
+            async move {
+                lifecycle.wait_for_cancellation().await;
+                task_joined.store(true, Ordering::SeqCst);
+            }
+        });
+        supervisor.register_finalizer("test finalizer", {
+            let lifecycle = lifecycle.clone();
+            let task_joined = Arc::clone(&task_joined);
+            let observed_state = Arc::clone(&observed_state);
+            async move {
+                assert!(task_joined.load(Ordering::SeqCst));
+                *observed_state.lock().unwrap() = Some(lifecycle.state());
+                assert_eq!(lifecycle.state(), LifecycleState::GracefulStop);
+                Ok(())
+            }
+        });
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         shutdown_tx.send(()).unwrap();
 
         supervisor.run(shutdown_rx).await.unwrap();
 
-        assert!(joined.load(Ordering::SeqCst));
+        assert_eq!(
+            *observed_state.lock().unwrap(),
+            Some(LifecycleState::GracefulStop)
+        );
         assert_eq!(lifecycle.state(), LifecycleState::Stopped);
     }
 
     #[tokio::test]
-    async fn registered_group_panic_faults_the_supervisor() {
-        let mut group = TaskGroup::new("nested");
-        group.spawn("group-panic", async { panic!("nested child failed") });
-        let mut supervisor = TaskSupervisor::new(Lifecycle::new());
-        supervisor.register_group(group);
-        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        let error = supervisor.run(shutdown_rx).await.unwrap_err();
-
-        assert!(matches!(
-            error,
-            SupervisorError::GroupTaskFailed {
-                group,
-                task,
-                ..
-            } if group == "nested" && task == "group-panic"
-        ));
-    }
-
-    #[tokio::test]
-    async fn registered_group_panic_wakes_while_a_direct_task_is_still_running() {
-        let mut group = TaskGroup::new("nested");
-        group.spawn("group-panic", async { panic!("nested child failed") });
+    async fn finalizer_failure_faults_before_stopped() {
         let lifecycle = Lifecycle::new();
+        let observed_stopped = Arc::new(AtomicBool::new(false));
         let mut supervisor = TaskSupervisor::new(lifecycle.clone());
-        supervisor.spawn("still-running", async move {
-            lifecycle.wait_for_cancellation().await;
+        supervisor.register_finalizer("failing finalizer", {
+            let lifecycle = lifecycle.clone();
+            let observed_stopped = Arc::clone(&observed_stopped);
+            async move {
+                observed_stopped.store(
+                    lifecycle.state() == LifecycleState::Stopped,
+                    Ordering::SeqCst,
+                );
+                Err("cleanup failed".to_owned())
+            }
         });
-        supervisor.register_group(group);
-        tokio::task::yield_now().await;
-        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        shutdown_tx.send(()).unwrap();
 
         let error = supervisor.run(shutdown_rx).await.unwrap_err();
 
         assert!(matches!(
             error,
-            SupervisorError::GroupTaskFailed {
-                group,
-                task,
-                ..
-            } if group == "nested" && task == "group-panic"
+            SupervisorError::FinalizersFailed { ref failures } if failures.contains("failing finalizer")
         ));
+        assert!(!observed_stopped.load(Ordering::SeqCst));
+        assert_eq!(lifecycle.state(), LifecycleState::Stopped);
+        assert!(lifecycle.is_faulted());
     }
 
     #[tokio::test(start_paused = true)]

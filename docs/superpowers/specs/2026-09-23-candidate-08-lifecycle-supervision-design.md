@@ -165,13 +165,16 @@ changed to return futures or the registry must adopt and own the handles
 explicitly. A wrapper future that merely awaits a pre-spawned handle is not
 sufficient because aborting the wrapper detaches the inner task.
 
+The lifecycle supervisor also owns a global child-task registry. Every
+`TaskGroup` created by a child-owning module registers its handles with that
+registry, even when the group is created inside a parent task. On timeout, the
+supervisor therefore aborts and joins the complete descendant graph, not only
+the parent task. A parent must still join its group during normal operation,
+but parent completion cannot be treated as proof that descendants terminated.
+
 Each task entry must carry a stable task name and report its completion result.
 Each task group must expose an explicit `join_all`/`abort_and_join` operation;
 a completion channel alone is not ownership.
-
-The exact registry shape is the one remaining design decision. It must support
-both pre-spawned handles and futures spawned directly by the supervisor,
-without allowing a parent abort to silently detach descendants.
 
 Disabled optional features must not be represented by permanently pending
 placeholder tasks. They should either be absent from the task registry or have
@@ -300,15 +303,17 @@ owned work and finalizers have been joined.
 The existing crash announcement remains useful for a handler fault. It is not a
 substitute for an error result.
 
-The shutdown announcement and Langfuse finalization remain bounded. The
-finalizer sequence is:
+The supervisor owns the finalizer phase. The shutdown announcement and
+Langfuse finalization remain bounded. The finalizer sequence is:
 
 1. stop application task producers;
-2. drain/join application tasks;
-3. request Langfuse flush;
-4. close the Langfuse exporter;
-5. join the Langfuse exporter;
-6. return the final result.
+2. drain/join application-owned tasks and globally registered task groups;
+3. run registered finalizers in order, including Langfuse flush/close and the
+   emote SQLite writer close/join;
+4. mark the lifecycle `Faulted` if any finalizer fails;
+5. mark the lifecycle `Stopped` only after all finalizers succeed or fail and
+   their owned work has been joined;
+6. return the combined supervisor/finalizer result.
 
 Do not allow a finalizer to start a new long-running application task.
 
@@ -471,6 +476,10 @@ Update `crates/core/src/ai/langfuse.rs` so the exporter's lifecycle is
 explicit. The exporter is application-owned but is finalized after normal task
 producers stop. The finalizer must flush, close, and join the exporter before
 `run_bot` returns.
+
+Update `crates/core/src/emote_tracker/handle.rs` so the named SQLite writer
+thread retains its `JoinHandle`. The handle must expose an explicit close/join
+operation registered with the supervisor finalizer phase.
 
 ### Nested application-owned work
 
@@ -655,6 +664,11 @@ join_all
 abort_and_join
 ```
 
+Every task group also registers with the supervisor's global child-task
+registry. The group remains owned by its creating module for normal
+reconciliation, while the registry retains enough ownership to abort and join
+descendants when a parent task is forcibly stopped.
+
 The task group is the common child-ownership contract for:
 
 - schedule children;
@@ -664,15 +678,17 @@ The task group is the common child-ownership contract for:
 - other bounded child work introduced later.
 
 Domain modules may choose their own internal data structures, but they must
-return the same lifecycle contract to the supervisor. A completion channel
-alone is not a task group. A parent must be able to join every child, abort
-and join every child after timeout, and propagate child faults.
+register with the global registry and return the same lifecycle contract to
+the supervisor. A completion channel alone is not a task group. The parent
+must join every child during normal operation; the supervisor must be able to
+abort and join every descendant after timeout.
 
 ## Acceptance criteria
 
 The implementation is complete when:
 
 - every long-running production task has a supervisor owner;
+- every nested task group is registered with the global child-task registry;
 - Ctrl-C and SIGTERM enter the same graceful path;
 - shutdown is latched and cannot be missed by a late task;
 - handler loss and panic transition the entire runtime to `Faulted`;
@@ -681,8 +697,10 @@ The implementation is complete when:
 - ping actor and flight tracker stop through the lifecycle seam;
 - web and Ritual are awaited before `run_bot` returns;
 - teardown timeout is logged and returns `Err`;
-- remaining application-owned tasks are aborted and then joined after the
-  timeout;
+- remaining application-owned tasks and registered descendants are aborted and
+  then joined after the timeout;
+- registered finalizers, including Langfuse and the emote SQLite writer, run
+  before lifecycle enters `Stopped`;
 - no application-owned task performs effects after `run_bot` returns;
 - dependency-owned `twitch-irc` tasks are stopped by releasing the client, with
   no claim that unavailable upstream handles were synchronously joined;

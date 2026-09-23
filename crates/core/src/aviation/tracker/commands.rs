@@ -949,7 +949,7 @@ where
     let mut messages: Vec<String> = Vec::new();
     let mut deferred_commands = Vec::new();
 
-    let mut poll_tasks: TaskGroup<PollAttempt> = TaskGroup::new("flight poll children");
+    let mut poll_tasks: TaskGroup<PollAttempt> = TaskGroup::new(lifecycle, "flight poll children");
     let mut fetch_results: Vec<PollAttempt> = Vec::new();
 
     for (child_index, flight) in state.flights.iter().enumerate() {
@@ -1001,16 +1001,18 @@ where
         let id = flight.identifier.clone();
         let plan = plan_adsb_lookup(flight);
         let cancellation = poll_tasks.cancellation_token();
-        poll_tasks.spawn(format!("poll-{child_index}"), async move {
-            if cancellation.is_cancelled() {
-                return None;
-            }
-            // This provider request is the atomic operation. Once started it is
-            // allowed to finish (and is bounded by POLL_TIMEOUT); cancellation
-            // prevents queued children and all later state/chat effects.
-            let observation = fetch_observation(plan, &ac).await;
-            Some((id, observation))
-        });
+        poll_tasks
+            .spawn(format!("poll-{child_index}"), async move {
+                if cancellation.is_cancelled() {
+                    return None;
+                }
+                // This provider request is the atomic operation. Once started it is
+                // allowed to finish (and is bounded by POLL_TIMEOUT); cancellation
+                // prevents queued children and all later state/chat effects.
+                let observation = fetch_observation(plan, &ac).await;
+                Some((id, observation))
+            })
+            .await;
     }
 
     let child_cancellation = poll_tasks.cancellation_token();
@@ -1202,21 +1204,24 @@ fn collect_poll_results(
 mod poll_task_group_tests {
     use super::{Observation, PollAttempt, PollOutcome, collect_poll_results};
     use crate::aviation::tracker::FlightIdentifier;
-    use crate::lifecycle::TaskGroup;
+    use crate::lifecycle::{Lifecycle, TaskGroup};
 
     #[tokio::test]
     async fn successful_child_results_are_collected() {
-        let mut group = TaskGroup::new("test flight poll children");
-        group.spawn("poll-0", async {
-            let attempt: PollAttempt = Some((
-                FlightIdentifier::Callsign("TEST".to_owned()),
-                Observation {
-                    used_hex: false,
-                    outcome: PollOutcome::Error,
-                },
-            ));
-            attempt
-        });
+        let lifecycle = Lifecycle::new();
+        let mut group = TaskGroup::new(&lifecycle, "test flight poll children");
+        group
+            .spawn("poll-0", async {
+                let attempt: PollAttempt = Some((
+                    FlightIdentifier::Callsign("TEST".to_owned()),
+                    Observation {
+                        used_hex: false,
+                        outcome: PollOutcome::Error,
+                    },
+                ));
+                attempt
+            })
+            .await;
 
         let results = collect_poll_results(group.join_all().await).unwrap();
 
@@ -1228,22 +1233,25 @@ mod poll_task_group_tests {
 
     #[tokio::test]
     async fn cancellation_prevents_a_queued_provider_child_from_starting() {
-        let mut group = TaskGroup::new("test flight poll children");
+        let lifecycle = Lifecycle::new();
+        let mut group = TaskGroup::new(&lifecycle, "test flight poll children");
         let cancellation = group.cancellation_token();
         let (start_queued_child, child_may_check) = tokio::sync::oneshot::channel();
-        group.spawn("poll-0", async move {
-            child_may_check.await.expect("test releases queued child");
-            if cancellation.is_cancelled() {
-                return None;
-            }
-            Some((
-                FlightIdentifier::Callsign("SHOULD_NOT_START".to_owned()),
-                Observation {
-                    used_hex: false,
-                    outcome: PollOutcome::Error,
-                },
-            ))
-        });
+        group
+            .spawn("poll-0", async move {
+                child_may_check.await.expect("test releases queued child");
+                if cancellation.is_cancelled() {
+                    return None;
+                }
+                Some((
+                    FlightIdentifier::Callsign("SHOULD_NOT_START".to_owned()),
+                    Observation {
+                        used_hex: false,
+                        outcome: PollOutcome::Error,
+                    },
+                ))
+            })
+            .await;
         group.cancel();
         start_queued_child
             .send(())
@@ -1256,8 +1264,11 @@ mod poll_task_group_tests {
 
     #[tokio::test]
     async fn nested_poll_join_error_is_not_discarded() {
-        let mut group = TaskGroup::new("test flight poll children");
-        group.spawn("poll-0", async { panic!("provider child failed") });
+        let lifecycle = Lifecycle::new();
+        let mut group = TaskGroup::new(&lifecycle, "test flight poll children");
+        group
+            .spawn("poll-0", async { panic!("provider child failed") })
+            .await;
 
         let source = collect_poll_results(group.join_all().await)
             .expect_err("a child panic must be propagated to the flight tracker parent");

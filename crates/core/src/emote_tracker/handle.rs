@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use eyre::{Result, WrapErr};
 use rusqlite::Connection;
-use tokio::sync::{mpsc, oneshot};
+use thiserror::Error;
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 use super::db::{
     apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, get_emote_meaning,
@@ -113,11 +114,45 @@ enum StoreCmd {
         ids: Vec<String>,
         reply: oneshot::Sender<Result<Vec<EmoteMeaningRow>>>,
     },
+    Close(oneshot::Sender<()>),
+}
+
+#[derive(Debug, Error)]
+pub enum EmoteTrackerFinalizeError {
+    #[error("emote tracker SQLite writer closed before the close command was accepted")]
+    CloseCommandFailed,
+
+    #[error("emote tracker SQLite writer closed before close acknowledgement")]
+    CloseReplyFailed,
+
+    #[error("failed to schedule emote tracker SQLite writer join")]
+    JoinTaskFailed(#[source] tokio::task::JoinError),
+
+    #[error("emote tracker SQLite writer thread panicked")]
+    WriterPanicked,
+}
+
+struct WriterOwner {
+    handle: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+impl Drop for WriterOwner {
+    fn drop(&mut self) {
+        // Normal runtime ownership takes the handle in `close_and_join`. If
+        // composition unwinds before finalization, the last handle can still
+        // synchronously confirm the named thread has terminated.
+        if let Ok(mut handle) = self.handle.try_lock()
+            && let Some(handle) = handle.take()
+        {
+            let _ = handle.join();
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct EmoteTrackerHandle {
     tx: Arc<mpsc::UnboundedSender<StoreCmd>>,
+    writer: Arc<WriterOwner>,
 }
 
 impl EmoteTrackerHandle {
@@ -139,12 +174,17 @@ impl EmoteTrackerHandle {
 
         let (tx, mut rx) = mpsc::unbounded_channel();
 
-        thread::Builder::new()
+        let writer = thread::Builder::new()
             .name("emote-tracker-sqlite".into())
             .spawn(move || run_writer(conn, &mut rx))
             .wrap_err("spawn emote-tracker-sqlite thread")?;
 
-        Ok(Self { tx: Arc::new(tx) })
+        Ok(Self {
+            tx: Arc::new(tx),
+            writer: Arc::new(WriterOwner {
+                handle: Mutex::new(Some(writer)),
+            }),
+        })
     }
 
     async fn send<R>(
@@ -345,6 +385,37 @@ impl EmoteTrackerHandle {
         self.send(|reply| StoreCmd::ListEmoteMeaningsForIds { ids, reply })
             .await
     }
+
+    /// Drain queued commands, stop the named SQLite writer, and synchronously
+    /// join its thread. This operation is idempotent across cloned handles.
+    pub async fn close_and_join(&self) -> Result<(), EmoteTrackerFinalizeError> {
+        let mut writer = self.writer.handle.lock().await;
+        if writer.is_none() {
+            return Ok(());
+        }
+
+        let (close_tx, close_rx) = oneshot::channel();
+        let command_result = self.tx.send(StoreCmd::Close(close_tx));
+        let close_result = match command_result {
+            Ok(()) => close_rx
+                .await
+                .map_err(|_| EmoteTrackerFinalizeError::CloseReplyFailed),
+            Err(_) => Err(EmoteTrackerFinalizeError::CloseCommandFailed),
+        };
+
+        // Even when command acknowledgement fails, take and join the retained
+        // thread handle. Returning must not leave an application-owned writer
+        // detached.
+        let handle = writer
+            .take()
+            .expect("writer handle was present before close began");
+        let join_result = tokio::task::spawn_blocking(move || handle.join())
+            .await
+            .map_err(EmoteTrackerFinalizeError::JoinTaskFailed)?;
+        let join_result = join_result.map_err(|_| EmoteTrackerFinalizeError::WriterPanicked);
+
+        close_result.and(join_result)
+    }
 }
 
 fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
@@ -455,6 +526,10 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
             StoreCmd::ListEmoteMeaningsForIds { ids, reply } => {
                 let _ = reply.send(list_emote_meanings_for_ids(&conn, &ids));
             }
+            StoreCmd::Close(reply) => {
+                let _ = reply.send(());
+                return;
+            }
         }
     }
 }
@@ -500,6 +575,37 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(life.kind, SetEventKind::Bootstrap);
+    }
+
+    #[tokio::test]
+    async fn close_and_join_retains_named_writer_ownership() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DB_FILENAME);
+        let handle = EmoteTrackerHandle::open(&path).unwrap();
+
+        handle.upsert_emote("e1", "Kappa", true, 1).await.unwrap();
+        handle
+            .insert_usage_events(vec![NewUsageEvent {
+                at: 1,
+                emote_id: "e1".into(),
+                twitch_user_id: "u1".into(),
+                login: Some("alice".into()),
+                flagged: false,
+            }])
+            .await
+            .unwrap();
+        handle.close_and_join().await.unwrap();
+
+        assert!(handle.writer.handle.lock().await.is_none());
+        assert!(
+            handle
+                .catalog_is_empty()
+                .await
+                .expect_err("closed writer must reject later work")
+                .to_string()
+                .contains("writer thread exited")
+        );
+        handle.close_and_join().await.unwrap();
     }
 
     #[tokio::test]

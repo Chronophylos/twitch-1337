@@ -352,6 +352,7 @@ pub async fn main() -> Result<()> {
     ));
 
     tokio::select! {
+        biased;
         result = &mut bot_task => join_bot_task(result),
         signal = wait_for_shutdown_signal() => {
             if let Err(error) = signal {
@@ -359,16 +360,24 @@ pub async fn main() -> Result<()> {
                 // not abort `run_bot`: request its normal drain first, join it,
                 // and only then return the adapter error to the process.
                 let _ = request_shutdown(shutdown_tx);
-                let _ = bot_task.await;
-                return Err(error);
+                let bot_result = bot_task.await;
+                return match bot_result {
+                    Ok(Err(bot_error)) => Err(bot_error),
+                    Ok(Ok(())) => Err(error),
+                    Err(join_error) => Err(eyre::eyre!("bot task join failed after signal error: {join_error}")),
+                };
             }
             match request_shutdown(shutdown_tx) {
                 Ok(()) => join_bot_task(bot_task.await),
-                Err(error) => {
-                    // A dropped receiver means the bot task has already left
-                    // `run_bot`; join it rather than detaching cleanup.
-                    let _ = bot_task.await;
-                    Err(error)
+                Err(signal_error) => {
+                    // The bot finished before the signal request was sent. Its
+                    // own result is authoritative when it failed; otherwise
+                    // retain the signal-adapter error.
+                    match bot_task.await {
+                        Ok(Err(bot_error)) => Err(bot_error),
+                        Ok(Ok(())) => Err(signal_error),
+                        Err(join_error) => Err(eyre::eyre!("bot task join failed after signal race: {join_error}")),
+                    }
                 }
             }
         }

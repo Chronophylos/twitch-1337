@@ -192,6 +192,7 @@ pub(crate) fn spawn_handlers<T, L>(
         let services = services.clone();
         let sender = chat_sender.clone();
         let shutdown = schedule_shutdown.clone();
+        let schedule_lifecycle = lifecycle.clone();
         register_notify_loop(
             supervisor,
             lifecycle.clone(),
@@ -204,6 +205,7 @@ pub(crate) fn spawn_handlers<T, L>(
                 services.channel.clone(),
                 schedule_shutdown,
                 services.clock.clone(),
+                schedule_lifecycle,
             ),
         );
     }
