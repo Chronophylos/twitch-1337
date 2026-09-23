@@ -167,6 +167,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_stops_before_chained_city_enrichment() {
+        crate::install_crypto_provider();
         let server = wiremock::MockServer::start().await;
         let client = DoeneratlasClient::with_base_url(reqwest::Client::new(), server.uri());
         let cancellation = CommandCancellation::new();
