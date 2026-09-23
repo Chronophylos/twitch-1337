@@ -3,12 +3,14 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use tokio::sync::mpsc;
+use tokio::task::JoinError;
 use tracing::{info, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
 #[cfg(test)]
 use crate::aviation::NearbyAircraft;
 use crate::aviation::{AdsbProvider, AviationClient, AviationstackFlightMetadata};
+use crate::lifecycle::{Lifecycle, TaskCompletion, TaskGroup};
 use crate::twitch::ChatSender;
 use crate::util::clock::Clock;
 
@@ -393,11 +395,15 @@ async fn drain_latency_sensitive_commands(
     data_dir: &Path,
     clock: &dyn Clock,
     deferred_commands: &mut Vec<TrackerCommand>,
+    lifecycle: &Lifecycle,
 ) {
     let Some(cmd_rx) = cmd_rx.as_mut() else {
         return;
     };
-    while let Ok(cmd) = cmd_rx.try_recv() {
+    while !lifecycle.is_cancelled() {
+        let Ok(cmd) = cmd_rx.try_recv() else {
+            return;
+        };
         if let Some(deferred) = process_latency_sensitive_command(cmd, state, data_dir, clock).await
         {
             deferred_commands.push(deferred);
@@ -890,31 +896,72 @@ pub async fn poll_all_flights_with_commands<T, L, P>(
     aviation_client: &P,
     data_dir: &Path,
     clock: &dyn Clock,
-    mut cmd_rx: Option<&mut mpsc::Receiver<TrackerCommand>>,
+    cmd_rx: Option<&mut mpsc::Receiver<TrackerCommand>>,
 ) -> Vec<TrackerCommand>
 where
     T: Transport,
     L: LoginCredentials,
     P: AdsbProvider + Clone + Send + Sync + 'static,
 {
+    let lifecycle = Lifecycle::new();
+    try_poll_all_flights_with_commands(
+        state,
+        sender,
+        channel,
+        aviation_client,
+        data_dir,
+        clock,
+        cmd_rx,
+        &lifecycle,
+    )
+    .await
+    .unwrap_or_else(|source| {
+        panic!("nested flight-poll child failed: {source}");
+    })
+    .unwrap_or_default()
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "poll cycle threads shared tracker dependencies, command input, and lifecycle"
+)]
+pub(crate) async fn try_poll_all_flights_with_commands<T, L, P>(
+    state: &mut FlightTrackerState,
+    sender: &Arc<ChatSender<T, L>>,
+    channel: &str,
+    aviation_client: &P,
+    data_dir: &Path,
+    clock: &dyn Clock,
+    mut cmd_rx: Option<&mut mpsc::Receiver<TrackerCommand>>,
+    lifecycle: &Lifecycle,
+) -> Result<Option<Vec<TrackerCommand>>, JoinError>
+where
+    T: Transport,
+    L: LoginCredentials,
+    P: AdsbProvider + Clone + Send + Sync + 'static,
+{
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
     let now = clock.now_utc();
     let mut changed = false;
     let mut removals: Vec<FlightIdentifier> = Vec::new();
     let mut messages: Vec<String> = Vec::new();
     let mut deferred_commands = Vec::new();
 
-    type PollAttempt = (FlightIdentifier, Observation);
-
-    let mut join_set = tokio::task::JoinSet::new();
+    let mut poll_tasks: TaskGroup<PollAttempt> = TaskGroup::new("flight poll children");
     let mut fetch_results: Vec<PollAttempt> = Vec::new();
 
-    for flight in state.flights.iter() {
+    for (child_index, flight) in state.flights.iter().enumerate() {
         let readiness = poll_readiness(flight, now);
         match poll_plan(flight, readiness, now) {
             PollPlan::Skip => continue,
             PollPlan::Apply(update) => {
                 let identifier = flight.identifier.clone();
                 for event in update.debug {
+                    if lifecycle.is_cancelled() {
+                        return Ok(None);
+                    }
                     append_debug_event(data_dir, now, event).await;
                 }
                 debug_assert!(
@@ -947,28 +994,44 @@ where
             PollPlan::Due => {}
         }
 
+        if lifecycle.is_cancelled() {
+            return Ok(None);
+        }
         let ac = aviation_client.clone();
         let id = flight.identifier.clone();
         let plan = plan_adsb_lookup(flight);
-        join_set.spawn(async move {
+        let cancellation = poll_tasks.cancellation_token();
+        poll_tasks.spawn(format!("poll-{child_index}"), async move {
+            if cancellation.is_cancelled() {
+                return None;
+            }
+            // This provider request is the atomic operation. Once started it is
+            // allowed to finish (and is bounded by POLL_TIMEOUT); cancellation
+            // prevents queued children and all later state/chat effects.
             let observation = fetch_observation(plan, &ac).await;
-            (id, observation)
+            Some((id, observation))
         });
     }
 
-    if let Some(cmd_rx) = cmd_rx.as_mut() {
+    let child_cancellation = poll_tasks.cancellation_token();
+    let (completions, poll_cancelled) = if let Some(cmd_rx) = cmd_rx.as_mut() {
         let mut command_channel_open = true;
-        while !join_set.is_empty() {
-            tokio::select! {
-                res = join_set.join_next() => {
-                    if let Some(Ok((identifier, observation))) = res {
-                        fetch_results.push((identifier, observation));
-                    }
-                }
+        let mut join_all = Box::pin(poll_tasks.join_all());
+        loop {
+            enum JoinWait {
+                Completed(Vec<TaskCompletion<PollAttempt>>),
+                Cancelled,
+            }
+            let completed = tokio::select! {
+                biased;
+                _ = lifecycle.wait_for_cancellation() => JoinWait::Cancelled,
+                completions = &mut join_all => JoinWait::Completed(completions),
                 cmd = cmd_rx.recv(), if command_channel_open => {
                     match cmd {
                         Some(cmd) => {
-                            if let Some(deferred) = process_latency_sensitive_command(
+                            if lifecycle.is_cancelled() {
+                                JoinWait::Cancelled
+                            } else if let Some(deferred) = process_latency_sensitive_command(
                                 cmd,
                                 state,
                                 data_dir,
@@ -977,30 +1040,63 @@ where
                             .await
                             {
                                 deferred_commands.push(deferred);
+                                continue;
+                            } else {
+                                continue;
                             }
                         }
                         None => {
                             command_channel_open = false;
+                            continue;
                         }
                     }
+                }
+            };
+            match completed {
+                JoinWait::Completed(completions) => break (completions, false),
+                JoinWait::Cancelled => {
+                    child_cancellation.cancel();
+                    break (join_all.await, true);
                 }
             }
         }
     } else {
-        while let Some(res) = join_set.join_next().await {
-            if let Ok((identifier, observation)) = res {
-                fetch_results.push((identifier, observation));
+        let mut join_all = Box::pin(poll_tasks.join_all());
+        let completed = tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => None,
+            completions = &mut join_all => Some(completions),
+        };
+        match completed {
+            Some(completions) => (completions, false),
+            None => {
+                child_cancellation.cancel();
+                (join_all.await, true)
             }
         }
+    };
+
+    // Join errors win even when cancellation was observed, so a panicking
+    // provider child still faults the parent task.
+    fetch_results.extend(collect_poll_results(completions)?);
+    if poll_cancelled || lifecycle.is_cancelled() {
+        return Ok(None);
     }
 
-    for (identifier, observation) in fetch_results {
+    for attempt in fetch_results {
+        let Some((identifier, observation)) = attempt else {
+            continue;
+        };
+        if lifecycle.is_cancelled() {
+            return Ok(None);
+        }
         drain_latency_sensitive_commands(
             &mut cmd_rx,
             state,
             data_dir,
             clock,
             &mut deferred_commands,
+            lifecycle,
         )
         .await;
 
@@ -1014,9 +1110,15 @@ where
         }) else {
             continue;
         };
+        if lifecycle.is_cancelled() {
+            return Ok(None);
+        }
         changed = true;
 
         for event in update.debug {
+            if lifecycle.is_cancelled() {
+                return Ok(None);
+            }
             append_debug_event(data_dir, now, event).await;
         }
         debug_assert!(
@@ -1045,6 +1147,9 @@ where
         }
     }
 
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
     for identifier in removals {
         if let Some(idx) = find_index_by_identifier(&state.flights, &identifier) {
             state.flights.remove(idx);
@@ -1052,18 +1157,113 @@ where
         }
     }
 
-    drain_latency_sensitive_commands(&mut cmd_rx, state, data_dir, clock, &mut deferred_commands)
-        .await;
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
+    drain_latency_sensitive_commands(
+        &mut cmd_rx,
+        state,
+        data_dir,
+        clock,
+        &mut deferred_commands,
+        lifecycle,
+    )
+    .await;
 
     for msg in messages {
+        if lifecycle.is_cancelled() {
+            return Ok(None);
+        }
         sender.say(channel.to_string(), msg).await;
     }
 
     if changed {
+        if lifecycle.is_cancelled() {
+            return Ok(None);
+        }
         save_tracker_state(data_dir, state).await;
     }
 
-    deferred_commands
+    Ok(Some(deferred_commands))
+}
+
+type PollAttempt = Option<(FlightIdentifier, Observation)>;
+
+fn collect_poll_results(
+    completions: Vec<TaskCompletion<PollAttempt>>,
+) -> Result<Vec<PollAttempt>, JoinError> {
+    completions
+        .into_iter()
+        .map(TaskCompletion::into_result)
+        .collect()
+}
+
+#[cfg(test)]
+mod poll_task_group_tests {
+    use super::{Observation, PollAttempt, PollOutcome, collect_poll_results};
+    use crate::aviation::tracker::FlightIdentifier;
+    use crate::lifecycle::TaskGroup;
+
+    #[tokio::test]
+    async fn successful_child_results_are_collected() {
+        let mut group = TaskGroup::new("test flight poll children");
+        group.spawn("poll-0", async {
+            let attempt: PollAttempt = Some((
+                FlightIdentifier::Callsign("TEST".to_owned()),
+                Observation {
+                    used_hex: false,
+                    outcome: PollOutcome::Error,
+                },
+            ));
+            attempt
+        });
+
+        let results = collect_poll_results(group.join_all().await).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            matches!(results[0].as_ref().unwrap().0, FlightIdentifier::Callsign(ref call) if call == "TEST")
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_prevents_a_queued_provider_child_from_starting() {
+        let mut group = TaskGroup::new("test flight poll children");
+        let cancellation = group.cancellation_token();
+        let (start_queued_child, child_may_check) = tokio::sync::oneshot::channel();
+        group.spawn("poll-0", async move {
+            child_may_check.await.expect("test releases queued child");
+            if cancellation.is_cancelled() {
+                return None;
+            }
+            Some((
+                FlightIdentifier::Callsign("SHOULD_NOT_START".to_owned()),
+                Observation {
+                    used_hex: false,
+                    outcome: PollOutcome::Error,
+                },
+            ))
+        });
+        group.cancel();
+        start_queued_child
+            .send(())
+            .expect("queued child is still owned by the group");
+
+        let results = collect_poll_results(group.join_all().await).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_none());
+    }
+
+    #[tokio::test]
+    async fn nested_poll_join_error_is_not_discarded() {
+        let mut group = TaskGroup::new("test flight poll children");
+        group.spawn("poll-0", async { panic!("provider child failed") });
+
+        let source = collect_poll_results(group.join_all().await)
+            .expect_err("a child panic must be propagated to the flight tracker parent");
+
+        assert!(source.is_panic());
+    }
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ use crate::{
     ChatHistory, Services, ai,
     ai::command::{AI_TRIGGER, GROK_ALIAS_TRIGGER, is_ai_trigger},
     aviation, commands,
+    lifecycle::Lifecycle,
     suspend::SuspensionManager,
     twitch::{ChatSender, mouth::Agent},
 };
@@ -20,6 +21,8 @@ use crate::{
 /// only consumer of this struct. Everything else destructures
 /// `Arc<Services>` directly.
 pub struct CommandConfig<T: Transport, L: LoginCredentials> {
+    /// Lifecycle used to stop accepting new commands during teardown.
+    pub lifecycle: Lifecycle,
     /// Pre-subscribed broadcast receiver, created in `spawn_handlers`
     /// before any handler task runs so messages broadcast during startup
     /// are buffered instead of lost (subscribe-before-router invariant).
@@ -40,6 +43,7 @@ where
     info!("Generic Command Handler started");
 
     let CommandConfig {
+        lifecycle,
         broadcast_rx,
         services,
         sender,
@@ -60,7 +64,15 @@ where
 
     let cmd_list = build_commands(&services, &snapshot);
 
-    run_command_dispatcher(broadcast_rx, services, snapshot, sender, cmd_list).await;
+    run_command_dispatcher(
+        broadcast_rx,
+        services,
+        snapshot,
+        sender,
+        cmd_list,
+        lifecycle,
+    )
+    .await;
 }
 /// Builds the full list of built-in commands, including every gated command
 /// whose service is present. `snapshot` is the settings snapshot the handler
@@ -407,6 +419,7 @@ pub(crate) async fn run_command_dispatcher<T, L>(
     snapshot: Arc<crate::settings::Settings>,
     sender: Arc<ChatSender<T, L>>,
     commands: Vec<Box<dyn crate::commands::Command<T, L>>>,
+    lifecycle: Lifecycle,
 ) where
     T: Transport,
     L: LoginCredentials,
@@ -436,145 +449,166 @@ pub(crate) async fn run_command_dispatcher<T, L>(
     let echo = services.echo.clone();
 
     loop {
-        match broadcast_rx.recv().await {
-            Ok(message) => {
-                let ServerMessage::Privmsg(privmsg) = message else {
-                    continue;
-                };
-
-                let is_ai_channel = ai_channel
-                    .as_ref()
-                    .is_some_and(|ch| privmsg.channel_login == *ch);
-
-                // In the admin channel, only the broadcaster can use commands.
-                if let Some(ref admin_ch) = admin_channel
-                    && privmsg.channel_login == *admin_ch
-                    && !privmsg.badges.iter().any(|b| b.name == "broadcaster")
-                {
+        let message = tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => {
+                debug!("Command handler lifecycle cancelled, shutting down");
+                break;
+            }
+            result = broadcast_rx.recv() => match result {
+                Ok(message) => message,
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    error!(skipped, "Command handler lagged, skipped messages");
                     continue;
                 }
-
-                // Record message in the appropriate chat history buffer.
-                let target_buffer: Option<&ChatHistory> = if admin_channel
-                    .as_ref()
-                    .is_some_and(|ch| privmsg.channel_login == *ch)
-                {
-                    None
-                } else if is_ai_channel {
-                    ai_channel_history_for_dispatch.as_ref()
-                } else {
-                    primary_history_for_dispatch.as_ref()
-                };
-                let is_mouth = echo.is_mouth(&privmsg.sender.id, &privmsg.sender.login);
-                let skip_history = is_mouth
-                    || echo
-                        .is_echo(
-                            &privmsg.sender.id,
-                            &privmsg.sender.login,
-                            &privmsg.message_id,
-                        )
-                        .await;
-                if let Some(buffer) = target_buffer.filter(|_| !skip_history) {
-                    let display_name = Some(privmsg.sender.name.as_str()).filter(|s| !s.is_empty());
-                    let user_id = Some(privmsg.sender.id.as_str()).filter(|s| !s.is_empty());
-                    buffer.lock().await.push_user_with_identity_at(
-                        privmsg.sender.login.clone(),
-                        display_name,
-                        user_id,
-                        privmsg.message_text.clone(),
-                        privmsg.server_timestamp,
-                    );
+                Err(broadcast::error::RecvError::Closed) => {
+                    debug!("Broadcast channel closed, command handler exiting");
+                    break;
                 }
-                if is_mouth {
-                    // Mouths are speak-only: never dispatch a command from their own echo.
-                    continue;
-                }
+            },
+        };
+        if lifecycle.is_cancelled() {
+            break;
+        }
+        {
+            let ServerMessage::Privmsg(privmsg) = message else {
+                continue;
+            };
 
-                let words: Vec<&str> = privmsg.message_text.split_whitespace().collect();
-                if let Some((cmd, inv)) = find_enabled_command(&commands, &words) {
-                    // In the ai channel, only `!ai` / `@grok` are reachable as
-                    // commands. Follow-ups are handled below, after no command
-                    // matched, so they still get through.
-                    if is_ai_channel && !is_ai_trigger(inv.trigger) {
-                        continue;
-                    }
-                    dispatch_command(
-                        cmd,
-                        &privmsg,
-                        &sender,
-                        inv.trigger,
-                        inv.args,
-                        &suspension_manager,
+            let is_ai_channel = ai_channel
+                .as_ref()
+                .is_some_and(|ch| privmsg.channel_login == *ch);
+
+            // In the admin channel, only the broadcaster can use commands.
+            if let Some(ref admin_ch) = admin_channel
+                && privmsg.channel_login == *admin_ch
+                && !privmsg.badges.iter().any(|b| b.name == "broadcaster")
+            {
+                continue;
+            }
+
+            // Record message in the appropriate chat history buffer.
+            let target_buffer: Option<&ChatHistory> = if admin_channel
+                .as_ref()
+                .is_some_and(|ch| privmsg.channel_login == *ch)
+            {
+                None
+            } else if is_ai_channel {
+                ai_channel_history_for_dispatch.as_ref()
+            } else {
+                primary_history_for_dispatch.as_ref()
+            };
+            let is_mouth = echo.is_mouth(&privmsg.sender.id, &privmsg.sender.login);
+            let skip_history = is_mouth
+                || echo
+                    .is_echo(
+                        &privmsg.sender.id,
+                        &privmsg.sender.login,
+                        &privmsg.message_id,
                     )
                     .await;
-                    continue;
+            if let Some(buffer) = target_buffer.filter(|_| !skip_history) {
+                let display_name = Some(privmsg.sender.name.as_str()).filter(|s| !s.is_empty());
+                let user_id = Some(privmsg.sender.id.as_str()).filter(|s| !s.is_empty());
+                if lifecycle.is_cancelled() {
+                    break;
                 }
-
-                // Twitch reply bodies start with `@parent`. Strip that and
-                // retry so `!lb` / `!ai` still win over a Follow-up. Only
-                // replies get this retry — a plain `@bob !lb` is just chat.
-                let rest = skip_leading_mentions(&words);
-                if privmsg.reply_parent.is_some()
-                    && rest.len() != words.len()
-                    && let Some((cmd, inv)) = find_enabled_command(&commands, rest)
-                {
-                    if is_ai_channel && !is_ai_trigger(inv.trigger) {
-                        continue;
-                    }
-                    dispatch_command(
-                        cmd,
-                        &privmsg,
-                        &sender,
-                        inv.trigger,
-                        inv.args,
-                        &suspension_manager,
-                    )
-                    .await;
-                    continue;
-                }
-
-                // No command matched. A reply whose direct parent is a Mouth
-                // starts a Follow-up Turn for that agent.
-                let Some(parent) = privmsg.reply_parent.as_ref() else {
-                    continue;
-                };
-                let Some(agent) = echo.agent_for(
-                    &parent.reply_parent_user.id,
-                    &parent.reply_parent_user.login,
-                ) else {
-                    continue;
-                };
-                let Some(trigger) = followup_trigger(agent) else {
-                    continue;
-                };
-                if rest.is_empty() || rest[0].starts_with('!') {
-                    continue;
-                }
-                let Some(cmd) = commands.iter().find(|c| c.enabled() && c.matches(trigger)) else {
-                    continue;
-                };
-                debug!(
-                    parent_agent = ?agent,
-                    user = %privmsg.sender.login,
-                    "Mouth-parent reply starting Follow-up Turn"
+                buffer.lock().await.push_user_with_identity_at(
+                    privmsg.sender.login.clone(),
+                    display_name,
+                    user_id,
+                    privmsg.message_text.clone(),
+                    privmsg.server_timestamp,
                 );
+            }
+            if is_mouth {
+                // Mouths are speak-only: never dispatch a command from their own echo.
+                continue;
+            }
+
+            let words: Vec<&str> = privmsg.message_text.split_whitespace().collect();
+            if let Some((cmd, inv)) = find_enabled_command(&commands, &words) {
+                if lifecycle.is_cancelled() {
+                    break;
+                }
+                // In the ai channel, only `!ai` / `@grok` are reachable as
+                // commands. Follow-ups are handled below, after no command
+                // matched, so they still get through.
+                if is_ai_channel && !is_ai_trigger(inv.trigger) {
+                    continue;
+                }
                 dispatch_command(
-                    cmd.as_ref(),
+                    cmd,
                     &privmsg,
                     &sender,
-                    trigger,
-                    rest.to_vec(),
+                    inv.trigger,
+                    inv.args,
                     &suspension_manager,
                 )
                 .await;
+                continue;
             }
-            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                error!(skipped, "Command handler lagged, skipped messages");
+
+            // Twitch reply bodies start with `@parent`. Strip that and
+            // retry so `!lb` / `!ai` still win over a Follow-up. Only
+            // replies get this retry — a plain `@bob !lb` is just chat.
+            let rest = skip_leading_mentions(&words);
+            if privmsg.reply_parent.is_some()
+                && rest.len() != words.len()
+                && let Some((cmd, inv)) = find_enabled_command(&commands, rest)
+            {
+                if lifecycle.is_cancelled() {
+                    break;
+                }
+                if is_ai_channel && !is_ai_trigger(inv.trigger) {
+                    continue;
+                }
+                dispatch_command(
+                    cmd,
+                    &privmsg,
+                    &sender,
+                    inv.trigger,
+                    inv.args,
+                    &suspension_manager,
+                )
+                .await;
+                continue;
             }
-            Err(broadcast::error::RecvError::Closed) => {
-                debug!("Broadcast channel closed, command handler exiting");
-                break;
+
+            // No command matched. A reply whose direct parent is a Mouth
+            // starts a Follow-up Turn for that agent.
+            let Some(parent) = privmsg.reply_parent.as_ref() else {
+                continue;
+            };
+            let Some(agent) = echo.agent_for(
+                &parent.reply_parent_user.id,
+                &parent.reply_parent_user.login,
+            ) else {
+                continue;
+            };
+            let Some(trigger) = followup_trigger(agent) else {
+                continue;
+            };
+            if rest.is_empty() || rest[0].starts_with('!') {
+                continue;
             }
+            let Some(cmd) = commands.iter().find(|c| c.enabled() && c.matches(trigger)) else {
+                continue;
+            };
+            debug!(
+                parent_agent = ?agent,
+                user = %privmsg.sender.login,
+                "Mouth-parent reply starting Follow-up Turn"
+            );
+            dispatch_command(
+                cmd.as_ref(),
+                &privmsg,
+                &sender,
+                trigger,
+                rest.to_vec(),
+                &suspension_manager,
+            )
+            .await;
         }
     }
 }

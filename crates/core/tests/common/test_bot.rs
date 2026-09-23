@@ -634,13 +634,9 @@ impl TestBotBuilder {
                         )),
                     },
                 );
-                let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
+                let spawner: twitch_1337::WebSpawner = Box::new(move |lifecycle| {
                     let deps = twitch_1337_web::WebDeps { bind_addr, state };
-                    tokio::spawn(async move {
-                        if let Err(e) = twitch_1337_web::run_web(listener, deps, shutdown).await {
-                            tracing::error!(target: "twitch_1337_web", ?e, "test web exited");
-                        }
-                    })
+                    twitch_1337_web::spawn_web_runtime(listener, deps, lifecycle)
                 });
                 Some(spawner)
             } else {

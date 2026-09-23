@@ -22,6 +22,7 @@ use super::potat_attribution::{
 use super::reconcile::{bootstrap_batch, reconcile_batch};
 use super::rest::fetch_channel_set;
 use super::types::{NewSetEvent, SetChangeBatch, SetEventKind};
+use crate::lifecycle::Lifecycle;
 use crate::settings::{PotatAttributionSettings, SettingsHandle};
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
@@ -32,6 +33,8 @@ const MAINTENANCE_BACKOFF: Duration = Duration::from_secs(300);
 /// How an EventAPI websocket session ended.
 #[derive(Debug)]
 enum SessionEnd {
+    /// Lifecycle cancellation won at an operation boundary.
+    Cancelled,
     /// Server asked for a reconnect (soft); REST reconcile without a gap stamp.
     ExpectedReconnect {
         code: u16,
@@ -79,30 +82,63 @@ pub struct StartupReconcileResult {
 ///
 /// `gap_started_at`: `None` on cold start; `Some(ms)` on reconnect or set-switch
 /// continuity breaks so reconcile writes an explicit gap row.
+#[allow(
+    dead_code,
+    reason = "compatibility seam for callers outside the production loop"
+)]
 pub async fn startup_reconcile_once(
     handle: &EmoteTrackerHandle,
     http: &reqwest::Client,
     cfg: &IngestConfig,
     gap_started_at: Option<i64>,
 ) -> Result<StartupReconcileResult> {
+    let lifecycle = Lifecycle::new();
+    startup_reconcile_once_until(handle, http, cfg, gap_started_at, &lifecycle)
+        .await?
+        .ok_or_else(|| eyre!("startup reconcile unexpectedly cancelled"))
+}
+
+async fn startup_reconcile_once_until(
+    handle: &EmoteTrackerHandle,
+    http: &reqwest::Client,
+    cfg: &IngestConfig,
+    gap_started_at: Option<i64>,
+    lifecycle: &Lifecycle,
+) -> Result<Option<StartupReconcileResult>> {
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
     let snapshot = fetch_channel_set(http, &cfg.rest_base_url, &cfg.twitch_channel_id).await?;
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
     let at = Utc::now().timestamp_millis();
 
-    let batch = if handle.catalog_is_empty().await? {
+    let empty = handle.catalog_is_empty().await?;
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
+    let batch = if empty {
         bootstrap_batch(at, &snapshot.emotes)
     } else {
         let current = handle.list_active_emotes().await?;
+        if lifecycle.is_cancelled() {
+            return Ok(None);
+        }
         let gap = gap_started_at.map(|from| (from, at));
         reconcile_batch(at, &current, &snapshot.emotes, gap, None)
     };
 
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
     handle.apply_set_changes(batch).await?;
 
-    Ok(StartupReconcileResult {
+    Ok(Some(StartupReconcileResult {
         user_id: snapshot.user_id,
         emote_count: snapshot.emotes.len(),
         set_id: snapshot.set_id,
-    })
+    }))
 }
 
 /// Long-running ingest: REST on startup/reconnect, EventAPI live updates.
@@ -113,15 +149,20 @@ pub async fn run_set_ingest(
     cfg: IngestConfig,
     http: reqwest::Client,
     settings: SettingsHandle,
+    lifecycle: Lifecycle,
 ) {
     let mut backoff = INITIAL_BACKOFF;
     let mut gap_started_at: Option<i64> = None;
 
     loop {
+        if lifecycle.is_cancelled() {
+            info!("emote set ingest lifecycle cancelled, shutting down");
+            return;
+        }
         // A server-requested reconnect is routine; only unexpected exits warn.
         let mut expected = false;
-        match startup_reconcile_once(&handle, &http, &cfg, gap_started_at).await {
-            Ok(result) => {
+        match startup_reconcile_once_until(&handle, &http, &cfg, gap_started_at, &lifecycle).await {
+            Ok(Some(result)) => {
                 debug!(
                     user_id = %result.user_id,
                     set_id = %result.set_id,
@@ -139,9 +180,11 @@ pub async fn run_set_ingest(
                     &result.user_id,
                     &result.set_id,
                     &mut gap_started_at,
+                    &lifecycle,
                 )
                 .await
                 {
+                    Ok(SessionEnd::Cancelled) => return,
                     Ok(SessionEnd::ExpectedReconnect {
                         code,
                         message,
@@ -169,6 +212,7 @@ pub async fn run_set_ingest(
                     }
                 }
             }
+            Ok(None) => return,
             Err(error) => {
                 error!(?error, "emote set ingest REST reconcile failed");
                 if gap_started_at.is_none() {
@@ -188,11 +232,19 @@ pub async fn run_set_ingest(
                 "emote set ingest backing off before reconnect"
             );
         }
-        tokio::time::sleep(backoff).await;
+        tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => return,
+            _ = tokio::time::sleep(backoff) => {}
+        }
         backoff = (backoff * 2).min(MAX_BACKOFF);
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one EventAPI session retains its store, clients, config, state, and lifecycle"
+)]
 async fn run_eventapi_session(
     handle: &EmoteTrackerHandle,
     http: &reqwest::Client,
@@ -201,13 +253,32 @@ async fn run_eventapi_session(
     seventv_user_id: &str,
     initial_set_id: &str,
     gap_started_at: &mut Option<i64>,
+    lifecycle: &Lifecycle,
 ) -> Result<SessionEnd> {
+    if lifecycle.is_cancelled() {
+        return Ok(SessionEnd::Cancelled);
+    }
     let mut remembered_set_id = initial_set_id.to_string();
+    // Connection plus initial subscriptions form one atomic network operation.
     let mut conn = connect_eventapi(&cfg.eventapi_url, &remembered_set_id, seventv_user_id).await?;
+    if lifecycle.is_cancelled() {
+        return Ok(SessionEnd::Cancelled);
+    }
     let mut heartbeat_interval_ms: Option<u64> = None;
     let mut heartbeat_deadline: Option<tokio::time::Instant> = None;
 
-    while let Some(frame) = conn.stream.next().await {
+    loop {
+        let frame = tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => return Ok(SessionEnd::Cancelled),
+            frame = conn.stream.next() => frame,
+        };
+        let Some(frame) = frame else {
+            break;
+        };
+        if lifecycle.is_cancelled() {
+            return Ok(SessionEnd::Cancelled);
+        }
         let msg = match frame {
             Ok(m) => m,
             Err(error) => {
@@ -247,7 +318,7 @@ async fn run_eventapi_session(
                         if dispatch.set_id != remembered_set_id {
                             // Defense in depth: object_id sub should only deliver the
                             // active set. Confirm via REST before treating as a switch.
-                            handle_possible_set_switch(
+                            if handle_possible_set_switch(
                                 handle,
                                 http,
                                 cfg,
@@ -255,20 +326,34 @@ async fn run_eventapi_session(
                                 &mut remembered_set_id,
                                 Some(&mut conn.sink),
                                 &dispatch.set_id,
+                                lifecycle,
                             )
-                            .await?;
+                            .await?
+                            .is_none()
+                            {
+                                return Ok(SessionEnd::Cancelled);
+                            }
                         } else {
                             let at = now_ms();
                             let mut batch = live_change_to_batch(at, &dispatch);
-                            maybe_attribute_batch(http, settings, cfg, &mut batch).await;
+                            if !maybe_attribute_batch_until(
+                                http, settings, cfg, &mut batch, lifecycle,
+                            )
+                            .await
+                            {
+                                return Ok(SessionEnd::Cancelled);
+                            }
                             if !batch.mutations.is_empty() {
+                                if lifecycle.is_cancelled() {
+                                    return Ok(SessionEnd::Cancelled);
+                                }
                                 handle.apply_set_changes(batch).await?;
                             }
                         }
                     }
                     ParsedEvent::UserActiveSetChanged(change) => {
-                        if change.new_set_id != remembered_set_id {
-                            handle_possible_set_switch(
+                        if change.new_set_id != remembered_set_id
+                            && handle_possible_set_switch(
                                 handle,
                                 http,
                                 cfg,
@@ -276,8 +361,12 @@ async fn run_eventapi_session(
                                 &mut remembered_set_id,
                                 Some(&mut conn.sink),
                                 &change.new_set_id,
+                                lifecycle,
                             )
-                            .await?;
+                            .await?
+                            .is_none()
+                        {
+                            return Ok(SessionEnd::Cancelled);
                         }
                     }
                     ParsedEvent::Error { code, message } => {
@@ -328,12 +417,18 @@ async fn run_eventapi_session(
                 });
             }
             Message::Ping(payload) => {
+                if lifecycle.is_cancelled() {
+                    return Ok(SessionEnd::Cancelled);
+                }
                 let _ = conn.sink.send(Message::Pong(payload)).await;
             }
             _ => {}
         }
     }
 
+    if lifecycle.is_cancelled() {
+        return Ok(SessionEnd::Cancelled);
+    }
     *gap_started_at = Some(gap_started_at.unwrap_or_else(now_ms));
     Err(eyre!("EventAPI websocket stream ended"))
 }
@@ -419,47 +514,86 @@ async fn fetch_with_retry(
     batch: &SetChangeBatch,
     potat: &PotatAttributionSettings,
     soft_cap: u64,
-) -> eyre::Result<Vec<super::potat_attribution::PotatHistoryItem>> {
+    lifecycle: &Lifecycle,
+) -> eyre::Result<Option<Vec<super::potat_attribution::PotatHistoryItem>>> {
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
     let first =
         fetch_potat_history(http, &cfg.potat_history_base_url, &cfg.twitch_channel_login).await?;
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
     if any_step_b_hit(batch, &first, potat, soft_cap) {
-        return Ok(first);
+        return Ok(Some(first));
     }
     // Do not sleep+retry when every eligible event has a known non-Potat
     // performer — Step A is permanently closed and a second fetch cannot help.
     if !batch_needs_history_fetch(batch, &potat.potat_7tv_user_id) {
-        return Ok(first);
+        return Ok(Some(first));
     }
-    tokio::time::sleep(HISTORY_RETRY_DELAY).await;
-    fetch_potat_history(http, &cfg.potat_history_base_url, &cfg.twitch_channel_login).await
+    tokio::select! {
+        biased;
+        _ = lifecycle.wait_for_cancellation() => return Ok(None),
+        _ = tokio::time::sleep(HISTORY_RETRY_DELAY) => {}
+    }
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
+    fetch_potat_history(http, &cfg.potat_history_base_url, &cfg.twitch_channel_login)
+        .await
+        .map(Some)
 }
 
 /// Settings-gated Potat history attribution for one live EventAPI dispatch.
+#[allow(
+    dead_code,
+    reason = "compatibility seam for callers outside the production loop"
+)]
 pub async fn maybe_attribute_batch(
     http: &reqwest::Client,
     settings: &SettingsHandle,
     cfg: &IngestConfig,
     batch: &mut SetChangeBatch,
 ) {
+    let lifecycle = Lifecycle::new();
+    maybe_attribute_batch_until(http, settings, cfg, batch, &lifecycle).await;
+}
+
+async fn maybe_attribute_batch_until(
+    http: &reqwest::Client,
+    settings: &SettingsHandle,
+    cfg: &IngestConfig,
+    batch: &mut SetChangeBatch,
+    lifecycle: &Lifecycle,
+) -> bool {
+    if lifecycle.is_cancelled() {
+        return false;
+    }
     let snap = settings.load();
     let potat = &snap.emote_tracker.potat_attribution;
     if !potat.enabled {
-        return;
+        return true;
     }
     if !batch_needs_history_fetch(batch, &potat.potat_7tv_user_id) {
-        return;
+        return true;
     }
     let soft_cap = potat.window_secs.saturating_add(SMALL_SLACK_SECS);
-    let history = match fetch_with_retry(http, cfg, batch, potat, soft_cap).await {
-        Ok(h) => h,
+    let history = match fetch_with_retry(http, cfg, batch, potat, soft_cap, lifecycle).await {
+        Ok(Some(history)) => history,
+        Ok(None) => return false,
         Err(error) => {
             warn!(?error, "potat history fetch failed; skipping attribution");
-            return;
+            return !lifecycle.is_cancelled();
         }
     };
+    if lifecycle.is_cancelled() {
+        return false;
+    }
     for event in &mut batch.events {
         attribute_one(event, &history, potat, soft_cap);
     }
+    !lifecycle.is_cancelled()
 }
 
 /// How to treat a set-id mismatch against the REST active set.
@@ -482,6 +616,10 @@ fn classify_set_id_mismatch(remembered_set_id: &str, rest_active_set_id: &str) -
 }
 
 /// Confirm a hinted set-id change via REST; on real switch, reconcile + resubscribe.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "set switching coordinates fetched state, active catalog, websocket, and lifecycle"
+)]
 async fn handle_possible_set_switch(
     handle: &EmoteTrackerHandle,
     http: &reqwest::Client,
@@ -490,8 +628,15 @@ async fn handle_possible_set_switch(
     remembered_set_id: &mut String,
     sink: Option<&mut EventApiSink>,
     hinted_set_id: &str,
-) -> Result<()> {
+    lifecycle: &Lifecycle,
+) -> Result<Option<()>> {
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
     let snapshot = fetch_channel_set(http, &cfg.rest_base_url, &cfg.twitch_channel_id).await?;
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
     match classify_set_id_mismatch(remembered_set_id, &snapshot.set_id) {
         SetIdMismatch::Foreign => {
             debug!(
@@ -499,7 +644,7 @@ async fn handle_possible_set_switch(
                 hinted_set_id = %hinted_set_id,
                 "ignoring EventAPI hint for non-active set"
             );
-            Ok(())
+            Ok(Some(()))
         }
         SetIdMismatch::ActiveSetChanged { active_set_id } => {
             warn!(
@@ -516,16 +661,26 @@ async fn handle_possible_set_switch(
 
             let at = now_ms();
             let current = handle.list_active_emotes().await?;
+            if lifecycle.is_cancelled() {
+                return Ok(None);
+            }
             let batch = reconcile_batch(at, &current, &snapshot.emotes, Some((gap_from, at)), None);
             handle.apply_set_changes(batch).await?;
+            if lifecycle.is_cancelled() {
+                return Ok(None);
+            }
 
-            if let Some(sink) = sink {
-                resubscribe_emote_set(sink, remembered_set_id, &active_set_id).await?;
+            if let Some(sink) = sink
+                && resubscribe_emote_set(sink, remembered_set_id, &active_set_id, lifecycle)
+                    .await?
+                    .is_none()
+            {
+                return Ok(None);
             }
 
             *remembered_set_id = active_set_id;
             *gap_started_at = None;
-            Ok(())
+            Ok(Some(()))
         }
     }
 }
@@ -534,19 +689,26 @@ async fn resubscribe_emote_set(
     sink: &mut EventApiSink,
     old_set_id: &str,
     new_set_id: &str,
-) -> Result<()> {
+    lifecycle: &Lifecycle,
+) -> Result<Option<()>> {
     if old_set_id == new_set_id {
-        return Ok(());
+        return Ok(Some(()));
+    }
+    if lifecycle.is_cancelled() {
+        return Ok(None);
     }
     let unsub = unsubscribe_emote_set_update_message(old_set_id);
     if let Err(error) = sink.send(Message::Text(unsub.into())).await {
         warn!(?error, old_set_id, "failed to unsubscribe old emote set");
     }
+    if lifecycle.is_cancelled() {
+        return Ok(None);
+    }
     let sub = subscribe_emote_set_update_message(new_set_id);
     sink.send(Message::Text(sub.into()))
         .await
         .wrap_err("failed to subscribe new emote set after switch")?;
-    Ok(())
+    Ok(Some(()))
 }
 
 async fn connect_eventapi(
@@ -654,6 +816,40 @@ mod tests {
         assert_eq!(active.len(), 2);
     }
 
+    #[tokio::test]
+    async fn cancellation_before_startup_reconcile_prevents_rest_and_sqlite_effects() {
+        crate::install_crypto_provider();
+        let mock = MockServer::start().await;
+        let channel_id = "12345";
+        Mock::given(method("GET"))
+            .and(path(format!("/v3/users/twitch/{channel_id}")))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&mock)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join(DB_FILENAME);
+        let handle = EmoteTrackerHandle::open(&db_path).unwrap();
+        let cfg = IngestConfig {
+            twitch_channel_id: channel_id.into(),
+            twitch_channel_login: "testchannel".into(),
+            rest_base_url: format!("{}/v3", mock.uri()),
+            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: POTAT_HISTORY_BASE_URL.into(),
+        };
+        let lifecycle = Lifecycle::new();
+        lifecycle.request_graceful_stop();
+
+        let result =
+            startup_reconcile_once_until(&handle, &reqwest::Client::new(), &cfg, None, &lifecycle)
+                .await
+                .unwrap();
+
+        assert!(result.is_none());
+        assert_eq!(count_events(&db_path, SetEventKind::Bootstrap), 0);
+    }
+
     #[test]
     fn foreign_set_update_when_rest_active_unchanged() {
         // Prod symptom: channel sub delivers NNYS set updates while the
@@ -717,9 +913,11 @@ mod tests {
             &mut remembered,
             None,
             "01JEY2SMVTRMC4ZHWCYKBA6M5R", // NNYS 2024 — not the active set
+            &Lifecycle::new(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .expect("running set-switch helper should complete");
 
         assert_eq!(remembered, active_set);
         assert_eq!(count_events(&db_path, SetEventKind::Gap), 0);
@@ -779,9 +977,11 @@ mod tests {
             &mut remembered,
             None,
             new_set,
+            &Lifecycle::new(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .expect("running set-switch helper should complete");
 
         assert_eq!(remembered, new_set);
         assert_eq!(count_events(&db_path, SetEventKind::Gap), 1);
@@ -1113,9 +1313,17 @@ mod tests {
 
         // Call fetch_with_retry directly so we exercise the no-retry branch
         // even though maybe_attribute_batch now skips the fetch entirely.
-        let history = fetch_with_retry(&reqwest::Client::new(), &cfg, &batch, &potat, soft_cap)
-            .await
-            .unwrap();
+        let history = fetch_with_retry(
+            &reqwest::Client::new(),
+            &cfg,
+            &batch,
+            &potat,
+            soft_cap,
+            &Lifecycle::new(),
+        )
+        .await
+        .unwrap()
+        .expect("running fetch should complete");
         assert!(history.is_empty());
         // wiremock expect(1) asserts no second request on drop
     }

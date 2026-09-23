@@ -1,18 +1,14 @@
-//! Handler spawn factory.
+//! Handler task composition.
 //!
-//! `run_bot` (in `src/lib.rs`) calls [`spawn_handlers`] once with the shared
-//! `Arc<Services>`. The returned [`HandlerSet`] owns every
-//! `JoinHandle` plus the shared `Arc<Notify>` post-spawn code uses to drain
-//! the scheduled-message handler on shutdown.
+//! `run_bot` owns the lifecycle supervisor and passes it here so every IRC
+//! handler is registered at the point where it is created. Optional handlers
+//! are absent from the registry rather than represented by forever-pending
+//! placeholders.
 
+use std::future::Future;
 use std::sync::Arc;
 
-use tokio::{
-    sync::{Notify, broadcast, mpsc, oneshot},
-    task::JoinHandle,
-    time::{Duration, timeout},
-};
-use tracing::{error, info, warn};
+use tokio::sync::{Notify, broadcast, mpsc};
 use twitch_irc::{
     TwitchIRCClient, login::LoginCredentials, message::ServerMessage, transport::Transport,
 };
@@ -21,6 +17,7 @@ use crate::{
     Services,
     ai::recap_batcher::run_recap_batcher,
     aviation,
+    lifecycle::{Lifecycle, TaskSupervisor},
     twitch::{
         ChatSender,
         handlers::{
@@ -35,34 +32,91 @@ use crate::{
     },
 };
 
-/// All `JoinHandle`s plus the shared state `run_bot` keeps after spawn.
-pub(crate) struct HandlerSet {
-    pub router: JoinHandle<()>,
-    pub latency: JoinHandle<()>,
-    pub tracker_1337: JoinHandle<()>,
-    pub generic_commands: JoinHandle<()>,
-    pub flight_tracker: JoinHandle<()>,
-    pub emote_set_ingest: JoinHandle<()>,
-    pub emote_usage: JoinHandle<()>,
-    pub mydealz: JoinHandle<()>,
-    pub alerts: JoinHandle<()>,
-    pub scheduled_messages: JoinHandle<()>,
-    pub recap: JoinHandle<()>,
-    /// Shared notify so consolidation/shutdown code can drain in-flight
-    /// scheduled-message sends. Cloned, not consumed.
-    pub shutdown_notify: Arc<Notify>,
+/// Register a loop under one stable supervisor name.
+///
+/// This is the lifecycle bridge for handlers whose domain-specific
+/// cancellation changes are owned by other tasks. The selected future is
+/// dropped only when the shared lifecycle is latched; an early clean return is
+/// left visible to the supervisor and therefore faults the runtime.
+fn register_loop<F>(
+    supervisor: &mut TaskSupervisor,
+    lifecycle: Lifecycle,
+    name: &'static str,
+    task: F,
+) where
+    F: Future<Output = ()> + Send + 'static,
+{
+    supervisor.spawn(name, async move {
+        tokio::pin!(task);
+        tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => task.await,
+            _ = &mut task => {}
+        }
+    });
 }
 
-/// Spawn every long-running handler task in the order they currently
-/// appear in `run_bot`. Returns a [`HandlerSet`] owning all handles plus the
-/// shared `Notify`.
+/// Register a loop that owns its operation-boundary cancellation policy.
+/// Once cancellation is latched, the supervisor waits for the domain task to
+/// finish its current atomic operation and observe the stop before the next
+/// effect instead of dropping an in-flight future from an outer `select!`.
+fn register_lifecycle_loop<F>(
+    supervisor: &mut TaskSupervisor,
+    lifecycle: Lifecycle,
+    name: &'static str,
+    task: F,
+) where
+    F: Future<Output = ()> + Send + 'static,
+{
+    supervisor.spawn(name, async move {
+        tokio::pin!(task);
+        tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => task.await,
+            _ = &mut task => {}
+        }
+    });
+}
+
+/// Register a loop that still exposes its domain-specific one-shot shutdown
+/// seam. The supervisor latches cancellation, sends the retained `Notify`
+/// permit, and then waits for the existing task to finish. This preserves the
+/// schedule orchestrator's in-flight `say()` drain and the recap batcher's
+/// graceful return.
+fn register_notify_loop<F>(
+    supervisor: &mut TaskSupervisor,
+    lifecycle: Lifecycle,
+    name: &'static str,
+    shutdown: Arc<Notify>,
+    task: F,
+) where
+    F: Future<Output = ()> + Send + 'static,
+{
+    supervisor.spawn(name, async move {
+        tokio::pin!(task);
+        tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => {
+                // `notify_one` stores a permit if the task has not yet created
+                // its receiver, avoiding a start/shutdown race. Each legacy
+                // loop receives its own Notify and therefore has one consumer.
+                shutdown.notify_one();
+                task.await;
+            }
+            _ = &mut task => {}
+        }
+    });
+}
+
+/// Spawn and register every enabled long-running IRC handler.
 pub(crate) fn spawn_handlers<T, L>(
+    supervisor: &mut TaskSupervisor,
+    lifecycle: Lifecycle,
     services: Arc<Services>,
     client: Arc<TwitchIRCClient<T, L>>,
     incoming: tokio::sync::mpsc::UnboundedReceiver<ServerMessage>,
     tracker_rx: Option<mpsc::Receiver<aviation::TrackerCommand>>,
-) -> HandlerSet
-where
+) where
     T: Transport + Send + Sync + 'static,
     L: LoginCredentials + Send + Sync + 'static,
 {
@@ -73,39 +127,47 @@ where
     // Flight tracker. The channel is pre-created by the caller (production:
     // main.rs; tests: TestBotBuilder) so the sender Arc can be shared with
     // WebState and the command handler before handlers are spawned.
-    let flight_tracker = match (services.aviation.clone(), tracker_rx) {
-        (Some(av), Some(rx)) => tokio::spawn({
-            let services = services.clone();
-            let sender = chat_sender.clone();
+    if let (Some(aviation), Some(rx)) = (services.aviation.clone(), tracker_rx) {
+        let services = services.clone();
+        let sender = chat_sender.clone();
+        let task_lifecycle = lifecycle.clone();
+        register_lifecycle_loop(
+            supervisor,
+            lifecycle.clone(),
+            "flight tracker",
             async move {
                 aviation::run_flight_tracker(
                     rx,
                     sender,
                     services.channel.clone(),
-                    av,
+                    aviation,
                     services.data_dir.clone(),
                     services.clock.clone(),
+                    task_lifecycle,
                 )
                 .await;
-            }
-        }),
-        _ => tokio::spawn(std::future::pending::<()>()),
-    };
+            },
+        );
+    }
 
-    let emote_set_ingest = match (
+    if let (Some(handle), Some(channel_id)) = (
         services.emote_tracker.clone(),
         services.twitch_channel_id.clone(),
     ) {
-        (Some(handle), Some(channel_id)) => {
-            let http = reqwest::Client::new();
-            let cfg = crate::emote_tracker::IngestConfig::new(channel_id, services.channel.clone());
-            let settings = services.settings.clone();
-            tokio::spawn(async move {
-                crate::emote_tracker::run_set_ingest(handle, cfg, http, settings).await;
-            })
-        }
-        _ => tokio::spawn(std::future::pending::<()>()),
-    };
+        let http = reqwest::Client::new();
+        let cfg = crate::emote_tracker::IngestConfig::new(channel_id, services.channel.clone());
+        let settings = services.settings.clone();
+        let task_lifecycle = lifecycle.clone();
+        register_lifecycle_loop(
+            supervisor,
+            lifecycle.clone(),
+            "emote set ingest",
+            async move {
+                crate::emote_tracker::run_set_ingest(handle, cfg, http, settings, task_lifecycle)
+                    .await;
+            },
+        );
+    }
 
     let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(100);
 
@@ -116,89 +178,120 @@ where
     // subscribe late on purpose (fresh receiver per PING / per 13:36 session).
     let commands_broadcast_rx = broadcast_tx.subscribe();
 
-    let router = tokio::spawn(run_message_router(incoming, broadcast_tx.clone()));
+    register_loop(
+        supervisor,
+        lifecycle.clone(),
+        "message router",
+        run_message_router(incoming, broadcast_tx.clone(), lifecycle.clone()),
+    );
 
-    // Notify lets the scheduled-message handler drain in-flight sends before exiting.
-    let shutdown_notify = Arc::new(Notify::new());
-
-    // Schedules orchestrator: subscribes to settings changes via
-    // `SettingsHandle::subscribe()` and reconciles per-schedule tasks.
-    // No cache, no 30s poll.
-    // `telemetry` comes from the caller (constructed in run_bot so WebState
-    // and the orchestrator share the same Arc).
-    let scheduled_messages = tokio::spawn({
+    // Schedules keeps its explicit child-task ownership API and is joined after
+    // the lifecycle-to-Notify bridge sends its shutdown permit.
+    let schedule_shutdown = Arc::new(Notify::new());
+    {
         let services = services.clone();
         let sender = chat_sender.clone();
-        let notify = shutdown_notify.clone();
-        async move {
+        let shutdown = schedule_shutdown.clone();
+        register_notify_loop(
+            supervisor,
+            lifecycle.clone(),
+            "scheduled messages",
+            shutdown,
             run_orchestrator(
                 sender,
                 services.settings.clone(),
                 services.telemetry.clone(),
                 services.channel.clone(),
-                notify,
+                schedule_shutdown,
                 services.clock.clone(),
-            )
-            .await;
-        }
-    });
+            ),
+        );
+    }
 
     // Shared latency cell. Composed in `Services` (seeded from settings); the
     // latency handler re-bases it live when `twitch.expected_latency` is
     // edited, so the 1337 handler always reads the current estimate.
     let latency_value = services.latency_value.clone();
 
-    let latency = tokio::spawn({
+    {
         let client = client.clone();
         let btx = broadcast_tx.clone();
         let settings = services.settings.clone();
         let lat = latency_value.clone();
         let conn = services.irc_connected.clone();
-        async move {
-            run_latency_handler(client, btx, settings, lat, conn).await;
-        }
-    });
+        let task_lifecycle = lifecycle.clone();
+        register_loop(
+            supervisor,
+            lifecycle.clone(),
+            "latency monitor",
+            async move {
+                run_latency_handler(client, btx, settings, lat, conn, task_lifecycle).await;
+            },
+        );
+    }
 
-    let _transcript_tap = if let Some(t) = services.ai_memory.as_ref().map(|m| m.transcript.clone())
-    {
+    if let Some(t) = services.ai_memory.as_ref().map(|m| m.transcript.clone()) {
         let rx = broadcast_tx.subscribe();
         let w = Arc::new(t);
         let ch = services.channel.clone();
         let echo_tap = services.echo.clone();
-        Some(tokio::spawn(async move {
-            crate::twitch::handlers::transcript::run_transcript_tap(rx, w, ch, echo_tap).await;
-        }))
-    } else {
-        None
-    };
+        let task_lifecycle = lifecycle.clone();
+        register_loop(
+            supervisor,
+            lifecycle.clone(),
+            "transcript tap",
+            async move {
+                crate::twitch::handlers::transcript::run_transcript_tap(
+                    rx,
+                    w,
+                    ch,
+                    echo_tap,
+                    task_lifecycle,
+                )
+                .await;
+            },
+        );
+    }
 
-    // Emote usage recording; `None` when SQLite open/migrate failed.
-    let emote_usage = match services.emote_tracker.clone() {
-        Some(handle) => {
-            let rx = broadcast_tx.subscribe();
-            let settings = services.settings.clone();
-            let channel = services.channel.clone();
-            let bot_username = services.bot_username.clone();
-            let echo_usage = services.echo.clone();
-            tokio::spawn(async move {
-                run_emote_usage_handler(rx, handle, settings, channel, bot_username, echo_usage)
-                    .await;
-            })
-        }
-        None => tokio::spawn(std::future::pending::<()>()),
-    };
+    // Emote usage recording; absent when SQLite open/migrate failed.
+    if let Some(handle) = services.emote_tracker.clone() {
+        let rx = broadcast_tx.subscribe();
+        let settings = services.settings.clone();
+        let channel = services.channel.clone();
+        let bot_username = services.bot_username.clone();
+        let echo_usage = services.echo.clone();
+        let task_lifecycle = lifecycle.clone();
+        register_loop(supervisor, lifecycle.clone(), "emote usage", async move {
+            run_emote_usage_handler(
+                rx,
+                handle,
+                settings,
+                channel,
+                bot_username,
+                echo_usage,
+                task_lifecycle,
+            )
+            .await;
+        });
+    }
 
-    let mydealz = tokio::spawn({
+    {
         let rx = broadcast_tx.subscribe();
         let sender = chat_sender.clone();
         let channel = services.channel.clone();
         let echo_mydealz = services.echo.clone();
-        async move {
-            run_mydealz_handler(rx, sender, channel, echo_mydealz).await;
-        }
-    });
+        let task_lifecycle = lifecycle.clone();
+        register_lifecycle_loop(
+            supervisor,
+            lifecycle.clone(),
+            "mydealz handler",
+            async move {
+                run_mydealz_handler(rx, sender, channel, echo_mydealz, task_lifecycle).await;
+            },
+        );
+    }
 
-    let tracker_1337 = tokio::spawn({
+    {
         let btx = broadcast_tx.clone();
         let sender = chat_sender.clone();
         let channel = services.channel.clone();
@@ -208,31 +301,62 @@ where
         let clk = services.clock.clone();
         let dd = services.data_dir.clone();
         let echo_tracker = services.echo.clone();
-        async move {
-            run_1337_handler(btx, sender, channel, lat, lb, hos, clk, dd, echo_tracker).await;
-        }
-    });
+        let task_lifecycle = lifecycle.clone();
+        register_loop(supervisor, lifecycle.clone(), "1337 handler", async move {
+            run_1337_handler(
+                btx,
+                sender,
+                channel,
+                lat,
+                lb,
+                hos,
+                clk,
+                dd,
+                echo_tracker,
+                task_lifecycle,
+            )
+            .await;
+        });
+    }
 
-    let alerts = tokio::spawn({
+    {
         let sender = chat_sender.clone();
         let channel = services.channel.clone();
         let settings = services.settings.clone();
         let dir = services.data_dir.clone();
         let clk = services.clock.clone();
-        async move {
-            crate::alerts::run_alerts_handler(sender, channel, settings, dir, clk).await;
-        }
-    });
+        let task_lifecycle = lifecycle.clone();
+        register_lifecycle_loop(
+            supervisor,
+            lifecycle.clone(),
+            "alerts handler",
+            async move {
+                crate::alerts::run_alerts_handler(
+                    sender,
+                    channel,
+                    settings,
+                    dir,
+                    clk,
+                    task_lifecycle,
+                )
+                .await;
+            },
+        );
+    }
 
-    let recap_task = match (services.recap.clone(), services.chat_ctx.clone()) {
-        (Some(handle), Some(ctx)) => {
-            let settings = services.settings.clone();
-            let shutdown = shutdown_notify.clone();
-            let echo_for_logins = services.echo.clone();
-            let registry = services.llm.clone();
-            let observer = services.langfuse.clone();
-            let bot_username = services.bot_username.clone();
-            tokio::spawn(async move {
+    if let (Some(handle), Some(ctx)) = (services.recap.clone(), services.chat_ctx.clone()) {
+        let settings = services.settings.clone();
+        let shutdown = Arc::new(Notify::new());
+        let echo_for_logins = services.echo.clone();
+        let registry = services.llm.clone();
+        let observer = services.langfuse.clone();
+        let bot_username = services.bot_username.clone();
+        register_notify_loop(
+            supervisor,
+            lifecycle.clone(),
+            "recap batcher",
+            shutdown.clone(),
+            async move {
                 let mut self_logins = vec![bot_username.to_ascii_lowercase()];
                 self_logins.extend(echo_for_logins.mouth_logins().iter().cloned());
                 run_recap_batcher(
@@ -246,107 +370,22 @@ where
                     observer,
                 )
                 .await;
-            })
-        }
-        _ => tokio::spawn(std::future::pending::<()>()),
-    };
+            },
+        );
+    }
 
-    let generic_commands = tokio::spawn({
+    {
         let services = services.clone();
         let sender = chat_sender.clone();
-        async move {
+        let command_lifecycle = lifecycle.clone();
+        register_loop(supervisor, lifecycle, "generic commands", async move {
             run_generic_command_handler(CommandConfig {
+                lifecycle: command_lifecycle,
                 broadcast_rx: commands_broadcast_rx,
                 services,
                 sender,
             })
             .await;
-        }
-    });
-
-    HandlerSet {
-        router,
-        latency,
-        tracker_1337,
-        generic_commands,
-        flight_tracker,
-        emote_set_ingest,
-        emote_usage,
-        mydealz,
-        alerts,
-        scheduled_messages,
-        recap: recap_task,
-        shutdown_notify,
-    }
-}
-
-/// Why [`await_shutdown`] returned. Lets the caller distinguish an intentional
-/// stop from a fault so the admin-channel announce matches reality.
-pub(crate) enum ShutdownOutcome {
-    /// The shutdown signal (Ctrl+C / SIGTERM) fired — intentional, graceful exit.
-    Graceful,
-    /// A handler task exited unexpectedly — the bot is faulting, not a clean stop.
-    HandlerExited,
-}
-
-/// Awaits whichever happens first: shutdown signal, or any handler exiting.
-///
-/// On shutdown, notifies `shutdown_notify` (so the scheduled-message handler
-/// drains in-flight `say()` calls) and waits up to 5s for the scheduled
-/// handler before returning. Returns a [`ShutdownOutcome`] telling the
-/// caller whether the exit was graceful.
-///
-/// The ping actor is owned by `run_bot` and only supervised here: its exit
-/// races this select, and an actor crash trips `HandlerExited` like any
-/// other handler. It is not drained on shutdown — the handler tasks hold
-/// `Arc<Services>` clones (hence live `PingHandle` senders) and are
-/// detached, not stopped, by this function, so a drain could never
-/// complete before process exit.
-///
-/// The scheduled-message handler subscribes directly to settings changes
-/// via `SettingsHandle::subscribe()` and reconciles per-schedule tasks
-/// internally — there is no separate settings-sync task.
-pub(crate) async fn await_shutdown(
-    handlers: HandlerSet,
-    ping_actor: &mut tokio::task::JoinHandle<()>,
-    shutdown: oneshot::Receiver<()>,
-) -> ShutdownOutcome {
-    let HandlerSet {
-        router,
-        latency,
-        tracker_1337,
-        generic_commands,
-        flight_tracker,
-        emote_set_ingest,
-        emote_usage,
-        mydealz,
-        alerts,
-        scheduled_messages: mut sched,
-        mut recap,
-        shutdown_notify,
-    } = handlers;
-
-    tokio::select! {
-        _ = shutdown => {
-            info!("Shutdown signal received, exiting gracefully");
-            // Always wake any waiters (scheduled messages, web dashboard).
-            shutdown_notify.notify_waiters();
-            if let Err(e) = timeout(Duration::from_secs(5), &mut sched).await {
-                warn!(?e, "Scheduled message handler did not shut down within 5s");
-            }
-            ShutdownOutcome::Graceful
-        }
-        result = router => { error!("Message router exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = tracker_1337 => { error!("1337 handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = generic_commands => { error!("Generic Command Handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = latency => { error!("Latency handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = flight_tracker => { error!("Flight tracker exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = emote_set_ingest => { error!("Emote set ingest exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = emote_usage => { error!("Emote usage handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = mydealz => { error!("mydealz handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = alerts => { error!("Alerts handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = &mut sched => { error!("Scheduled message handler exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = &mut recap => { error!("Recap batcher exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
-        result = &mut *ping_actor => { error!("Ping actor exited unexpectedly: {result:?}"); ShutdownOutcome::HandlerExited }
+        });
     }
 }

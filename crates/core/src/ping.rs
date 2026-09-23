@@ -264,12 +264,39 @@ pub fn ping_runtime(
 }
 
 pub async fn run_ping_actor(
+    cmd_rx: mpsc::Receiver<PingCommand>,
+    manager: PingManager,
+    names_tx: watch::Sender<HashSet<String>>,
+) {
+    // Standalone callers (web test fixtures and ping-command tests) do not have
+    // the bot lifecycle. Keep their existing channel-closed behavior by using a
+    // lifecycle that never transitions.
+    run_ping_actor_until(
+        cmd_rx,
+        manager,
+        names_tx,
+        crate::lifecycle::Lifecycle::new(),
+    )
+    .await;
+}
+
+/// Lifecycle-aware ping actor used by the composed bot runtime.
+pub(crate) async fn run_ping_actor_until(
     mut cmd_rx: mpsc::Receiver<PingCommand>,
     mut manager: PingManager,
     names_tx: watch::Sender<HashSet<String>>,
+    lifecycle: crate::lifecycle::Lifecycle,
 ) {
     publish_names(&manager, &names_tx);
-    while let Some(cmd) = cmd_rx.recv().await {
+    loop {
+        let cmd = tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => return,
+            cmd = cmd_rx.recv() => {
+                let Some(cmd) = cmd else { return };
+                cmd
+            }
+        };
         match cmd {
             PingCommand::CreatePing {
                 name,
@@ -650,6 +677,26 @@ mod tests {
         mgr.create_ping("uwu".into(), "Hey {mentions}!".into(), "admin".into(), None)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn actor_stops_through_lifecycle_without_sender_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = test_manager(dir.path()).await;
+        let (tx, rx) = mpsc::channel(1);
+        let (names_tx, _names_rx) = watch::channel(HashSet::new());
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+        let actor_lifecycle = lifecycle.clone();
+        let actor = tokio::spawn(run_ping_actor_until(rx, manager, names_tx, actor_lifecycle));
+        let retained_sender = PingHandle::new(tx);
+        tokio::task::yield_now().await;
+
+        lifecycle.request_graceful_stop();
+        actor.await.expect("ping actor joined");
+
+        // The handle still owns a sender; lifecycle cancellation, not channel
+        // closure, is what ended the actor.
+        assert!(retained_sender.snapshot().await.is_empty());
     }
 
     #[tokio::test]
