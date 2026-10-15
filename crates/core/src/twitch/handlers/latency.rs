@@ -16,6 +16,7 @@ use twitch_irc::{
     transport::Transport,
 };
 
+use crate::lifecycle::Lifecycle;
 use crate::settings::SettingsHandle;
 
 /// Interval between PING measurements
@@ -51,6 +52,7 @@ pub async fn run_latency_handler<T, L>(
     settings: SettingsHandle,
     latency: Arc<AtomicU32>,
     irc_connected: Arc<AtomicBool>,
+    lifecycle: Lifecycle,
 ) where
     T: Transport,
     L: LoginCredentials,
@@ -73,6 +75,8 @@ pub async fn run_latency_handler<T, L>(
 
     loop {
         tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => return,
             () = sleep(LATENCY_PING_INTERVAL) => {
                 let nonce = Utc::now().timestamp_nanos_opt().unwrap_or(0).to_string();
 
@@ -148,6 +152,9 @@ pub async fn run_latency_handler<T, L>(
                 }
             }
             () = sub.next() => {
+                if lifecycle.is_cancelled() {
+                    return;
+                }
                 // Every commit notifies, including no-op writes and unrelated
                 // edits (cooldowns, toggles). Only a genuine change to
                 // `twitch.expected_latency` re-bases the EMA; the new value is

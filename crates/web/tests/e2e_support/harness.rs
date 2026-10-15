@@ -4,13 +4,13 @@
 #![allow(dead_code)]
 
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
 use std::time::Duration;
 
 use fantoccini::{Client, ClientBuilder, Locator};
 use hyper_util::client::legacy::connect::HttpConnector;
 use serde_json::json;
-use tokio::sync::Notify;
+use tokio::task::JoinHandle;
+use twitch_1337_core::lifecycle::Lifecycle;
 use twitch_1337_web::{bind, build_router, serve_app};
 
 #[path = "../helpers/mod.rs"]
@@ -43,7 +43,8 @@ enum SessionKind {
 pub struct E2eSession {
     client: Client,
     base_url: String,
-    shutdown: Arc<Notify>,
+    lifecycle: Lifecycle,
+    server: JoinHandle<()>,
     // Kept alive so the server's data dirs are not removed mid-test.
     _dirs: (tempfile::TempDir, tempfile::TempDir, tempfile::TempDir),
 }
@@ -89,10 +90,12 @@ impl E2eSession {
         // "invalid argument: invalid 'domain'".
         let base_url = format!("http://localhost:{port}");
         let app = build_router(state);
-        let shutdown = Arc::new(Notify::new());
-        let srv_shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            let _ = serve_app(listener, app, srv_shutdown).await;
+        let lifecycle = Lifecycle::new();
+        let server = tokio::spawn({
+            let lifecycle = lifecycle.clone();
+            async move {
+                let _ = serve_app(listener, app, lifecycle).await;
+            }
         });
 
         // Headless Chrome capabilities; auto-accept confirm() dialogs so
@@ -140,7 +143,8 @@ impl E2eSession {
         Self {
             client,
             base_url,
-            shutdown,
+            lifecycle,
+            server,
             _dirs: (d1, d2, d3),
         }
     }
@@ -247,7 +251,10 @@ impl E2eSession {
     /// Close the browser and stop the server.
     pub async fn close(self) {
         let _ = self.client.close().await;
-        self.shutdown.notify_waiters();
+        self.lifecycle.request_graceful_stop();
+        self.server
+            .await
+            .expect("E2E web server task panicked during shutdown");
     }
 }
 

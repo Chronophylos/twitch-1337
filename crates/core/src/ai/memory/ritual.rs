@@ -6,12 +6,15 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone as _};
 use chrono_tz::Europe::Berlin;
 use chrono_tz::Tz;
 use eyre::Result;
-use llm::{AgentOpts, AgentOutcome, Message, ToolChatCompletionRequest, run_agent};
-use tokio::sync::Notify;
+use llm::{
+    AgentOpts, AgentOutcome, LlmClient, LlmError, Message, ToolCall, ToolChatCompletionRequest,
+    ToolChatCompletionResponse, ToolExecutor, ToolResultMessage, run_agent,
+};
 use tracing::{error, info, warn};
 
 use crate::ai::memory::inject::{
@@ -23,6 +26,7 @@ use crate::ai::memory::tools::{DreamerExecutor, DreamerExecutorOpts, dreamer_too
 use crate::ai::memory::transcript::TranscriptWriter;
 use crate::ai::memory::types::FileKind;
 use crate::ai::preset::render_standalone;
+use crate::lifecycle::Lifecycle;
 use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
@@ -47,11 +51,15 @@ pub fn spawn_ritual(
     store: MemoryStore,
     transcript: TranscriptWriter,
     settings: SettingsHandle,
-    shutdown: Arc<Notify>,
+    lifecycle: Lifecycle,
     langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
+            if lifecycle.is_cancelled() {
+                return;
+            }
+
             // Re-read settings on each loop iteration. This picks up live edits
             // to dreamer.{enabled, model, reasoning_effort, run_at, timeout_secs,
             // max_rounds, max_writes_per_turn} and memory.inject_byte_budget.
@@ -64,9 +72,11 @@ pub fn spawn_ritual(
                 // realistic run_at granularity.
                 drop(snap);
                 tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(300)) => continue,
-                    _ = shutdown.notified() => return,
+                    biased;
+                    _ = lifecycle.wait_for_cancellation() => return,
+                    _ = tokio::time::sleep(Duration::from_secs(300)) => {}
                 }
+                continue;
             }
             let run_at = chrono::NaiveTime::parse_from_str(&ai.dreamer.run_at, "%H:%M")
                 .expect("ai.dreamer.run_at validated at settings store");
@@ -81,16 +91,21 @@ pub fn spawn_ritual(
             });
             let wait = (next - now).to_std().unwrap_or_default();
             tokio::select! {
+                biased;
+                _ = lifecycle.wait_for_cancellation() => return,
                 _ = tokio::time::sleep(wait) => {}
-                _ = shutdown.notified() => return,
             }
+
+            // A wake-up can race cancellation. Do not enter the file/LLM
+            // operation until the operation-boundary check immediately below.
             let yesterday = next.date_naive().pred_opt().expect("valid prev day");
-            if let Err(e) = run_ritual(
+            if let Err(e) = run_ritual_until(
                 &registry,
                 &store,
                 &transcript,
                 &settings,
                 yesterday,
+                &lifecycle,
                 langfuse.as_ref(),
             )
             .await
@@ -99,6 +114,62 @@ pub fn spawn_ritual(
             }
         }
     })
+}
+
+/// Adds a cancellation gate immediately before each provider request while
+/// leaving an in-flight provider request to finish under its existing timeout.
+struct LifecycleLlmClient<'a> {
+    inner: &'a dyn LlmClient,
+    lifecycle: &'a Lifecycle,
+}
+
+#[async_trait]
+impl LlmClient for LifecycleLlmClient<'_> {
+    async fn chat_completion(
+        &self,
+        request: llm::ChatCompletionRequest,
+    ) -> std::result::Result<String, LlmError> {
+        if self.lifecycle.is_cancelled() {
+            return Err(self.cancelled_error());
+        }
+        self.inner.chat_completion(request).await
+    }
+
+    async fn chat_completion_with_tools(
+        &self,
+        request: ToolChatCompletionRequest,
+    ) -> std::result::Result<ToolChatCompletionResponse, LlmError> {
+        if self.lifecycle.is_cancelled() {
+            return Err(self.cancelled_error());
+        }
+        self.inner.chat_completion_with_tools(request).await
+    }
+}
+
+impl LifecycleLlmClient<'_> {
+    fn cancelled_error(&self) -> LlmError {
+        LlmError::Provider {
+            status: 0,
+            body: "dreamer ritual cancelled before provider request".into(),
+        }
+    }
+}
+
+/// Gates each tool call independently. The wrapped memory operation is atomic:
+/// once it starts it may finish, but no later tool call starts after stop.
+struct LifecycleToolExecutor<'a> {
+    inner: &'a DreamerExecutor,
+    lifecycle: &'a Lifecycle,
+}
+
+#[async_trait]
+impl ToolExecutor for LifecycleToolExecutor<'_> {
+    async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
+        if self.lifecycle.is_cancelled() {
+            return ToolResultMessage::for_call(call, "cancelled: dreamer ritual stopped");
+        }
+        self.inner.execute(call).await
+    }
 }
 
 /// Twitch user ids the transcript itself carries (`HH:MM:SS  login#<id>: …`).
@@ -125,6 +196,31 @@ pub async fn run_ritual(
     rotate_to: NaiveDate,
     langfuse: Option<&Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) -> Result<()> {
+    run_ritual_until(
+        registry,
+        store,
+        transcript,
+        settings,
+        rotate_to,
+        &Lifecycle::new(),
+        langfuse,
+    )
+    .await
+}
+
+async fn run_ritual_until(
+    registry: &LlmRegistry,
+    store: &MemoryStore,
+    transcript: &TranscriptWriter,
+    settings: &SettingsHandle,
+    rotate_to: NaiveDate,
+    lifecycle: &Lifecycle,
+    langfuse: Option<&Arc<crate::ai::langfuse::LangfuseHandle>>,
+) -> Result<()> {
+    if lifecycle.is_cancelled() {
+        return Ok(());
+    }
+
     // Snapshot once at top; build local config from live settings values.
     let snap = settings.load();
     let ai = &snap.ai;
@@ -143,8 +239,12 @@ pub async fn run_ritual(
     drop(snap);
 
     // Rotate first, then bail: a misconfigured model must not leave today.md
-    // growing forever without a date boundary.
+    // growing forever without a date boundary. Rotation is one atomic file
+    // operation: cancellation observed during it is handled immediately after.
     let dated = transcript.rotate_to(rotate_to).await?;
+    if lifecycle.is_cancelled() {
+        return Ok(());
+    }
     // Resolve fresh on every run, not once at spawn, so a dashboard profile
     // switch (or an edit to ai.dreamer.profile) applies to the next run.
     let Some((llm, base_profile)) = registry.resolve_named(&dreamer_profile) else {
@@ -190,6 +290,9 @@ pub async fn run_ritual(
         },
     )
     .await?;
+    if lifecycle.is_cancelled() {
+        return Ok(());
+    }
     let date_str = rotate_to.format("%Y-%m-%d").to_string();
     let transcript_block = fence_block(
         FenceLabel::Transcript { date: &date_str },
@@ -216,11 +319,17 @@ pub async fn run_ritual(
         }
         mem_block.push_str(&mem_ctx.scratch);
     }
+    if lifecycle.is_cancelled() {
+        return Ok(());
+    }
     // Roster of every user sheet, listed independently of the byte budget that
     // packed `mem_block`. A sheet dropped for space used to read as "this
     // regular has no file yet", and the dreamer answered that by inventing an
     // id for the login it saw in the transcript.
     let users = store.list_users().await?;
+    if lifecycle.is_cancelled() {
+        return Ok(());
+    }
     let mut roster_lines: Vec<String> = Vec::with_capacity(users.len());
     let mut writable_ids: BTreeSet<String> = BTreeSet::new();
     for f in &users {
@@ -274,13 +383,27 @@ pub async fn run_ritual(
             tags: vec!["dreamer".into()],
         },
         async {
-            match run_agent(&*llm, req, &exec, opts).await {
+            if lifecycle.is_cancelled() {
+                return;
+            }
+            let lifecycle_client = LifecycleLlmClient {
+                inner: &*llm,
+                lifecycle,
+            };
+            let lifecycle_executor = LifecycleToolExecutor {
+                inner: &exec,
+                lifecycle,
+            };
+            match run_agent(&lifecycle_client, req, &lifecycle_executor, opts).await {
                 Ok(AgentOutcome::Text(_)) => {
                     info!(rotated = %dated.display(), "dreamer ritual finished");
                 }
                 Ok(AgentOutcome::MaxRoundsExceeded) => warn!("dreamer max_rounds reached"),
                 Ok(AgentOutcome::Timeout { round }) => warn!(round, "dreamer per-round timeout"),
-                Err(e) => error!(error = ?e, "dreamer llm error"),
+                Err(_error) if lifecycle.is_cancelled() => {
+                    info!("dreamer ritual cancelled at an operation boundary");
+                }
+                Err(error) => error!(error = ?error, "dreamer llm error"),
             }
         },
     )
@@ -326,6 +449,169 @@ not a transcript line
         let four_am = NaiveTime::from_hms_opt(4, 0, 0).unwrap();
         let resolved = resolve_berlin_run_at(date, four_am).expect("04:00 always resolves");
         assert_eq!(resolved.hour(), 4);
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_ritual_prevents_rotation_and_provider_work() {
+        use async_trait::async_trait;
+        use llm::{
+            ChatCompletionRequest, LlmClient, LlmError, ToolChatCompletionRequest,
+            ToolChatCompletionResponse,
+        };
+
+        struct UnexpectedLlm;
+        #[async_trait]
+        impl LlmClient for UnexpectedLlm {
+            async fn chat_completion(
+                &self,
+                _request: ChatCompletionRequest,
+            ) -> std::result::Result<String, LlmError> {
+                panic!("cancelled ritual must not call the provider")
+            }
+            async fn chat_completion_with_tools(
+                &self,
+                _request: ToolChatCompletionRequest,
+            ) -> Result<ToolChatCompletionResponse, LlmError> {
+                panic!("cancelled ritual must not call the provider")
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let settings =
+            SettingsHandle::from_settings(crate::settings::Settings::compiled_defaults());
+        let store = MemoryStore::open(dir.path(), settings.clone())
+            .await
+            .unwrap();
+        let transcript = TranscriptWriter::open(store.memories_dir()).await.unwrap();
+        let registry = LlmRegistry::fixed(
+            Arc::new(UnexpectedLlm) as Arc<dyn LlmClient>,
+            settings.clone(),
+        );
+        let lifecycle = Lifecycle::new();
+        lifecycle.request_graceful_stop();
+        let rotate_to = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
+
+        run_ritual_until(
+            &registry,
+            &store,
+            &transcript,
+            &settings,
+            rotate_to,
+            &lifecycle,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!transcript.dated_path_for(rotate_to).exists());
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_llm_request_finishes_it_but_blocks_the_next_write() {
+        use async_trait::async_trait;
+        use llm::{
+            ChatCompletionRequest, LlmClient, LlmError, ToolCall, ToolChatCompletionRequest,
+            ToolChatCompletionResponse,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::sync::Notify;
+
+        struct GatedLlm {
+            started: Notify,
+            release: Notify,
+            calls: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl LlmClient for GatedLlm {
+            async fn chat_completion(
+                &self,
+                _request: ChatCompletionRequest,
+            ) -> std::result::Result<String, LlmError> {
+                unreachable!("ritual uses the tool-calling client")
+            }
+
+            async fn chat_completion_with_tools(
+                &self,
+                _request: ToolChatCompletionRequest,
+            ) -> std::result::Result<ToolChatCompletionResponse, LlmError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.started.notify_one();
+                self.release.notified().await;
+                Ok(ToolChatCompletionResponse::ToolCalls {
+                    calls: vec![ToolCall {
+                        id: "write-1".into(),
+                        name: "write_file".into(),
+                        arguments: serde_json::json!({
+                            "path": "LORE.md",
+                            "body": "must not be written after cancellation"
+                        }),
+                        arguments_parse_error: None,
+                    }],
+                    reasoning_content: None,
+                })
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings_value = crate::settings::Settings::compiled_defaults();
+        settings_value.ai.profiles[0].model = "model-v1".into();
+        let settings = SettingsHandle::from_settings(settings_value);
+        let store = MemoryStore::open(dir.path(), settings.clone())
+            .await
+            .unwrap();
+        store
+            .write(
+                &FileKind::Lore,
+                "sentinel before ritual cancellation",
+                crate::ai::memory::store::UserIdentity::default(),
+            )
+            .await
+            .unwrap();
+        let transcript = TranscriptWriter::open(store.memories_dir()).await.unwrap();
+        let client = Arc::new(GatedLlm {
+            started: Notify::new(),
+            release: Notify::new(),
+            calls: AtomicUsize::new(0),
+        });
+        let registry = Arc::new(LlmRegistry::fixed(
+            client.clone() as Arc<dyn LlmClient>,
+            settings.clone(),
+        ));
+        let lifecycle = Lifecycle::new();
+        let rotate_to = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
+
+        let task = {
+            let registry = registry.clone();
+            let store = store.clone();
+            let transcript = transcript.clone();
+            let settings = settings.clone();
+            let lifecycle = lifecycle.clone();
+            tokio::spawn(async move {
+                run_ritual_until(
+                    &registry,
+                    &store,
+                    &transcript,
+                    &settings,
+                    rotate_to,
+                    &lifecycle,
+                    None,
+                )
+                .await
+            })
+        };
+
+        client.started.notified().await;
+        lifecycle.request_graceful_stop();
+        client.release.notify_one();
+        task.await.unwrap().unwrap();
+
+        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            store.read_kind(&FileKind::Lore).await.unwrap().body,
+            "sentinel before ritual cancellation",
+            "a tool effect must not start after the active provider operation finishes"
+        );
     }
 
     /// Demonstrates live config rebinding: `run_ritual` reads settings fresh on

@@ -6,7 +6,7 @@ use tokio::time::Duration;
 use tracing::error;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext};
+use super::{Command, CommandCancellation, CommandContext, ExecutionClass};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::doener::format::{
     api_down_message, format_city, format_did_you_mean, format_global, format_not_found,
@@ -48,13 +48,23 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> &'static str {
+        "dpi"
+    }
+
     fn name(&self) -> &str {
         "!dpi"
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Background
+    }
+
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
+        ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
         if let Some(remaining) = self.cooldown.check(user).await {
+            ctx.cancellation.check()?;
             send(
                 &ctx,
                 format!(
@@ -62,7 +72,7 @@ where
                     format_cooldown_remaining(remaining)
                 ),
             )
-            .await;
+            .await?;
             return Ok(());
         }
         self.cooldown.record(user).await;
@@ -70,6 +80,7 @@ where
         let query = ctx.args.join(" ");
         let query = query.trim();
 
+        ctx.cancellation.check()?;
         let response = if query.is_empty() {
             match self.client.stats().await {
                 Ok(s) => format_global(&s),
@@ -80,7 +91,9 @@ where
             }
         } else {
             match self.client.search_city_hits(query).await {
-                Ok(hits) => resolve_city_reply(self.client.as_ref(), query, hits).await,
+                Ok(hits) => {
+                    resolve_city_reply(self.client.as_ref(), query, hits, &ctx.cancellation).await?
+                }
                 Err(e) => {
                     error!(error = ?e, query, "doeneratlas city search failed");
                     api_down_message().to_string()
@@ -88,7 +101,8 @@ where
             }
         };
 
-        send(&ctx, response).await;
+        ctx.cancellation.check()?;
+        send(&ctx, response).await?;
         Ok(())
     }
 }
@@ -97,19 +111,25 @@ async fn resolve_city_reply(
     client: &DoeneratlasClient,
     query: &str,
     mut hits: Vec<CityHit>,
-) -> String {
+    cancellation: &CommandCancellation,
+) -> Result<String> {
+    cancellation.check()?;
     if hits.is_empty() {
-        return format_not_found(query);
+        return Ok(format_not_found(query));
     }
     if hits.len() == 1 {
+        cancellation.check()?;
         let hit = client.enrich_city_hit(hits.remove(0)).await;
-        return format_city(&hit);
+        cancellation.check()?;
+        return Ok(format_city(&hit));
     }
     if equal_case_insensitive(&hits[0].city, query) {
+        cancellation.check()?;
         let hit = client.enrich_city_hit(hits.remove(0)).await;
-        return format_city(&hit);
+        cancellation.check()?;
+        return Ok(format_city(&hit));
     }
-    format_did_you_mean(&hits)
+    Ok(format_did_you_mean(&hits))
 }
 
 fn equal_case_insensitive(left: &str, right: &str) -> bool {
@@ -118,12 +138,14 @@ fn equal_case_insensitive(left: &str, right: &str) -> bool {
         .eq(right.chars().flat_map(char::to_lowercase))
 }
 
-async fn send<T, L>(ctx: &CommandContext<'_, T, L>, line: String)
+async fn send<T, L>(ctx: &CommandContext<T, L>, line: String) -> Result<()>
 where
     T: Transport,
     L: LoginCredentials,
 {
-    ctx.sender.reply(ctx.privmsg, line).await;
+    ctx.cancellation.check()?;
+    ctx.sender.reply(&ctx.privmsg, line).await;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -144,11 +166,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancellation_stops_before_chained_city_enrichment() {
+        crate::install_crypto_provider();
+        let server = wiremock::MockServer::start().await;
+        let client = DoeneratlasClient::with_base_url(reqwest::Client::new(), server.uri());
+        let cancellation = CommandCancellation::new();
+        cancellation.cancel();
+        let error = resolve_city_reply(
+            &client,
+            "Han",
+            vec![hit("Hannover", 1, false)],
+            &cancellation,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<crate::commands::CommandCancelled>()
+                .is_some()
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn city_response_empty_hits_is_not_found() {
         crate::install_crypto_provider();
         let server = wiremock::MockServer::start().await;
         let client = DoeneratlasClient::with_base_url(reqwest::Client::new(), server.uri());
-        let out = resolve_city_reply(&client, "xyz", vec![]).await;
+        let out = resolve_city_reply(&client, "xyz", vec![], &CommandCancellation::new())
+            .await
+            .unwrap();
         assert_eq!(out, "FeelsDankMan keine Stadt für 'xyz' gefunden.");
     }
 
@@ -177,7 +224,9 @@ mod tests {
             max_price: Some(9.0),
             avg_price: Some(6.0),
         };
-        let out = resolve_city_reply(&client, "Han", vec![hit]).await;
+        let out = resolve_city_reply(&client, "Han", vec![hit], &CommandCancellation::new())
+            .await
+            .unwrap();
         assert!(
             out.starts_with("Hannover: 20 Buden")
                 && out.contains("4.81")
@@ -215,7 +264,9 @@ mod tests {
             },
             hit("Berlingerode", 1, false),
         ];
-        let out = resolve_city_reply(&client, "berlin", hits).await;
+        let out = resolve_city_reply(&client, "berlin", hits, &CommandCancellation::new())
+            .await
+            .unwrap();
         assert!(
             out.starts_with("Berlin: 127 Buden")
                 && out.contains("5.49")
@@ -235,7 +286,9 @@ mod tests {
             hit("Hanau", 3, true),
             hit("Handewitt", 1, false),
         ];
-        let out = resolve_city_reply(&client, "Han", hits).await;
+        let out = resolve_city_reply(&client, "Han", hits, &CommandCancellation::new())
+            .await
+            .unwrap();
         assert_eq!(out, "Meintest du: Hannover (51), Hanau (3), Handewitt (1)?");
     }
 
@@ -267,7 +320,9 @@ mod tests {
             },
             hit("Müncheberg", 2, true),
         ];
-        let out = resolve_city_reply(&client, "MÜNCHEN", hits).await;
+        let out = resolve_city_reply(&client, "MÜNCHEN", hits, &CommandCancellation::new())
+            .await
+            .unwrap();
         assert!(
             out.starts_with("München: 42 Buden")
                 && out.contains("8.10")

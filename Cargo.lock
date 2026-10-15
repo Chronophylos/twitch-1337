@@ -3328,6 +3328,7 @@ dependencies = [
  "hex",
  "humantime",
  "humantime-serde",
+ "indexmap",
  "infer",
  "llm",
  "minijinja",

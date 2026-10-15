@@ -126,6 +126,9 @@ pub struct TestBotBuilder {
     emote_set_event_seed: Vec<twitch_1337::emote_tracker::NewSetEvent>,
     mouth_identity: Option<(String, String)>,
     fake_mouths: Vec<(Agent, FakeMouth)>,
+    /// Test-only concrete registry injected at the production composition seam.
+    command_registry:
+        Option<Arc<twitch_1337::commands::CommandRegistry<FakeTransport, StaticLoginCredentials>>>,
 }
 
 impl TestBotBuilder {
@@ -145,6 +148,7 @@ impl TestBotBuilder {
             emote_set_event_seed: Vec::new(),
             mouth_identity: None,
             fake_mouths: Vec::new(),
+            command_registry: None,
         }
     }
 
@@ -281,6 +285,18 @@ impl TestBotBuilder {
                 message_id: message_id.to_string(),
             },
         ));
+        self
+    }
+
+    /// Inject fake commands through the production `CommandRegistry` seam.
+    /// Candidate 08 will supervise the same ingress and concrete manager.
+    pub fn with_command_registry(
+        mut self,
+        registry: Arc<
+            twitch_1337::commands::CommandRegistry<FakeTransport, StaticLoginCredentials>,
+        >,
+    ) -> Self {
+        self.command_registry = Some(registry);
         self
     }
 
@@ -634,13 +650,9 @@ impl TestBotBuilder {
                         )),
                     },
                 );
-                let spawner: twitch_1337::WebSpawner = Box::new(move |shutdown| {
+                let spawner: twitch_1337::WebSpawner = Box::new(move |lifecycle| {
                     let deps = twitch_1337_web::WebDeps { bind_addr, state };
-                    tokio::spawn(async move {
-                        if let Err(e) = twitch_1337_web::run_web(listener, deps, shutdown).await {
-                            tracing::error!(target: "twitch_1337_web", ?e, "test web exited");
-                        }
-                    })
+                    twitch_1337_web::spawn_web_runtime(listener, deps, lifecycle)
                 });
                 Some(spawner)
             } else {
@@ -648,15 +660,28 @@ impl TestBotBuilder {
             };
 
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
-            let bot_task = tokio::spawn(run_bot(
-                client,
-                incoming,
-                services,
-                ping_runtime,
-                aviation_tracker_rx,
-                web_spawner,
-                shutdown_rx,
-            ));
+            let bot_task = if let Some(registry) = self.command_registry.take() {
+                tokio::spawn(twitch_1337::run_bot_with_command_registry(
+                    client,
+                    incoming,
+                    services,
+                    ping_runtime,
+                    aviation_tracker_rx,
+                    web_spawner,
+                    shutdown_rx,
+                    registry,
+                ))
+            } else {
+                tokio::spawn(run_bot(
+                    client,
+                    incoming,
+                    services,
+                    ping_runtime,
+                    aviation_tracker_rx,
+                    web_spawner,
+                    shutdown_rx,
+                ))
+            };
 
             // Wait for startup instead of sleeping a fixed interval: the latency
             // handler flips `irc_connected` as its first action, and it is spawned

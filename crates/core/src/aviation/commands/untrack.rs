@@ -5,7 +5,7 @@ use tracing::error;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::TrackerCommand;
-use crate::commands::{Command, CommandContext};
+use crate::commands::{Command, CommandContext, ExecutionClass};
 
 pub struct UntrackCommand {
     tracker_tx: mpsc::Sender<TrackerCommand>,
@@ -23,15 +23,23 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> &'static str {
+        "untrack"
+    }
+
     fn name(&self) -> &str {
         "!untrack"
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Inline
+    }
+
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let input = ctx.args.join(" ");
         if input.trim().is_empty() {
             ctx.sender
-                .reply(ctx.privmsg, "Benutzung: !untrack <callsign/hex> FDM")
+                .reply(&ctx.privmsg, "Benutzung: !untrack <callsign/hex> FDM")
                 .await;
             return Ok(());
         }

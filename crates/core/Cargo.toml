@@ -25,6 +25,7 @@ futures-util = { workspace = true }
 hex = { workspace = true }
 humantime = "2"
 humantime-serde = { workspace = true }
+indexmap = { workspace = true }
 infer = { workspace = true }
 llm = { path = "../llm" }
 minijinja = { version = "2.24.0", default-features = false, features = [

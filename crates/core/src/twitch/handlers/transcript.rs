@@ -8,6 +8,7 @@ use tracing::error;
 use twitch_irc::message::ServerMessage;
 
 use crate::ai::memory::transcript::TranscriptWriter;
+use crate::lifecycle::Lifecycle;
 use crate::twitch::echo::EchoGuard;
 
 pub async fn run_transcript_tap(
@@ -15,9 +16,18 @@ pub async fn run_transcript_tap(
     writer: Arc<TranscriptWriter>,
     channel: String,
     echo: Arc<EchoGuard>,
+    lifecycle: Lifecycle,
 ) {
     loop {
-        match rx.recv().await {
+        let message = tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => return,
+            result = rx.recv() => result,
+        };
+        if lifecycle.is_cancelled() {
+            return;
+        }
+        match message {
             Ok(ServerMessage::Privmsg(p)) if p.channel_login == channel => {
                 if echo
                     .is_echo(&p.sender.id, &p.sender.login, &p.message_id)

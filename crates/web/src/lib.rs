@@ -30,12 +30,14 @@ use std::sync::Arc;
 use axum::Router;
 use eyre::{Result, WrapErr as _};
 use tokio::net::TcpListener;
-use tokio::sync::Notify;
 use tower_cookies::CookieManagerLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
+use twitch_1337_core::lifecycle::Lifecycle;
 
 pub use crate::state::WebState;
+
+const SESSION_PERSIST_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
 
 pub struct WebDeps {
     pub bind_addr: SocketAddr,
@@ -50,12 +52,54 @@ pub async fn bind(addr: SocketAddr) -> Result<TcpListener> {
         .wrap_err_with(|| format!("bind {addr}"))
 }
 
-pub async fn run_web(listener: TcpListener, deps: WebDeps, shutdown: Arc<Notify>) -> Result<()> {
-    serve_app(listener, build_router(deps.state), shutdown).await
+/// Spawn the dashboard and its session-persistence loop with one shared,
+/// latched lifecycle. Returning both handles is intentional: the core
+/// supervisor adopts them as direct siblings, so a server or session-writer
+/// fault wakes the other and a teardown timeout aborts and joins each actual
+/// handle.
+pub fn spawn_web_runtime(
+    listener: TcpListener,
+    deps: WebDeps,
+    lifecycle: Lifecycle,
+) -> twitch_1337_core::WebRuntimeTasks {
+    let sessions = deps.state.sessions.clone();
+    let app = build_router(deps.state);
+    let session_persistence = tokio::spawn(persist_sessions(sessions, lifecycle.clone()));
+    let server = tokio::spawn(async move {
+        if let Err(error) = serve_app(listener, app, lifecycle).await {
+            panic!("web server exited with error: {error:?}");
+        }
+    });
+    twitch_1337_core::WebRuntimeTasks {
+        server,
+        session_persistence,
+    }
+}
+
+/// Persist sliding session activity on the same lifecycle as the web server.
+/// The returned pre-spawned handle is part of [`WebRuntimeTasks`].
+async fn persist_sessions(sessions: Arc<auth::session::SessionTable>, lifecycle: Lifecycle) {
+    let mut tick = tokio::time::interval(SESSION_PERSIST_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => return,
+            _ = tick.tick() => {
+                // Operation boundary: lifecycle wins over a simultaneously
+                // ready tick. An already-started atomic persist is allowed to
+                // finish before this future returns.
+                if lifecycle.is_cancelled() {
+                    return;
+                }
+                sessions.persist().await;
+            }
+        }
+    }
 }
 
 /// Serve a pre-built router with graceful shutdown.
-pub async fn serve_app(listener: TcpListener, app: Router, shutdown: Arc<Notify>) -> Result<()> {
+pub async fn serve_app(listener: TcpListener, app: Router, lifecycle: Lifecycle) -> Result<()> {
     let url = listener
         .local_addr()
         .map(|a| format!("http://{a}/"))
@@ -68,7 +112,9 @@ pub async fn serve_app(listener: TcpListener, app: Router, shutdown: Arc<Notify>
     );
     info!(target: "twitch_1337_web", %url, "Web dashboard listening");
     axum::serve(listener, app)
-        .with_graceful_shutdown(async move { shutdown.notified().await })
+        .with_graceful_shutdown(async move {
+            lifecycle.wait_for_cancellation().await;
+        })
         .await
         .wrap_err("web serve")?;
     warn!(target: "twitch_1337_web", "Web dashboard stopped");

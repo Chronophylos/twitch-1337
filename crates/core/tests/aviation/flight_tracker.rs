@@ -12,6 +12,7 @@ use twitch_1337::aviation::tracker::{
     TrackedFlight, TrackerCommand, run_flight_tracker,
 };
 use twitch_1337::config::AviationstackBootstrap;
+use twitch_1337::lifecycle::Lifecycle;
 use twitch_1337::settings::overrides::SettingsOverrides;
 use twitch_1337::twitch::ChatSender;
 use twitch_irc::ClientConfig;
@@ -1147,16 +1148,22 @@ async fn visible_assigned_hex_then_one_empty_poll_keeps_flight_within_grace_wind
         "expected tracking-lost message, got: {lost}"
     );
 
-    // The removal message is sent just before the state is persisted; give the
-    // atomic save a moment to flush before reading the file back.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let persisted = tokio::fs::read_to_string(&state_path).await.unwrap();
-    let state: twitch_1337::aviation::tracker::FlightTrackerState =
-        ron::from_str(&persisted).unwrap();
-    assert!(
-        state.flights.is_empty(),
-        "flight should be removed after sustained ADS-B absence"
-    );
+    // The removal message is sent just before the state is persisted; poll until
+    // the atomic save lands instead of guessing a flush delay (slow under coverage).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let persisted = tokio::fs::read_to_string(&state_path).await.unwrap();
+        let state: twitch_1337::aviation::tracker::FlightTrackerState =
+            ron::from_str(&persisted).unwrap();
+        if state.flights.is_empty() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "flight should be removed after sustained ADS-B absence"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     bot.shutdown().await;
 }
@@ -1866,6 +1873,7 @@ async fn tracker_answers_dashboard_commands_while_polling() {
     );
     let clock = FakeClock::new(now);
     let (tx, rx) = tokio::sync::mpsc::channel(8);
+    let lifecycle = Lifecycle::new();
     let tracker_task = tokio::spawn(run_flight_tracker(
         rx,
         sender,
@@ -1873,6 +1881,7 @@ async fn tracker_answers_dashboard_commands_while_polling() {
         aviation,
         data_dir.path().to_path_buf(),
         clock,
+        lifecycle.clone(),
     ));
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1901,7 +1910,9 @@ async fn tracker_answers_dashboard_commands_while_polling() {
         .unwrap();
     assert_eq!(removed.as_deref(), Some("DLH1234"));
 
-    drop(tx);
+    // The sender is intentionally retained: shutdown must be driven by the
+    // latched lifecycle, and the already-started provider request may finish.
+    lifecycle.request_graceful_stop();
     tokio::time::timeout(Duration::from_secs(3), tracker_task)
         .await
         .expect("tracker should shut down")

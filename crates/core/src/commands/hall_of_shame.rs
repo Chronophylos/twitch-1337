@@ -6,7 +6,7 @@ use eyre::Result;
 use tokio::sync::RwLock;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext};
+use super::{Command, CommandContext, ExecutionClass};
 use crate::twitch::handlers::tracker_1337::{PersonalWorst, format_remaining};
 
 pub struct HallOfShameCommand {
@@ -25,11 +25,19 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> &'static str {
+        "hall_of_shame"
+    }
+
     fn name(&self) -> &str {
         "!sb"
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Inline
+    }
+
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let hall_of_shame = self.hall_of_shame.read().await;
 
         let response =
@@ -43,7 +51,7 @@ where
                 "Noch keine Einträge vorhanden".to_string()
             };
 
-        ctx.sender.reply(ctx.privmsg, response).await;
+        ctx.sender.reply(&ctx.privmsg, response).await;
 
         Ok(())
     }

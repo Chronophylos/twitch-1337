@@ -4,6 +4,8 @@
 
 use std::{
     collections::HashMap,
+    future::Future,
+    panic::AssertUnwindSafe,
     sync::{
         Arc,
         atomic::{AtomicU32, Ordering},
@@ -11,12 +13,16 @@ use std::{
 };
 
 use chrono::{TimeDelta, Timelike, Utc};
+use futures_util::FutureExt;
 use rand::seq::IndexedRandom as _;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio::{
     fs,
-    sync::{Mutex, broadcast},
+    sync::{Mutex, broadcast, mpsc},
+    task::JoinError,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
 use twitch_irc::{
     login::LoginCredentials,
@@ -25,6 +31,7 @@ use twitch_irc::{
 };
 
 use crate::{
+    lifecycle::TaskGroup,
     resolve_berlin_time,
     twitch::{ChatSender, clanker::is_clanker, echo::EchoGuard},
     util::clock::Clock,
@@ -50,6 +57,28 @@ pub(crate) const LEADERBOARD_FILENAME: &str = "leaderboard.ron";
 pub(crate) const HALL_OF_SHAME_FILENAME: &str = "hall_of_shame.ron";
 
 const MINUTE_MS: u64 = 60_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MonitorCompletion {
+    Cancelled,
+    BroadcastClosed,
+    Panicked,
+}
+
+#[derive(Debug, Error)]
+enum MonitorChildError {
+    #[error("1337 message monitor completed unexpectedly: {completion:?}")]
+    CompletedUnexpectedly { completion: MonitorCompletion },
+
+    #[error("1337 message monitor panicked")]
+    Panicked,
+
+    #[error("1337 message monitor failed to join: {source}")]
+    JoinFailed {
+        #[source]
+        source: JoinError,
+    },
+}
 
 /// A user's personal best time for the 1337 challenge.
 ///
@@ -465,22 +494,26 @@ pub(crate) async fn save_hall_of_shame(
 
 /// Monitors broadcast messages and tracks users who say 1337 during the target minute.
 ///
-/// Runs in a loop until the broadcast channel closes or an error occurs.
-/// Only tracks messages sent during the configured TARGET_HOUR:TARGET_MINUTE from the primary channel.
-#[instrument(skip(broadcast_rx, total_users, channel, echo))]
-pub(crate) async fn monitor_1337_messages(
+/// Runs until the owner requests cancellation or the broadcast channel closes.
+/// Only tracks messages sent during the configured TARGET_HOUR:TARGET_MINUTE
+/// from the primary channel.
+#[instrument(skip(broadcast_rx, total_users, channel, echo, cancellation))]
+async fn monitor_1337_messages(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
     total_users: Arc<Mutex<HashMap<String, u64>>>,
     channel: String,
     echo: Arc<EchoGuard>,
-) {
+    cancellation: CancellationToken,
+) -> MonitorCompletion {
     loop {
-        match broadcast_rx.recv().await {
-            Ok(message) => {
-                let ServerMessage::Privmsg(privmsg) = message else {
-                    continue;
-                };
+        let message = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return MonitorCompletion::Cancelled,
+            message = broadcast_rx.recv() => message,
+        };
 
+        match message {
+            Ok(ServerMessage::Privmsg(privmsg)) => {
                 if privmsg.channel_login != channel {
                     continue;
                 }
@@ -509,12 +542,13 @@ pub(crate) async fn monitor_1337_messages(
                     }
                 }
             }
+            Ok(_) => {}
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
                 error!(skipped, "1337 handler lagged, skipped messages");
             }
             Err(broadcast::error::RecvError::Closed) => {
                 debug!("Broadcast channel closed, 1337 monitor exiting");
-                break;
+                return MonitorCompletion::BroadcastClosed;
             }
         }
     }
@@ -538,6 +572,7 @@ pub async fn run_1337_handler<T, L>(
     clock: Arc<dyn Clock>,
     data_dir: std::path::PathBuf,
     echo: Arc<EchoGuard>,
+    lifecycle: crate::lifecycle::Lifecycle,
 ) where
     T: Transport,
     L: LoginCredentials,
@@ -546,35 +581,69 @@ pub async fn run_1337_handler<T, L>(
 
     loop {
         // Wait until 13:36 to start monitoring
-        wait_until_schedule(clock.as_ref(), TARGET_HOUR, TARGET_MINUTE - 1).await;
+        tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => return,
+            () = wait_until_schedule(clock.as_ref(), TARGET_HOUR, TARGET_MINUTE - 1) => {}
+        }
 
         info!("Starting daily 1337 monitoring session");
 
         // Fresh HashMap for today's users (maps username -> ms_since_minute if sub-second)
         let total_users = Arc::new(Mutex::new(HashMap::with_capacity(MAX_USERS)));
 
-        // Spawn message monitoring subtask
-        let mut monitor_handle = tokio::spawn({
-            let total_users = total_users.clone();
-            // Subscribe fresh when we wake up - only see messages from now on
-            let broadcast_rx = broadcast_tx.subscribe();
-            let monitor_channel = channel.clone();
-            let echo = echo.clone();
+        // The completion channel wakes the parent; TaskGroup ownership remains
+        // authoritative and is joined before the child result is propagated.
+        let (monitor_completion_tx, mut monitor_completion_rx) = mpsc::unbounded_channel();
+        let mut monitor_tasks: TaskGroup<MonitorCompletion> =
+            TaskGroup::new(&lifecycle, "1337 daily message monitor");
+        let child_cancellation = monitor_tasks.cancellation_token();
+        monitor_tasks
+            .spawn("message monitor", {
+                let total_users = total_users.clone();
+                // Subscribe fresh when we wake up - only see messages from now on.
+                let broadcast_rx = broadcast_tx.subscribe();
+                let monitor_channel = channel.clone();
+                let echo = echo.clone();
 
-            async move {
-                monitor_1337_messages(broadcast_rx, total_users, monitor_channel, echo).await;
-            }
-        });
+                async move {
+                    let completion = AssertUnwindSafe(monitor_1337_messages(
+                        broadcast_rx,
+                        total_users,
+                        monitor_channel,
+                        echo,
+                        child_cancellation,
+                    ))
+                    .catch_unwind()
+                    .await
+                    .unwrap_or(MonitorCompletion::Panicked);
+                    let _ = monitor_completion_tx.send(completion);
+                    completion
+                }
+            })
+            .await;
 
-        // Wait until 13:36:30 to send reminder
-        sleep_until_hms(
-            clock.as_ref(),
-            TARGET_HOUR,
-            TARGET_MINUTE - 1,
-            30,
-            latency.load(Ordering::Relaxed),
+        // Wait until 13:36:30 to send reminder.
+        wait_for_monitor_stage(
+            &mut monitor_completion_rx,
+            &mut monitor_tasks,
+            &lifecycle,
+            sleep_until_hms(
+                clock.as_ref(),
+                TARGET_HOUR,
+                TARGET_MINUTE - 1,
+                30,
+                latency.load(Ordering::Relaxed),
+            ),
         )
-        .await;
+        .await
+        .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
+        if lifecycle.is_cancelled() {
+            stop_monitor(&mut monitor_tasks)
+                .await
+                .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
+            return;
+        }
 
         info!("Posting reminder to channel");
         sender.say(channel.clone(), "PausersHype").await;
@@ -584,19 +653,49 @@ pub async fn run_1337_handler<T, L>(
         // above). Keep collecting for SCORING_GRACE_SECS afterwards: messages
         // stamped inside :37 can still arrive after the wall, and the minute
         // guard on server_timestamp rejects anything stamped outside :37.
-        sleep_until_hms(clock.as_ref(), TARGET_HOUR, TARGET_MINUTE + 1, 0, 0).await;
-        sleep_until_hms(
-            clock.as_ref(),
-            TARGET_HOUR,
-            TARGET_MINUTE + 1,
-            SCORING_GRACE_SECS,
-            0,
+        wait_for_monitor_stage(
+            &mut monitor_completion_rx,
+            &mut monitor_tasks,
+            &lifecycle,
+            sleep_until_hms(clock.as_ref(), TARGET_HOUR, TARGET_MINUTE + 1, 0, 0),
         )
-        .await;
+        .await
+        .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
+        if lifecycle.is_cancelled() {
+            stop_monitor(&mut monitor_tasks)
+                .await
+                .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
+            return;
+        }
+        wait_for_monitor_stage(
+            &mut monitor_completion_rx,
+            &mut monitor_tasks,
+            &lifecycle,
+            sleep_until_hms(
+                clock.as_ref(),
+                TARGET_HOUR,
+                TARGET_MINUTE + 1,
+                SCORING_GRACE_SECS,
+                0,
+            ),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
+        if lifecycle.is_cancelled() {
+            stop_monitor(&mut monitor_tasks)
+                .await
+                .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
+            return;
+        }
 
-        // Abort the monitor and wait for it to fully stop before reading results
-        monitor_handle.abort();
-        let _ = (&mut monitor_handle).await;
+        // Stop cooperatively and confirm termination before reading results.
+        // An in-flight users mutex operation is allowed to finish.
+        stop_monitor(&mut monitor_tasks)
+            .await
+            .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
+        if lifecycle.is_cancelled() {
+            return;
+        }
 
         // Get user list, count, fastest, and slowest
         let (count, user_list, fastest, slowest) = {
@@ -649,6 +748,9 @@ pub async fn run_1337_handler<T, L>(
             ));
         }
 
+        if lifecycle.is_cancelled() {
+            return;
+        }
         // Update leaderboard with today's sub-1s times
         let today = clock
             .now_utc()
@@ -671,6 +773,9 @@ pub async fn run_1337_handler<T, L>(
             save_leaderboard(&leaderboard_guard, &data_dir).await;
         }
 
+        if lifecycle.is_cancelled() {
+            return;
+        }
         {
             let users = total_users.lock().await;
             let mut shame = hall_of_shame.write().await;
@@ -688,11 +793,94 @@ pub async fn run_1337_handler<T, L>(
             save_hall_of_shame(&shame, &data_dir).await;
         }
 
+        if lifecycle.is_cancelled() {
+            return;
+        }
         // Post stats message
         info!(count = count, "Posting stats to channel");
         sender.say(channel.clone(), message).await;
 
         info!("Daily 1337 session completed, waiting for next day");
+    }
+}
+
+async fn stop_monitor(
+    monitor_tasks: &mut TaskGroup<MonitorCompletion>,
+) -> Result<(), MonitorChildError> {
+    monitor_tasks.cancel();
+    monitor_tasks
+        .join_all()
+        .await
+        .into_iter()
+        .try_for_each(|completion| {
+            classify_monitor_completion(
+                completion
+                    .into_result()
+                    .map_err(|source| MonitorChildError::JoinFailed { source })?,
+                /* cancellation_expected = */ true,
+            )
+        })
+}
+
+async fn wait_for_monitor_stage<F>(
+    completion_rx: &mut mpsc::UnboundedReceiver<MonitorCompletion>,
+    monitor_tasks: &mut TaskGroup<MonitorCompletion>,
+    lifecycle: &crate::lifecycle::Lifecycle,
+    stage: F,
+) -> Result<F::Output, MonitorChildError>
+where
+    F: Future<Output = ()>,
+{
+    tokio::select! {
+        biased;
+        _ = lifecycle.wait_for_cancellation() => {
+            stop_monitor(monitor_tasks).await?;
+            Ok(())
+        }
+        output = stage => Ok(output),
+        observed = completion_rx.recv() => {
+            // None means every child sender is gone. The child has either
+            // completed or the impossible channel invariant was broken; cancel
+            // before joining in either case.
+            let cancellation_expected = observed.is_none();
+            if cancellation_expected {
+                monitor_tasks.cancel();
+            }
+            let mut completions = monitor_tasks.join_all().await;
+            if completions.len() != 1 {
+                return Err(MonitorChildError::CompletedUnexpectedly {
+                    completion: observed.unwrap_or(MonitorCompletion::Panicked),
+                });
+            }
+            let completion = completions
+                .remove(0)
+                .into_result()
+                .map_err(|source| MonitorChildError::JoinFailed { source })?;
+            if let Some(observed) = observed
+                && observed != completion
+            {
+                return Err(MonitorChildError::CompletedUnexpectedly {
+                    completion: observed,
+                });
+            }
+            classify_monitor_completion(completion, cancellation_expected)
+        }
+    }
+}
+
+fn classify_monitor_completion(
+    completion: MonitorCompletion,
+    cancellation_expected: bool,
+) -> Result<(), MonitorChildError> {
+    match completion {
+        MonitorCompletion::Cancelled if cancellation_expected => Ok(()),
+        MonitorCompletion::Cancelled => {
+            Err(MonitorChildError::CompletedUnexpectedly { completion })
+        }
+        MonitorCompletion::BroadcastClosed => {
+            Err(MonitorChildError::CompletedUnexpectedly { completion })
+        }
+        MonitorCompletion::Panicked => Err(MonitorChildError::Panicked),
     }
 }
 
@@ -826,5 +1014,56 @@ mod tests {
         assert!(beats_own_worst("alice", 56_000, &map));
         assert!(!beats_own_worst("alice", 55_000, &map));
         assert!(!beats_own_worst("alice", 54_000, &map));
+    }
+
+    #[tokio::test]
+    async fn monitor_child_is_cancelled_and_joined() {
+        let (broadcast_tx, broadcast_rx) = broadcast::channel::<ServerMessage>(1);
+        let users = Arc::new(Mutex::new(HashMap::new()));
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+        let mut tasks = TaskGroup::new(&lifecycle, "test 1337 monitor");
+        let child_cancellation = tasks.cancellation_token();
+        tasks
+            .spawn("message monitor", async move {
+                monitor_1337_messages(
+                    broadcast_rx,
+                    users,
+                    "main".to_owned(),
+                    Arc::new(EchoGuard::disabled()),
+                    child_cancellation,
+                )
+                .await
+            })
+            .await;
+        tokio::task::yield_now().await;
+
+        tasks.cancel();
+        let completions = tasks.join_all().await;
+
+        assert_eq!(completions.len(), 1);
+        assert_eq!(
+            completions[0]
+                .result()
+                .as_ref()
+                .expect("cooperative cancellation should be joined"),
+            &MonitorCompletion::Cancelled
+        );
+        drop(broadcast_tx);
+    }
+
+    #[tokio::test]
+    async fn monitor_panic_is_a_nested_task_fault() {
+        let lifecycle = crate::lifecycle::Lifecycle::new();
+        let mut tasks = TaskGroup::new(&lifecycle, "panicking 1337 monitor");
+        tasks
+            .spawn("message monitor", async { panic!("monitor failed") })
+            .await;
+
+        let completion = tasks.join_all().await.remove(0);
+        let error = completion
+            .into_result()
+            .expect_err("the monitor panic must be preserved");
+
+        assert!(error.is_panic());
     }
 }

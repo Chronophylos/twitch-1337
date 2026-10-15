@@ -13,6 +13,7 @@ pub mod cooldown;
 pub mod dhl;
 pub mod doener;
 pub mod emote_tracker;
+pub mod lifecycle;
 pub mod llm_factory;
 pub mod ping;
 pub mod pronouns;
@@ -40,9 +41,10 @@ use twitch_irc::{
 
 use crate::{
     aviation::AviationClient,
+    lifecycle::{Lifecycle, TaskSupervisor},
     ping::PingRuntime,
     twitch::handlers::{
-        spawn::spawn_handlers,
+        spawn::{build_command_registry, spawn_handlers},
         tracker_1337::{TARGET_HOUR, TARGET_MINUTE},
     },
     twitch::whisper::WhisperSender,
@@ -192,8 +194,16 @@ pub struct Services {
     pub recap: Option<Arc<crate::ai::recap::RecapHandle>>,
 }
 
-pub type WebSpawner =
-    Box<dyn FnOnce(Arc<tokio::sync::Notify>) -> tokio::task::JoinHandle<()> + Send + 'static>;
+/// Pre-spawned web tasks transferred to the lifecycle supervisor.
+///
+/// The embedded web crate cannot depend on the private supervisor type, so the
+/// composition boundary returns the two actual handles explicitly.
+pub struct WebRuntimeTasks {
+    pub server: tokio::task::JoinHandle<()>,
+    pub session_persistence: tokio::task::JoinHandle<()>,
+}
+
+pub type WebSpawner = Box<dyn FnOnce(Lifecycle) -> WebRuntimeTasks + Send + 'static>;
 
 /// Run the bot until `shutdown` fires or a handler exits.
 ///
@@ -213,6 +223,84 @@ where
     T: Transport + Send + Sync + 'static,
     L: LoginCredentials + Send + Sync + 'static,
 {
+    run_bot_inner(BotRun {
+        client,
+        incoming,
+        services,
+        ping,
+        tracker_rx,
+        web_spawner,
+        shutdown,
+        command_registry: None,
+    })
+    .await
+}
+
+/// Test-only composition seam for dispatcher integration tests.
+///
+/// This injects the same concrete `CommandRegistry` used by production; it does
+/// not add a second executor abstraction. The registry remains shared by
+/// ingress and `CommandExecutionManager`.
+#[cfg(any(test, feature = "testing"))]
+#[allow(clippy::too_many_arguments)]
+pub async fn run_bot_with_command_registry<T, L>(
+    client: Arc<TwitchIRCClient<T, L>>,
+    incoming: UnboundedReceiver<ServerMessage>,
+    services: Services,
+    ping: PingRuntime,
+    tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
+    web_spawner: Option<WebSpawner>,
+    shutdown: oneshot::Receiver<()>,
+    registry: Arc<commands::CommandRegistry<T, L>>,
+) -> Result<()>
+where
+    T: Transport + Send + Sync + 'static,
+    L: LoginCredentials + Send + Sync + 'static,
+{
+    run_bot_inner(BotRun {
+        client,
+        incoming,
+        services,
+        ping,
+        tracker_rx,
+        web_spawner,
+        shutdown,
+        command_registry: Some(registry),
+    })
+    .await
+}
+
+struct BotRun<T, L>
+where
+    T: Transport,
+    L: LoginCredentials,
+{
+    client: Arc<TwitchIRCClient<T, L>>,
+    incoming: UnboundedReceiver<ServerMessage>,
+    services: Services,
+    ping: PingRuntime,
+    tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
+    web_spawner: Option<WebSpawner>,
+    shutdown: oneshot::Receiver<()>,
+    command_registry: Option<Arc<commands::CommandRegistry<T, L>>>,
+}
+
+async fn run_bot_inner<T, L>(runtime: BotRun<T, L>) -> Result<()>
+where
+    T: Transport + Send + Sync + 'static,
+    L: LoginCredentials + Send + Sync + 'static,
+{
+    let BotRun {
+        client,
+        incoming,
+        services,
+        ping,
+        tracker_rx,
+        web_spawner,
+        shutdown,
+        command_registry: injected_registry,
+    } = runtime;
+
     // The flight-tracker boot guard ties all three values together —
     // `Services.aviation`, `Services.aviation_tracker_tx`, and `tracker_rx` —
     // restoring the invariant the deleted
@@ -232,20 +320,29 @@ where
         );
     }
 
-    // The ping actor is owned by `run_bot` and supervised by
-    // `await_shutdown`'s select (an actor crash trips `HandlerExited`). It
-    // is NOT drained on shutdown: every handler task holds an
-    // `Arc<Services>` (hence a `PingHandle` sender) and is detached — not
-    // stopped — by `await_shutdown`, so the sender count never reaches
-    // zero before process exit. The runtime reaps the actor; ping state
-    // is persisted per command, not on drain.
-    let mut ping_actor = tokio::spawn(crate::ping::run_ping_actor(
-        ping.rx,
-        ping.manager,
-        ping.names_tx,
-    ));
-
     let services = Arc::new(services);
+
+    // Construct the registry and all command-owned optional clients before any
+    // runtime task is registered. A startup error therefore cannot leave the
+    // ping actor or another task behind.
+    let command_registry = match injected_registry {
+        Some(registry) => registry,
+        None => build_command_registry(&services, &services.settings.load())?,
+    };
+
+    let lifecycle = Lifecycle::new();
+    let mut supervisor = TaskSupervisor::new(lifecycle.clone());
+
+    // The ping actor is single-owner and lifecycle-aware. It is registered
+    // directly, so a clean actor return before shutdown is a runtime fault and
+    // a lifecycle stop is observed without relying on sender-count drain.
+    {
+        let lifecycle = lifecycle.clone();
+        supervisor.spawn("ping actor", async move {
+            crate::ping::run_ping_actor_until(ping.rx, ping.manager, ping.names_tx, lifecycle)
+                .await;
+        });
+    }
 
     // Cloned Arc retained for the startup/shutdown announces; `client` itself is
     // moved into spawn_handlers below.
@@ -253,27 +350,40 @@ where
 
     let admin_channel = services.settings.load().twitch.admin_channel.clone();
 
-    let handlers = spawn_handlers(Arc::clone(&services), client, incoming, tracker_rx);
+    spawn_handlers(
+        &mut supervisor,
+        lifecycle.clone(),
+        Arc::clone(&services),
+        client,
+        command_registry,
+        incoming,
+        tracker_rx,
+    );
 
-    let shutdown_notify = handlers.shutdown_notify.clone();
+    // Optional embedded web dashboard. The bin builds and supplies the spawn
+    // closure so this crate stays independent of `twitch_1337_web`; both the
+    // server and session-writer handles are adopted by the same supervisor.
+    if let Some(spawner) = web_spawner {
+        let web_tasks = spawner(lifecycle.clone());
+        supervisor.adopt("web server", web_tasks.server);
+        supervisor.adopt("web session persistence", web_tasks.session_persistence);
+    }
 
-    // Optional embedded web dashboard. The bin builds and supplies the
-    // spawn closure so this crate stays independent of `twitch_1337_web`.
-    let web_handle = web_spawner.map(|spawner| spawner(shutdown_notify.clone()));
-
-    // Daily dreamer ritual. Re-reads settings each loop iteration so dashboard
-    // edits to ai.dreamer.* apply on the next scheduled run without a restart.
+    // Daily dreamer ritual. The loop observes the latched lifecycle directly at
+    // sleep and file/provider-operation boundaries; the supervisor owns its
+    // returned handle.
     if let Some(mem) = &services.ai_memory
         && services.ai_enabled
     {
-        crate::ai::memory::ritual::spawn_ritual(
+        let ritual_handle = crate::ai::memory::ritual::spawn_ritual(
             services.llm.clone(),
             mem.store.clone(),
             mem.transcript.clone(),
             services.settings.clone(),
-            shutdown_notify.clone(),
+            lifecycle.clone(),
             services.langfuse.clone(),
         );
+        supervisor.adopt("dreamer ritual", ritual_handle);
         tracing::info!("Daily AI memory dreamer ritual spawned (live settings)");
     }
 
@@ -294,37 +404,51 @@ where
         TARGET_HOUR,
         TARGET_MINUTE - 1
     );
-    let shutdown_outcome =
-        crate::twitch::handlers::spawn::await_shutdown(handlers, &mut ping_actor, shutdown).await;
-
-    // Shutdown initiated; best-effort line before draining web/ping actor. A
-    // handler fault posts a distinct message so operators don't read it as a
-    // graceful, intentional stop. Both are timeout-bounded internally.
-    match shutdown_outcome {
-        crate::twitch::handlers::spawn::ShutdownOutcome::Graceful => {
-            crate::twitch::announce::announce_shutdown(
-                &client_for_announce,
-                admin_channel.as_deref(),
-            )
-            .await;
-        }
-        crate::twitch::handlers::spawn::ShutdownOutcome::HandlerExited => {
-            crate::twitch::announce::announce_crash(&client_for_announce, admin_channel.as_deref())
-                .await;
-        }
-    }
-
-    // After handler shutdown, drain the web task. The graceful shutdown future
-    // is wired to the same `shutdown_notify` notified by `await_shutdown`, so
-    // axum::serve has already begun winding down.
-    if let Some(handle) = web_handle
-        && let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await
+    // Finalizers are registered before supervision starts and run in order
+    // only after producers and globally registered descendants are joined.
+    // The supervisor marks the lifecycle Stopped after all of them return.
     {
-        tracing::warn!(target: "twitch_1337_web", ?e, "Web task did not shut down within 5s");
+        let client = Arc::clone(&client_for_announce);
+        let lifecycle = lifecycle.clone();
+        let admin_channel = admin_channel.clone();
+        supervisor.register_finalizer("shutdown announcement", async move {
+            if lifecycle.is_faulted() {
+                crate::twitch::announce::announce_crash(client.as_ref(), admin_channel.as_deref())
+                    .await;
+            } else {
+                crate::twitch::announce::announce_shutdown(
+                    client.as_ref(),
+                    admin_channel.as_deref(),
+                )
+                .await;
+            }
+            Ok(())
+        });
+    }
+    if let Some(handle) = services.langfuse.clone() {
+        supervisor.register_finalizer("Langfuse exporter", async move {
+            handle
+                .finalize()
+                .await
+                .map_err(|error| format!("flush/close/join failed: {error}"))
+        });
+    }
+    if let Some(handle) = services.emote_tracker.clone() {
+        supervisor.register_finalizer("emote SQLite writer", async move {
+            handle
+                .close_and_join()
+                .await
+                .map_err(|error| error.to_string())
+        });
     }
 
-    if let Some(handle) = &services.langfuse {
-        handle.flush(std::time::Duration::from_secs(2)).await;
+    let supervisor_result = supervisor
+        .run(shutdown)
+        .await
+        .map_err(|error| eyre::eyre!("application lifecycle supervision failed: {error}"));
+    if let Err(error) = &supervisor_result {
+        tracing::error!(?error, "Application lifecycle supervision failed");
+        return Err(eyre::eyre!("{error}"));
     }
 
     info!("Bot shutdown complete");

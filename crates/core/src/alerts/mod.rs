@@ -13,9 +13,12 @@ pub mod state;
 pub use solar::class_rank;
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
+
+use crate::lifecycle::Lifecycle;
 
 /// One event that survived parsing and threshold filtering, already
 /// rendered into the exact line that would go to chat. Whether it is
@@ -88,18 +91,26 @@ impl Due {
 /// drives ad-hoc handles, whose change signal never fires (e.g. tests).
 const TICK: std::time::Duration = std::time::Duration::from_secs(60);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PollStep {
+    Complete { dirty: bool },
+    Cancelled,
+}
+
 /// Poll the earthquake, solar flare, and Earth-directed CME feeds and announce
 /// new events.
 ///
 /// One task, three independent cadences. Every failure mode degrades to
-/// "skip this tick" — the next poll is the retry. The loop never returns,
-/// so it never trips the shutdown select in `await_shutdown`.
+/// "skip this tick" — the next poll is the retry. Feed failures are not task
+/// faults; an optional-client build failure returns visibly to the supervisor,
+/// and lifecycle cancellation returns only after the current atomic step.
 pub async fn run_alerts_handler<T, L>(
     sender: Arc<crate::twitch::ChatSender<T, L>>,
     channel: String,
     settings: crate::settings::SettingsHandle,
     data_dir: std::path::PathBuf,
     clock: Arc<dyn crate::util::clock::Clock>,
+    lifecycle: Lifecycle,
 ) where
     T: twitch_irc::transport::Transport,
     L: twitch_irc::login::LoginCredentials,
@@ -113,10 +124,9 @@ pub async fn run_alerts_handler<T, L>(
         Err(error) => {
             tracing::error!(
                 ?error,
-                "Failed to build alerts HTTP client, alerts disabled"
+                "Failed to build alerts HTTP client; alerts task exiting"
             );
-            std::future::pending::<()>().await;
-            unreachable!("pending future never resolves");
+            return;
         }
     };
 
@@ -129,17 +139,25 @@ pub async fn run_alerts_handler<T, L>(
 
     loop {
         tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => return,
             _ = tokio::time::sleep(TICK) => {}
             _ = changes.next() => {}
+        }
+        if lifecycle.is_cancelled() {
+            return;
         }
         let now = clock.now_utc();
         let cfg = settings.load().alerts.clone();
         let max_age = Duration::seconds(i64::try_from(cfg.max_age_secs).unwrap_or(i64::MAX));
         let mut dirty = false;
 
+        if lifecycle.is_cancelled() {
+            return;
+        }
         if cfg.quake.enabled && quake_due.ready(now, cfg.quake.poll_secs) {
             let url = quake::url(quake::DEFAULT_BASE_URL, cfg.quake.min_mag_tenths);
-            dirty |= poll_feed(
+            match poll_feed(
                 &sender,
                 &channel,
                 &http,
@@ -149,13 +167,21 @@ pub async fn run_alerts_handler<T, L>(
                 &mut seen.quake,
                 now,
                 max_age,
+                &lifecycle,
             )
-            .await;
+            .await
+            {
+                PollStep::Cancelled => return,
+                PollStep::Complete { dirty: changed } => dirty |= changed,
+            }
         }
 
+        if lifecycle.is_cancelled() {
+            return;
+        }
         if cfg.solar.enabled && solar_due.ready(now, cfg.solar.poll_secs) {
             let min_rank = class_rank(&cfg.solar.min_class).unwrap_or((3, 0.0));
-            dirty |= poll_feed(
+            match poll_feed(
                 &sender,
                 &channel,
                 &http,
@@ -165,12 +191,20 @@ pub async fn run_alerts_handler<T, L>(
                 &mut seen.solar,
                 now,
                 max_age,
+                &lifecycle,
             )
-            .await;
+            .await
+            {
+                PollStep::Cancelled => return,
+                PollStep::Complete { dirty: changed } => dirty |= changed,
+            }
         }
 
+        if lifecycle.is_cancelled() {
+            return;
+        }
         if cfg.cme.enabled && cme_due.ready(now, cfg.cme.poll_secs) {
-            dirty |= poll_feed(
+            match poll_feed(
                 &sender,
                 &channel,
                 &http,
@@ -180,11 +214,19 @@ pub async fn run_alerts_handler<T, L>(
                 &mut seen.cme,
                 now,
                 max_age,
+                &lifecycle,
             )
-            .await;
+            .await
+            {
+                PollStep::Cancelled => return,
+                PollStep::Complete { dirty: changed } => dirty |= changed,
+            }
         }
 
         if dirty {
+            if lifecycle.is_cancelled() {
+                return;
+            }
             seen.save(&data_dir).await;
         }
     }
@@ -205,6 +247,24 @@ fn parsed_or_skip<E: std::fmt::Debug>(
     }
 }
 
+async fn announce_while_running<F, Fut>(
+    lines: Vec<String>,
+    lifecycle: &Lifecycle,
+    mut effect: F,
+) -> bool
+where
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    for line in lines {
+        if lifecycle.is_cancelled() {
+            return false;
+        }
+        effect(line).await;
+    }
+    true
+}
+
 #[allow(clippy::too_many_arguments)] // one-shot poll: fetch, parse, dedupe, say
 async fn poll_feed<T, L, E: std::fmt::Debug>(
     sender: &Arc<crate::twitch::ChatSender<T, L>>,
@@ -216,22 +276,34 @@ async fn poll_feed<T, L, E: std::fmt::Debug>(
     seen: &mut VecDeque<String>,
     now: DateTime<Utc>,
     max_age: Duration,
-) -> bool
+    lifecycle: &Lifecycle,
+) -> PollStep
 where
     T: twitch_irc::transport::Transport,
     L: twitch_irc::login::LoginCredentials,
 {
+    if lifecycle.is_cancelled() {
+        return PollStep::Cancelled;
+    }
     let Some(body) = fetch(http, url).await else {
-        return false;
+        return PollStep::Complete { dirty: false };
     };
+    if lifecycle.is_cancelled() {
+        return PollStep::Cancelled;
+    }
     let Some(cands) = parsed_or_skip(feed, parse(&body)) else {
-        return false;
+        return PollStep::Complete { dirty: false };
     };
     let (lines, marked) = select_announcements(cands, seen, now, max_age);
-    for line in lines {
-        sender.say(channel.to_owned(), line).await;
+    let completed = announce_while_running(lines, lifecycle, |line| {
+        let channel = channel.to_owned();
+        async move { sender.say(channel, line).await }
+    })
+    .await;
+    if !completed {
+        return PollStep::Cancelled;
     }
-    marked
+    PollStep::Complete { dirty: marked }
 }
 
 /// Fetch a feed body. Any failure logs and yields `None`; the caller skips
@@ -376,6 +448,30 @@ mod tests {
         assert!(
             loaded.quake.contains(&"old".to_string()),
             "stale catch-up must survive a restart"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_first_announcement_blocks_the_next_effect() {
+        let lifecycle = Lifecycle::new();
+        let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let completed =
+            announce_while_running(vec!["first".into(), "second".into()], &lifecycle, |_line| {
+                let sent = sent.clone();
+                let lifecycle = lifecycle.clone();
+                async move {
+                    sent.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    lifecycle.request_graceful_stop();
+                }
+            })
+            .await;
+
+        assert!(!completed);
+        assert_eq!(
+            sent.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the started effect finishes, but no second announcement starts"
         );
     }
 

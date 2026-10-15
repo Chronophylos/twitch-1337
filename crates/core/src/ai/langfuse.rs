@@ -12,7 +12,11 @@ use llm::{GenerationEvent, LlmObserver, SpanEvent};
 use reqwest::header::{self, HeaderMap, HeaderValue};
 use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, oneshot};
+use thiserror::Error;
+use tokio::{
+    sync::{Mutex, mpsc, oneshot},
+    task::JoinHandle,
+};
 use tracing::warn;
 
 use crate::APP_USER_AGENT;
@@ -24,17 +28,61 @@ const CHANNEL_CAP: usize = 256;
 const BATCH_MAX: usize = 32;
 const BATCH_WAIT: Duration = Duration::from_millis(200);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+const FINALIZE_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
+const FINALIZE_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 enum ExporterCmd {
     Generation(GenerationEvent),
     Span(SpanEvent),
     Flush(oneshot::Sender<()>),
+    Close(oneshot::Sender<()>),
 }
 
-/// Handle held in [`crate::Services`]. Clone is cheap (mpsc sender).
+/// Failure while finalizing an application-owned exporter task.
+#[derive(Debug, Error)]
+pub enum LangfuseFinalizeError {
+    #[error("timed out requesting the Langfuse exporter flush")]
+    FlushTimeout,
+
+    #[error("the Langfuse exporter closed before the flush completed")]
+    FlushClosed,
+
+    #[error("timed out requesting the Langfuse exporter close")]
+    CloseTimeout,
+
+    #[error("the Langfuse exporter closed before the close completed")]
+    CloseClosed,
+
+    #[error("timed out joining the Langfuse exporter after abort")]
+    JoinTimeout,
+
+    #[error("Langfuse exporter task failed during finalization: {0}")]
+    Join(#[from] tokio::task::JoinError),
+}
+
+struct ExporterOwner {
+    handle: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Drop for ExporterOwner {
+    fn drop(&mut self) {
+        // Correct runtime finalization removes and joins this handle. Aborting
+        // here is only a last-resort guard against detaching exporter work when
+        // composition itself unwinds before `run_bot` takes ownership.
+        if let Ok(mut handle) = self.handle.try_lock()
+            && let Some(handle) = handle.take()
+        {
+            handle.abort();
+        }
+    }
+}
+
+/// Handle held in [`crate::Services`]. Clones share both the event channel and
+/// the single owner for the exporter's [`JoinHandle`].
 #[derive(Clone)]
 pub struct LangfuseHandle {
     tx: mpsc::Sender<ExporterCmd>,
+    owner: std::sync::Arc<ExporterOwner>,
 }
 
 impl LangfuseHandle {
@@ -85,8 +133,13 @@ impl LangfuseHandle {
             .build()
             .map_err(|e| eyre::eyre!("build langfuse HTTP client: {e}"))?;
         let (tx, rx) = mpsc::channel(CHANNEL_CAP);
-        tokio::spawn(exporter_loop(http, url, rx));
-        Ok(Self { tx })
+        let handle = tokio::spawn(exporter_loop(http, url, rx));
+        Ok(Self {
+            tx,
+            owner: std::sync::Arc::new(ExporterOwner {
+                handle: Mutex::new(Some(handle)),
+            }),
+        })
     }
 
     /// Drain queued observations and wait for one POST attempt.
@@ -96,6 +149,88 @@ impl LangfuseHandle {
             return;
         }
         let _ = tokio::time::timeout(timeout, done_rx).await;
+    }
+
+    /// Stop the exporter and synchronously confirm its task termination.
+    ///
+    /// Runtime callers invoke this only after all observation producers have
+    /// joined. Every phase is bounded; if the exporter misses a request or join
+    /// deadline, its handle is aborted and joined before the error returns.
+    pub async fn finalize(&self) -> Result<(), LangfuseFinalizeError> {
+        let mut first_error = None;
+
+        let (flush_tx, flush_rx) = oneshot::channel();
+        match tokio::time::timeout(
+            FINALIZE_COMMAND_TIMEOUT,
+            self.tx.send(ExporterCmd::Flush(flush_tx)),
+        )
+        .await
+        {
+            Ok(Ok(())) => match tokio::time::timeout(FINALIZE_COMMAND_TIMEOUT, flush_rx).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => first_error = Some(LangfuseFinalizeError::FlushClosed),
+                Err(_) => first_error = Some(LangfuseFinalizeError::FlushTimeout),
+            },
+            Ok(Err(_)) => first_error = Some(LangfuseFinalizeError::FlushClosed),
+            Err(_) => first_error = Some(LangfuseFinalizeError::FlushTimeout),
+        }
+
+        let (close_tx, close_rx) = oneshot::channel();
+        match tokio::time::timeout(
+            FINALIZE_COMMAND_TIMEOUT,
+            self.tx.send(ExporterCmd::Close(close_tx)),
+        )
+        .await
+        {
+            Ok(Ok(())) => match tokio::time::timeout(FINALIZE_COMMAND_TIMEOUT, close_rx).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => {
+                    if first_error.is_none() {
+                        first_error = Some(LangfuseFinalizeError::CloseClosed);
+                    }
+                }
+                Err(_) => {
+                    if first_error.is_none() {
+                        first_error = Some(LangfuseFinalizeError::CloseTimeout);
+                    }
+                }
+            },
+            Ok(Err(_)) => {
+                if first_error.is_none() {
+                    first_error = Some(LangfuseFinalizeError::CloseClosed);
+                }
+            }
+            Err(_) => {
+                if first_error.is_none() {
+                    first_error = Some(LangfuseFinalizeError::CloseTimeout);
+                }
+            }
+        }
+
+        if let Some(mut handle) = self.owner.handle.lock().await.take() {
+            match tokio::time::timeout(FINALIZE_JOIN_TIMEOUT, &mut handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(source)) => {
+                    if first_error.is_none() {
+                        first_error = Some(LangfuseFinalizeError::Join(source));
+                    }
+                }
+                Err(_) => {
+                    handle.abort();
+                    // Abort is not completion confirmation. Join the aborted
+                    // task before returning the finalization error.
+                    let _ = handle.await;
+                    if first_error.is_none() {
+                        first_error = Some(LangfuseFinalizeError::JoinTimeout);
+                    }
+                }
+            }
+        }
+
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     pub fn as_observer(self: &std::sync::Arc<Self>) -> std::sync::Arc<dyn LlmObserver> {
@@ -148,6 +283,13 @@ async fn exporter_loop(http: reqwest::Client, url: String, mut rx: mpsc::Receive
                 post_batch(&http, &url, &mut batch).await;
                 let _ = done.send(());
             }
+            Some(ExporterCmd::Close(done)) => {
+                // Finalizer ordering is explicit: flush has already completed,
+                // but drain anything that raced the close before terminating.
+                post_batch(&http, &url, &mut batch).await;
+                let _ = done.send(());
+                return;
+            }
             Some(cmd) => {
                 batch.push(cmd);
                 if batch.len() >= BATCH_MAX {
@@ -180,7 +322,7 @@ fn otlp_traces(batch: Vec<ExporterCmd>) -> Value {
         .filter_map(|cmd| match cmd {
             ExporterCmd::Generation(e) => Some(generation_span(e)),
             ExporterCmd::Span(e) => Some(generic_span(e)),
-            ExporterCmd::Flush(_) => None,
+            ExporterCmd::Flush(_) | ExporterCmd::Close(_) => None,
         })
         .collect();
     json!({
@@ -460,7 +602,8 @@ mod tests {
             },
         )
         .await;
-        handle.flush(Duration::from_secs(2)).await;
+        handle.finalize().await.unwrap();
+        assert!(handle.owner.handle.lock().await.is_none());
     }
 
     #[tokio::test]
@@ -474,7 +617,8 @@ mod tests {
         let handle =
             LangfuseHandle::start_with_host(&server.uri(), "pk-lf-test", "sk-lf-test").unwrap();
         handle.generation(sample_generation());
-        handle.flush(Duration::from_secs(2)).await;
+        handle.finalize().await.unwrap();
+        assert!(handle.owner.handle.lock().await.is_none());
     }
 
     #[test]

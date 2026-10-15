@@ -16,6 +16,7 @@ use url::Url;
 
 use crate::{
     APP_USER_AGENT,
+    lifecycle::Lifecycle,
     twitch::{ChatSender, echo::EchoGuard},
 };
 
@@ -90,6 +91,7 @@ pub async fn run_mydealz_handler<T, L>(
     sender: Arc<ChatSender<T, L>>,
     channel: String,
     echo: Arc<EchoGuard>,
+    lifecycle: Lifecycle,
 ) where
     T: Transport,
     L: LoginCredentials,
@@ -101,37 +103,57 @@ pub async fn run_mydealz_handler<T, L>(
         .build()
     {
         Ok(c) => c,
-        // Park instead of returning: an exiting handle trips the bot's fault
-        // shutdown, and this feature is not worth the bot.
+        // Optional client construction is an owned task failure, not a reason
+        // to park forever under a live supervisor.
         Err(error) => {
-            error!(?error, "mydealz http client build failed, handler disabled");
-            std::future::pending::<()>().await;
+            error!(?error, "mydealz http client build failed, handler exiting");
             return;
         }
     };
     loop {
-        let msg = match broadcast_rx.recv().await {
-            Ok(m) => m,
-            Err(broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(_) => return,
+        let msg = tokio::select! {
+            biased;
+            _ = lifecycle.wait_for_cancellation() => return,
+            result = broadcast_rx.recv() => match result {
+                Ok(message) => message,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => return,
+            },
         };
+        if lifecycle.is_cancelled() {
+            return;
+        }
         let ServerMessage::Privmsg(p) = msg else {
             continue;
         };
         if p.channel_login != channel || echo.is_mouth(p.sender.id.as_str(), &p.sender.login) {
             continue;
         }
-        handle_message(&http, &sender, &p).await;
+        handle_message(&http, &sender, &p, &lifecycle).await;
     }
 }
 
-async fn handle_message<T, L>(http: &Client, sender: &ChatSender<T, L>, p: &PrivmsgMessage)
-where
+async fn handle_message<T, L>(
+    http: &Client,
+    sender: &ChatSender<T, L>,
+    p: &PrivmsgMessage,
+    lifecycle: &Lifecycle,
+) where
     T: Transport,
     L: LoginCredentials,
 {
     for url in mydealz_urls(&p.message_text) {
-        match clean(http, &url).await {
+        if lifecycle.is_cancelled() {
+            return;
+        }
+        // The HEAD request is one atomic network operation. If cancellation
+        // lands while it is in flight, let it finish and then stop before the
+        // externally visible reply or the next link request.
+        let cleaned = clean(http, &url).await;
+        if lifecycle.is_cancelled() {
+            return;
+        }
+        match cleaned {
             Some(cleaned) => sender.reply(p, format!("🔗 {cleaned}")).await,
             None => debug!(%url, "nothing to clean"),
         }

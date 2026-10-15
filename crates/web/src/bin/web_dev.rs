@@ -34,8 +34,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::{Result, WrapErr as _};
-use tokio::sync::Notify;
-use twitch_1337_core::{install_crypto_provider, install_tracing};
+use twitch_1337_core::{install_crypto_provider, install_tracing, lifecycle::Lifecycle};
 use twitch_1337_web::clock::SystemClock;
 use twitch_1337_web::dev::{DEV_CSRF, DEV_SID, DEV_USER_ID, StubHelix, dev_new_session};
 use twitch_1337_web::state::{WebState, WebTestConfig};
@@ -83,12 +82,7 @@ async fn main() -> Result<()> {
         .insert_with_id(DEV_SID, DEV_CSRF, dev_new_session());
 
     let listener = bind(bind_addr).await?;
-    let shutdown = Arc::new(Notify::new());
-    let s = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        s.notify_one();
-    });
+    let lifecycle = Lifecycle::new();
 
     let mut app = build_router(state);
     let livereload = tower_livereload::LiveReloadLayer::new();
@@ -96,7 +90,15 @@ async fn main() -> Result<()> {
     app = app.layer(livereload);
     install_asset_watcher(reloader);
 
-    serve_app(listener, app, shutdown).await
+    let mut serving = Box::pin(serve_app(listener, app, lifecycle.clone()));
+    tokio::select! {
+        result = &mut serving => result,
+        signal = tokio::signal::ctrl_c() => {
+            signal.wrap_err("register Ctrl-C handler for web-dev")?;
+            lifecycle.request_graceful_stop();
+            serving.await
+        }
+    }
 }
 
 /// Watch `assets/` + `templates/` and ping the livereload SSE on

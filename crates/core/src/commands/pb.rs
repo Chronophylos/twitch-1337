@@ -6,7 +6,7 @@ use eyre::Result;
 use tokio::sync::RwLock;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, normalize_username};
+use super::{Command, CommandContext, ExecutionClass, normalize_username};
 use crate::twitch::handlers::tracker_1337::PersonalBest;
 
 pub struct PbCommand {
@@ -25,11 +25,19 @@ where
     T: Transport,
     L: LoginCredentials,
 {
+    fn id(&self) -> &'static str {
+        "pb"
+    }
+
     fn name(&self) -> &str {
         "!pb"
     }
 
-    async fn execute(&self, ctx: CommandContext<'_, T, L>) -> Result<()> {
+    fn execution_policy(&self) -> ExecutionClass {
+        ExecutionClass::Inline
+    }
+
+    async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let target = ctx
             .args
             .first()
@@ -52,7 +60,7 @@ where
             (None, false) => format!("{target} hat noch keinen PB"),
         };
 
-        ctx.sender.reply(ctx.privmsg, response).await;
+        ctx.sender.reply(&ctx.privmsg, response).await;
 
         Ok(())
     }

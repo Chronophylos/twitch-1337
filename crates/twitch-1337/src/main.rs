@@ -341,12 +341,7 @@ pub async fn main() -> Result<()> {
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        let _ = shutdown_tx.send(());
-    });
-
-    run_bot(
+    let mut bot_task = tokio::spawn(run_bot(
         client,
         incoming,
         services,
@@ -354,13 +349,81 @@ pub async fn main() -> Result<()> {
         aviation_tracker_rx,
         web_spawner,
         shutdown_rx,
-    )
-    .await
+    ));
+
+    tokio::select! {
+        biased;
+        result = &mut bot_task => join_bot_task(result),
+        signal = wait_for_shutdown_signal() => {
+            if let Err(error) = signal {
+                // Signal registration failure is still a process fault, but do
+                // not abort `run_bot`: request its normal drain first, join it,
+                // and only then return the adapter error to the process.
+                let _ = request_shutdown(shutdown_tx);
+                let bot_result = bot_task.await;
+                return match bot_result {
+                    Ok(Err(bot_error)) => Err(bot_error),
+                    Ok(Ok(())) => Err(error),
+                    Err(join_error) => Err(eyre::eyre!("bot task join failed after signal error: {join_error}")),
+                };
+            }
+            match request_shutdown(shutdown_tx) {
+                Ok(()) => join_bot_task(bot_task.await),
+                Err(signal_error) => {
+                    // The bot finished before the signal request was sent. Its
+                    // own result is authoritative when it failed; otherwise
+                    // retain the signal-adapter error.
+                    match bot_task.await {
+                        Ok(Err(bot_error)) => Err(bot_error),
+                        Ok(Ok(())) => Err(signal_error),
+                        Err(join_error) => Err(eyre::eyre!("bot task join failed after signal race: {join_error}")),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Translate either process signal into the one intentional shutdown request
+/// consumed by `run_bot`. Registration and delivery errors are faults; neither
+/// Ctrl-C nor SIGTERM is silently ignored.
+async fn wait_for_shutdown_signal() -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .wrap_err("register SIGTERM handler")?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                result.wrap_err("wait for Ctrl-C")?;
+            }
+            signal = sigterm.recv() => {
+                signal.ok_or_else(|| eyre!("SIGTERM signal stream closed"))?;
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.wrap_err("wait for Ctrl-C")?;
+    }
+
+    Ok(())
+}
+
+fn request_shutdown(shutdown: oneshot::Sender<()>) -> Result<()> {
+    shutdown
+        .send(())
+        .map_err(|_| eyre!("bot shutdown receiver was already dropped"))
+}
+
+fn join_bot_task(task: std::result::Result<Result<()>, tokio::task::JoinError>) -> Result<()> {
+    task.wrap_err("bot task panicked")?
 }
 /// Build the web-task spawn closure. Resolves the broadcaster id, builds
 /// the helix client + OAuth context, and returns a closure that — given the
-/// shared shutdown `Notify` — spawns `run_web` on a tokio task. The listener
-/// is bound in `run` (port-in-use aborts startup loudly there) and passed in.
+/// shared latched lifecycle — spawns the server and session-persistence
+/// handles. The listener is bound in `run` (port-in-use aborts startup loudly
+/// there) and passed in.
 async fn build_web_spawner(
     config: &twitch_1337::config::Configuration,
     credentials: AuthenticatedLoginCredentials,
@@ -409,20 +472,8 @@ async fn build_web_spawner(
         web_clock.clone(),
         get_data_dir().join("sessions.ron"),
     ));
-    // Periodic snapshot so the sliding `last_seen` survives a restart too,
-    // not just the login event. Login/logout persist immediately; this catches
-    // the in-between activity. 5 min is well under the default 2 h session TTL.
-    {
-        let sessions = sessions.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tick.tick().await;
-                sessions.persist().await;
-            }
-        });
-    }
+    // Session persistence is owned by the web runtime's lifecycle task, not a
+    // detached interval task in this composition function.
 
     let web_config = Arc::new(twitch_1337_web::config::WebConfig {
         bind_addr: config.web.bind_addr.clone(),
@@ -462,13 +513,9 @@ async fn build_web_spawner(
         },
     );
 
-    Ok(Box::new(move |shutdown| {
+    Ok(Box::new(move |lifecycle| {
         let deps = twitch_1337_web::WebDeps { bind_addr, state };
-        tokio::spawn(async move {
-            if let Err(e) = twitch_1337_web::run_web(listener, deps, shutdown).await {
-                tracing::error!(target: "twitch_1337_web", error = ?e, "Web task exited with error");
-            }
-        })
+        twitch_1337_web::spawn_web_runtime(listener, deps, lifecycle)
     }))
 }
 
@@ -541,10 +588,28 @@ async fn run_healthcheck() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_aviation_client;
+    use super::{build_aviation_client, request_shutdown};
     use secrecy::SecretString;
+    use tokio::sync::oneshot;
     use twitch_1337_core::config::AviationstackBootstrap;
     use twitch_1337_core::settings::Settings;
+
+    #[tokio::test]
+    async fn one_shutdown_request_is_sent_once() {
+        let (sender, receiver) = oneshot::channel();
+
+        request_shutdown(sender).unwrap();
+        assert_eq!(receiver.await.unwrap(), ());
+    }
+
+    #[test]
+    fn dropped_shutdown_receiver_is_a_signal_adapter_fault() {
+        let (sender, receiver) = oneshot::channel::<()>();
+        drop(receiver);
+
+        let error = request_shutdown(sender).expect_err("a dropped receiver must be reported");
+        assert!(error.to_string().contains("receiver was already dropped"));
+    }
 
     #[test]
     fn test_prefill_threshold_validation() {
