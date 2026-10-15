@@ -126,6 +126,17 @@ struct AviationstackFlightIdentity {
     number: Option<String>,
     iata: Option<String>,
     icao: Option<String>,
+    /// Set on a marketing (codeshare) record: the flight that actually flies,
+    /// whose ICAO number is the callsign seen on ADS-B.
+    #[serde(default)]
+    codeshared: Option<AviationstackCodeshare>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AviationstackCodeshare {
+    airline_name: Option<String>,
+    flight_iata: Option<String>,
+    flight_icao: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -183,6 +194,10 @@ pub struct AviationstackFlightMetadata {
     pub airline_iata: Option<String>,
     pub airline_icao: Option<String>,
     pub airline_name: Option<String>,
+    /// Operating flight of a codeshare record (e.g. `OS128` behind `LH6418`).
+    pub operating_flight_iata: Option<String>,
+    pub operating_flight_icao: Option<String>,
+    pub operating_airline_name: Option<String>,
     pub departure_airport: Option<String>,
     pub departure_iata: Option<String>,
     pub departure_icao: Option<String>,
@@ -255,6 +270,7 @@ impl From<AviationstackFlight> for AviationstackFlightMetadata {
         let departure = value.departure;
         let arrival = value.arrival;
         let aircraft = value.aircraft;
+        let codeshared = flight.as_ref().and_then(|f| f.codeshared.as_ref());
 
         Self {
             flight_date: value.flight_date,
@@ -265,6 +281,9 @@ impl From<AviationstackFlight> for AviationstackFlightMetadata {
             airline_iata: airline.as_ref().and_then(|a| a.iata.clone()),
             airline_icao: airline.as_ref().and_then(|a| a.icao.clone()),
             airline_name: airline.as_ref().and_then(|a| a.name.clone()),
+            operating_flight_iata: codeshared.and_then(|c| c.flight_iata.clone()),
+            operating_flight_icao: codeshared.and_then(|c| c.flight_icao.clone()),
+            operating_airline_name: codeshared.and_then(|c| c.airline_name.clone()),
             departure_airport: departure.as_ref().and_then(|d| d.airport.clone()),
             departure_iata: departure.as_ref().and_then(|d| d.iata.clone()),
             departure_icao: departure.as_ref().and_then(|d| d.icao.clone()),
@@ -367,6 +386,39 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "hex": "3c6589" })).unwrap();
         assert_eq!(ac.rssi, None);
         assert_eq!(ac.seen_pos, None);
+    }
+
+    #[test]
+    fn aviationstack_codeshare_record_exposes_operating_flight() {
+        let metadata = metadata_from_json(serde_json::json!({
+            "flight": {
+                "iata": "LH6418",
+                "icao": "DLH6418",
+                "number": "6418",
+                "codeshared": {
+                    "airline_name": "austrian",
+                    "airline_iata": "os",
+                    "airline_icao": "aua",
+                    "flight_number": "128",
+                    "flight_iata": "os128",
+                    "flight_icao": "aua128"
+                }
+            }
+        }));
+
+        assert_eq!(metadata.flight_icao.as_deref(), Some("DLH6418"));
+        assert_eq!(metadata.operating_flight_iata.as_deref(), Some("os128"));
+        assert_eq!(metadata.operating_flight_icao.as_deref(), Some("aua128"));
+        assert_eq!(metadata.operating_airline_name.as_deref(), Some("austrian"));
+    }
+
+    #[test]
+    fn aviationstack_null_codeshare_leaves_operating_flight_empty() {
+        let metadata = metadata_from_json(serde_json::json!({
+            "flight": { "iata": "LH1234", "icao": "DLH1234", "codeshared": null }
+        }));
+
+        assert_eq!(metadata.operating_flight_icao, None);
     }
 
     /// Aviationstack stamps local wall times as `+00:00` while also sending the

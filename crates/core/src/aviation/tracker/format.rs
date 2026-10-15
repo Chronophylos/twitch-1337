@@ -96,6 +96,12 @@ pub(crate) fn msg_aviationstack_info(
     let airline = present(metadata.airline_name.as_deref())
         .map(|name| format!(" {name}"))
         .unwrap_or_default();
+    let operated_by = first_present([
+        metadata.operating_flight_iata.as_deref(),
+        metadata.operating_flight_icao.as_deref(),
+    ])
+    .map(|op| format!(" (op. {})", op.to_uppercase()))
+    .unwrap_or_default();
     let dep = format_airport(
         metadata.departure_iata.as_deref(),
         metadata.departure_icao.as_deref(),
@@ -111,7 +117,10 @@ pub(crate) fn msg_aviationstack_info(
         metadata.arrival_gate.as_deref(),
     );
 
-    let mut parts = vec![format!("{flight}{airline}"), format!("{dep} -> {arr}")];
+    let mut parts = vec![
+        format!("{flight}{airline}{operated_by}"),
+        format!("{dep} -> {arr}"),
+    ];
 
     if let Some(dep_time) = format_time(
         metadata

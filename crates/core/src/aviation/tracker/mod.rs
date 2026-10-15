@@ -222,7 +222,7 @@ pub struct TrackedFlight {
 /// v1 (default for missing field): pre-timezone-reinterpretation cache. Those
 /// entries store local wall times as UTC and omit `*_timezone`, which made
 /// `!track` keep saying `Status: scheduled` after the timezone fix shipped.
-pub const FLIGHT_INFO_CACHE_VERSION: u32 = 2;
+pub const FLIGHT_INFO_CACHE_VERSION: u32 = 3;
 
 /// Persisted AviationStack lookup result shared by `!track` and `!info`.
 #[derive(Debug, Clone, Serialize, Deserialize)]

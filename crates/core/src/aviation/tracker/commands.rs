@@ -157,6 +157,7 @@ fn metadata_cache_aliases(metadata: &AviationstackFlightMetadata) -> Vec<String>
     let mut aliases = Vec::new();
     push_cache_alias(&mut aliases, metadata.flight_iata.as_deref());
     push_cache_alias(&mut aliases, metadata.flight_icao.as_deref());
+    push_cache_alias(&mut aliases, metadata.operating_flight_iata.as_deref());
     push_cache_alias(&mut aliases, metadata_callsign(metadata).as_deref());
     aliases
 }
