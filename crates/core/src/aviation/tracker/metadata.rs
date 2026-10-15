@@ -1,3 +1,5 @@
+use tracing::warn;
+
 use crate::aviation::{AviationstackFlightMetadata, NearbyAircraft, iata_to_coords};
 
 use super::{FlightIdentifier, HexSource, TrackedFlight};
@@ -74,12 +76,27 @@ pub(crate) fn set_hex_if_consistent(
         return false;
     };
 
-    if flight
-        .hex
-        .as_deref()
-        .is_some_and(|current| !current.eq_ignore_ascii_case(&hex))
+    if let Some(current) = flight.hex.as_deref()
+        && !current.eq_ignore_ascii_case(&hex)
     {
-        return false;
+        // Aviationstack's aircraft assignment is often stale (previous
+        // rotation, swapped equipment). A target-confirmed ADS-B sighting on a
+        // different airframe wins; any other disagreement keeps the current hex.
+        let replace_aviationstack = source == HexSource::Adsb
+            && promote_aviationstack_to_adsb
+            && flight.hex_source == Some(HexSource::AviationStack);
+        if !replace_aviationstack {
+            return false;
+        }
+        warn!(
+            identifier = %flight.identifier,
+            aviationstack_hex = current,
+            adsb_hex = %hex,
+            "ADS-B confirmed a different airframe than Aviationstack assigned; replacing hex"
+        );
+        flight.hex = Some(hex);
+        flight.hex_source = Some(HexSource::Adsb);
+        return true;
     }
 
     flight.hex = Some(hex);
@@ -107,11 +124,19 @@ pub(crate) fn set_hex_if_consistent(
     true
 }
 
+/// The callsign expected on ADS-B. For a codeshare record that is the
+/// operating flight's ICAO number, not the marketing one.
 pub(crate) fn metadata_callsign(metadata: &AviationstackFlightMetadata) -> Option<String> {
     metadata
-        .flight_icao
+        .operating_flight_icao
         .as_deref()
         .and_then(normalize_flight_code)
+        .or_else(|| {
+            metadata
+                .flight_icao
+                .as_deref()
+                .and_then(normalize_flight_code)
+        })
         .or_else(|| {
             let airline = metadata.airline_icao.as_deref()?.trim();
             let number = metadata.flight_number.as_deref()?.trim();
@@ -140,6 +165,9 @@ pub(crate) fn apply_aviationstack_metadata(
     }
     if let Some(icao) = metadata.flight_icao.as_deref() {
         add_alias_callsign(flight, icao);
+    }
+    if let Some(iata) = metadata.operating_flight_iata.as_deref() {
+        add_alias_callsign(flight, iata);
     }
     if let Some(callsign) = metadata_callsign(&metadata) {
         add_alias_callsign(flight, &callsign);

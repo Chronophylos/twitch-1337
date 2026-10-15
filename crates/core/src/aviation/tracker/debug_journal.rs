@@ -399,6 +399,7 @@ fn metadata_summary(metadata: &AviationstackFlightMetadata) -> Value {
     json!({
         "flight_iata": metadata.flight_iata,
         "flight_icao": metadata.flight_icao,
+        "operating_flight_icao": metadata.operating_flight_icao,
         "departure_iata": metadata.departure_iata,
         "arrival_iata": metadata.arrival_iata,
         "departure_scheduled": metadata.departure_scheduled.map(format_ts),

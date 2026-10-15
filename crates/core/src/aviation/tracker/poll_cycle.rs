@@ -13,6 +13,7 @@ use tracing::warn;
 use crate::aviation::{AdsbProvider, NearbyAircraft};
 
 use super::FlightIdentifier;
+use super::HexSource;
 use super::POLL_TIMEOUT;
 use super::ROUTE_FETCH_TIMEOUT;
 use super::TrackedFlight;
@@ -32,35 +33,51 @@ pub(crate) enum AdsbLookup {
     Callsigns {
         candidates: Vec<String>,
         hex_fallback: Option<String>,
+        /// Also try `hex_fallback` when the callsign lookup fails, not only on
+        /// a miss. Set for an Aviationstack hex: the flight was hex-polled
+        /// before callsigns went first, and must not go dark on a callsign error.
+        hex_fallback_on_error: bool,
     },
     /// No hex plan and no callsign candidates — Observation is a Miss.
     None,
 }
 
 /// Plan the ADS-B lookup for a Due Tracked Flight (O1: Poll Cycle owns this).
+///
+/// A hex that only Aviationstack vouches for is a fallback, not the plan:
+/// callsigns go first so a stale aircraft assignment cannot pin the flight to
+/// the wrong airframe.
 pub(crate) fn plan_adsb_lookup(flight: &TrackedFlight) -> AdsbLookup {
     if should_poll_by_hex(flight) {
         let hex = flight
             .hex
             .clone()
             .unwrap_or_else(|| flight.identifier.as_str().to_string());
+        return AdsbLookup::Hex { hex };
+    }
+
+    let aviationstack_hex = flight
+        .hex
+        .clone()
+        .filter(|_| flight.hex_source == Some(HexSource::AviationStack));
+    let hex_fallback_on_error = aviationstack_hex.is_some();
+    let hex_fallback = aviationstack_hex.or_else(|| match &flight.identifier {
+        FlightIdentifier::Callsign(id) if FlightIdentifier::is_valid_icao24_hex(id) => {
+            Some(id.clone())
+        }
+        _ => None,
+    });
+    let candidates = callsign_poll_candidates(flight);
+    if !candidates.is_empty() {
+        AdsbLookup::Callsigns {
+            candidates,
+            hex_fallback,
+            hex_fallback_on_error,
+        }
+    } else if let Some(hex) = hex_fallback {
         AdsbLookup::Hex { hex }
     } else {
-        let candidates = callsign_poll_candidates(flight);
-        if candidates.is_empty() {
-            AdsbLookup::None
-        } else {
-            let hex_fallback = match &flight.identifier {
-                FlightIdentifier::Callsign(id) if FlightIdentifier::is_valid_icao24_hex(id) => {
-                    Some(id.clone())
-                }
-                _ => None,
-            };
-            AdsbLookup::Callsigns {
-                candidates,
-                hex_fallback,
-            }
-        }
+        AdsbLookup::None
     }
 }
 
@@ -82,10 +99,15 @@ pub(crate) async fn fetch_observation<P: AdsbProvider>(
         AdsbLookup::Callsigns {
             candidates,
             hex_fallback,
+            hex_fallback_on_error,
         } => {
             let result = poll_aircraft_by_callsign_aliases(provider, &candidates).await;
-            let callsign_miss = matches!(&result, Ok(Ok(None)));
-            if callsign_miss && let Some(hex) = hex_fallback {
+            let retry_hex = match &result {
+                Ok(Ok(None)) => true,
+                Ok(Ok(Some(_))) => false,
+                Ok(Err(_)) | Err(_) => hex_fallback_on_error,
+            };
+            if retry_hex && let Some(hex) = hex_fallback {
                 let hex_result =
                     tokio::time::timeout(POLL_TIMEOUT, provider.get_aircraft_by_hex(&hex)).await;
                 Observation {
@@ -142,9 +164,14 @@ pub(crate) async fn fetch_route<P: AdsbProvider>(provider: &P, callsign: &str) -
 }
 
 /// Whether ADS-B should prefer hex over callsign for this Tracked Flight.
+///
+/// An Aviationstack-assigned hex never qualifies on its own: it is only
+/// trusted as a fallback until ADS-B confirms the airframe by callsign.
 pub(crate) fn should_poll_by_hex(flight: &TrackedFlight) -> bool {
     matches!(&flight.identifier, FlightIdentifier::Hex(_))
-        || (flight.hex.is_some() && (flight.hex_source.is_some() || flight.last_seen.is_some()))
+        || (flight.hex.is_some()
+            && flight.hex_source != Some(HexSource::AviationStack)
+            && (flight.hex_source.is_some() || flight.last_seen.is_some()))
 }
 
 pub(crate) fn callsign_poll_candidates(flight: &TrackedFlight) -> Vec<String> {
@@ -345,6 +372,7 @@ mod tests {
             AdsbLookup::Callsigns {
                 candidates,
                 hex_fallback: None,
+                hex_fallback_on_error: false,
             } => {
                 assert_eq!(candidates, vec!["DLH1234".to_string()]);
             }
@@ -373,7 +401,9 @@ mod tests {
             AdsbLookup::Callsigns {
                 candidates,
                 hex_fallback,
+                hex_fallback_on_error,
             } => {
+                assert!(!hex_fallback_on_error);
                 assert!(candidates.iter().any(|c| c == "DE1513"));
                 assert_eq!(hex_fallback.as_deref(), Some("DE1513"));
             }
@@ -418,5 +448,81 @@ mod tests {
         let obs = fetch_observation(plan, &provider).await;
         assert!(!obs.used_hex);
         assert!(matches!(obs.outcome, PollOutcome::Error));
+    }
+
+    fn aviationstack_hex_flight() -> TrackedFlight {
+        let mut flight = pending_callsign_flight();
+        flight.hex = Some("44006E".to_string());
+        flight.hex_source = Some(HexSource::AviationStack);
+        flight
+    }
+
+    #[test]
+    fn plan_aviationstack_hex_polls_callsigns_first_with_hex_fallback() {
+        for confirmed in [false, true] {
+            let mut flight = aviationstack_hex_flight();
+            if confirmed {
+                flight.target_confirmation = TargetConfirmation::InferredByAssignedHex;
+                flight.last_seen = Some(dt("2026-04-18T12:00:00Z"));
+            }
+            match plan_adsb_lookup(&flight) {
+                AdsbLookup::Callsigns {
+                    candidates,
+                    hex_fallback,
+                    hex_fallback_on_error,
+                } => {
+                    assert!(hex_fallback_on_error);
+                    assert_eq!(candidates, vec!["DLH1234".to_string()]);
+                    assert_eq!(hex_fallback.as_deref(), Some("44006E"));
+                }
+                other => panic!("expected Callsigns, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn plan_aviationstack_hex_without_callsigns_uses_hex() {
+        let mut flight = aviationstack_hex_flight();
+        flight.identifier = FlightIdentifier::Callsign(String::new());
+        flight.callsign = None;
+        flight.alias_callsigns.clear();
+        match plan_adsb_lookup(&flight) {
+            AdsbLookup::Hex { hex } => assert_eq!(hex, "44006E"),
+            other => panic!("expected Hex, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_observation_prefers_callsign_over_stale_aviationstack_hex() {
+        let flight = aviationstack_hex_flight();
+        let plan = plan_adsb_lookup(&flight);
+        let provider = TestAdsb {
+            by_hex: HashMap::from([("44006E".to_string(), aircraft_on_hex("44006E", ""))]),
+            by_callsign: HashMap::from([(
+                "DLH1234".to_string(),
+                aircraft_on_hex("3C6589", "DLH1234"),
+            )]),
+            ..TestAdsb::default()
+        };
+        let obs = fetch_observation(plan, &provider).await;
+        assert!(!obs.used_hex);
+        match obs.outcome {
+            PollOutcome::Hit(ac) => assert_eq!(ac.hex.as_deref(), Some("3C6589")),
+            other => panic!("expected Hit, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_observation_callsign_error_retries_aviationstack_hex() {
+        let flight = aviationstack_hex_flight();
+        let plan = plan_adsb_lookup(&flight);
+        let provider = TestAdsb {
+            callsign_err: true,
+            by_hex: HashMap::from([("44006E".to_string(), aircraft_on_hex("44006E", ""))]),
+            ..TestAdsb::default()
+        };
+        let obs = fetch_observation(plan, &provider).await;
+        assert!(obs.used_hex);
+        assert!(matches!(obs.outcome, PollOutcome::Hit(_)));
     }
 }

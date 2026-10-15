@@ -959,6 +959,37 @@ mod tests {
         assert_eq!(f.observed_callsign.as_deref(), Some("EWG3PV"));
     }
 
+    /// LH6418 repro: Aviationstack assigned a stale airframe; a callsign hit
+    /// on a different hex must replace it so later polls follow the real plane.
+    #[test]
+    fn callsign_confirmed_seed_replaces_stale_aviationstack_hex() {
+        let mut f = tracked_flight(); // callsign DLH1234
+        f.hex = Some("44006E".to_string());
+        f.hex_source = Some(HexSource::AviationStack);
+        let mut ac = aircraft();
+        ac.hex = Some("3C6497".to_string());
+        ac.flight = Some("DLH1234".to_string());
+
+        seed_from_observation(&mut f, &ac, false, dt("2026-04-18T12:00:00Z")).expect("confirmed");
+
+        assert_eq!(f.hex.as_deref(), Some("3C6497"));
+        assert_eq!(f.hex_source, Some(HexSource::Adsb));
+    }
+
+    #[test]
+    fn unconfirmed_hit_does_not_replace_aviationstack_hex() {
+        let mut f = ewg9573_hex_flight();
+        let mut ac = aircraft_ewg3pv();
+        ac.hex = Some("3C0000".to_string());
+        ac.flight = Some("EWG9999".to_string());
+
+        // Hex-mode hit on another airframe with a conflicting flight number.
+        let _ = seed_from_observation(&mut f, &ac, true, dt("2026-08-13T08:18:00Z"));
+
+        assert_eq!(f.hex.as_deref(), Some("3C56EA"));
+        assert_eq!(f.hex_source, Some(HexSource::AviationStack));
+    }
+
     #[test]
     fn seed_keeps_prior_confirmation_when_hex_visible_without_callsign() {
         let mut f = tracked_flight(); // identifier Callsign DLH1234

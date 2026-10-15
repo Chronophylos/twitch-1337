@@ -766,6 +766,19 @@ async fn aviationstack_codeshare_confirms_operating_callsign_alias() {
         .mount(&bot.adsb_mock)
         .await;
 
+    // Callsigns are polled before the Aviationstack hex; none is airborne
+    // under KLM1234/AF1234 (adsb.lol answers an unknown callsign with 200 + empty).
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/callsign/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ac": [],
+            "ctime": 0,
+            "now": 0,
+            "total": 0
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
     let mut bot = bot;
     bot.send("alice", "!track AF1234").await;
     let ack = bot.expect_say(Duration::from_secs(5)).await;
