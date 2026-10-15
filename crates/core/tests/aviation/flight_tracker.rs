@@ -1135,16 +1135,22 @@ async fn visible_assigned_hex_then_one_empty_poll_keeps_flight_within_grace_wind
         "expected tracking-lost message, got: {lost}"
     );
 
-    // The removal message is sent just before the state is persisted; give the
-    // atomic save a moment to flush before reading the file back.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let persisted = tokio::fs::read_to_string(&state_path).await.unwrap();
-    let state: twitch_1337::aviation::tracker::FlightTrackerState =
-        ron::from_str(&persisted).unwrap();
-    assert!(
-        state.flights.is_empty(),
-        "flight should be removed after sustained ADS-B absence"
-    );
+    // The removal message is sent just before the state is persisted; poll until
+    // the atomic save lands instead of guessing a flush delay (slow under coverage).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let persisted = tokio::fs::read_to_string(&state_path).await.unwrap();
+        let state: twitch_1337::aviation::tracker::FlightTrackerState =
+            ron::from_str(&persisted).unwrap();
+        if state.flights.is_empty() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "flight should be removed after sustained ADS-B absence"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     bot.shutdown().await;
 }
