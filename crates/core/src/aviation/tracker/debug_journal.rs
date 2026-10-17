@@ -204,17 +204,15 @@ impl FlightTrackerDebugEvent {
     }
     pub(crate) fn diversion_decision(flight: &TrackedFlight, input: DiversionDebugInput) -> Self {
         Self::for_flight("diversion_decision", flight).payload(json!({
-            "previous_position": {"lat": input.previous_lat, "lon": input.previous_lon},
             "current_position": {"lat": input.current_lat, "lon": input.current_lon},
             "destination_position": {"lat": input.destination_lat, "lon": input.destination_lon},
-            "ground_track": input.ground_track,
-            "bearing_to_dest": input.bearing_to_dest,
-            "diff": input.diff,
-            "threshold": input.threshold,
-            "anomalous": input.anomalous,
-            "counter_before": input.counter_before,
-            "counter_after": input.counter_after,
-            "alert_emitted": input.alert_emitted,
+            "distance_nm": input.step.distance_nm,
+            "min_distance_nm": input.step.min_distance_nm,
+            "armed": input.step.armed,
+            "away_secs": input.step.away_secs,
+            "alerted": input.step.alerted,
+            "rearmed": input.step.rearmed,
+            "alert_emitted": input.step.alert_emitted,
         }))
     }
     pub(crate) fn tracking_removal(
@@ -276,20 +274,11 @@ pub(crate) struct AdsbPollDebugInput<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DiversionDebugInput {
-    pub previous_lat: f64,
-    pub previous_lon: f64,
     pub current_lat: f64,
     pub current_lon: f64,
     pub destination_lat: f64,
     pub destination_lon: f64,
-    pub ground_track: f64,
-    pub bearing_to_dest: f64,
-    pub diff: f64,
-    pub threshold: f64,
-    pub anomalous: bool,
-    pub counter_before: u32,
-    pub counter_after: u32,
-    pub alert_emitted: bool,
+    pub step: super::divert::DivertStep,
 }
 
 pub(crate) fn debug_journal_path(data_dir: &Path, now: DateTime<Utc>) -> PathBuf {

@@ -10,6 +10,7 @@ use tracing::{debug, info, warn};
 use super::debug_journal::{
     AdsbPollDebugInput, DebugHttpOutcome, DiversionDebugInput, FlightTrackerDebugEvent,
 };
+use super::divert::{DivertWatch, landed_elsewhere};
 use super::format::{
     msg_adsb_visible, msg_approach, msg_cruise, msg_descent, msg_landing, msg_pending_expired,
     msg_possible_divert, msg_squawk_emergency, msg_takeoff, msg_tracking_lost,
@@ -18,13 +19,12 @@ use super::metadata::{
     add_alias_callsign, aircraft_callsign, set_hex_if_consistent, set_route_from_iata,
 };
 use super::phase::{
-    altitude_ft, detect_phase, emergency_squawk_meaning, is_airborne_phase, update_divert_counter,
-    vertical_rate,
+    altitude_ft, detect_phase, emergency_squawk_meaning, is_airborne_phase, vertical_rate,
 };
 use super::schedule::is_pending_adsb;
 use super::{
-    DIVERT_BEARING_THRESHOLD, FlightIdentifier, FlightPhase, HexSource, TRACKING_LOST_REMOVAL,
-    TRACKING_LOST_THRESHOLD, TargetConfirmation, TrackedFlight,
+    FlightIdentifier, FlightPhase, HexSource, TRACKING_LOST_REMOVAL, TRACKING_LOST_THRESHOLD,
+    TargetConfirmation, TrackedFlight,
 };
 use crate::aviation::types::NearbyAircraft;
 
@@ -49,8 +49,16 @@ pub(crate) enum Emit {
     Cruise,
     Descent,
     Approach,
-    Landing { takeoff_at: Option<DateTime<Utc>> },
-    SquawkEmergency { code: String, meaning: String },
+    Landing {
+        takeoff_at: Option<DateTime<Utc>>,
+        /// Nearest airport label when the touchdown was away from the
+        /// destination.
+        elsewhere: Option<String>,
+    },
+    SquawkEmergency {
+        code: String,
+        meaning: String,
+    },
     PossibleDivert,
     TrackingLost,
     PendingExpired,
@@ -110,7 +118,10 @@ pub(crate) fn format_emit(flight: &TrackedFlight, emit: &Emit, now: DateTime<Utc
         Emit::Cruise => msg_cruise(flight),
         Emit::Descent => msg_descent(flight),
         Emit::Approach => msg_approach(flight),
-        Emit::Landing { takeoff_at } => msg_landing(flight, *takeoff_at, now),
+        Emit::Landing {
+            takeoff_at,
+            elsewhere,
+        } => msg_landing(flight, *takeoff_at, elsewhere.as_deref(), now),
         Emit::SquawkEmergency { code, meaning } => msg_squawk_emergency(flight, code, meaning),
         Emit::PossibleDivert => msg_possible_divert(flight),
         Emit::TrackingLost => msg_tracking_lost(flight),
@@ -496,10 +507,8 @@ pub(crate) fn advance_flight(
         }
     };
 
-    // Capture pre-observation telemetry the per-cycle divert/squawk decisions
-    // compare against, before the Seed's apply overwrites these fields.
-    let prev_lat = flight.lat;
-    let prev_lon = flight.lon;
+    // Capture pre-observation telemetry the per-cycle squawk decision compares
+    // against, before the Seed's apply overwrites it.
     let prev_squawk = flight.squawk.clone();
 
     let Some(seed) = seed_from_observation(flight, ac, obs.used_hex, now) else {
@@ -563,6 +572,7 @@ pub(crate) fn advance_flight(
                 // original inline `msg_landing(flight, now)` did.
                 FlightPhase::Landing => update.emits.push(Emit::Landing {
                     takeoff_at: flight.takeoff_at,
+                    elsewhere: landed_elsewhere(flight),
                 }),
                 _ => {}
             }
@@ -582,65 +592,31 @@ pub(crate) fn advance_flight(
         }
     }
 
-    if phase_sample_confirmed
-        && matches!(flight.phase, FlightPhase::Descent | FlightPhase::Approach)
-    {
-        if let (
-            Some(dest_lat),
-            Some(dest_lon),
-            Some(cur_lat),
-            Some(cur_lon),
-            Some(p_lat),
-            Some(p_lon),
-        ) = (
-            flight.dest_lat,
-            flight.dest_lon,
-            flight.lat,
-            flight.lon,
-            prev_lat,
-            prev_lon,
-        ) {
-            let ground_track = random_flight::geo::initial_bearing(p_lat, p_lon, cur_lat, cur_lon);
-            let bearing_to_dest =
-                random_flight::geo::initial_bearing(cur_lat, cur_lon, dest_lat, dest_lon);
-
-            let mut diff = (ground_track - bearing_to_dest).abs();
-            if diff > 180.0 {
-                diff = 360.0 - diff;
-            }
-
-            let counter_before = flight.divert_consecutive_polls;
-            let alert_emitted = update_divert_counter(
-                &mut flight.divert_consecutive_polls,
-                diff > DIVERT_BEARING_THRESHOLD,
-            );
+    if phase_sample_confirmed && is_airborne_phase(flight.phase) {
+        if let (Some(dest_lat), Some(dest_lon), Some(lat), Some(lon)) =
+            (flight.dest_lat, flight.dest_lon, flight.lat, flight.lon)
+        {
+            let step = flight
+                .divert
+                .observe(flight.phase, (lat, lon), (dest_lat, dest_lon), now);
             update
                 .debug
                 .push(FlightTrackerDebugEvent::diversion_decision(
                     flight,
                     DiversionDebugInput {
-                        previous_lat: p_lat,
-                        previous_lon: p_lon,
-                        current_lat: cur_lat,
-                        current_lon: cur_lon,
+                        current_lat: lat,
+                        current_lon: lon,
                         destination_lat: dest_lat,
                         destination_lon: dest_lon,
-                        ground_track,
-                        bearing_to_dest,
-                        diff,
-                        threshold: DIVERT_BEARING_THRESHOLD,
-                        anomalous: diff > DIVERT_BEARING_THRESHOLD,
-                        counter_before,
-                        counter_after: flight.divert_consecutive_polls,
-                        alert_emitted,
+                        step,
                     },
                 ));
-            if alert_emitted {
+            if step.alert_emitted {
                 update.emits.push(Emit::PossibleDivert);
             }
         }
-    } else {
-        flight.divert_consecutive_polls = 0;
+    } else if flight.phase == FlightPhase::Ground {
+        flight.divert = DivertWatch::default();
     }
 
     update
@@ -680,7 +656,7 @@ mod tests {
             aviationstack_checked: false,
             scheduled_departure_at: None,
             last_adsb_poll_at: None,
-            divert_consecutive_polls: 0,
+            divert: Default::default(),
             dest_lat: None,
             dest_lon: None,
         }
@@ -1065,6 +1041,7 @@ mod tests {
             &flight,
             &Emit::Landing {
                 takeoff_at: Some(dt("2026-04-18T10:30:00Z")),
+                elsewhere: None,
             },
             dt("2026-04-18T12:00:00Z"),
         );
@@ -1092,7 +1069,7 @@ mod tests {
         assert!(
             update.emits.iter().any(|emit| matches!(
                 emit,
-                Emit::Landing { takeoff_at } if *takeoff_at == Some(takeoff)
+                Emit::Landing { takeoff_at, .. } if *takeoff_at == Some(takeoff)
             )),
             "expected Emit::Landing carrying the pre-clear takeoff, got: {:?}",
             update.emits
@@ -1189,51 +1166,132 @@ mod tests {
         );
     }
 
-    #[test]
-    fn sustained_off_heading_in_descent_eventually_emits_possible_divert() {
-        // Divert fires after DIVERT_CONSECUTIVE_POLLS (3) anomalous polls.
-        // Flight is already confirmed; position starts north of destination
-        // and moves further north so the ground-track bearing (~0°/north)
-        // diverges from the bearing-to-destination (~190°/south) by >> 90°.
-        // alt=8000 ft, baro_rate=-1500 fpm → detect_phase returns Approach
-        // (vrate < -500, alt < 10000), keeping the flight in {Descent|Approach}
-        // so the divert block runs on every poll.
-        //
-        // f.lat is seeded one step south of poll-0's observation (51.5 vs 52.0)
-        // so the very first poll already has a non-degenerate (non-zero-length)
-        // ground track and all 3+ consecutive anomalous polls count toward the
-        // divert threshold.
+    /// Confirmed airborne sample at `lat` (lon 11.78), descending.
+    fn descending_at(lat: f64, alt: i64) -> NearbyAircraft {
+        let mut ac = aircraft();
+        ac.flight = Some("DLH1234".to_string());
+        ac.alt_baro = Some(AltBaro::Feet(alt));
+        ac.baro_rate = Some(-1_500);
+        ac.lat = Some(lat);
+        ac.lon = Some(11.78);
+        ac
+    }
+
+    fn flight_bound_for_munich(phase: FlightPhase) -> TrackedFlight {
         let mut f = tracked_flight();
         f.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
-        f.phase = FlightPhase::Descent;
+        f.phase = phase;
+        f.route = Some(("FRA".to_string(), "MUC".to_string()));
         f.dest_lat = Some(48.35);
         f.dest_lon = Some(11.78);
-        // Seed prior position one step south so poll 0's observation (lat=52.0)
-        // gives a northward ground track from the start.
-        f.lat = Some(51.5);
-        f.lon = Some(13.0);
+        f
+    }
 
-        let mut emitted = false;
-        for i in 0..6_i32 {
-            let mut ac = aircraft();
-            // Callsign must match so ConfirmedByCallsign fires each poll →
-            // phase_sample_confirmed = true → divert block runs.
-            ac.flight = Some("DLH1234".to_string());
-            ac.alt_baro = Some(AltBaro::Feet(8_000));
-            ac.baro_rate = Some(-1_500);
-            // Move progressively north (away from the southern destination).
-            // i=0 → 52.0, i=1 → 52.5, …; every poll is genuinely anomalous.
-            ac.lat = Some(52.0 + f64::from(i) * 0.5);
-            ac.lon = Some(13.0);
-            let upd = advance_flight(&mut f, &hit(ac, false), dt("2026-04-18T12:05:00Z"));
-            if upd.emits.iter().any(|e| matches!(e, Emit::PossibleDivert)) {
-                emitted = true;
-                break;
-            }
+    #[test]
+    fn downwind_leg_past_destination_does_not_emit_possible_divert() {
+        // Regression: overflying the field and flying a long downwind leg away
+        // from it used to trip the heading check after three 30s polls.
+        let mut f = flight_bound_for_munich(FlightPhase::Cruise);
+        let start = dt("2026-04-18T12:00:00Z");
+        let mut t = 0;
+        // Inbound from 120 nm north down to the field.
+        for i in 0..12_i32 {
+            t += 60;
+            let lat = 48.35 + (120.0 - f64::from(i) * 10.0) / 60.0;
+            let upd = advance_flight(
+                &mut f,
+                &hit(descending_at(lat, 9_000), false),
+                start + TimeDelta::seconds(t),
+            );
+            assert!(!upd.emits.contains(&Emit::PossibleDivert));
         }
+        // 10-minute downwind leg south, away from the field.
+        for i in 0..20_i32 {
+            t += 30;
+            let lat = 48.35 - (5.0 + f64::from(i)) / 60.0;
+            let upd = advance_flight(
+                &mut f,
+                &hit(descending_at(lat, 4_000), false),
+                start + TimeDelta::seconds(t),
+            );
+            assert!(
+                !upd.emits.contains(&Emit::PossibleDivert),
+                "false divert on downwind leg at poll {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn sustained_retreat_in_cruise_emits_possible_divert_once() {
+        let mut f = flight_bound_for_munich(FlightPhase::Cruise);
+        let start = dt("2026-04-18T12:00:00Z");
+        let mut emitted = 0;
+        // Closest point 100 nm north, then turn back north for 15 minutes.
+        for i in 0..16_i32 {
+            let lat = 48.35 + (100.0 + f64::from(i) * 8.0) / 60.0;
+            let mut ac = descending_at(lat, 35_000);
+            ac.baro_rate = Some(0);
+            let upd = advance_flight(
+                &mut f,
+                &hit(ac, false),
+                start + TimeDelta::minutes(i64::from(i)),
+            );
+            emitted += upd
+                .emits
+                .iter()
+                .filter(|e| matches!(e, Emit::PossibleDivert))
+                .count();
+        }
+        assert_eq!(emitted, 1, "expected exactly one PossibleDivert");
+    }
+
+    #[test]
+    fn landing_away_from_destination_names_nearest_airport() {
+        let mut f = flight_bound_for_munich(FlightPhase::Approach);
+        let mut ac = aircraft_on_ground();
+        // Nuremberg airport.
+        ac.lat = Some(49.4987);
+        ac.lon = Some(11.0669);
+        let upd = advance_flight(&mut f, &hit(ac, false), dt("2026-04-18T12:00:00Z"));
+        let elsewhere = upd.emits.iter().find_map(|e| match e {
+            Emit::Landing { elsewhere, .. } => Some(elsewhere.clone()),
+            _ => None,
+        });
+        let label = elsewhere.flatten().expect("landing elsewhere detected");
+        assert!(label.contains("NUE"), "got {label}");
+        let msg = format_emit(
+            &f,
+            &Emit::Landing {
+                takeoff_at: None,
+                elsewhere: Some(label),
+            },
+            dt("2026-04-18T12:00:00Z"),
+        );
+        assert!(msg.contains("statt in MUC gelandet"), "got {msg}");
+        assert_eq!(
+            f.divert,
+            DivertWatch::default(),
+            "watch resets on the ground"
+        );
+    }
+
+    #[test]
+    fn landing_at_destination_has_no_elsewhere() {
+        let mut f = flight_bound_for_munich(FlightPhase::Approach);
+        let mut ac = aircraft_on_ground();
+        ac.lat = Some(48.36);
+        ac.lon = Some(11.79);
+        let upd = advance_flight(&mut f, &hit(ac, false), dt("2026-04-18T12:00:00Z"));
         assert!(
-            emitted,
-            "expected PossibleDivert after sustained off-heading polls"
+            upd.emits.iter().any(|e| matches!(
+                e,
+                Emit::Landing {
+                    elsewhere: None,
+                    ..
+                }
+            )),
+            "got {:?}",
+            upd.emits
         );
     }
 

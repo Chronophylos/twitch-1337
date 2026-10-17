@@ -1814,7 +1814,7 @@ async fn tracker_answers_dashboard_commands_while_polling() {
             aviationstack_checked: false,
             scheduled_departure_at: None,
             last_adsb_poll_at: None,
-            divert_consecutive_polls: 0,
+            divert: Default::default(),
             dest_lat: None,
             dest_lon: None,
         }],

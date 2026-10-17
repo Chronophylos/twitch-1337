@@ -44,7 +44,7 @@ pub(crate) fn tracked_flight() -> TrackedFlight {
         aviationstack_checked: true,
         scheduled_departure_at: Some(dt("2026-04-18T12:00:00Z")),
         last_adsb_poll_at: Some(dt("2026-04-18T12:32:00Z")),
-        divert_consecutive_polls: 0,
+        divert: Default::default(),
         dest_lat: None,
         dest_lon: None,
     }

@@ -227,21 +227,24 @@ pub(crate) fn msg_approach(flight: &TrackedFlight) -> String {
 pub(crate) fn msg_landing(
     flight: &TrackedFlight,
     takeoff_at: Option<DateTime<Utc>>,
+    elsewhere: Option<&str>,
     now: DateTime<Utc>,
 ) -> String {
-    match takeoff_at {
-        Some(takeoff_at) => {
-            let duration = now.signed_duration_since(takeoff_at);
-            format!(
-                "{} ist gelandet! Flugzeit: {}",
-                format_flight_prefix(flight),
-                format_duration_hm(duration)
-            )
+    let flight_time = match takeoff_at {
+        Some(takeoff_at) => format_duration_hm(now.signed_duration_since(takeoff_at)),
+        None => "unbekannt (Takeoff nicht beobachtet)".to_string(),
+    };
+    let prefix = format_flight_prefix(flight);
+    match elsewhere {
+        Some(airport) => {
+            let instead = flight
+                .route
+                .as_ref()
+                .map(|(_, dest)| format!(" statt in {dest}"))
+                .unwrap_or_default();
+            format!("\u{26a0} {prefix} ist in {airport}{instead} gelandet! Flugzeit: {flight_time}")
         }
-        None => format!(
-            "{} ist gelandet! Flugzeit: unbekannt (Takeoff nicht beobachtet)",
-            format_flight_prefix(flight)
-        ),
+        None => format!("{prefix} ist gelandet! Flugzeit: {flight_time}"),
     }
 }
 

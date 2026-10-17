@@ -1,6 +1,6 @@
 use crate::aviation::{AltBaro, NearbyAircraft};
 
-use super::{DIVERT_CONSECUTIVE_POLLS, FlightPhase, TrackedFlight};
+use super::{FlightPhase, TrackedFlight};
 
 const CLIMB_RATE_THRESHOLD: i64 = 500;
 const DESCENT_RATE_THRESHOLD: i64 = -500;
@@ -48,19 +48,6 @@ pub(crate) fn is_airborne_phase(phase: FlightPhase) -> bool {
             | FlightPhase::Descent
             | FlightPhase::Approach
     )
-}
-
-pub(crate) fn update_divert_counter(
-    divert_consecutive_polls: &mut u32,
-    is_anomalous: bool,
-) -> bool {
-    if is_anomalous {
-        *divert_consecutive_polls = (*divert_consecutive_polls).saturating_add(1);
-        *divert_consecutive_polls >= DIVERT_CONSECUTIVE_POLLS
-    } else {
-        *divert_consecutive_polls = 0;
-        false
-    }
 }
 
 pub(crate) fn detect_phase(flight: &TrackedFlight, ac: &NearbyAircraft) -> FlightPhase {

@@ -79,6 +79,43 @@ pub(crate) fn iata_to_coords(code: &str) -> Option<(f64, f64, &'static str)> {
         .map(|a| (f64::from(a.lat), f64::from(a.lon), a.name))
 }
 
+/// IATA-coded airports this close to a point win over a nearer uncoded strip
+/// or heliport; scheduled traffic lands at IATA-coded fields.
+const NEAREST_IATA_PREFERENCE_NM: f64 = 10.0;
+
+pub(crate) struct NearestAirport {
+    /// IATA code when present, ICAO otherwise.
+    pub code: &'static str,
+    pub name: &'static str,
+}
+
+/// Nearest baked airport to a point. Linear scan — called once per landing.
+pub(crate) fn nearest_airport(lat: f64, lon: f64) -> Option<NearestAirport> {
+    let mut nearest: Option<(f64, LookupAirport)> = None;
+    let mut nearest_iata: Option<(f64, LookupAirport)> = None;
+    for apt in lookup_airports() {
+        let d = random_flight::geo::haversine_distance_nm(
+            lat,
+            lon,
+            f64::from(apt.lat),
+            f64::from(apt.lon),
+        );
+        if nearest.is_none_or(|(best, _)| d < best) {
+            nearest = Some((d, apt));
+        }
+        if apt.iata.is_some() && nearest_iata.is_none_or(|(best, _)| d < best) {
+            nearest_iata = Some((d, apt));
+        }
+    }
+    let (_, apt) = nearest_iata
+        .filter(|(d, _)| *d <= NEAREST_IATA_PREFERENCE_NM)
+        .or(nearest)?;
+    Some(NearestAirport {
+        code: apt.iata.or(apt.icao)?,
+        name: apt.name,
+    })
+}
+
 // --- Airline IATA-to-ICAO Lookup ---
 
 const AIRLINE_DATA: &str = AIRLINES_CSV;
