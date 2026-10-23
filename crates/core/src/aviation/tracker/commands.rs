@@ -627,7 +627,7 @@ async fn handle_track<T, L>(
         aviationstack_checked,
         scheduled_departure_at: None,
         last_adsb_poll_at: None,
-        divert_consecutive_polls: 0,
+        divert: Default::default(),
         dest_lat: None,
         dest_lon: None,
     };

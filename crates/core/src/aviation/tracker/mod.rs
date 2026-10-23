@@ -1,6 +1,7 @@
 pub(crate) mod advance;
 pub(crate) mod commands;
 pub(crate) mod debug_journal;
+pub(crate) mod divert;
 pub(crate) mod format;
 pub(crate) mod loop_run;
 pub(crate) mod metadata;
@@ -40,9 +41,6 @@ pub const POLL_SLOW: Duration = Duration::from_secs(120);
 pub const POLL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Timeout for adsbdb route fetch.
 pub(crate) const ROUTE_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
-
-pub(crate) const DIVERT_BEARING_THRESHOLD: f64 = 90.0;
-pub(crate) const DIVERT_CONSECUTIVE_POLLS: u32 = 3;
 
 /// Identifies a flight either by callsign or ICAO24 hex code.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -207,8 +205,10 @@ pub struct TrackedFlight {
     #[serde(default)]
     pub last_adsb_poll_at: Option<DateTime<Utc>>,
 
-    #[serde(default)]
-    pub divert_consecutive_polls: u32,
+    /// Divert Watch state. Not persisted: a restart starts the watch fresh,
+    /// so it can never cause an alert.
+    #[serde(skip)]
+    pub divert: divert::DivertWatch,
 
     #[serde(default)]
     pub dest_lat: Option<f64>,
@@ -377,7 +377,7 @@ mod tests {
             aviationstack_checked: false,
             scheduled_departure_at: None,
             last_adsb_poll_at: None,
-            divert_consecutive_polls: 0,
+            divert: Default::default(),
             dest_lat: None,
             dest_lon: None,
         }
@@ -529,7 +529,7 @@ mod tests {
         let mut flight = tracked_flight();
         flight.takeoff_at = Some(dt("2026-04-18T10:30:00Z"));
 
-        let msg = msg_landing(&flight, flight.takeoff_at, dt("2026-04-18T12:00:00Z"));
+        let msg = msg_landing(&flight, flight.takeoff_at, None, dt("2026-04-18T12:00:00Z"));
 
         assert!(msg.contains("Flugzeit: 1h30m"), "got: {msg}");
         assert!(!msg.contains("2h00m"), "got: {msg}");
@@ -539,7 +539,7 @@ mod tests {
     fn landing_reports_unknown_duration_without_takeoff_time() {
         let flight = tracked_flight();
 
-        let msg = msg_landing(&flight, flight.takeoff_at, dt("2026-04-18T12:00:00Z"));
+        let msg = msg_landing(&flight, flight.takeoff_at, None, dt("2026-04-18T12:00:00Z"));
 
         assert!(
             msg.contains("Flugzeit: unbekannt (Takeoff nicht beobachtet)"),
@@ -758,33 +758,6 @@ mod tests {
             next_poll_at(&[flight], now),
             Some(dt("2026-04-18T10:00:30Z"))
         );
-    }
-
-    #[test]
-    fn divert_alert_repeats_after_consecutive_poll_threshold() {
-        use crate::aviation::tracker::phase::update_divert_counter;
-        let mut divert_consecutive_polls = 0;
-
-        assert!(!update_divert_counter(&mut divert_consecutive_polls, true));
-        assert_eq!(divert_consecutive_polls, 1);
-        assert!(!update_divert_counter(&mut divert_consecutive_polls, true));
-        assert_eq!(divert_consecutive_polls, 2);
-        assert!(update_divert_counter(&mut divert_consecutive_polls, true));
-        assert_eq!(divert_consecutive_polls, 3);
-        assert!(update_divert_counter(&mut divert_consecutive_polls, true));
-        assert_eq!(divert_consecutive_polls, 4);
-        assert!(update_divert_counter(&mut divert_consecutive_polls, true));
-        assert_eq!(divert_consecutive_polls, 5);
-
-        assert!(!update_divert_counter(&mut divert_consecutive_polls, false));
-        assert_eq!(divert_consecutive_polls, 0);
-
-        assert!(!update_divert_counter(&mut divert_consecutive_polls, true));
-        assert_eq!(divert_consecutive_polls, 1);
-        assert!(!update_divert_counter(&mut divert_consecutive_polls, true));
-        assert_eq!(divert_consecutive_polls, 2);
-        assert!(update_divert_counter(&mut divert_consecutive_polls, true));
-        assert_eq!(divert_consecutive_polls, 3);
     }
 
     #[test]
@@ -1090,7 +1063,7 @@ mod tests {
     }
 
     #[test]
-    fn debug_journal_diversion_decision_records_bearings_and_counter() {
+    fn debug_journal_diversion_decision_records_closure_state() {
         let event = FlightTrackerDebugEvent::diversion_decision(
             &TrackedFlight {
                 phase: FlightPhase::Approach,
@@ -1101,20 +1074,19 @@ mod tests {
                 ..tracked_flight()
             },
             DiversionDebugInput {
-                previous_lat: 49.0,
-                previous_lon: 9.0,
                 current_lat: 49.2,
                 current_lon: 8.5,
                 destination_lat: 48.3538,
                 destination_lon: 11.7861,
-                ground_track: 280.0,
-                bearing_to_dest: 110.0,
-                diff: 170.0,
-                threshold: 90.0,
-                anomalous: true,
-                counter_before: 2,
-                counter_after: 3,
-                alert_emitted: true,
+                step: crate::aviation::tracker::divert::DivertStep {
+                    distance_nm: 140.0,
+                    min_distance_nm: Some(95.0),
+                    armed: true,
+                    away_secs: Some(300),
+                    alerted: true,
+                    rearmed: false,
+                    alert_emitted: true,
+                },
             },
         );
 
@@ -1122,10 +1094,9 @@ mod tests {
         assert_eq!(json["event"], "diversion_decision");
         assert_eq!(json["phase"], "Approach");
         assert_eq!(json["target_confirmation"], "ConfirmedByCallsign");
-        assert_eq!(json["ground_track"], 280.0);
-        assert_eq!(json["bearing_to_dest"], 110.0);
-        assert_eq!(json["counter_before"], 2);
-        assert_eq!(json["counter_after"], 3);
+        assert_eq!(json["distance_nm"], 140.0);
+        assert_eq!(json["min_distance_nm"], 95.0);
+        assert_eq!(json["away_secs"], 300);
         assert_eq!(json["alert_emitted"], true);
         assert_eq!(json["route"]["destination"], "MUC");
     }

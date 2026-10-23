@@ -121,7 +121,7 @@ Trigger: squawk changes to one of these values (compared against previous poll).
 
 ### Divert Detection
 
-On first successful poll, cache the route destination airport coordinates from adsbdb. In subsequent polls during Descent or Approach phase: if the aircraft's bearing relative to the destination diverges > 90 degrees for 3+ consecutive polls, flag as potential divert. Divert detection is limited to Descent/Approach since en-route heading changes are normal (airways, ATC vectors).
+Superseded by `2026-10-17-divert-watch-design.md` (closure-based Divert Watch + landed-elsewhere message). The original bearing check (> 90° for 3 polls in Descent/Approach) fired on downwind legs and holds.
 
 ## Chat Commands
 
@@ -279,8 +279,6 @@ main():
 | `POLL_TIMEOUT` | 10s |
 | `TRACKING_LOST_THRESHOLD` | 5 min |
 | `TRACKING_LOST_REMOVAL` | 30 min |
-| `DIVERT_BEARING_THRESHOLD` | 90 degrees |
-| `DIVERT_CONSECUTIVE_POLLS` | 3 |
 | `CRUISE_STABLE_POLLS` | 2 |
 | `CLIMB_RATE_THRESHOLD` | 500 ft/min |
 | `DESCENT_RATE_THRESHOLD` | -500 ft/min |
