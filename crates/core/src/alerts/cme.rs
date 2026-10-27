@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use super::Candidate;
 
-pub const DEFAULT_URL: &str = "https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/WSAEnlilSimulations";
+pub const DEFAULT_URL: &str = "https://ccmc.gsfc.nasa.gov/DONKI-API/get/WSAEnlilSimulations";
 
 #[derive(Debug, Deserialize)]
 struct Sim {
