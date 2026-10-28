@@ -86,23 +86,8 @@ pub fn format_emote_chat_reply(emote: &EmoteRow, lifecycle: Option<&SetEventRow>
             format!("{name} ({id}) war schon da als Tracking anfing ({when})")
         }
         SetEventKind::Add | SetEventKind::Remove | SetEventKind::Rename => {
-            let verb = match event.kind {
-                SetEventKind::Add => "hinzugefügt",
-                SetEventKind::Remove => "entfernt",
-                SetEventKind::Rename => "umbenannt",
-                SetEventKind::Bootstrap | SetEventKind::Gap => unreachable!(),
-            };
-            let by = super::format::format_set_event_attribution(
-                event.requester_login.as_deref(),
-                event.via.as_deref(),
-            )
-            .unwrap_or_else(|| {
-                super::format::format_actor_display(
-                    event.actor_display_name.as_deref(),
-                    event.actor_username.as_deref(),
-                    event.actor_7tv_id.as_deref(),
-                )
-            });
+            let verb = super::format::lifecycle_verb(event.kind).unwrap_or_default();
+            let by = super::format::format_set_event_by(event);
             format!("{name} ({id}) {verb} von {by} am {when}")
         }
         SetEventKind::Gap => {

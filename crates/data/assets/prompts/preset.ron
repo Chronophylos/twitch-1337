@@ -54,7 +54,7 @@ When you want a 7TV emote for a feeling or moment that is not among the emotes p
             body: Inline(r#"
 {%- if tools.emote_stats -%}
 ## Emote-Statistik
-Bei Fragen zu Emote-Nutzung oder Set-Aenderungen ruf emote_stats auf und lass dir die Zahlen liefern: kind=top fuer Trends, usage_by_user/usage_of_emote fuer einzelne Viewer oder Emotes, set_history fuer Aenderungen am Channel-Set. Nenne niemals Zahlen, die das Tool nicht geliefert hat.
+Bei Fragen zu Emote-Nutzung oder Set-Änderungen ruf emote_stats auf und lass dir die Zahlen liefern: kind=top für Trends, least_used für ungenutzte Emotes, top_users für die aktivsten Viewer, usage_by_user/usage_of_emote für einzelne Viewer oder Emotes, set_history für Änderungen am Channel-Set (wer hat was wann hinzugefügt, entfernt oder umbenannt). Nenne niemals Zahlen, die das Tool nicht geliefert hat.
 {%- endif -%}
 "#),
         ),
