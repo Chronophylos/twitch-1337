@@ -81,6 +81,18 @@ pub struct SetEventRow {
     pub attribution_method: Option<String>,
 }
 
+impl SetEventRow {
+    /// Rows found by diffing a REST snapshot (startup, reconnect) carry
+    /// neither a 7TV actor nor a requester, and their `at` is detection time.
+    // ponytail: inferred from missing actor; a live EventAPI change without an
+    // actor reads as approximate too. Add a stored `source` column if that bites.
+    pub fn is_snapshot_diff(&self) -> bool {
+        self.actor_7tv_id.is_none()
+            && self.actor_username.is_none()
+            && self.requester_login.is_none()
+    }
+}
+
 /// Input for inserting one `set_events` audit row.
 ///
 /// Non-gap kinds should pass an `emote_id` that already exists in `emotes`
@@ -162,6 +174,33 @@ pub struct EmoteUsageCount {
     pub count: i64,
     /// Most recent use in the window (UTC unix ms).
     pub last_used_at: i64,
+    /// `false` when the emote has since left the channel set.
+    pub active: bool,
+}
+
+/// Usage of one active emote, including emotes with zero uses in the window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeastUsedEmote {
+    /// 7TV emote id.
+    pub emote_id: String,
+    /// Current channel-set name.
+    pub name: String,
+    /// Unflagged uses in the window (0 = never used).
+    pub count: i64,
+    /// Most recent use in the window, if any (UTC unix ms).
+    pub last_used_at: Option<i64>,
+    /// Start of the emote's current stay on the set, if recorded.
+    pub tenure: Option<SetTenure>,
+}
+
+/// Start of an emote's current stay on the set: the newest bootstrap/add row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetTenure {
+    /// Already on the set when tracking began; the real add date is unknown.
+    TrackingStart,
+    /// Added at `at` (UTC unix ms). `approximate` marks a snapshot-diff row
+    /// (see [`SetEventRow::is_snapshot_diff`]) stamped at detection time.
+    Added { at: i64, approximate: bool },
 }
 
 /// Per-viewer count inside one emote's usage breakdown.
@@ -184,6 +223,13 @@ pub struct SetEventListFilter {
     pub name_substr: Option<String>,
     pub since_ms: Option<i64>,
     pub until_ms: Option<i64>,
+    /// With `emote_id`, also match rows whose old/new name is exactly this:
+    /// 7TV version swaps reuse a name under a new emote id.
+    pub emote_name: Option<String>,
+    /// Only add/remove/rename rows; drops bootstrap and gap markers.
+    pub lifecycle_only: bool,
+    /// Requester login / Twitch id or 7TV actor username (case-insensitive).
+    pub user: Option<String>,
     pub limit: u32,
     pub offset: u32,
 }

@@ -10,15 +10,16 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 
 use super::db::{
     apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, get_emote_meaning,
-    insert_set_event, insert_usage_events, list_active_emotes, list_emote_meanings_for_ids,
-    list_set_events, list_usage_events, resolve_active_name, resolve_viewer_twitch_id,
-    top_usage_counts, upsert_emote, upsert_emote_meaning, usage_counts_for_user,
-    usage_counts_of_emote,
+    insert_set_event, insert_usage_events, least_used_emotes, list_active_emotes,
+    list_emote_meanings_for_ids, list_set_events, list_usage_events, resolve_active_name,
+    resolve_viewer_twitch_id, top_usage_counts, top_users_by_usage, upsert_emote,
+    upsert_emote_meaning, usage_counts_for_user, usage_counts_of_emote,
 };
 use super::migrate;
 use super::types::{
-    EmoteMeaningRow, EmoteRow, EmoteUsageCount, NewSetEvent, NewUsageEvent, SetChangeBatch,
-    SetEventListFilter, SetEventRow, UsageEventListFilter, UsageEventRow, UserUsageCount,
+    EmoteMeaningRow, EmoteRow, EmoteUsageCount, LeastUsedEmote, NewSetEvent, NewUsageEvent,
+    SetChangeBatch, SetEventListFilter, SetEventRow, UsageEventListFilter, UsageEventRow,
+    UserUsageCount,
 };
 
 enum StoreCmd {
@@ -80,6 +81,16 @@ enum StoreCmd {
         since_ms: Option<i64>,
         limit: u32,
         reply: oneshot::Sender<Result<Vec<EmoteUsageCount>>>,
+    },
+    TopUsers {
+        since_ms: Option<i64>,
+        limit: u32,
+        reply: oneshot::Sender<Result<Vec<UserUsageCount>>>,
+    },
+    LeastUsedEmotes {
+        since_ms: Option<i64>,
+        limit: u32,
+        reply: oneshot::Sender<Result<(i64, Vec<LeastUsedEmote>)>>,
     },
     ResolveViewerTwitchId {
         login: String,
@@ -304,6 +315,34 @@ impl EmoteTrackerHandle {
         .await
     }
 
+    /// Viewers ranked by unflagged emote uses across all emotes.
+    pub async fn top_users(
+        &self,
+        since_ms: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<UserUsageCount>> {
+        self.send(|reply| StoreCmd::TopUsers {
+            since_ms,
+            limit,
+            reply,
+        })
+        .await
+    }
+
+    /// Active emotes least-used first, plus the count of never-used ones.
+    pub async fn least_used_emotes(
+        &self,
+        since_ms: Option<i64>,
+        limit: u32,
+    ) -> Result<(i64, Vec<LeastUsedEmote>)> {
+        self.send(|reply| StoreCmd::LeastUsedEmotes {
+            since_ms,
+            limit,
+            reply,
+        })
+        .await
+    }
+
     /// Resolve a viewer login to their stable Twitch user id (`None` if never seen).
     pub async fn resolve_viewer(&self, login: &str) -> Result<Option<String>> {
         let login = login.to_owned();
@@ -477,6 +516,20 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
             } => {
                 let _ = reply.send(top_usage_counts(&conn, since_ms, limit));
             }
+            StoreCmd::TopUsers {
+                since_ms,
+                limit,
+                reply,
+            } => {
+                let _ = reply.send(top_users_by_usage(&conn, since_ms, limit));
+            }
+            StoreCmd::LeastUsedEmotes {
+                since_ms,
+                limit,
+                reply,
+            } => {
+                let _ = reply.send(least_used_emotes(&conn, since_ms, limit));
+            }
             StoreCmd::ResolveViewerTwitchId { login, reply } => {
                 let _ = reply.send(resolve_viewer_twitch_id(&conn, &login));
             }
@@ -537,7 +590,9 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emote_tracker::{DB_FILENAME, SetEventKind, UsageEventListFilter, try_open};
+    use crate::emote_tracker::{
+        DB_FILENAME, SetEventKind, SetTenure, UsageEventListFilter, try_open,
+    };
 
     const TEST_EMOTE_ID: &str = "0123456789abcdef01234567";
 
@@ -785,5 +840,262 @@ mod tests {
         assert_eq!(users[0].count, 3);
         assert_eq!(users[1].twitch_user_id, "u2");
         assert!(!users.iter().any(|u| u.twitch_user_id == "u3"));
+    }
+
+    /// Lifecycle row with only the fields these tests vary.
+    fn set_ev(
+        at: i64,
+        kind: SetEventKind,
+        emote_id: &str,
+        old_name: Option<&str>,
+        new_name: Option<&str>,
+        actor: Option<&str>,
+        requester: Option<&str>,
+    ) -> NewSetEvent {
+        NewSetEvent {
+            at,
+            kind,
+            emote_id: Some(emote_id.into()),
+            old_name: old_name.map(Into::into),
+            new_name: new_name.map(Into::into),
+            actor_7tv_id: None,
+            actor_username: actor.map(Into::into),
+            actor_display_name: None,
+            gap_from: None,
+            gap_to: None,
+            requester_login: requester.map(Into::into),
+            requester_twitch_id: None,
+            via: requester.map(|_| "potatbotat".into()),
+            attribution_method: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn top_users_sums_across_emotes_and_skips_flagged() {
+        let (h, _dir) = seed_usage_fixture().await;
+        let users = h.top_users(None, 20).await.unwrap();
+        // alice: 3x KEKW + 1x Pepe; label is her newest login, not "Alice".
+        assert_eq!(users[0].twitch_user_id, "u1");
+        assert_eq!(users[0].count, 4);
+        assert_eq!(users[0].login.as_deref(), Some("alice"));
+        assert!(!users.iter().any(|u| u.twitch_user_id == "u3"));
+        // Window drops the pre-window viewer entirely.
+        let windowed = h.top_users(Some(100), 20).await.unwrap();
+        assert!(!windowed.iter().any(|u| u.twitch_user_id == "u9"));
+    }
+
+    #[tokio::test]
+    async fn least_used_ranks_unused_first_and_reports_tenure() {
+        let (h, _dir) = seed_usage_fixture().await;
+        h.upsert_emote("e3", "Dead", true, 10).await.unwrap();
+        h.upsert_emote("e4", "Gone", false, 10).await.unwrap();
+        for ev in [
+            set_ev(
+                5,
+                SetEventKind::Bootstrap,
+                "e1",
+                None,
+                Some("KEKW"),
+                None,
+                None,
+            ),
+            set_ev(
+                5,
+                SetEventKind::Bootstrap,
+                "e2",
+                None,
+                Some("Pepe"),
+                None,
+                None,
+            ),
+            set_ev(50, SetEventKind::Add, "e3", None, Some("Dead"), None, None),
+        ] {
+            h.insert_set_event(ev).await.unwrap();
+        }
+        let (unused, rows) = h.least_used_emotes(None, 20).await.unwrap();
+        assert_eq!(unused, 1);
+        // Inactive emotes are not "unused", they are gone.
+        assert_eq!(
+            rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            ["Dead", "Pepe", "KEKW"]
+        );
+        assert_eq!(rows[0].count, 0);
+        assert_eq!(rows[0].last_used_at, None);
+        // No actor or requester: a snapshot-diff add, so its time is approximate.
+        assert_eq!(
+            rows[0].tenure,
+            Some(SetTenure::Added {
+                at: 50,
+                approximate: true
+            })
+        );
+        assert_eq!(rows[1].tenure, Some(SetTenure::TrackingStart));
+        // Windowed: KEKW's pre-window use no longer counts, Pepe's still does.
+        let (_, windowed) = h.least_used_emotes(Some(100), 20).await.unwrap();
+        assert_eq!(windowed[2].count, 4);
+    }
+
+    #[tokio::test]
+    async fn least_used_breaks_zero_use_ties_by_tenure() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = EmoteTrackerHandle::open(&dir.path().join(DB_FILENAME)).unwrap();
+        // Alphabetical order would put the brand-new "AAAA" first.
+        for (id, name) in [("n1", "AAAA"), ("o1", "Old"), ("b1", "Zzz")] {
+            h.upsert_emote(id, name, true, 10).await.unwrap();
+        }
+        for ev in [
+            set_ev(
+                900,
+                SetEventKind::Add,
+                "n1",
+                None,
+                Some("AAAA"),
+                Some("chef"),
+                None,
+            ),
+            set_ev(
+                100,
+                SetEventKind::Add,
+                "o1",
+                None,
+                Some("Old"),
+                Some("chef"),
+                None,
+            ),
+            set_ev(
+                5,
+                SetEventKind::Bootstrap,
+                "b1",
+                None,
+                Some("Zzz"),
+                None,
+                None,
+            ),
+        ] {
+            h.insert_set_event(ev).await.unwrap();
+        }
+        let (unused, rows) = h.least_used_emotes(None, 20).await.unwrap();
+        assert_eq!(unused, 3);
+        assert_eq!(
+            rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            ["Zzz", "Old", "AAAA"]
+        );
+        assert_eq!(
+            rows[1].tenure,
+            Some(SetTenure::Added {
+                at: 100,
+                approximate: false
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn usage_counts_mark_removed_emotes_inactive() {
+        let (h, _dir) = seed_usage_fixture().await;
+        h.deactivate_emote("e2", 20).await.unwrap();
+        let top = h.top_usage_events(None, 20).await.unwrap();
+        assert!(top.iter().find(|r| r.name == "KEKW").unwrap().active);
+        assert!(!top.iter().find(|r| r.name == "Pepe").unwrap().active);
+        let (_, per_emote) = h.usage_count_by_user("u1", None, 20).await.unwrap();
+        assert!(!per_emote.iter().find(|r| r.name == "Pepe").unwrap().active);
+    }
+
+    #[tokio::test]
+    async fn set_events_filter_lifecycle_and_user() {
+        let (h, _dir) = seed_usage_fixture().await;
+        for ev in [
+            set_ev(
+                5,
+                SetEventKind::Bootstrap,
+                "e1",
+                None,
+                Some("KEKW"),
+                None,
+                None,
+            ),
+            set_ev(
+                60,
+                SetEventKind::Add,
+                "e2",
+                None,
+                Some("Pepe"),
+                Some("potat"),
+                Some("alice"),
+            ),
+            set_ev(
+                70,
+                SetEventKind::Remove,
+                "e1",
+                Some("KEKW"),
+                None,
+                Some("chef"),
+                None,
+            ),
+        ] {
+            h.insert_set_event(ev).await.unwrap();
+        }
+        let list = |user: Option<&str>| SetEventListFilter {
+            lifecycle_only: true,
+            user: user.map(Into::into),
+            limit: 20,
+            ..Default::default()
+        };
+        let all = h.list_set_events(list(None)).await.unwrap();
+        assert_eq!(all.len(), 2, "bootstrap must be dropped");
+        let by_requester = h.list_set_events(list(Some("ALICE"))).await.unwrap();
+        assert_eq!(by_requester.len(), 1);
+        assert_eq!(by_requester[0].kind, SetEventKind::Add);
+        let by_actor = h.list_set_events(list(Some("Chef"))).await.unwrap();
+        assert_eq!(by_actor.len(), 1);
+        assert_eq!(by_actor[0].kind, SetEventKind::Remove);
+    }
+
+    #[tokio::test]
+    async fn set_events_match_requester_twitch_id_and_swapped_versions() {
+        let (h, _dir) = seed_usage_fixture().await;
+        let mut add = set_ev(
+            60,
+            SetEventKind::Add,
+            "e2",
+            None,
+            Some("KEKW"),
+            None,
+            Some("alice"),
+        );
+        add.requester_twitch_id = Some("u1".into());
+        // Version swap: the old KEKW lived under id e1.
+        let remove = set_ev(
+            50,
+            SetEventKind::Remove,
+            "e1",
+            Some("KEKW"),
+            None,
+            None,
+            None,
+        );
+        h.insert_set_event(add).await.unwrap();
+        h.insert_set_event(remove).await.unwrap();
+
+        let by_id = h
+            .list_set_events(SetEventListFilter {
+                user: Some("u1".into()),
+                limit: 20,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(by_id.len(), 1);
+
+        let filter = |name: Option<&str>| SetEventListFilter {
+            emote_id: Some("e2".into()),
+            emote_name: name.map(Into::into),
+            limit: 20,
+            ..Default::default()
+        };
+        assert_eq!(h.list_set_events(filter(None)).await.unwrap().len(), 1);
+        assert_eq!(
+            h.list_set_events(filter(Some("KEKW"))).await.unwrap().len(),
+            2
+        );
     }
 }

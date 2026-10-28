@@ -2,8 +2,9 @@ use eyre::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::types::{
-    EmoteMeaningRow, EmoteRow, EmoteUsageCount, NewSetEvent, NewUsageEvent, SetEventKind,
-    SetEventListFilter, SetEventRow, UsageEventListFilter, UsageEventRow, UserUsageCount,
+    EmoteMeaningRow, EmoteRow, EmoteUsageCount, LeastUsedEmote, NewSetEvent, NewUsageEvent,
+    SetEventKind, SetEventListFilter, SetEventRow, SetTenure, UsageEventListFilter, UsageEventRow,
+    UserUsageCount,
 };
 
 /// Insert or update a curated emote meaning row.
@@ -278,7 +279,7 @@ pub fn top_usage_counts(
     let limit = clamp_limit(limit);
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     let mut sql = String::from(
-        "SELECT e.emote_id, e.name, COUNT(*) AS cnt, MAX(u.at) AS last_at
+        "SELECT e.emote_id, e.name, COUNT(*) AS cnt, MAX(u.at) AS last_at, e.active
          FROM usage_events u JOIN emotes e ON e.emote_id = u.emote_id
          WHERE u.flagged = 0",
     );
@@ -298,6 +299,7 @@ pub fn top_usage_counts(
             name: row.get(1)?,
             count: row.get(2)?,
             last_used_at: row.get(3)?,
+            active: row.get::<_, i32>(4)? != 0,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -347,7 +349,7 @@ pub fn usage_counts_for_user(
 
     params.push(Box::new(i64::from(limit)));
     let top_sql = format!(
-        "SELECT e.emote_id, e.name, COUNT(*) AS cnt, MAX(u.at) AS last_at
+        "SELECT e.emote_id, e.name, COUNT(*) AS cnt, MAX(u.at) AS last_at, e.active
          FROM usage_events u JOIN emotes e ON e.emote_id = u.emote_id
          WHERE u.flagged = 0 AND u.twitch_user_id = ?{where_extra}
          GROUP BY e.emote_id ORDER BY cnt DESC, last_at DESC LIMIT ?"
@@ -361,6 +363,7 @@ pub fn usage_counts_for_user(
             name: row.get(1)?,
             count: row.get(2)?,
             last_used_at: row.get(3)?,
+            active: row.get::<_, i32>(4)? != 0,
         })
     })?;
     let top = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -410,6 +413,121 @@ pub fn usage_counts_of_emote(
     Ok((total, top))
 }
 
+/// Viewers ranked by unflagged emote uses across all emotes within a window.
+pub fn top_users_by_usage(
+    conn: &Connection,
+    since_ms: Option<i64>,
+    limit: u32,
+) -> Result<Vec<UserUsageCount>> {
+    let limit = clamp_limit(limit);
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    // With exactly one MAX() aggregate SQLite takes bare `login` from the
+    // row holding that max, so the label is the viewer's newest login.
+    let mut sql = String::from(
+        "SELECT twitch_user_id, login, COUNT(*) AS cnt, MAX(at) AS last_at
+         FROM usage_events WHERE flagged = 0",
+    );
+    if let Some(since) = since_ms {
+        sql.push_str(" AND at >= ?");
+        params.push(Box::new(since));
+    }
+    sql.push_str(" GROUP BY twitch_user_id ORDER BY cnt DESC, last_at DESC LIMIT ?");
+    params.push(Box::new(i64::from(limit)));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(AsRef::as_ref).collect();
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+        Ok(UserUsageCount {
+            twitch_user_id: row.get(0)?,
+            login: row.get(1)?,
+            count: row.get(2)?,
+            last_used_at: row.get(3)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// Active emotes ranked least-used first (never-used, then oldest last use,
+/// then longest on the set), plus how many active emotes had zero uses in
+/// the window.
+pub fn least_used_emotes(
+    conn: &Connection,
+    since_ms: Option<i64>,
+    limit: u32,
+) -> Result<(i64, Vec<LeastUsedEmote>)> {
+    let limit = clamp_limit(limit);
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut join_extra = String::new();
+    if let Some(since) = since_ms {
+        join_extra.push_str(" AND u.at >= ?");
+        params.push(Box::new(since));
+    }
+    params.push(Box::new(i64::from(limit)));
+    // The current tenure starts at the newest bootstrap/add row; a bootstrap
+    // there means the emote predates tracking, so it sorts as the oldest.
+    // ASC puts NULL last_at (never used) first. The window SUM runs before
+    // LIMIT, so `unused` counts the whole set in the same scan.
+    let sql = format!(
+        "SELECT b.emote_id, b.name, b.cnt, b.last_at, s.at, s.kind,
+                s.actor_7tv_id, s.actor_username, s.requester_login,
+                SUM(b.cnt = 0) OVER () AS unused
+         FROM (
+           SELECT e.emote_id, e.name, COUNT(u.id) AS cnt, MAX(u.at) AS last_at
+           FROM emotes e
+           LEFT JOIN usage_events u
+             ON u.emote_id = e.emote_id AND u.flagged = 0{join_extra}
+           WHERE e.active = 1
+           GROUP BY e.emote_id
+         ) b
+         LEFT JOIN set_events s ON s.id = (
+           SELECT id FROM set_events
+           WHERE emote_id = b.emote_id AND kind IN ('bootstrap', 'add')
+           ORDER BY at DESC, id DESC LIMIT 1
+         )
+         ORDER BY b.cnt ASC, b.last_at ASC, (s.kind = 'bootstrap') DESC, s.at ASC, b.name ASC
+         LIMIT ?"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(AsRef::as_ref).collect();
+    let mut unused = 0;
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+        let at: Option<i64> = row.get(4)?;
+        let kind: Option<String> = row.get(5)?;
+        let tenure = match (kind.as_deref(), at) {
+            (Some("bootstrap"), _) => Some(SetTenure::TrackingStart),
+            (Some(_), Some(at)) => {
+                let actor_id: Option<String> = row.get(6)?;
+                let actor_name: Option<String> = row.get(7)?;
+                let requester: Option<String> = row.get(8)?;
+                // Same rule as `SetEventRow::is_snapshot_diff`.
+                Some(SetTenure::Added {
+                    at,
+                    approximate: actor_id.is_none() && actor_name.is_none() && requester.is_none(),
+                })
+            }
+            _ => None,
+        };
+        Ok((
+            row.get::<_, i64>(9)?,
+            LeastUsedEmote {
+                emote_id: row.get(0)?,
+                name: row.get(1)?,
+                count: row.get(2)?,
+                last_used_at: row.get(3)?,
+                tenure,
+            },
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (total_unused, emote) = row?;
+        unused = total_unused;
+        out.push(emote);
+    }
+    Ok((unused, out))
+}
+
 pub fn list_set_events(conn: &Connection, filter: &SetEventListFilter) -> Result<Vec<SetEventRow>> {
     let limit = clamp_limit(if filter.limit == 0 { 200 } else { filter.limit });
     let mut sql = String::from(
@@ -423,9 +541,18 @@ pub fn list_set_events(conn: &Connection, filter: &SetEventListFilter) -> Result
         sql.push_str(" AND kind = ?");
         params.push(Box::new(kind.as_str().to_string()));
     }
-    if let Some(ref id) = filter.emote_id {
-        sql.push_str(" AND emote_id = ?");
-        params.push(Box::new(id.clone()));
+    match (&filter.emote_id, &filter.emote_name) {
+        (Some(id), Some(name)) => {
+            sql.push_str(" AND (emote_id = ? OR old_name = ? OR new_name = ?)");
+            params.push(Box::new(id.clone()));
+            params.push(Box::new(name.clone()));
+            params.push(Box::new(name.clone()));
+        }
+        (Some(id), None) => {
+            sql.push_str(" AND emote_id = ?");
+            params.push(Box::new(id.clone()));
+        }
+        (None, _) => {}
     }
     if let Some(ref name) = filter.name_substr {
         sql.push_str(" AND (old_name LIKE ? OR new_name LIKE ?)");
@@ -440,6 +567,18 @@ pub fn list_set_events(conn: &Connection, filter: &SetEventListFilter) -> Result
     if let Some(until) = filter.until_ms {
         sql.push_str(" AND at <= ?");
         params.push(Box::new(until));
+    }
+    if filter.lifecycle_only {
+        sql.push_str(" AND kind IN ('add', 'remove', 'rename')");
+    }
+    if let Some(ref user) = filter.user {
+        sql.push_str(
+            " AND (requester_login = ? COLLATE NOCASE OR actor_username = ? COLLATE NOCASE
+                   OR requester_twitch_id = ?)",
+        );
+        params.push(Box::new(user.clone()));
+        params.push(Box::new(user.clone()));
+        params.push(Box::new(user.clone()));
     }
     sql.push_str(" ORDER BY at DESC, id DESC LIMIT ? OFFSET ?");
     params.push(Box::new(i64::from(limit)));

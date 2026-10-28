@@ -1,6 +1,8 @@
 use chrono::{TimeZone, Utc};
 use chrono_tz::Europe::Berlin;
 
+use super::types::{SetEventKind, SetEventRow};
+
 /// Display rule for set-change actors: display name → username → 7TV id → `unbekannt`.
 pub fn format_actor_display(
     actor_display_name: Option<&str>,
@@ -33,6 +35,30 @@ pub fn format_set_event_attribution(
         return None;
     }
     Some(format!("{login} via PotatBotat"))
+}
+
+/// Past-participle verb for a lifecycle change; `None` for bootstrap/gap rows,
+/// which are tracker bookkeeping, not changes.
+pub fn lifecycle_verb(kind: SetEventKind) -> Option<&'static str> {
+    match kind {
+        SetEventKind::Add => Some("hinzugefügt"),
+        SetEventKind::Remove => Some("entfernt"),
+        SetEventKind::Rename => Some("umbenannt"),
+        SetEventKind::Bootstrap | SetEventKind::Gap => None,
+    }
+}
+
+/// Who made a set change, for `von {..}`: the chat requester when a bot
+/// mediated it, else the 7TV editor (falling back to `unbekannt`).
+pub fn format_set_event_by(event: &SetEventRow) -> String {
+    format_set_event_attribution(event.requester_login.as_deref(), event.via.as_deref())
+        .unwrap_or_else(|| {
+            format_actor_display(
+                event.actor_display_name.as_deref(),
+                event.actor_username.as_deref(),
+                event.actor_7tv_id.as_deref(),
+            )
+        })
 }
 
 /// Format UTC unix milliseconds as `DD.MM.YYYY HH:MM` in Europe/Berlin.

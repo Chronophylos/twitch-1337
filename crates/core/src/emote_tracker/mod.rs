@@ -11,7 +11,10 @@ mod schema;
 mod types;
 mod usage;
 
-pub use format::{format_actor_display, format_berlin_millis, format_set_event_attribution};
+pub use format::{
+    format_actor_display, format_berlin_millis, format_set_event_attribution, format_set_event_by,
+    lifecycle_verb,
+};
 pub use handle::EmoteTrackerHandle;
 pub use ingest::{IngestConfig, run_set_ingest};
 pub use lookup::{
@@ -19,8 +22,9 @@ pub use lookup::{
 };
 pub use schema::migrate;
 pub use types::{
-    CatalogMutation, EmoteMeaningRow, EmoteRow, NewSetEvent, NewUsageEvent, SetChangeBatch,
-    SetEventKind, SetEventListFilter, SetEventRow, UsageEventListFilter, UsageEventRow,
+    CatalogMutation, EmoteMeaningRow, EmoteRow, EmoteUsageCount, NewSetEvent, NewUsageEvent,
+    SetChangeBatch, SetEventKind, SetEventListFilter, SetEventRow, SetTenure, UsageEventListFilter,
+    UsageEventRow,
 };
 pub use usage::match_usage_tokens;
 

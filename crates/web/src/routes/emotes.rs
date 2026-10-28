@@ -271,6 +271,9 @@ async fn audit(
             name_substr: q.name.filter(|s| !s.is_empty()),
             since_ms: None,
             until_ms: None,
+            emote_name: None,
+            lifecycle_only: false,
+            user: None,
             limit: 200,
             offset: q.offset.unwrap_or(0),
         };

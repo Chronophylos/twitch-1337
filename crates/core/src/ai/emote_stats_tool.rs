@@ -8,7 +8,8 @@ use llm::{ToolCall, ToolDefinition, ToolResultMessage};
 use serde::Deserialize;
 
 use crate::emote_tracker::{
-    EmoteTrackerHandle, SetEventListFilter, format_berlin_millis, format_set_event_attribution,
+    EmoteTrackerHandle, EmoteUsageCount, SetEventKind, SetEventListFilter, SetEventRow, SetTenure,
+    format_berlin_millis, format_set_event_by, lifecycle_verb,
 };
 
 pub const EMOTE_STATS_TOOL_NAME: &str = "emote_stats";
@@ -28,20 +29,46 @@ const MAX_WINDOW_DAYS: u32 = 30;
 #[serde(rename_all = "snake_case")]
 enum StatsKind {
     Top,
+    LeastUsed,
+    TopUsers,
     UsageByUser,
     UsageOfEmote,
     SetHistory,
 }
 
+/// Lifecycle kinds the model may filter `set_history` by. Bootstrap and gap
+/// rows are tracker bookkeeping, never "changes" a viewer asks about.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ChangeKind {
+    Add,
+    Remove,
+    Rename,
+}
+
+impl From<ChangeKind> for SetEventKind {
+    fn from(kind: ChangeKind) -> Self {
+        match kind {
+            ChangeKind::Add => Self::Add,
+            ChangeKind::Remove => Self::Remove,
+            ChangeKind::Rename => Self::Rename,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct EmoteStatsArgs {
     kind: StatsKind,
-    /// Viewer login (or Twitch user id) for `usage_by_user`.
+    /// Viewer login (or Twitch user id) for `usage_by_user`; requester or
+    /// 7TV editor login filter for `set_history`.
     #[serde(default)]
     user: Option<String>,
-    /// Emote code (or fragment/id) for `usage_of_emote`.
+    /// Emote code (or fragment/id) for `usage_of_emote` and `set_history`.
     #[serde(default)]
     emote: Option<String>,
+    /// Change kind filter for `set_history`.
+    #[serde(default)]
+    change: Option<ChangeKind>,
     /// Calendar-day window ending now, counted on Europe/Berlin days.
     #[serde(default)]
     window_days: Option<u32>,
@@ -53,10 +80,14 @@ pub fn emote_stats_tool() -> ToolDefinition {
     ToolDefinition {
         name: EMOTE_STATS_TOOL_NAME.into(),
         description: "Frag die Emote-Nutzungsstatistik des Channels ab. kind=top: meistgenutzte \
-            Emotes im Zeitraum. kind=usage_by_user mit user: was und wie oft ein bestimmter \
+            Emotes im Zeitraum. kind=least_used: am wenigsten oder nie genutzte Emotes im \
+            aktuellen Set (gezählt erst ab Tracking-Start). kind=top_users: Viewer mit den \
+            meisten Emote-Nutzungen. kind=usage_by_user mit user: was und wie oft ein bestimmter \
             Viewer nutzt. kind=usage_of_emote mit emote: wer und wie oft ein Emote nutzt. \
-            kind=set_history: letzte Set-Aenderungen (Add/Remove/Rename mit Attribution). \
-            Optional window_days (1..=30, Berlin-Tage, ohne Angabe: alles) und limit. \
+            kind=set_history: Set-Änderungen (hinzugefügt/entfernt/umbenannt) mit 7TV-Editor \
+            und Attribution, optional gefiltert nach emote, change und user (Requester oder \
+            Editor). Optional window_days (1..=30, Berlin-Tage, ohne Angabe: alles) und limit. \
+            '(entfernt)' heißt, das Emote ist nicht mehr im Set. \
             Erfinde niemals Zahlen — nimm exakt die gelieferten Werte."
             .into(),
         parameters: serde_json::json!({
@@ -64,10 +95,18 @@ pub fn emote_stats_tool() -> ToolDefinition {
             "properties": {
                 "kind": {
                     "type": "string",
-                    "enum": ["top", "usage_by_user", "usage_of_emote", "set_history"],
+                    "enum": [
+                        "top",
+                        "least_used",
+                        "top_users",
+                        "usage_by_user",
+                        "usage_of_emote",
+                        "set_history"
+                    ],
                 },
                 "user": { "type": "string" },
                 "emote": { "type": "string" },
+                "change": { "type": "string", "enum": ["add", "remove", "rename"] },
                 "window_days": { "type": "integer", "minimum": 1, "maximum": 30 },
                 "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
             },
@@ -107,30 +146,146 @@ fn window_cutoff(days: u32) -> eyre::Result<Option<i64>> {
     Ok(Some(cutoff.with_timezone(&Utc).timestamp_millis()))
 }
 
+fn removed_marker(active: bool) -> &'static str {
+    if active { "" } else { " (entfernt)" }
+}
+
+/// Ranked `name — Nx, zuletzt …` lines shared by `top` and `usage_by_user`.
+fn push_emote_counts(out: &mut String, rows: &[EmoteUsageCount]) {
+    for (i, r) in rows.iter().enumerate() {
+        out.push_str(&format!(
+            "{}. {}{} — {}x, zuletzt {}\n",
+            i + 1,
+            r.name,
+            removed_marker(r.active),
+            r.count,
+            format_berlin_millis(r.last_used_at),
+        ));
+    }
+}
+
+/// Marks a time the tracker only knows as "noticed at", not "happened at".
+const APPROX_TIME: &str = "Zeitpunkt ungefähr, beim Abgleich erkannt";
+
+/// One `set_history` line: when, what changed and who did it. `None` for
+/// bootstrap/gap bookkeeping rows.
+fn format_set_event(ev: &SetEventRow) -> Option<String> {
+    let verb = lifecycle_verb(ev.kind)?;
+    let what = if ev.kind == SetEventKind::Rename {
+        format!(
+            "{} → {}",
+            ev.old_name.as_deref().unwrap_or("?"),
+            ev.new_name.as_deref().unwrap_or("?"),
+        )
+    } else {
+        ev.new_name
+            .as_deref()
+            .or(ev.old_name.as_deref())
+            .or(ev.emote_id.as_deref())
+            .unwrap_or("?")
+            .to_string()
+    };
+    let mut line = format!(
+        "{} — {what} {verb} — von {}",
+        format_berlin_millis(ev.at),
+        format_set_event_by(ev),
+    );
+    if ev.is_snapshot_diff() {
+        line.push_str(&format!(" ({APPROX_TIME})"));
+    }
+    Some(line)
+}
+
 async fn execute_top(
     tracker: &EmoteTrackerHandle,
     label: &str,
     cutoff: Option<i64>,
     limit: usize,
-    out: String,
 ) -> String {
     match tracker.top_usage_events(cutoff, limit as u32).await {
         Ok(rows) => {
-            let mut out = out;
-            out.push_str(&format!("Top {} Emotes ({label}):\n", rows.len()));
+            let mut out = format!("Top {} Emotes ({label}):\n", rows.len());
+            push_emote_counts(&mut out, &rows);
+            out
+        }
+        Err(error) => {
+            tracing::warn!(?error, "emote_stats top query failed");
+            "{\"error\":\"tracker unavailable\"}".to_string()
+        }
+    }
+}
+
+async fn execute_least_used(
+    tracker: &EmoteTrackerHandle,
+    label: &str,
+    cutoff: Option<i64>,
+    limit: usize,
+) -> String {
+    match tracker.least_used_emotes(cutoff, limit as u32).await {
+        Ok((_, rows)) if rows.is_empty() => "Keine Emotes im Set erfasst.".to_string(),
+        Ok((unused, rows)) => {
+            let mut out = format!(
+                "{unused} Emotes im Set ohne Nutzung ({label}, gezählt ab Tracking-Start). \
+                 Am wenigsten genutzt:\n"
+            );
             for (i, r) in rows.iter().enumerate() {
+                // Inside a window "no use" says nothing about older history.
+                let last = match (r.last_used_at, cutoff) {
+                    (Some(at), _) => format_berlin_millis(at),
+                    (None, Some(_)) => "nicht im Zeitraum".to_string(),
+                    (None, None) => "nie".to_string(),
+                };
+                let since = match r.tenure {
+                    Some(SetTenure::TrackingStart) => "seit Tracking-Start".to_string(),
+                    Some(SetTenure::Added { at, approximate }) => {
+                        let at = format_berlin_millis(at);
+                        if approximate {
+                            format!("seit ca. {at} ({APPROX_TIME})")
+                        } else {
+                            format!("seit {at}")
+                        }
+                    }
+                    None => "seit unbekannt".to_string(),
+                };
                 out.push_str(&format!(
-                    "{}. {} — {}x, zuletzt {}\n",
+                    "{}. {} — {}x, zuletzt {last}, im Set {since}\n",
                     i + 1,
                     r.name,
                     r.count,
-                    format_berlin_millis(r.last_used_at),
                 ));
             }
             out
         }
         Err(error) => {
-            tracing::warn!(?error, "emote_stats top query failed");
+            tracing::warn!(?error, "emote_stats least-used query failed");
+            "{\"error\":\"tracker unavailable\"}".to_string()
+        }
+    }
+}
+
+async fn execute_top_users(
+    tracker: &EmoteTrackerHandle,
+    label: &str,
+    cutoff: Option<i64>,
+    limit: usize,
+) -> String {
+    match tracker.top_users(cutoff, limit as u32).await {
+        Ok(users) if users.is_empty() => format!("Keine Emote-Nutzung erfasst ({label})."),
+        Ok(users) => {
+            let mut out = format!("Top {} Viewer nach Emote-Nutzung ({label}):\n", users.len());
+            for (i, u) in users.iter().enumerate() {
+                out.push_str(&format!(
+                    "{}. {} — {}x, zuletzt {}\n",
+                    i + 1,
+                    u.login.as_deref().unwrap_or(&u.twitch_user_id),
+                    u.count,
+                    format_berlin_millis(u.last_used_at),
+                ));
+            }
+            out
+        }
+        Err(error) => {
+            tracing::warn!(?error, "emote_stats top-users query failed");
             "{\"error\":\"tracker unavailable\"}".to_string()
         }
     }
@@ -163,15 +318,7 @@ async fn execute_by_user(
         }
         Ok((total, per_emote)) => {
             let mut out = format!("{user}: {total} Emote-Nutzungen ({label}):\n");
-            for (i, r) in per_emote.iter().enumerate() {
-                out.push_str(&format!(
-                    "{}. {} — {}x, zuletzt {}\n",
-                    i + 1,
-                    r.name,
-                    r.count,
-                    format_berlin_millis(r.last_used_at),
-                ));
-            }
+            push_emote_counts(&mut out, &per_emote);
             out
         }
         Err(error) => {
@@ -190,22 +337,23 @@ async fn execute_of_emote(
 ) -> String {
     let row = match tracker.resolve_emote_query(emote_ref).await {
         Ok(Some(row)) => row,
-        Ok(None) => return "Unbekanntes Emote — pruefe den Code.".to_string(),
+        Ok(None) => return "Unbekanntes Emote — prüfe den Code.".to_string(),
         Err(error) => {
             tracing::warn!(?error, "emote_stats emote resolution failed");
             return "{\"error\":\"tracker unavailable\"}".to_string();
         }
     };
+    let marker = removed_marker(row.active);
     match tracker
         .usage_count_by_emote(&row.emote_id, cutoff, limit as u32)
         .await
     {
         Ok((0, _users)) => {
-            format!("\"{}\" wurde nicht genutzt ({label}).", row.name)
+            format!("\"{}\"{marker} wurde nicht genutzt ({label}).", row.name)
         }
         Ok((total, users)) => {
             let mut out = format!(
-                "\"{}\": {total} Nutzung(en) ({label}), Top {} Viewer:\n",
+                "\"{}\"{marker}: {total} Nutzung(en) ({label}), Top {} Viewer:\n",
                 row.name,
                 users.len()
             );
@@ -227,23 +375,48 @@ async fn execute_of_emote(
     }
 }
 
-async fn execute_set_history(tracker: &EmoteTrackerHandle, limit: usize) -> String {
+struct SetHistoryQuery<'a> {
+    emote: Option<&'a str>,
+    user: Option<&'a str>,
+    change: Option<ChangeKind>,
+    cutoff: Option<i64>,
+    label: &'a str,
+    limit: usize,
+}
+
+async fn execute_set_history(tracker: &EmoteTrackerHandle, q: SetHistoryQuery<'_>) -> String {
+    // Resolving through the catalog (not a name substring) follows renames
+    // and finds removed emotes by their last name; the exact-name match adds
+    // other 7TV ids that carried the same code (version swaps).
+    let emote = match q.emote {
+        None => None,
+        Some(emote_ref) => match tracker.resolve_emote_query(emote_ref).await {
+            Ok(Some(row)) => Some(row),
+            Ok(None) => return "Unbekanntes Emote — prüfe den Code.".to_string(),
+            Err(error) => {
+                tracing::warn!(?error, "emote_stats emote resolution failed");
+                return "{\"error\":\"tracker unavailable\"}".to_string();
+            }
+        },
+    };
     let filter = SetEventListFilter {
-        limit: limit as u32,
+        kind: q.change.map(SetEventKind::from),
+        emote_name: emote.as_ref().map(|row| row.name.clone()),
+        emote_id: emote.map(|row| row.emote_id),
+        since_ms: q.cutoff,
+        lifecycle_only: true,
+        user: q.user.map(str::to_owned),
+        limit: q.limit as u32,
         ..Default::default()
     };
+    let label = q.label;
     match tracker.list_set_events(filter).await {
-        Ok(events) if events.is_empty() => "Keine Set-Aenderungen erfasst.".to_string(),
+        Ok(events) if events.is_empty() => format!("Keine Set-Änderungen erfasst ({label})."),
         Ok(events) => {
-            let mut out = String::from("Letzte Set-Aenderungen:\n");
-            for ev in events {
-                out.push_str(&format!(
-                    "{} — {:?} — {}\n",
-                    format_berlin_millis(ev.at),
-                    ev.kind,
-                    format_set_event_attribution(ev.requester_login.as_deref(), ev.via.as_deref(),)
-                        .unwrap_or_else(|| "ohne Attribution".to_string()),
-                ));
+            let mut out = format!("Letzte Set-Änderungen ({label}):\n");
+            for line in events.iter().filter_map(format_set_event) {
+                out.push_str(&line);
+                out.push('\n');
             }
             out
         }
@@ -252,6 +425,10 @@ async fn execute_set_history(tracker: &EmoteTrackerHandle, limit: usize) -> Stri
             "{\"error\":\"tracker unavailable\"}".to_string()
         }
     }
+}
+
+fn non_blank(s: Option<&str>) -> Option<&str> {
+    s.map(str::trim).filter(|s| !s.is_empty())
 }
 
 /// Execute an `emote_stats` call against the tracker handle. Always returns a
@@ -263,7 +440,13 @@ pub async fn execute_emote_stats(
 ) -> ToolResultMessage {
     let args = match call.parse_args::<EmoteStatsArgs>() {
         Ok(a) => a,
-        Err(_) => return invalid(call, "erwartet kind (+ je nach kind user/emote)"),
+        Err(error) => {
+            // serde names the offending field and its allowed values.
+            return invalid(
+                call,
+                &format!("erwartet kind (+ je nach kind user/emote/change): {error}"),
+            );
+        }
     };
 
     let cutoff = match args.window_days.map(window_cutoff) {
@@ -278,18 +461,37 @@ pub async fn execute_emote_stats(
         |days| format!("letzte {days} Tage"),
     );
     let limit = stats_limit(args.limit);
+    // Chat habit: viewers are named as `@login`.
+    let user = non_blank(
+        args.user
+            .as_deref()
+            .map(|u| u.trim().trim_start_matches('@')),
+    );
+    let emote = non_blank(args.emote.as_deref());
 
     let body = match args.kind {
-        StatsKind::Top => execute_top(&tracker, &label, cutoff, limit, String::new()).await,
-        StatsKind::UsageByUser => match args.user.as_deref().map(str::trim) {
-            Some("") | None => return invalid(call, "kind=usage_by_user braucht user"),
+        StatsKind::Top => execute_top(&tracker, &label, cutoff, limit).await,
+        StatsKind::LeastUsed => execute_least_used(&tracker, &label, cutoff, limit).await,
+        StatsKind::TopUsers => execute_top_users(&tracker, &label, cutoff, limit).await,
+        StatsKind::UsageByUser => match user {
+            None => return invalid(call, "kind=usage_by_user braucht user"),
             Some(user) => execute_by_user(&tracker, user, &label, cutoff, limit).await,
         },
-        StatsKind::UsageOfEmote => match args.emote.as_deref().map(str::trim) {
-            Some("") | None => return invalid(call, "kind=usage_of_emote braucht emote"),
+        StatsKind::UsageOfEmote => match emote {
+            None => return invalid(call, "kind=usage_of_emote braucht emote"),
             Some(emote) => execute_of_emote(&tracker, emote, &label, cutoff, limit).await,
         },
-        StatsKind::SetHistory => execute_set_history(&tracker, limit).await,
+        StatsKind::SetHistory => {
+            let query = SetHistoryQuery {
+                emote,
+                user,
+                change: args.change,
+                cutoff,
+                label: &label,
+                limit,
+            };
+            execute_set_history(&tracker, query).await
+        }
     };
 
     ToolResultMessage::for_call(call, body)
@@ -459,7 +661,171 @@ mod tests {
         let out = content(
             execute_emote_stats(h, &call(serde_json::json!({"kind": "set_history"}))).await,
         );
-        assert!(out.contains("Add"), "{out}");
-        assert!(out.contains("alice via PotatBotat"), "{out}");
+        // Same "von" rule as !emote: the chat requester wins over the 7TV editor.
+        assert!(
+            out.contains("KEKW hinzugefügt — von alice via PotatBotat"),
+            "{out}"
+        );
+        assert!(
+            !out.contains("ungefähr"),
+            "attributed rows are exact: {out}"
+        );
+    }
+
+    fn lifecycle(at: i64, kind: SetEventKind, old: Option<&str>, new: Option<&str>) -> NewSetEvent {
+        NewSetEvent {
+            at,
+            kind,
+            emote_id: Some("e1".into()),
+            old_name: old.map(Into::into),
+            new_name: new.map(Into::into),
+            actor_7tv_id: None,
+            actor_username: None,
+            actor_display_name: None,
+            gap_from: None,
+            gap_to: None,
+            requester_login: None,
+            requester_twitch_id: None,
+            via: None,
+            attribution_method: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn set_history_hides_bootstrap_and_names_changes() {
+        let (h, _dir) = tracker().await;
+        let now = Utc::now().timestamp_millis();
+        for ev in [
+            lifecycle(now - 3, SetEventKind::Bootstrap, None, Some("KEKW")),
+            lifecycle(now - 2, SetEventKind::Rename, Some("KEKW"), Some("KEKL")),
+            lifecycle(now - 1, SetEventKind::Remove, Some("KEKL"), None),
+        ] {
+            h.insert_set_event(ev).await.unwrap();
+        }
+        let out = content(
+            execute_emote_stats(h, &call(serde_json::json!({"kind": "set_history"}))).await,
+        );
+        assert!(out.contains("KEKW → KEKL umbenannt"), "{out}");
+        assert!(out.contains("KEKL entfernt"), "{out}");
+        assert!(!out.contains("Tracking-Start"), "bootstrap leaked: {out}");
+        // Snapshot-diff rows: unknown editor, detection-time stamp.
+        assert!(
+            out.contains("KEKL entfernt — von unbekannt (Zeitpunkt ungefähr"),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_history_filters_by_change_and_emote() {
+        let (h, _dir) = tracker().await;
+        let now = Utc::now().timestamp_millis();
+        h.insert_set_event(lifecycle(now - 2, SetEventKind::Add, None, Some("KEKW")))
+            .await
+            .unwrap();
+        h.insert_set_event(lifecycle(now - 1, SetEventKind::Remove, Some("KEKW"), None))
+            .await
+            .unwrap();
+        let out = content(
+            execute_emote_stats(
+                h.clone(),
+                &call(serde_json::json!({
+                    "kind": "set_history",
+                    "emote": "KEKW",
+                    "change": "add",
+                    "window_days": 1
+                })),
+            )
+            .await,
+        );
+        assert!(out.contains("hinzugefügt"), "{out}");
+        assert!(!out.contains("entfernt"), "{out}");
+        let unknown = content(
+            execute_emote_stats(
+                h,
+                &call(serde_json::json!({"kind": "set_history", "emote": "NopeGibtsNicht"})),
+            )
+            .await,
+        );
+        assert!(unknown.contains("Unbekanntes Emote"), "{unknown}");
+    }
+
+    #[tokio::test]
+    async fn set_history_user_accepts_at_prefix() {
+        let (h, _dir) = tracker().await;
+        let mut ev = lifecycle(
+            Utc::now().timestamp_millis(),
+            SetEventKind::Add,
+            None,
+            Some("KEKW"),
+        );
+        ev.requester_login = Some("alice".into());
+        ev.via = Some("potatbotat".into());
+        h.insert_set_event(ev).await.unwrap();
+        let out = content(
+            execute_emote_stats(
+                h,
+                &call(serde_json::json!({"kind": "set_history", "user": "@Alice"})),
+            )
+            .await,
+        );
+        assert!(out.contains("KEKW hinzugefügt"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn invalid_change_names_allowed_values() {
+        let (h, _dir) = tracker().await;
+        let out = content(
+            execute_emote_stats(
+                h,
+                &call(serde_json::json!({"kind": "set_history", "change": "added"})),
+            )
+            .await,
+        );
+        assert!(out.contains("invalid_arguments"), "{out}");
+        assert!(out.contains("rename"), "allowed values missing: {out}");
+    }
+
+    #[tokio::test]
+    async fn least_used_in_window_does_not_claim_never() {
+        let (h, _dir) = tracker().await;
+        let out = content(
+            execute_emote_stats(
+                h,
+                &call(serde_json::json!({"kind": "least_used", "window_days": 1})),
+            )
+            .await,
+        );
+        assert!(
+            out.contains("Pepe — 0x, zuletzt nicht im Zeitraum"),
+            "{out}"
+        );
+        assert!(!out.contains("zuletzt nie"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn top_marks_removed_emotes() {
+        let (h, _dir) = tracker().await;
+        h.deactivate_emote("e1", 20).await.unwrap();
+        let out = content(execute_emote_stats(h, &call(serde_json::json!({"kind": "top"}))).await);
+        assert!(out.contains("KEKW (entfernt) — 4x"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn least_used_lists_never_used_first() {
+        let (h, _dir) = tracker().await;
+        let out =
+            content(execute_emote_stats(h, &call(serde_json::json!({"kind": "least_used"}))).await);
+        assert!(out.starts_with("1 Emotes im Set ohne Nutzung"), "{out}");
+        assert!(out.contains("1. Pepe — 0x, zuletzt nie"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn top_users_ranks_viewers() {
+        let (h, _dir) = tracker().await;
+        let out =
+            content(execute_emote_stats(h, &call(serde_json::json!({"kind": "top_users"}))).await);
+        // Seeded events share one timestamp, so either login casing may win.
+        assert!(out.to_lowercase().contains("1. alice — 3x"), "{out}");
+        assert!(!out.contains("spam-bot"), "{out}");
     }
 }
