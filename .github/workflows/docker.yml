@@ -95,7 +95,11 @@ jobs:
       # run line or the step log.
       - name: Trigger dockhand redeploy
         if: ${{ env.DOCKHAND_WEBHOOK_URL != '' }}
+        # dockhand answers HTTP 200 even when the compose pull fails, so
+        # -f alone never trips; check the body.
         run: |
-          curl -fsS -X POST \
+          resp=$(curl -fsS -X POST \
             -H "X-Gitlab-Token: $DOCKHAND_WEBHOOK_SECRET" \
-            "$DOCKHAND_WEBHOOK_URL"
+            "$DOCKHAND_WEBHOOK_URL")
+          echo "$resp"
+          jq -e '.success != false and .skipped != true' <<<"$resp" >/dev/null
