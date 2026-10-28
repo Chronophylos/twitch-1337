@@ -1,0 +1,6 @@
+[advisories]
+ignore = [
+    # basic-toml unmaintained: build-time only via askama_derive (reads askama config),
+    # never parses user input, no patched version. Drop once askama moves to `toml`.
+    "RUSTSEC-2026-0374",
+]
