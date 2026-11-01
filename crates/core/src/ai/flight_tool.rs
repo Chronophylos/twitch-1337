@@ -3,6 +3,7 @@ use rand::RngExt;
 use random_flight::{Direction, FlightRequest};
 use serde::Deserialize;
 use serde_json::json;
+use twitch_1337_data::flight::{Aircraft, Airport};
 
 use crate::commands::{CommandCancellation, CommandTaskGroup};
 use crate::util::parse_flight_duration;
@@ -13,9 +14,12 @@ pub const PLAN_FLIGHT_TOOL_NAME: &str = "plan_flight";
 struct PlanFlightArgs {
     #[serde(default)]
     aircraft: Option<String>,
-    duration: String,
+    #[serde(default)]
+    duration: Option<String>,
     #[serde(default)]
     departure: Option<String>,
+    #[serde(default)]
+    arrival: Option<String>,
     #[serde(default)]
     towards: Option<String>,
 }
@@ -36,9 +40,11 @@ pub fn plan_flight_tool() -> ToolDefinition {
         description: "Würfelt einen Flugplan für Flugsimulator-Leute: echte Flughäfen, passend \
 zum Flugzeug und zur gewünschten Blockzeit, inklusive SimBrief-Link. Das ist derselbe Generator \
 wie der !fl Command. Nutz das, wenn jemand nach einem Flug, einer Route oder \"was soll ich \
-fliegen\" fragt. Start und Himmelsrichtung sind optional festlegbar; das Ziel wird immer \
-gewürfelt. Achtung: towards ist nur die Richtung, nicht das Ziel - \"Richtung Berlin\" landet \
-irgendwo auf dieser Peilung, nicht in Berlin."
+fliegen\" fragt. Start und Himmelsrichtung sind optional festlegbar. Will jemand eine bestimmte \
+Strecke (\"EDDF nach London\"), setz departure und arrival: dann wird genau diese Strecke geplant \
+und duration entfällt. Ohne arrival wird das Ziel gewürfelt. Achtung: towards ist nur die \
+Richtung, nicht das Ziel - \"Richtung Berlin\" landet irgendwo auf dieser Peilung, nicht in \
+Berlin. Für \"von X nach Berlin\" nimm departure + arrival; ohne Start geht nur towards."
             .into(),
         parameters: json!({
             "type": "object",
@@ -52,18 +58,22 @@ irgendwo auf dieser Peilung, nicht in Berlin."
                 },
                 "duration": {
                     "type": "string",
-                    "description": "Gewünschte Blockzeit als h/m-String, z.B. \"1h\", \"90m\", \"2h30m\"."
+                    "description": "Gewünschte Blockzeit als h/m-String, z.B. \"1h\", \"90m\", \"2h30m\". Pflicht, außer wenn departure und arrival beide gesetzt sind."
                 },
                 "departure": {
                     "type": "string",
-                    "description": "ICAO-Code des Startflughafens, z.B. EDFE. Weglassen für einen zufälligen Start."
+                    "description": "ICAO- oder IATA-Code des Startflughafens, z.B. EDFE. Weglassen für einen zufälligen Start."
+                },
+                "arrival": {
+                    "type": "string",
+                    "description": "ICAO- oder IATA-Code des Zielflughafens, z.B. EGLL. Nur zusammen mit departure. Dann sind duration und towards egal."
                 },
                 "towards": {
                     "type": "string",
                     "description": "Grobe Flugrichtung. Entweder eine Himmelsrichtung (N, NE, E, SE, S, SW, W, NW bzw. north/nord, osten, ...) oder der ICAO/IATA-Code eines Flughafens, in dessen Richtung geflogen werden soll - für \"Richtung Berlin\" also EDDB. Weglassen für eine zufällige Richtung."
                 }
             },
-            "required": ["duration"]
+            "required": []
         }),
     }
 }
@@ -123,7 +133,7 @@ pub async fn execute_plan_flight(
 
     let aircraft = match trimmed(&args.aircraft) {
         Some(code) => match twitch_1337_data::flight::aircraft_by_icao_type(&code) {
-            Some(a) => a,
+            Some(a) => Some(a),
             None => {
                 return err(
                     call,
@@ -135,13 +145,42 @@ pub async fn execute_plan_flight(
                 );
             }
         },
-        None => {
-            let db = twitch_1337_data::flight::aircraft();
-            &db[rand::rng().random_range(0..db.len())]
-        }
+        None => None,
     };
 
-    let Some(block_time) = parse_flight_duration(&args.duration) else {
+    let departure = match trimmed(&args.departure) {
+        None => None,
+        Some(code) => match resolve_airport(&code) {
+            Some(a) => Some(a),
+            None => {
+                return err(
+                    call,
+                    json!({"error": "unknown_departure", "departure": code}),
+                );
+            }
+        },
+    };
+
+    if let Some(arrival) = trimmed(&args.arrival) {
+        let Some(departure) = departure else {
+            return err(call, json!({"error": "arrival_needs_departure"}));
+        };
+        let Some(arrival) = resolve_airport(&arrival) else {
+            return err(
+                call,
+                json!({"error": "unknown_arrival", "arrival": arrival}),
+            );
+        };
+        return execute_fixed_route(call, departure, arrival, aircraft);
+    }
+    let departure = departure.map(|a| a.icao);
+
+    let aircraft = aircraft.unwrap_or_else(|| {
+        let db = twitch_1337_data::flight::aircraft();
+        &db[rand::rng().random_range(0..db.len())]
+    });
+
+    let Some(block_time) = args.duration.as_deref().and_then(parse_flight_duration) else {
         return err(
             call,
             json!({"error": "invalid_duration", "duration": args.duration}),
@@ -158,8 +197,6 @@ pub async fn execute_plan_flight(
         },
     };
 
-    let departure = trimmed(&args.departure);
-
     // Retries internally, can block for a while. The command task group owns
     // and joins this child; command execution has no detached fallback.
     if cancellation.is_cancelled() {
@@ -173,7 +210,7 @@ pub async fn execute_plan_flight(
         random_flight::generate_flight_plan(&FlightRequest {
             aircraft,
             block_time,
-            departure: departure.as_deref(),
+            departure,
             direction,
         })
     }) {
@@ -189,24 +226,7 @@ pub async fn execute_plan_flight(
         Ok(Ok(fp)) => fp,
         Ok(Err(e)) => {
             tracing::warn!(error = ?e, "plan_flight: no route found");
-            let code = match e {
-                random_flight::Error::UnknownAirport { .. } => "unknown_departure",
-                random_flight::Error::RunwayTooShort { .. } => "runway_too_short",
-                random_flight::Error::NoRouteInDirection => "no_route_in_direction",
-                random_flight::Error::TargetIsDeparture => "target_is_departure",
-                random_flight::Error::BlockTimeTooLong { max } => {
-                    return err(
-                        call,
-                        json!({
-                            "error": "impossible_duration",
-                            "achievable_max": crate::cooldown::format_duration_hm(max),
-                            "details": e.to_string(),
-                        }),
-                    );
-                }
-                _ => "no_route_found",
-            };
-            return err(call, json!({"error": code, "details": e.to_string()}));
+            return route_error(call, &e);
         }
         Err(e) => {
             tracing::warn!(error = ?e, "plan_flight: generation task panicked");
@@ -214,6 +234,87 @@ pub async fn execute_plan_flight(
         }
     };
 
+    ToolResultMessage::for_call(call, plan_json(&fp).to_string())
+}
+
+/// One error vocabulary for both paths, so the model sees the same code for
+/// the same failure.
+fn route_error(call: &ToolCall, e: &random_flight::Error) -> ToolResultMessage {
+    use random_flight::Error as E;
+    let code = match e {
+        E::UnknownAirport { .. } => "unknown_departure",
+        E::RunwayTooShort { .. } => "runway_too_short",
+        E::RangeExceeded { .. } => "range_exceeded",
+        E::NoRouteInDirection => "no_route_in_direction",
+        E::TargetIsDeparture => "target_is_departure",
+        E::BlockTimeTooLong { max } => {
+            return err(
+                call,
+                json!({
+                    "error": "impossible_duration",
+                    "achievable_max": crate::cooldown::format_duration_hm(*max),
+                    "details": e.to_string(),
+                }),
+            );
+        }
+        _ => "no_route_found",
+    };
+    err(call, json!({"error": code, "details": e.to_string()}))
+}
+
+/// ICAO first (the flight DB's key), then IATA via the location DB, which
+/// maps it back to an ICAO.
+fn resolve_airport(code: &str) -> Option<&'static Airport> {
+    twitch_1337_data::flight::find_by_icao(code).or_else(|| {
+        twitch_1337_data::location::lookup_by_iata(code)?
+            .icao
+            .and_then(twitch_1337_data::flight::find_by_icao)
+    })
+}
+
+/// Departure and arrival are both pinned: no dice, just validate and compute.
+/// plan_route checks runway and range before computing a profile, so even
+/// trying every aircraft type is cheap enough to run inline.
+fn execute_fixed_route(
+    call: &ToolCall,
+    departure: &'static Airport,
+    arrival: &'static Airport,
+    aircraft: Option<&'static Aircraft>,
+) -> ToolResultMessage {
+    if std::ptr::eq(departure, arrival) {
+        return route_error(call, &random_flight::Error::TargetIsDeparture);
+    }
+    let result = match aircraft {
+        Some(ac) => random_flight::plan_route(departure, arrival, ac),
+        None => {
+            let mut fits: Vec<_> = twitch_1337_data::flight::aircraft()
+                .iter()
+                .filter_map(|ac| random_flight::plan_route(departure, arrival, ac).ok())
+                .collect();
+            if fits.is_empty() {
+                // Types fail for different reasons (range for the short-field
+                // ones, runway for the heavies), so no single reason is true.
+                return err(
+                    call,
+                    json!({
+                        "error": "no_aircraft_fits",
+                        "departure": departure.icao,
+                        "arrival": arrival.icao,
+                        "details": "no known aircraft clears both runways and has the range",
+                    }),
+                );
+            }
+            Ok(fits.swap_remove(rand::rng().random_range(0..fits.len())))
+        }
+    };
+
+    match result {
+        Ok(fp) => ToolResultMessage::for_call(call, plan_json(&fp).to_string()),
+        Err(e) => route_error(call, &e),
+    }
+}
+
+fn plan_json(fp: &random_flight::FlightPlan) -> serde_json::Value {
     let bearing = random_flight::geo::initial_bearing(
         fp.departure.latitude,
         fp.departure.longitude,
@@ -221,22 +322,18 @@ pub async fn execute_plan_flight(
         fp.arrival.longitude,
     );
 
-    ToolResultMessage::for_call(
-        call,
-        json!({
-            "aircraft": fp.aircraft.icao_type,
-            "aircraft_name": fp.aircraft.name,
-            "departure": fp.departure.icao,
-            "arrival": fp.arrival.icao,
-            "distance_nm": fp.distance_nm.round(),
-            "block_time": crate::cooldown::format_duration_hm(fp.block_time),
-            "cruise_flight_level": fp.cruise_altitude_ft / 100,
-            "direction": random_flight::geo::cardinal_direction(bearing),
-            "bearing_deg": bearing.round(),
-            "simbrief_url": fp.simbrief_url(),
-        })
-        .to_string(),
-    )
+    json!({
+        "aircraft": fp.aircraft.icao_type,
+        "aircraft_name": fp.aircraft.name,
+        "departure": fp.departure.icao,
+        "arrival": fp.arrival.icao,
+        "distance_nm": fp.distance_nm.round(),
+        "block_time": crate::cooldown::format_duration_hm(fp.block_time),
+        "cruise_flight_level": fp.cruise_altitude_ft / 100,
+        "direction": random_flight::geo::cardinal_direction(bearing),
+        "bearing_deg": bearing.round(),
+        "simbrief_url": fp.simbrief_url(),
+    })
 }
 
 #[cfg(test)]
@@ -369,6 +466,84 @@ mod tests {
     async fn unknown_aircraft_errors() {
         let v = run(json!({"aircraft": "XXXX", "duration": "1h"})).await;
         assert_eq!(v["error"], "unknown_aircraft");
+    }
+
+    #[tokio::test]
+    async fn fixed_route_ignores_duration_and_links_simbrief() {
+        let v = run(json!({"aircraft": "B738", "departure": "EDDF", "arrival": "EGLL"})).await;
+        assert_eq!(
+            (&v["departure"], &v["arrival"]),
+            (&json!("EDDF"), &json!("EGLL"))
+        );
+        let url = v["simbrief_url"].as_str().expect("simbrief_url");
+        assert!(
+            url.contains("orig=EDDF") && url.contains("dest=EGLL"),
+            "{url}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fixed_route_without_aircraft_picks_one_that_reaches() {
+        // Long-haul: rules out the short-range types, so a pick must check range.
+        for _ in 0..20 {
+            let v = run(json!({"departure": "EDDF", "arrival": "KJFK"})).await;
+            assert_eq!(v["arrival"], "KJFK", "got: {v}");
+        }
+    }
+
+    #[tokio::test]
+    async fn fixed_route_errors() {
+        for (args, want) in [
+            (
+                json!({"aircraft": "B738", "departure": "EDDF", "arrival": "YSSY"}),
+                "range_exceeded",
+            ),
+            (
+                json!({"departure": "EDDF", "arrival": "ZZZZ"}),
+                "unknown_arrival",
+            ),
+            (
+                json!({"departure": "ZZZZ", "arrival": "EDDF"}),
+                "unknown_departure",
+            ),
+            (
+                json!({"departure": "EDDF", "arrival": "EDDF"}),
+                "target_is_departure",
+            ),
+            (json!({"arrival": "EGLL"}), "arrival_needs_departure"),
+        ] {
+            let v = run(args.clone()).await;
+            assert_eq!(v["error"], want, "args: {args}, got: {v}");
+        }
+    }
+
+    #[tokio::test]
+    async fn fixed_route_accepts_iata() {
+        let v = run(json!({"aircraft": "B738", "departure": "FRA", "arrival": "LHR"})).await;
+        assert_eq!(v["departure"], "EDDF", "got: {v}");
+        assert_eq!(v["arrival"], "EGLL", "got: {v}");
+    }
+
+    #[tokio::test]
+    async fn fixed_route_nobody_can_fly_says_so() {
+        // The DB's shortest strip is below every type's minimum runway.
+        let short = twitch_1337_data::flight::airports()
+            .iter()
+            .min_by_key(|a| a.runway_length_ft)
+            .expect("airports");
+        assert!(
+            twitch_1337_data::flight::aircraft()
+                .iter()
+                .all(|ac| short.runway_length_ft < ac.min_runway_length_ft)
+        );
+        let v = run(json!({"departure": "EDDF", "arrival": short.icao})).await;
+        assert_eq!(v["error"], "no_aircraft_fits", "got: {v}");
+    }
+
+    #[tokio::test]
+    async fn missing_duration_on_random_route_errors() {
+        let v = run(json!({"aircraft": "B738"})).await;
+        assert_eq!(v["error"], "invalid_duration");
     }
 
     #[tokio::test]
