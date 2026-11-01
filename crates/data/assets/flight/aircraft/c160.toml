@@ -1,0 +1,26 @@
+[aircraft]
+name = "Transall C-160"
+icao_type = "C160"
+
+[performance]
+cruise_speed_ktas = 265            # Wikipedia/airforce-technology: 495 km/h (267 kt) cruise, 277 kt max at 16,000 ft
+cruise_altitude_ft = 24000         # Typical FL200–FL260 transport cruise, below the 27,000 ft ceiling
+service_ceiling_ft = 27000         # SimBrief airframe; matches published 8,230 m
+min_runway_length_ft = 5600        # SimBrief airframe
+
+[performance.climb]
+speed_ktas = 165                   # SimBrief 140-KIAS climb; TAS average through climb
+rate_fpm = 1000                    # Published 1,300 fpm sea-level (6.6 m/s); mid-climb average
+
+[performance.descent]
+speed_ktas = 210                   # SimBrief 180-KIAS descent; TAS average through descent
+rate_fpm = 1500                    # Estimate, no published figure
+
+[fuel]
+capacity_kg = 23830.0              # SimBrief airframe 52,536 lb (wing tanks 19,000 l + 9,000 l centre-section tank)
+fuel_type = "jet"                  # RR Tyne RTy.20 Mk 22 (kerosene)
+
+[fuel.flow]
+climb_kg_per_hour = 2000.0         # ~1.4× cruise
+cruise_kg_per_hour = 1400.0        # Estimate: 8,850 km ferry range on ~22 t fuel ≈ 1,100 kg/h light; higher at normal weights
+descent_kg_per_hour = 800.0        # ~0.6× cruise
