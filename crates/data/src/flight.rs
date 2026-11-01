@@ -117,6 +117,21 @@ mod tests {
     }
 
     #[test]
+    fn c160_is_listed() {
+        let ac = aircraft_by_icao_type("C160").expect("C160");
+        assert_eq!(ac.name, "Transall C-160");
+        assert_eq!(ac.fuel_type, FuelType::Jet);
+        assert_eq!(ac.service_ceiling_ft, 27000);
+        assert_eq!(ac.min_runway_length_ft, 5600);
+        // Published ferry range with the centre tank is ~4,800 nm.
+        let range = ac.range_nm();
+        assert!(
+            (3000.0..5500.0).contains(&range),
+            "C160 range_nm()={range} outside 3000–5500 nm"
+        );
+    }
+
+    #[test]
     fn airport_has_no_name_field() {
         assert!(find_by_icao("EDDF").is_some());
         let db = include_str!(concat!(env!("OUT_DIR"), "/airport_db.rs"));
