@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use twitch_1337_data::flight::{Aircraft, Airport, AirportSize};
 
+use crate::error::Error;
 use crate::geo::haversine_distance_nm;
 
 fn taxi_out_for(size: AirportSize) -> Duration {
@@ -164,6 +165,41 @@ pub fn calculate_flight_plan(
     }
 }
 
+/// Plan a fixed departure → arrival route, rejecting what the aircraft can't
+/// fly: the same airport twice, a runway too short at either end, or a
+/// distance past its fuel range.
+pub fn plan_route(
+    departure: &'static Airport,
+    arrival: &'static Airport,
+    aircraft: &Aircraft,
+) -> Result<FlightPlan, Error> {
+    if std::ptr::eq(departure, arrival) {
+        return Err(Error::TargetIsDeparture);
+    }
+    for airport in [departure, arrival] {
+        if airport.runway_length_ft < aircraft.min_runway_length_ft {
+            return Err(Error::RunwayTooShort {
+                airport_icao: airport.icao.to_string(),
+                required_ft: aircraft.min_runway_length_ft,
+                available_ft: airport.runway_length_ft,
+            });
+        }
+    }
+    let distance_nm = haversine_distance_nm(
+        departure.latitude,
+        departure.longitude,
+        arrival.latitude,
+        arrival.longitude,
+    );
+    if distance_nm > aircraft.range_nm() {
+        return Err(Error::RangeExceeded {
+            distance_nm,
+            range_nm: aircraft.range_nm(),
+        });
+    }
+    Ok(calculate_flight_plan(departure, arrival, aircraft))
+}
+
 /// Block time of the nominal profile (sea-level airports, medium taxi) at a
 /// given distance. Monotone non-decreasing in distance: at the
 /// altitude-reduction boundaries the function jumps *up* (climb and descent
@@ -225,6 +261,39 @@ pub fn max_block_time(aircraft: &Aircraft) -> Duration {
 mod tests {
     use super::*;
     use twitch_1337_data::flight::{aircraft_by_icao_type, find_by_icao};
+
+    #[test]
+    fn plan_route_flies_the_given_pair() {
+        let ac = aircraft_by_icao_type("B738").expect("B738");
+        let (eddf, egll) = (find_by_icao("EDDF").unwrap(), find_by_icao("EGLL").unwrap());
+        let fp = plan_route(eddf, egll, ac).expect("EDDF-EGLL in a B738");
+        assert_eq!((fp.departure.icao, fp.arrival.icao), ("EDDF", "EGLL"));
+    }
+
+    #[test]
+    fn plan_route_rejects_what_the_aircraft_cannot_fly() {
+        let b738 = aircraft_by_icao_type("B738").expect("B738");
+        let eddf = find_by_icao("EDDF").expect("EDDF");
+        let yssy = find_by_icao("YSSY").expect("YSSY");
+        assert!(matches!(
+            plan_route(eddf, yssy, b738),
+            Err(Error::RangeExceeded { .. })
+        ));
+        assert!(matches!(
+            plan_route(eddf, eddf, b738),
+            Err(Error::TargetIsDeparture)
+        ));
+        // Whatever the DB's shortest strip is, a 737 can't use it.
+        let short = twitch_1337_data::flight::airports()
+            .iter()
+            .min_by_key(|a| a.runway_length_ft)
+            .expect("airports");
+        assert!(short.runway_length_ft < b738.min_runway_length_ft);
+        assert!(matches!(
+            plan_route(eddf, short, b738),
+            Err(Error::RunwayTooShort { .. })
+        ));
+    }
 
     #[test]
     fn basic_flight_plan_computes() {
