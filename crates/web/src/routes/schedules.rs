@@ -143,6 +143,14 @@ impl ScheduleForm {
         let trigger = match self.kind.as_str() {
             "interval" => {
                 let secs = parse_hhmm_to_secs(&self.interval_every).unwrap_or(0);
+                // Checked here, not in `Schedule::validate`: that also runs at
+                // boot, where one failing row quarantines all of settings.ron.
+                if secs > 86_400 {
+                    errs.push(twitch_1337_core::settings::FieldError {
+                        field: format!("{prefix}.interval_every"),
+                        message: format!("must be ≤ 24:00 (got {:?})", self.interval_every),
+                    });
+                }
                 let days = parse_weekdays(&self.interval_days);
                 let active_from = parse_hhmm(&self.interval_active_from);
                 let active_to = parse_hhmm(&self.interval_active_to);
@@ -747,6 +755,21 @@ mod try_into_schedule_tests {
         let s = base_interval_form().try_into_schedule().unwrap();
         assert_eq!(s.name, "noon");
         assert_eq!(s.message, "hello world");
+    }
+
+    #[test]
+    fn interval_over_a_day_rejected() {
+        let mut form = base_interval_form();
+        form.interval_every = "24:01".into();
+        let errs = form.try_into_schedule().unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "form.interval_every"));
+    }
+
+    #[test]
+    fn interval_of_exactly_a_day_accepted() {
+        let mut form = base_interval_form();
+        form.interval_every = "24:00".into();
+        assert!(form.try_into_schedule().is_ok());
     }
 
     #[test]
