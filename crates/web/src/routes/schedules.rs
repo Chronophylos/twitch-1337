@@ -247,9 +247,9 @@ async fn list(
 ) -> Result<Response, WebError> {
     let rows = state.settings.load().schedules.clone();
     let active_count = rows.iter().filter(|r| r.enabled).count();
-    let telemetry = state.telemetry.snapshot().await;
-    let fired_today: u32 = telemetry.values().map(|r| r.fires_today).sum();
     let now_utc = chrono::Utc::now();
+    let telemetry = state.telemetry.snapshot(now_utc).await;
+    let fired_today: u32 = telemetry.values().map(|r| r.fires_today).sum();
     let now_berlin = now_utc.with_timezone(&chrono_tz::Europe::Berlin);
     let next_fire = rows
         .iter()

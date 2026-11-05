@@ -22,6 +22,7 @@ use chrono_tz::Europe::Berlin;
 use common::TestBotBuilder;
 use twitch_1337_core::schedule::{Schedule, Trigger, WeekdaySet};
 use twitch_1337_core::settings::{Actor, MemoryAuditLog, SettingsOverrides, SettingsStore};
+use twitch_1337_core::util::clock::Clock;
 
 // ---------------------------------------------------------------------------
 // Test 1: save → subscription fires within 500ms; schedule round-trips
@@ -133,7 +134,7 @@ async fn schedule_fires_after_clock_advance() {
     );
 
     // Check telemetry in-memory (avoids depending on the debounced disk flush).
-    let snap = bot.telemetry.snapshot().await;
+    let snap = bot.telemetry.snapshot(bot.clock.now_utc()).await;
     let runtime = snap
         .get("hello-world")
         .expect("telemetry entry for 'hello-world' must exist");
