@@ -1,19 +1,26 @@
 //! Trigger model.
 //!
 //! Two variants:
-//! - `Interval` — fires every `every` at wall-clock multiples (anchored
-//!   to Berlin midnight), optionally restricted to a within-day window
-//!   and a set of weekdays.
+//! - `Interval` — fires every `every` at wall-clock multiples, restarting
+//!   at each Berlin midnight, optionally restricted to a within-day window
+//!   and a set of weekdays. An `every` over 24h only has the midnight slot;
+//!   the dashboard refuses to save one.
 //! - `Calendar` — fires at a fixed `at` on each listed weekday (empty
 //!   set means every day).
 
 use std::time::Duration;
 
-use chrono::{DateTime, Datelike, Duration as ChronoDuration, LocalResult, NaiveTime, TimeZone};
+use chrono::{
+    DateTime, Datelike, Duration as ChronoDuration, LocalResult, NaiveDateTime, NaiveTime, TimeZone,
+};
 use chrono_tz::{Europe::Berlin, Tz};
 use serde::{Deserialize, Serialize};
 
 use super::weekday::WeekdaySet;
+
+const SECS_PER_DAY: i64 = 86_400;
+/// Length of the repeated hour when Berlin leaves summer time.
+const FOLD_LENGTH: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -40,8 +47,9 @@ impl Trigger {
     /// All arithmetic is Berlin-local; the returned `DateTime<Tz>` is
     /// always `Tz::Berlin`.
     ///
-    /// DST: `from_local_datetime` is used. Spring-forward gap picks the
-    /// post-gap instant; fall-back fold picks the first occurrence.
+    /// DST: a slot in the spring-forward gap moves one hour later. A slot in
+    /// the fall-back fold uses the first occurrence; intervals of an hour or
+    /// less also fire on the second.
     pub fn next_fire_after(&self, now: DateTime<Tz>) -> DateTime<Tz> {
         let now = now.with_timezone(&Berlin);
         match self {
@@ -63,21 +71,46 @@ fn next_interval(
     active_from: Option<NaiveTime>,
     active_to: Option<NaiveTime>,
 ) -> DateTime<Tz> {
-    let every_secs = every.as_secs() as i64;
-    let day_start = day_start_berlin(now.date_naive());
-    let elapsed = (now - day_start).num_seconds().max(0);
-    let mut slot = (elapsed / every_secs + 1) * every_secs;
-    let mut candidate = day_start + ChronoDuration::seconds(slot);
-
-    // Safety bound: scan at most 14 days of slots before giving up.
-    for _ in 0..(14 * 1440) {
-        if in_window(candidate.time(), active_from, active_to) && days.allows(candidate.weekday()) {
-            return candidate;
+    // A DST day has 23 or 25 hours, so slots must be counted on the local
+    // clock. Adding real seconds to midnight shifts them by the DST offset.
+    let repeat_in_fold = every <= FOLD_LENGTH;
+    for offset in 0..=7 {
+        let date = now.date_naive() + ChronoDuration::days(offset);
+        if !days.allows(date.weekday()) {
+            continue;
         }
-        slot += every_secs;
-        candidate = day_start + ChronoDuration::seconds(slot);
+        let midnight = date.and_time(NaiveTime::MIN);
+        let next = (0..SECS_PER_DAY)
+            .step_by(every.as_secs() as usize)
+            .map(|slot| midnight + ChronoDuration::seconds(slot))
+            .filter(|naive| in_window(naive.time(), active_from, active_to))
+            .flat_map(|naive| slot_instants(naive, repeat_in_fold))
+            .flatten()
+            .filter(|t| *t > now)
+            .min();
+        if let Some(next) = next {
+            return next;
+        }
     }
-    candidate
+    // No slot ever lands in the window (e.g. every 12h, 08:00-10:00). Push it
+    // far out rather than fire outside the window.
+    now + ChronoDuration::seconds(every.as_secs() as i64 * 14 * 1440)
+}
+
+/// Real instants for one local slot. In the autumn fold a slot exists twice;
+/// the second one is only used when the interval is short enough that skipping
+/// it would leave a silent hour. A slot in the spring gap moves one hour later.
+fn slot_instants(naive: NaiveDateTime, repeat_in_fold: bool) -> [Option<DateTime<Tz>>; 2] {
+    match Berlin.from_local_datetime(&naive) {
+        LocalResult::Single(t) => [Some(t), None],
+        LocalResult::Ambiguous(first, second) => [Some(first), repeat_in_fold.then_some(second)],
+        LocalResult::None => [
+            Berlin
+                .from_local_datetime(&(naive + ChronoDuration::hours(1)))
+                .earliest(),
+            None,
+        ],
+    }
 }
 
 fn next_calendar(now: DateTime<Tz>, days: &WeekdaySet, at: NaiveTime) -> DateTime<Tz> {
@@ -109,18 +142,6 @@ fn next_calendar(now: DateTime<Tz>, days: &WeekdaySet, at: NaiveTime) -> DateTim
         .from_local_datetime(&naive)
         .single()
         .unwrap_or(now + ChronoDuration::days(7))
-}
-
-fn day_start_berlin(date: chrono::NaiveDate) -> DateTime<Tz> {
-    let naive = date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-    match Berlin.from_local_datetime(&naive) {
-        LocalResult::Single(t) => t,
-        LocalResult::Ambiguous(t1, _) => t1,
-        LocalResult::None => Berlin
-            .from_local_datetime(&(naive + ChronoDuration::hours(1)))
-            .single()
-            .expect("post-gap midnight always valid"),
-    }
 }
 
 fn in_window(t: NaiveTime, from: Option<NaiveTime>, to: Option<NaiveTime>) -> bool {
@@ -493,5 +514,126 @@ mod dst_tests {
         assert!(next > now);
         use chrono::Datelike;
         assert_eq!(next.day(), 25);
+    }
+
+    fn interval(every_mins: u64, window: Option<(u32, u32)>) -> Trigger {
+        let at = |h| NaiveTime::from_hms_opt(h, 0, 0).unwrap();
+        Trigger::Interval {
+            every: Duration::from_secs(every_mins * 60),
+            days: WeekdaySet::default(),
+            active_from: window.map(|w| at(w.0)),
+            active_to: window.map(|w| at(w.1)),
+        }
+    }
+
+    /// The next `n` fires, walked like the runner does: each search starts
+    /// from the previous fire.
+    fn fires(trig: &Trigger, mut now: DateTime<Tz>, n: usize) -> Vec<String> {
+        (0..n)
+            .map(|_| {
+                now = trig.next_fire_after(now);
+                now.format("%d %H:%M %Z").to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn daily_interval_stays_at_midnight_across_fall_back() {
+        let got = fires(&interval(1440, None), now_berlin(2026, 10, 24, 12, 0), 3);
+        assert_eq!(got, ["25 00:00 CEST", "26 00:00 CET", "27 00:00 CET"]);
+    }
+
+    #[test]
+    fn daily_interval_stays_at_midnight_across_spring_forward() {
+        let got = fires(&interval(1440, None), now_berlin(2026, 3, 28, 12, 0), 3);
+        assert_eq!(got, ["29 00:00 CET", "30 00:00 CEST", "31 00:00 CEST"]);
+    }
+
+    #[test]
+    fn six_hour_interval_keeps_wall_clock_slots_on_fall_back_day() {
+        let got = fires(&interval(360, None), now_berlin(2026, 10, 24, 23, 0), 5);
+        assert_eq!(
+            got,
+            [
+                "25 00:00 CEST",
+                "25 06:00 CET",
+                "25 12:00 CET",
+                "25 18:00 CET",
+                "26 00:00 CET"
+            ]
+        );
+    }
+
+    #[test]
+    fn six_hour_interval_keeps_wall_clock_slots_on_spring_forward_day() {
+        let got = fires(&interval(360, None), now_berlin(2026, 3, 28, 23, 0), 5);
+        assert_eq!(
+            got,
+            [
+                "29 00:00 CET",
+                "29 06:00 CEST",
+                "29 12:00 CEST",
+                "29 18:00 CEST",
+                "30 00:00 CEST"
+            ]
+        );
+    }
+
+    #[test]
+    fn windowed_interval_is_back_on_slot_the_morning_after_fall_back() {
+        let trig = interval(120, Some((8, 18)));
+        let got = fires(&trig, now_berlin(2026, 10, 24, 17, 0), 7);
+        assert_eq!(
+            got,
+            [
+                "25 08:00 CET",
+                "25 10:00 CET",
+                "25 12:00 CET",
+                "25 14:00 CET",
+                "25 16:00 CET",
+                "26 08:00 CET",
+                "26 10:00 CET"
+            ]
+        );
+    }
+
+    #[test]
+    fn short_interval_fires_through_both_repeated_hours() {
+        let got = fires(&interval(30, None), now_berlin(2026, 10, 25, 1, 30), 5);
+        assert_eq!(
+            got,
+            [
+                "25 02:00 CEST",
+                "25 02:30 CEST",
+                "25 02:00 CET",
+                "25 02:30 CET",
+                "25 03:00 CET"
+            ]
+        );
+    }
+
+    #[test]
+    fn long_interval_fires_once_in_repeated_hour() {
+        let got = fires(&interval(120, None), now_berlin(2026, 10, 25, 1, 0), 2);
+        assert_eq!(got, ["25 02:00 CEST", "25 04:00 CET"]);
+    }
+
+    #[test]
+    fn hourly_interval_does_not_double_fire_after_spring_gap() {
+        let got = fires(&interval(60, None), now_berlin(2026, 3, 29, 1, 0), 2);
+        assert_eq!(got, ["29 03:00 CEST", "29 04:00 CEST"]);
+    }
+
+    #[test]
+    fn interval_not_dividing_a_day_restarts_at_midnight() {
+        let got = fires(&interval(420, None), now_berlin(2026, 6, 10, 20, 0), 3);
+        assert_eq!(got, ["10 21:00 CEST", "11 00:00 CEST", "11 07:00 CEST"]);
+    }
+
+    #[test]
+    fn interval_not_dividing_a_day_keeps_slots_inside_window() {
+        let trig = interval(300, Some((8, 18)));
+        let got = fires(&trig, now_berlin(2026, 6, 10, 16, 0), 2);
+        assert_eq!(got, ["11 10:00 CEST", "11 15:00 CEST"]);
     }
 }
