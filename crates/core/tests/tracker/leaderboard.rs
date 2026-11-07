@@ -9,7 +9,7 @@ use common::TestBotBuilder;
 use twitch_1337::PersonalBest;
 
 #[tokio::test]
-async fn leaderboard_returns_fastest_pb() {
+async fn leaderboard_returns_top_pbs() {
     let mut seeded: HashMap<String, PersonalBest> = HashMap::new();
     seeded.insert(
         "alice".into(),
@@ -40,8 +40,8 @@ async fn leaderboard_returns_fastest_pb() {
         "leaderboard missing alice's date: {out}"
     );
     assert!(
-        !out.contains("bob"),
-        "only fastest PB should be shown, bob present: {out}"
+        out.ends_with(", 2. bob 567ms"),
+        "runner-up should be abbreviated: {out}"
     );
 
     bot.shutdown().await;
