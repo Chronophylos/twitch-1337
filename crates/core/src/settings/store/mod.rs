@@ -412,6 +412,7 @@ mod tests {
                     timeout: 30,
                     reasoning_effort: None,
                     service_tier: None,
+                    ..Default::default()
                 }]),
                 active_profile: Some("default".into()),
                 ..Default::default()
@@ -643,6 +644,7 @@ mod tests {
                     timeout: 30,
                     reasoning_effort: None,
                     service_tier: None,
+                    ..Default::default()
                 }]),
                 active_profile: Some("default".into()),
                 ..Default::default()

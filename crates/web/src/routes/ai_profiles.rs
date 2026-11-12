@@ -200,6 +200,7 @@ impl ProfileForm {
             timeout,
             reasoning_effort: non_empty(&self.reasoning_effort),
             service_tier: non_empty(&self.service_tier),
+            ..Default::default()
         })
     }
 }

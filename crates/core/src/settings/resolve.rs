@@ -465,6 +465,7 @@ fn legacy_profile(o: &overrides::AiOverrides) -> Option<AiProfile> {
             .clone()
             .flatten()
             .filter(|_| provider == AiProvider::OpenRouter),
+        ..Default::default()
     })
 }
 
@@ -548,6 +549,7 @@ mod tests {
             timeout: 30,
             reasoning_effort: None,
             service_tier: None,
+            ..Default::default()
         }
     }
 
@@ -916,6 +918,7 @@ mod tests {
             timeout: 30,
             reasoning_effort: None,
             service_tier: None,
+            ..Default::default()
         }]);
         o.ai.active_profile = Some("local".into());
 
@@ -964,6 +967,7 @@ mod tests {
             timeout: 30,
             reasoning_effort: None,
             service_tier: None,
+            ..Default::default()
         }]);
         o.ai.active_profile = Some("gone".into());
         let s = Settings::resolve(&Settings::compiled_defaults(), &o);
@@ -983,6 +987,7 @@ mod tests {
             timeout: 30,
             reasoning_effort: None,
             service_tier: None,
+            ..Default::default()
         }]);
         o.ai.active_profile = Some("cheap".into());
         let s = Settings::resolve(&defaults, &o);

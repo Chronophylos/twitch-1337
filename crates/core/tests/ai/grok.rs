@@ -20,6 +20,7 @@ fn profile(name: &str, model: &str) -> AiProfile {
         timeout: 30,
         reasoning_effort: None,
         service_tier: None,
+        ..Default::default()
     }
 }
 

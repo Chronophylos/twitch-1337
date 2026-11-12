@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use super::provider::Efforts;
-use super::{AiSettings, FieldError, Settings};
+use super::{AiProvider, AiSettings, FieldError, ProfileKind, Settings};
 
 /// Bootstrap-side context required for cross-field validation. `channel`
 /// is the IRC channel from config.toml, used to enforce that
@@ -381,6 +381,19 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
             "at least one profile is required".into(),
         );
     }
+    // Agents drive an `LlmClient`; a Decision profile has none (ADR-0010).
+    let require_chat = |errs: &mut Vec<FieldError>, field: &str, name: &str| {
+        if ai
+            .by_name(name)
+            .is_some_and(|p| p.kind == ProfileKind::Decision)
+        {
+            err(
+                errs,
+                field,
+                format!("{name:?} is a decision profile; pick a chat profile"),
+            );
+        }
+    };
     for (field, name) in [
         ("ai.aurora.profile", ai.aurora.profile.as_str()),
         ("ai.grok.profile", ai.grok.profile.as_str()),
@@ -391,6 +404,8 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
             err(errs, field, "must not be empty".into());
         } else if validate_agent_profile_targets && ai.by_name(name).is_none() {
             err(errs, field, format!("no profile named {name:?}"));
+        } else if validate_agent_profile_targets {
+            require_chat(errs, field, name);
         }
     }
     if let Some(name) = ai.recap.profile.as_deref() {
@@ -406,6 +421,8 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
                 "ai.recap.profile",
                 format!("no profile named {name:?}"),
             );
+        } else if validate_agent_profile_targets {
+            require_chat(errs, "ai.recap.profile", name);
         }
     }
 
@@ -422,6 +439,29 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
                 &at("name"),
                 format!("duplicate profile name {:?}", p.name),
             );
+        }
+        if p.kind == ProfileKind::Decision {
+            if p.provider != AiProvider::OpenRouter {
+                err(
+                    errs,
+                    &at("provider"),
+                    "decision profiles require the open_router provider".into(),
+                );
+            }
+            if p.reasoning_effort.is_some() {
+                err(
+                    errs,
+                    &at("reasoning_effort"),
+                    "must be unset for a decision profile".into(),
+                );
+            }
+            if p.service_tier.is_some() {
+                err(
+                    errs,
+                    &at("service_tier"),
+                    "must be unset for a decision profile".into(),
+                );
+            }
         }
         if p.timeout == 0 || p.timeout > 600 {
             err(errs, &at("timeout"), "must be between 1 and 600".into());
@@ -629,7 +669,7 @@ fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{AiProfile, AiProvider};
+    use crate::settings::{AiProfile, AiProvider, ProfileKind};
 
     fn ctx() -> ValidationContext {
         ValidationContext {
@@ -647,7 +687,99 @@ mod tests {
             timeout: 30,
             reasoning_effort: None,
             service_tier: None,
+            ..Default::default()
         }
+    }
+
+    fn decision_profile() -> AiProfile {
+        AiProfile {
+            name: "d".into(),
+            kind: ProfileKind::Decision,
+            ..profile(AiProvider::OpenRouter)
+        }
+    }
+
+    /// Settings whose five agent pointers all name the profile "p", plus a
+    /// Decision profile "d" that `point` redirects one pointer to.
+    fn agent_on_decision(idx: usize) -> (Settings, &'static str) {
+        let mut s = with_profiles(
+            vec![profile(AiProvider::OpenRouter), decision_profile()],
+            "p",
+        );
+        s.ai.recap.profile = Some("p".into());
+        let field = match idx {
+            0 => {
+                s.ai.aurora.profile = "d".into();
+                "ai.aurora.profile"
+            }
+            1 => {
+                s.ai.grok.profile = "d".into();
+                "ai.grok.profile"
+            }
+            2 => {
+                s.ai.dreamer.profile = "d".into();
+                "ai.dreamer.profile"
+            }
+            3 => {
+                s.ai.media.profile = "d".into();
+                "ai.media.profile"
+            }
+            _ => {
+                s.ai.recap.profile = Some("d".into());
+                "ai.recap.profile"
+            }
+        };
+        (s, field)
+    }
+
+    #[test]
+    fn agent_on_decision_profile_is_rejected() {
+        for idx in 0..5 {
+            let (s, field) = agent_on_decision(idx);
+            let errs = s.validate(&ctx()).expect_err("must fail");
+            assert!(
+                errs.iter()
+                    .any(|e| e.field == field && e.message.contains("chat profile")),
+                "{field}: {errs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn load_tolerates_agent_on_decision_profile() {
+        for idx in 0..5 {
+            let (s, field) = agent_on_decision(idx);
+            s.validate_for_load(&ctx())
+                .unwrap_or_else(|e| panic!("{field}: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn decision_profile_rejects_non_openrouter_provider() {
+        let mut d = decision_profile();
+        d.provider = AiProvider::OpenAi;
+        let errs = with_profiles(vec![profile(AiProvider::OpenRouter), d], "p")
+            .validate(&ctx())
+            .expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.profiles[1].provider"));
+    }
+
+    #[test]
+    fn decision_profile_ignores_effort_and_tier() {
+        let mut d = decision_profile();
+        d.reasoning_effort = Some("high".into());
+        d.service_tier = Some("flex".into());
+        let errs = with_profiles(vec![profile(AiProvider::OpenRouter), d], "p")
+            .validate(&ctx())
+            .expect_err("must fail");
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.profiles[1].reasoning_effort")
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.profiles[1].service_tier")
+        );
     }
 
     fn with_profiles(list: Vec<AiProfile>, active: &str) -> Settings {

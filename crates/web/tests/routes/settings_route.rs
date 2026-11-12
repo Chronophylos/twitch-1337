@@ -373,6 +373,7 @@ async fn a_required_dreamer_profile_round_trips_through_the_settings_post() {
         timeout: 30,
         reasoning_effort: None,
         service_tier: None,
+        ..Default::default()
     };
     state
         .settings_store
@@ -479,6 +480,7 @@ async fn a_recap_profile_round_trips_through_the_settings_post() {
         timeout: 30,
         reasoning_effort: None,
         service_tier: None,
+        ..Default::default()
     };
     state
         .settings_store
@@ -1636,6 +1638,7 @@ async fn validation_error_preserves_stored_ai_settings() {
         timeout: 30,
         reasoning_effort: None,
         service_tier: None,
+        ..Default::default()
     };
     state
         .settings_store

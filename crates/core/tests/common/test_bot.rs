@@ -187,6 +187,7 @@ impl TestBotBuilder {
                     timeout: 30,
                     reasoning_effort: None,
                     service_tier: None,
+                    ..Default::default()
                 }]);
                 o.ai.active_profile = Some("default".into());
             }

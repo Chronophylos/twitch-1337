@@ -29,7 +29,7 @@ pub mod web;
 
 pub use ai::{
     AiAurora, AiBackendKind, AiDreamer, AiEmotes, AiGrok, AiHistory, AiMedia, AiMemory, AiPrefill,
-    AiProfile, AiRecap, AiSettings, AiWeb,
+    AiProfile, AiRecap, AiSettings, AiWeb, ProfileKind,
 };
 pub use alerts::{AlertsSettings, CmeAlerts, QuakeAlerts, SolarAlerts};
 #[cfg(any(test, feature = "testing"))]
