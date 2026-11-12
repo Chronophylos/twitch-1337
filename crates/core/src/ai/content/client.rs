@@ -1,5 +1,5 @@
 use std::io;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -138,6 +138,85 @@ pub fn ssrf_bypass_for_tests(enabled: bool) {
     SSRF_BYPASS.store(enabled, Ordering::Relaxed);
 }
 
+/// HTTP client for one-off public fetches (spoiler check). Same SSRF guard
+/// as `read_url`, no trusted host.
+pub fn fetch_client() -> Result<reqwest::Client> {
+    build_ssrf_safe_client(TrustedHost::default())
+}
+
+/// Body bytes of a capped GET, untouched, plus the post-redirect URL.
+#[derive(Debug, Clone)]
+pub struct RawFetch {
+    pub final_url: reqwest::Url,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
+pub async fn fetch_raw(
+    http: &reqwest::Client,
+    url: reqwest::Url,
+    max_bytes: u64,
+    timeout: Duration,
+) -> Result<RawFetch> {
+    match url.scheme() {
+        "http" | "https" => {}
+        other => bail!("Unsupported URL scheme: {other}"),
+    }
+
+    if ssrf_active() && is_blocked_host_literal(&url) {
+        bail!(BLOCKED_TARGET)
+    }
+
+    let response = http
+        .get(url)
+        .timeout(timeout)
+        .send()
+        .await
+        .wrap_err("Failed to fetch URL")?
+        .error_for_status()
+        .wrap_err("URL returned error status")?;
+
+    let final_url = response.url().clone();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = read_capped(response, max_bytes).await?;
+
+    Ok(RawFetch {
+        final_url,
+        content_type,
+        bytes,
+    })
+}
+
+/// Stream a body, bailing as soon as it would exceed `max_bytes`.
+async fn read_capped(response: reqwest::Response, max_bytes: u64) -> Result<Vec<u8>> {
+    if let Some(length) = response.content_length()
+        && length > max_bytes
+    {
+        bail!("Response too large")
+    }
+
+    let initial_capacity = response
+        .content_length()
+        .map(|len| len.min(max_bytes) as usize)
+        .unwrap_or(0);
+
+    let mut stream = response.bytes_stream();
+    let mut buf: Vec<u8> = Vec::with_capacity(initial_capacity);
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.wrap_err("Failed to read URL response body")?;
+        if (buf.len() as u64).saturating_add(chunk.len() as u64) > max_bytes {
+            bail!("Response too large")
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
 const SEARX_RESPONSE_LIMIT: usize = 10;
 
 #[derive(Debug, Clone)]
@@ -262,14 +341,6 @@ impl SearchClient {
             .error_for_status()
             .wrap_err("URL returned error status")?;
 
-        let max_cap = overall_cap(caps);
-
-        if let Some(length) = response.content_length()
-            && length > max_cap
-        {
-            bail!("Response too large")
-        }
-
         let header_ct = response
             .headers()
             .get(header::CONTENT_TYPE)
@@ -277,20 +348,7 @@ impl SearchClient {
             .unwrap_or("")
             .to_string();
 
-        let initial_capacity = response
-            .content_length()
-            .map(|len| len.min(max_cap) as usize)
-            .unwrap_or(0);
-
-        let mut stream = response.bytes_stream();
-        let mut buf: Vec<u8> = Vec::with_capacity(initial_capacity);
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.wrap_err("Failed to read URL response body")?;
-            if (buf.len() as u64).saturating_add(chunk.len() as u64) > max_cap {
-                bail!("Response too large")
-            }
-            buf.extend_from_slice(&chunk);
-        }
+        let buf = read_capped(response, overall_cap(caps)).await?;
 
         let head = &buf[..buf.len().min(16)];
         let Some(bucket) = detect(&header_ct, head) else {
@@ -374,6 +432,7 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
                 || v4.is_broadcast()
                 || v4.is_unspecified()
                 || v4.is_documentation()
+                || is_cgnat(v4)
         }
         IpAddr::V6(v6) => {
             v6.is_loopback()
@@ -385,6 +444,12 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
                     .is_some_and(|v4| is_blocked_ip(IpAddr::V4(v4)))
         }
     }
+}
+
+/// 100.64.0.0/10: carrier-grade NAT, also Tailscale's tailnet range.
+fn is_cgnat(v4: Ipv4Addr) -> bool {
+    let [a, b, ..] = v4.octets();
+    a == 100 && (b & 0xC0) == 64
 }
 
 fn is_blocked_host_literal(url: &reqwest::Url) -> bool {
@@ -403,7 +468,7 @@ fn is_blocked_host_literal(url: &reqwest::Url) -> bool {
     false
 }
 
-fn extract_readable_text(html: &str) -> String {
+pub(crate) fn extract_readable_text(html: &str) -> String {
     let doc = Html::parse_document(html);
     let article_sel = Selector::parse("article, main").expect("valid selector");
     let para_sel = Selector::parse("p, h1, h2, h3, li, blockquote").expect("valid selector");
@@ -519,6 +584,87 @@ mod tests {
         assert!(is_html_content_type("application/xhtml+xml"));
         assert!(is_html_content_type("application/xml"));
         assert!(!is_html_content_type("application/json"));
+    }
+
+    #[test]
+    fn blocks_cgnat_range() {
+        assert!(is_blocked_ip("100.64.0.1".parse().expect("ip")));
+        assert!(is_blocked_ip("100.127.255.254".parse().expect("ip")));
+        assert!(!is_blocked_ip("100.128.0.1".parse().expect("ip")));
+        assert!(!is_blocked_ip("100.63.255.255".parse().expect("ip")));
+        assert!(is_blocked_ip("::ffff:100.64.0.1".parse().expect("ip")));
+    }
+
+    #[tokio::test]
+    async fn fetch_raw_returns_bytes_and_final_url_after_redirect() {
+        crate::install_crypto_provider();
+        ssrf_bypass_for_tests(true);
+        let server = MockServer::start().await;
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/from"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/to"))
+            .mount(&server)
+            .await;
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/to"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/zip")
+                    .set_body_bytes(vec![1u8, 2, 3]),
+            )
+            .mount(&server)
+            .await;
+
+        let http = fetch_client().expect("client");
+        let url = reqwest::Url::parse(&format!("{}/from", server.uri())).expect("url");
+        let raw = fetch_raw(&http, url, 1024, Duration::from_secs(2))
+            .await
+            .expect("fetch");
+        assert_eq!(raw.final_url.path(), "/to");
+        assert_eq!(raw.content_type, "application/zip");
+        assert_eq!(raw.bytes, vec![1u8, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn fetch_raw_rejects_oversize_and_error_status() {
+        crate::install_crypto_provider();
+        ssrf_bypass_for_tests(true);
+        let server = MockServer::start().await;
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/big"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 64]))
+            .mount(&server)
+            .await;
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/gone"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let http = fetch_client().expect("client");
+        let big = reqwest::Url::parse(&format!("{}/big", server.uri())).expect("url");
+        let err = fetch_raw(&http, big, 16, Duration::from_secs(2))
+            .await
+            .expect_err("too large");
+        assert!(err.to_string().contains("too large"), "{err}");
+        let gone = reqwest::Url::parse(&format!("{}/gone", server.uri())).expect("url");
+        assert!(
+            fetch_raw(&http, gone, 16, Duration::from_secs(2))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_raw_rejects_non_http_scheme() {
+        crate::install_crypto_provider();
+        let http = fetch_client().expect("client");
+        let url = reqwest::Url::parse("ftp://example.com/x").expect("url");
+        assert!(
+            fetch_raw(&http, url, 16, Duration::from_secs(2))
+                .await
+                .is_err()
+        );
     }
 
     #[test]

@@ -20,6 +20,7 @@ pub mod pronouns;
 pub mod repology;
 pub mod schedule;
 pub mod settings;
+pub mod spoiler;
 pub mod suspend;
 pub mod tarot;
 pub mod twitch;
