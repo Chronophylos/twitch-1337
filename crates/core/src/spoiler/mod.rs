@@ -35,9 +35,11 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    /// Whether the decision model was called, i.e. the cooldown applies.
-    pub fn called_model(&self) -> bool {
-        matches!(self, Self::Verdict(_) | Self::Broken)
+    /// Whether a fetch or model call went out, i.e. the cooldown applies.
+    /// Unreadable counts so dead links can't make the bot an unthrottled
+    /// fetcher; only `NotConfigured` sends nothing.
+    pub fn charges_cooldown(&self) -> bool {
+        !matches!(self, Self::NotConfigured)
     }
 }
 

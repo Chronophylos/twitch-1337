@@ -139,7 +139,7 @@ where
             }
         };
 
-        if outcome.called_model() {
+        if outcome.charges_cooldown() {
             self.cooldown.record(user).await;
         }
 

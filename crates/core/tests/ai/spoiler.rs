@@ -215,7 +215,7 @@ async fn missing_url_replies_usage() {
 }
 
 #[tokio::test]
-async fn unreadable_page_does_not_charge_cooldown() {
+async fn unreadable_page_charges_cooldown_without_model_call() {
     let mut fx = spawn("dec", ok_decision(), ResponseTemplate::new(404)).await;
     let url = fx.page_url();
 
@@ -224,11 +224,11 @@ async fn unreadable_page_does_not_charge_cooldown() {
         fx.bot.expect_reply(WAIT).await,
         "⬜ kann den Link nicht lesen"
     );
+    // A fetch was attempted, so the cooldown applies: dead links must not
+    // turn the bot into an unthrottled fetcher.
     fx.bot.send("alice", &format!("!spoiler {url}")).await;
-    assert_eq!(
-        fx.bot.expect_reply(WAIT).await,
-        "⬜ kann den Link nicht lesen"
-    );
+    let second = fx.bot.expect_reply(WAIT).await;
+    assert!(second.starts_with("Bitte warte noch"), "{second}");
     assert!(fx.decision_bodies().await.is_empty());
 
     fx.bot.shutdown().await;

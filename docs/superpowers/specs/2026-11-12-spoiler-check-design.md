@@ -218,12 +218,14 @@ page is ever echoed.
 |---|---|---|---|
 | No URL / bad game name | usage / `ungültiger Spielname` | — | no |
 | `spoiler.profile` missing or not a Decision profile | `⬜ Spoiler-Check nicht konfiguriert` | `warn` | no |
-| Fetch failed, blocked host, unsupported type, nothing readable | `⬜ kann den Link nicht lesen` | `debug` | no |
+| Fetch failed, blocked host, unsupported type, nothing readable | `⬜ kann den Link nicht lesen` | `debug` | yes |
 | `refusal` answer | same as `insufficient` | `info` | yes |
 | Decision API error / timeout | `⬜ Spoiler-Check gerade kaputt` | `error`, `?error` | yes |
 | Verdict | as above | `info` (choice, p, model, cost) | yes |
 
-The cooldown is charged only when the decision model was called.
+The cooldown is charged once a fetch is attempted. Only replies that send
+nothing out (usage, bad game name, not configured) are free, so dead links
+can't turn the bot into an unthrottled fetcher.
 
 ## Settings
 
@@ -264,7 +266,7 @@ discover them late):
 - **Integration** (`crates/core/tests/ai/`, wiremock via profile
   `base_url`): request body shape against `/api/alpha/decisions`, image
   part present when og:image resolves and absent when it doesn't, error
-  paths, cooldown charged only after a model call.
+  paths, cooldown charged once a fetch is attempted.
 - **Live eval** (`#[ignore]`, needs `OPENROUTER_API_KEY`): ~20 text fixtures
   from released games (RDR2, Elden Ring, The Last of Us Part II), 4 per
   category, stored as text so link rot can't break them. Prints a confusion
