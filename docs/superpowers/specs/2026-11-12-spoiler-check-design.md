@@ -217,7 +217,7 @@ page is ever echoed.
 | Case | Reply | Log | Cooldown charged |
 |---|---|---|---|
 | No URL / bad game name | usage / `ungültiger Spielname` | — | no |
-| `spoiler.profile` missing or not a Decision profile | `⬜ Spoiler-Check nicht konfiguriert` | `warn` | no |
+| `spoiler.profile` missing, not a Decision profile, or without model / key | `⬜ Spoiler-Check nicht konfiguriert` | `warn` | no |
 | Fetch failed, blocked host, unsupported type, nothing readable | `⬜ kann den Link nicht lesen` | `debug` | yes |
 | `refusal` answer | same as `insufficient` | `info` | yes |
 | Decision API error / timeout | `⬜ Spoiler-Check gerade kaputt` | `error`, `?error` | yes |

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use llm::decision::{DecisionRequest, StatePart, decide, decisions_endpoint};
 use reqwest::Url;
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, error, info, warn};
 
 use crate::llm_factory::LlmRegistry;
@@ -30,63 +30,72 @@ pub enum Outcome {
     Unreadable,
     /// The decision call failed or its answer could not be mapped.
     Broken,
-    /// `spoiler.profile` is missing or not a Decision profile.
-    NotConfigured,
 }
 
-impl Outcome {
-    /// Whether a fetch or model call went out, i.e. the cooldown applies.
-    /// Unreadable counts so dead links can't make the bot an unthrottled
-    /// fetcher; only `NotConfigured` sends nothing.
-    pub fn charges_cooldown(&self) -> bool {
-        !matches!(self, Self::NotConfigured)
+/// A Decision profile that is ready to call: kind, model, key and endpoint
+/// all check out. Built before the cooldown is charged so a misconfigured
+/// bot answers "nicht konfiguriert" for free.
+pub struct Prepared<'a> {
+    profile: &'a AiProfile,
+    endpoint: String,
+    key: SecretString,
+}
+
+impl Prepared<'_> {
+    /// Upper bound for a whole check: page + image budgets plus the
+    /// profile's decision timeout.
+    pub fn overall_timeout(&self) -> Duration {
+        PAGE_TIMEOUT + IMAGE_TIMEOUT + Duration::from_secs(self.profile.timeout)
     }
 }
 
-/// The Decision profile `spoiler.profile` points at, if usable.
-pub fn decision_profile(settings: &Settings) -> Option<&AiProfile> {
-    settings
+/// Resolve `spoiler.profile` into something [`check`] can call, or `None`
+/// (logged at warn) when the profile is missing, not a Decision profile, has
+/// no model, no usable key, or an unusable base URL.
+pub fn prepare<'a>(registry: &LlmRegistry, settings: &'a Settings) -> Option<Prepared<'a>> {
+    let Some(profile) = settings
         .ai
         .by_name(settings.spoiler.profile.trim())
         .filter(|p| p.kind == ProfileKind::Decision)
-}
-
-/// Upper bound for a whole check: page + image budgets plus the profile's
-/// decision timeout.
-pub fn overall_timeout(profile: Option<&AiProfile>) -> Duration {
-    PAGE_TIMEOUT + IMAGE_TIMEOUT + Duration::from_secs(profile.map_or(0, |p| p.timeout))
-}
-
-/// Fetch `url` with `http` (SSRF-guarded), then classify it for `game` with
-/// the configured Decision profile over `api` (the owner-configured endpoint,
-/// so no SSRF guard). `game` must already be validated.
-pub async fn check(
-    http: &reqwest::Client,
-    api: &reqwest::Client,
-    registry: &LlmRegistry,
-    settings: &Settings,
-    url: &Url,
-    game: &str,
-) -> Outcome {
-    let Some(profile) = decision_profile(settings) else {
+    else {
         warn!(profile = %settings.spoiler.profile, "spoiler.profile is not a Decision profile");
-        return Outcome::NotConfigured;
+        return None;
+    };
+    if profile.model.trim().is_empty() {
+        warn!(profile = %profile.name, "spoiler profile has no model");
+        return None;
+    }
+    let Some(key) = registry.secret_for(profile) else {
+        warn!(profile = %profile.name, "spoiler profile has no key in [ai.keys]");
+        return None;
     };
     let endpoint = match decisions_endpoint(profile.base_url.as_deref().unwrap_or(DEFAULT_BASE_URL))
     {
         Ok(endpoint) => endpoint,
         Err(error) => {
             warn!(?error, profile = %profile.name, "spoiler profile has an unusable base URL");
-            return Outcome::NotConfigured;
+            return None;
         }
     };
+    Some(Prepared {
+        profile,
+        endpoint,
+        key,
+    })
+}
 
-    let key = registry.secret_for(profile);
-    if profile.key.is_some() && key.is_none() {
-        warn!(profile = %profile.name, "spoiler profile names a key that is not in [ai.keys]");
-        return Outcome::NotConfigured;
-    }
-
+/// Fetch `url` with `http` (SSRF-guarded), then classify it for `game` with
+/// the prepared Decision profile over `api` (the owner-configured endpoint,
+/// so no SSRF guard). `game` must already be validated.
+pub async fn check(
+    http: &reqwest::Client,
+    api: &reqwest::Client,
+    prepared: &Prepared<'_>,
+    floor_pct: u8,
+    url: &Url,
+    game: &str,
+) -> Outcome {
+    let profile = prepared.profile;
     let input = match gather(http, url).await {
         Ok(input) => input,
         Err(GatherError::Unreadable) => {
@@ -97,8 +106,8 @@ pub async fn check(
     let req = request(profile, input, game);
     let resp = match decide(
         api,
-        &endpoint,
-        key.as_ref().map(ExposeSecret::expose_secret),
+        &prepared.endpoint,
+        Some(prepared.key.expose_secret()),
         &req,
         Duration::from_secs(profile.timeout),
     )
@@ -114,7 +123,7 @@ pub async fn check(
         error!(model = %resp.model, "spoiler decision response has no answer");
         return Outcome::Broken;
     };
-    match verdict(answer, settings.spoiler.confidence_floor) {
+    match verdict(answer, floor_pct) {
         Ok(v) => {
             log_verdict(&v, &resp.model);
             Outcome::Verdict(v)

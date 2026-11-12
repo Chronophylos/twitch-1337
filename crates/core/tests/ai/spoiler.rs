@@ -53,12 +53,22 @@ impl Fixture {
 }
 
 async fn spawn(profile: &str, decision: ResponseTemplate, page: ResponseTemplate) -> Fixture {
-    spawn_with_key(profile, "test", decision, page).await
+    spawn_with(profile, Some("test"), "nace-ai/drex-max", decision, page).await
 }
 
 async fn spawn_with_key(
     profile: &str,
     key: &str,
+    decision: ResponseTemplate,
+    page: ResponseTemplate,
+) -> Fixture {
+    spawn_with(profile, Some(key), "nace-ai/drex-max", decision, page).await
+}
+
+async fn spawn_with(
+    profile: &str,
+    key: Option<&str>,
+    model: &str,
     decision: ResponseTemplate,
     page: ResponseTemplate,
 ) -> Fixture {
@@ -80,17 +90,18 @@ async fn spawn_with_key(
 
     let base_url = format!("{}/v1", decision_server.uri());
     let profile = profile.to_owned();
-    let key = key.to_owned();
+    let key = key.map(str::to_owned);
+    let model = model.to_owned();
     let bot = TestBotBuilder::new()
         .with_ai()
         .with_settings(move |o| {
             let list = o.ai.profiles.as_mut().expect("with_ai seeds a profile");
             list.push(twitch_1337::settings::ai::AiProfile {
                 name: "dec".into(),
-                key: Some(key),
+                key,
                 provider: AiProvider::OpenRouter,
                 base_url: Some(base_url),
-                model: "nace-ai/drex-max".into(),
+                model,
                 timeout: 5,
                 kind: ProfileKind::Decision,
                 ..Default::default()
@@ -277,4 +288,48 @@ async fn missing_key_is_not_configured_without_call_or_cooldown() {
     assert!(fx.decision_bodies().await.is_empty());
 
     fx.bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn burst_hits_cooldown_while_first_check_runs() {
+    let slow = ok_decision().set_delay(Duration::from_millis(1500));
+    let mut fx = spawn("dec", slow, html_page()).await;
+    let url = fx.page_url();
+
+    fx.bot.send("alice", &format!("!spoiler {url}")).await;
+    fx.bot.send("alice", &format!("!spoiler {url}")).await;
+    let replies = [
+        fx.bot.expect_reply(WAIT).await,
+        fx.bot.expect_reply(WAIT).await,
+    ];
+    assert_eq!(
+        replies
+            .iter()
+            .filter(|r| r.starts_with("Bitte warte noch"))
+            .count(),
+        1,
+        "{replies:?}"
+    );
+    assert_eq!(fx.decision_bodies().await.len(), 1);
+
+    fx.bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn profile_without_key_or_model_is_not_configured() {
+    for (key, model) in [(None, "nace-ai/drex-max"), (Some("test"), "")] {
+        let mut fx = spawn_with("dec", key, model, ok_decision(), html_page()).await;
+        let url = fx.page_url();
+
+        for _ in 0..2 {
+            fx.bot.send("alice", &format!("!spoiler {url}")).await;
+            assert_eq!(
+                fx.bot.expect_reply(WAIT).await,
+                "⬜ Spoiler-Check nicht konfiguriert"
+            );
+        }
+        assert!(fx.decision_bodies().await.is_empty());
+
+        fx.bot.shutdown().await;
+    }
 }

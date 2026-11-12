@@ -123,10 +123,26 @@ where
         }
         let game = game.trim();
 
-        let budget = spoiler::overall_timeout(spoiler::decision_profile(&settings));
+        let Some(prepared) = spoiler::prepare(&self.registry, &settings) else {
+            ctx.sender.reply(&ctx.privmsg, NOT_CONFIGURED).await;
+            return Ok(());
+        };
+
+        // Charge before any request goes out: recording after the check
+        // finishes let a burst of concurrent invocations all pass `check`.
+        self.cooldown.record(user).await;
+
+        let budget = prepared.overall_timeout();
         let outcome = match tokio::time::timeout(
             budget,
-            spoiler::check(&self.http, &self.api, &self.registry, &settings, &url, game),
+            spoiler::check(
+                &self.http,
+                &self.api,
+                &prepared,
+                settings.spoiler.confidence_floor,
+                &url,
+                game,
+            ),
         )
         .await
         {
@@ -139,15 +155,10 @@ where
             }
         };
 
-        if outcome.charges_cooldown() {
-            self.cooldown.record(user).await;
-        }
-
         let line = match &outcome {
             Outcome::Verdict(v) => render(v, game),
             Outcome::Unreadable => UNREADABLE.to_string(),
             Outcome::Broken => BROKEN.to_string(),
-            Outcome::NotConfigured => NOT_CONFIGURED.to_string(),
         };
         ctx.cancellation.check()?;
         ctx.sender.reply(&ctx.privmsg, line).await;

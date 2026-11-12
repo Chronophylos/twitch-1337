@@ -175,7 +175,7 @@ managed via `/settings`. AI profiles have a `kind` (Chat by default, or
 Decision, ADR-0010). Decision profiles are OpenRouter-only and skip
 `reasoning_effort` / `service_tier`. They are called through `llm::decision`
 per call, outside `LlmRegistry`; only the key comes from
-`LlmRegistry::secret_for`. A profile that names a key missing from `[ai.keys]`
+`LlmRegistry::secret_for`. A profile without a model or without a key in `[ai.keys]`
 makes the command answer "nicht konfiguriert".
 
 Alert monitors live entirely in `settings.ron` — there is no config.toml
