@@ -508,7 +508,22 @@ pub(crate) fn extract_readable_text(html: &str) -> String {
     }
 
     if chunks.is_empty() {
-        return collapse_ws(&doc.root_element().text().collect::<Vec<_>>().join(" "));
+        // Skip script/style/noscript so a JS shell reads as empty instead of
+        // handing minified code (or "enable JavaScript") on as page text.
+        let text: Vec<&str> = doc
+            .root_element()
+            .descendants()
+            .filter_map(|node| {
+                let text = node.value().as_text()?;
+                let hidden = node.ancestors().any(|a| {
+                    a.value()
+                        .as_element()
+                        .is_some_and(|e| matches!(e.name(), "script" | "style" | "noscript"))
+                });
+                (!hidden).then_some(&**text)
+            })
+            .collect();
+        return collapse_ws(&text.join(" "));
     }
 
     chunks.join("\n")
@@ -524,6 +539,18 @@ mod tests {
 
     use super::*;
     use crate::ai::content::detect::Bucket;
+
+    #[test]
+    fn readable_text_fallback_skips_script_style_noscript() {
+        let html = "<html><head><script>var x = 1;</script><style>p{color:red}</style></head>\
+<body><div>hello world</div><noscript>Please enable JavaScript</noscript>\
+<script>window.__STATE__={}</script></body></html>";
+        assert_eq!(extract_readable_text(html), "hello world");
+
+        let shell = "<html><head><script>boot()</script></head><body><div id=\"app\"></div>\
+<script src=\"a.js\"></script></body></html>";
+        assert_eq!(extract_readable_text(shell), "");
+    }
 
     #[test]
     fn trusted_host_from_url_extracts_name_or_ip() {
