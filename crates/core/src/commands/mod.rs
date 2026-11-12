@@ -19,6 +19,7 @@ pub mod ping_admin;
 pub mod ping_trigger;
 pub mod pw;
 pub mod registry;
+pub mod spoiler;
 pub mod suspend;
 pub mod version;
 
@@ -97,6 +98,7 @@ pub const RESERVED_PING_NAMES: &[&str] = &[
     "!pb",
     "!pw",
     "!sb",
+    "!spoiler",
     "!suspend",
     "!tldr",
     "!track",
