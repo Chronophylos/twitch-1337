@@ -110,6 +110,13 @@ impl LlmRegistry {
         }
     }
 
+    /// Test-injection companion to [`Self::fixed`]: give it `[ai.keys]` so
+    /// [`Self::secret_for`] resolves named keys.
+    pub fn with_keys(mut self, keys: HashMap<String, SecretString>) -> Self {
+        self.keys = keys;
+        self
+    }
+
     /// The API key a profile should use, by the same rules `client_for`
     /// applies: a named `[ai.keys]` entry. `MediaClient` needs the raw secret
     /// because it posts to `/chat/completions` itself rather than going

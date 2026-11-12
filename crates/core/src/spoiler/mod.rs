@@ -17,7 +17,7 @@ use crate::llm_factory::LlmRegistry;
 use crate::settings::{Settings, ai::AiProfile, ai::ProfileKind};
 
 use self::input::{GatherError, IMAGE_TIMEOUT, Input, PAGE_TIMEOUT, gather};
-use self::verdict::{Category, UNTRUSTED_PREFIX, Verdict, build_question, verdict};
+use self::verdict::{UNTRUSTED_PREFIX, Verdict, build_question, verdict};
 
 const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const QUESTION_KEY: &str = "spoiler";
@@ -79,6 +79,12 @@ pub async fn check(
         }
     };
 
+    let key = registry.secret_for(profile);
+    if profile.key.is_some() && key.is_none() {
+        warn!(profile = %profile.name, "spoiler profile names a key that is not in [ai.keys]");
+        return Outcome::NotConfigured;
+    }
+
     let input = match gather(http, url).await {
         Ok(input) => input,
         Err(GatherError::Unreadable) => {
@@ -86,15 +92,7 @@ pub async fn check(
             return Outcome::Unreadable;
         }
     };
-    if input.text.trim().is_empty() && input.image_data_url.is_none() {
-        return Outcome::Verdict(Verdict::Sure {
-            category: Category::Insufficient,
-            pct: 0,
-        });
-    }
-
     let req = request(profile, input, game);
-    let key = registry.secret_for(profile);
     let resp = match decide(
         api,
         &endpoint,

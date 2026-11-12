@@ -53,6 +53,15 @@ impl Fixture {
 }
 
 async fn spawn(profile: &str, decision: ResponseTemplate, page: ResponseTemplate) -> Fixture {
+    spawn_with_key(profile, "test", decision, page).await
+}
+
+async fn spawn_with_key(
+    profile: &str,
+    key: &str,
+    decision: ResponseTemplate,
+    page: ResponseTemplate,
+) -> Fixture {
     twitch_1337::ai::content::client::ssrf_bypass_for_tests(true);
 
     let page_server = MockServer::start().await;
@@ -71,13 +80,14 @@ async fn spawn(profile: &str, decision: ResponseTemplate, page: ResponseTemplate
 
     let base_url = format!("{}/v1", decision_server.uri());
     let profile = profile.to_owned();
+    let key = key.to_owned();
     let bot = TestBotBuilder::new()
         .with_ai()
         .with_settings(move |o| {
             let list = o.ai.profiles.as_mut().expect("with_ai seeds a profile");
             list.push(twitch_1337::settings::ai::AiProfile {
                 name: "dec".into(),
-                key: Some("test".into()),
+                key: Some(key),
                 provider: AiProvider::OpenRouter,
                 base_url: Some(base_url),
                 model: "nace-ai/drex-max".into(),
@@ -249,6 +259,21 @@ async fn empty_profile_disables_command() {
 
     fx.bot.send("alice", &format!("!spoiler {url}")).await;
     fx.bot.expect_silent(Duration::from_millis(500)).await;
+    assert!(fx.decision_bodies().await.is_empty());
+
+    fx.bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn missing_key_is_not_configured_without_call_or_cooldown() {
+    let mut fx = spawn_with_key("dec", "nope", ok_decision(), html_page()).await;
+    let url = fx.page_url();
+
+    for _ in 0..2 {
+        fx.bot.send("alice", &format!("!spoiler {url}")).await;
+        let reply = fx.bot.expect_reply(WAIT).await;
+        assert!(!reply.starts_with("Bitte warte noch"), "{reply}");
+    }
     assert!(fx.decision_bodies().await.is_empty());
 
     fx.bot.shutdown().await;

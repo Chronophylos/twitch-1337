@@ -742,8 +742,9 @@ mod tests {
         }
     }
 
-    /// Settings whose five agent pointers all name the profile "p", plus a
-    /// Decision profile "d" that `point` redirects one pointer to.
+    /// Settings whose five agent pointers all name the profile "p", except the
+    /// one picked by `idx`, which names the Decision profile "d". Returns the
+    /// settings and the offending field path.
     fn agent_on_decision(idx: usize) -> (Settings, &'static str) {
         let mut s = with_profiles(
             vec![profile(AiProvider::OpenRouter), decision_profile()],
