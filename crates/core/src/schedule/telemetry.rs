@@ -76,9 +76,15 @@ impl TelemetryStore {
         })
     }
 
-    /// Snapshot the current map (used by dashboard reads).
-    pub async fn snapshot(&self) -> HashMap<String, ScheduleRuntime> {
-        self.data.lock().await.map.clone()
+    /// Snapshot the current map (used by dashboard reads). `fires_today` is
+    /// only rolled over by the next fire, so the copy is rolled over to `now`.
+    pub async fn snapshot(&self, now: DateTime<Utc>) -> HashMap<String, ScheduleRuntime> {
+        let today = now.with_timezone(&Berlin).date_naive();
+        let mut map = self.data.lock().await.map.clone();
+        for runtime in map.values_mut() {
+            runtime.maybe_rollover(today);
+        }
+        map
     }
 
     /// Record a fire for `name` at `at`. Rolls fires_today on day change.
@@ -144,7 +150,7 @@ mod tests {
         let now = Utc::now();
         s.record_fire("a", now).await;
         s.record_fire("a", now).await;
-        let snap = s.snapshot().await;
+        let snap = s.snapshot(now).await;
         let r = snap.get("a").expect("present");
         assert_eq!(r.fires_today, 2);
         assert_eq!(r.last_fired_at, Some(now));
@@ -165,9 +171,32 @@ mod tests {
         s.record_fire("a", day1).await;
         s.record_fire("a", day1).await;
         s.record_fire("a", day2).await;
-        let r = s.snapshot().await.get("a").cloned().expect("present");
+        let r = s.snapshot(day2).await.get("a").cloned().expect("present");
         assert_eq!(r.fires_today, 1);
         assert_eq!(r.day_anchor, Some(day2.with_timezone(&Berlin).date_naive()));
+    }
+
+    #[tokio::test]
+    async fn snapshot_resets_fires_today_at_berlin_midnight() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let s = TelemetryStore::open(dir.path());
+        // 23:30 and 00:30 Berlin: the same UTC day, different Berlin days.
+        let before = Utc
+            .with_ymd_and_hms(2026, 5, 28, 21, 30, 0)
+            .single()
+            .unwrap();
+        let after = Utc
+            .with_ymd_and_hms(2026, 5, 28, 22, 30, 0)
+            .single()
+            .unwrap();
+        s.record_fire("a", before).await;
+
+        let same_day = s.snapshot(before).await;
+        assert_eq!(same_day["a"].fires_today, 1);
+
+        let next_day = s.snapshot(after).await;
+        assert_eq!(next_day["a"].fires_today, 0);
+        assert_eq!(next_day["a"].last_fired_at, Some(before));
     }
 
     #[tokio::test]
@@ -192,6 +221,6 @@ mod tests {
             s.flush().await;
         }
         let s2 = TelemetryStore::open(dir.path());
-        assert!(s2.snapshot().await.contains_key("a"));
+        assert!(s2.snapshot(Utc::now()).await.contains_key("a"));
     }
 }
