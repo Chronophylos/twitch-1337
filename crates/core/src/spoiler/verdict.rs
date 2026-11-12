@@ -141,7 +141,7 @@ pub fn verdict(answer: &Answer, floor_pct: u8) -> Result<Verdict, VerdictError> 
 pub fn render(v: &Verdict, game: &str) -> String {
     match *v {
         Verdict::Sure { category, pct } => match category {
-            Category::Unrelated => format!("🟩 scheint nicht über {game} zu sein"),
+            Category::Unrelated => format!("⬜ scheint nicht über {game} zu sein"),
             Category::Marketing => {
                 format!("🟩 sieht nach offiziellem Material aus ({game}, {pct}%)")
             }
@@ -186,7 +186,7 @@ mod tests {
             instructions,
             criteria,
         } = build_question("Elden Ring: Don't");
-        assert!(instructions.contains("Elden Ring: Don't"));
+        assert!(instructions.contains("\"Elden Ring: Don't\""));
         assert!(!instructions.contains("{{"));
         assert!(criteria.values().all(|v| !v.contains("{{")));
         assert!(criteria["unrelated"].contains("Elden Ring: Don't"));
@@ -257,7 +257,7 @@ mod tests {
         );
         assert_eq!(
             render(&s(Category::Unrelated, 90), "GTA 6"),
-            "🟩 scheint nicht über GTA 6 zu sein"
+            "⬜ scheint nicht über GTA 6 zu sein"
         );
         assert_eq!(
             render(&s(Category::Marketing, 80), "GTA 6"),

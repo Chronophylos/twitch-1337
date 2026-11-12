@@ -197,11 +197,11 @@ before GTA 6's story was public.
 
 | Choice | Meaning | Chat |
 |---|---|---|
-| `unrelated` | not about {game} | `🟩 scheint nicht über {game} zu sein` |
+| `unrelated` | not about {game} | `⬜ scheint nicht über {game} zu sein` |
 | `marketing` | official trailers, screenshots, announcements | `🟩 sieht nach offiziellem Material aus ({game}, {p}%)` |
 | `gameplay` | mechanics, map, side content, nothing story-related | `🟨 Gameplay-Details ({game}, {p}%)` |
 | `story` | plot, missions, character fates, ending, leaked cutscenes | `🟥 Story-Spoiler ({game}, {p}%) – nicht klicken` |
-| `insufficient` | too little content to judge | `⬜ kann ich nicht beurteilen` |
+| `insufficient` | no real content to judge (walls, empty page) | `⬜ kann ich nicht beurteilen` |
 
 `{p}` is `probabilities[choice]`, not `confidence` (they differ; see verified
 facts). If it is below `spoiler.confidence_floor`, reply
