@@ -61,6 +61,8 @@ struct SaveForm {
     cooldown_feedback: u64,
     #[serde(default)]
     cooldown_doener: u64,
+    #[serde(default)]
+    cooldown_spoiler: Option<u64>,
 
     // ---- pings ----
     #[serde(default)]
@@ -234,6 +236,14 @@ struct SaveForm {
     #[serde(default)]
     suspend_default_duration_secs: Option<u64>,
 
+    // ---- Spoiler card (absent fields leave persisted values untouched) ----
+    #[serde(default)]
+    spoiler_profile: Option<String>,
+    #[serde(default)]
+    spoiler_default_game: Option<String>,
+    #[serde(default)]
+    spoiler_confidence_floor: Option<u8>,
+
     // ---- Emote tracker · Potat attribution card ----
     #[serde(default)]
     emote_tracker_potat_card_visible: Option<String>,
@@ -328,8 +338,7 @@ async fn save(
         up: form.cooldown_up,
         feedback: form.cooldown_feedback,
         doener: form.cooldown_doener,
-        // No form field until the spoiler card lands; keep the saved value.
-        spoiler: before.cooldowns.spoiler,
+        spoiler: form.cooldown_spoiler.unwrap_or(before.cooldowns.spoiler),
     };
     let pings_settings = PingsSettings {
         cooldown: form.ping_cooldown,
@@ -442,6 +451,7 @@ async fn reset(
         "twitch_channels" => SettingsSection::TwitchChannels,
         "aviationstack" => SettingsSection::Aviationstack,
         "suspend" => SettingsSection::Suspend,
+        "spoiler" => SettingsSection::Spoiler,
         "emote_tracker_potat" => SettingsSection::EmoteTrackerPotat,
         "alerts_quake" => SettingsSection::AlertsQuake,
         "alerts_solar" => SettingsSection::AlertsSolar,

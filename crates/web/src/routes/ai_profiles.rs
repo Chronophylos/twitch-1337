@@ -17,7 +17,7 @@ use axum::routing::{get, post};
 use serde::Deserialize;
 use tower_cookies::Cookies;
 use twitch_1337_core::settings::{
-    Actor, AiProfile, AiProvider, Efforts, FieldError, Settings, SettingsError,
+    Actor, AiProfile, AiProvider, Efforts, FieldError, ProfileKind, Settings, SettingsError,
 };
 
 use crate::auth::csrf;
@@ -53,6 +53,7 @@ struct ListQuery {
 
 struct CardView {
     name: String,
+    kind: &'static str,
     provider_label: &'static str,
     model: String,
     base_url: Option<String>,
@@ -100,6 +101,8 @@ fn provider_options() -> Vec<ProviderOption> {
 #[derive(Default, Debug, Clone)]
 struct FormState {
     name: String,
+    /// `ProfileKind::as_str()`; empty is treated as chat.
+    kind: String,
     provider: String,
     key: String,
     base_url: String,
@@ -114,6 +117,7 @@ impl FormState {
     /// 30s timeout, everything else left for the user to fill in.
     fn new_default() -> Self {
         Self {
+            kind: ProfileKind::Chat.as_str().to_owned(),
             provider: AiProvider::OpenRouter.as_str().to_owned(),
             timeout: "30".to_owned(),
             ..Self::default()
@@ -148,12 +152,15 @@ struct ListTpl {
     is_owner: bool,
     total: usize,
     providers: Vec<ProviderOption>,
+    kinds: [ProfileKind; 2],
 }
 
 #[derive(Debug, Deserialize)]
 struct ProfileForm {
     _csrf: String,
     name: String,
+    #[serde(default)]
+    kind: String,
     provider: String,
     #[serde(default)]
     key: String,
@@ -180,6 +187,17 @@ impl ProfileForm {
                 field: "form.provider".into(),
                 message: format!("unknown provider {:?}", self.provider),
             })?;
+        let kind = if self.kind.trim().is_empty() {
+            ProfileKind::Chat
+        } else {
+            ProfileKind::ALL
+                .into_iter()
+                .find(|k| k.as_str() == self.kind.trim())
+                .ok_or_else(|| FieldError {
+                    field: "form.kind".into(),
+                    message: format!("unknown profile kind {:?}", self.kind),
+                })?
+        };
         let timeout: u64 = self.timeout.trim().parse().map_err(|_| FieldError {
             field: "form.timeout".into(),
             message: format!("must be a whole number of seconds (got {:?})", self.timeout),
@@ -200,7 +218,7 @@ impl ProfileForm {
             timeout,
             reasoning_effort: non_empty(&self.reasoning_effort),
             service_tier: non_empty(&self.service_tier),
-            ..Default::default()
+            kind,
         })
     }
 }
@@ -257,12 +275,14 @@ async fn list(
         is_owner: matches!(session.role, crate::auth::Role::Owner),
         total,
         providers: provider_options(),
+        kinds: ProfileKind::ALL,
     })
 }
 
 fn card_view(p: &AiProfile) -> CardView {
     CardView {
         name: p.name.clone(),
+        kind: p.kind.as_str(),
         provider_label: p.provider.label(),
         model: p.model.clone(),
         base_url: p.base_url.clone(),
@@ -276,6 +296,7 @@ fn card_view(p: &AiProfile) -> CardView {
 fn form_state_from_profile(p: &AiProfile) -> FormState {
     FormState {
         name: p.name.clone(),
+        kind: p.kind.as_str().to_owned(),
         provider: p.provider.as_str().to_owned(),
         key: p.key.clone().unwrap_or_default(),
         base_url: p.base_url.clone().unwrap_or_default(),
@@ -289,6 +310,7 @@ fn form_state_from_profile(p: &AiProfile) -> FormState {
 fn form_state_from_form(form: &ProfileForm) -> FormState {
     FormState {
         name: form.name.trim().to_owned(),
+        kind: form.kind.clone(),
         provider: form.provider.clone(),
         key: form.key.clone(),
         base_url: form.base_url.clone(),
@@ -384,6 +406,7 @@ async fn update(
             let rewrite_dreamer = current.ai.dreamer.profile == target;
             let rewrite_media = current.ai.media.profile == target;
             let rewrite_recap = current.ai.recap.profile.as_deref() == Some(target.as_str());
+            let rewrite_spoiler = current.spoiler.profile == target;
             let mut next = current.ai.profiles;
             if let Some(slot) = next.iter_mut().find(|p| p.name == target) {
                 *slot = edited_for_mutate.clone();
@@ -402,7 +425,10 @@ async fn update(
                 o.ai.media.profile = Some(Some(renamed.clone()));
             }
             if rewrite_recap {
-                o.ai.recap.profile = Some(Some(renamed));
+                o.ai.recap.profile = Some(Some(renamed.clone()));
+            }
+            if rewrite_spoiler {
+                o.spoiler.profile = Some(renamed);
             }
             o.ai.profiles = Some(next);
         }),
@@ -441,6 +467,7 @@ async fn delete(
         settings.ai.grok.profile.as_str(),
         settings.ai.dreamer.profile.as_str(),
         settings.ai.media.profile.as_str(),
+        settings.spoiler.profile.as_str(),
     ]
     .into_iter()
     .any(|profile| profile == name)
@@ -451,7 +478,7 @@ async fn delete(
             profiles,
             vec![FieldError {
                 field: "ai.profiles".into(),
-                message: "assign every agent to another profile before deleting this one".into(),
+                message: "assign every agent and the spoiler check to another profile before deleting this one".into(),
             }],
             None,
             None,
@@ -581,6 +608,7 @@ fn render_validation(
         is_owner: matches!(session.role, crate::auth::Role::Owner),
         total,
         providers: provider_options(),
+        kinds: ProfileKind::ALL,
     };
     render(&resp)
 }

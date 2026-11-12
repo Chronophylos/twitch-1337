@@ -63,12 +63,13 @@
     </div>
 
     <div class="settings-nav-group" data-group="commands">
-      {% call m::nav_group_head("commands", "Commands", 3) %}{% endcall %}
+      {% call m::nav_group_head("commands", "Commands", 4) %}{% endcall %}
       <div class="settings-nav-group-body" id="nav-group-body-commands">
         <ul class="settings-nav-group-items">
           {% call m::nav_section_item("cooldowns", "cooldowns", "Cooldowns") %}{% endcall %}
           {% call m::nav_section_item("pings", "pings", "Pings") %}{% endcall %}
           {% call m::nav_section_item("suspend", "suspend", "Suspend") %}{% endcall %}
+          {% call m::nav_section_item("spoiler", "spoiler", "Spoiler check") %}{% endcall %}
         </ul>
       </div>
     </div>
@@ -134,6 +135,7 @@
       {% include "settings/cards/cooldowns.html" %}
       {% include "settings/cards/pings.html" %}
       {% include "settings/cards/suspend.html" %}
+      {% include "settings/cards/spoiler.html" %}
       <div class="settings-group-divider" data-group="emote_tracker"><span>EMOTE TRACKER</span></div>
       {% include "settings/cards/emote_tracker_potat.html" %}
       <div class="settings-group-divider" data-group="flight_tracking"><span>FLIGHT TRACKING</span></div>

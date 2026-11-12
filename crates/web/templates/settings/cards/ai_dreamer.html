@@ -34,7 +34,7 @@
       <div class="row-control-cell">
         <select name="ai_dreamer_profile" data-key="ai.dreamer.profile" data-default="{{ defaults.ai.dreamer.profile }}" required>
           {% for p in current.ai.profiles %}
-          <option value="{{ p.name }}"{% if dreamer_profile == p.name %} selected{% endif %}>{{ p.name }}</option>
+          {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if dreamer_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
           {% endfor %}
         </select>
       </div>

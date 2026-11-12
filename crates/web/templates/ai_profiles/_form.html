@@ -17,10 +17,21 @@
   </div>
 
   <div class="row">
+    <label>Kind
+      <select name="kind" class="kind-select">
+        {% for k in kinds %}
+          <option value="{{ k.as_str() }}" {% if form.kind == k.as_str() || (form.kind.is_empty() && k.as_str() == "chat") %}selected{% endif %}>{{ k.as_str() }}</option>
+        {% endfor %}
+      </select>
+      <small class="muted">decision = single-shot structured choice (OpenRouter only, no effort/tier); cannot be assigned to chat agents.</small>
+    </label>
+  </div>
+
+  <div class="row">
     <label>Provider
       <select name="provider" class="provider-select">
         {% for p in providers %}
-          <option value="{{ p.value }}" {% if form.provider == p.value %}selected{% endif %}>{{ p.label }}</option>
+          <option value="{{ p.value }}" data-decision-ok="{% if p.value == "open_router" %}1{% else %}0{% endif %}" {% if form.provider == p.value %}selected{% endif %}>{{ p.label }}</option>
         {% endfor %}
       </select>
     </label>
@@ -101,16 +112,29 @@
   (function () {
     document.querySelectorAll('form.profile-form').forEach(function (form) {
       var select = form.querySelector('select[name="provider"]');
+      var kind = form.querySelector('select[name="kind"]');
       if (!select) { return; }
       function refresh() {
+        var decision = kind && kind.value === 'decision';
+        // Decision profiles are OpenRouter-only; hide the other providers
+        // and snap to OpenRouter. Server-side validation is the real gate.
+        Array.prototype.forEach.call(select.options, function (opt) {
+          var ok = !decision || opt.dataset.decisionOk === '1';
+          opt.hidden = !ok;
+          opt.disabled = !ok;
+        });
+        if (decision && select.selectedOptions[0] && select.selectedOptions[0].dataset.decisionOk !== '1') {
+          select.value = 'open_router';
+        }
         var val = select.value;
         form.querySelectorAll('fieldset[data-provider]').forEach(function (el) {
-          var match = el.dataset.provider === val;
+          var match = el.dataset.provider === val && !decision;
           el.hidden = !match;
           el.disabled = !match;
         });
       }
       select.addEventListener('change', refresh);
+      if (kind) { kind.addEventListener('change', refresh); }
       refresh();
     });
   })();

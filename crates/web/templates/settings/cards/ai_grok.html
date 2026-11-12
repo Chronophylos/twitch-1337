@@ -16,7 +16,7 @@
       <div class="row-control-cell">
         <select name="ai_grok_profile" data-key="ai.grok.profile" data-default="{{ defaults.ai.grok.profile }}" required>
           {% for p in current.ai.profiles %}
-          <option value="{{ p.name }}"{% if grok_profile == p.name %} selected{% endif %}>{{ p.name }}</option>
+          {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if grok_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
           {% endfor %}
         </select>
       </div>

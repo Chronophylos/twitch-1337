@@ -21,7 +21,7 @@
         <select name="ai_recap_profile" data-key="ai.recap.profile" data-default="{{ recap_default }}">
           <option value="">(off)</option>
           {% for p in current.ai.profiles %}
-          <option value="{{ p.name }}"{% if recap_profile == p.name %} selected{% endif %}>{{ p.name }}</option>
+          {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if recap_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
           {% endfor %}
         </select>
       </div>

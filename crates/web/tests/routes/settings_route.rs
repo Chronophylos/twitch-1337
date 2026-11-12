@@ -1713,3 +1713,193 @@ async fn validation_error_preserves_stored_ai_settings() {
         "validation rejection must not mutate stored settings",
     );
 }
+
+fn decision_profile(name: &str) -> twitch_1337_core::settings::AiProfile {
+    twitch_1337_core::settings::AiProfile {
+        name: name.into(),
+        key: Some("k".into()),
+        provider: twitch_1337_core::settings::AiProvider::OpenRouter,
+        model: "decider".into(),
+        timeout: 30,
+        kind: twitch_1337_core::settings::ProfileKind::Decision,
+        ..Default::default()
+    }
+}
+
+/// Adds a Decision profile named `dec` to the persisted profile list and
+/// optionally points `spoiler.profile` at it.
+async fn seed_decision_profile(state: &twitch_1337_web::WebState, point_spoiler: bool) {
+    use twitch_1337_core::settings::overrides::SettingsOverrides;
+    let mut profiles = state.settings.load().ai.profiles.clone();
+    profiles.push(decision_profile("dec"));
+    let mut o = SettingsOverrides::default();
+    o.ai.profiles = Some(profiles);
+    if point_spoiler {
+        o.spoiler.profile = Some("dec".into());
+        o.spoiler.default_game = Some("Hades 2".into());
+        o.spoiler.confidence_floor = Some(70);
+    }
+    state
+        .settings_store
+        .apply(
+            o,
+            twitch_1337_core::settings::Actor {
+                user_id: "t".into(),
+                user_login: "t".into(),
+            },
+        )
+        .await
+        .expect("seed decision profile");
+}
+
+async fn post_settings(
+    state: &twitch_1337_web::WebState,
+    extra: &[(&str, &str)],
+) -> axum::http::Response<Body> {
+    let (sid, csrf_cookie, bare_csrf) = insert_session_as(state, "123", "owner", Role::Owner);
+    let current = state.settings.load().as_ref().clone();
+    let body = save_form_body(&bare_csrf, &current, extra);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    build_router(state.clone()).oneshot(req).await.unwrap()
+}
+
+#[tokio::test]
+async fn spoiler_card_save_persists() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    seed_decision_profile(&state, false).await;
+    let res = post_settings(
+        &state,
+        &[
+            ("spoiler_profile", "dec"),
+            ("spoiler_default_game", "Elden Ring"),
+            ("spoiler_confidence_floor", "65"),
+            ("cooldown_spoiler", "45"),
+        ],
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let s = state.settings.load();
+    assert_eq!(s.spoiler.profile, "dec");
+    assert_eq!(s.spoiler.default_game, "Elden Ring");
+    assert_eq!(s.spoiler.confidence_floor, 65);
+    assert_eq!(s.cooldowns.spoiler, 45);
+}
+
+#[tokio::test]
+async fn empty_spoiler_profile_persists_as_off() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    seed_decision_profile(&state, true).await;
+    assert_eq!(state.settings.load().spoiler.profile, "dec");
+    let res = post_settings(
+        &state,
+        &[
+            ("spoiler_profile", ""),
+            ("spoiler_default_game", "Hades 2"),
+            ("spoiler_confidence_floor", "70"),
+        ],
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(state.settings.load().spoiler.profile, "");
+}
+
+/// The real page always posts the spoiler card, but a form that omits the
+/// fields (older tab, hand-rolled client) must leave persisted values alone.
+#[tokio::test]
+async fn save_without_spoiler_fields_keeps_persisted_spoiler_settings() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    seed_decision_profile(&state, true).await;
+    let res = post_settings(&state, &[("cooldown_ai", "99")]).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let s = state.settings.load();
+    assert_eq!(s.cooldowns.ai, 99);
+    assert_eq!(s.spoiler.profile, "dec");
+    assert_eq!(s.spoiler.default_game, "Hades 2");
+    assert_eq!(s.spoiler.confidence_floor, 70);
+}
+
+#[tokio::test]
+async fn posted_spoiler_fields_round_trip_unchanged() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    seed_decision_profile(&state, true).await;
+    let before = state.settings.load().spoiler.clone();
+    let res = post_settings(
+        &state,
+        &[
+            ("spoiler_profile", "dec"),
+            ("spoiler_default_game", "Hades 2"),
+            ("spoiler_confidence_floor", "70"),
+        ],
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(state.settings.load().spoiler, before);
+}
+
+#[tokio::test]
+async fn settings_page_spoiler_dropdown_lists_only_decision_profiles() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    seed_decision_profile(&state, false).await;
+    let (sid, csrf_cookie, _) = insert_session_as(&state, "123", "owner", Role::Owner);
+    let req = Request::builder()
+        .uri("/settings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let res = build_router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(html.contains("id=\"sec-spoiler\""), "spoiler card missing");
+    assert!(html.contains("name=\"cooldown_spoiler\""));
+    let inner = select_inner(&html, "spoiler_profile");
+    assert!(
+        inner.contains("value=\"\""),
+        "needs the off option: {inner}"
+    );
+    assert!(inner.contains("value=\"dec\""), "{inner}");
+    let chat_names: Vec<String> = state
+        .settings
+        .load()
+        .ai
+        .profiles
+        .iter()
+        .filter(|p| p.kind == twitch_1337_core::settings::ProfileKind::Chat)
+        .map(|p| p.name.clone())
+        .collect();
+    assert!(!chat_names.is_empty());
+    for n in &chat_names {
+        assert!(
+            !inner.contains(&format!("value=\"{n}\"")),
+            "chat profile {n} leaked into spoiler dropdown"
+        );
+    }
+    for agent in [
+        "ai_aurora_profile",
+        "ai_grok_profile",
+        "ai_dreamer_profile",
+        "ai_media_profile",
+        "ai_recap_profile",
+    ] {
+        let inner = select_inner(&html, agent);
+        assert!(
+            !inner.contains("value=\"dec\""),
+            "{agent} must not list a Decision profile: {inner}"
+        );
+    }
+}

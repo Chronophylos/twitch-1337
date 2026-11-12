@@ -16,7 +16,7 @@
       <div class="row-control-cell">
         <select name="ai_aurora_profile" data-key="ai.aurora.profile" data-default="{{ defaults.ai.aurora.profile }}" required>
           {% for p in current.ai.profiles %}
-          <option value="{{ p.name }}"{% if aurora_profile == p.name %} selected{% endif %}>{{ p.name }}</option>
+          {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if aurora_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
           {% endfor %}
         </select>
       </div>
