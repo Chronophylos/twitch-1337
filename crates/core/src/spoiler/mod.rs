@@ -3,3 +3,4 @@
 
 pub mod input;
 pub mod url;
+pub mod verdict;

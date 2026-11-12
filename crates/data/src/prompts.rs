@@ -24,3 +24,7 @@ pub const PRESET_FILES: &[(&str, &str)] = &[
         include_str!("../assets/prompts/grok/instructions.md"),
     ),
 ];
+
+/// Decision question for `!spoiler`: instruction plus one description per
+/// category key; `{{ game }}` is substituted at runtime.
+pub const SPOILER_QUESTION: &str = include_str!("../assets/prompts/spoiler/question.ron");
