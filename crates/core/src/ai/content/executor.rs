@@ -384,6 +384,7 @@ mod tests {
             timeout: 30,
             reasoning_effort: None,
             service_tier: None,
+            ..Default::default()
         }
     }
 

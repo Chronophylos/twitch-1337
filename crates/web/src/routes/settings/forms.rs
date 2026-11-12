@@ -9,7 +9,7 @@ use twitch_1337_core::settings::overrides::{
     AiGrokOverrides, AiHistoryOverrides, AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides,
     AiRecapOverrides, AiWebOverrides, AlertsOverrides, AviationstackOverrides, CmeAlertsOverrides,
     EmoteTrackerOverrides, PotatAttributionOverrides, QuakeAlertsOverrides, SolarAlertsOverrides,
-    SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
+    SpoilerOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
 };
 use twitch_1337_core::settings::{
     AiOverrides, CooldownsOverrides, FieldError, PingsOverrides, SettingsOverrides,
@@ -92,6 +92,8 @@ struct CooldownsForm {
     cooldown_feedback: u64,
     #[serde(default)]
     cooldown_doener: u64,
+    #[serde(default)]
+    cooldown_spoiler: Option<u64>,
 }
 
 impl CooldownsForm {
@@ -102,6 +104,7 @@ impl CooldownsForm {
             up: Some(self.cooldown_up),
             feedback: Some(self.cooldown_feedback),
             doener: Some(self.cooldown_doener),
+            spoiler: self.cooldown_spoiler,
         }
     }
 }
@@ -526,6 +529,28 @@ impl SuspendForm {
 }
 
 #[derive(Default, Deserialize)]
+struct SpoilerForm {
+    #[serde(default)]
+    spoiler_profile: Option<String>,
+    #[serde(default)]
+    spoiler_default_game: Option<String>,
+    #[serde(default)]
+    spoiler_confidence_floor: Option<u8>,
+}
+
+impl SpoilerForm {
+    /// Absent field = untouched; an empty `spoiler_profile` is an explicit
+    /// "off" and persists as `""`.
+    fn into_overrides(self) -> SpoilerOverrides {
+        SpoilerOverrides {
+            profile: self.spoiler_profile.map(|p| p.trim().to_owned()),
+            default_game: self.spoiler_default_game.map(|g| g.trim().to_owned()),
+            confidence_floor: self.spoiler_confidence_floor,
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
 struct EmoteTrackerPotatForm {
     #[serde(default)]
     emote_tracker_potat_card_visible: Option<String>,
@@ -637,6 +662,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             cooldown_up: form.cooldown_up,
             cooldown_feedback: form.cooldown_feedback,
             cooldown_doener: form.cooldown_doener,
+            cooldown_spoiler: form.cooldown_spoiler,
         }
         .into_overrides(),
         pings: PingsForm {
@@ -772,6 +798,12 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
         .into_overrides(),
         suspend: SuspendForm {
             suspend_default_duration_secs: form.suspend_default_duration_secs,
+        }
+        .into_overrides(),
+        spoiler: SpoilerForm {
+            spoiler_profile: form.spoiler_profile,
+            spoiler_default_game: form.spoiler_default_game,
+            spoiler_confidence_floor: form.spoiler_confidence_floor,
         }
         .into_overrides(),
         emote_tracker: EmoteTrackerPotatForm {

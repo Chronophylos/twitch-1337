@@ -1,0 +1,38 @@
+{# crates/web/templates/settings/cards/spoiler.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-spoiler" class="settings-card" data-section="spoiler">
+  <header class="settings-card-head">
+    <div>
+      <h2>Spoiler check</h2>
+      <p>Vibe-checks a linked page for spoilers via a decision profile. Empty profile turns <code>!spoiler</code> off.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    {% let spoiler_profile = current.spoiler.profile.as_str() %}
+    <div class="settings-row" data-section="spoiler">
+      {% call m::row_head("spoiler.profile", "Decision profile used for the check. Only decision-kind profiles are listed; empty turns it off.") %}{% endcall %}
+      <div class="row-control-cell">
+        <select name="spoiler_profile" data-key="spoiler.profile" data-default="{{ defaults.spoiler.profile }}">
+          <option value="">(off)</option>
+          {% for p in current.ai.profiles %}
+          {% if p.kind.as_str() == "decision" %}<option value="{{ p.name }}"{% if spoiler_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
+          {% endfor %}
+        </select>
+      </div>
+      <div class="row-right">
+        {% call m::row_reset("spoiler.profile") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(off)</span></span>
+      </div>
+    </div>
+    {% call m::text_row("spoiler", "spoiler_default_game", "default_game",
+       "Game assumed when <code>!spoiler</code> is called without one. Letters, digits, spaces, : - ' (max 40).",
+       current.spoiler.default_game, defaults.spoiler.default_game, "GTA 6") %}{% endcall %}
+    {% call m::num_row_bounded("spoiler", "spoiler_confidence_floor", "confidence_floor",
+       "Minimum probability (percent) the model must give its chosen category before the verdict is shown; below it the bot answers unsure.",
+       current.spoiler.confidence_floor, defaults.spoiler.confidence_floor, "%", 0, 100) %}{% endcall %}
+  </div>
+</section>

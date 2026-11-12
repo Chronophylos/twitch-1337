@@ -37,6 +37,7 @@ fn profile(name: &str) -> AiProfile {
         timeout: 30,
         reasoning_effort: None,
         service_tier: None,
+        ..Default::default()
     }
 }
 
@@ -596,4 +597,192 @@ async fn edit_rename_with_rejected_field_reopens_under_the_original_name_then_su
         "rename must actually land"
     );
     assert_eq!(settings.ai.aurora.profile, "renamed");
+}
+
+fn decision(name: &str) -> AiProfile {
+    AiProfile {
+        kind: twitch_1337_core::settings::ProfileKind::Decision,
+        ..profile(name)
+    }
+}
+
+async fn post_form(
+    app: axum::Router,
+    sid: &str,
+    csrf_cookie: &str,
+    uri: &str,
+    body: String,
+) -> axum::http::Response<Body> {
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::COOKIE, cookie_header(sid, csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    app.oneshot(req).await.unwrap()
+}
+
+async fn point_spoiler_at(state: &twitch_1337_web::WebState, name: &str) {
+    let mut o = SettingsOverrides::default();
+    o.spoiler.profile = Some(name.to_owned());
+    state
+        .settings_store
+        .apply(
+            o,
+            Actor {
+                user_id: "test".into(),
+                user_login: "test".into(),
+            },
+        )
+        .await
+        .expect("point spoiler");
+}
+
+#[tokio::test]
+async fn add_decision_profile_on_open_router_persists_kind() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=dec&kind=decision&provider=open_router&model=m&timeout=30&key=k",
+        urlencoding::encode(&csrf)
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/add",
+        body,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let s = state.settings.load();
+    let p = s.ai.profiles.iter().find(|p| p.name == "dec").unwrap();
+    assert_eq!(p.kind, twitch_1337_core::settings::ProfileKind::Decision);
+}
+
+#[tokio::test]
+async fn add_decision_profile_on_other_provider_is_rejected() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=dec&kind=decision&provider=open_ai&model=m&timeout=30&key=k",
+        urlencoding::encode(&csrf)
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/add",
+        body,
+    )
+    .await;
+    assert!(res.status().is_client_error() || res.status() == StatusCode::OK);
+    assert_ne!(res.status(), StatusCode::SEE_OTHER);
+    let html = body_string(res).await;
+    assert!(html.contains("Validation failed"), "{html}");
+    assert!(
+        html.contains("open_router") || html.contains("OpenRouter"),
+        "{html}"
+    );
+    assert_eq!(state.settings.load().ai.profiles.len(), 1);
+}
+
+#[tokio::test]
+async fn editing_a_decision_profile_keeps_its_kind() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a"), decision("dec")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=dec&kind=decision&provider=open_router&model=new-model&timeout=30&key=k",
+        urlencoding::encode(&csrf)
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/dec/edit",
+        body,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let s = state.settings.load();
+    let p = s.ai.profiles.iter().find(|p| p.name == "dec").unwrap();
+    assert_eq!(p.kind, twitch_1337_core::settings::ProfileKind::Decision);
+    assert_eq!(p.model, "new-model");
+}
+
+#[tokio::test]
+async fn edit_form_preselects_the_profile_kind() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a"), decision("dec")], "a").await;
+    let (sid, cc, _) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let req = Request::builder()
+        .uri("/ai-profiles?edit=dec")
+        .header(header::COOKIE, cookie_header(&sid, &cc))
+        .body(Body::empty())
+        .unwrap();
+    let res = build_router(state.clone()).oneshot(req).await.unwrap();
+    let html = body_string(res).await;
+    assert!(html.contains("name=\"kind\""), "{html}");
+    assert!(
+        html.contains("value=\"decision\" selected"),
+        "decision must be preselected"
+    );
+}
+
+#[tokio::test]
+async fn renaming_the_spoiler_profile_rewrites_spoiler_pointer() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a"), decision("dec")], "a").await;
+    point_spoiler_at(&state, "dec").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=dec2&kind=decision&provider=open_router&model=m&timeout=30&key=k",
+        urlencoding::encode(&csrf)
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/dec/edit",
+        body,
+    )
+    .await;
+    let status = res.status();
+    assert_eq!(status, StatusCode::SEE_OTHER, "{}", body_string(res).await);
+    assert_eq!(state.settings.load().spoiler.profile, "dec2");
+}
+
+#[tokio::test]
+async fn delete_refuses_the_spoiler_profile() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a"), decision("dec")], "a").await;
+    point_spoiler_at(&state, "dec").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!("_csrf={}", urlencoding::encode(&csrf));
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/dec/delete",
+        body,
+    )
+    .await;
+    assert_ne!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(state.settings.load().ai.profiles.len(), 2);
 }

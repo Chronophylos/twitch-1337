@@ -10,3 +10,5 @@ mod golden;
 mod grok;
 mod helix_mouth;
 mod memory_v2;
+mod spoiler;
+mod spoiler_eval;

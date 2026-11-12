@@ -85,6 +85,9 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.cooldowns.doener {
         into.cooldowns.doener = Some(v);
     }
+    if let Some(v) = patch.cooldowns.spoiler {
+        into.cooldowns.spoiler = Some(v);
+    }
     if let Some(v) = patch.pings.cooldown {
         into.pings.cooldown = Some(v);
     }
@@ -320,6 +323,16 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.suspend.default_duration_secs {
         into.suspend.default_duration_secs = Some(v);
     }
+    // Spoiler
+    if let Some(v) = patch.spoiler.profile.as_ref() {
+        into.spoiler.profile = Some(v.clone());
+    }
+    if let Some(v) = patch.spoiler.default_game.as_ref() {
+        into.spoiler.default_game = Some(v.clone());
+    }
+    if let Some(v) = patch.spoiler.confidence_floor {
+        into.spoiler.confidence_floor = Some(v);
+    }
     // Emote tracker · Potat attribution
     if let Some(v) = patch.emote_tracker.potat_attribution.enabled {
         into.emote_tracker.potat_attribution.enabled = Some(v);
@@ -433,6 +446,29 @@ mod tests {
             into.twitch.hidden_admins.as_deref(),
             Some(&vec!["new1".to_string(), "new2".to_string()][..])
         );
+    }
+
+    #[test]
+    fn merge_spoiler() {
+        use crate::settings::overrides::SpoilerOverrides;
+        let mut into = SettingsOverrides::default();
+        let patch = SettingsOverrides {
+            spoiler: SpoilerOverrides {
+                profile: Some("dec".into()),
+                default_game: Some("Hades II".into()),
+                confidence_floor: Some(70),
+            },
+            cooldowns: crate::settings::overrides::CooldownsOverrides {
+                spoiler: Some(45),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        merge_into(&mut into, &patch);
+        assert_eq!(into.spoiler.profile.as_deref(), Some("dec"));
+        assert_eq!(into.spoiler.default_game.as_deref(), Some("Hades II"));
+        assert_eq!(into.spoiler.confidence_floor, Some(70));
+        assert_eq!(into.cooldowns.spoiler, Some(45));
     }
 
     #[test]

@@ -27,6 +27,8 @@ pub struct SettingsOverrides {
     #[serde(default)]
     pub suspend: SuspendOverrides,
     #[serde(default)]
+    pub spoiler: SpoilerOverrides,
+    #[serde(default)]
     pub emote_tracker: EmoteTrackerOverrides,
     #[serde(default)]
     pub alerts: AlertsOverrides,
@@ -50,6 +52,7 @@ impl Default for SettingsOverrides {
             twitch: TwitchOverrides::default(),
             aviationstack: AviationstackOverrides::default(),
             suspend: SuspendOverrides::default(),
+            spoiler: SpoilerOverrides::default(),
             emote_tracker: EmoteTrackerOverrides::default(),
             alerts: AlertsOverrides::default(),
             web: WebRuntimeOverrides::default(),
@@ -70,6 +73,8 @@ pub struct CooldownsOverrides {
     pub feedback: Option<u64>,
     #[serde(default)]
     pub doener: Option<u64>,
+    #[serde(default)]
+    pub spoiler: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -376,6 +381,16 @@ pub struct AviationstackOverrides {
 pub struct SuspendOverrides {
     #[serde(default)]
     pub default_duration_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpoilerOverrides {
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub default_game: Option<String>,
+    #[serde(default)]
+    pub confidence_floor: Option<u8>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

@@ -22,6 +22,7 @@ fn profile_with_timeout(name: &str, model: &str, timeout: u64) -> AiProfile {
         timeout,
         reasoning_effort: None,
         service_tier: None,
+        ..Default::default()
     }
 }
 

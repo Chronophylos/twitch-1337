@@ -1,0 +1,10 @@
+(
+    instructions: "Classify how much this content spoils the video game titled \"{{ game }}\" for someone who has not played it.",
+    criteria: {
+        "unrelated": "Readable content that is clearly about something other than {{ game }}. A page you cannot read properly is not unrelated.",
+        "marketing": "Only official promotional material: trailers, announcements, official screenshots. Nothing beyond what the publisher has shown.",
+        "gameplay": "Reveals mechanics, map, side activities or other details beyond official material, but nothing about the story.",
+        "story": "Reveals plot events, mission content, character fates, twists, leaked cutscenes or the ending.",
+        "insufficient": "No real content to judge: a cookie or consent banner, login wall, \"enable JavaScript\" notice, bot or captcha check (e.g. \"Just a moment\"), or an empty or near-empty page.",
+    },
+)

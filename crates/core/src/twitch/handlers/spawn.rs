@@ -99,6 +99,10 @@ where
             services.doener.clone(),
             services.settings.clone(),
         )),
+        Arc::new(commands::spoiler::SpoilerCommand::new(
+            services.llm.clone(),
+            services.settings.clone(),
+        )?),
     ];
 
     if let Some(tx) = services

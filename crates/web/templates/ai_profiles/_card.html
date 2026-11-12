@@ -5,6 +5,7 @@
   </header>
   <div class="card-badges">
     <span class="chip trigger">{{ card.provider_label }}</span>
+    {% if card.kind == "decision" %}<span class="chip today">decision</span>{% endif %}
     <span class="chip window">{{ card.model }}</span>
   </div>
   <footer class="card-footer">

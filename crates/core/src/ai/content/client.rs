@@ -1,5 +1,5 @@
 use std::io;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -10,6 +10,7 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::header;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
+use url::Host;
 
 use crate::APP_USER_AGENT;
 use crate::ai::content::detect::{Bucket, detect};
@@ -32,19 +33,20 @@ struct TrustedHost {
 
 impl TrustedHost {
     fn from_url(url: &reqwest::Url) -> Self {
-        let Some(host) = url.host_str() else {
-            return Self::default();
-        };
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            Self {
-                name: None,
-                ip: Some(ip),
-            }
-        } else {
-            Self {
-                name: Some(host.to_ascii_lowercase()),
+        match url.host() {
+            None => Self::default(),
+            Some(Host::Domain(name)) => Self {
+                name: Some(name.to_ascii_lowercase()),
                 ip: None,
-            }
+            },
+            Some(Host::Ipv4(v4)) => Self {
+                name: None,
+                ip: Some(v4.into()),
+            },
+            Some(Host::Ipv6(v6)) => Self {
+                name: None,
+                ip: Some(v6.into()),
+            },
         }
     }
 
@@ -107,16 +109,12 @@ fn redirect_target_trusted(url: &reqwest::Url, trusted: &TrustedHost) -> bool {
     if !is_blocked_host_literal(url) {
         return true;
     }
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    if trusted.matches_name(host) {
-        return true;
+    match url.host() {
+        None => false,
+        Some(Host::Domain(name)) => trusted.matches_name(name),
+        Some(Host::Ipv4(v4)) => trusted.matches_ip(v4.into()),
+        Some(Host::Ipv6(v6)) => trusted.matches_ip(v6.into()),
     }
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return trusted.matches_ip(ip);
-    }
-    false
 }
 
 fn build_ssrf_safe_client(trusted: TrustedHost) -> Result<reqwest::Client> {
@@ -136,6 +134,85 @@ fn build_ssrf_safe_client(trusted: TrustedHost) -> Result<reqwest::Client> {
 #[doc(hidden)]
 pub fn ssrf_bypass_for_tests(enabled: bool) {
     SSRF_BYPASS.store(enabled, Ordering::Relaxed);
+}
+
+/// HTTP client for one-off public fetches (spoiler check). Same SSRF guard
+/// as `read_url`, no trusted host.
+pub fn fetch_client() -> Result<reqwest::Client> {
+    build_ssrf_safe_client(TrustedHost::default())
+}
+
+/// Body bytes of a capped GET, untouched, plus the post-redirect URL.
+#[derive(Debug, Clone)]
+pub struct RawFetch {
+    pub final_url: reqwest::Url,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
+pub async fn fetch_raw(
+    http: &reqwest::Client,
+    url: reqwest::Url,
+    max_bytes: u64,
+    timeout: Duration,
+) -> Result<RawFetch> {
+    match url.scheme() {
+        "http" | "https" => {}
+        other => bail!("Unsupported URL scheme: {other}"),
+    }
+
+    if ssrf_active() && is_blocked_host_literal(&url) {
+        bail!(BLOCKED_TARGET)
+    }
+
+    let response = http
+        .get(url)
+        .timeout(timeout)
+        .send()
+        .await
+        .wrap_err("Failed to fetch URL")?
+        .error_for_status()
+        .wrap_err("URL returned error status")?;
+
+    let final_url = response.url().clone();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = read_capped(response, max_bytes).await?;
+
+    Ok(RawFetch {
+        final_url,
+        content_type,
+        bytes,
+    })
+}
+
+/// Stream a body, bailing as soon as it would exceed `max_bytes`.
+async fn read_capped(response: reqwest::Response, max_bytes: u64) -> Result<Vec<u8>> {
+    if let Some(length) = response.content_length()
+        && length > max_bytes
+    {
+        bail!("Response too large")
+    }
+
+    let initial_capacity = response
+        .content_length()
+        .map(|len| len.min(max_bytes) as usize)
+        .unwrap_or(0);
+
+    let mut stream = response.bytes_stream();
+    let mut buf: Vec<u8> = Vec::with_capacity(initial_capacity);
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.wrap_err("Failed to read URL response body")?;
+        if (buf.len() as u64).saturating_add(chunk.len() as u64) > max_bytes {
+            bail!("Response too large")
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 const SEARX_RESPONSE_LIMIT: usize = 10;
@@ -262,14 +339,6 @@ impl SearchClient {
             .error_for_status()
             .wrap_err("URL returned error status")?;
 
-        let max_cap = overall_cap(caps);
-
-        if let Some(length) = response.content_length()
-            && length > max_cap
-        {
-            bail!("Response too large")
-        }
-
         let header_ct = response
             .headers()
             .get(header::CONTENT_TYPE)
@@ -277,20 +346,7 @@ impl SearchClient {
             .unwrap_or("")
             .to_string();
 
-        let initial_capacity = response
-            .content_length()
-            .map(|len| len.min(max_cap) as usize)
-            .unwrap_or(0);
-
-        let mut stream = response.bytes_stream();
-        let mut buf: Vec<u8> = Vec::with_capacity(initial_capacity);
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.wrap_err("Failed to read URL response body")?;
-            if (buf.len() as u64).saturating_add(chunk.len() as u64) > max_cap {
-                bail!("Response too large")
-            }
-            buf.extend_from_slice(&chunk);
-        }
+        let buf = read_capped(response, overall_cap(caps)).await?;
 
         let head = &buf[..buf.len().min(16)];
         let Some(bucket) = detect(&header_ct, head) else {
@@ -368,42 +424,67 @@ fn collapse_ws(s: &str) -> String {
 fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
             v4.is_loopback()
                 || v4.is_private()
                 || v4.is_link_local()
                 || v4.is_broadcast()
                 || v4.is_unspecified()
                 || v4.is_documentation()
+                || v4.is_multicast()
+                || is_cgnat(v4)
+                // 0.0.0.0/8 "this network"
+                || a == 0
+                // 198.18.0.0/15 benchmarking
+                || (a == 198 && (b & 0xFE) == 18)
+                // 240.0.0.0/4 reserved (incl. broadcast)
+                || a >= 240
         }
         IpAddr::V6(v6) => {
+            let seg = v6.segments();
+            let embedded = |hi: u16, lo: u16| {
+                let [h1, h2] = hi.to_be_bytes();
+                let [l1, l2] = lo.to_be_bytes();
+                is_blocked_ip(IpAddr::V4(Ipv4Addr::new(h1, h2, l1, l2)))
+            };
             v6.is_loopback()
                 || v6.is_unique_local()
                 || v6.is_unicast_link_local()
                 || v6.is_unspecified()
+                || v6.is_multicast()
                 || v6
                     .to_ipv4_mapped()
                     .is_some_and(|v4| is_blocked_ip(IpAddr::V4(v4)))
+                // NAT64 well-known prefix 64:ff9b::/96, v4 in the low 32 bits
+                || (seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] && embedded(seg[6], seg[7]))
+                // 6to4 2002::/16, v4 in bits 16..48
+                || (seg[0] == 0x2002 && embedded(seg[1], seg[2]))
         }
     }
 }
 
-fn is_blocked_host_literal(url: &reqwest::Url) -> bool {
-    let Some(host) = url.host_str() else {
-        return true;
-    };
-
-    if host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost") {
-        return true;
-    }
-
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return is_blocked_ip(ip);
-    }
-
-    false
+/// 100.64.0.0/10: carrier-grade NAT, also Tailscale's tailnet range.
+fn is_cgnat(v4: Ipv4Addr) -> bool {
+    let [a, b, ..] = v4.octets();
+    a == 100 && (b & 0xC0) == 64
 }
 
-fn extract_readable_text(html: &str) -> String {
+/// Matches on the parsed `Host`, not `host_str()`: the latter brackets IPv6
+/// (`"[::1]"`), which never parses as an `IpAddr`, and hyper skips the custom
+/// resolver for IP literals, so this is the only guard they get.
+fn is_blocked_host_literal(url: &reqwest::Url) -> bool {
+    match url.host() {
+        None => true,
+        Some(Host::Ipv4(v4)) => is_blocked_ip(v4.into()),
+        Some(Host::Ipv6(v6)) => is_blocked_ip(v6.into()),
+        Some(Host::Domain(host)) => {
+            let host = host.to_ascii_lowercase();
+            host == "localhost" || host.ends_with(".localhost")
+        }
+    }
+}
+
+pub(crate) fn extract_readable_text(html: &str) -> String {
     let doc = Html::parse_document(html);
     let article_sel = Selector::parse("article, main").expect("valid selector");
     let para_sel = Selector::parse("p, h1, h2, h3, li, blockquote").expect("valid selector");
@@ -427,7 +508,22 @@ fn extract_readable_text(html: &str) -> String {
     }
 
     if chunks.is_empty() {
-        return collapse_ws(&doc.root_element().text().collect::<Vec<_>>().join(" "));
+        // Skip script/style/noscript so a JS shell reads as empty instead of
+        // handing minified code (or "enable JavaScript") on as page text.
+        let text: Vec<&str> = doc
+            .root_element()
+            .descendants()
+            .filter_map(|node| {
+                let text = node.value().as_text()?;
+                let hidden = node.ancestors().any(|a| {
+                    a.value()
+                        .as_element()
+                        .is_some_and(|e| matches!(e.name(), "script" | "style" | "noscript"))
+                });
+                (!hidden).then_some(&**text)
+            })
+            .collect();
+        return collapse_ws(&text.join(" "));
     }
 
     chunks.join("\n")
@@ -443,6 +539,18 @@ mod tests {
 
     use super::*;
     use crate::ai::content::detect::Bucket;
+
+    #[test]
+    fn readable_text_fallback_skips_script_style_noscript() {
+        let html = "<html><head><script>var x = 1;</script><style>p{color:red}</style></head>\
+<body><div>hello world</div><noscript>Please enable JavaScript</noscript>\
+<script>window.__STATE__={}</script></body></html>";
+        assert_eq!(extract_readable_text(html), "hello world");
+
+        let shell = "<html><head><script>boot()</script></head><body><div id=\"app\"></div>\
+<script src=\"a.js\"></script></body></html>";
+        assert_eq!(extract_readable_text(shell), "");
+    }
 
     #[test]
     fn trusted_host_from_url_extracts_name_or_ip() {
@@ -519,6 +627,170 @@ mod tests {
         assert!(is_html_content_type("application/xhtml+xml"));
         assert!(is_html_content_type("application/xml"));
         assert!(!is_html_content_type("application/json"));
+    }
+
+    fn url(s: &str) -> reqwest::Url {
+        reqwest::Url::parse(s).expect("url")
+    }
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().expect("ip")
+    }
+
+    #[test]
+    fn blocks_ip_literal_hosts_incl_bracketed_ipv6() {
+        for blocked in [
+            "http://[::1]/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://[fd00::1]/",
+            "http://[::ffff:100.64.0.1]/",
+            "http://0.0.0.0/",
+            "http://[::]:8080/",
+            "http://localhost/",
+        ] {
+            assert!(is_blocked_host_literal(&url(blocked)), "{blocked}");
+        }
+        for allowed in ["http://[2606:4700::1111]/", "https://example.com/"] {
+            assert!(!is_blocked_host_literal(&url(allowed)), "{allowed}");
+        }
+    }
+
+    #[test]
+    fn redirect_rejects_ipv6_loopback_target() {
+        let trusted = TrustedHost::default();
+        assert!(!redirect_target_trusted(&url("http://[::1]/"), &trusted));
+        assert!(!redirect_target_trusted(
+            &url("http://[::ffff:100.64.0.1]/"),
+            &trusted
+        ));
+        assert!(redirect_target_trusted(
+            &url("http://[2606:4700::1111]/"),
+            &trusted
+        ));
+    }
+
+    #[test]
+    fn trusted_host_from_bracketed_ipv6_url() {
+        let trusted = TrustedHost::from_url(&url("http://[fd00::5]:8080/search"));
+        assert!(trusted.name.is_none());
+        assert!(trusted.matches_ip(ip("fd00::5")));
+        assert!(redirect_target_trusted(
+            &url("http://[fd00::5]:8080/results"),
+            &trusted
+        ));
+    }
+
+    #[test]
+    fn blocks_extra_special_v4_ranges() {
+        for (blocked, outside) in [
+            ("0.1.2.3", "1.0.0.1"),
+            ("224.0.0.1", "223.255.255.255"),
+            ("239.255.255.255", "223.255.255.254"),
+            ("198.18.0.1", "198.17.255.255"),
+            ("198.19.255.255", "198.20.0.0"),
+            ("240.0.0.1", "8.8.8.8"),
+            ("255.255.255.255", "9.9.9.9"),
+        ] {
+            assert!(is_blocked_ip(ip(blocked)), "{blocked}");
+            assert!(!is_blocked_ip(ip(outside)), "{outside}");
+        }
+    }
+
+    #[test]
+    fn blocks_extra_special_v6_ranges() {
+        assert!(is_blocked_ip(ip("ff02::1")));
+        assert!(!is_blocked_ip(ip("fe00::1")));
+        // NAT64 well-known prefix with embedded v4.
+        assert!(is_blocked_ip(ip("64:ff9b::7f00:1")));
+        assert!(is_blocked_ip(ip("64:ff9b::a00:1")));
+        assert!(!is_blocked_ip(ip("64:ff9b::808:808")));
+        assert!(!is_blocked_ip(ip("64:ff9a::7f00:1")));
+        // 6to4 with embedded v4 in bits 16..48.
+        assert!(is_blocked_ip(ip("2002:7f00:1::1")));
+        assert!(is_blocked_ip(ip("2002:6440:1::1")));
+        assert!(!is_blocked_ip(ip("2002:808:808::1")));
+        assert!(!is_blocked_ip(ip("2003:7f00:1::1")));
+    }
+
+    #[test]
+    fn blocks_cgnat_range() {
+        assert!(is_blocked_ip("100.64.0.1".parse().expect("ip")));
+        assert!(is_blocked_ip("100.127.255.254".parse().expect("ip")));
+        assert!(!is_blocked_ip("100.128.0.1".parse().expect("ip")));
+        assert!(!is_blocked_ip("100.63.255.255".parse().expect("ip")));
+        assert!(is_blocked_ip("::ffff:100.64.0.1".parse().expect("ip")));
+    }
+
+    #[tokio::test]
+    async fn fetch_raw_returns_bytes_and_final_url_after_redirect() {
+        crate::install_crypto_provider();
+        ssrf_bypass_for_tests(true);
+        let server = MockServer::start().await;
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/from"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/to"))
+            .mount(&server)
+            .await;
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/to"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/zip")
+                    .set_body_bytes(vec![1u8, 2, 3]),
+            )
+            .mount(&server)
+            .await;
+
+        let http = fetch_client().expect("client");
+        let url = reqwest::Url::parse(&format!("{}/from", server.uri())).expect("url");
+        let raw = fetch_raw(&http, url, 1024, Duration::from_secs(2))
+            .await
+            .expect("fetch");
+        assert_eq!(raw.final_url.path(), "/to");
+        assert_eq!(raw.content_type, "application/zip");
+        assert_eq!(raw.bytes, vec![1u8, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn fetch_raw_rejects_oversize_and_error_status() {
+        crate::install_crypto_provider();
+        ssrf_bypass_for_tests(true);
+        let server = MockServer::start().await;
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/big"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 64]))
+            .mount(&server)
+            .await;
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/gone"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let http = fetch_client().expect("client");
+        let big = reqwest::Url::parse(&format!("{}/big", server.uri())).expect("url");
+        let err = fetch_raw(&http, big, 16, Duration::from_secs(2))
+            .await
+            .expect_err("too large");
+        assert!(err.to_string().contains("too large"), "{err}");
+        let gone = reqwest::Url::parse(&format!("{}/gone", server.uri())).expect("url");
+        assert!(
+            fetch_raw(&http, gone, 16, Duration::from_secs(2))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_raw_rejects_non_http_scheme() {
+        crate::install_crypto_provider();
+        let http = fetch_client().expect("client");
+        let url = reqwest::Url::parse("ftp://example.com/x").expect("url");
+        assert!(
+            fetch_raw(&http, url, 16, Duration::from_secs(2))
+                .await
+                .is_err()
+        );
     }
 
     #[test]

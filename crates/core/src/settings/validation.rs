@@ -3,7 +3,8 @@
 use std::collections::BTreeSet;
 
 use super::provider::Efforts;
-use super::{AiSettings, FieldError, Settings};
+use super::spoiler::is_valid_game_name;
+use super::{AiProvider, AiSettings, FieldError, ProfileKind, Settings};
 
 /// Bootstrap-side context required for cross-field validation. `channel`
 /// is the IRC channel from config.toml, used to enforce that
@@ -66,8 +67,16 @@ impl Settings {
             3600,
             &mut errs,
         );
+        bound(
+            "cooldowns.spoiler",
+            self.cooldowns.spoiler,
+            1,
+            3600,
+            &mut errs,
+        );
         bound("pings.cooldown", self.pings.cooldown, 1, 86_400, &mut errs);
         validate_ai(&self.ai, validate_agent_profile_targets, &mut errs);
+        validate_spoiler(self, validate_agent_profile_targets, &mut errs);
         if self.twitch.expected_latency > 1000 {
             errs.push(FieldError {
                 field: "twitch.expected_latency".into(),
@@ -381,6 +390,19 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
             "at least one profile is required".into(),
         );
     }
+    // Agents drive an `LlmClient`; a Decision profile has none (ADR-0010).
+    let require_chat = |errs: &mut Vec<FieldError>, field: &str, name: &str| {
+        if ai
+            .by_name(name)
+            .is_some_and(|p| p.kind == ProfileKind::Decision)
+        {
+            err(
+                errs,
+                field,
+                format!("{name:?} is a decision profile; pick a chat profile"),
+            );
+        }
+    };
     for (field, name) in [
         ("ai.aurora.profile", ai.aurora.profile.as_str()),
         ("ai.grok.profile", ai.grok.profile.as_str()),
@@ -391,6 +413,8 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
             err(errs, field, "must not be empty".into());
         } else if validate_agent_profile_targets && ai.by_name(name).is_none() {
             err(errs, field, format!("no profile named {name:?}"));
+        } else if validate_agent_profile_targets {
+            require_chat(errs, field, name);
         }
     }
     if let Some(name) = ai.recap.profile.as_deref() {
@@ -406,6 +430,8 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
                 "ai.recap.profile",
                 format!("no profile named {name:?}"),
             );
+        } else if validate_agent_profile_targets {
+            require_chat(errs, "ai.recap.profile", name);
         }
     }
 
@@ -422,6 +448,29 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
                 &at("name"),
                 format!("duplicate profile name {:?}", p.name),
             );
+        }
+        if p.kind == ProfileKind::Decision {
+            if p.provider != AiProvider::OpenRouter {
+                err(
+                    errs,
+                    &at("provider"),
+                    "decision profiles require the open_router provider".into(),
+                );
+            }
+            if p.reasoning_effort.is_some() {
+                err(
+                    errs,
+                    &at("reasoning_effort"),
+                    "must be unset for a decision profile".into(),
+                );
+            }
+            if p.service_tier.is_some() {
+                err(
+                    errs,
+                    &at("service_tier"),
+                    "must be unset for a decision profile".into(),
+                );
+            }
         }
         if p.timeout == 0 || p.timeout > 600 {
             err(errs, &at("timeout"), "must be between 1 and 600".into());
@@ -592,6 +641,40 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
     }
 }
 
+fn validate_spoiler(s: &Settings, validate_profile_target: bool, errs: &mut Vec<FieldError>) {
+    let sp = &s.spoiler;
+    if sp.confidence_floor > 100 {
+        errs.push(FieldError {
+            field: "spoiler.confidence_floor".into(),
+            message: format!("must be 0..=100 (got {})", sp.confidence_floor),
+        });
+    }
+    if !is_valid_game_name(&sp.default_game) {
+        errs.push(FieldError {
+            field: "spoiler.default_game".into(),
+            message: "must be 1-40 chars: letters, digits, spaces, : - '".into(),
+        });
+    }
+    // Empty means the command is off. Like the agent pointers, the target
+    // check only gates saves; boot load stays lenient.
+    if validate_profile_target && !sp.profile.is_empty() {
+        match s.ai.by_name(&sp.profile) {
+            None => errs.push(FieldError {
+                field: "spoiler.profile".into(),
+                message: format!("no profile named {:?}", sp.profile),
+            }),
+            Some(p) if p.kind != ProfileKind::Decision => errs.push(FieldError {
+                field: "spoiler.profile".into(),
+                message: format!(
+                    "{:?} is a chat profile; pick a decision profile",
+                    sp.profile
+                ),
+            }),
+            Some(_) => {}
+        }
+    }
+}
+
 fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldError>) {
     bound(
         "alerts.quake.poll_secs",
@@ -629,7 +712,7 @@ fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{AiProfile, AiProvider};
+    use crate::settings::{AiProfile, AiProvider, ProfileKind};
 
     fn ctx() -> ValidationContext {
         ValidationContext {
@@ -647,7 +730,100 @@ mod tests {
             timeout: 30,
             reasoning_effort: None,
             service_tier: None,
+            ..Default::default()
         }
+    }
+
+    fn decision_profile() -> AiProfile {
+        AiProfile {
+            name: "d".into(),
+            kind: ProfileKind::Decision,
+            ..profile(AiProvider::OpenRouter)
+        }
+    }
+
+    /// Settings whose five agent pointers all name the profile "p", except the
+    /// one picked by `idx`, which names the Decision profile "d". Returns the
+    /// settings and the offending field path.
+    fn agent_on_decision(idx: usize) -> (Settings, &'static str) {
+        let mut s = with_profiles(
+            vec![profile(AiProvider::OpenRouter), decision_profile()],
+            "p",
+        );
+        s.ai.recap.profile = Some("p".into());
+        let field = match idx {
+            0 => {
+                s.ai.aurora.profile = "d".into();
+                "ai.aurora.profile"
+            }
+            1 => {
+                s.ai.grok.profile = "d".into();
+                "ai.grok.profile"
+            }
+            2 => {
+                s.ai.dreamer.profile = "d".into();
+                "ai.dreamer.profile"
+            }
+            3 => {
+                s.ai.media.profile = "d".into();
+                "ai.media.profile"
+            }
+            _ => {
+                s.ai.recap.profile = Some("d".into());
+                "ai.recap.profile"
+            }
+        };
+        (s, field)
+    }
+
+    #[test]
+    fn agent_on_decision_profile_is_rejected() {
+        for idx in 0..5 {
+            let (s, field) = agent_on_decision(idx);
+            let errs = s.validate(&ctx()).expect_err("must fail");
+            assert!(
+                errs.iter()
+                    .any(|e| e.field == field && e.message.contains("chat profile")),
+                "{field}: {errs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn load_tolerates_agent_on_decision_profile() {
+        for idx in 0..5 {
+            let (s, field) = agent_on_decision(idx);
+            s.validate_for_load(&ctx())
+                .unwrap_or_else(|e| panic!("{field}: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn decision_profile_rejects_non_openrouter_provider() {
+        let mut d = decision_profile();
+        d.provider = AiProvider::OpenAi;
+        let errs = with_profiles(vec![profile(AiProvider::OpenRouter), d], "p")
+            .validate(&ctx())
+            .expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.profiles[1].provider"));
+    }
+
+    #[test]
+    fn decision_profile_ignores_effort_and_tier() {
+        let mut d = decision_profile();
+        d.reasoning_effort = Some("high".into());
+        d.service_tier = Some("flex".into());
+        let errs = with_profiles(vec![profile(AiProvider::OpenRouter), d], "p")
+            .validate(&ctx())
+            .expect_err("must fail");
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.profiles[1].reasoning_effort")
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.field == "ai.profiles[1].service_tier")
+        );
     }
 
     fn with_profiles(list: Vec<AiProfile>, active: &str) -> Settings {
@@ -1047,6 +1223,87 @@ mod tests {
             errs.iter()
                 .any(|e| e.field == "suspend.default_duration_secs")
         );
+    }
+
+    fn spoiler_errs(s: &Settings) -> Vec<FieldError> {
+        s.validate(&ctx()).err().unwrap_or_default()
+    }
+
+    #[test]
+    fn validate_rejects_spoiler_confidence_floor_over_100() {
+        let mut s = Settings::compiled_defaults();
+        s.spoiler.confidence_floor = 101;
+        assert!(
+            spoiler_errs(&s)
+                .iter()
+                .any(|e| e.field == "spoiler.confidence_floor")
+        );
+        s.spoiler.confidence_floor = 100;
+        assert!(spoiler_errs(&s).is_empty());
+        s.spoiler.confidence_floor = 0;
+        assert!(spoiler_errs(&s).is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_bad_spoiler_default_game() {
+        let mut s = Settings::compiled_defaults();
+        s.spoiler.default_game = "x.".into();
+        assert!(
+            spoiler_errs(&s)
+                .iter()
+                .any(|e| e.field == "spoiler.default_game")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_spoiler_cooldown_zero() {
+        let mut s = Settings::compiled_defaults();
+        s.cooldowns.spoiler = 0;
+        assert!(
+            spoiler_errs(&s)
+                .iter()
+                .any(|e| e.field == "cooldowns.spoiler")
+        );
+    }
+
+    #[test]
+    fn spoiler_profile_must_be_decision_profile() {
+        let mut s = with_profiles(
+            vec![profile(AiProvider::OpenRouter), decision_profile()],
+            "p",
+        );
+        s.spoiler.profile = "p".into();
+        assert!(
+            spoiler_errs(&s)
+                .iter()
+                .any(|e| e.field == "spoiler.profile")
+        );
+        s.spoiler.profile = "d".into();
+        assert!(spoiler_errs(&s).is_empty());
+        s.spoiler.profile = String::new();
+        assert!(spoiler_errs(&s).is_empty());
+        s.spoiler.profile = "ghost".into();
+        assert!(
+            spoiler_errs(&s)
+                .iter()
+                .any(|e| e.field == "spoiler.profile")
+        );
+    }
+
+    #[test]
+    fn editing_pointed_decision_profile_to_chat_fails() {
+        let mut s = with_profiles(
+            vec![profile(AiProvider::OpenRouter), decision_profile()],
+            "p",
+        );
+        s.spoiler.profile = "d".into();
+        assert!(s.validate(&ctx()).is_ok());
+        let dec = s.ai.profiles.iter_mut().find(|p| p.name == "d").unwrap();
+        dec.kind = ProfileKind::Chat;
+        let errs = s.validate(&ctx()).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "spoiler.profile"));
+        // Boot load stays lenient for pointer targets.
+        assert!(s.validate_for_load(&ctx()).is_ok());
     }
 
     #[test]

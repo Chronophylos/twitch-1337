@@ -187,6 +187,7 @@ impl TestBotBuilder {
                     timeout: 30,
                     reasoning_effort: None,
                     service_tier: None,
+                    ..Default::default()
                 }]);
                 o.ai.active_profile = Some("default".into());
             }
@@ -555,10 +556,19 @@ impl TestBotBuilder {
             ));
             let services = Services {
                 clock: clock.clone(),
-                llm: Arc::new(twitch_1337::llm_factory::LlmRegistry::fixed(
-                    llm.clone() as Arc<dyn LlmClient>,
-                    settings_handle.clone(),
-                )),
+                llm: Arc::new(
+                    twitch_1337::llm_factory::LlmRegistry::fixed(
+                        llm.clone() as Arc<dyn LlmClient>,
+                        settings_handle.clone(),
+                    )
+                    .with_keys(
+                        self.config
+                            .ai
+                            .as_ref()
+                            .map(|a| a.keys.clone())
+                            .unwrap_or_default(),
+                    ),
+                ),
                 aviation: Some(aviation),
                 dhl: self.dhl_base_url.as_ref().map(|base| {
                     std::sync::Arc::new(twitch_1337::dhl::DhlClient::with_base_url(

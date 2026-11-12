@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 use crate::APP_USER_AGENT;
 use crate::config::AiBootstrap;
 use crate::settings::SettingsHandle;
-use crate::settings::ai::AiProfile;
+use crate::settings::ai::{AiProfile, ProfileKind};
 use crate::settings::provider::AiProvider;
 
 /// One client per endpoint identity. Model, timeout, effort and tier are
@@ -70,6 +70,13 @@ impl LlmRegistry {
             warn!(profile = name, "named profile not found");
             return None;
         };
+        if prof.kind == ProfileKind::Decision {
+            warn!(
+                profile = %prof.name,
+                "decision profile has no chat client, named resolve skipped"
+            );
+            return None;
+        }
         if prof.model.trim().is_empty() {
             error!(
                 profile = %prof.name,
@@ -101,6 +108,13 @@ impl LlmRegistry {
             },
             None => Ok(None),
         }
+    }
+
+    /// Test-injection companion to [`Self::fixed`]: give it `[ai.keys]` so
+    /// [`Self::secret_for`] resolves named keys.
+    pub fn with_keys(mut self, keys: HashMap<String, SecretString>) -> Self {
+        self.keys = keys;
+        self
     }
 
     /// The API key a profile should use, by the same rules `client_for`
@@ -187,6 +201,7 @@ mod tests {
             timeout: 30,
             reasoning_effort: None,
             service_tier: None,
+            ..Default::default()
         }
     }
 
@@ -225,6 +240,15 @@ mod tests {
         assert!(r.resolve_named("deleted").is_none());
         assert!(r.resolve_named("").is_none());
         assert!(r.resolve_named("   ").is_none());
+    }
+
+    #[test]
+    fn resolve_named_refuses_decision_profile() {
+        crate::install_crypto_provider();
+        let mut d = p("d", AiProvider::OpenRouter, "m-d");
+        d.kind = ProfileKind::Decision;
+        let r = LlmRegistry::new(Some(&boot()), handle(vec![d], "d"));
+        assert!(r.resolve_named("d").is_none());
     }
 
     #[test]

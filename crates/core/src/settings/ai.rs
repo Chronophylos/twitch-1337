@@ -26,6 +26,30 @@ pub struct AiSettings {
     pub emotes: Option<AiEmotes>,
 }
 
+/// What a profile is for. `Chat` profiles drive agents through an
+/// `LlmClient`; `Decision` profiles are single-shot structured-choice
+/// endpoints (OpenRouter decisions) and never back a chat client. See
+/// ADR-0010.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileKind {
+    #[default]
+    Chat,
+    Decision,
+}
+
+impl ProfileKind {
+    pub const ALL: [Self; 2] = [Self::Chat, Self::Decision];
+
+    /// Stable string form, matches the serde output; used by the web form.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Decision => "decision",
+        }
+    }
+}
+
 /// One named provider configuration.
 ///
 /// `key` names an entry in config.toml's `[ai.keys]`; the secret itself
@@ -42,6 +66,8 @@ pub struct AiProfile {
     pub reasoning_effort: Option<String>,
     /// Service tier hint. Only honored when `provider.caps().service_tier`.
     pub service_tier: Option<String>,
+    #[serde(default)]
+    pub kind: ProfileKind,
 }
 
 impl Default for AiProfile {
@@ -55,6 +81,7 @@ impl Default for AiProfile {
             timeout: 30,
             reasoning_effort: None,
             service_tier: None,
+            kind: ProfileKind::Chat,
         }
     }
 }
@@ -413,6 +440,22 @@ impl AiMedia {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_without_kind_deserializes_as_chat() {
+        let p: AiProfile = ron::from_str(
+            r#"(name: "x", provider: open_router, base_url: None, model: "m", timeout: 30, reasoning_effort: None, service_tier: None)"#,
+        )
+        .expect("legacy profile must parse");
+        assert_eq!(p.kind, ProfileKind::Chat);
+    }
+
+    #[test]
+    fn profile_kind_as_str_matches_serde() {
+        for k in ProfileKind::ALL {
+            assert_eq!(ron::to_string(&k).unwrap(), k.as_str());
+        }
+    }
 
     #[test]
     fn ai_aurora_default_has_persona_aurora() {
