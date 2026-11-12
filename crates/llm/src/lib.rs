@@ -1,6 +1,7 @@
 //! Provider-agnostic LLM client for twitch-1337.
 
 pub mod agent;
+pub mod decision;
 pub mod error;
 pub mod observe;
 pub mod ollama;
