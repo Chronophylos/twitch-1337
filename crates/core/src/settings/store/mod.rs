@@ -218,6 +218,7 @@ impl SettingsStore {
             }
             SettingsSection::Aviationstack => current.aviationstack = Default::default(),
             SettingsSection::Suspend => current.suspend = Default::default(),
+            SettingsSection::Spoiler => current.spoiler = Default::default(),
             SettingsSection::EmoteTrackerPotat => current.emote_tracker = Default::default(),
             SettingsSection::AlertsQuake => current.alerts.quake = Default::default(),
             SettingsSection::AlertsSolar => {
@@ -362,6 +363,31 @@ mod tests {
             s.cooldowns.news,
             Settings::compiled_defaults().cooldowns.news
         );
+    }
+
+    #[tokio::test]
+    async fn spoiler_reset_restores_defaults() {
+        use crate::settings::overrides::SpoilerOverrides;
+        let (_dir, store, handle, _log) = fixture();
+        let actor = Actor {
+            user_id: "1".into(),
+            user_login: "tester".into(),
+        };
+        let patch = SettingsOverrides {
+            spoiler: SpoilerOverrides {
+                default_game: Some("Hades II".into()),
+                confidence_floor: Some(80),
+                ..Default::default()
+            },
+            ..SettingsOverrides::default()
+        };
+        store.apply(patch, actor.clone()).await.expect("apply");
+        assert_eq!(handle.load().spoiler.confidence_floor, 80);
+        store
+            .reset(SettingsSection::Spoiler, actor)
+            .await
+            .expect("reset");
+        assert_eq!(handle.load().spoiler, Settings::compiled_defaults().spoiler);
     }
 
     #[tokio::test]

@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 
 use super::provider::Efforts;
+use super::spoiler::is_valid_game_name;
 use super::{AiProvider, AiSettings, FieldError, ProfileKind, Settings};
 
 /// Bootstrap-side context required for cross-field validation. `channel`
@@ -66,8 +67,16 @@ impl Settings {
             3600,
             &mut errs,
         );
+        bound(
+            "cooldowns.spoiler",
+            self.cooldowns.spoiler,
+            1,
+            3600,
+            &mut errs,
+        );
         bound("pings.cooldown", self.pings.cooldown, 1, 86_400, &mut errs);
         validate_ai(&self.ai, validate_agent_profile_targets, &mut errs);
+        validate_spoiler(self, validate_agent_profile_targets, &mut errs);
         if self.twitch.expected_latency > 1000 {
             errs.push(FieldError {
                 field: "twitch.expected_latency".into(),
@@ -632,6 +641,40 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
     }
 }
 
+fn validate_spoiler(s: &Settings, validate_profile_target: bool, errs: &mut Vec<FieldError>) {
+    let sp = &s.spoiler;
+    if sp.confidence_floor > 100 {
+        errs.push(FieldError {
+            field: "spoiler.confidence_floor".into(),
+            message: format!("must be 0..=100 (got {})", sp.confidence_floor),
+        });
+    }
+    if !is_valid_game_name(&sp.default_game) {
+        errs.push(FieldError {
+            field: "spoiler.default_game".into(),
+            message: "must be 1-40 chars: letters, digits, spaces, : - '".into(),
+        });
+    }
+    // Empty means the command is off. Like the agent pointers, the target
+    // check only gates saves; boot load stays lenient.
+    if validate_profile_target && !sp.profile.is_empty() {
+        match s.ai.by_name(&sp.profile) {
+            None => errs.push(FieldError {
+                field: "spoiler.profile".into(),
+                message: format!("no profile named {:?}", sp.profile),
+            }),
+            Some(p) if p.kind != ProfileKind::Decision => errs.push(FieldError {
+                field: "spoiler.profile".into(),
+                message: format!(
+                    "{:?} is a chat profile; pick a decision profile",
+                    sp.profile
+                ),
+            }),
+            Some(_) => {}
+        }
+    }
+}
+
 fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldError>) {
     bound(
         "alerts.quake.poll_secs",
@@ -1179,6 +1222,87 @@ mod tests {
             errs.iter()
                 .any(|e| e.field == "suspend.default_duration_secs")
         );
+    }
+
+    fn spoiler_errs(s: &Settings) -> Vec<FieldError> {
+        s.validate(&ctx()).err().unwrap_or_default()
+    }
+
+    #[test]
+    fn validate_rejects_spoiler_confidence_floor_over_100() {
+        let mut s = Settings::compiled_defaults();
+        s.spoiler.confidence_floor = 101;
+        assert!(
+            spoiler_errs(&s)
+                .iter()
+                .any(|e| e.field == "spoiler.confidence_floor")
+        );
+        s.spoiler.confidence_floor = 100;
+        assert!(spoiler_errs(&s).is_empty());
+        s.spoiler.confidence_floor = 0;
+        assert!(spoiler_errs(&s).is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_bad_spoiler_default_game() {
+        let mut s = Settings::compiled_defaults();
+        s.spoiler.default_game = "x.".into();
+        assert!(
+            spoiler_errs(&s)
+                .iter()
+                .any(|e| e.field == "spoiler.default_game")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_spoiler_cooldown_zero() {
+        let mut s = Settings::compiled_defaults();
+        s.cooldowns.spoiler = 0;
+        assert!(
+            spoiler_errs(&s)
+                .iter()
+                .any(|e| e.field == "cooldowns.spoiler")
+        );
+    }
+
+    #[test]
+    fn spoiler_profile_must_be_decision_profile() {
+        let mut s = with_profiles(
+            vec![profile(AiProvider::OpenRouter), decision_profile()],
+            "p",
+        );
+        s.spoiler.profile = "p".into();
+        assert!(
+            spoiler_errs(&s)
+                .iter()
+                .any(|e| e.field == "spoiler.profile")
+        );
+        s.spoiler.profile = "d".into();
+        assert!(spoiler_errs(&s).is_empty());
+        s.spoiler.profile = String::new();
+        assert!(spoiler_errs(&s).is_empty());
+        s.spoiler.profile = "ghost".into();
+        assert!(
+            spoiler_errs(&s)
+                .iter()
+                .any(|e| e.field == "spoiler.profile")
+        );
+    }
+
+    #[test]
+    fn editing_pointed_decision_profile_to_chat_fails() {
+        let mut s = with_profiles(
+            vec![profile(AiProvider::OpenRouter), decision_profile()],
+            "p",
+        );
+        s.spoiler.profile = "d".into();
+        assert!(s.validate(&ctx()).is_ok());
+        let dec = s.ai.profiles.iter_mut().find(|p| p.name == "d").unwrap();
+        dec.kind = ProfileKind::Chat;
+        let errs = s.validate(&ctx()).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "spoiler.profile"));
+        // Boot load stays lenient for pointer targets.
+        assert!(s.validate_for_load(&ctx()).is_ok());
     }
 
     #[test]

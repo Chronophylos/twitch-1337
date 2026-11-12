@@ -102,6 +102,8 @@ impl CooldownsForm {
             up: Some(self.cooldown_up),
             feedback: Some(self.cooldown_feedback),
             doener: Some(self.cooldown_doener),
+            // Not on the form yet; None leaves the saved value untouched.
+            spoiler: None,
         }
     }
 }
@@ -774,6 +776,8 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             suspend_default_duration_secs: form.suspend_default_duration_secs,
         }
         .into_overrides(),
+        // Spoiler card is Task 3; None leaves saved values untouched.
+        spoiler: Default::default(),
         emote_tracker: EmoteTrackerPotatForm {
             emote_tracker_potat_card_visible: form.emote_tracker_potat_card_visible,
             emote_tracker_potat_enabled: form.emote_tracker_potat_enabled,

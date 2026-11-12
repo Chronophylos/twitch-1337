@@ -20,6 +20,7 @@ pub mod overrides;
 pub mod provider;
 mod resolve;
 pub mod schedules;
+pub mod spoiler;
 pub mod store;
 pub mod suspend;
 mod tree;
@@ -40,6 +41,7 @@ pub use emote_tracker::{EmoteTrackerSettings, PotatAttributionSettings};
 pub use overrides::{AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides};
 pub use provider::{AiProvider, Efforts, ProviderCaps};
 pub use schedules::Schedule;
+pub use spoiler::SpoilerSettings;
 pub use store::{Actor, SettingsStore};
 pub use suspend::SuspendSettings;
 pub use twitch::TwitchRuntime;
@@ -151,6 +153,7 @@ pub struct Settings {
     pub twitch: TwitchRuntime,
     pub aviationstack: AviationstackSettings,
     pub suspend: SuspendSettings,
+    pub spoiler: SpoilerSettings,
     pub emote_tracker: EmoteTrackerSettings,
     pub alerts: AlertsSettings,
     pub web: WebRuntime,
@@ -164,6 +167,7 @@ pub struct Cooldowns {
     pub up: u64,
     pub feedback: u64,
     pub doener: u64,
+    pub spoiler: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -191,6 +195,7 @@ pub enum SettingsSection {
     TwitchChannels,
     Aviationstack,
     Suspend,
+    Spoiler,
     EmoteTrackerPotat,
     AlertsQuake,
     AlertsSolar,
@@ -233,6 +238,7 @@ impl Settings {
                 up: 30,
                 feedback: 300,
                 doener: 30,
+                spoiler: 30,
             },
             pings: PingsSettings {
                 cooldown: 300,
@@ -242,6 +248,7 @@ impl Settings {
             twitch: TwitchRuntime::default(),
             aviationstack: AviationstackSettings::default(),
             suspend: SuspendSettings::default(),
+            spoiler: SpoilerSettings::default(),
             emote_tracker: EmoteTrackerSettings::default(),
             alerts: AlertsSettings::default(),
             web: WebRuntime::default(),
@@ -273,6 +280,8 @@ mod tests {
         assert_eq!(s.twitch, TwitchRuntime::default());
         assert_eq!(s.aviationstack, AviationstackSettings::default());
         assert_eq!(s.suspend, SuspendSettings::default());
+        assert_eq!(s.spoiler, SpoilerSettings::default());
+        assert_eq!(s.cooldowns.spoiler, 30);
         assert_eq!(s.emote_tracker, EmoteTrackerSettings::default());
         assert!(s.emote_tracker.potat_attribution.enabled);
         assert_eq!(s.emote_tracker.potat_attribution.window_secs, 15);

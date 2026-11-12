@@ -7,7 +7,8 @@ use super::provider::AiProvider;
 use super::{
     AiEmotes, AiPrefill, AiSettings, AiWeb, AlertsSettings, AviationstackSettings, CmeAlerts,
     Cooldowns, EmoteTrackerSettings, PingsSettings, PotatAttributionSettings, QuakeAlerts,
-    SCHEMA_VERSION, Settings, SolarAlerts, SuspendSettings, TwitchRuntime, WebRuntime,
+    SCHEMA_VERSION, Settings, SolarAlerts, SpoilerSettings, SuspendSettings, TwitchRuntime,
+    WebRuntime,
 };
 
 impl Settings {
@@ -35,6 +36,10 @@ impl Settings {
                     .cooldowns
                     .doener
                     .unwrap_or(defaults.cooldowns.doener),
+                spoiler: overrides
+                    .cooldowns
+                    .spoiler
+                    .unwrap_or(defaults.cooldowns.spoiler),
             },
             pings: PingsSettings {
                 cooldown: overrides.pings.cooldown.unwrap_or(defaults.pings.cooldown),
@@ -90,6 +95,22 @@ impl Settings {
                     .suspend
                     .default_duration_secs
                     .unwrap_or(defaults.suspend.default_duration_secs),
+            },
+            spoiler: SpoilerSettings {
+                profile: overrides
+                    .spoiler
+                    .profile
+                    .clone()
+                    .unwrap_or_else(|| defaults.spoiler.profile.clone()),
+                default_game: overrides
+                    .spoiler
+                    .default_game
+                    .clone()
+                    .unwrap_or_else(|| defaults.spoiler.default_game.clone()),
+                confidence_floor: overrides
+                    .spoiler
+                    .confidence_floor
+                    .unwrap_or(defaults.spoiler.confidence_floor),
             },
             emote_tracker: EmoteTrackerSettings {
                 potat_attribution: PotatAttributionSettings {
@@ -709,6 +730,28 @@ mod tests {
         assert_eq!(r.twitch.hidden_admins, vec!["111", "222"]);
         assert_eq!(r.twitch.admin_channel.as_deref(), Some("admins"));
         assert!(r.twitch.ai_channel.is_none());
+    }
+
+    #[test]
+    fn spoiler_overrides_resolve() {
+        use crate::settings::overrides::SpoilerOverrides;
+        let defaults = Settings::compiled_defaults();
+        let mut o = SettingsOverrides {
+            spoiler: SpoilerOverrides {
+                profile: Some("dec".into()),
+                default_game: Some("Hades II".into()),
+                confidence_floor: Some(70),
+            },
+            ..Default::default()
+        };
+        o.cooldowns.spoiler = Some(45);
+        let r = Settings::resolve(&defaults, &o);
+        assert_eq!(r.spoiler.profile, "dec");
+        assert_eq!(r.spoiler.default_game, "Hades II");
+        assert_eq!(r.spoiler.confidence_floor, 70);
+        assert_eq!(r.cooldowns.spoiler, 45);
+        let r = Settings::resolve(&defaults, &SettingsOverrides::default());
+        assert_eq!(r.spoiler, defaults.spoiler);
     }
 
     #[test]

@@ -328,6 +328,8 @@ async fn save(
         up: form.cooldown_up,
         feedback: form.cooldown_feedback,
         doener: form.cooldown_doener,
+        // No form field until the spoiler card lands; keep the saved value.
+        spoiler: before.cooldowns.spoiler,
     };
     let pings_settings = PingsSettings {
         cooldown: form.ping_cooldown,

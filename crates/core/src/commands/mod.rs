@@ -34,6 +34,11 @@ pub use registry::{CommandEntry, CommandId, CommandRegistry, ExecutionClass, Reg
 /// lacks the required badge or id.
 pub const ADMIN_DENIED_MSG: &str = "Das darfst du nicht FDM";
 
+/// Per-user cooldown duration for `!spoiler`.
+pub fn spoiler_cooldown_duration(s: &crate::settings::Settings) -> Duration {
+    Duration::from_secs(s.cooldowns.spoiler)
+}
+
 /// Per-user cooldown duration for `!news`, `!tldr`, and `!haiku` (shared bucket).
 pub fn news_cooldown_duration(s: &crate::settings::Settings) -> Duration {
     Duration::from_secs(s.cooldowns.news)
