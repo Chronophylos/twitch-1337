@@ -4,7 +4,7 @@ Guide Claude Code work repo.
 
 ## Project
 
-Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), feedback (`!fb`), alerts (earthquake + solar flare + Earth-directed CME monitors, passive, configured at `/settings → Alerts`), version (`!v`).
+Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), feedback (`!fb`), spoiler check (`!spoiler`, decision model), alerts (earthquake + solar flare + Earth-directed CME monitors, passive, configured at `/settings → Alerts`), version (`!v`).
 
 Single persistent IRC connection, broadcast channel routes to independent handler tasks.
 
@@ -153,7 +153,7 @@ owner-only). `ai.aurora.profile` names the profile `!ai` uses; Aurora, Grok,
 Dreamer, and Media each have a required profile dropdown at `/settings`.
 Recap's profile dropdown is optional, with empty meaning off. Agents do not
 override model / effort / tier on top of a profile — pick a different profile
-instead. Dreamer and media keep their own timeout knobs. Every AI client is
+instead. Dreamer and media keep their own timeout knobs. Every chat AI client is
 resolved per call through `LlmRegistry` (`crates/core/src/llm_factory.rs`), so
 changing an agent's profile selection or editing a profile applies on the next
 turn — no restart. Each profile declares an
@@ -168,6 +168,15 @@ persist to `$DATA_DIR/settings.ron`. A leftover legacy `[ai]` table in
 `[aviationstack]` keeps only `api_key` in config.toml. `enabled`, `base_url`,
 and `timeout_secs` live in `settings.ron` (restart-required for connection
 changes), managed via `/settings → Aviationstack`.
+
+`!spoiler <url> [game]` is configured by the `spoiler` section (`profile`,
+`default_game`, `confidence_floor`) and `cooldowns.spoiler` in `settings.ron`,
+managed via `/settings`. AI profiles have a `kind` (Chat by default, or
+Decision, ADR-0010). Decision profiles are OpenRouter-only and skip
+`reasoning_effort` / `service_tier`. They are called through `llm::decision`
+per call, outside `LlmRegistry`; only the key comes from
+`LlmRegistry::secret_for`. A profile that names a key missing from `[ai.keys]`
+makes the command answer "nicht konfiguriert".
 
 Alert monitors live entirely in `settings.ron` — there is no config.toml
 section and no API key, because all three feeds (EMSC seismicportal.eu, NOAA

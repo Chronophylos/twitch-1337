@@ -175,10 +175,22 @@ _Avoid_: thread, continuation, reply turn.
 ## AI profiles
 
 **Profile**:
-A named provider configuration — provider, base URL, model, timeout,
-reasoning effort, service tier — that a Turn runs under. Switching or
-editing one applies immediately, never a restart.
+A named provider configuration — provider, base URL, model, timeout, and
+for chat profiles reasoning effort and service tier. Has a Profile Kind.
+Switching or editing one applies immediately, never a restart.
 _Avoid_: connection, backend, config.
+
+**Profile Kind**:
+Whether a Profile is for chatting (Chat, the default) or for classifying
+content into fixed categories (Decision). A Turn only runs on a Chat
+Profile; a Decision Profile is picked by the feature that classifies.
+_Avoid_: type, mode.
+
+**Decision Profile**:
+A Profile of kind Decision. It answers a multiple-choice question about some
+content with a category and a probability per category, and never writes
+chat prose.
+_Avoid_: classifier, judge profile.
 
 **Active Profile**:
 The Profile `!ai` runs on by default. Dreamer, Grok, and the media tool may
