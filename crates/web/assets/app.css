@@ -326,6 +326,8 @@ kbd {
 .scroll {
   flex: 1; overflow: auto;
   padding: 28px 28px 40px;
+  /* Lets sticky children (settings nav) size against this scrollport, not the viewport. */
+  container-type: size;
 }
 .page { max-width: 1280px; margin: 0 auto; }
 
@@ -1003,7 +1005,9 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   display: flex;
   flex-direction: column;
   gap: 18px;
-  max-height: calc(100vh - 24px);
+  /* 100cqh = .scroll content box; sticky top sits 28px pad + 12px down,
+     so content + 68px padding - 40px - 12px bottom gap. */
+  max-height: calc(100cqh + 16px);
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -1537,6 +1541,9 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   transform: translateY(0);
   pointer-events: auto;
 }
+/* Clear the fixed bar. Growing the padding also shrinks .scroll's 100cqh,
+   so the sticky settings nav ends above the bar too. */
+.scroll:has(.save-bar.visible) { padding-bottom: 100px; }
 .save-bar-inner {
   max-width: 1280px;
   margin: 0 auto;
