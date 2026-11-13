@@ -20,7 +20,7 @@ target/
 **/config.toml
 **/*.ron
 # ...except baked prompt assets, which build.rs include_str!s
-!crates/data/assets/prompts/*.ron
+!crates/data/assets/prompts/**/*.ron
 .env
 
 # Ignore local/prod data mounts (just mount-prod-data, dev runs)
