@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use indexmap::IndexMap;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -53,7 +54,8 @@ pub struct ImageUrl {
 pub enum Question {
     Choice {
         instructions: String,
-        criteria: BTreeMap<String, String>,
+        /// Sent in insertion order: decision models lean toward the first option.
+        criteria: IndexMap<String, String>,
     },
 }
 
@@ -160,7 +162,10 @@ mod tests {
                 "spoiler".to_string(),
                 Question::Choice {
                     instructions: "classify".into(),
-                    criteria: BTreeMap::from([("story".into(), "story spoilers".into())]),
+                    criteria: IndexMap::from([
+                        ("story".into(), "story spoilers".into()),
+                        ("gameplay".into(), "gameplay".into()),
+                    ]),
                 },
             )]),
         }
@@ -189,10 +194,13 @@ mod tests {
                 "questions": {"spoiler": {
                     "type": "choice",
                     "instructions": "classify",
-                    "criteria": {"story": "story spoilers"}
+                    "criteria": {"story": "story spoilers", "gameplay": "gameplay"}
                 }}
             })
         );
+        // `Value` sorts keys, so check criteria order on the raw string.
+        let raw = serde_json::to_string(&request()).unwrap();
+        assert!(raw.find("\"story\"").unwrap() < raw.find("\"gameplay\"").unwrap());
     }
 
     async fn server_with(resp: ResponseTemplate) -> (MockServer, String) {

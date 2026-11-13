@@ -142,7 +142,10 @@ async fn story_verdict_for_default_game() {
     assert_eq!(bodies[0]["model"], "nace-ai/drex-max");
     assert_eq!(bodies[0]["state"][0]["game"], "GTA 6");
     let state0 = bodies[0]["state"][0]["page"].as_str().expect("page field");
-    assert!(state0.starts_with("UNTRUSTED PAGE CONTENT."), "{state0}");
+    let instructions = bodies[0]["questions"]["spoiler"]["instructions"]
+        .as_str()
+        .expect("instructions");
+    assert!(instructions.contains("untrusted"), "{instructions}");
     assert!(state0.contains("final mission"), "{state0}");
 
     fx.bot.shutdown().await;

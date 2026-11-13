@@ -1,13 +1,15 @@
 //! Live eval for `!spoiler`: classifies hand-written fixtures through the real
 //! Decisions endpoint and prints a confusion matrix. Run manually:
 //! `cargo nextest run -p twitch-1337-core --test ai spoiler_eval --run-ignored only --no-capture`
+//! Set `SPOILER_EVAL_REVERSE=1` to send the options in reverse order; decision
+//! models lean toward the first option, so both orders should agree.
 
 use twitch_1337_core as twitch_1337;
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use llm::decision::{Answer, DecisionRequest, decide, decisions_endpoint};
+use llm::decision::{Answer, DecisionRequest, Question, decide, decisions_endpoint};
 use twitch_1337::spoiler::verdict::{Category, build_question, state};
 
 const DEFAULT_MODEL: &str = "nace-ai/drex-max";
@@ -69,6 +71,11 @@ async fn spoiler_eval_live() {
     let model = std::env::var("SPOILER_EVAL_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_owned());
     twitch_1337::util::install_crypto_provider();
     let http = reqwest::Client::new();
+    let mut question = build_question();
+    if std::env::var_os("SPOILER_EVAL_REVERSE").is_some() {
+        let Question::Choice { criteria, .. } = &mut question;
+        criteria.reverse();
+    }
     let endpoint = decisions_endpoint("https://openrouter.ai/api/v1").expect("endpoint");
 
     // matrix[expected][predicted]; last column counts refusals/errors.
@@ -84,7 +91,7 @@ async fn spoiler_eval_live() {
         let req = DecisionRequest {
             model: model.clone(),
             state: vec![state(game, text)],
-            questions: BTreeMap::from([("spoiler".to_owned(), build_question())]),
+            questions: BTreeMap::from([("spoiler".to_owned(), question.clone())]),
         };
         let resp = decide(&http, &endpoint, Some(&key), &req, Duration::from_secs(60))
             .await
@@ -101,6 +108,7 @@ async fn spoiler_eval_live() {
             }
             other => (None, format!("no choice: {other:?}")),
         };
+        println!("{name:<16} {note}");
         matrix[expected][predicted.unwrap_or(6)] += 1;
         if predicted != Some(expected) {
             misses.push(format!("{name}: expected {expected_key}, got {note}"));
