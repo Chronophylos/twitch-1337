@@ -12,7 +12,7 @@ use twitch_1337::spoiler::verdict::{Category, UNTRUSTED_PREFIX, build_question};
 
 const DEFAULT_MODEL: &str = "nace-ai/drex-max";
 
-const FIXTURES: [(&str, &str); 25] = [
+const FIXTURES: [(&str, &str); 27] = [
     ("unrelated_1", include_str!("spoiler_eval/unrelated_1.txt")),
     ("unrelated_2", include_str!("spoiler_eval/unrelated_2.txt")),
     ("unrelated_3", include_str!("spoiler_eval/unrelated_3.txt")),
@@ -29,11 +29,13 @@ const FIXTURES: [(&str, &str); 25] = [
     ("gameplay_2", include_str!("spoiler_eval/gameplay_2.txt")),
     ("gameplay_3", include_str!("spoiler_eval/gameplay_3.txt")),
     ("gameplay_4", include_str!("spoiler_eval/gameplay_4.txt")),
+    ("gameplay_5", include_str!("spoiler_eval/gameplay_5.txt")),
     ("story_1", include_str!("spoiler_eval/story_1.txt")),
     ("story_2", include_str!("spoiler_eval/story_2.txt")),
     ("story_3", include_str!("spoiler_eval/story_3.txt")),
     ("story_4", include_str!("spoiler_eval/story_4.txt")),
     ("story_5", include_str!("spoiler_eval/story_5.txt")),
+    ("story_6", include_str!("spoiler_eval/story_6.txt")),
     (
         "insufficient_1",
         include_str!("spoiler_eval/insufficient_1.txt"),
