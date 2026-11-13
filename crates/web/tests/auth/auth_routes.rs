@@ -111,6 +111,22 @@ async fn auth_start_redirects_to_twitch() {
         location.starts_with("https://id.twitch.tv/oauth2/authorize"),
         "expected twitch authorize URL, got {location}"
     );
+    let url = url::Url::parse(location).unwrap();
+    let q: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+    assert_eq!(q["response_type"], "code");
+    assert_eq!(q["scope"], "user:read:email user:read:moderated_channels");
+    assert!(q["redirect_uri"].ends_with("/auth/callback"));
+    let set_cookie = res
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .find(|c| c.starts_with("tw1337_oauth_state="))
+        .expect("oauth state cookie");
+    assert!(
+        set_cookie.starts_with(&format!("tw1337_oauth_state={};", q["state"])),
+        "state param must match the cookie; cookie={set_cookie}"
+    );
 }
 
 #[tokio::test]

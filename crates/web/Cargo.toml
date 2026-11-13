@@ -19,9 +19,7 @@ chrono = { workspace = true }
 chrono-tz = { workspace = true }
 eyre = { workspace = true }
 hex = { workspace = true }
-http = "1"
 mime_guess = { workspace = true }
-oauth2 = { workspace = true }
 rand = { workspace = true }
 ron = { workspace = true }
 reqwest = { workspace = true }

@@ -43,10 +43,6 @@ humantime-serde = "1"
 indexmap = "2.14"
 infer = { version = "0.22", default-features = false }
 tokio-util = "0.7"
-# HTTP client is supplied by the app (reqwest 0.13 adapter in web auth).
-# Do not enable oauth2's bundled reqwest/rustls features — they pull reqwest
-# 0.12 and can reintroduce aws-lc via feature unification.
-oauth2 = { version = "5", default-features = false }
 rand = "0.10.3"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "stream"] }
 ron = "0.12.3"
