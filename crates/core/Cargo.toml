@@ -23,7 +23,6 @@ color-eyre = { workspace = true }
 eyre = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
-humantime = "2"
 humantime-serde = { workspace = true }
 indexmap = { workspace = true }
 infer = { workspace = true }
@@ -90,3 +89,7 @@ path = "tests/tracker/main.rs"
 [[test]]
 name = "irc"
 path = "tests/irc/main.rs"
+
+# humantime_serde is only named inside #[serde(with = "...")], which machete can't see.
+[package.metadata.cargo-machete]
+ignored = ["humantime-serde"]
