@@ -15,15 +15,17 @@ pub const UNTRUSTED_PREFIX: &str =
 pub enum Category {
     Unrelated,
     Marketing,
+    News,
     Gameplay,
     Story,
     Insufficient,
 }
 
 impl Category {
-    pub const ALL: [Category; 5] = [
+    pub const ALL: [Category; 6] = [
         Category::Unrelated,
         Category::Marketing,
+        Category::News,
         Category::Gameplay,
         Category::Story,
         Category::Insufficient,
@@ -33,6 +35,7 @@ impl Category {
         match self {
             Category::Unrelated => "unrelated",
             Category::Marketing => "marketing",
+            Category::News => "news",
             Category::Gameplay => "gameplay",
             Category::Story => "story",
             Category::Insufficient => "insufficient",
@@ -47,6 +50,7 @@ impl Category {
         match self {
             Category::Unrelated => "Off-Topic",
             Category::Marketing => "Marketing",
+            Category::News => "News",
             Category::Gameplay => "Gameplay",
             Category::Story => "Story",
             Category::Insufficient => "Unklar",
@@ -145,6 +149,7 @@ pub fn render(v: &Verdict, game: &str) -> String {
             Category::Marketing => {
                 format!("🟩 sieht nach offiziellem Material aus ({game}, {pct}%)")
             }
+            Category::News => format!("🟩 nur News/Gerede ({game}, {pct}%)"),
             Category::Gameplay => format!("🟨 Gameplay-Details ({game}, {pct}%)"),
             Category::Story => format!("🟥 Story-Spoiler ({game}, {pct}%) – nicht klicken"),
             Category::Insufficient => "⬜ kann ich nicht beurteilen".to_string(),
@@ -254,6 +259,10 @@ mod tests {
         assert_eq!(
             render(&s(Category::Story, 87), "GTA 6"),
             "🟥 Story-Spoiler (GTA 6, 87%) – nicht klicken"
+        );
+        assert_eq!(
+            render(&s(Category::News, 81), "GTA 6"),
+            "🟩 nur News/Gerede (GTA 6, 81%)"
         );
         assert_eq!(
             render(&s(Category::Unrelated, 90), "GTA 6"),
