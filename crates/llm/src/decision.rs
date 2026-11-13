@@ -17,11 +17,13 @@ pub struct DecisionRequest {
     pub questions: BTreeMap<String, Question>,
 }
 
-/// One piece of the state the model decides on: plain text or an image.
+/// One piece of the state the model decides on: plain text, named text
+/// fields the question can refer to by key, or an image.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum StatePart {
     Text(String),
+    Fields(BTreeMap<String, String>),
     Image(ImagePart),
 }
 

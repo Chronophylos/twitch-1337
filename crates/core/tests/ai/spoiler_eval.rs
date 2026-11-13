@@ -7,12 +7,12 @@ use twitch_1337_core as twitch_1337;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use llm::decision::{Answer, DecisionRequest, StatePart, decide, decisions_endpoint};
-use twitch_1337::spoiler::verdict::{Category, UNTRUSTED_PREFIX, build_question};
+use llm::decision::{Answer, DecisionRequest, decide, decisions_endpoint};
+use twitch_1337::spoiler::verdict::{Category, build_question, state};
 
 const DEFAULT_MODEL: &str = "nace-ai/drex-max";
 
-const FIXTURES: [(&str, &str); 27] = [
+const FIXTURES: [(&str, &str); 28] = [
     ("unrelated_1", include_str!("spoiler_eval/unrelated_1.txt")),
     ("unrelated_2", include_str!("spoiler_eval/unrelated_2.txt")),
     ("unrelated_3", include_str!("spoiler_eval/unrelated_3.txt")),
@@ -36,6 +36,7 @@ const FIXTURES: [(&str, &str); 27] = [
     ("story_4", include_str!("spoiler_eval/story_4.txt")),
     ("story_5", include_str!("spoiler_eval/story_5.txt")),
     ("story_6", include_str!("spoiler_eval/story_6.txt")),
+    ("story_7", include_str!("spoiler_eval/story_7.txt")),
     (
         "insufficient_1",
         include_str!("spoiler_eval/insufficient_1.txt"),
@@ -82,8 +83,8 @@ async fn spoiler_eval_live() {
 
         let req = DecisionRequest {
             model: model.clone(),
-            state: vec![StatePart::Text(format!("{UNTRUSTED_PREFIX}{text}"))],
-            questions: BTreeMap::from([("spoiler".to_owned(), build_question(game))]),
+            state: vec![state(game, text)],
+            questions: BTreeMap::from([("spoiler".to_owned(), build_question())]),
         };
         let resp = decide(&http, &endpoint, Some(&key), &req, Duration::from_secs(60))
             .await

@@ -126,12 +126,6 @@ fn ok_decision() -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(story_answer())
 }
 
-fn instructions(body: &Value) -> &str {
-    body["questions"]["spoiler"]["instructions"]
-        .as_str()
-        .expect("instructions string")
-}
-
 const WAIT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
@@ -146,8 +140,8 @@ async fn story_verdict_for_default_game() {
     let bodies = fx.decision_bodies().await;
     assert_eq!(bodies.len(), 1);
     assert_eq!(bodies[0]["model"], "nace-ai/drex-max");
-    assert!(instructions(&bodies[0]).contains("GTA 6"));
-    let state0 = bodies[0]["state"][0].as_str().expect("text state");
+    assert_eq!(bodies[0]["state"][0]["game"], "GTA 6");
+    let state0 = bodies[0]["state"][0]["page"].as_str().expect("page field");
     assert!(state0.starts_with("UNTRUSTED PAGE CONTENT."), "{state0}");
     assert!(state0.contains("final mission"), "{state0}");
 
@@ -167,7 +161,7 @@ async fn explicit_game_argument_is_used() {
 
     let bodies = fx.decision_bodies().await;
     assert_eq!(bodies.len(), 1);
-    assert!(instructions(&bodies[0]).contains("Elden Ring"));
+    assert_eq!(bodies[0]["state"][0]["game"], "Elden Ring");
 
     fx.bot.shutdown().await;
 }
