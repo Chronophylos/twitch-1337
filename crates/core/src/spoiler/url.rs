@@ -1,5 +1,5 @@
 //! URL detection in chat text and the redirect-blind host rewrites that pick
-//! a fetchable form (old.reddit, fxtwitter API) before the first fetch.
+//! a fetchable form (fxtwitter API), plus Reddit post ids for the archive lookup before the first fetch.
 
 use reqwest::Url;
 
@@ -9,16 +9,17 @@ const TRAILING: &[char] = &[')', ']', '.', ',', '!', '?', '"', '\''];
 /// Opening wrappers around a link (`(https://…)`, `"https://…"`).
 const LEADING: &[char] = &['(', '[', '"', '\''];
 
-/// Reddit hosts that serve the 8 KB JS shell instead of the post.
-const REDDIT_SHELL_HOSTS: &[&str] = &[
+/// Reddit hosts. All of them wall logged-out bots (JS proof-of-work page,
+/// login redirect, or a TLS-fingerprint 403), so posts are never fetched
+/// from Reddit itself; see [`reddit_post`].
+const REDDIT_HOSTS: &[&str] = &[
     "reddit.com",
     "www.reddit.com",
     "new.reddit.com",
     "np.reddit.com",
     "m.reddit.com",
+    "old.reddit.com",
 ];
-
-const OLD_REDDIT: &str = "old.reddit.com";
 
 const TWITTER_HOSTS: &[&str] = &[
     "x.com",
@@ -40,7 +41,7 @@ const FXTWITTER_API: &str = "https://api.fxtwitter.com";
 /// What to fetch first for a user-supplied URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    /// Fetch as-is (possibly rewritten to old.reddit).
+    /// Fetch as-is.
     Page(Url),
     /// `api.fxtwitter.com/<user>/status/<id>` JSON.
     Tweet(Url),
@@ -77,10 +78,7 @@ fn token_url(token: &str) -> Option<Url> {
 }
 
 fn is_known_host(host: &str) -> bool {
-    REDDIT_SHELL_HOSTS.contains(&host)
-        || host == OLD_REDDIT
-        || host == "redd.it"
-        || TWITTER_HOSTS.contains(&host)
+    REDDIT_HOSTS.contains(&host) || host == "redd.it" || TWITTER_HOSTS.contains(&host)
 }
 
 /// String-level rewrite, applied once before the first fetch.
@@ -90,20 +88,6 @@ pub fn rewrite(url: &Url) -> Target {
         .path_segments()
         .map(|s| s.filter(|seg| !seg.is_empty()).collect())
         .unwrap_or_default();
-
-    if REDDIT_SHELL_HOSTS.contains(&host)
-        && let ["r", _, "comments", ..] = segments.as_slice()
-        && let Some(old) = old_reddit(url.path())
-    {
-        return Target::Page(old);
-    }
-
-    if host == "redd.it"
-        && let [id] = segments.as_slice()
-        && let Some(old) = old_reddit(&format!("/comments/{id}"))
-    {
-        return Target::Page(old);
-    }
 
     if TWITTER_HOSTS.contains(&host)
         && let [user, "status", id, ..] = segments.as_slice()
@@ -115,18 +99,34 @@ pub fn rewrite(url: &Url) -> Target {
     Target::Page(url.clone())
 }
 
-fn old_reddit(path: &str) -> Option<Url> {
-    Url::parse(&format!("https://{OLD_REDDIT}{path}")).ok()
+/// A Reddit post named by a link: its base36 id, plus the canonical
+/// permalink when the link carried the subreddit (oEmbed needs it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedditPost {
+    pub id: String,
+    pub permalink: Option<Url>,
 }
 
-/// After the page fetch: a share link that redirected to a shell host gets
-/// one refetch on old.reddit. `None` when no refetch is needed.
-pub fn needs_old_reddit_refetch(final_url: &Url) -> Option<Url> {
-    let host = final_url.host_str()?;
-    if !REDDIT_SHELL_HOSTS.contains(&host) {
+/// `/r/<sub>/comments/<id>/…` or `/comments/<id>` on a Reddit host, or
+/// `redd.it/<id>`. Share links (`/r/<sub>/s/<id>`) are not posts; they are
+/// fetched and their redirect target is checked again.
+pub fn reddit_post(url: &Url) -> Option<RedditPost> {
+    let host = url.host_str()?;
+    let segments: Vec<&str> = url.path_segments()?.filter(|s| !s.is_empty()).collect();
+    let (id, sub) = match segments.as_slice() {
+        ["r", sub, "comments", id, ..] if REDDIT_HOSTS.contains(&host) => (*id, Some(*sub)),
+        ["comments", id, ..] if REDDIT_HOSTS.contains(&host) => (*id, None),
+        [id] if host == "redd.it" => (*id, None),
+        _ => return None,
+    };
+    let id = id.to_ascii_lowercase();
+    if id.is_empty() || id.len() > 13 || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return None;
     }
-    old_reddit(final_url.path())
+    let permalink = sub
+        .filter(|sub| sub.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+        .and_then(|sub| Url::parse(&format!("https://www.reddit.com/r/{sub}/comments/{id}/")).ok());
+    Some(RedditPost { id, permalink })
 }
 
 #[cfg(test)]
@@ -183,34 +183,39 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_reddit_comment_hosts_to_old() {
-        for host in [
-            "reddit.com",
-            "www.reddit.com",
-            "new.reddit.com",
-            "np.reddit.com",
-            "m.reddit.com",
-        ] {
+    fn reddit_post_from_every_host_and_redd_it() {
+        for host in REDDIT_HOSTS {
             assert_eq!(
-                rewrite(&u(&format!("https://{host}/r/x/comments/1/t"))),
-                Target::Page(u("https://old.reddit.com/r/x/comments/1/t")),
+                reddit_post(&u(&format!(
+                    "https://{host}/r/GTA6/comments/1XuG/t?share_id=9"
+                ))),
+                Some(RedditPost {
+                    id: "1xug".into(),
+                    permalink: Some(u("https://www.reddit.com/r/GTA6/comments/1xug/")),
+                }),
                 "{host}"
             );
         }
+        let bare = Some(RedditPost {
+            id: "abc".into(),
+            permalink: None,
+        });
+        assert_eq!(reddit_post(&u("https://redd.it/abc")), bare);
+        assert_eq!(reddit_post(&u("https://www.reddit.com/comments/abc")), bare);
     }
 
     #[test]
-    fn rewrite_leaves_reddit_share_link_alone() {
-        let share = u("https://reddit.com/r/x/s/AbC");
-        assert_eq!(rewrite(&share), Target::Page(share.clone()));
-    }
-
-    #[test]
-    fn rewrite_redd_it_to_old_comments() {
-        assert_eq!(
-            rewrite(&u("https://redd.it/abc")),
-            Target::Page(u("https://old.reddit.com/comments/abc"))
-        );
+    fn reddit_post_rejects_non_posts_and_odd_ids() {
+        for link in [
+            "https://reddit.com/r/x/s/AbC",
+            "https://www.reddit.com/r/x/",
+            "https://redd.it/a/b",
+            "https://www.reddit.com/r/x/comments/a&b=1",
+            "https://www.reddit.com/r/x/comments/aaaaaaaaaaaaaaaaaaaa",
+            "https://example.com/r/x/comments/abc",
+        ] {
+            assert_eq!(reddit_post(&u(link)), None, "{link}");
+        }
     }
 
     #[test]
@@ -240,25 +245,11 @@ mod tests {
 
     #[test]
     fn rewrite_leaves_other_hosts_alone() {
-        let yt = u("https://youtube.com/watch?v=1");
-        assert_eq!(rewrite(&yt), Target::Page(yt.clone()));
-        let old = u("https://old.reddit.com/r/x/comments/1");
-        assert_eq!(rewrite(&old), Target::Page(old.clone()));
-    }
-
-    #[test]
-    fn share_link_redirect_target_gets_old_reddit_refetch() {
-        assert_eq!(
-            needs_old_reddit_refetch(&u("https://www.reddit.com/r/x/comments/1")),
-            Some(u("https://old.reddit.com/r/x/comments/1"))
-        );
-        assert_eq!(
-            needs_old_reddit_refetch(&u("https://old.reddit.com/r/x/comments/1")),
-            None
-        );
-        assert_eq!(
-            needs_old_reddit_refetch(&u("https://youtube.com/watch?v=1")),
-            None
-        );
+        for link in [
+            "https://youtube.com/watch?v=1",
+            "https://reddit.com/r/x/s/AbC",
+        ] {
+            assert_eq!(rewrite(&u(link)), Target::Page(u(link)));
+        }
     }
 }

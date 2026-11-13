@@ -12,13 +12,19 @@ use serde::Deserialize;
 use tracing::debug;
 
 use crate::ai::content::client::{RawFetch, extract_readable_text, fetch_raw};
-use crate::spoiler::url::{Target, needs_old_reddit_refetch, rewrite};
+use crate::spoiler::url::{RedditPost, Target, reddit_post, rewrite};
 
 pub const PAGE_MAX_BYTES: u64 = 3 * 1024 * 1024;
 pub const PAGE_TIMEOUT: Duration = Duration::from_secs(8);
 pub const IMAGE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 pub const IMAGE_TIMEOUT: Duration = Duration::from_secs(4);
 pub const TEXT_CAP_BYTES: usize = 24 * 1024;
+
+/// Community Reddit archive (Arctic Shift): keyless, ingests new posts within
+/// seconds, returns Reddit's own post JSON. Reddit itself walls bots.
+const ARCTIC_SHIFT_POSTS: &str = "https://arctic-shift.photon-reddit.com/api/posts/ids";
+/// Title-only fallback when the archive is down or lacks the post.
+const REDDIT_OEMBED: &str = "https://www.reddit.com/oembed";
 
 /// What the decision call sees.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,7 +41,8 @@ pub enum GatherError {
     Unreadable,
 }
 
-/// Rewrite, fetch (with at most one old.reddit refetch), extract.
+/// Rewrite, fetch, extract. Reddit posts go to the archive instead; a share
+/// link gets one fetch to learn its redirect target first.
 pub async fn gather(http: &reqwest::Client, url: &Url) -> Result<Input, GatherError> {
     gather_with(|u, max, timeout| fetch_raw(http, u, max, timeout), url).await
 }
@@ -46,41 +53,21 @@ where
     Fut: Future<Output = Result<RawFetch>>,
 {
     let started = Instant::now();
-    let target = rewrite(url);
-    let mut page = fetch(target.url().clone(), PAGE_MAX_BYTES, PAGE_TIMEOUT)
-        .await
-        .map_err(unreadable)?;
-
-    // At most once: the refetch result is never re-checked, so a server that
-    // keeps redirecting old.reddit back to www cannot loop us.
-    if matches!(target, Target::Page(_))
-        && let Some(old) = needs_old_reddit_refetch(&page.final_url)
-    {
-        let remaining = PAGE_TIMEOUT.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            return Err(unreadable(eyre::eyre!("page budget spent before refetch")));
-        }
-        page = fetch(old, PAGE_MAX_BYTES, remaining)
+    let (text, image) = if let Some(post) = reddit_post(url) {
+        reddit_text(&fetch, &post, PAGE_TIMEOUT).await?
+    } else {
+        let target = rewrite(url);
+        let page = fetch(target.url().clone(), PAGE_MAX_BYTES, PAGE_TIMEOUT)
             .await
             .map_err(unreadable)?;
-    }
-
-    let media_type = media_type(&page.content_type);
-    let (text, image) = if media_type == "text/html" || media_type == "application/xhtml+xml" {
-        let ex = extract_html(&String::from_utf8_lossy(&page.bytes), &page.final_url);
-        (ex.text, ImageSource::Url(ex.image_url))
-    } else if media_type == "application/json" {
-        let ex = extract_tweet(&page.bytes)
-            .ok_or_else(|| unreadable(eyre::eyre!("JSON is not an fxtwitter tweet")))?;
-        (ex.text, ImageSource::Url(ex.image_url))
-    } else if media_type.starts_with("image/") {
-        (String::new(), ImageSource::Bytes(page.bytes))
-    } else {
-        return Err(unreadable(eyre::eyre!(
-            "unsupported content type {media_type:?}"
-        )));
+        match reddit_post(&page.final_url) {
+            Some(post) if matches!(target, Target::Page(_)) => {
+                let remaining = PAGE_TIMEOUT.saturating_sub(started.elapsed());
+                reddit_text(&fetch, &post, remaining).await?
+            }
+            _ => page_text(page)?,
+        }
     };
-
     let image_data_url = match image {
         ImageSource::Bytes(bytes) => data_url(&bytes),
         ImageSource::Url(Some(image_url)) => {
@@ -104,6 +91,147 @@ where
         text,
         image_data_url,
     })
+}
+
+fn page_text(page: RawFetch) -> Result<(String, ImageSource), GatherError> {
+    let media_type = media_type(&page.content_type);
+    if media_type == "text/html" || media_type == "application/xhtml+xml" {
+        let ex = extract_html(&String::from_utf8_lossy(&page.bytes), &page.final_url);
+        Ok((ex.text, ImageSource::Url(ex.image_url)))
+    } else if media_type == "application/json" {
+        let ex = extract_tweet(&page.bytes)
+            .ok_or_else(|| unreadable(eyre::eyre!("JSON is not an fxtwitter tweet")))?;
+        Ok((ex.text, ImageSource::Url(ex.image_url)))
+    } else if media_type.starts_with("image/") {
+        Ok((String::new(), ImageSource::Bytes(page.bytes)))
+    } else {
+        Err(unreadable(eyre::eyre!(
+            "unsupported content type {media_type:?}"
+        )))
+    }
+}
+
+/// The post from the archive, else its oEmbed title (needs the permalink).
+async fn reddit_text<F, Fut>(
+    fetch: &F,
+    post: &RedditPost,
+    budget: Duration,
+) -> Result<(String, ImageSource), GatherError>
+where
+    F: Fn(Url, u64, Duration) -> Fut,
+    Fut: Future<Output = Result<RawFetch>>,
+{
+    let started = Instant::now();
+    let archive = Url::parse_with_params(ARCTIC_SHIFT_POSTS, [("ids", post.id.as_str())])
+        .expect("valid archive URL");
+    match fetch(archive, PAGE_MAX_BYTES, budget).await {
+        Ok(raw) => match extract_reddit_post(&raw.bytes) {
+            Some(ex) => return Ok((ex.text, ImageSource::Url(ex.image_url))),
+            None => debug!(id = %post.id, "reddit post not in archive"),
+        },
+        Err(error) => debug!(?error, id = %post.id, "reddit archive fetch failed"),
+    }
+
+    let Some(permalink) = &post.permalink else {
+        return Err(unreadable(eyre::eyre!(
+            "no archive copy and no permalink for oEmbed"
+        )));
+    };
+    let remaining = budget.saturating_sub(started.elapsed());
+    if remaining.is_zero() {
+        return Err(unreadable(eyre::eyre!("page budget spent before oEmbed")));
+    }
+    let oembed = Url::parse_with_params(REDDIT_OEMBED, [("url", permalink.as_str())])
+        .expect("valid oEmbed URL");
+    let raw = fetch(oembed, PAGE_MAX_BYTES, remaining)
+        .await
+        .map_err(unreadable)?;
+    let title = serde_json::from_slice::<OEmbed>(&raw.bytes)
+        .map_err(|e| unreadable(e.into()))?
+        .title;
+    Ok((title, ImageSource::Url(None)))
+}
+
+#[derive(Deserialize)]
+struct OEmbed {
+    #[serde(default)]
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct ArchiveResponse {
+    #[serde(default)]
+    data: Vec<ArchivePost>,
+}
+
+#[derive(Deserialize)]
+struct ArchivePost {
+    #[serde(default)]
+    subreddit: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    selftext: String,
+    link_flair_text: Option<String>,
+    #[serde(default)]
+    spoiler: bool,
+    #[serde(default)]
+    is_self: bool,
+    url: Option<String>,
+    preview: Option<ArchivePreview>,
+}
+
+#[derive(Deserialize)]
+struct ArchivePreview {
+    #[serde(default)]
+    images: Vec<ArchivePreviewImage>,
+}
+
+#[derive(Deserialize)]
+struct ArchivePreviewImage {
+    source: ArchiveImageSource,
+}
+
+#[derive(Deserialize)]
+struct ArchiveImageSource {
+    url: String,
+}
+
+/// `r/<sub> · <flair>`, title, spoiler mark, body, link; first preview image.
+fn extract_reddit_post(bytes: &[u8]) -> Option<Extracted> {
+    let post = serde_json::from_slice::<ArchiveResponse>(bytes)
+        .ok()?
+        .data
+        .into_iter()
+        .next()?;
+    let mut head = format!("r/{}", post.subreddit);
+    if let Some(flair) = post.link_flair_text.filter(|f| !f.trim().is_empty()) {
+        head.push_str(" · ");
+        head.push_str(flair.trim());
+    }
+    let mut parts = vec![head, post.title];
+    if post.spoiler {
+        parts.push("(Reddit: the poster marked this post as a spoiler)".into());
+    }
+    parts.push(post.selftext);
+    if !post.is_self
+        && let Some(link) = post.url
+    {
+        parts.push(format!("Link: {link}"));
+    }
+    // Older archive rows keep Reddit's HTML-escaped `&amp;` in preview URLs.
+    let image_url = post
+        .preview
+        .and_then(|p| p.images.into_iter().next())
+        .and_then(|i| Url::parse(&i.source.url.replace("&amp;", "&")).ok())
+        .filter(|u| matches!(u.scheme(), "http" | "https"));
+    let text = parts
+        .into_iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(Extracted { text, image_url })
 }
 
 enum ImageSource {
@@ -236,7 +364,7 @@ fn data_url(bytes: &[u8]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -357,53 +485,141 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn share_link_refetched_on_old_reddit_exactly_once() {
-        let calls = AtomicUsize::new(0);
-        let seen = std::sync::Mutex::new(Vec::new());
-        let fetch = |url: Url, _max: u64, _t: Duration| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            seen.lock().expect("lock").push(url.to_string());
-            // Pathological server: every fetch lands on the www shell.
-            async {
-                Ok(raw(
-                    "https://www.reddit.com/r/x/comments/1/t",
-                    "text/html",
-                    b"<p>post body</p>",
-                ))
-            }
-        };
-        let input = gather_with(fetch, &u("https://reddit.com/r/x/s/AbC"))
-            .await
-            .expect("readable");
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    fn archive_json() -> Vec<u8> {
+        serde_json::json!({"data": [{
+            "subreddit": "GamingLeaksAndRumours",
+            "title": "GTA VI rating drama",
+            "selftext": "Regulators postponed twice.",
+            "link_flair_text": "Rumour",
+            "spoiler": true,
+            "is_self": false,
+            "url": "https://insider-gaming.example/gta",
+            "preview": {"images": [{"source": {"url": "https://external-preview.redd.it/a.jpeg?width=1&amp;s=x"}}]}
+        }]})
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn reddit_archive_post_text_and_preview() {
+        let ex = extract_reddit_post(&archive_json()).expect("post");
         assert_eq!(
-            *seen.lock().expect("lock"),
-            vec![
-                "https://reddit.com/r/x/s/AbC".to_string(),
-                "https://old.reddit.com/r/x/comments/1/t".to_string(),
-            ]
+            ex.text,
+            "r/GamingLeaksAndRumours · Rumour\nGTA VI rating drama\n\
+             (Reddit: the poster marked this post as a spoiler)\n\
+             Regulators postponed twice.\nLink: https://insider-gaming.example/gta"
         );
-        assert_eq!(input.text, "post body");
+        assert_eq!(
+            ex.image_url,
+            Some(u("https://external-preview.redd.it/a.jpeg?width=1&s=x"))
+        );
+        assert!(extract_reddit_post(br#"{"data":[]}"#).is_none());
+        assert!(extract_reddit_post(b"<html>").is_none());
+    }
+
+    type Seen = Arc<Mutex<Vec<String>>>;
+
+    /// A fake fetch answering via `respond` and logging every requested URL.
+    fn recorder(
+        respond: impl Fn(&Url) -> Result<RawFetch> + Sync,
+    ) -> (
+        Seen,
+        impl Fn(Url, u64, Duration) -> std::future::Ready<Result<RawFetch>>,
+    ) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let fetch = move |url: Url, _max: u64, _t: Duration| {
+            log.lock().expect("lock").push(url.to_string());
+            std::future::ready(respond(&url))
+        };
+        (seen, fetch)
     }
 
     #[tokio::test]
-    async fn no_refetch_when_already_old_reddit() {
-        let calls = AtomicUsize::new(0);
-        let fetch = |_url: Url, _max: u64, _t: Duration| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            async {
+    async fn reddit_post_link_reads_archive_never_reddit() {
+        let (seen, fetch) = recorder(|url| {
+            Ok(raw(url.as_str(), "application/json", &archive_json())).map(|mut r| {
+                if url.host_str() == Some("external-preview.redd.it") {
+                    r.content_type = "image/png".into();
+                    r.bytes = PNG.to_vec();
+                }
+                r
+            })
+        });
+        let input = gather_with(
+            fetch,
+            &u("https://old.reddit.com/r/GamingLeaksAndRumours/comments/1xugesq/slug/"),
+        )
+        .await
+        .expect("readable");
+        assert!(input.text.contains("Regulators postponed twice."));
+        assert!(input.image_data_url.is_some());
+        assert_eq!(
+            *seen.lock().expect("lock"),
+            [
+                "https://arctic-shift.photon-reddit.com/api/posts/ids?ids=1xugesq",
+                "https://external-preview.redd.it/a.jpeg?width=1&s=x",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn reddit_falls_back_to_oembed_title() {
+        let (seen, fetch) = recorder(|url| {
+            if url.host_str() == Some("www.reddit.com") {
                 Ok(raw(
-                    "https://old.reddit.com/r/x/comments/1/t",
-                    "text/html",
-                    b"<p>post body</p>",
+                    url.as_str(),
+                    "application/json",
+                    br#"{"title":"GTA VI ending leaked","type":"rich"}"#,
                 ))
+            } else {
+                Ok(raw(url.as_str(), "application/json", br#"{"data":[]}"#))
             }
-        };
-        gather_with(fetch, &u("https://www.reddit.com/r/x/comments/1/t"))
+        });
+        let input = gather_with(fetch, &u("https://www.reddit.com/r/GTA6/comments/abc/x"))
             .await
             .expect("readable");
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(input.text, "GTA VI ending leaked");
+        assert_eq!(
+            seen.lock().expect("lock")[1],
+            "https://www.reddit.com/oembed?url=https%3A%2F%2Fwww.reddit.com%2Fr%2FGTA6%2Fcomments%2Fabc%2F"
+        );
+    }
+
+    #[tokio::test]
+    async fn redd_it_without_archive_copy_is_unreadable() {
+        let (seen, fetch) = recorder(|_| Err(eyre::eyre!("archive down")));
+        assert_eq!(
+            gather_with(fetch, &u("https://redd.it/abc")).await,
+            Err(GatherError::Unreadable)
+        );
+        assert_eq!(seen.lock().expect("lock").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn share_link_resolved_by_redirect_then_archive() {
+        let (seen, fetch) = recorder(|url| {
+            if url.path().contains("/s/") {
+                // Reddit redirects the share link, then walls the post page.
+                Ok(raw(
+                    "https://www.reddit.com/r/x/comments/abc/t/",
+                    "text/html",
+                    b"<p>proof of work</p>",
+                ))
+            } else {
+                Ok(raw(url.as_str(), "application/json", &archive_json()))
+            }
+        });
+        let input = gather_with(fetch, &u("https://reddit.com/r/x/s/AbC"))
+            .await
+            .expect("readable");
+        assert!(input.text.contains("GTA VI rating drama"));
+        let seen = seen.lock().expect("lock");
+        assert_eq!(seen[0], "https://reddit.com/r/x/s/AbC");
+        assert_eq!(
+            seen[1],
+            "https://arctic-shift.photon-reddit.com/api/posts/ids?ids=abc"
+        );
     }
 
     #[tokio::test]
