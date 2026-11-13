@@ -12,7 +12,7 @@ use twitch_1337::spoiler::verdict::{Category, UNTRUSTED_PREFIX, build_question};
 
 const DEFAULT_MODEL: &str = "nace-ai/drex-max";
 
-const FIXTURES: [(&str, &str); 20] = [
+const FIXTURES: [(&str, &str); 25] = [
     ("unrelated_1", include_str!("spoiler_eval/unrelated_1.txt")),
     ("unrelated_2", include_str!("spoiler_eval/unrelated_2.txt")),
     ("unrelated_3", include_str!("spoiler_eval/unrelated_3.txt")),
@@ -21,6 +21,10 @@ const FIXTURES: [(&str, &str); 20] = [
     ("marketing_2", include_str!("spoiler_eval/marketing_2.txt")),
     ("marketing_3", include_str!("spoiler_eval/marketing_3.txt")),
     ("marketing_4", include_str!("spoiler_eval/marketing_4.txt")),
+    ("news_1", include_str!("spoiler_eval/news_1.txt")),
+    ("news_2", include_str!("spoiler_eval/news_2.txt")),
+    ("news_3", include_str!("spoiler_eval/news_3.txt")),
+    ("news_4", include_str!("spoiler_eval/news_4.txt")),
     ("gameplay_1", include_str!("spoiler_eval/gameplay_1.txt")),
     ("gameplay_2", include_str!("spoiler_eval/gameplay_2.txt")),
     ("gameplay_3", include_str!("spoiler_eval/gameplay_3.txt")),
@@ -29,6 +33,7 @@ const FIXTURES: [(&str, &str); 20] = [
     ("story_2", include_str!("spoiler_eval/story_2.txt")),
     ("story_3", include_str!("spoiler_eval/story_3.txt")),
     ("story_4", include_str!("spoiler_eval/story_4.txt")),
+    ("story_5", include_str!("spoiler_eval/story_5.txt")),
     (
         "insufficient_1",
         include_str!("spoiler_eval/insufficient_1.txt"),
@@ -64,7 +69,7 @@ async fn spoiler_eval_live() {
     let endpoint = decisions_endpoint("https://openrouter.ai/api/v1").expect("endpoint");
 
     // matrix[expected][predicted]; last column counts refusals/errors.
-    let mut matrix = [[0usize; 6]; 5];
+    let mut matrix = [[0usize; 7]; 6];
     let mut misses: Vec<String> = Vec::new();
 
     for (name, raw) in FIXTURES {
@@ -93,7 +98,7 @@ async fn spoiler_eval_live() {
             }
             other => (None, format!("no choice: {other:?}")),
         };
-        matrix[expected][predicted.unwrap_or(5)] += 1;
+        matrix[expected][predicted.unwrap_or(6)] += 1;
         if predicted != Some(expected) {
             misses.push(format!("{name}: expected {expected_key}, got {note}"));
         }
@@ -112,7 +117,7 @@ async fn spoiler_eval_live() {
         }
         println!();
     }
-    let correct: usize = (0..5).map(|i| matrix[i][i]).sum();
+    let correct: usize = (0..6).map(|i| matrix[i][i]).sum();
     println!(
         "\naccuracy: {correct}/{} ({:.0}%)",
         FIXTURES.len(),

@@ -28,7 +28,7 @@ chat model.
 | Profiles | New `ProfileKind::{Chat, Decision}` on `AiProfile` (ADR-0010) |
 | Surface | Command only. Aurora tool `check_spoiler` comes later and reuses the same core |
 | Input | Page text + `og:title`/`og:description` + `og:image` as image. Rewrites for Reddit and X. No video |
-| Question | One `choice` question, five categories, confidence floor |
+| Question | One `choice` question, six categories, confidence floor |
 | Game | Free-text argument (restricted charset), default from `spoiler.default_game` |
 | Access | Everyone, per-user cooldown `cooldowns.spoiler`, no verdict cache |
 | Action | Reply only. No deletes, no mod pings |
@@ -172,6 +172,7 @@ Request:
       "criteria": {
         "unrelated":    "…",
         "marketing":    "…",
+        "news":         "…",
         "gameplay":     "…",
         "story":        "…",
         "insufficient": "…"
@@ -191,7 +192,7 @@ Response: `answers.spoiler` is either
 
 ### Prompt template
 
-The five category keys are a Rust enum in core; their order and spelling
+The six category keys are a Rust enum in core; their order and spelling
 live in code. The instruction and one description per key live in
 `crates/data/assets/prompts/spoiler/question.ron`, a map keyed by the same
 names, exported from `crates/data/src/prompts.rs` like the other prompts.
@@ -209,9 +210,16 @@ before GTA 6's story was public.
 |---|---|---|
 | `unrelated` | not about {game} | `⬜ scheint nicht über {game} zu sein` |
 | `marketing` | official trailers, screenshots, announcements | `🟩 sieht nach offiziellem Material aus ({game}, {p}%)` |
-| `gameplay` | mechanics, map, side content, nothing story-related | `🟨 Gameplay-Details ({game}, {p}%)` |
-| `story` | plot, missions, character fates, ending, leaked cutscenes | `🟥 Story-Spoiler ({game}, {p}%) – nicht klicken` |
+| `news` | about {game} but reveals no content: news, ratings, release dates, business, opinions, discussion | `🟩 nur News/Gerede ({game}, {p}%)` |
+| `gameplay` | mechanics, map, side content, nothing story-related; official, leaked or rumored | `🟨 Gameplay-Details ({game}, {p}%)` |
+| `story` | plot, missions, character fates, ending, leaked cutscenes; official, leaked or rumored | `🟥 Story-Spoiler ({game}, {p}%) – nicht klicken` |
 | `insufficient` | no real content to judge (walls, empty page) | `⬜ kann ich nicht beurteilen` |
+
+`news` closes a gap: a post about the game that reveals nothing (an age
+rating story) used to split between `gameplay`, `marketing` and `unrelated`
+(50/29/15). Rumors and opinions are not their own categories: "is it a
+rumor" is orthogonal to "what does it reveal", so a rumored ending stays
+`story`, and more categories would only spread the probability mass.
 
 `{p}` is `probabilities[choice]`, not `confidence` (they differ; see verified
 facts). If it is below `spoiler.confidence_floor`, reply
@@ -277,9 +285,9 @@ discover them late):
   `base_url`): request body shape against `/api/alpha/decisions`, image
   part present when og:image resolves and absent when it doesn't, error
   paths, cooldown charged once a fetch is attempted.
-- **Live eval** (`#[ignore]`, needs `OPENROUTER_API_KEY`): ~20 text fixtures
+- **Live eval** (`#[ignore]`, needs `OPENROUTER_API_KEY`): 25 text fixtures
   from released games (RDR2, Elden Ring, The Last of Us Part II), 4 per
-  category, stored as text so link rot can't break them. Prints a confusion
+  category plus a rumored story leak (25/25 on 2026-11-13), stored as text so link rot can't break them. Prints a confusion
   matrix. Run by hand to pick the model and tune `confidence_floor`. Never
   in CI.
 - **Manual, from the homelab:** fetch a Reddit post, a Reddit share link, a
