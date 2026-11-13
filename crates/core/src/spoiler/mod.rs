@@ -8,7 +8,7 @@ pub mod verdict;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use llm::decision::{DecisionRequest, StatePart, decide, decisions_endpoint};
+use llm::decision::{Answer, DecisionRequest, StatePart, decide, decisions_endpoint};
 use reqwest::Url;
 use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, error, info, warn};
@@ -125,7 +125,7 @@ pub async fn check(
     };
     match verdict(answer, floor_pct) {
         Ok(v) => {
-            log_verdict(&v, &resp.model);
+            log_verdict(&v, &resp.model, answer);
             Outcome::Verdict(v)
         }
         Err(error) => {
@@ -147,10 +147,26 @@ fn request(profile: &AiProfile, input: Input, game: &str) -> DecisionRequest {
     }
 }
 
-fn log_verdict(v: &Verdict, model: &str) {
+fn log_verdict(v: &Verdict, model: &str, answer: &Answer) {
+    // Full distribution so floor and criteria tweaks can be judged from prod.
+    let (probs, confidence) = match answer {
+        Answer::Choice {
+            probabilities,
+            confidence,
+            ..
+        } => (
+            probabilities
+                .iter()
+                .map(|(k, p)| format!("{k}={:.1}", p * 100.0))
+                .collect::<Vec<_>>()
+                .join(" "),
+            *confidence,
+        ),
+        _ => (String::new(), None),
+    };
     match *v {
         Verdict::Sure { category, pct } => {
-            info!(choice = category.key(), pct, model, "spoiler verdict");
+            info!(choice = category.key(), pct, %probs, ?confidence, model, "spoiler verdict");
         }
         Verdict::Unsure {
             top: [(a, pa), (b, pb)],
@@ -159,6 +175,8 @@ fn log_verdict(v: &Verdict, model: &str) {
             pct = pa,
             runner_up = b.key(),
             runner_up_pct = pb,
+            %probs,
+            ?confidence,
             model,
             "spoiler verdict below confidence floor"
         ),
