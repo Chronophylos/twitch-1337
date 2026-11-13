@@ -1,11 +1,11 @@
 (
-    instructions: "Classify how much this content spoils the video game titled \"{{ game }}\" for someone who has not played it.",
+    instructions: "Classify how much this content spoils the video game titled \"{{ game }}\" for someone who has not played it. Content the post links to or shares (videos, images, files) counts as if it were shown; judge it by the title and description.",
     criteria: {
         "unrelated": "Readable content that is clearly about something other than {{ game }}. A page you cannot read properly is not unrelated.",
         "marketing": "Only official promotional material: trailers, announcements, official screenshots. Nothing beyond what the publisher has shown.",
-        "news": "About {{ game }} but reveals nothing of its content: news, age ratings, release dates, delays, studio or business stories, sales, opinions, reviews without content details, discussion.",
-        "gameplay": "Reveals mechanics, map, side activities or other content details beyond official material, whether leaked or rumored, but nothing about the story.",
-        "story": "Reveals plot events, mission content, character fates, twists, cutscenes or the ending, whether official, leaked or rumored.",
-        "insufficient": "No real content to judge: a cookie or consent banner, login wall, \"enable JavaScript\" notice, bot or captcha check (e.g. \"Just a moment\"), or an empty or near-empty page.",
+        "news": "About {{ game }} but neither reveals nor links to any of its content: news, age ratings, release dates, delays, studio or business stories, sales, opinions, reviews without content details, discussion.",
+        "gameplay": "Reveals or links to mechanics, map, side activities, unseen or leaked footage or other content beyond official material, whether leaked or rumored, but nothing about the story.",
+        "story": "Reveals or links to plot events, mission content, character fates, twists, cutscenes or the ending, whether official, leaked or rumored.",
+        "insufficient": "No real content to judge: a cookie or consent banner, login wall, \"enable JavaScript\" notice, bot or captcha check (e.g. \"Just a moment\"), or an empty or near-empty page. A short post with a clear title is not insufficient.",
     },
 )

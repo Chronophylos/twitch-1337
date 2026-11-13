@@ -204,6 +204,12 @@ missions, leaked cutscenes, reveals beyond official material), so the model
 does not need to know the game's plot. Most decision models were trained
 before GTA 6's story was public.
 
+Linked content counts as shown. A leak post is often just a title and a
+video link; the instruction tells the model to judge what the post links
+to or shares by its title and description. Without that, "Cyberleek shares
+25 minutes of unseen GTA 6 gameplay" plus an mp4 link split news 36 /
+gameplay 32 / insufficient 28; with it, gameplay 0.92.
+
 ## Categories and output
 
 | Choice | Meaning | Chat |
@@ -285,9 +291,10 @@ discover them late):
   `base_url`): request body shape against `/api/alpha/decisions`, image
   part present when og:image resolves and absent when it doesn't, error
   paths, cooldown charged once a fetch is attempted.
-- **Live eval** (`#[ignore]`, needs `OPENROUTER_API_KEY`): 25 text fixtures
-  from released games (RDR2, Elden Ring, The Last of Us Part II), 4 per
-  category plus a rumored story leak (25/25 on 2026-11-13), stored as text so link rot can't break them. Prints a confusion
+- **Live eval** (`#[ignore]`, needs `OPENROUTER_API_KEY`): 27 text fixtures,
+  mostly from released games (RDR2, Elden Ring, The Last of Us Part II), 4 per
+  category plus a rumored story leak and two link-only leak posts (27/27 on
+  2026-11-13), stored as text so link rot can't break them. Prints a confusion
   matrix. Run by hand to pick the model and tune `confidence_floor`. Never
   in CI.
 - **Manual, from the homelab:** fetch a Reddit post, a Reddit share link, a
