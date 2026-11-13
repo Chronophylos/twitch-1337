@@ -1,6 +1,6 @@
 //! OAuth login/callback/logout handlers + mod-gate / CSRF middlewares.
 //!
-//! `OAuthCtx` wraps the configured `BasicClient`. Login redirects to twitch
+//! `OAuthCtx` holds the Twitch auth-code flow config. Login redirects to twitch
 //! with a freshly issued `tw1337_oauth_state` cookie. The callback verifies
 //! the state, exchanges the auth code, looks up the caller via helix,
 //! enforces the mod check, and finally drops `tw1337_sid` (HttpOnly) and
@@ -17,11 +17,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use eyre::{Result, WrapErr as _, eyre};
-use oauth2::basic::BasicClient;
-use oauth2::{
-    AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet,
-    EndpointSet, RedirectUrl, Scope, TokenResponse as _, TokenUrl,
-};
+use rand::Rng as _;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
 use tower_cookies::cookie::SameSite;
@@ -37,10 +33,6 @@ const OAUTH_STATE_COOKIE: &str = "tw1337_oauth_state";
 /// Short-lived cookie that stashes the original requested path captured by
 /// `require_mod` into `?next=`. Consumed (and cleared) by the callback.
 const NEXT_COOKIE: &str = "tw1337_next";
-
-/// Fully-configured `BasicClient` (auth/token/redirect endpoints all set).
-type ConfiguredClient =
-    BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
 
 /// Set the signed sid + csrf cookies that mark a logged-in session. Shared
 /// between the OAuth callback (`secure = true`) and the dev-login bypass
@@ -70,13 +62,22 @@ pub(crate) fn issue_session_cookies(
     );
 }
 
+const AUTHORIZE_URL: &str = "https://id.twitch.tv/oauth2/authorize";
+/// `user:read:moderated_channels` lets the callback ask Twitch which channels
+/// the logging-in user moderates and check our broadcaster against that list;
+/// `moderation:read` would only work if the logging-in user IS the broadcaster.
+const SCOPES: &str = "user:read:email user:read:moderated_channels";
+
+/// Twitch authorization-code flow, hand-rolled: one authorize URL and one
+/// form POST. The token URL is fixed at construction (never request-derived),
+/// so there is no SSRF surface.
 pub struct OAuthCtx {
-    pub basic: ConfiguredClient,
-    /// Owned reqwest client used for token exchanges. Disables redirects to
-    /// avoid SSRF (oauth2 docs explicitly recommend this). oauth2 is compiled
-    /// without its bundled HTTP client; the closure adapter `oauth_http_call`
-    /// supplies this workspace `reqwest` 0.13 client via
-    /// `AsyncHttpClient` / `Fn(HttpRequest)`.
+    client_id: String,
+    client_secret: SecretString,
+    token_url: String,
+    redirect_uri: String,
+    /// Client for token exchanges. Redirects disabled so the token endpoint
+    /// can't bounce the client secret somewhere else.
     pub http: reqwest::Client,
     /// Base URL for Helix calls made during the OAuth callback (`/helix/users`,
     /// `/helix/moderation/channels`). Production uses `https://api.twitch.tv`;
@@ -105,89 +106,71 @@ impl OAuthCtx {
         token_url: &str,
         helix_api_base: &str,
     ) -> Result<Self> {
-        let redirect = format!("{}/auth/callback", public_url.trim_end_matches('/'));
-        // Twitch's token endpoint only reads `client_id` / `client_secret` from
-        // the form body and ignores HTTP Basic auth, so override oauth2 v5's
-        // BasicAuth default — otherwise Twitch returns
-        // `{"status":400,"message":"missing client id"}`.
-        let basic = BasicClient::new(ClientId::new(client_id.to_owned()))
-            .set_client_secret(ClientSecret::new(client_secret.expose_secret().to_owned()))
-            .set_auth_uri(AuthUrl::new(
-                "https://id.twitch.tv/oauth2/authorize".into(),
-            )?)
-            .set_token_uri(TokenUrl::new(token_url.into())?)
-            .set_redirect_uri(RedirectUrl::new(redirect)?)
-            .set_auth_type(AuthType::RequestBody);
+        url::Url::parse(token_url).wrap_err("oauth token url")?;
+        let redirect_uri = format!("{}/auth/callback", public_url.trim_end_matches('/'));
+        url::Url::parse(&redirect_uri).wrap_err("oauth redirect url")?;
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .wrap_err("oauth http client")?;
         Ok(Self {
-            basic,
+            client_id: client_id.to_owned(),
+            client_secret: client_secret.clone(),
+            token_url: token_url.to_owned(),
+            redirect_uri,
             http,
             helix_api_base: helix_api_base.trim_end_matches('/').to_owned(),
         })
     }
-}
 
-/// Errors returned by the oauth2-bridging http closure.
-#[derive(Debug, thiserror::Error)]
-pub enum OAuthHttpError {
-    #[error("reqwest: {0}")]
-    Reqwest(#[from] reqwest::Error),
-    #[error("invalid header: {0}")]
-    Header(String),
-}
-
-/// Adapt the workspace `reqwest::Client` to the closure form
-/// `Fn(HttpRequest) -> Future<Output = Result<HttpResponse, _>>` so it
-/// satisfies `oauth2::AsyncHttpClient` without enabling oauth2's bundled
-/// reqwest feature.
-async fn oauth_http_call(
-    client: reqwest::Client,
-    req: oauth2::HttpRequest,
-) -> Result<oauth2::HttpResponse, OAuthHttpError> {
-    let (parts, body) = req.into_parts();
-    let url = parts.uri.to_string();
-    let mut builder = client.request(parts.method.clone(), &url).body(body);
-    for (name, value) in parts.headers.iter() {
-        builder = builder.header(name.as_str(), value.as_bytes());
+    fn authorize_url(&self, state: &str) -> String {
+        let mut url = url::Url::parse(AUTHORIZE_URL).expect("const authorize url parses");
+        url.query_pairs_mut()
+            .append_pair("response_type", "code")
+            .append_pair("client_id", &self.client_id)
+            .append_pair("redirect_uri", &self.redirect_uri)
+            .append_pair("scope", SCOPES)
+            .append_pair("state", state);
+        url.into()
     }
-    let resp = builder.send().await?;
-    let status = resp.status();
-    let headers = resp.headers().clone();
-    let bytes = normalize_twitch_scope(resp.bytes().await?.to_vec());
 
-    let mut http_resp = http::Response::builder().status(status.as_u16());
-    for (name, value) in headers.iter() {
-        http_resp = http_resp.header(name.as_str(), value.as_bytes());
+    /// Exchange an auth code for a user access token. Twitch reads
+    /// `client_id` / `client_secret` from the form body only (HTTP Basic is
+    /// ignored and yields `missing client id`).
+    async fn exchange_code(&self, code: &str) -> Result<String> {
+        #[derive(Deserialize)]
+        struct TokenBody {
+            access_token: String,
+        }
+        let form = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("client_id", &self.client_id)
+            .append_pair("client_secret", self.client_secret.expose_secret())
+            .append_pair("code", code)
+            .append_pair("grant_type", "authorization_code")
+            .append_pair("redirect_uri", &self.redirect_uri)
+            .finish();
+        let resp = self
+            .http
+            .post(&self.token_url)
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(form)
+            .send()
+            .await
+            .wrap_err("token request")?;
+        let status = resp.status();
+        let body = resp.bytes().await.wrap_err("token response body")?;
+        // Surface the (token-redacted) raw body so logs show Twitch's message
+        // without leaking tokens on success-shaped bodies.
+        if !status.is_success() {
+            return Err(eyre!("status {status}, body: {}", redact_token_body(&body)));
+        }
+        serde_json::from_slice::<TokenBody>(&body)
+            .map(|t| t.access_token)
+            .map_err(|e| eyre!("{e}, body: {}", redact_token_body(&body)))
     }
-    http_resp
-        .body(bytes)
-        .map_err(|e| OAuthHttpError::Header(e.to_string()))
-}
-
-/// Twitch returns `scope` as a JSON array (`["a","b"]`), but RFC 6749 — and
-/// therefore oauth2 v5's `StandardTokenResponse` deserializer — expects a
-/// space-separated string. Rewrite arrays to strings so token parsing
-/// succeeds. No-op on non-JSON, non-object, or already-string shapes.
-fn normalize_twitch_scope(body: Vec<u8>) -> Vec<u8> {
-    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&body) else {
-        return body;
-    };
-    let Some(obj) = value.as_object_mut() else {
-        return body;
-    };
-    let Some(arr) = obj.get("scope").and_then(serde_json::Value::as_array) else {
-        return body;
-    };
-    let joined = arr
-        .iter()
-        .filter_map(serde_json::Value::as_str)
-        .collect::<Vec<_>>()
-        .join(" ");
-    obj.insert("scope".to_owned(), serde_json::Value::String(joined));
-    serde_json::to_vec(&value).unwrap_or(body)
 }
 
 /// Replace values of known credential-bearing JSON fields with `<redacted>`
@@ -260,9 +243,11 @@ async fn auth_start(
     Query(params): Query<LoginParams>,
     cookies: Cookies,
 ) -> Response {
-    let csrf = CsrfToken::new_random();
+    let mut state_bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut state_bytes);
+    let oauth_state = hex::encode(state_bytes);
     cookies.add(
-        Cookie::build((OAUTH_STATE_COOKIE, csrf.secret().to_owned()))
+        Cookie::build((OAUTH_STATE_COOKIE, oauth_state.clone()))
             .http_only(true)
             .secure(true)
             .same_site(SameSite::Lax)
@@ -283,19 +268,7 @@ async fn auth_start(
                 .build(),
         );
     }
-    let csrf_for_url = csrf.clone();
-    // `user:read:moderated_channels` lets the callback ask Twitch which
-    // channels the logging-in user moderates and check our broadcaster
-    // against that list — `moderation:read` would only work if the
-    // logging-in user IS the broadcaster.
-    let (auth_url, _) = state
-        .oauth
-        .basic
-        .authorize_url(move || csrf_for_url.clone())
-        .add_scope(Scope::new("user:read:email".to_owned()))
-        .add_scope(Scope::new("user:read:moderated_channels".to_owned()))
-        .url();
-    Redirect::to(auth_url.as_ref()).into_response()
+    Redirect::to(&state.oauth.authorize_url(&oauth_state)).into_response()
 }
 
 #[derive(Deserialize)]
@@ -315,34 +288,11 @@ async fn callback(
     }
     cookies.remove(Cookie::build(OAUTH_STATE_COOKIE).path("/").build());
 
-    let http = state.oauth.http.clone();
-    let http_call = move |req: oauth2::HttpRequest| {
-        let client = http.clone();
-        oauth_http_call(client, req)
-    };
-    let token = state
+    let user_token = state
         .oauth
-        .basic
-        .exchange_code(AuthorizationCode::new(params.code))
-        .request_async(&http_call)
+        .exchange_code(&params.code)
         .await
-        .map_err(|e| {
-            // Twitch returns non-RFC-6749 error bodies that fail Parse; surface
-            // the (token-redacted) raw body so logs show the upstream message
-            // without leaking access/refresh tokens on success-shaped bodies.
-            let msg = match &e {
-                oauth2::RequestTokenError::Parse(_, body) => {
-                    format!(
-                        "token exchange (response body: {})",
-                        redact_token_body(body)
-                    )
-                }
-                _ => "token exchange".into(),
-            };
-            WebError::OAuthExchange(eyre::Report::new(e).wrap_err(msg))
-        })?;
-
-    let user_token = token.access_token().secret().to_owned();
+        .map_err(|e| WebError::OAuthExchange(e.wrap_err("token exchange")))?;
     let me = fetch_caller_user(&state, &user_token)
         .await
         .map_err(|e| WebError::OAuthExchange(e.wrap_err("user lookup")))?;
@@ -629,54 +579,6 @@ pub async fn require_owner(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn normalize_twitch_scope_rewrites_array_to_space_string() {
-        let body = br#"{"access_token":"x","scope":["a","b"],"token_type":"bearer"}"#.to_vec();
-        let out = normalize_twitch_scope(body);
-        let parsed: serde_json::Value = serde_json::from_slice(&out).unwrap();
-        assert_eq!(parsed["scope"], serde_json::Value::String("a b".into()));
-    }
-
-    #[test]
-    fn normalize_twitch_scope_passes_through_string_scope() {
-        let body = br#"{"access_token":"x","scope":"a b","token_type":"bearer"}"#.to_vec();
-        let out = normalize_twitch_scope(body.clone());
-        // Re-parse rather than byte-compare; serialization order is not guaranteed.
-        let parsed: serde_json::Value = serde_json::from_slice(&out).unwrap();
-        assert_eq!(parsed["scope"], serde_json::Value::String("a b".into()));
-    }
-
-    #[test]
-    fn normalize_twitch_scope_passes_through_non_json() {
-        let body = b"not json".to_vec();
-        assert_eq!(normalize_twitch_scope(body.clone()), body);
-    }
-
-    #[test]
-    fn normalize_twitch_scope_passes_through_missing_scope_field() {
-        let body = br#"{"access_token":"x","token_type":"bearer"}"#.to_vec();
-        assert_eq!(normalize_twitch_scope(body.clone()), body);
-    }
-
-    #[test]
-    fn normalize_twitch_scope_handles_empty_array() {
-        let body = br#"{"access_token":"x","scope":[],"token_type":"bearer"}"#.to_vec();
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&normalize_twitch_scope(body)).unwrap();
-        assert_eq!(parsed["scope"], serde_json::Value::String(String::new()));
-    }
-
-    #[test]
-    fn normalize_twitch_scope_drops_non_string_array_elements() {
-        // Twitch should never send numbers in scope, but pin the silent-drop
-        // behavior of `filter_map(as_str)` so a future Twitch quirk surfaces
-        // as a test diff rather than a parse failure on the live endpoint.
-        let body = br#"{"scope":[1,"a",2,"b"]}"#.to_vec();
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&normalize_twitch_scope(body)).unwrap();
-        assert_eq!(parsed["scope"], serde_json::Value::String("a b".into()));
-    }
 
     #[test]
     fn redact_token_body_replaces_known_credential_fields() {

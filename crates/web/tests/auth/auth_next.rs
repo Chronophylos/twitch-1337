@@ -19,7 +19,7 @@ use tower::ServiceExt as _;
 use twitch_1337_web::build_router;
 use twitch_1337_web::error::is_safe_redirect;
 use twitch_1337_web::helix::HelixClient;
-use wiremock::matchers::{header as wm_header, method, path, query_param};
+use wiremock::matchers::{body_string_contains, header as wm_header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::helpers;
@@ -106,6 +106,9 @@ const NEXT_PATH: &str = "/memory/scratch/notes";
 async fn mount_oauth_callback_stubs(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/oauth2/token"))
+        // Twitch ignores HTTP Basic auth; credentials must ride in the form body.
+        .and(body_string_contains("client_secret=test-secret"))
+        .and(body_string_contains("grant_type=authorization_code"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "access_token": TEST_ACCESS_TOKEN,
             "token_type": "bearer",
