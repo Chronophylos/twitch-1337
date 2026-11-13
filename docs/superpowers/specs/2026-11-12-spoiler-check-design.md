@@ -97,12 +97,22 @@ reachable. This also tightens `read_url`.
 
    | Input host / path | Rewritten to |
    |---|---|
-   | `reddit.com`, `www.`, `new.`, `np.`, `m.` + `/r/<sub>/comments/…` | `https://old.reddit.com/<same path>` |
-   | `reddit.com/r/<sub>/s/<id>` (share link) | unchanged; it redirects to `www.reddit.com/…`, so after the fetch, if `final_url` host is `www.reddit.com`, refetch once with the host swapped to `old.reddit.com` |
-   | `redd.it/<id>` | `https://old.reddit.com/comments/<id>` |
+   | `reddit.com`, `www.`, `new.`, `np.`, `m.`, `old.` + `/r/<sub>/comments/<id>/…` or `/comments/<id>`, and `redd.it/<id>` | not fetched from Reddit; the post id goes to the archive lookup below |
+   | `reddit.com/r/<sub>/s/<id>` (share link) | unchanged; it redirects to the post path, so after the fetch a `final_url` that names a post goes to the archive lookup |
    | `x.com`, `twitter.com`, `www.`/`mobile.` variants, `fxtwitter.com`, `vxtwitter.com`, `fixupx.com` + `/<user>/status/<id>` | `https://api.fxtwitter.com/<user>/status/<id>` (query string dropped) |
 
    Everything else is fetched as-is.
+
+   **Reddit posts.** Reddit walls logged-out bots on every host (JS
+   proof-of-work on `www`, a login redirect on `old`, a TLS-fingerprint 403
+   on `embed`, `.json`/RSS gone, new API keys closed). The post is read from
+   the Arctic Shift archive instead
+   (`arctic-shift.photon-reddit.com/api/posts/ids?ids=<id>`, keyless,
+   ingests within seconds) as `r/<sub> · <flair>`, title, a spoiler-flag
+   note, body and link URL, with the first preview image. If the archive
+   fails or lacks the post, Reddit's oEmbed (`www.reddit.com/oembed`, which
+   still answers bots) supplies the title alone; it needs the subreddit, so
+   `redd.it` links have no fallback. Both fail → Unreadable.
 
 2. **Page fetch:** `fetch_raw` with `max_bytes = 3 MiB` (YouTube watch pages
    exceed the 1 MiB `ai.media.max_text_size`, so that knob is not used here).
@@ -291,7 +301,10 @@ discover them late):
 - `GET /api/v1/models?output_modalities=decisions` lists 39 models;
   `nace-ai/drex-max` is text+image, 262144 ctx.
 - `api.fxtwitter.com/<user>/status/<id>` returns tweet JSON without auth.
-- `old.reddit.com` returns full HTML; `www.reddit.com` returns an 8 KB shell.
+- (2026-11-13) Reddit walls bots everywhere: `old.reddit.com` posts redirect
+  to `/login/?reason=lor2`, `www` serves a JS proof-of-work page, `.json`
+  and `api.reddit.com` 403, `embed.reddit.com` 403s rustls (curl gets 200;
+  header casing ruled out). Arctic Shift and oEmbed answer our client.
 - Live calls against `nace-ai/drex-max` (resolves to `drex-max-20261016`,
   served by DeepInfra) with the request shape above, choice question and
   five categories:
