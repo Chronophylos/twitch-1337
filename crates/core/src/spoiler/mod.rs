@@ -17,7 +17,7 @@ use crate::llm_factory::LlmRegistry;
 use crate::settings::{Settings, ai::AiProfile, ai::ProfileKind};
 
 use self::input::{GatherError, IMAGE_TIMEOUT, Input, PAGE_TIMEOUT, gather};
-use self::verdict::{UNTRUSTED_PREFIX, Verdict, build_question, verdict};
+use self::verdict::{Verdict, build_question, state, verdict};
 
 const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const QUESTION_KEY: &str = "spoiler";
@@ -125,7 +125,7 @@ pub async fn check(
     };
     match verdict(answer, floor_pct) {
         Ok(v) => {
-            log_verdict(&v, &resp.model, answer);
+            log_verdict(&v, &resp.model, game, answer);
             Outcome::Verdict(v)
         }
         Err(error) => {
@@ -136,18 +136,18 @@ pub async fn check(
 }
 
 fn request(profile: &AiProfile, input: Input, game: &str) -> DecisionRequest {
-    let mut state = vec![StatePart::Text(format!("{UNTRUSTED_PREFIX}{}", input.text))];
+    let mut parts = vec![state(game, &input.text)];
     if let Some(image) = input.image_data_url {
-        state.push(StatePart::image(image));
+        parts.push(StatePart::image(image));
     }
     DecisionRequest {
         model: profile.model.clone(),
-        state,
-        questions: BTreeMap::from([(QUESTION_KEY.to_string(), build_question(game))]),
+        state: parts,
+        questions: BTreeMap::from([(QUESTION_KEY.to_string(), build_question())]),
     }
 }
 
-fn log_verdict(v: &Verdict, model: &str, answer: &Answer) {
+fn log_verdict(v: &Verdict, model: &str, game: &str, answer: &Answer) {
     // Full distribution so floor and criteria tweaks can be judged from prod.
     let (probs, confidence) = match answer {
         Answer::Choice {
@@ -166,11 +166,12 @@ fn log_verdict(v: &Verdict, model: &str, answer: &Answer) {
     };
     match *v {
         Verdict::Sure { category, pct } => {
-            info!(choice = category.key(), pct, %probs, ?confidence, model, "spoiler verdict");
+            info!(game, choice = category.key(), pct, %probs, ?confidence, model, "spoiler verdict");
         }
         Verdict::Unsure {
             top: [(a, pa), (b, pb)],
         } => info!(
+            game,
             choice = a.key(),
             pct = pa,
             runner_up = b.key(),

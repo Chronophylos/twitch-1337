@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use indexmap::IndexMap;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -17,11 +18,13 @@ pub struct DecisionRequest {
     pub questions: BTreeMap<String, Question>,
 }
 
-/// One piece of the state the model decides on: plain text or an image.
+/// One piece of the state the model decides on: plain text, named text
+/// fields the question can refer to by key, or an image.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum StatePart {
     Text(String),
+    Fields(BTreeMap<String, String>),
     Image(ImagePart),
 }
 
@@ -51,7 +54,8 @@ pub struct ImageUrl {
 pub enum Question {
     Choice {
         instructions: String,
-        criteria: BTreeMap<String, String>,
+        /// Sent in insertion order: decision models lean toward the first option.
+        criteria: IndexMap<String, String>,
     },
 }
 
@@ -158,7 +162,10 @@ mod tests {
                 "spoiler".to_string(),
                 Question::Choice {
                     instructions: "classify".into(),
-                    criteria: BTreeMap::from([("story".into(), "story spoilers".into())]),
+                    criteria: IndexMap::from([
+                        ("story".into(), "story spoilers".into()),
+                        ("gameplay".into(), "gameplay".into()),
+                    ]),
                 },
             )]),
         }
@@ -187,10 +194,13 @@ mod tests {
                 "questions": {"spoiler": {
                     "type": "choice",
                     "instructions": "classify",
-                    "criteria": {"story": "story spoilers"}
+                    "criteria": {"story": "story spoilers", "gameplay": "gameplay"}
                 }}
             })
         );
+        // `Value` sorts keys, so check criteria order on the raw string.
+        let raw = serde_json::to_string(&request()).unwrap();
+        assert!(raw.find("\"story\"").unwrap() < raw.find("\"gameplay\"").unwrap());
     }
 
     async fn server_with(resp: ResponseTemplate) -> (MockServer, String) {
