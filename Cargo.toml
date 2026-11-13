@@ -21,9 +21,9 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-arc-swap = "1.7"
+arc-swap = "1.9"
 askama = { version = "0.16", features = ["urlencode"] }
-async-trait = "0.1.89"
+async-trait = "0.1.92"
 axum = { version = "0.8", default-features = false, features = ["form", "http1", "json", "query", "tokio", "tower-log", "tracing"] }
 # serde_html_form-backed Form extractor: parses repeated urlencoded keys into
 # Vec and a single occurrence into a 1-element Vec (plain axum::Form/serde_urlencoded
@@ -31,12 +31,12 @@ axum = { version = "0.8", default-features = false, features = ["form", "http1",
 axum-extra = { version = "0.12", default-features = false, features = ["form"] }
 base64 = "0.23"
 bytesize = { version = "2", features = ["serde"] }
-chrono = { version = "0.4.44", features = ["now", "serde"], default-features = false }
+chrono = { version = "0.4.45", features = ["now", "serde"], default-features = false }
 # Full IANA DB (no filter-by-regex): Aviationstack airport timezones must resolve.
 chrono-tz = { version = "0.10.4" }
 color-eyre = "0.6"
 csv = "1.4.0"
-eyre = "0.6.12"
+eyre = "0.6.14"
 futures-util = "0.3"
 hex = "0.4"
 humantime-serde = "1"
@@ -47,21 +47,21 @@ tokio-util = "0.7"
 # Do not enable oauth2's bundled reqwest/rustls features — they pull reqwest
 # 0.12 and can reintroduce aws-lc via feature unification.
 oauth2 = { version = "5", default-features = false }
-rand = "0.10.1"
+rand = "0.10.3"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "stream"] }
-ron = "0.12.1"
-rusqlite = { version = "0.41", features = ["bundled"] }
+ron = "0.12.3"
+rusqlite = { version = "0.42", features = ["bundled"] }
 rust-embed = { version = "8", features = ["axum-ex"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 schemars = { version = "1.2", features = ["derive"] }
 scraper = "0.29"
 secrecy = { version = "0.10", features = ["serde"] }
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
-thiserror = "2.0.18"
-tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "signal", "time", "fs"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "signal", "time", "fs"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
-toml = "1.1.2"
+toml = "1.2.1"
 tower = { version = "0.5", features = ["util"] }
 tower-cookies = { version = "0.11", features = ["signed", "private"] }
 tower-http = { version = "0.7", features = ["fs", "trace"] }
