@@ -8,7 +8,9 @@ pub mod verdict;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use llm::decision::{Answer, DecisionRequest, StatePart, decide, decisions_endpoint};
+use llm::decision::{
+    Answer, DecisionRequest, DecisionResponse, StatePart, decide, decisions_endpoint,
+};
 use reqwest::Url;
 use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, error, info, warn};
@@ -125,7 +127,7 @@ pub async fn check(
     };
     match verdict(answer, floor_pct) {
         Ok(v) => {
-            log_verdict(&v, &resp.model, game, answer);
+            log_verdict(&v, &resp, game, answer);
             Outcome::Verdict(v)
         }
         Err(error) => {
@@ -147,7 +149,12 @@ fn request(profile: &AiProfile, input: Input, game: &str) -> DecisionRequest {
     }
 }
 
-fn log_verdict(v: &Verdict, model: &str, game: &str, answer: &Answer) {
+fn log_verdict(v: &Verdict, resp: &DecisionResponse, game: &str, answer: &Answer) {
+    let model = resp.model.as_str();
+    let provider = resp.provider.as_deref();
+    let id = resp.id.as_deref();
+    let cost = resp.usage.as_ref().and_then(|u| u.cost);
+    let input_tokens = resp.usage.as_ref().map(|u| u.input_tokens);
     // Full distribution so floor and criteria tweaks can be judged from prod.
     let (probs, confidence) = match answer {
         Answer::Choice {
@@ -162,12 +169,35 @@ fn log_verdict(v: &Verdict, model: &str, game: &str, answer: &Answer) {
                 .join(" "),
             *confidence,
         ),
-        _ => (String::new(), None),
+        Answer::Refusal => {
+            // verdict() maps this to Unklar; log it as what it was.
+            info!(
+                game,
+                model,
+                ?provider,
+                ?id,
+                ?cost,
+                ?input_tokens,
+                "spoiler decision refused"
+            );
+            return;
+        }
+        Answer::Other => (String::new(), None),
     };
     match *v {
-        Verdict::Sure { category, pct } => {
-            info!(game, choice = category.key(), pct, %probs, ?confidence, model, "spoiler verdict");
-        }
+        Verdict::Sure { category, pct } => info!(
+            game,
+            choice = category.key(),
+            pct,
+            %probs,
+            ?confidence,
+            model,
+            ?provider,
+            ?id,
+            ?cost,
+            ?input_tokens,
+            "spoiler verdict"
+        ),
         Verdict::Unsure {
             top: [(a, pa), (b, pb)],
         } => info!(
@@ -179,6 +209,10 @@ fn log_verdict(v: &Verdict, model: &str, game: &str, answer: &Answer) {
             %probs,
             ?confidence,
             model,
+            ?provider,
+            ?id,
+            ?cost,
+            ?input_tokens,
             "spoiler verdict below confidence floor"
         ),
     }

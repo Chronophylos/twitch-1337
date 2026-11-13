@@ -64,6 +64,26 @@ pub struct DecisionResponse {
     #[serde(default)]
     pub model: String,
     pub answers: BTreeMap<String, Answer>,
+    /// Generation id, for looking the call up on OpenRouter.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Upstream that answered (e.g. `DeepInfra`).
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub usage: Option<Usage>,
+}
+
+/// Billing info; every field is optional so a thin `usage` never fails a call.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    /// Credits charged, when the provider reports it.
+    #[serde(default)]
+    pub cost: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -221,12 +241,17 @@ mod tests {
             "id": "x", "provider": "DeepInfra", "model": "drex-max-20261016",
             "answers": {"spoiler": {"type": "choice", "choice": "story",
                 "probabilities": {"story": 0.998, "marketing": 0.001}, "confidence": 0.997}},
-            "usage": {"input_tokens": 207}
+            "usage": {"input_tokens": 207, "cost": 0.00001, "is_byok": false}
         })))
         .await;
         let r = decide(&http(), &ep, Some("k"), &request(), Duration::from_secs(5))
             .await
             .unwrap();
+        assert_eq!(r.provider.as_deref(), Some("DeepInfra"));
+        assert_eq!(r.id.as_deref(), Some("x"));
+        let usage = r.usage.as_ref().expect("usage");
+        assert_eq!((usage.input_tokens, usage.output_tokens), (207, 0));
+        assert_eq!(usage.cost, Some(0.00001));
         match &r.answers["spoiler"] {
             Answer::Choice {
                 choice,
