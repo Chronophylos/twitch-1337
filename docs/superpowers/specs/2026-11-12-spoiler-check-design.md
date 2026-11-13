@@ -250,7 +250,7 @@ page is ever echoed.
 | Fetch failed, blocked host, unsupported type, nothing readable | `⬜ kann den Link nicht lesen` | `debug` | yes |
 | `refusal` answer | same as `insufficient` | `info` | yes |
 | Decision API error / timeout | `⬜ Spoiler-Check gerade kaputt` | `error`, `?error` | yes |
-| Verdict | as above | `info` (game, choice, p, full distribution, confidence, model) | yes |
+| Verdict | as above | `info` (game, choice, p, full distribution, confidence, model, provider, id, cost, input tokens; a refusal logs as "spoiler decision refused") | yes |
 
 The cooldown is charged once a fetch is attempted. Only replies that send
 nothing out (usage, bad game name, not configured) are free, so dead links
