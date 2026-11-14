@@ -125,6 +125,10 @@ where
         command_list.push(Arc::new(aviation::commands::info::InfoCommand::new(tx)));
     }
 
+    if let Some(amp) = services.amp.clone() {
+        command_list.push(Arc::new(commands::servers::ServersCommand::new(amp)));
+    }
+
     if let Some(tracker) = services.emote_tracker.clone() {
         command_list.push(Arc::new(commands::emote::EmoteCommand::new(tracker)));
     }
