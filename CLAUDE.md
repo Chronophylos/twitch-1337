@@ -197,7 +197,9 @@ removing the key needs a bot restart.
 
 `[amp]` holds `url`, `username`, `password` (`SecretString`) for the homelab
 CubeCoders AMP controller and is optional. Its presence registers `!servers`;
-absent, the command does not exist. No `settings.ron` section. Use a dedicated
+absent, the command does not exist. `url` must be `http://` or `https://`
+(validated at startup). The per-user cooldown is `cooldowns.servers` in
+`settings.ron` (default 30s, `/settings → Cooldowns`). Use a dedicated
 AMP user whose role allows only `Instances.*` (all else denied). The bot reads,
 never starts or stops. The bot reaches the controller over the LAN
 (`192.168.178.114:8080`), no ZeroTier needed. Game instances need their own

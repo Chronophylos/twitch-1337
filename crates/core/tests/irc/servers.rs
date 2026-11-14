@@ -41,6 +41,39 @@ async fn servers_lists_online_instances() {
 }
 
 #[tokio::test]
+async fn servers_has_per_user_cooldown() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/API/Core/Login"))
+        .respond_with(json(r#"{"success":true,"sessionID":"s1"}"#))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/API/ADSModule/GetInstances"))
+        .respond_with(json(INSTANCES))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let mut bot = TestBotBuilder::new()
+        .with_amp_base_url(server.uri())
+        .spawn()
+        .await;
+
+    bot.send("alice", "!servers").await;
+    bot.expect_reply(Duration::from_secs(2)).await;
+    bot.send("alice", "!servers gregtech").await;
+    let reply = bot.expect_reply(Duration::from_secs(2)).await;
+    assert!(reply.starts_with("Bitte warte noch"), "got: {reply}");
+    // Other users are not throttled by alice.
+    bot.send("bob", "!servers").await;
+    let reply = bot.expect_reply(Duration::from_secs(2)).await;
+    assert!(reply.starts_with("Online:"), "got: {reply}");
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
 async fn servers_absent_without_amp_config() {
     let mut bot = TestBotBuilder::new().spawn().await;
 

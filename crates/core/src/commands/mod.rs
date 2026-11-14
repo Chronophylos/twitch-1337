@@ -43,6 +43,11 @@ pub fn spoiler_cooldown_duration(s: &crate::settings::Settings) -> Duration {
     Duration::from_secs(s.cooldowns.spoiler)
 }
 
+/// Per-user cooldown duration for `!servers`.
+pub fn servers_cooldown_duration(s: &crate::settings::Settings) -> Duration {
+    Duration::from_secs(s.cooldowns.servers)
+}
+
 /// Per-user cooldown duration for `!news`, `!tldr`, and `!haiku` (shared bucket).
 pub fn news_cooldown_duration(s: &crate::settings::Settings) -> Duration {
     Duration::from_secs(s.cooldowns.news)

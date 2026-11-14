@@ -1794,6 +1794,16 @@ async fn spoiler_card_save_persists() {
 }
 
 #[tokio::test]
+async fn post_settings_saves_servers_cooldown() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    set_owner(&state, Some("123"));
+    let res = post_settings(&state, &[("cooldown_servers", "45")]).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(state.settings.load().cooldowns.servers, 45);
+}
+
+#[tokio::test]
 async fn empty_spoiler_profile_persists_as_off() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
@@ -1867,6 +1877,7 @@ async fn settings_page_spoiler_dropdown_lists_only_decision_profiles() {
     let html = body_string(res).await;
     assert!(html.contains("id=\"sec-spoiler\""), "spoiler card missing");
     assert!(html.contains("name=\"cooldown_spoiler\""));
+    assert!(html.contains("name=\"cooldown_servers\""));
     let inner = select_inner(&html, "spoiler_profile");
     assert!(
         inner.contains("value=\"\""),

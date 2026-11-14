@@ -233,6 +233,14 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         if amp.url.trim().is_empty() {
             bail!("amp.url cannot be empty when amp is configured");
         }
+        let scheme_ok = reqwest::Url::parse(&amp.url)
+            .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.has_host());
+        if !scheme_ok {
+            bail!(
+                "amp.url must be an http:// or https:// URL, got {:?}",
+                amp.url
+            );
+        }
         if amp.username.trim().is_empty() {
             bail!("amp.username cannot be empty when amp is configured");
         }
@@ -545,6 +553,27 @@ password = "pw"
             err.to_string().contains("amp.url"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn amp_url_without_http_scheme_rejected() {
+        for url in ["192.168.178.114:8080", "ftp://amp:8080", "amp"] {
+            let mut cfg = Configuration::test_default();
+            cfg.amp = Some(AmpBootstrap {
+                url: url.to_owned(),
+                username: "bot".to_owned(),
+                password: SecretString::new("pw".into()),
+            });
+            let err = validate_config(&cfg).expect_err(url);
+            assert!(err.to_string().contains("amp.url"), "{url}: {err}");
+        }
+        let mut cfg = Configuration::test_default();
+        cfg.amp = Some(AmpBootstrap {
+            url: "https://amp.example:8080".to_owned(),
+            username: "bot".to_owned(),
+            password: SecretString::new("pw".into()),
+        });
+        validate_config(&cfg).expect("https accepted");
     }
 
     #[test]

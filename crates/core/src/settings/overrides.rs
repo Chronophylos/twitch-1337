@@ -75,6 +75,8 @@ pub struct CooldownsOverrides {
     pub doener: Option<u64>,
     #[serde(default)]
     pub spoiler: Option<u64>,
+    #[serde(default)]
+    pub servers: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

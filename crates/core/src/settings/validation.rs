@@ -74,6 +74,13 @@ impl Settings {
             3600,
             &mut errs,
         );
+        bound(
+            "cooldowns.servers",
+            self.cooldowns.servers,
+            1,
+            3600,
+            &mut errs,
+        );
         bound("pings.cooldown", self.pings.cooldown, 1, 86_400, &mut errs);
         validate_ai(&self.ai, validate_agent_profile_targets, &mut errs);
         validate_spoiler(self, validate_agent_profile_targets, &mut errs);
@@ -1263,6 +1270,17 @@ mod tests {
             spoiler_errs(&s)
                 .iter()
                 .any(|e| e.field == "cooldowns.spoiler")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_servers_cooldown_zero() {
+        let mut s = Settings::compiled_defaults();
+        s.cooldowns.servers = 0;
+        assert!(
+            spoiler_errs(&s)
+                .iter()
+                .any(|e| e.field == "cooldowns.servers")
         );
     }
 

@@ -148,8 +148,7 @@ pub async fn main() -> Result<()> {
         build_aviation_client(config.aviationstack.as_ref(), &av_settings)
     };
 
-    // DHL needs no settings lookup, only the config key. Match the aviation
-    // invariant: log and disable on failure, never abort startup.
+    // AMP: same invariant as DHL below, log and disable, never abort startup.
     let amp_client = match config.amp.as_ref() {
         Some(a) => match twitch_1337_core::amp::AmpClient::new(
             a.url.clone(),
@@ -165,6 +164,8 @@ pub async fn main() -> Result<()> {
         None => None,
     };
 
+    // DHL needs no settings lookup, only the config key. Match the aviation
+    // invariant: log and disable on failure, never abort startup.
     let dhl_client = match config.dhl.as_ref() {
         Some(d) => match twitch_1337_core::dhl::DhlClient::new(d.api_key.clone()) {
             Ok(c) => Some(Arc::new(c)),

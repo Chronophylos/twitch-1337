@@ -63,6 +63,8 @@ struct SaveForm {
     cooldown_doener: u64,
     #[serde(default)]
     cooldown_spoiler: Option<u64>,
+    #[serde(default)]
+    cooldown_servers: Option<u64>,
 
     // ---- pings ----
     #[serde(default)]
@@ -339,6 +341,7 @@ async fn save(
         feedback: form.cooldown_feedback,
         doener: form.cooldown_doener,
         spoiler: form.cooldown_spoiler.unwrap_or(before.cooldowns.spoiler),
+        servers: form.cooldown_servers.unwrap_or(before.cooldowns.servers),
     };
     let pings_settings = PingsSettings {
         cooldown: form.ping_cooldown,

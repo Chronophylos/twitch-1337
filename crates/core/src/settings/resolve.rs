@@ -40,6 +40,10 @@ impl Settings {
                     .cooldowns
                     .spoiler
                     .unwrap_or(defaults.cooldowns.spoiler),
+                servers: overrides
+                    .cooldowns
+                    .servers
+                    .unwrap_or(defaults.cooldowns.servers),
             },
             pings: PingsSettings {
                 cooldown: overrides.pings.cooldown.unwrap_or(defaults.pings.cooldown),
@@ -745,11 +749,13 @@ mod tests {
             ..Default::default()
         };
         o.cooldowns.spoiler = Some(45);
+        o.cooldowns.servers = Some(50);
         let r = Settings::resolve(&defaults, &o);
         assert_eq!(r.spoiler.profile, "dec");
         assert_eq!(r.spoiler.default_game, "Hades II");
         assert_eq!(r.spoiler.confidence_floor, 70);
         assert_eq!(r.cooldowns.spoiler, 45);
+        assert_eq!(r.cooldowns.servers, 50);
         let r = Settings::resolve(&defaults, &SettingsOverrides::default());
         assert_eq!(r.spoiler, defaults.spoiler);
     }

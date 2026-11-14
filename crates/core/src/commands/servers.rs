@@ -6,23 +6,28 @@ use async_trait::async_trait;
 use eyre::Result;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, ExecutionClass};
+use super::{Command, CommandContext, ExecutionClass, servers_cooldown_duration};
 use crate::{
     amp::{AmpClient, AmpDetails, AmpError, AmpServer},
+    cooldown::{PerUserCooldown, format_cooldown_remaining},
+    settings::SettingsHandle,
     twitch::announce::format_uptime,
     util::truncate_response,
 };
 
 const MAX_REPLY_CHARS: usize = 480;
 
-// ponytail: no cooldown and no cache, one HTTP call per use; add cooldowns.servers if it gets spammed
 pub struct ServersCommand {
     amp: Arc<AmpClient>,
+    cooldown: PerUserCooldown,
 }
 
 impl ServersCommand {
-    pub fn new(amp: Arc<AmpClient>) -> Self {
-        Self { amp }
+    pub fn new(amp: Arc<AmpClient>, settings: SettingsHandle) -> Self {
+        Self {
+            amp,
+            cooldown: PerUserCooldown::live(settings, servers_cooldown_duration),
+        }
     }
 
     async fn reply_for(&self, query: &str) -> String {
@@ -81,6 +86,21 @@ where
 
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         ctx.cancellation.check()?;
+        let user = &ctx.privmsg.sender.login;
+        if let Some(remaining) = self.cooldown.check(user).await {
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    format!(
+                        "Bitte warte noch {} Waiting",
+                        format_cooldown_remaining(remaining)
+                    ),
+                )
+                .await;
+            return Ok(());
+        }
+        self.cooldown.record(user).await;
+
         let reply = self.reply_for(ctx.args.join(" ").trim()).await;
         ctx.cancellation.check()?;
         ctx.sender.reply(&ctx.privmsg, reply).await;

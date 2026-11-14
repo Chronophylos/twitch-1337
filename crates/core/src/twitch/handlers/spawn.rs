@@ -126,7 +126,10 @@ where
     }
 
     if let Some(amp) = services.amp.clone() {
-        command_list.push(Arc::new(commands::servers::ServersCommand::new(amp)));
+        command_list.push(Arc::new(commands::servers::ServersCommand::new(
+            amp,
+            services.settings.clone(),
+        )));
     }
 
     if let Some(tracker) = services.emote_tracker.clone() {

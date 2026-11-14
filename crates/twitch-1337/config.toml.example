@@ -55,7 +55,8 @@ client_secret = "your_client_secret"
 
 # Optional: CubeCoders AMP game-server panel. Presence enables `!servers`
 # (list online servers, `!servers <name>` for details). Create a dedicated
-# AMP user whose role allows only `Instances.*`. Restart to apply.
+# AMP user whose role allows only `Instances.*`. url needs http:// or
+# https://. Per-user cooldown lives at /settings → Cooldowns. Restart to apply.
 # [amp]
 # url = "http://192.168.178.114:8080"
 # username = "twitch-1337"
