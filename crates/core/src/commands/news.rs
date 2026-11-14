@@ -206,6 +206,17 @@ where
         self.mode.trigger()
     }
 
+    fn description(&self) -> &str {
+        match self.mode {
+            NewsMode::News => "Chat-News: was zuletzt im Chat passiert ist",
+            NewsMode::Tldr => "TL;DR vom Chat",
+        }
+    }
+
+    fn usage(&self) -> &str {
+        self.mode.trigger()
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Background
     }

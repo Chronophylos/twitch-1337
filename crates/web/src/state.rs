@@ -49,6 +49,10 @@ pub struct WebState {
     /// delete) persist to disk and must serialize against IRC handler
     /// triggers.
     pub ping_actor: PingHandle,
+    /// Live public command catalog, set by `run_bot` once the registry is
+    /// built. Empty until then; `/commands.json` answers 503 meanwhile.
+    pub command_catalog:
+        Arc<std::sync::OnceLock<Arc<dyn twitch_1337_core::commands::CommandCatalog>>>,
     /// Shared v2 memory store (same `Arc`-backed instance the bot's `!ai`
     /// turn / dreamer ritual writes through). Sharing the store keeps the
     /// per-path mutex map coherent — two independent stores against the
@@ -141,6 +145,7 @@ impl WebState {
             client_id: web.client_id,
             oauth: web.oauth,
             ping_actor: core.ping.clone(),
+            command_catalog: core.command_catalog.clone(),
             memory_store: core.memory_store.clone(),
             memory_audit: web.memory_audit,
             signed_key: web.signed_key,
@@ -222,6 +227,7 @@ impl WebState {
             client_id: SecretString::new("test-client-id".to_owned().into()),
             oauth,
             ping_actor,
+            command_catalog: Arc::default(),
             memory_store,
             memory_audit,
             signed_key,

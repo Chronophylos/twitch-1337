@@ -31,6 +31,14 @@ where
         "!info"
     }
 
+    fn description(&self) -> &str {
+        "Infos zu einer Flugnummer"
+    }
+
+    fn usage(&self) -> &str {
+        "!info <flight number>"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Inline
     }

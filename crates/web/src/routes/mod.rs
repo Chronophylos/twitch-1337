@@ -6,6 +6,7 @@ use crate::error::WebError;
 
 pub mod ai_profiles;
 pub mod assets;
+pub mod commands;
 pub mod emotes;
 pub mod flights;
 pub mod health;

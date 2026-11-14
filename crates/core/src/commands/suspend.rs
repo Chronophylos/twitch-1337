@@ -28,7 +28,8 @@ use eyre::Result;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use super::{
-    ADMIN_DENIED_MSG, Command, CommandContext, ExecutionClass, is_admin, normalize_command_name,
+    ADMIN_DENIED_MSG, Command, CommandContext, ExecutionClass, Permission, is_admin,
+    normalize_command_name,
 };
 use crate::cooldown::format_cooldown_remaining;
 use crate::settings::SettingsHandle;
@@ -76,6 +77,18 @@ where
 
     fn name(&self) -> &str {
         "!suspend"
+    }
+
+    fn description(&self) -> &str {
+        "Command zeitweise stummschalten"
+    }
+
+    fn usage(&self) -> &str {
+        "!suspend <command> [dauer]"
+    }
+
+    fn permission(&self) -> Permission {
+        Permission::Moderator
     }
 
     fn execution_policy(&self) -> ExecutionClass {
@@ -164,6 +177,18 @@ where
 
     fn name(&self) -> &str {
         "!unsuspend"
+    }
+
+    fn description(&self) -> &str {
+        "Stummschaltung eines Commands aufheben"
+    }
+
+    fn usage(&self) -> &str {
+        "!unsuspend <command>"
+    }
+
+    fn permission(&self) -> Permission {
+        Permission::Moderator
     }
 
     fn execution_policy(&self) -> ExecutionClass {

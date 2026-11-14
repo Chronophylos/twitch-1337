@@ -41,6 +41,14 @@ where
         "!up"
     }
 
+    fn description(&self) -> &str {
+        "Flugzeuge über einem Ort"
+    }
+
+    fn usage(&self) -> &str {
+        "!up <PLZ/ICAO/IATA/Ort>"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Background
     }

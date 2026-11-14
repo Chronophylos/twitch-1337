@@ -33,6 +33,14 @@ where
         "!lb"
     }
 
+    fn description(&self) -> &str {
+        "1337-Leaderboard, Top 5"
+    }
+
+    fn usage(&self) -> &str {
+        "!lb"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Inline
     }

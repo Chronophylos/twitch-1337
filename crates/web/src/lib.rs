@@ -2,6 +2,7 @@
 //!
 //! Public surfaces:
 //! - `/healthz` (always public)
+//! - `/commands.json` (always public, chat-client autocomplete)
 //! - `/login`, `/auth/callback`, `/logout` (OAuth + post-login `?next=` deep-link)
 //! - `/assets/*` (embedded htmx + pico bundles, immutable cache)
 //!
@@ -137,6 +138,10 @@ pub fn build_router(state: WebState) -> Router {
     let mut public = Router::new()
         .merge(routes::health::router(state.irc_connected.clone()))
         .merge(routes::assets::router())
+        .merge(routes::commands::router(
+            state.command_catalog.clone(),
+            state.channel.clone(),
+        ))
         .merge(auth::auth_router().with_state(state.clone()));
     #[cfg(feature = "dev-login")]
     {

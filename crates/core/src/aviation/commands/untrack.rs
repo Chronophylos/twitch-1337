@@ -31,6 +31,14 @@ where
         "!untrack"
     }
 
+    fn description(&self) -> &str {
+        "Flug-Tracking beenden"
+    }
+
+    fn usage(&self) -> &str {
+        "!untrack <callsign/hex>"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Inline
     }

@@ -34,6 +34,14 @@ where
         "!e"
     }
 
+    fn description(&self) -> &str {
+        "Infos zu einem 7TV-Emote"
+    }
+
+    fn usage(&self) -> &str {
+        "!e <Name, ID oder 7TV-Link>"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Inline
     }

@@ -46,6 +46,14 @@ where
         "!fb"
     }
 
+    fn description(&self) -> &str {
+        "Feedback an den Bot-Owner"
+    }
+
+    fn usage(&self) -> &str {
+        "!fb <nachricht>"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Inline
     }

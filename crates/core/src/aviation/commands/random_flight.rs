@@ -27,6 +27,14 @@ where
         "!fl"
     }
 
+    fn description(&self) -> &str {
+        "Zufälliger Flugplan für Flugzeugtyp und Dauer"
+    }
+
+    fn usage(&self) -> &str {
+        "!fl <ICAO-Typ> <dauer>"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Background
     }

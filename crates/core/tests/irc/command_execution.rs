@@ -104,6 +104,14 @@ impl Command<FakeTransport, StaticLoginCredentials> for FakeCommand {
         self.policy
     }
 
+    fn description(&self) -> &str {
+        "test"
+    }
+
+    fn usage(&self) -> &str {
+        "test"
+    }
+
     fn enabled(&self) -> bool {
         self.enabled
     }
