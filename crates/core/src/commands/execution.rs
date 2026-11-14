@@ -1537,6 +1537,14 @@ mod tests {
             self.policy
         }
 
+        fn description(&self) -> &str {
+            "test"
+        }
+
+        fn usage(&self) -> &str {
+            "test"
+        }
+
         async fn execute(&self, ctx: CommandContext<TestTransport, TestLogin>) -> Result<()> {
             self.started.lock().await.push(ctx.trigger.clone());
             self.started_notify.notify_one();
@@ -1593,6 +1601,14 @@ mod tests {
 
         fn execution_policy(&self) -> ExecutionClass {
             ExecutionClass::Background
+        }
+
+        fn description(&self) -> &str {
+            "test"
+        }
+
+        fn usage(&self) -> &str {
+            "test"
         }
 
         async fn execute(&self, _ctx: CommandContext<TestTransport, TestLogin>) -> Result<()> {

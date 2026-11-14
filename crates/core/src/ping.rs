@@ -251,7 +251,9 @@ pub fn ping_runtime(
     manager: PingManager,
 ) -> (PingRuntime, PingHandle, watch::Receiver<HashSet<String>>) {
     let (cmd_tx, cmd_rx) = mpsc::channel(PING_ACTOR_CHANNEL);
-    let (names_tx, names_rx) = watch::channel(HashSet::new());
+    // Seeded so a reader polled before the actor's first publish (e.g. the
+    // first `/commands.json`) already sees the loaded pings.
+    let (names_tx, names_rx) = watch::channel(manager.store.pings.keys().cloned().collect());
     (
         PingRuntime {
             rx: cmd_rx,

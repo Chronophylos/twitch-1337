@@ -286,6 +286,18 @@ where
         "!döner"
     }
 
+    fn description(&self) -> &str {
+        "Zahl in Döner umrechnen (Deutschland-Ø)"
+    }
+
+    fn usage(&self) -> &str {
+        "!döner <Zahl>"
+    }
+
+    fn aliases(&self) -> &[&'static str] {
+        &["!doener"]
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Background
     }

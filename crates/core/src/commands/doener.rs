@@ -56,6 +56,14 @@ where
         "!dpi"
     }
 
+    fn description(&self) -> &str {
+        "Döner-Preisindex für eine Stadt, ohne Suche für Deutschland"
+    }
+
+    fn usage(&self) -> &str {
+        "!dpi [Suche]"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Background
     }

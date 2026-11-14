@@ -32,6 +32,14 @@ where
         "!v"
     }
 
+    fn description(&self) -> &str {
+        "Bot-Version und Uptime"
+    }
+
+    fn usage(&self) -> &str {
+        "!v"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Inline
     }

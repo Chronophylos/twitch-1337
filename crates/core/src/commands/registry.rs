@@ -158,6 +158,27 @@ where
             });
         }
 
+        if command
+            .aliases()
+            .iter()
+            .any(|alias| !command.matches(alias))
+        {
+            return Err(RegistryBuildError::InvalidMetadata {
+                id,
+                reason: "every alias must be accepted by matches()",
+            });
+        }
+        // A `!`-alias shadows a ping of the same name, so `!p create` must
+        // refuse it just like the command name.
+        if let Some(alias) = command.aliases().iter().find(|alias| {
+            alias.starts_with('!') && !is_reserved_ping_name(&normalize_command_name(alias))
+        }) {
+            return Err(RegistryBuildError::ReservedPingNameMissing {
+                id,
+                name: (*alias).to_owned(),
+            });
+        }
+
         let is_catch_all = id.as_str() == PING_TRIGGER_ID;
         if is_catch_all {
             if name != PING_TRIGGER_NAME {
@@ -245,6 +266,8 @@ mod tests {
         name: &'static str,
         execution_policy: ExecutionClass,
         aliases: &'static [&'static str],
+        /// Matcher that ignores `aliases`, to exercise the drift guard.
+        stale_matcher: bool,
     }
 
     impl FakeCommand {
@@ -258,6 +281,7 @@ mod tests {
                 name,
                 execution_policy,
                 aliases: &[],
+                stale_matcher: false,
             })
         }
     }
@@ -280,8 +304,20 @@ mod tests {
             self.execution_policy
         }
 
+        fn description(&self) -> &str {
+            "test"
+        }
+
+        fn usage(&self) -> &str {
+            "test"
+        }
+
+        fn aliases(&self) -> &[&'static str] {
+            self.aliases
+        }
+
         fn matches(&self, word: &str) -> bool {
-            word == self.name || self.aliases.contains(&word)
+            word == self.name || (!self.stale_matcher && self.aliases.contains(&word))
         }
 
         async fn execute(&self, _ctx: CommandContext<TestTransport, TestLogin>) -> Result<()> {
@@ -383,6 +419,7 @@ mod tests {
             name: "!v",
             execution_policy: ExecutionClass::Inline,
             aliases: &[],
+            stale_matcher: false,
         };
         let error = match CommandRegistry::from_commands([Arc::new(invalid), catch_all()]) {
             Ok(_) => panic!("invalid IDs must fail registry construction"),
@@ -470,12 +507,95 @@ mod tests {
             name: "!ai",
             execution_policy: ExecutionClass::Background,
             aliases: &["@grok"],
+            stale_matcher: false,
         });
         assert!(ai.matches("@grok"));
 
         let registry = CommandRegistry::from_commands([ai, catch_all()]).unwrap();
         assert_eq!(registry.len(), 2);
         assert!(registry.get(&CommandId::new("ai").unwrap()).is_some());
+    }
+
+    #[test]
+    fn registry_rejects_alias_its_matcher_does_not_accept() {
+        let stale = Arc::new(FakeCommand {
+            id: "ai",
+            name: "!ai",
+            execution_policy: ExecutionClass::Background,
+            aliases: &["@grok"],
+            stale_matcher: true,
+        });
+        assert!(matches!(
+            CommandRegistry::from_commands([stale, catch_all()]),
+            Err(RegistryBuildError::InvalidMetadata { .. })
+        ));
+    }
+
+    fn fake(
+        id: &'static str,
+        name: &'static str,
+        aliases: &'static [&'static str],
+    ) -> Arc<FakeCommand> {
+        Arc::new(FakeCommand {
+            id,
+            name,
+            execution_policy: ExecutionClass::Inline,
+            aliases,
+            stale_matcher: false,
+        })
+    }
+
+    #[test]
+    fn registry_rejects_unreserved_bang_alias() {
+        let lead = fake("lb", "!lb", &["!lead"]);
+        assert!(matches!(
+            CommandRegistry::from_commands([lead, catch_all()]),
+            Err(RegistryBuildError::ReservedPingNameMissing { name, .. }) if name == "!lead"
+        ));
+    }
+
+    #[test]
+    fn alias_shares_the_command_suspend_key() {
+        let lb = fake("lb", "!lb", &["!lead"]);
+        let key = |t| Command::<TestTransport, TestLogin>::suspend_key(&*lb, t).into_owned();
+        assert_eq!(key("!lead"), "lb");
+        assert_eq!(key("!lb"), "lb");
+    }
+
+    #[test]
+    fn catalog_drops_entries_an_earlier_command_shadows() {
+        let registry = CommandRegistry::from_commands([
+            fake("lb", "!lb", &[]) as Arc<dyn Command<TestTransport, TestLogin>>,
+            fake("shadowed", "!lb", &[]),
+            catch_all(),
+        ])
+        .unwrap();
+        let names: Vec<_> = crate::commands::CommandCatalog::catalog(&registry)
+            .into_iter()
+            .map(|info| info.name)
+            .collect();
+        assert_eq!(names, ["!lb", "!<ping>"]);
+    }
+
+    #[test]
+    fn catalog_publishes_aliases_and_serializes_snake_case() {
+        let ai = Arc::new(FakeCommand {
+            id: "ai",
+            name: "!ai",
+            execution_policy: ExecutionClass::Background,
+            aliases: &["@grok"],
+            stale_matcher: false,
+        });
+        let registry = CommandRegistry::from_commands([ai, catch_all()]).unwrap();
+        let catalog = crate::commands::CommandCatalog::catalog(&registry);
+        let json = serde_json::to_value(&catalog[0]).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "name": "!ai", "aliases": ["@grok"], "kind": "command",
+                "permission": "everyone", "description": "test", "usage": "test",
+            })
+        );
     }
 
     #[test]

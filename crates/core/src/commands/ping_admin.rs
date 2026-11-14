@@ -38,6 +38,14 @@ where
         "!p"
     }
 
+    fn description(&self) -> &str {
+        "Ping-Gruppen: join, leave, list; create, edit, delete, add, remove nur für Mods"
+    }
+
+    fn usage(&self) -> &str {
+        "!p <join|leave> <name> | !p list"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Inline
     }

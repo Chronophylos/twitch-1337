@@ -133,6 +133,14 @@ where
         "!haiku"
     }
 
+    fn description(&self) -> &str {
+        "Haiku aus dem Chatverlauf"
+    }
+
+    fn usage(&self) -> &str {
+        "!haiku"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Background
     }

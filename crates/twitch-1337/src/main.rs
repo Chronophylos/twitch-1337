@@ -310,6 +310,7 @@ pub async fn main() -> Result<()> {
         started_at,
         ping: ping_handle,
         ping_names_rx,
+        command_catalog: Default::default(),
         memory_store,
         ai_memory,
         chat_ctx,

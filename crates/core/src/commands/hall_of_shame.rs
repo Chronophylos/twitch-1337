@@ -33,6 +33,14 @@ where
         "!sb"
     }
 
+    fn description(&self) -> &str {
+        "Hall of Shame: der langsamste 1337"
+    }
+
+    fn usage(&self) -> &str {
+        "!sb"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Inline
     }

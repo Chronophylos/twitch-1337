@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
+pub mod catalog;
 pub mod doener;
 pub mod doener_calc;
 pub mod emote;
@@ -23,6 +24,7 @@ pub mod spoiler;
 pub mod suspend;
 pub mod version;
 
+pub use catalog::{CommandCatalog, CommandInfo, CommandKind, Permission};
 pub use execution::{
     CAPACITY_REJECTION_MESSAGE, CommandAdmissionError, CommandAdmissionReceiver,
     CommandAdmissionSender, CommandCancellation, CommandCancelled, CommandContext,
@@ -156,10 +158,41 @@ where
         true
     }
 
+    /// One-line German description for the public command catalog.
+    fn description(&self) -> &str;
+
+    /// Usage hint for the public command catalog, e.g. `!track <callsign/hex>`.
+    fn usage(&self) -> &str;
+
+    /// Who may run the command, as published in the command catalog.
+    fn permission(&self) -> Permission {
+        Permission::Everyone
+    }
+
+    /// Extra triggers (with prefix) besides `name()`. The registry rejects an
+    /// alias that `matches()` does not accept, so an overridden matcher and
+    /// the published catalog cannot disagree.
+    fn aliases(&self) -> &[&'static str] {
+        &[]
+    }
+
     /// Whether this command matches the given trigger word.
-    /// Default: exact match on `name()`.
+    /// Default: exact match on `name()` or one of `aliases()`.
     fn matches(&self, word: &str) -> bool {
-        self.name() == word
+        self.name() == word || self.aliases().contains(&word)
+    }
+
+    /// Entries this command contributes to the public catalog. Overridden by
+    /// the ping catch-all, which expands into one entry per ping.
+    fn catalog_entries(&self) -> Vec<CommandInfo> {
+        vec![CommandInfo {
+            name: self.name().to_owned(),
+            aliases: self.aliases().iter().map(|&a| a.to_owned()).collect(),
+            kind: CommandKind::Command,
+            permission: self.permission(),
+            description: self.description().to_owned(),
+            usage: self.usage().to_owned(),
+        }]
     }
 
     /// Key used when looking up suspension state. The default normalizes the
@@ -169,7 +202,14 @@ where
     /// (e.g. `AiCommand` returns `"ai"` so both `!ai` and `@grok` collapse to
     /// the same entry).
     fn suspend_key(&self, trigger: &str) -> Cow<'_, str> {
-        Cow::Owned(normalize_command_name(trigger))
+        // An alias shares its command's suspension, so `!suspend <name>`
+        // also silences the alias.
+        let canonical = if self.aliases().contains(&trigger) {
+            self.name()
+        } else {
+            trigger
+        };
+        Cow::Owned(normalize_command_name(canonical))
     }
 
     /// Execute the command with the given owned context.

@@ -18,7 +18,9 @@ use crate::ai::memory::types::Role;
 use crate::ai::model_catalog::ModelCatalog;
 use crate::ai::recap::RecapHandle;
 use crate::ai::turn::{TurnInput, TurnOutcome, TurnReplyParent, TurnRunner, TurnSpeaker};
-use crate::commands::{Command, CommandContext, ExecutionClass};
+use crate::commands::{
+    Command, CommandContext, CommandInfo, CommandKind, ExecutionClass, Permission,
+};
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::settings::{Settings, SettingsHandle};
 use crate::twitch::mouth::{Agent, SpeakError};
@@ -168,6 +170,7 @@ const GROK_REPLY_DEFAULT_INSTRUCTION: &str =
 
 pub struct AiCommand {
     cooldown: PerUserCooldown,
+    settings: SettingsHandle,
     turn: TurnRunner,
 }
 
@@ -200,6 +203,7 @@ impl AiCommand {
         let cooldown = PerUserCooldown::live(deps.settings.clone(), ai_cooldown_duration);
         Self {
             cooldown,
+            settings: deps.settings.clone(),
             turn: TurnRunner::new(deps),
         }
     }
@@ -230,6 +234,35 @@ where
 
     fn name(&self) -> &str {
         "!ai"
+    }
+
+    /// Fallback only; the catalog text is built in `catalog_entries` from
+    /// the live persona names.
+    fn description(&self) -> &str {
+        "Frag die KI"
+    }
+
+    fn usage(&self) -> &str {
+        "!ai <anweisung>"
+    }
+
+    fn aliases(&self) -> &[&'static str] {
+        &[GROK_ALIAS_TRIGGER]
+    }
+
+    fn catalog_entries(&self) -> Vec<CommandInfo> {
+        let s = self.settings.load();
+        vec![CommandInfo {
+            name: AI_TRIGGER.to_owned(),
+            aliases: vec![GROK_ALIAS_TRIGGER.to_owned()],
+            kind: CommandKind::Command,
+            permission: Permission::Everyone,
+            description: format!(
+                "Frag {}, mit {GROK_ALIAS_TRIGGER} antwortet {}",
+                s.ai.aurora.persona_name, s.ai.grok.persona_name
+            ),
+            usage: Command::<T, L>::usage(self).to_owned(),
+        }]
     }
 
     fn execution_policy(&self) -> ExecutionClass {

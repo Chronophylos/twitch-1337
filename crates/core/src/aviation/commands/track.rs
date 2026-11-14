@@ -31,6 +31,14 @@ where
         "!track"
     }
 
+    fn description(&self) -> &str {
+        "Flug im Chat live verfolgen"
+    }
+
+    fn usage(&self) -> &str {
+        "!track <callsign/hex>"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Inline
     }

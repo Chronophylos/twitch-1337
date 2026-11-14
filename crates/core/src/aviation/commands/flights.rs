@@ -31,6 +31,14 @@ where
         "!flights"
     }
 
+    fn description(&self) -> &str {
+        "Alle verfolgten Flüge"
+    }
+
+    fn usage(&self) -> &str {
+        "!flights"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Inline
     }
@@ -71,6 +79,14 @@ where
 
     fn name(&self) -> &str {
         "!flight"
+    }
+
+    fn description(&self) -> &str {
+        "Status eines verfolgten Flugs"
+    }
+
+    fn usage(&self) -> &str {
+        "!flight <callsign/hex>"
     }
 
     fn execution_policy(&self) -> ExecutionClass {

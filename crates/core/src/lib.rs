@@ -128,6 +128,10 @@ pub struct Services {
     pub ping: crate::ping::PingHandle,
     /// Live ping name set, published by the ping actor.
     pub ping_names_rx: tokio::sync::watch::Receiver<HashSet<String>>,
+    /// Public command catalog for `/commands.json`. Filled by [`run_bot`]
+    /// once the registry is built; the web state is composed earlier, so it
+    /// shares this cell instead of the registry itself.
+    pub command_catalog: Arc<std::sync::OnceLock<Arc<dyn commands::CommandCatalog>>>,
     /// Shared v2 memory store. Constructed by the bin so the bot's `!ai`
     /// turn / dreamer ritual and the dashboard memory editor write through
     /// the *same* per-path mutex map. Two independent stores against the
@@ -330,6 +334,9 @@ where
         Some(registry) => registry,
         None => build_command_registry(&services, &services.settings.load())?,
     };
+    let catalog: Arc<dyn commands::CommandCatalog> = command_registry.clone();
+    // ponytail: a second run_bot on the same Services keeps the first catalog.
+    let _ = services.command_catalog.set(catalog);
 
     let lifecycle = Lifecycle::new();
     let mut supervisor = TaskSupervisor::new(lifecycle.clone());

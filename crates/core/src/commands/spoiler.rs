@@ -74,6 +74,14 @@ where
         "!spoiler"
     }
 
+    fn description(&self) -> &str {
+        "Prüft, ob ein Link ein Spiel spoilert"
+    }
+
+    fn usage(&self) -> &str {
+        "!spoiler <link> [spiel]"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Background
     }

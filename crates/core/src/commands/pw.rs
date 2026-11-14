@@ -33,6 +33,14 @@ where
         "!pw"
     }
 
+    fn description(&self) -> &str {
+        "Langsamster 1337 (Personal Worst) von dir oder einem User"
+    }
+
+    fn usage(&self) -> &str {
+        "!pw [user]"
+    }
+
     fn execution_policy(&self) -> ExecutionClass {
         ExecutionClass::Inline
     }
