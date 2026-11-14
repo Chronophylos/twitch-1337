@@ -74,6 +74,38 @@ async fn servers_has_per_user_cooldown() {
 }
 
 #[tokio::test]
+async fn ambiguous_query_does_not_start_the_cooldown() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/API/Core/Login"))
+        .respond_with(json(r#"{"success":true,"sessionID":"s1"}"#))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/API/ADSModule/GetInstances"))
+        .respond_with(json(INSTANCES))
+        .mount(&server)
+        .await;
+
+    let mut bot = TestBotBuilder::new()
+        .with_amp_base_url(server.uri())
+        .spawn()
+        .await;
+
+    bot.send("alice", "!servers vintage").await;
+    let reply = bot.expect_reply(Duration::from_secs(2)).await;
+    assert!(reply.starts_with("Mehrere Treffer"), "got: {reply}");
+    bot.send("alice", "!servers vintage story").await;
+    let reply = bot.expect_reply(Duration::from_secs(2)).await;
+    assert!(
+        reply.starts_with("Vintage Story ist offline"),
+        "got: {reply}"
+    );
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
 async fn servers_absent_without_amp_config() {
     let mut bot = TestBotBuilder::new().spawn().await;
 

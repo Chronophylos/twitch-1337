@@ -1,8 +1,8 @@
 //! CubeCoders AMP client backing `!servers`. AMP is JSON-RPC over POST with
 //! the session id in the body. Game instances sit behind the controller's
 //! proxy (`ADSModule/Servers/{id}/API/...`) and need their own login there;
-//! the controller session is rejected. Live probe notes:
-//! `docs/superpowers/plans/2026-11-14-amp-servers.md`.
+//! the controller session is rejected. Probed against AMP 2.8.0.10; see the
+//! `[amp]` section in CLAUDE.md.
 
 use std::{collections::HashMap, time::Duration};
 
@@ -22,8 +22,22 @@ const CONTROLLER: &str = "";
 pub enum AmpError {
     /// Login refused, or a fresh session was rejected again.
     Auth,
+    /// Valid session, but the AMP role lacks the method's permission.
+    Permission,
     Unavailable,
 }
+
+/// AMP nulls optional fields freely; treat null like a missing key.
+fn null_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
+/// AMP `AppState` for a game that is up and accepting players.
+const APP_STATE_READY: i32 = 20;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AmpServer {
@@ -49,44 +63,46 @@ pub struct AmpDetails {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct WireTarget {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     available_instances: Vec<WireInstance>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct WireInstance {
-    #[serde(rename = "InstanceID")]
+    #[serde(rename = "InstanceID", default, deserialize_with = "null_default")]
     instance_id: String,
     #[serde(default)]
+    app_state: Option<i32>,
+    #[serde(default, deserialize_with = "null_default")]
     instance_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     friendly_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     module: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     running: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     metrics: HashMap<String, WireMetric>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     application_endpoints: Vec<WireEndpoint>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct WireMetric {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     raw_value: f64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     max_value: f64,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct WireEndpoint {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     display_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     endpoint: String,
 }
 
@@ -99,7 +115,7 @@ struct WireStatus {
 
 #[derive(Debug, Deserialize)]
 struct WireLogin {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     success: bool,
     #[serde(default, rename = "sessionID")]
     session_id: Option<String>,
@@ -152,12 +168,22 @@ impl AmpClient {
 
     /// Uptime and player names of one running instance, via the proxy.
     pub async fn details(&self, instance_id: &str) -> Result<AmpDetails, AmpError> {
-        let status: WireStatus = self.call(instance_id, "Core/GetStatus").await?;
-        let users: HashMap<String, String> = self.call(instance_id, "Core/GetUserList").await?;
-        let mut players: Vec<String> = users.into_values().collect();
+        // Each piece stands alone; only fail when both calls failed.
+        let status = self.call::<WireStatus>(instance_id, "Core/GetStatus").await;
+        let users = self
+            .call::<HashMap<String, String>>(instance_id, "Core/GetUserList")
+            .await;
+        let (status, users) = match (status, users) {
+            (Err(e), Err(_)) => return Err(e),
+            (s, u) => (s.ok(), u.ok()),
+        };
+        let mut players: Vec<String> = users.map(|u| u.into_values().collect()).unwrap_or_default();
         players.sort();
         Ok(AmpDetails {
-            uptime: status.uptime.as_deref().and_then(parse_uptime),
+            uptime: status
+                .and_then(|s| s.uptime)
+                .as_deref()
+                .and_then(parse_uptime),
             players,
         })
     }
@@ -237,8 +263,12 @@ impl AmpClient {
             let value = self
                 .post(target, method, &json!({ "SESSIONID": sid }))
                 .await?;
-            match value.get("Title").and_then(Value::as_str) {
-                Some("Unauthorized Access") => {
+            let title = value.get("Title").and_then(Value::as_str);
+            let message = value.get("Message").and_then(Value::as_str);
+            match (title, message) {
+                // A missing/expired session names Session.Exists; any other
+                // permission is the role, and a re-login would not help.
+                (Some("Unauthorized Access"), Some(msg)) if msg.contains("Session.Exists") => {
                     self.sessions.lock().await.remove(target);
                     if retried {
                         tracing::warn!(method, "amp rejected a fresh session");
@@ -246,8 +276,12 @@ impl AmpClient {
                     }
                     retried = true;
                 }
-                Some(title) if value.get("StackTrace").is_some() => {
-                    tracing::warn!(method, title, "amp returned an error");
+                (Some("Unauthorized Access"), _) => {
+                    tracing::warn!(method, ?message, "amp role lacks permission");
+                    return Err(AmpError::Permission);
+                }
+                (Some(title), Some(_)) => {
+                    tracing::warn!(method, title, ?message, "amp returned an error");
                     return Err(AmpError::Unavailable);
                 }
                 _ => {
@@ -267,10 +301,12 @@ fn project(targets: Vec<WireTarget>) -> Vec<AmpServer> {
         .flat_map(|t| t.available_instances)
         .filter(|i| i.module != "ADS")
         .map(|i| {
+            // `Running` is AMP's instance process; the game is only up at Ready.
+            let online = i.running && i.app_state == Some(APP_STATE_READY);
             let metric = |key: &str| {
                 i.metrics
                     .get(key)
-                    .filter(|_| i.running)
+                    .filter(|_| online)
                     .map(|m| (m.raw_value.round() as u32, m.max_value.round() as u32))
             };
             AmpServer {
@@ -281,7 +317,7 @@ fn project(targets: Vec<WireTarget>) -> Vec<AmpServer> {
                 name: i.friendly_name,
                 instance_name: i.instance_name,
                 module: i.module,
-                running: i.running,
+                running: online,
             }
         })
         .collect();
@@ -340,8 +376,14 @@ mod tests {
 
     const INSTANCES: &str = include_str!("fixtures/get_instances.json");
     const STATUS: &str = include_str!("fixtures/status.json");
-    const UNAUTHORIZED: &str =
-        r#"{"Title":"Unauthorized Access","Message":"nope","StackTrace":""}"#;
+    const UNAUTHORIZED: &str = r#"{"Title":"Unauthorized Access","Message":"You do not have permission to use this method (ADSModule.GetInstances) at this time. This method requires the Session.Exists permission.","StackTrace":""}"#;
+    const FORBIDDEN: &str = r#"{"Title":"Unauthorized Access","Message":"You do not have permission to use this method (Core.GetUserList) at this time. This method requires the Core.UserManagement.ViewUsers permission.","StackTrace":""}"#;
+
+    fn one_instance(fields: &str) -> String {
+        format!(
+            r#"[{{"AvailableInstances":[{{"InstanceID":"x","InstanceName":"X01","FriendlyName":"X","Module":"Minecraft",{fields}}}]}}]"#
+        )
+    }
 
     fn fixture_servers() -> Vec<AmpServer> {
         project(serde_json::from_str(INSTANCES).unwrap())
@@ -386,6 +428,44 @@ mod tests {
         assert_eq!(gt.players, Some((0, 20)));
         assert_eq!(gt.memory_mb, Some((9496, 10240)));
         assert_eq!(gt.address.as_deref(), Some("192.168.196.166:25566"));
+    }
+
+    #[test]
+    fn running_requires_app_state_ready() {
+        // AMP's instance process is up, but the game itself is stopped (0),
+        // failed (100) or updating (75): not online, metrics stale.
+        for state in [0, 100, 75, -1] {
+            let raw = one_instance(&format!(
+                r#""Running":true,"AppState":{state},"Metrics":{{"Active Users":{{"RawValue":3,"MaxValue":20}}}}"#
+            ));
+            let servers = project(serde_json::from_str(&raw).unwrap());
+            assert!(!servers[0].running, "AppState {state}");
+            assert_eq!(servers[0].players, None, "AppState {state}");
+        }
+        let raw = one_instance(
+            r#""Running":true,"AppState":20,"Metrics":{"Active Users":{"RawValue":3,"MaxValue":20}}"#,
+        );
+        let servers = project(serde_json::from_str(&raw).unwrap());
+        assert!(servers[0].running);
+        assert_eq!(servers[0].players, Some((3, 20)));
+    }
+
+    #[test]
+    fn nulls_do_not_break_the_list() {
+        let raw = one_instance(
+            r#""Running":null,"AppState":null,"Metrics":null,"ApplicationEndpoints":null"#,
+        )
+        .replace(r#""FriendlyName":"X""#, r#""FriendlyName":null"#);
+        let servers = project(serde_json::from_str(&raw).unwrap());
+        assert_eq!(servers.len(), 1);
+        assert!(!servers[0].running);
+
+        let raw = one_instance(
+            r#""Running":true,"AppState":20,"Metrics":{"CPU Usage":{"RawValue":null,"MaxValue":100}},"ApplicationEndpoints":[{"DisplayName":null,"Endpoint":null}]"#,
+        );
+        let servers = project(serde_json::from_str(&raw).unwrap());
+        assert!(servers[0].running);
+        assert_eq!(servers[0].address, None);
     }
 
     #[test]
@@ -468,6 +548,84 @@ mod tests {
             .await;
 
         assert_eq!(client(&server).servers().await, Err(AmpError::Auth));
+    }
+
+    #[tokio::test]
+    async fn permission_denied_is_not_a_relogin() {
+        let server = MockServer::start().await;
+        let base = "/API/ADSModule/Servers/abc/API/Core";
+        Mock::given(method("POST"))
+            .and(path(format!("{base}/Login")))
+            .respond_with(json(r#"{"success":true,"sessionID":"i1"}"#))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{base}/GetStatus")))
+            .respond_with(json(FORBIDDEN))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{base}/GetUserList")))
+            .respond_with(json(FORBIDDEN))
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client(&server).details("abc").await,
+            Err(AmpError::Permission)
+        );
+    }
+
+    #[tokio::test]
+    async fn details_keeps_uptime_when_user_list_fails() {
+        let server = MockServer::start().await;
+        let base = "/API/ADSModule/Servers/abc/API/Core";
+        Mock::given(method("POST"))
+            .and(path(format!("{base}/Login")))
+            .respond_with(json(r#"{"success":true,"sessionID":"i1"}"#))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{base}/GetStatus")))
+            .respond_with(json(STATUS))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{base}/GetUserList")))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let details = client(&server).details("abc").await.unwrap();
+        assert!(details.uptime.is_some());
+        assert!(details.players.is_empty());
+    }
+
+    #[tokio::test]
+    async fn error_envelope_without_stacktrace_is_not_player_names() {
+        let server = MockServer::start().await;
+        let base = "/API/ADSModule/Servers/abc/API/Core";
+        Mock::given(method("POST"))
+            .and(path(format!("{base}/Login")))
+            .respond_with(json(r#"{"success":true,"sessionID":"i1"}"#))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{base}/GetStatus")))
+            .respond_with(json(STATUS))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{base}/GetUserList")))
+            .respond_with(json(
+                r#"{"Title":"Instance Unavailable","Message":"Module not ready"}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let details = client(&server).details("abc").await.unwrap();
+        assert!(details.players.is_empty(), "{:?}", details.players);
     }
 
     #[tokio::test]

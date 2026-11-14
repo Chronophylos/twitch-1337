@@ -233,8 +233,15 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         if amp.url.trim().is_empty() {
             bail!("amp.url cannot be empty when amp is configured");
         }
-        let scheme_ok = reqwest::Url::parse(&amp.url)
-            .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.has_host());
+        // The client concatenates the raw string, so it must already be a
+        // bare origin: no surrounding whitespace, query or fragment.
+        let scheme_ok = amp.url.trim() == amp.url
+            && reqwest::Url::parse(&amp.url).is_ok_and(|u| {
+                matches!(u.scheme(), "http" | "https")
+                    && u.has_host()
+                    && u.query().is_none()
+                    && u.fragment().is_none()
+            });
         if !scheme_ok {
             bail!(
                 "amp.url must be an http:// or https:// URL, got {:?}",
@@ -557,7 +564,15 @@ password = "pw"
 
     #[test]
     fn amp_url_without_http_scheme_rejected() {
-        for url in ["192.168.178.114:8080", "ftp://amp:8080", "amp"] {
+        for url in [
+            "192.168.178.114:8080",
+            "ftp://amp:8080",
+            "amp",
+            "http://amp:8080 ",
+            " http://amp:8080",
+            "http://amp:8080/?x=1",
+            "http://amp:8080/#/",
+        ] {
             let mut cfg = Configuration::test_default();
             cfg.amp = Some(AmpBootstrap {
                 url: url.to_owned(),

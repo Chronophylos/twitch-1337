@@ -16,10 +16,14 @@ use crate::{
 };
 
 const MAX_REPLY_CHARS: usize = 480;
+/// Details (uptime, names) are a bonus; never hold the reply hostage for them.
+const DETAILS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const NOT_FOUND_REPLY: &str = "Kein Server gefunden";
 
 pub struct ServersCommand {
     amp: Arc<AmpClient>,
     cooldown: PerUserCooldown,
+    details_timeout: std::time::Duration,
 }
 
 impl ServersCommand {
@@ -27,32 +31,40 @@ impl ServersCommand {
         Self {
             amp,
             cooldown: PerUserCooldown::live(settings, servers_cooldown_duration),
+            details_timeout: DETAILS_TIMEOUT,
         }
     }
 
-    async fn reply_for(&self, query: &str) -> String {
+    /// Reply text, and whether it costs the viewer their cooldown. A "be more
+    /// specific" or "not found" answer is free so the retry goes through.
+    async fn reply_for(&self, query: &str) -> (String, bool) {
         let servers = match self.amp.servers().await {
             Ok(s) => s,
-            Err(e) => return error_reply(e).to_owned(),
+            Err(e) => return (error_reply(e).to_owned(), true),
         };
-        if query.is_empty() {
-            return list_reply(&servers);
+        // Invisible chars (Chatterino's U+E0000 dedupe) normalize to empty.
+        if normalize(query).is_empty() {
+            return (list_reply(&servers), true);
         }
         match pick_server(&servers, query) {
-            Pick::None => not_found_reply(query),
-            Pick::Many(m) => many_reply(&m),
-            Pick::One(s) if !s.running => detail_reply(s, None),
+            Pick::None => (NOT_FOUND_REPLY.to_owned(), false),
+            Pick::Many(m) => (many_reply(&m), false),
+            Pick::One(s) if !s.running => (detail_reply(s, None), true),
             Pick::One(s) => {
-                // Details are a bonus; the list data alone still answers.
-                let details = self
-                    .amp
-                    .details(&s.id)
-                    .await
-                    .inspect_err(
-                        |error| tracing::warn!(?error, server = %s.name, "amp details failed"),
-                    )
-                    .ok();
-                detail_reply(s, details.as_ref())
+                let details =
+                    match tokio::time::timeout(self.details_timeout, self.amp.details(&s.id)).await
+                    {
+                        Ok(Ok(d)) => Some(d),
+                        Ok(Err(error)) => {
+                            tracing::warn!(?error, server = %s.name, "amp details failed");
+                            None
+                        }
+                        Err(_) => {
+                            tracing::warn!(server = %s.name, "amp details timed out");
+                            None
+                        }
+                    };
+                (detail_reply(s, details.as_ref()), true)
             }
         }
     }
@@ -99,9 +111,10 @@ where
                 .await;
             return Ok(());
         }
-        self.cooldown.record(user).await;
-
-        let reply = self.reply_for(ctx.args.join(" ").trim()).await;
+        let (reply, charged) = self.reply_for(ctx.args.join(" ").trim()).await;
+        if charged {
+            self.cooldown.record(user).await;
+        }
         ctx.cancellation.check()?;
         ctx.sender.reply(&ctx.privmsg, reply).await;
         Ok(())
@@ -215,16 +228,10 @@ fn many_reply(hits: &[&AmpServer]) -> String {
     )
 }
 
-fn not_found_reply(query: &str) -> String {
-    truncate_response(
-        &format!("Kein Server \"{query}\" gefunden"),
-        MAX_REPLY_CHARS,
-    )
-}
-
 fn error_reply(e: AmpError) -> &'static str {
     match e {
         AmpError::Auth => "AMP-Login fehlgeschlagen",
+        AmpError::Permission => "AMP-Rechte fehlen",
         AmpError::Unavailable => "AMP gerade nicht erreichbar",
     }
 }
@@ -424,15 +431,113 @@ mod tests {
             many_reply(&m),
             "Mehrere Treffer: Vintage Story, Vintage Story Forever World"
         );
-        assert_eq!(not_found_reply("zelda"), "Kein Server \"zelda\" gefunden");
+        // The viewer's query is never echoed (mentions/links in the bot's voice).
+        assert_eq!(NOT_FOUND_REPLY, "Kein Server gefunden");
     }
 
     #[test]
     fn error_copy() {
         assert_eq!(error_reply(AmpError::Auth), "AMP-Login fehlgeschlagen");
+        assert_eq!(error_reply(AmpError::Permission), "AMP-Rechte fehlen");
         assert_eq!(
             error_reply(AmpError::Unavailable),
             "AMP gerade nicht erreichbar"
         );
+    }
+
+    mod live {
+        use secrecy::SecretString;
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+
+        use super::*;
+
+        const INSTANCES: &str = include_str!("../amp/fixtures/get_instances.json");
+
+        fn json(body: &str) -> ResponseTemplate {
+            ResponseTemplate::new(200).set_body_raw(body.as_bytes().to_vec(), "application/json")
+        }
+
+        async fn amp_with_instances() -> MockServer {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/API/Core/Login"))
+                .respond_with(json(r#"{"success":true,"sessionID":"s1"}"#))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/API/ADSModule/GetInstances"))
+                .respond_with(json(INSTANCES))
+                .mount(&server)
+                .await;
+            server
+        }
+
+        fn command(server: &MockServer, details_timeout: Duration) -> ServersCommand {
+            crate::install_crypto_provider();
+            let amp = AmpClient::with_http(
+                reqwest::Client::new(),
+                server.uri(),
+                "bot".to_owned(),
+                SecretString::new("pw".into()),
+            );
+            let mut cmd = ServersCommand::new(
+                Arc::new(amp),
+                crate::settings::SettingsHandle::from_settings(
+                    crate::settings::Settings::compiled_defaults(),
+                ),
+            );
+            cmd.details_timeout = details_timeout;
+            cmd
+        }
+
+        #[tokio::test]
+        async fn invisible_query_shows_the_list() {
+            let server = amp_with_instances().await;
+            let cmd = command(&server, Duration::from_secs(5));
+            // Chatterino's duplicate-message bypass appends U+E0000.
+            let (reply, charged) = cmd.reply_for("\u{E0000}").await;
+            assert!(reply.starts_with("Online:"), "{reply}");
+            assert!(charged);
+        }
+
+        #[tokio::test]
+        async fn ambiguous_and_unknown_are_not_charged() {
+            let server = amp_with_instances().await;
+            let cmd = command(&server, Duration::from_secs(5));
+            assert!(!cmd.reply_for("vintage").await.1);
+            assert!(!cmd.reply_for("zelda").await.1);
+            let (reply, charged) = cmd.reply_for("vintage story").await;
+            assert!(reply.starts_with("Vintage Story ist offline"), "{reply}");
+            assert!(charged);
+        }
+
+        #[tokio::test]
+        async fn slow_details_fall_back_to_list_data() {
+            let server = amp_with_instances().await;
+            let base = "/API/ADSModule/Servers/ad13df52-a04f-4614-b6e7-9172fdd696ae/API/Core";
+            Mock::given(method("POST"))
+                .and(path(format!("{base}/Login")))
+                .respond_with(
+                    json(r#"{"success":true,"sessionID":"i1"}"#).set_delay(Duration::from_secs(3)),
+                )
+                .mount(&server)
+                .await;
+            let cmd = command(&server, Duration::from_millis(200));
+            let started = std::time::Instant::now();
+            let (reply, _) = cmd.reply_for("gregtech").await;
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "{:?}",
+                started.elapsed()
+            );
+            assert_eq!(
+                reply,
+                "GregTech: New Horizon [Minecraft] online · 0/20 Spieler · RAM 9496/10240 MB · \
+                 192.168.196.166:25566"
+            );
+        }
     }
 }
