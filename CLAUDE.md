@@ -4,7 +4,7 @@ Guide Claude Code work repo.
 
 ## Project
 
-Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), feedback (`!fb`), spoiler check (`!spoiler`, decision model), alerts (earthquake + solar flare + Earth-directed CME monitors, passive, configured at `/settings → Alerts`), version (`!v`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`).
+Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), feedback (`!fb`), spoiler check (`!spoiler`, decision model), alerts (earthquake + solar flare + Earth-directed CME monitors, passive, configured at `/settings → Alerts`), version (`!v`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`).
 
 Single persistent IRC connection, broadcast channel routes to independent handler tasks.
 

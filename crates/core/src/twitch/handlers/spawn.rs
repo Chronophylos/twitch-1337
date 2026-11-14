@@ -199,6 +199,7 @@ where
                 repology,
                 pronouns,
                 dhl: services.dhl.clone(),
+                command_catalog: services.command_catalog.clone(),
                 emote_tracker: services.emote_tracker.clone(),
                 langfuse: services.langfuse.clone(),
                 model_catalog,
