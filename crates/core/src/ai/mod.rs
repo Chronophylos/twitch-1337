@@ -1,5 +1,6 @@
 pub mod chat_history;
 pub mod command;
+pub mod commands_tool;
 pub mod content;
 pub mod dhl_tool;
 pub mod doener_tool;

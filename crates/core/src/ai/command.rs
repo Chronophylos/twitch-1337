@@ -189,6 +189,7 @@ pub struct AiCommandDeps {
     pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
     pub echo: Arc<crate::twitch::echo::EchoGuard>,
     pub dhl: Option<Arc<crate::dhl::DhlClient>>,
+    pub command_catalog: crate::ai::commands_tool::CatalogCell,
     pub emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     pub recap: Option<Arc<RecapHandle>>,
     pub langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,

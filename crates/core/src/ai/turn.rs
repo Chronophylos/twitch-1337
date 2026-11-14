@@ -110,6 +110,7 @@ pub struct TurnRunner {
     pub(crate) mouths: Arc<crate::twitch::mouth::MouthRouter>,
     pub(crate) echo: Arc<crate::twitch::echo::EchoGuard>,
     dhl: Option<Arc<crate::dhl::DhlClient>>,
+    command_catalog: crate::ai::commands_tool::CatalogCell,
     emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     recap: Option<Arc<RecapHandle>>,
     langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
@@ -136,6 +137,7 @@ impl TurnRunner {
             mouths: deps.mouths,
             echo: deps.echo,
             dhl: deps.dhl,
+            command_catalog: deps.command_catalog,
             emote_tracker: deps.emote_tracker,
             recap: deps.recap,
             langfuse: deps.langfuse,
@@ -462,6 +464,7 @@ impl TurnRunner {
             chat_turn_tools()
         };
         tools.push(crate::ai::doener_tool::doener_tool());
+        tools.push(crate::ai::commands_tool::list_commands_tool());
         if !grok_alias {
             tools.push(crate::ai::tarot_tool::tarot_tool());
             tools.push(crate::ai::flight_tool::plan_flight_tool());
@@ -528,6 +531,7 @@ impl TurnRunner {
                     doener: self.doener.as_ref(),
                     repology: self.repology.as_ref(),
                     dhl: self.dhl.as_deref(),
+                    command_catalog: &self.command_catalog,
                     emote_tracker: self.emote_tracker.as_ref(),
                     trace: &trace,
                     cancellation: &input.cancellation,
@@ -604,7 +608,7 @@ impl TurnRunner {
 /// executor (write_file/write_scratch/delete_scratch), the web search executor
 /// (web_search/read_url) when web tools are configured, the on-demand
 /// `search_emotes` tool when the emote provider is active, the always-on
-/// doener_index tool, the Aurora-only draw_tarot and plan_flight tools, or the
+/// doener_index and list_commands tools, the Aurora-only draw_tarot and plan_flight tools, or the
 /// Aurora-only search_packages tool.
 struct V2Executor<'a> {
     chat: &'a ChatTurnExecutor,
@@ -613,6 +617,7 @@ struct V2Executor<'a> {
     doener: &'a crate::doener::DoeneratlasClient,
     repology: &'a crate::repology::RepologyClient,
     dhl: Option<&'a crate::dhl::DhlClient>,
+    command_catalog: &'a crate::ai::commands_tool::CatalogCell,
     emote_tracker: Option<&'a Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     trace: &'a TraceIds,
     cancellation: &'a CommandCancellation,
@@ -626,6 +631,9 @@ impl ToolExecutor for V2Executor<'_> {
         }
         if call.name == crate::ai::doener_tool::DOENER_TOOL_NAME {
             return crate::ai::doener_tool::execute_doener_index(self.doener, call).await;
+        }
+        if call.name == crate::ai::commands_tool::LIST_COMMANDS_TOOL_NAME {
+            return crate::ai::commands_tool::execute_list_commands(self.command_catalog, call);
         }
         if call.name == crate::ai::tarot_tool::TAROT_TOOL_NAME {
             return crate::ai::tarot_tool::execute_draw_tarot(call).await;
@@ -913,6 +921,7 @@ mod turn_tests {
                 MouthIdentities::default(),
             )),
             dhl: None,
+            command_catalog: Default::default(),
             emote_tracker: None,
             recap: None,
             langfuse: None,
