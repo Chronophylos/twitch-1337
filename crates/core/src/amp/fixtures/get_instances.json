@@ -1,0 +1,288 @@
+[
+  {
+    "AvailableInstances": [
+      {
+        "InstanceID": "23638996-a0f9-4236-8120-3e1ab3b07215",
+        "InstanceName": "ADS01",
+        "FriendlyName": "ADS01",
+        "Module": "ADS",
+        "Running": true,
+        "AppState": -1,
+        "Metrics": {},
+        "ApplicationEndpoints": [
+          {
+            "DisplayName": "Game Server Address",
+            "Endpoint": "192.168.196.166:12820",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "SFTP Server",
+            "Endpoint": "0.0.0.0:2223",
+            "Uri": "sftp://0.0.0.0:2223"
+          }
+        ]
+      },
+      {
+        "InstanceID": "4ac3cb3f-86a8-4b0b-9ac1-7cbe36410fb2",
+        "InstanceName": "ArmaReforger01",
+        "FriendlyName": "ArmaReforger",
+        "Module": "GenericModule",
+        "Running": false,
+        "AppState": -1,
+        "Metrics": {},
+        "ApplicationEndpoints": [
+          {
+            "DisplayName": "Application Address",
+            "Endpoint": "0.0.0.0:2001",
+            "Uri": "steam://connect/0.0.0.0:17777"
+          },
+          {
+            "DisplayName": "SFTP Server",
+            "Endpoint": "0.0.0.0:2224",
+            "Uri": "steam://connect/0.0.0.0:17777"
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:2001",
+            "Uri": "steam://connect/192.168.196.166:17777"
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:2001",
+            "Uri": "steam://connect/192.168.196.166:17777"
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:2001",
+            "Uri": "steam://connect/192.168.196.166:17777"
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:2001",
+            "Uri": "steam://connect/192.168.196.166:17777"
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:2001",
+            "Uri": "steam://connect/192.168.196.166:17777"
+          }
+        ]
+      },
+      {
+        "InstanceID": "ad13df52-a04f-4614-b6e7-9172fdd696ae",
+        "InstanceName": "GregTechNewHorizon01",
+        "FriendlyName": "GregTech: New Horizon",
+        "Module": "Minecraft",
+        "Running": true,
+        "AppState": 20,
+        "Metrics": {
+          "CPU Usage": {
+            "RawValue": 0,
+            "MaxValue": 100,
+            "Percent": 0,
+            "Units": "%",
+            "Color": "#239B2D",
+            "Color2": "#239B2D",
+            "Color3": "#FFF",
+            "ShortName": null
+          },
+          "Memory Usage": {
+            "RawValue": 9496,
+            "MaxValue": 10240,
+            "Percent": 92,
+            "Units": "MB",
+            "Color": "#246BA0",
+            "Color2": null,
+            "Color3": "#FFF",
+            "ShortName": null
+          },
+          "Active Users": {
+            "RawValue": 0,
+            "MaxValue": 20,
+            "Percent": 0,
+            "Units": "",
+            "Color": "#7B249E",
+            "Color2": null,
+            "Color3": "#FFF",
+            "ShortName": null
+          }
+        },
+        "ApplicationEndpoints": [
+          {
+            "DisplayName": "Minecraft Server Address",
+            "Endpoint": "192.168.196.166:25566",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "SFTP Server",
+            "Endpoint": "192.168.196.166:2230",
+            "Uri": "sftp://192.168.196.166:2230"
+          }
+        ]
+      },
+      {
+        "InstanceID": "ffac3e23-98f1-40f2-9a06-579c3650107e",
+        "InstanceName": "MinecraftVanilla202501",
+        "FriendlyName": "Minecraft Vanilla 2025",
+        "Module": "Minecraft",
+        "Running": false,
+        "AppState": -1,
+        "Metrics": {},
+        "ApplicationEndpoints": [
+          {
+            "DisplayName": "Minecraft Server Address",
+            "Endpoint": "192.168.196.166:25565",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "SFTP Server",
+            "Endpoint": "192.168.196.166:2226",
+            "Uri": "sftp://192.168.196.166:2226"
+          }
+        ]
+      },
+      {
+        "InstanceID": "5dccf615-dda4-4818-8212-b1981c42e15c",
+        "InstanceName": "VintageStory01",
+        "FriendlyName": "Vintage Story",
+        "Module": "GenericModule",
+        "Running": false,
+        "AppState": -1,
+        "Metrics": {},
+        "ApplicationEndpoints": [
+          {
+            "DisplayName": "Application Address",
+            "Endpoint": "192.168.196.166:42422",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "SFTP Server",
+            "Endpoint": "192.168.196.166:2228",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:42422",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:42422",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:42422",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:42422",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:42422",
+            "Uri": ""
+          }
+        ]
+      },
+      {
+        "InstanceID": "9bffad6f-374f-4083-9a48-3e366e83263f",
+        "InstanceName": "VintageStoryForeverWorld01",
+        "FriendlyName": "Vintage Story Forever World",
+        "Module": "GenericModule",
+        "Running": false,
+        "AppState": 0,
+        "Metrics": {
+          "CPU Usage": {
+            "RawValue": 0,
+            "MaxValue": 100,
+            "Percent": 0,
+            "Units": "%",
+            "Color": "#239B2D",
+            "Color2": "#239B2D",
+            "Color3": "#FFF",
+            "ShortName": null
+          },
+          "Memory Usage": {
+            "RawValue": 0,
+            "MaxValue": 32039,
+            "Percent": 0,
+            "Units": "MB",
+            "Color": "#246BA0",
+            "Color2": null,
+            "Color3": "#FFF",
+            "ShortName": null
+          },
+          "Active Users": {
+            "RawValue": 0,
+            "MaxValue": 16,
+            "Percent": 0,
+            "Units": "",
+            "Color": "#7B249E",
+            "Color2": null,
+            "Color3": "#FFF",
+            "ShortName": null
+          }
+        },
+        "ApplicationEndpoints": [
+          {
+            "DisplayName": "Application Address",
+            "Endpoint": "192.168.196.166:42420",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "SFTP Server",
+            "Endpoint": "192.168.196.166:2229",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:42420",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:42420",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:42420",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:42420",
+            "Uri": ""
+          },
+          {
+            "DisplayName": "Unknown Endpoint",
+            "Endpoint": "192.168.196.166:42420",
+            "Uri": ""
+          }
+        ]
+      }
+    ],
+    "CanCreate": true,
+    "CreatesInContainers": true,
+    "Description": "Instances that exist and are under the direct control of this ADS instance",
+    "Disabled": false,
+    "Fitness": null,
+    "FriendlyName": "Local Instances",
+    "Id": 0,
+    "InstanceId": "23638996-a0f9-4236-8120-3e1ab3b07215",
+    "IsRemote": false,
+    "LastUpdated": "2026-11-06T12:20:34.0349311Z",
+    "LastPollUpdate": "0001-01-01T00:00:00",
+    "LastPushUpdate": "0001-01-01T00:00:00",
+    "State": 20,
+    "StateReason": null,
+    "Tags": [
+      "Local"
+    ],
+    "TagsList": null,
+    "URL": "http://localhost:8080"
+  }
+]

@@ -1,0 +1,36 @@
+{
+  "State": 20,
+  "Uptime": "5:23:48:43",
+  "Metrics": {
+    "CPU Usage": {
+      "RawValue": 0,
+      "MaxValue": 100,
+      "Percent": 0,
+      "Units": "%",
+      "Color": "#239B2D",
+      "Color2": "#239B2D",
+      "Color3": "#FFF",
+      "ShortName": "CPU"
+    },
+    "Memory Usage": {
+      "RawValue": 9496,
+      "MaxValue": 10240,
+      "Percent": 92,
+      "Units": "MB",
+      "Color": "#246BA0",
+      "Color2": null,
+      "Color3": "#FFF",
+      "ShortName": "RAM"
+    },
+    "Active Users": {
+      "RawValue": 0,
+      "MaxValue": 20,
+      "Percent": 0,
+      "Units": "",
+      "Color": "#7B249E",
+      "Color2": null,
+      "Color3": "#FFF",
+      "ShortName": "Users"
+    }
+  }
+}

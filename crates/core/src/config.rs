@@ -66,6 +66,17 @@ pub struct DhlBootstrap {
     pub api_key: SecretString,
 }
 
+/// Bootstrap-only AMP (CubeCoders game-server panel) configuration. Presence
+/// enables `!servers`. Use a dedicated AMP user whose role only allows
+/// `Instances.*`; the bot never starts or stops anything.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AmpBootstrap {
+    /// Controller origin, e.g. `http://192.168.178.114:8080`.
+    pub url: String,
+    pub username: String,
+    pub password: SecretString,
+}
+
 /// Bootstrap-only Langfuse configuration. Presence of the section enables
 /// first-party OTLP export. Keys never belong in settings.ron.
 #[derive(Debug, Clone, Deserialize)]
@@ -135,6 +146,8 @@ pub struct Configuration {
     #[serde(default)]
     pub dhl: Option<DhlBootstrap>,
     #[serde(default)]
+    pub amp: Option<AmpBootstrap>,
+    #[serde(default)]
     pub langfuse: Option<LangfuseBootstrap>,
     #[serde(default)]
     pub ai: Option<AiBootstrap>,
@@ -160,6 +173,7 @@ impl Configuration {
             },
             aviationstack: None,
             dhl: None,
+            amp: None,
             langfuse: None,
             ai: None,
             web: WebConfig::default(),
@@ -213,6 +227,18 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         .is_some_and(|d| d.api_key.expose_secret().trim().is_empty())
     {
         bail!("dhl.api_key cannot be empty when dhl is configured");
+    }
+
+    if let Some(amp) = config.amp.as_ref() {
+        if amp.url.trim().is_empty() {
+            bail!("amp.url cannot be empty when amp is configured");
+        }
+        if amp.username.trim().is_empty() {
+            bail!("amp.username cannot be empty when amp is configured");
+        }
+        if amp.password.expose_secret().trim().is_empty() {
+            bail!("amp.password cannot be empty when amp is configured");
+        }
     }
 
     if let Some(lf) = config.langfuse.as_ref() {
@@ -465,6 +491,58 @@ client_secret = "s"
         let err = validate_config(&cfg).expect_err("empty key must fail");
         assert!(
             err.to_string().contains("dhl.api_key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn amp_section_parses() {
+        let toml = r#"
+[twitch]
+channel = "chan"
+username = "bot"
+refresh_token = "r"
+client_id = "c"
+client_secret = "s"
+
+[amp]
+url = "http://192.168.178.114:8080"
+username = "twitch-1337"
+password = "pw"
+"#;
+        let cfg: Configuration = toml::from_str(toml).expect("parse");
+        let amp = cfg.amp.expect("amp section present");
+        assert_eq!(amp.url, "http://192.168.178.114:8080");
+        assert_eq!(amp.username, "twitch-1337");
+        assert_eq!(amp.password.expose_secret(), "pw");
+    }
+
+    #[test]
+    fn amp_blank_password_rejected() {
+        let mut cfg = Configuration::test_default();
+        cfg.amp = Some(AmpBootstrap {
+            url: "http://amp:8080".to_owned(),
+            username: "bot".to_owned(),
+            password: SecretString::new(" ".into()),
+        });
+        let err = validate_config(&cfg).expect_err("blank password must fail");
+        assert!(
+            err.to_string().contains("amp.password"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn amp_blank_url_rejected() {
+        let mut cfg = Configuration::test_default();
+        cfg.amp = Some(AmpBootstrap {
+            url: "".to_owned(),
+            username: "bot".to_owned(),
+            password: SecretString::new("pw".into()),
+        });
+        let err = validate_config(&cfg).expect_err("blank url must fail");
+        assert!(
+            err.to_string().contains("amp.url"),
             "unexpected error: {err}"
         );
     }

@@ -150,6 +150,21 @@ pub async fn main() -> Result<()> {
 
     // DHL needs no settings lookup, only the config key. Match the aviation
     // invariant: log and disable on failure, never abort startup.
+    let amp_client = match config.amp.as_ref() {
+        Some(a) => match twitch_1337_core::amp::AmpClient::new(
+            a.url.clone(),
+            a.username.clone(),
+            a.password.clone(),
+        ) {
+            Ok(c) => Some(Arc::new(c)),
+            Err(error) => {
+                tracing::error!(?error, "failed to build AMP client, !servers disabled");
+                None
+            }
+        },
+        None => None,
+    };
+
     let dhl_client = match config.dhl.as_ref() {
         Some(d) => match twitch_1337_core::dhl::DhlClient::new(d.api_key.clone()) {
             Ok(c) => Some(Arc::new(c)),
@@ -296,6 +311,7 @@ pub async fn main() -> Result<()> {
         llm,
         aviation: aviation_client,
         dhl: dhl_client,
+        amp: amp_client,
         langfuse,
         doener: doener_client,
         whisper: Some(whisper),
