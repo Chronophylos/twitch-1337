@@ -1173,18 +1173,20 @@ where
     )
     .await;
 
-    for msg in messages {
-        if lifecycle.is_cancelled() {
-            return Ok(None);
-        }
-        sender.say(channel.to_string(), msg).await;
-    }
-
+    // Save before announcing so a restart after the say cannot re-emit the
+    // same phase change. At-most-once: cancellation mid-loop drops the rest.
     if changed {
         if lifecycle.is_cancelled() {
             return Ok(None);
         }
         save_tracker_state(data_dir, state).await;
+    }
+
+    for msg in messages {
+        if lifecycle.is_cancelled() {
+            return Ok(None);
+        }
+        sender.say(channel.to_string(), msg).await;
     }
 
     Ok(Some(deferred_commands))

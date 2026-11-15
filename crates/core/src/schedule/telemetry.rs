@@ -90,49 +90,37 @@ impl TelemetryStore {
     /// Record a fire for `name` at `at`. Rolls fires_today on day change.
     pub async fn record_fire(&self, name: &str, at: DateTime<Utc>) {
         let today = at.with_timezone(&Berlin).date_naive();
-        let snap_for_flush = {
-            let mut g = self.data.lock().await;
-            let entry = g.map.entry(name.to_owned()).or_default();
-            entry.maybe_rollover(today);
-            entry.last_fired_at = Some(at);
-            entry.fires_today = entry.fires_today.saturating_add(1);
-            g.dirty = true;
-            if g.last_flush.elapsed() >= FLUSH_INTERVAL {
-                Some(g.map.clone())
-            } else {
-                None
-            }
-        };
-        if let Some(snap) = snap_for_flush {
-            match atomic_save_ron_async(&snap, &self.path).await {
-                Ok(()) => {
-                    let mut g = self.data.lock().await;
-                    g.dirty = false;
-                    g.last_flush = std::time::Instant::now();
-                }
-                Err(e) => {
-                    warn!(?e, "telemetry flush failed");
-                }
-            }
+        let mut g = self.data.lock().await;
+        let entry = g.map.entry(name.to_owned()).or_default();
+        entry.maybe_rollover(today);
+        entry.last_fired_at = Some(at);
+        entry.fires_today = entry.fires_today.saturating_add(1);
+        g.dirty = true;
+        if g.last_flush.elapsed() >= FLUSH_INTERVAL {
+            Self::write(&self.path, &mut g, "telemetry flush failed").await;
         }
     }
 
     /// Force-flush any pending writes. Call from graceful shutdown.
     pub async fn flush(&self) {
-        let snap = {
-            let g = self.data.lock().await;
-            if !g.dirty {
-                return;
-            }
-            g.map.clone()
-        };
-        match atomic_save_ron_async(&snap, &self.path).await {
+        let mut g = self.data.lock().await;
+        if g.dirty {
+            Self::write(&self.path, &mut g, "telemetry final flush failed").await;
+        }
+    }
+
+    /// Writes while the caller holds the state lock, so concurrent schedule
+    /// children never race on the shared `.tmp` path or land an older
+    /// snapshot over a newer one.
+    // ponytail: dashboard snapshot reads wait on the disk write; it is a
+    // small file at most every 5s.
+    async fn write(path: &std::path::Path, g: &mut TelemetryState, what: &'static str) {
+        match atomic_save_ron_async(&g.map, path).await {
             Ok(()) => {
-                let mut g = self.data.lock().await;
                 g.dirty = false;
                 g.last_flush = std::time::Instant::now();
             }
-            Err(e) => warn!(?e, "telemetry final flush failed"),
+            Err(e) => warn!(?e, "{what}"),
         }
     }
 }
