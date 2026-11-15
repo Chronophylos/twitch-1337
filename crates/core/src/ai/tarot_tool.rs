@@ -85,14 +85,11 @@ pub async fn execute_draw_tarot(call: &ToolCall) -> ToolResultMessage {
         }
     };
 
-    let spread = match parse_spread(args.spread.as_deref()) {
-        Ok(s) => s,
-        Err(_) => {
-            return ToolResultMessage::for_call(
-                call,
-                json!({"error": "unsupported_spread"}).to_string(),
-            );
-        }
+    let Ok(spread) = parse_spread(args.spread.as_deref()) else {
+        return ToolResultMessage::for_call(
+            call,
+            json!({"error": "unsupported_spread"}).to_string(),
+        );
     };
 
     let question = normalized_question(args.question.as_deref());

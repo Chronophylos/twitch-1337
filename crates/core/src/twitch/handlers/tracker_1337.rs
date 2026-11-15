@@ -558,7 +558,7 @@ async fn monitor_1337_messages(
 ///
 /// Monitors messages during the 13:37 window, tracks unique users, and posts stats at 13:38.
 /// Runs continuously, resetting state daily.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "handler deps are injected individually for testability"
 )]

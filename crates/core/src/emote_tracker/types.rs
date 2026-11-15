@@ -128,11 +128,6 @@ pub struct NewSetEvent {
     pub attribution_method: Option<String>,
 }
 
-/// Input for inserting one `usage_events` chat-usage row.
-///
-/// One event per matching token (`Kappa Kappa` → two rows). `emote_id` must
-/// already exist in `emotes` (FK). [`Self::flagged`] marks bot/clanker
-/// traffic so default queries can exclude it. Timestamps are UTC unix ms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CatalogMutation {
     Upsert {
@@ -257,6 +252,11 @@ pub struct EmoteMeaningRow {
     pub updated_at: i64,
 }
 
+/// Input for inserting one `usage_events` chat-usage row.
+///
+/// One event per matching token (`Kappa Kappa` → two rows). `emote_id` must
+/// already exist in `emotes` (FK). [`Self::flagged`] marks bot/clanker
+/// traffic so default queries can exclude it. Timestamps are UTC unix ms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewUsageEvent {
     /// Observation time (UTC unix ms).

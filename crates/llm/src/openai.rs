@@ -330,7 +330,7 @@ impl OpenAiClient {
             HeaderValue::from_static("application/json"),
         );
 
-        let mut auth_value = HeaderValue::from_str(&format!("Bearer {}", api_key))?;
+        let mut auth_value = HeaderValue::from_str(&format!("Bearer {api_key}"))?;
         auth_value.set_sensitive(true);
         headers.insert(header::AUTHORIZATION, auth_value);
 

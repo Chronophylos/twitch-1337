@@ -76,6 +76,18 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # Broken intra-doc links. Private links are fine: docs are internal-only.
+      - name: cargo doc
+        env:
+          RUSTDOCFLAGS: -D warnings -A rustdoc::private_intra_doc_links
+        run: cargo doc --workspace --no-deps --document-private-items
+
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@cargo-machete # zizmor: ignore[unpinned-uses]
+
+      - name: cargo machete (unused deps)
+        run: cargo machete
+
   test:
     name: test
     needs: changes

@@ -177,9 +177,8 @@ impl OAuthCtx {
 /// so error logs that include a response body never leak access/refresh
 /// tokens. No-op on non-JSON or non-object bodies.
 fn redact_token_body(body: &[u8]) -> String {
-    let mut value = match serde_json::from_slice::<serde_json::Value>(body) {
-        Ok(v) => v,
-        Err(_) => return String::from_utf8_lossy(body).into_owned(),
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return String::from_utf8_lossy(body).into_owned();
     };
     let Some(obj) = value.as_object_mut() else {
         return String::from_utf8_lossy(body).into_owned();

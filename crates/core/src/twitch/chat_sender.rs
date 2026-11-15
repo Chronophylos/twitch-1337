@@ -118,7 +118,7 @@ where
             .await;
     }
 
-    /// Like [`reply`], but skips the 480-byte clamp. Agent replies are
+    /// Like [`Self::reply`], but skips the 480-byte clamp. Agent replies are
     /// character-clamped to 490 before they reach here; applying the byte
     /// ceiling would cut a 490-character ASCII line. A 490-character
     /// multibyte line can still exceed IRC's 500-byte PRIVMSG limit — that

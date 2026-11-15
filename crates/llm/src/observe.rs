@@ -1,7 +1,7 @@
 //! Task-local LLM turn tracing.
 //!
-//! When a [`TurnContext`] is in scope, [`OpenAiClient`] / [`OllamaClient`]
-//! record generations and [`run_agent`] records tool spans. Absent a context,
+//! Inside [`with_turn`], [`OpenAiClient`](crate::OpenAiClient) / [`OllamaClient`](crate::OllamaClient)
+//! record generations and [`run_agent`](crate::run_agent) records tool spans. Absent a context,
 //! every hook is a no-op so tests and untraced call sites stay unchanged.
 
 use std::fmt;

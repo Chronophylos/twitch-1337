@@ -248,7 +248,7 @@ impl OllamaClient {
                 .into_iter()
                 .enumerate()
                 .map(|(i, tc)| ToolCall {
-                    id: format!("call_{}", i),
+                    id: format!("call_{i}"),
                     name: tc.function.name,
                     arguments: tc.function.arguments,
                     arguments_parse_error: None,

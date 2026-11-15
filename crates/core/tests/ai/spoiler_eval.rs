@@ -3,6 +3,10 @@
 //! `cargo nextest run -p twitch-1337-core --test ai spoiler_eval --run-ignored only --no-capture`
 //! Set `SPOILER_EVAL_REVERSE=1` to send the options in reverse order; decision
 //! models lean toward the first option, so both orders should agree.
+#![expect(
+    clippy::print_stdout,
+    reason = "manual eval prints its confusion matrix"
+)]
 
 use twitch_1337_core as twitch_1337;
 

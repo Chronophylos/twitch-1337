@@ -305,7 +305,10 @@ where
     true
 }
 
-#[allow(clippy::too_many_arguments)] // one-shot poll: fetch, parse, dedupe
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one-shot poll: fetch, parse, dedupe"
+)]
 async fn poll_feed<E: std::fmt::Debug>(
     http: &reqwest::Client,
     feed: &'static str,

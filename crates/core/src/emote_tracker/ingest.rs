@@ -82,9 +82,12 @@ pub struct StartupReconcileResult {
 ///
 /// `gap_started_at`: `None` on cold start; `Some(ms)` on reconnect or set-switch
 /// continuity breaks so reconcile writes an explicit gap row.
-#[allow(
-    dead_code,
-    reason = "compatibility seam for callers outside the production loop"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "compatibility seam for callers outside the production loop"
+    )
 )]
 pub async fn startup_reconcile_once(
     handle: &EmoteTrackerHandle,
@@ -241,7 +244,7 @@ pub async fn run_set_ingest(
     }
 }
 
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "one EventAPI session retains its store, clients, config, state, and lifecycle"
 )]
@@ -546,9 +549,12 @@ async fn fetch_with_retry(
 }
 
 /// Settings-gated Potat history attribution for one live EventAPI dispatch.
-#[allow(
-    dead_code,
-    reason = "compatibility seam for callers outside the production loop"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "compatibility seam for callers outside the production loop"
+    )
 )]
 pub async fn maybe_attribute_batch(
     http: &reqwest::Client,
@@ -616,7 +622,7 @@ fn classify_set_id_mismatch(remembered_set_id: &str, rest_active_set_id: &str) -
 }
 
 /// Confirm a hinted set-id change via REST; on real switch, reconcile + resubscribe.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "set switching coordinates fetched state, active catalog, websocket, and lifecycle"
 )]

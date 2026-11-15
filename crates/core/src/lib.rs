@@ -251,7 +251,10 @@ where
 /// not add a second executor abstraction. The registry remains shared by
 /// ingress and `CommandExecutionManager`.
 #[cfg(any(test, feature = "testing"))]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test entrypoint mirrors run_bot plus injected registry"
+)]
 pub async fn run_bot_with_command_registry<T, L>(
     client: Arc<TwitchIRCClient<T, L>>,
     incoming: UnboundedReceiver<ServerMessage>,

@@ -34,9 +34,12 @@ use crate::util::clock::Clock;
 enum ScheduleCompletion {
     Expired,
     Cancelled,
-    #[allow(
-        dead_code,
-        reason = "classification must recognize a future early return"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "classification must recognize a future early return"
+        )
     )]
     CompletedUnexpectedly,
     Panicked,
@@ -287,7 +290,10 @@ async fn stop_and_join_all(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "reconcile needs cache, children, client, and lifecycle state"
+)]
 async fn reconcile<T, L, S>(
     sender: &Arc<ChatSender<T, L>>,
     settings: &SettingsHandle,
@@ -404,7 +410,10 @@ where
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "child task owns its schedule, client, and shutdown signals"
+)]
 async fn spawn_schedule_child<T, L>(
     id: u64,
     name: String,

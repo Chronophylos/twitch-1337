@@ -720,7 +720,7 @@ fn kind_tag(kind: &FileKind) -> &'static str {
 /// Best-effort append of one memory-audit line. A write failure is logged and
 /// swallowed — the dashboard save already succeeded and must not be undone by
 /// an audit hiccup (mirrors `SettingsStore::commit`).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "flat audit record builder")]
 // 9 args is past clippy's 7; this is a single flat record builder, threading a
 // struct here would just move the field list one call deeper.
 fn audit_memory(
@@ -758,7 +758,10 @@ fn audit_memory(
 /// Validates csrf, dispatches to `write_with_guard`, and on
 /// `WriteError::{Full,ScratchFull,InvalidSlug,ReservedSlug}` re-renders the originating
 /// editor with the user's draft + an inline error so the work isn't lost.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "csrf + guard + editor re-render context"
+)]
 async fn save_kind(
     state: &WebState,
     session: &Session,
@@ -1151,7 +1154,10 @@ async fn create_scratch(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "8 args, a params struct would only rename them"
+)]
 // 8 args is just past clippy's default of 7. Threading a struct here would
 // obscure the call sites without trimming any state; allow it locally.
 fn render_scratch_create(

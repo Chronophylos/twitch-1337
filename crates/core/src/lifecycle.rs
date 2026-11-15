@@ -301,7 +301,7 @@ impl ChildTaskRegistry {
         }
     }
 
-    #[allow(
+    #[expect(
         dead_code,
         reason = "TaskGroup::abort_and_join is part of the explicit child-owner contract"
     )]
@@ -450,7 +450,7 @@ impl<T: Send + 'static> TaskGroup<T> {
     /// Abort every unfinished child, then wait until every handle has been
     /// joined. The returned records include the abort-induced cancellation
     /// errors so callers cannot mistake this for a clean join.
-    #[allow(
+    #[expect(
         dead_code,
         reason = "explicit abort-and-join is part of the TaskGroup ownership contract"
     )]

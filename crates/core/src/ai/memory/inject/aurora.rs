@@ -66,7 +66,7 @@ pub struct BuildOpts {
 /// maximises prompt-cache hits:
 /// - `memory` holds SOUL/LORE/users (changes on dreamer runs only).
 ///   Lives in the system message so consecutive turns hit the prompt cache.
-/// - `scratch` holds the scratch/<slug> blocks (every `write_scratch` /
+/// - `scratch` holds the `scratch/<slug>` blocks (every `write_scratch` /
 ///   `delete_scratch` mutates them). Lives in the user message so it can change
 ///   freely without invalidating the system-message cache.
 /// - `recent_chat` holds the rolling per-turn chat history (volatile by
