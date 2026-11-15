@@ -7,7 +7,9 @@ on:
 
 concurrency:
   group: docker-${{ github.ref }}
-  cancel-in-progress: true
+  # Queue, never cancel: a docs-only push cancelling an in-flight code build
+  # would skip its own build too, and that code would never deploy.
+  cancel-in-progress: false
 
 jobs:
   changes:
@@ -76,6 +78,9 @@ jobs:
         with:
           context: .
           push: true
+          # No attestation manifests: each one is an extra untagged GHCR
+          # version, which eats into ghcr-retention's keep-30 window.
+          provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
