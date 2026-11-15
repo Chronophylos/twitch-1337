@@ -230,6 +230,7 @@ mod tests {
     fn make_schedule(name: &str, message: &str) -> Schedule {
         use crate::schedule::{Trigger, WeekdaySet};
         Schedule {
+            ping: None,
             name: name.into(),
             message: message.into(),
             trigger: Trigger::Interval {

@@ -45,6 +45,7 @@ async fn settings_save_signals_subscription() {
         .apply(
             SettingsOverrides {
                 schedules: Some(vec![Schedule {
+                    ping: None,
                     name: "morning".into(),
                     message: "gm everyone!".into(),
                     trigger: Trigger::Calendar {
@@ -98,6 +99,7 @@ async fn schedule_fires_after_clock_advance() {
         .at(start_utc)
         .with_settings(|o| {
             o.schedules = Some(vec![Schedule {
+                ping: None,
                 name: "hello-world".into(),
                 message: "scheduled-hello".into(),
                 trigger: Trigger::Interval {
@@ -143,6 +145,58 @@ async fn schedule_fires_after_clock_advance() {
         "expected at least 1 fire_today, got {}",
         runtime.fires_today
     );
+
+    bot.shutdown().await;
+}
+
+/// A schedule with `ping` sends its message, then the rendered ping as a
+/// second message. The next fire lands inside the ping's cooldown, so only
+/// the message goes out.
+#[tokio::test]
+async fn schedule_with_ping_sends_message_then_ping_respecting_cooldown() {
+    let start_utc = Berlin
+        .with_ymd_and_hms(2026, 4, 18, 11, 0, 0)
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+
+    let mut bot = TestBotBuilder::new()
+        .at(start_utc)
+        .with_settings(|o| {
+            o.schedules = Some(vec![Schedule {
+                ping: Some("hi".into()),
+                name: "raid".into(),
+                message: "raid time".into(),
+                trigger: Trigger::Interval {
+                    every: std::time::Duration::from_secs(60),
+                    days: WeekdaySet::default(),
+                    active_from: None,
+                    active_to: None,
+                },
+                start_date: None,
+                end_date: None,
+                enabled: true,
+            }]);
+        })
+        .spawn()
+        .await;
+
+    bot.send_as_broadcaster("broadcaster", "!p create hi yo {mentions}")
+        .await;
+    let _ = bot.expect_say(Duration::from_secs(2)).await;
+    bot.send("alice", "!p join hi").await;
+    let _ = bot.expect_say(Duration::from_secs(1)).await;
+
+    // Let the child arm its sleep_until first, or it skips to the next slot.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    bot.clock.advance(ChronoDuration::minutes(1));
+    assert_eq!(bot.expect_reply(Duration::from_secs(2)).await, "raid time");
+    assert_eq!(bot.expect_reply(Duration::from_secs(2)).await, "yo @alice");
+
+    // Let the child arm its sleep_until first, or it skips to the next slot.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    bot.clock.advance(ChronoDuration::minutes(1));
+    assert_eq!(bot.expect_reply(Duration::from_secs(2)).await, "raid time");
+    bot.expect_silent(Duration::from_millis(300)).await;
 
     bot.shutdown().await;
 }

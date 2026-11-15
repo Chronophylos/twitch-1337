@@ -30,7 +30,7 @@ use crate::{
             latency::run_latency_handler,
             mydealz::run_mydealz_handler,
             router::run_message_router,
-            schedule_runner::run_orchestrator,
+            schedule_runner::{SchedulePing, run_orchestrator},
             tracker_1337::run_1337_handler,
         },
     },
@@ -430,6 +430,11 @@ pub(crate) fn spawn_handlers<T, L>(
                 schedule_shutdown,
                 services.clock.clone(),
                 schedule_lifecycle,
+                SchedulePing {
+                    handle: services.ping.clone(),
+                    settings: services.settings.clone(),
+                    bot_login: services.bot_username.clone(),
+                },
             ),
         );
     }
