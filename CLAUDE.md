@@ -225,7 +225,9 @@ managed via `/settings → Web · Sessions`.
 
 Schedules live in `settings.ron`, managed via `/schedules` (mod-gated). Each
 row carries name, message, hh:mm interval, optional ISO 8601 date range, optional
-HH:MM active-time window, and an enabled toggle. Validation runs on save
+HH:MM active-time window, an optional ping name (fired as a second
+message after the schedule message, respects the ping's cooldown, a missing
+ping just warns and skips), and an enabled toggle. Validation runs on save
 (unique non-blank names, parseable interval, paired active-time fields).
 Changes apply within ~30s via a `SettingsHandle` change-`Notify` signal that
 the `ScheduleCache` sync task subscribes to. A leftover legacy `[[schedules]]`

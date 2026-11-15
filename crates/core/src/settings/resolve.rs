@@ -835,6 +835,7 @@ mod tests {
         let defaults = Settings::compiled_defaults();
         let overrides = overrides::SettingsOverrides {
             schedules: Some(vec![Schedule {
+                ping: None,
                 name: "noon".into(),
                 message: "hi".into(),
                 trigger: Trigger::Interval {

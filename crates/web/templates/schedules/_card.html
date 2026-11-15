@@ -12,6 +12,9 @@
   <p class="card-message">{{ card.message }}</p>
   <div class="card-badges">
     <span class="chip trigger">{{ card.trigger_label }}</span>
+    {% if let Some(p) = card.ping.as_ref() %}
+      <span class="chip">!{{ p }}</span>
+    {% endif %}
     {% if let Some(w) = card.schedule_window_label.as_ref() %}
       <span class="chip window">{{ w }}</span>
     {% endif %}

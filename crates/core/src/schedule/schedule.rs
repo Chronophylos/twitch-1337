@@ -16,6 +16,10 @@ pub struct Schedule {
     #[serde(default)]
     pub end_date: Option<NaiveDate>,
     pub enabled: bool,
+    /// Ping fired as a second message right after `message`. Respects the
+    /// ping's cooldown; a missing ping is skipped at fire time.
+    #[serde(default)]
+    pub ping: Option<String>,
 }
 
 impl Schedule {
@@ -139,6 +143,7 @@ mod validate_tests {
 
     fn ok() -> Schedule {
         Schedule {
+            ping: None,
             name: "noon".into(),
             message: "hi".into(),
             trigger: Trigger::Interval {
@@ -229,6 +234,7 @@ mod next_active_fire_tests {
 
     fn daily_at(h: u32, m: u32) -> Schedule {
         Schedule {
+            ping: None,
             name: "x".into(),
             message: "y".into(),
             trigger: Trigger::Calendar {

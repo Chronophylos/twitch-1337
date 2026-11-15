@@ -53,6 +53,7 @@ struct ListQuery {
 struct CardView {
     name: String,
     message: String,
+    ping: Option<String>,
     enabled: bool,
     trigger_label: String,
     /// Human-rendered active-window label, e.g. "09:00–17:00".
@@ -71,6 +72,8 @@ struct NextFire {
 struct FormState {
     name: String,
     message: String,
+    /// Ping name without `!`; empty means none.
+    ping: String,
     /// "interval" | "calendar"
     kind: String,
     interval_every: String,
@@ -111,6 +114,8 @@ struct ScheduleForm {
     _csrf: String,
     name: String,
     message: String,
+    #[serde(default)]
+    ping: String,
     /// "interval" or "calendar"
     kind: String,
     // Interval fields
@@ -192,12 +197,19 @@ impl ScheduleForm {
         Ok(Schedule {
             name: self.name.trim().to_owned(),
             message: self.message.trim().to_owned(),
+            ping: parse_ping(&self.ping),
             trigger,
             start_date: parse_date(&self.start_date),
             end_date: parse_date(&self.end_date),
             enabled: self.enabled.is_some(),
         })
     }
+}
+
+/// Accepts `name` or `!name`; blank means no ping.
+fn parse_ping(s: &str) -> Option<String> {
+    let s = s.trim().trim_start_matches('!');
+    (!s.is_empty()).then(|| s.to_owned())
 }
 
 fn parse_hhmm(s: &str) -> Option<NaiveTime> {
@@ -316,6 +328,7 @@ fn card_view(
     CardView {
         name: s.name.clone(),
         message: s.message.clone(),
+        ping: s.ping.clone(),
         enabled: s.enabled,
         trigger_label,
         schedule_window_label: window_label,
@@ -389,6 +402,7 @@ fn form_state_from_schedule(s: &Schedule) -> FormState {
     let mut fs = FormState {
         name: s.name.clone(),
         message: s.message.clone(),
+        ping: s.ping.clone().unwrap_or_default(),
         enabled: s.enabled,
         start_date: s
             .start_date
@@ -439,6 +453,7 @@ fn form_state_from_form(form: &ScheduleForm) -> FormState {
     FormState {
         name: form.name.trim().to_owned(),
         message: form.message.trim().to_owned(),
+        ping: form.ping.trim().to_owned(),
         kind: form.kind.clone(),
         interval_every: form.interval_every.clone(),
         interval_active_from: form.interval_active_from.clone(),
@@ -734,6 +749,7 @@ mod try_into_schedule_tests {
 
     fn base_interval_form() -> ScheduleForm {
         ScheduleForm {
+            ping: String::new(),
             _csrf: "x".into(),
             name: "  noon  ".into(),
             message: "  hello world  ".into(),
@@ -804,6 +820,7 @@ mod try_into_schedule_tests {
     #[test]
     fn calendar_at_required() {
         let form = ScheduleForm {
+            ping: String::new(),
             _csrf: "x".into(),
             name: "test".into(),
             message: "hi".into(),
@@ -825,6 +842,7 @@ mod try_into_schedule_tests {
     #[test]
     fn unknown_kind_returns_error() {
         let form = ScheduleForm {
+            ping: String::new(),
             _csrf: "x".into(),
             name: "test".into(),
             message: "hi".into(),

@@ -1486,6 +1486,7 @@ mod tests {
         let mut s = Settings::compiled_defaults();
         s.schedules = vec![
             Schedule {
+                ping: None,
                 name: "a".into(),
                 message: "hi".into(),
                 trigger: Trigger::Interval {
@@ -1499,6 +1500,7 @@ mod tests {
                 enabled: true,
             },
             Schedule {
+                ping: None,
                 name: "a".into(),
                 message: "hi".into(),
                 trigger: Trigger::Interval {
@@ -1525,6 +1527,7 @@ mod tests {
         use crate::schedule::{Schedule, Trigger, WeekdaySet};
         let mut s = Settings::compiled_defaults();
         s.schedules = vec![Schedule {
+            ping: None,
             name: "x".into(),
             message: "hi".into(),
             trigger: Trigger::Interval {
@@ -1553,6 +1556,7 @@ mod tests {
         use crate::schedule::{Schedule, Trigger, WeekdaySet};
         let mut s = Settings::compiled_defaults();
         s.schedules = vec![Schedule {
+            ping: None,
             name: "x".into(),
             message: "hi".into(),
             trigger: Trigger::Interval {
@@ -1585,6 +1589,7 @@ mod tests {
         use crate::schedule::{Schedule, Trigger, WeekdaySet};
         let mut s = Settings::compiled_defaults();
         s.schedules = vec![Schedule {
+            ping: None,
             name: "x".into(),
             message: "hi".into(),
             trigger: Trigger::Interval {
@@ -1610,6 +1615,7 @@ mod tests {
         use crate::schedule::{Schedule, Trigger, WeekdaySet};
         let mut s = Settings::compiled_defaults();
         s.schedules = vec![Schedule {
+            ping: None,
             name: "morning/evening".into(),
             message: "hi".into(),
             trigger: Trigger::Interval {
@@ -1635,6 +1641,7 @@ mod tests {
         use crate::schedule::{Schedule, Trigger, WeekdaySet};
         let mut s = Settings::compiled_defaults();
         s.schedules = vec![Schedule {
+            ping: None,
             name: "foo&bar".into(),
             message: "m".into(),
             trigger: Trigger::Interval {
@@ -1660,6 +1667,7 @@ mod tests {
         use crate::schedule::{Schedule, Trigger, WeekdaySet};
         let mut s = Settings::compiled_defaults();
         s.schedules = vec![Schedule {
+            ping: None,
             name: "foo bar".into(),
             message: "m".into(),
             trigger: Trigger::Interval {
@@ -1700,6 +1708,7 @@ mod tests {
         use crate::schedule::{Schedule, Trigger, WeekdaySet};
         let mut s = Settings::compiled_defaults();
         s.schedules = vec![Schedule {
+            ping: None,
             name: "foo\nbar".into(),
             message: "m".into(),
             trigger: Trigger::Interval {

@@ -549,6 +549,7 @@ mod tests {
 
     fn make_schedule(name: &str, message: &str) -> Schedule {
         Schedule {
+            ping: None,
             name: name.into(),
             message: message.into(),
             trigger: Trigger::Interval {

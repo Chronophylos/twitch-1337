@@ -11,20 +11,55 @@ use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
+use std::time::Duration;
 
 use futures_util::FutureExt;
 use thiserror::Error;
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinError;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::lifecycle::{Lifecycle, TaskGroup};
+use crate::ping::{PingHandle, TriggerDecision};
 use crate::schedule::{Schedule, TelemetryStore};
 use crate::settings::SettingsHandle;
 use crate::twitch::ChatSender;
 use crate::util::clock::Clock;
+
+/// What a schedule needs to fire its optional ping: the ping actor, the
+/// settings for the default cooldown, and the bot login used as `{sender}`.
+#[derive(Clone)]
+pub struct SchedulePing {
+    pub handle: PingHandle,
+    pub settings: SettingsHandle,
+    pub bot_login: String,
+}
+
+impl SchedulePing {
+    async fn fire<T, L>(&self, sender: &ChatSender<T, L>, channel: &str, ping_name: &str)
+    where
+        T: Transport,
+        L: LoginCredentials,
+    {
+        let cooldown = Duration::from_secs(self.settings.load().pings.cooldown);
+        // `public = true`: the bot is not a member of the ping it fires.
+        match self
+            .handle
+            .try_record_trigger(ping_name.to_owned(), self.bot_login.clone(), cooldown, true)
+            .await
+        {
+            TriggerDecision::Fire(rendered) => sender.say(channel.to_owned(), rendered).await,
+            TriggerDecision::OnCooldown(remaining) => {
+                info!(ping = %ping_name, ?remaining, "scheduled ping on cooldown, skipped");
+            }
+            TriggerDecision::Skip => {
+                warn!(ping = %ping_name, "scheduled ping missing or has no members, skipped");
+            }
+        }
+    }
+}
 
 /// Why a schedule child stopped.
 ///
@@ -85,6 +120,10 @@ enum ReconcileControl {
 }
 
 #[instrument(skip_all)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "orchestrator owns every dependency its schedule children need"
+)]
 pub async fn run_orchestrator<T, L>(
     sender: Arc<ChatSender<T, L>>,
     settings: SettingsHandle,
@@ -93,12 +132,13 @@ pub async fn run_orchestrator<T, L>(
     shutdown: Arc<Notify>,
     clock: Arc<dyn Clock>,
     lifecycle: Lifecycle,
+    ping: SchedulePing,
 ) where
     T: Transport,
     L: LoginCredentials,
 {
     if let Err(error) = try_run_orchestrator(
-        sender, settings, telemetry, channel, shutdown, clock, &lifecycle,
+        sender, settings, telemetry, channel, shutdown, clock, &lifecycle, &ping,
     )
     .await
     {
@@ -109,6 +149,10 @@ pub async fn run_orchestrator<T, L>(
 /// Error-returning schedule orchestration seam. Runtime composition should
 /// adopt this future under the lifecycle supervisor after the shared lifecycle
 /// value is threaded into the handler factory.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "orchestrator owns every dependency its schedule children need"
+)]
 pub(crate) async fn try_run_orchestrator<T, L>(
     sender: Arc<ChatSender<T, L>>,
     settings: SettingsHandle,
@@ -117,6 +161,7 @@ pub(crate) async fn try_run_orchestrator<T, L>(
     shutdown: Arc<Notify>,
     clock: Arc<dyn Clock>,
     lifecycle: &Lifecycle,
+    ping: &SchedulePing,
 ) -> Result<(), ScheduleOrchestratorError>
 where
     T: Transport,
@@ -147,6 +192,7 @@ where
         &completion_tx,
         &mut shutdown_request,
         lifecycle,
+        ping,
     )
     .await;
     let initial = match initial {
@@ -184,6 +230,7 @@ where
                     &completion_tx,
                     &mut shutdown_request,
                     lifecycle,
+                    ping,
                 ).await {
                     Ok(ReconcileControl::Continue) => continue,
                     Ok(ReconcileControl::Shutdown) => ReconcileControl::Shutdown,
@@ -305,6 +352,7 @@ async fn reconcile<T, L, S>(
     completion_tx: &mpsc::UnboundedSender<ScheduleCompletionEvent>,
     shutdown: &mut S,
     lifecycle: &Lifecycle,
+    ping: &SchedulePing,
 ) -> Result<ReconcileControl, ScheduleOrchestratorError>
 where
     T: Transport,
@@ -392,6 +440,7 @@ where
             clock.clone(),
             completion_tx.clone(),
             lifecycle,
+            ping.clone(),
         )
         .await;
         running.insert(name, child);
@@ -424,6 +473,7 @@ async fn spawn_schedule_child<T, L>(
     clock: Arc<dyn Clock>,
     completion_tx: mpsc::UnboundedSender<ScheduleCompletionEvent>,
     lifecycle: &Lifecycle,
+    ping: SchedulePing,
 ) -> RunningSchedule
 where
     T: Transport,
@@ -443,6 +493,7 @@ where
                 channel,
                 clock,
                 child_cancellation,
+                ping,
             ))
             .catch_unwind()
             .await
@@ -571,7 +622,7 @@ fn classify_schedule_completions(
     }
 }
 
-#[instrument(skip(sender, telemetry, channel, clock, cancel), fields(schedule = %schedule.name))]
+#[instrument(skip(sender, telemetry, channel, clock, cancel, ping), fields(schedule = %schedule.name))]
 async fn run_schedule_task<T, L>(
     schedule: Schedule,
     sender: Arc<ChatSender<T, L>>,
@@ -579,6 +630,7 @@ async fn run_schedule_task<T, L>(
     channel: String,
     clock: Arc<dyn Clock>,
     cancel: CancellationToken,
+    ping: SchedulePing,
 ) -> ScheduleCompletion
 where
     T: Transport,
@@ -615,6 +667,9 @@ where
         // A cancellation racing this await must not make a successful send
         // disappear from telemetry.
         telemetry.record_fire(&schedule.name, clock.now_utc()).await;
+        if let Some(ping_name) = &schedule.ping {
+            ping.fire(&sender, &channel, ping_name).await;
+        }
         if cancel.is_cancelled() {
             info!("cancelled after send, exiting");
             return ScheduleCompletion::Cancelled;
@@ -747,6 +802,7 @@ mod tests {
                 super::RunningSchedule {
                     id: index as u64,
                     captured: crate::schedule::Schedule {
+                        ping: None,
                         name: format!("schedule-{index}"),
                         message: String::new(),
                         trigger: crate::schedule::Trigger::Interval {

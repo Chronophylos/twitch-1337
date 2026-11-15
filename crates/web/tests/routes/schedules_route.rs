@@ -48,6 +48,7 @@ async fn seed_schedules(state: &twitch_1337_web::WebState, rows: Vec<Schedule>) 
 
 fn interval_schedule(name: &str, message: &str) -> Schedule {
     Schedule {
+        ping: None,
         name: name.into(),
         message: message.into(),
         trigger: Trigger::Interval {

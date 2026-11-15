@@ -656,6 +656,7 @@ mod tests {
                 ..Default::default()
             },
             schedules: Some(vec![crate::schedule::Schedule {
+                ping: None,
                 name: "legacy-schedule".into(),
                 message: "hi".into(),
                 trigger: crate::schedule::Trigger::Interval {
@@ -784,6 +785,7 @@ mod tests {
             .apply(
                 SettingsOverrides {
                     schedules: Some(vec![Schedule {
+                        ping: None,
                         name: "x".into(),
                         message: "hi".into(),
                         trigger: Trigger::Interval {
@@ -899,6 +901,7 @@ mod tests {
                     |o| {
                         let mut next = o.schedules.clone().unwrap_or_default();
                         next.push(crate::schedule::Schedule {
+                            ping: None,
                             name: "alpha".into(),
                             message: "a".into(),
                             trigger: crate::schedule::Trigger::Interval {
@@ -927,6 +930,7 @@ mod tests {
                     |o| {
                         let mut next = o.schedules.clone().unwrap_or_default();
                         next.push(crate::schedule::Schedule {
+                            ping: None,
                             name: "bravo".into(),
                             message: "b".into(),
                             trigger: crate::schedule::Trigger::Interval {
