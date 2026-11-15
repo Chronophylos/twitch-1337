@@ -73,17 +73,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
-      # ADR-0007: ring-only rustls. aws-lc-sys must stay out of the graph
-      # (including test/dev deps) so musl/`FROM scratch` stays cmake-free and
-      # rustls never sees dual crypto providers.
-      - name: Forbid aws-lc-sys
-        run: |
-          if cargo tree --workspace --all-targets -i aws-lc-sys >/dev/null 2>&1; then
-            echo "aws-lc-sys must not appear in the dependency graph (ADR-0007)" >&2
-            cargo tree --workspace --all-targets -i aws-lc-sys >&2
-            exit 1
-          fi
-
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -178,22 +167,19 @@ jobs:
           E2E_CHROME_BINARY: ${{ steps.chrome.outputs.chrome-path }}
         run: cargo nextest run -p twitch-1337-web --features e2e
 
-  audit:
-    name: cargo audit
+  deny:
+    # Advisories (RustSec), bans (aws-lc-sys, ADR-0007) and sources; see deny.toml.
+    name: cargo deny
     needs: changes
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'schedule' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
-      checks: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          command: check advisories bans sources

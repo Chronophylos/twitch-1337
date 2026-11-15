@@ -31,7 +31,7 @@ RUST_LOG=trace cargo run   # every ServerMessage
 cargo fmt --all
 cargo clippy --all-targets -- -D warnings
 cargo test
-cargo audit                # optional locally; CI job fails on advisories
+cargo deny check           # optional locally; CI job fails on advisories/bans/sources
 
 # Deploy (Justfile, podman local → docker.homelab SSH)
 just build | just push | just restart | just deploy
@@ -52,7 +52,7 @@ Linear history required, force-push + delete blocked, conversations must resolve
 | `clippy` | ci.yml | cargo clippy --workspace --all-targets -- -D warnings |
 | `test` | ci.yml | cargo llvm-cov nextest --workspace (lcov artifact; no threshold gate) |
 | `e2e` | ci.yml | web crate WebDriver tests (`--features e2e`, setup-chrome) |
-| `cargo audit` | ci.yml | RustSec CVE scan of Cargo.lock via rustsec/audit-check |
+| `cargo deny` | ci.yml | `deny.toml`: RustSec advisories, banned crates (aws-lc-sys), allowed sources; also weekly on schedule |
 | `hadolint (Dockerfile)` | sast.yml | Dockerfile lint, SARIF → Security tab |
 | `trivy config (IaC)` | sast.yml | IaC misconfig scan, HIGH/CRITICAL only |
 | `actionlint (workflows)` | sast.yml | Workflow YAML + shell lint |
@@ -77,7 +77,7 @@ grouped as `actions-minor-patch`. Docker ecosystem bumps both tag AND sha256 dig
 Dockerfile.
 
 **Action pinning:** security-critical actions pinned to **commit SHA** with version
-comment: `rustsec/audit-check`, `gitleaks/gitleaks-action`, `zizmorcore/zizmor-action`,
+comment: `EmbarkStudios/cargo-deny-action`, `gitleaks/gitleaks-action`, `zizmorcore/zizmor-action`,
 `actions/delete-package-versions`, `aquasecurity/trivy-action` (Mar 2026 supply-chain
 incident — always SHA-pin trivy). Others pinned to major tags; Dependabot keeps them
 current.
@@ -109,12 +109,13 @@ There are no `vX.Y.Z` tags, no GitHub Releases, no `CHANGELOG.md`. `git
 log` on `main` is the release history. The workspace version stays at
 `0.0.0` permanently.
 
-**When `cargo audit` fails:**
+**When `cargo deny` fails:**
 - Check open Dependabot PRs first (weekly); a bump may already be queued.
 - Transitive vulns: `cargo tree -i <crate>` to find the parent; bump the parent.
 - If two majors of one crate coexist in Cargo.lock (e.g. rustls-webpki 0.101 + 0.103),
   both must be resolved — usually by bumping the dep pulling in the old major.
-- Last resort: ignore in `.cargo/audit.toml` with a written-down reason.
+- Last resort: add the id to `[advisories] ignore` in `deny.toml` with a `reason`.
+- New git dependency: add its repo to `[sources] allow-git` in `deny.toml`.
 
 **When Dependabot cargo PRs break `clippy` or `test`:**
 - Breaking-API bump; adapt code on the dependabot branch and force-push
