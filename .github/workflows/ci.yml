@@ -5,10 +5,14 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # Weekly audit: advisories land against an unchanged Cargo.lock too.
+  schedule:
+    - cron: '0 5 * * 1'  # Mondays 05:00 UTC
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  # Only supersede PR runs; every main push keeps its own result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
@@ -44,18 +48,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # dtolnay/rust-toolchain requires `toolchain:` — it does not read
-      # rust-toolchain.toml. Grep the root pin so CI tracks that file.
-      - name: Read Rust toolchain channel
-        id: rust-toolchain
-        run: |
-          channel=$(grep '^channel' rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-
-      - uses: dtolnay/rust-toolchain@master # zizmor: ignore[unpinned-uses]
-        with:
-          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
-          components: rustfmt
+      # rustup installs the channel + components pinned in rust-toolchain.toml.
+      - name: Install Rust toolchain
+        run: rustup toolchain install
 
       - name: cargo fmt
         run: cargo fmt --all -- --check
@@ -72,16 +67,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read Rust toolchain channel
-        id: rust-toolchain
-        run: |
-          channel=$(grep '^channel' rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-
-      - uses: dtolnay/rust-toolchain@master # zizmor: ignore[unpinned-uses]
-        with:
-          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
-          components: clippy
+      # rustup installs the channel + components pinned in rust-toolchain.toml.
+      - name: Install Rust toolchain
+        run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
@@ -111,16 +99,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read Rust toolchain channel
-        id: rust-toolchain
+      # rustup installs the channel + components pinned in rust-toolchain.toml.
+      - name: Install Rust toolchain
         run: |
-          channel=$(grep '^channel' rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-
-      - uses: dtolnay/rust-toolchain@master # zizmor: ignore[unpinned-uses]
-        with:
-          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
-          components: llvm-tools-preview
+          rustup toolchain install
+          rustup component add llvm-tools-preview
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
@@ -156,15 +139,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read Rust toolchain channel
-        id: rust-toolchain
-        run: |
-          channel=$(grep '^channel' rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-
-      - uses: dtolnay/rust-toolchain@master # zizmor: ignore[unpinned-uses]
-        with:
-          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
+      # rustup installs the channel + components pinned in rust-toolchain.toml.
+      - name: Install Rust toolchain
+        run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
@@ -204,7 +181,7 @@ jobs:
   audit:
     name: cargo audit
     needs: changes
-    if: always() && (github.event_name == 'pull_request' || needs.changes.outputs.code == 'true')
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'schedule' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read

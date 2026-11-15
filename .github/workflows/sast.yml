@@ -32,7 +32,9 @@ jobs:
           dockerfile: Dockerfile
           format: sarif
           output-file: hadolint.sarif
-          no-fail: true
+          # Public: findings go to the Security tab. Private (no GHAS, no
+          # upload): fail the job, or findings vanish.
+          no-fail: ${{ !github.event.repository.private }}
 
       - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always() && !github.event.repository.private
@@ -61,7 +63,8 @@ jobs:
           format: sarif
           output: trivy-config.sarif
           severity: HIGH,CRITICAL
-          exit-code: '0'
+          # Same rule as hadolint: fail only when there is no SARIF upload.
+          exit-code: ${{ github.event.repository.private && '1' || '0' }}
 
       - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always() && !github.event.repository.private

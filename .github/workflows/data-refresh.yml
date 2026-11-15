@@ -9,9 +9,9 @@ jobs:
   refresh:
     name: regenerate CSVs and open PR
     runs-on: ubuntu-latest
+    # All writes go through DATA_REFRESH_PAT; GITHUB_TOKEN only reads.
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
