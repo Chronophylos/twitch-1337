@@ -222,6 +222,11 @@ pub enum SettingsError {
     Ron(#[from] ron::error::SpannedError),
     #[error("persist: {0}")]
     Persist(#[from] crate::util::persist::AtomicPersistError),
+    #[error(
+        "settings.ron is schema v{found}, this build knows v{supported}; \
+         read-only until the newer build is running again"
+    )]
+    FutureVersion { found: u32, supported: u32 },
 }
 
 impl From<Vec<FieldError>> for SettingsError {
