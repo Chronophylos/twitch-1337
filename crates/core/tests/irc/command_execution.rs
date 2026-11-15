@@ -18,14 +18,6 @@ use twitch_1337::commands::{
 type TestRegistry = CommandRegistry<FakeTransport, StaticLoginCredentials>;
 type TestCommand = dyn Command<FakeTransport, StaticLoginCredentials>;
 
-// `cargo test` runs tests in one process, unlike nextest. Serialize this
-// module because the repository's legacy FakeTransport queue is process-global.
-static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-async fn test_guard() -> tokio::sync::MutexGuard<'static, ()> {
-    TEST_LOCK.lock().await
-}
-
 #[derive(Clone)]
 struct Action {
     reply: Option<&'static str>,
@@ -174,7 +166,6 @@ async fn wait_history(bot: &TestBot, minimum: usize) {
 
 #[tokio::test]
 async fn slow_background_does_not_block_later_inline_or_reorder_history() {
-    let _test_guard = test_guard().await;
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let slow_gate = Arc::new(Semaphore::new(0));
     let slow = FakeCommand::command(
@@ -238,7 +229,6 @@ async fn slow_background_does_not_block_later_inline_or_reorder_history() {
 
 #[tokio::test]
 async fn saturated_background_is_rejected_but_remains_in_history_and_transcript() {
-    let _test_guard = test_guard().await;
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let slow = FakeCommand::command(
         "random_flight",
@@ -308,7 +298,6 @@ async fn saturated_background_is_rejected_but_remains_in_history_and_transcript(
 
 #[tokio::test]
 async fn registry_order_aliases_and_enabled_checks_remain_at_ingress() {
-    let _test_guard = test_guard().await;
     let priority_registry = registry([
         FakeCommand::command(
             "version",

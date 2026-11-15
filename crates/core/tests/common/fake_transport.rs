@@ -2,22 +2,19 @@
 //!
 //! `Transport::new()` takes no arguments, so tests cannot directly hand a
 //! stream to the client. Instead, the test calls [`install`] before
-//! constructing the `TwitchIRCClient`; `install` pushes the client-side of
-//! a duplex stream onto a global queue. `FakeTransport::new()` pops from
-//! the front to obtain its stream.
+//! constructing the `TwitchIRCClient`; `install` parks the client-side of a
+//! duplex stream in a thread-local slot that `FakeTransport::new()` takes.
 //!
-//! **Safety model:** `cargo nextest` runs each test in its own OS process.
-//! The queue is isolated per-process, and each test process spawns exactly
-//! one `TestBotBuilder` (one `install()` → one `FakeTransport::new()`).
-//! FIFO order alone does NOT guarantee correct pairing if two bots were
-//! spawned concurrently in the same process: `Transport::new()` fires from
-//! an async connection task spawned by `TwitchIRCClient::new()`, so push
-//! and pop order can diverge. The defensive assertion in `install()` catches
-//! that misuse at runtime.
+//! **Isolation model:** `#[tokio::test]` runs each test on its own
+//! current-thread runtime, so the connection task that `TwitchIRCClient::new()`
+//! spawns (and that calls `Transport::new()`) runs on the same thread as the
+//! test's `install()`. Each test therefore sees only its own slot, under both
+//! `cargo test` (many tests per process) and nextest (one per process).
+//! Multi-thread runtimes are not supported: the connection task may land on a
+//! worker that has no slot, and `new()` fails with a message saying so.
 
-use std::collections::VecDeque;
+use std::cell::RefCell;
 use std::fmt::{self, Debug};
-use std::sync::Mutex;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -32,7 +29,11 @@ use tokio_util::codec::{BytesCodec, FramedWrite};
 use twitch_irc::message::{AsRawIRC, IRCMessage, IRCParseError};
 use twitch_irc::transport::Transport;
 
-static QUEUE: Mutex<VecDeque<DuplexStream>> = Mutex::new(VecDeque::new());
+thread_local! {
+    // ponytail: one slot per thread, so one IRC connection per test. A client
+    // that reconnects (rate-limit second connection) finds it empty.
+    static SLOT: RefCell<Option<DuplexStream>> = const { RefCell::new(None) };
+}
 
 /// Handle returned to the test for injecting incoming lines and capturing outgoing ones.
 pub struct TransportHandle {
@@ -42,8 +43,8 @@ pub struct TransportHandle {
 
 /// Set up a fake transport pair. Call BEFORE constructing `TwitchIRCClient`.
 ///
-/// Pushes the client-side duplex half onto the global queue; `FakeTransport::new()`
-/// pops it. The returned [`TransportHandle`] lets tests inject IRC lines (server→client)
+/// Parks the client-side duplex half in this thread's slot (replacing any
+/// unused one); `FakeTransport::new()` takes it. The returned [`TransportHandle`] lets tests inject IRC lines (server→client)
 /// and inspect lines the client sent (client→server).
 pub async fn install() -> TransportHandle {
     let (client_side, test_side) = tokio::io::duplex(64 * 1024);
@@ -97,15 +98,7 @@ pub async fn install() -> TransportHandle {
         tokio::join!(handshake_task, capture_task);
     });
 
-    {
-        let mut q = QUEUE.lock().unwrap();
-        assert!(
-            q.is_empty(),
-            "FakeTransport: install() called while a stream is already queued — \
-             only one TestBotBuilder per process is supported"
-        );
-        q.push_back(client_side);
-    }
+    SLOT.with(|slot| *slot.borrow_mut() = Some(client_side));
 
     TransportHandle {
         inject: inject_tx,
@@ -115,8 +108,8 @@ pub async fn install() -> TransportHandle {
 
 /// A fake `Transport` backed by a `tokio::io::duplex` stream.
 ///
-/// Instantiated by `FakeTransport::new()` which pops from the global queue
-/// populated by [`install`].
+/// Instantiated by `FakeTransport::new()`, which takes the stream that
+/// [`install`] parked on this thread.
 pub struct FakeTransport {
     incoming: Box<
         dyn FusedStream<Item = Result<IRCMessage, Either<std::io::Error, IRCParseError>>>
@@ -159,20 +152,13 @@ impl Transport for FakeTransport {
     type Outgoing = Box<dyn Sink<IRCMessage, Error = std::io::Error> + Unpin + Send + Sync>;
 
     async fn new() -> Result<Self, FakeTransportConnectError> {
-        let stream = {
-            let mut q = QUEUE.lock().unwrap();
-            let s = q.pop_front().ok_or_else(|| {
-                FakeTransportConnectError(
-                    "FakeTransport queue empty; call fake_transport::install() before building the client".to_owned(),
-                )
-            })?;
-            assert!(
-                q.is_empty(),
-                "FakeTransport: queue has leftover streams after pop — \
-                 multiple TestBotBuilder spawns in one process are not supported"
-            );
-            s
-        };
+        let stream = SLOT.with(|slot| slot.borrow_mut().take()).ok_or_else(|| {
+            FakeTransportConnectError(
+                "no stream on this thread; call fake_transport::install() before building the \
+                 client, from a current-thread runtime"
+                    .to_owned(),
+            )
+        })?;
         let (read_half, write_half) = tokio::io::split(stream);
 
         let lines = BufReader::new(read_half).lines();
