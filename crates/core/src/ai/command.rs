@@ -390,9 +390,15 @@ where
             }
             Ok(crate::twitch::mouth::SpeakOutcome::NoMouth) => {
                 ctx.cancellation.check()?;
-                ctx.sender
+                // Same rule as the Mouth Err arm: chat saw nothing, so no
+                // history or transcript write (the sender already logged it).
+                if !ctx
+                    .sender
                     .reply_no_byte_clamp(&ctx.privmsg, line.clone())
-                    .await;
+                    .await
+                {
+                    return Ok(());
+                }
                 (self.turn.bot_username.clone(), None)
             }
             Err(e) => {

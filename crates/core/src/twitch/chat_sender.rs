@@ -113,7 +113,8 @@ where
     /// Reply to `privmsg` with `message`. Sanitizes the payload, drops empty
     /// results, and logs (does not propagate) IRC send errors.
     pub async fn reply(&self, privmsg: &PrivmsgMessage, message: impl Into<String>) {
-        self.send_reply(privmsg, sanitize_outbound(&message.into()))
+        let _ = self
+            .send_reply(privmsg, sanitize_outbound(&message.into()))
             .await;
     }
 
@@ -123,19 +124,28 @@ where
     /// multibyte line can still exceed IRC's 500-byte PRIVMSG limit — that
     /// is the trade-off issue #417 accepted so Helix and IRC share one
     /// character policy.
-    pub async fn reply_no_byte_clamp(&self, privmsg: &PrivmsgMessage, message: impl Into<String>) {
+    ///
+    /// Returns whether the line was handed to IRC, so agent replies are only
+    /// recorded as speech when chat could have seen them.
+    pub async fn reply_no_byte_clamp(
+        &self,
+        privmsg: &PrivmsgMessage,
+        message: impl Into<String>,
+    ) -> bool {
         self.send_reply(privmsg, collapse_control_and_whitespace(&message.into()))
-            .await;
+            .await
     }
 
-    async fn send_reply(&self, privmsg: &PrivmsgMessage, cleaned: String) {
+    async fn send_reply(&self, privmsg: &PrivmsgMessage, cleaned: String) -> bool {
         if cleaned.is_empty() {
             warn!(channel = %privmsg.channel_login, "outbound reply empty after sanitize, dropping");
-            return;
+            return false;
         }
         if let Err(error) = self.client.say_in_reply_to(privmsg, cleaned).await {
             error!(?error, "chat reply failed");
+            return false;
         }
+        true
     }
 }
 
