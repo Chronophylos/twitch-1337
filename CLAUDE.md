@@ -44,13 +44,14 @@ Linear history required, force-push + delete blocked, conversations must resolve
 
 **Branch naming:** `feature/` features, `spec/` specs, `fix/` bug fixes, `refactor/` refactors, `build/` CI / dependencies / Docker. Slug after slash, kebab-case.
 
-**Required status checks (9, must all pass to merge):**
+**Required status checks (10, must all pass to merge):**
 
 | Check | Workflow | Purpose |
 |---|---|---|
 | `fmt` | ci.yml | cargo fmt --check |
 | `clippy` | ci.yml | cargo clippy --workspace --all-targets -- -D warnings |
 | `test` | ci.yml | cargo llvm-cov nextest --workspace (lcov artifact; no threshold gate) |
+| `e2e` | ci.yml | web crate WebDriver tests (`--features e2e`, setup-chrome) |
 | `cargo audit` | ci.yml | RustSec CVE scan of Cargo.lock via rustsec/audit-check |
 | `hadolint (Dockerfile)` | sast.yml | Dockerfile lint, SARIF → Security tab |
 | `trivy config (IaC)` | sast.yml | IaC misconfig scan, HIGH/CRITICAL only |
@@ -65,9 +66,10 @@ docs. Not a required check.
 keeping the last 30 plus `:latest`. Not a required check.
 `Data refresh` runs Sundays 03:00 UTC; opens a `chore/data-refresh` PR.
 
-**Native GitHub security (repo settings):** secret_scanning, push_protection,
-dependabot_security_updates — all enabled. Push-protection blocks commits
-containing known provider tokens at the server.
+**Native GitHub security (repo settings):** repo is private on GitHub Pro without
+GHAS, so secret scanning / push protection are unavailable and SARIF uploads are
+skipped (hadolint/trivy fail the job instead; gitleaks is the secret gate).
+Dependabot alerts + security updates are enabled.
 
 **Dependabot** (`.github/dependabot.yml`): weekly PRs for `cargo`, `github-actions`,
 `docker`. Cargo minor+patch grouped as `rust-minor-patch`; GitHub Actions minor+patch
@@ -82,7 +84,7 @@ current.
 
 **Typical PR flow:**
 1. branch → commit → push → `gh pr create`
-2. wait for 9 checks green; rebase on main if `strict` blocks merge
+2. wait for 10 checks green; rebase on main if `strict` blocks merge
 3. `gh pr merge --squash`
 
 **Release flow (rolling):**
