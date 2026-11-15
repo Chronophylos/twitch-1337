@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, reason = "test crate: a panic is a test failure")]
 //! Browser-level e2e tests for the dashboard. Compiled only under
 //! `--features e2e` (see Cargo.toml `[[test]]`). Needs a running
 //! chromedriver at `$WEBDRIVER_URL` (default http://localhost:9515).

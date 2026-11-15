@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -138,7 +138,11 @@ impl SessionTable {
             return;
         };
         let _write = self.write_lock.lock().await;
-        let snapshot = self.inner.read().unwrap().clone();
+        let snapshot = self
+            .inner
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         if let Err(error) = atomic_save_ron_async(&snapshot, &path).await {
             tracing::warn!(?error, "Failed to persist sessions");
         }
@@ -168,20 +172,23 @@ impl SessionTable {
 
     fn insert_at(&self, id: &str, csrf: [u8; 32], new: NewSession) {
         let now = self.clock.now();
-        self.inner.write().unwrap().insert(
-            id.to_owned(),
-            Session {
-                user_id: new.user_id,
-                user_login: new.user_login,
-                role: new.role,
-                issued_at: now,
-                last_seen: now,
-                last_role_check: now,
-                csrf_value: csrf,
-                avatar_url: new.avatar_url,
-                is_broadcaster: new.is_broadcaster,
-            },
-        );
+        self.inner
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(
+                id.to_owned(),
+                Session {
+                    user_id: new.user_id,
+                    user_login: new.user_login,
+                    role: new.role,
+                    issued_at: now,
+                    last_seen: now,
+                    last_role_check: now,
+                    csrf_value: csrf,
+                    avatar_url: new.avatar_url,
+                    is_broadcaster: new.is_broadcaster,
+                },
+            );
     }
 
     /// Check whether the session with `id` is still live under `ttl` and, if
@@ -193,7 +200,7 @@ impl SessionTable {
     pub fn get_and_touch(&self, id: &str, ttl: Duration) -> Option<Session> {
         let now = self.clock.now();
         let ttl = chrono::Duration::from_std(ttl).ok()?;
-        let mut g = self.inner.write().unwrap();
+        let mut g = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         let session = g.get_mut(id)?;
         if now.signed_duration_since(session.last_seen) > ttl {
             g.remove(id);
@@ -204,12 +211,20 @@ impl SessionTable {
     }
 
     pub fn drop_session(&self, id: &str) {
-        self.inner.write().unwrap().remove(id);
+        self.inner
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(id);
     }
 
     pub fn record_role_check(&self, id: &str) {
         let now = self.clock.now();
-        if let Some(s) = self.inner.write().unwrap().get_mut(id) {
+        if let Some(s) = self
+            .inner
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(id)
+        {
             s.last_role_check = now;
         }
     }

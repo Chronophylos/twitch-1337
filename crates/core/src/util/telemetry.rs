@@ -37,9 +37,7 @@ pub fn install_tracing() {
     // back to a crate without grepping. Pair with `ShortTimer` for the
     // line-budget we just freed by dropping the date prefix.
     let fmt_layer = fmt::layer().with_target(true).with_timer(ShortTimer);
-    let filter_layer = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
-        .unwrap();
+    let filter_layer = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::registry()
         .with(filter_layer)

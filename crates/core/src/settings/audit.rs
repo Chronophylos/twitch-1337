@@ -1,7 +1,7 @@
 //! Append-only JSON-lines audit log for settings changes.
 
 #[cfg(any(test, feature = "testing"))]
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -82,7 +82,10 @@ impl MemoryAuditLog {
     }
 
     pub fn snapshot(&self) -> Vec<AuditEntry> {
-        self.entries.lock().unwrap().clone()
+        self.entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -96,7 +99,10 @@ impl Default for MemoryAuditLog {
 #[cfg(any(test, feature = "testing"))]
 impl AuditLog for MemoryAuditLog {
     fn append(&self, entry: &AuditEntry) -> Result<(), AuditError> {
-        self.entries.lock().unwrap().push(entry.clone());
+        self.entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(entry.clone());
         Ok(())
     }
 }

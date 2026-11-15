@@ -107,7 +107,7 @@ impl Schedule {
         let mut anchor = now;
         if let Some(start) = self.start_date {
             let start_dt = Berlin
-                .from_local_datetime(&start.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()))
+                .from_local_datetime(&start.and_time(NaiveTime::MIN))
                 .single()
                 .expect("midnight always valid");
             if anchor < start_dt {
@@ -117,7 +117,9 @@ impl Schedule {
         let next = self.trigger.next_fire_after(anchor);
         if let Some(end) = self.end_date {
             let end_dt = Berlin
-                .from_local_datetime(&end.and_time(NaiveTime::from_hms_opt(23, 59, 59).unwrap()))
+                .from_local_datetime(&end.and_time(
+                    NaiveTime::from_hms_opt(23, 59, 59).expect("23:59:59 is a valid time"),
+                ))
                 .single()
                 .expect("end of day valid");
             if next > end_dt {
