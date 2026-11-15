@@ -1,0 +1,28 @@
+# cargo-deny: advisories (RustSec), bans, sources. Licenses are not checked:
+# private bot, nothing is redistributed.
+
+[graph]
+all-features = true
+
+[advisories]
+ignore = [
+    # basic-toml unmaintained: build-time only via askama_derive (reads askama config),
+    # never parses user input, no patched version. Drop once askama moves to `toml`.
+    { id = "RUSTSEC-2026-0374", reason = "build-time only via askama_derive" },
+]
+
+[bans]
+# Duplicate majors are routine transitive churn; advisories catch the ones
+# that matter (an old major with a CVE).
+multiple-versions = "allow"
+deny = [
+    # ADR-0007: ring-only rustls. aws-lc-sys must stay out of the graph so the
+    # musl `FROM scratch` build stays cmake-free and rustls has one provider.
+    { crate = "aws-lc-sys", reason = "ADR-0007: ring-only rustls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# Own fork, pinned by rev in crates/{core,twitch-1337}/Cargo.toml.
+allow-git = ["https://github.com/Chronophylos/twitch-irc-rs"]
