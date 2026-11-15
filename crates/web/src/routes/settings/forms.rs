@@ -94,6 +94,8 @@ struct CooldownsForm {
     cooldown_doener: u64,
     #[serde(default)]
     cooldown_spoiler: Option<u64>,
+    #[serde(default)]
+    cooldown_servers: Option<u64>,
 }
 
 impl CooldownsForm {
@@ -105,6 +107,7 @@ impl CooldownsForm {
             feedback: Some(self.cooldown_feedback),
             doener: Some(self.cooldown_doener),
             spoiler: self.cooldown_spoiler,
+            servers: self.cooldown_servers,
         }
     }
 }
@@ -663,6 +666,7 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
             cooldown_feedback: form.cooldown_feedback,
             cooldown_doener: form.cooldown_doener,
             cooldown_spoiler: form.cooldown_spoiler,
+            cooldown_servers: form.cooldown_servers,
         }
         .into_overrides(),
         pings: PingsForm {

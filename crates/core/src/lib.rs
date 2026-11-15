@@ -6,6 +6,7 @@
 
 pub mod ai;
 pub mod alerts;
+pub mod amp;
 pub mod aviation;
 pub mod commands;
 pub mod config;
@@ -89,6 +90,9 @@ pub struct Services {
     /// DHL tracking client backing Aurora's `track_shipment`. `None` when
     /// `[dhl]` is absent from config.toml, which hides the tool entirely.
     pub dhl: Option<Arc<crate::dhl::DhlClient>>,
+    /// AMP game-server panel client backing `!servers`. `None` when `[amp]`
+    /// is absent from config.toml, which leaves the command unregistered.
+    pub amp: Option<Arc<crate::amp::AmpClient>>,
     /// First-party Langfuse exporter. `None` when `[langfuse]` is absent or
     /// init failed; AI still runs, traces are dropped.
     pub langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,

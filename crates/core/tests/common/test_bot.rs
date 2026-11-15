@@ -119,6 +119,7 @@ pub struct TestBotBuilder {
     whisper_failure: bool,
     doener_base_url: Option<String>,
     dhl_base_url: Option<String>,
+    amp_base_url: Option<String>,
     settings_overrides: Option<twitch_1337::settings::SettingsOverrides>,
     open_emote_tracker: bool,
     emote_catalog_seed: Vec<(String, String)>,
@@ -141,6 +142,7 @@ impl TestBotBuilder {
             whisper_failure: false,
             doener_base_url: None,
             dhl_base_url: None,
+            amp_base_url: None,
             settings_overrides: None,
             open_emote_tracker: false,
             emote_catalog_seed: Vec::new(),
@@ -253,6 +255,12 @@ impl TestBotBuilder {
     /// assertions.
     pub fn with_dhl_base_url(mut self, base: impl Into<String>) -> Self {
         self.dhl_base_url = Some(base.into());
+        self
+    }
+
+    /// Registers `!servers` against a stub AMP controller (user `bot`, password `pw`).
+    pub fn with_amp_base_url(mut self, base: impl Into<String>) -> Self {
+        self.amp_base_url = Some(base.into());
         self
     }
 
@@ -575,6 +583,14 @@ impl TestBotBuilder {
                         reqwest::Client::new(),
                         base.clone(),
                         secrecy::SecretString::new("test".into()),
+                    ))
+                }),
+                amp: self.amp_base_url.as_ref().map(|base| {
+                    std::sync::Arc::new(twitch_1337::amp::AmpClient::with_http(
+                        reqwest::Client::new(),
+                        base.clone(),
+                        "bot".to_owned(),
+                        secrecy::SecretString::new("pw".into()),
                     ))
                 }),
                 langfuse: None,

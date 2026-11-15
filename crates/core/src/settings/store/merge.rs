@@ -88,6 +88,9 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if let Some(v) = patch.cooldowns.spoiler {
         into.cooldowns.spoiler = Some(v);
     }
+    if let Some(v) = patch.cooldowns.servers {
+        into.cooldowns.servers = Some(v);
+    }
     if let Some(v) = patch.pings.cooldown {
         into.pings.cooldown = Some(v);
     }
@@ -460,6 +463,7 @@ mod tests {
             },
             cooldowns: crate::settings::overrides::CooldownsOverrides {
                 spoiler: Some(45),
+                servers: Some(50),
                 ..Default::default()
             },
             ..Default::default()
@@ -469,6 +473,7 @@ mod tests {
         assert_eq!(into.spoiler.default_game.as_deref(), Some("Hades II"));
         assert_eq!(into.spoiler.confidence_floor, Some(70));
         assert_eq!(into.cooldowns.spoiler, Some(45));
+        assert_eq!(into.cooldowns.servers, Some(50));
     }
 
     #[test]

@@ -168,6 +168,8 @@ pub struct Cooldowns {
     pub feedback: u64,
     pub doener: u64,
     pub spoiler: u64,
+    /// Per-user cooldown for `!servers` (AMP calls).
+    pub servers: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -239,6 +241,7 @@ impl Settings {
                 feedback: 300,
                 doener: 30,
                 spoiler: 30,
+                servers: 30,
             },
             pings: PingsSettings {
                 cooldown: 300,
@@ -282,6 +285,7 @@ mod tests {
         assert_eq!(s.suspend, SuspendSettings::default());
         assert_eq!(s.spoiler, SpoilerSettings::default());
         assert_eq!(s.cooldowns.spoiler, 30);
+        assert_eq!(s.cooldowns.servers, 30);
         assert_eq!(s.emote_tracker, EmoteTrackerSettings::default());
         assert!(s.emote_tracker.potat_attribution.enabled);
         assert_eq!(s.emote_tracker.potat_attribution.window_secs, 15);

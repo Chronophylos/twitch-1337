@@ -20,6 +20,7 @@ pub mod ping_admin;
 pub mod ping_trigger;
 pub mod pw;
 pub mod registry;
+pub mod servers;
 pub mod spoiler;
 pub mod suspend;
 pub mod version;
@@ -40,6 +41,11 @@ pub const ADMIN_DENIED_MSG: &str = "Das darfst du nicht FDM";
 /// Per-user cooldown duration for `!spoiler`.
 pub fn spoiler_cooldown_duration(s: &crate::settings::Settings) -> Duration {
     Duration::from_secs(s.cooldowns.spoiler)
+}
+
+/// Per-user cooldown duration for `!servers`.
+pub fn servers_cooldown_duration(s: &crate::settings::Settings) -> Duration {
+    Duration::from_secs(s.cooldowns.servers)
 }
 
 /// Per-user cooldown duration for `!news`, `!tldr`, and `!haiku` (shared bucket).
@@ -99,6 +105,7 @@ pub const RESERVED_PING_NAMES: &[&str] = &[
     "!p",
     "!pb",
     "!pw",
+    "!servers",
     "!sb",
     "!spoiler",
     "!suspend",
