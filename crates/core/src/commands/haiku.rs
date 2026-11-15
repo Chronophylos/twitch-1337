@@ -108,15 +108,11 @@ fn is_valid_haiku_part(part: &str) -> bool {
         return false;
     }
     let lower = part.to_ascii_lowercase();
-    if part.contains("```")
+    !(part.contains("```")
         || part.contains("**")
         || part.contains('#')
         || lower.starts_with("icymi:")
-        || lower.contains("in den letzten 24h:")
-    {
-        return false;
-    }
-    true
+        || lower.contains("in den letzten 24h:"))
 }
 
 #[async_trait]
