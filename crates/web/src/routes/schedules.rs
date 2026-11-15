@@ -169,7 +169,7 @@ impl ScheduleForm {
                             field: format!("{prefix}.calendar_at"),
                             message: format!("must be HH:MM (got {:?})", self.calendar_at),
                         });
-                        NaiveTime::from_hms_opt(0, 0, 0).unwrap()
+                        NaiveTime::MIN
                     }
                 };
                 let days = parse_weekdays(&self.calendar_days);
@@ -182,7 +182,7 @@ impl ScheduleForm {
                 });
                 Trigger::Calendar {
                     days: WeekdaySet::default(),
-                    at: NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                    at: NaiveTime::MIN,
                 }
             }
         };

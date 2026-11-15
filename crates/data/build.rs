@@ -1,3 +1,7 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "build script: a panic is a build failure on committed data"
+)]
 use csv::ReaderBuilder;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};

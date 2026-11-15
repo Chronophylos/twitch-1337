@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, reason = "test crate: a panic is a test failure")]
 #[path = "../helpers/mod.rs"]
 mod helpers;
 

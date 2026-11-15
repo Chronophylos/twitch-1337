@@ -92,3 +92,5 @@ allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
 uninlined_format_args = "warn"
 manual_let_else = "warn"
+# Panics kill a handler task; tests opt out via clippy.toml.
+unwrap_used = "warn"
