@@ -181,13 +181,24 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(eyre::Report::from)?;
 
-        match version {
-            v if v >= SCHEMA_VERSION => break,
-            0 => conn.execute_batch(SCHEMA_V3)?,
-            1 => conn.execute_batch(MIGRATE_1_TO_2)?,
-            2 => conn.execute_batch(MIGRATE_2_TO_3)?,
+        let step = match version {
+            SCHEMA_VERSION => break,
+            // A newer binary wrote this file (e.g. rollback to `:b<N-1>`). Refuse
+            // instead of running against a schema we don't know.
+            v if v > SCHEMA_VERSION => eyre::bail!(
+                "emotes.db schema version {v} is newer than this build supports \
+                 ({SCHEMA_VERSION}); refusing to open it"
+            ),
+            0 => SCHEMA_V3,
+            1 => MIGRATE_1_TO_2,
+            2 => MIGRATE_2_TO_3,
             other => eyre::bail!("unsupported emote_tracker schema version {other}"),
-        }
+        };
+        // One transaction per step: DDL and the `user_version` bump commit
+        // together, so an interrupted upgrade re-runs cleanly on next open.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(step)?;
+        tx.commit()?;
     }
 
     Ok(())
@@ -267,6 +278,38 @@ mod tests {
             )
             .unwrap();
         assert_eq!(table, "emote_meanings");
+    }
+
+    #[test]
+    fn migrate_refuses_future_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!("PRAGMA user_version = {};", SCHEMA_VERSION + 1))
+            .unwrap();
+        let err = migrate(&conn).unwrap_err().to_string();
+        assert!(err.contains("newer than this build"), "{err}");
+    }
+
+    #[test]
+    fn failed_migration_step_rolls_back() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_V1).unwrap();
+        // Pre-add one column so MIGRATE_1_TO_2 fails halfway through.
+        conn.execute_batch("ALTER TABLE set_events ADD COLUMN via TEXT;")
+            .unwrap();
+        assert!(migrate(&conn).is_err());
+        let v: i32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 1);
+        let has_requester: bool = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('set_events') WHERE name = 'requester_login'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap();
+        assert!(!has_requester, "partial DDL leaked past the failed step");
     }
 
     #[test]
