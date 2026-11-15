@@ -91,9 +91,9 @@ impl Due {
 /// drives ad-hoc handles, whose change signal never fires (e.g. tests).
 const TICK: std::time::Duration = std::time::Duration::from_secs(60);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PollStep {
-    Complete { dirty: bool },
+    Complete { lines: Vec<String>, dirty: bool },
     Cancelled,
 }
 
@@ -151,6 +151,7 @@ pub async fn run_alerts_handler<T, L>(
         let cfg = settings.load().alerts.clone();
         let max_age = Duration::seconds(i64::try_from(cfg.max_age_secs).unwrap_or(i64::MAX));
         let mut dirty = false;
+        let mut lines = Vec::new();
 
         if lifecycle.is_cancelled() {
             return;
@@ -158,8 +159,6 @@ pub async fn run_alerts_handler<T, L>(
         if cfg.quake.enabled && quake_due.ready(now, cfg.quake.poll_secs) {
             let url = quake::url(quake::DEFAULT_BASE_URL, cfg.quake.min_mag_tenths);
             match poll_feed(
-                &sender,
-                &channel,
                 &http,
                 "quake",
                 &url,
@@ -172,7 +171,13 @@ pub async fn run_alerts_handler<T, L>(
             .await
             {
                 PollStep::Cancelled => return,
-                PollStep::Complete { dirty: changed } => dirty |= changed,
+                PollStep::Complete {
+                    lines: new,
+                    dirty: changed,
+                } => {
+                    lines.extend(new);
+                    dirty |= changed;
+                }
             }
         }
 
@@ -182,8 +187,6 @@ pub async fn run_alerts_handler<T, L>(
         if cfg.solar.enabled && solar_due.ready(now, cfg.solar.poll_secs) {
             let min_rank = class_rank(&cfg.solar.min_class).unwrap_or((3, 0.0));
             match poll_feed(
-                &sender,
-                &channel,
                 &http,
                 "solar",
                 solar::DEFAULT_URL,
@@ -196,7 +199,13 @@ pub async fn run_alerts_handler<T, L>(
             .await
             {
                 PollStep::Cancelled => return,
-                PollStep::Complete { dirty: changed } => dirty |= changed,
+                PollStep::Complete {
+                    lines: new,
+                    dirty: changed,
+                } => {
+                    lines.extend(new);
+                    dirty |= changed;
+                }
             }
         }
 
@@ -205,8 +214,6 @@ pub async fn run_alerts_handler<T, L>(
         }
         if cfg.cme.enabled && cme_due.ready(now, cfg.cme.poll_secs) {
             match poll_feed(
-                &sender,
-                &channel,
                 &http,
                 "cme",
                 cme::DEFAULT_URL,
@@ -219,17 +226,50 @@ pub async fn run_alerts_handler<T, L>(
             .await
             {
                 PollStep::Cancelled => return,
-                PollStep::Complete { dirty: changed } => dirty |= changed,
+                PollStep::Complete {
+                    lines: new,
+                    dirty: changed,
+                } => {
+                    lines.extend(new);
+                    dirty |= changed;
+                }
             }
         }
 
-        if dirty {
-            if lifecycle.is_cancelled() {
-                return;
-            }
-            seen.save(&data_dir).await;
+        if lifecycle.is_cancelled() {
+            return;
+        }
+        let completed = save_then_announce(&seen, dirty, &data_dir, lines, &lifecycle, |line| {
+            let channel = channel.clone();
+            let sender = &sender;
+            async move { sender.say(channel, line).await }
+        })
+        .await;
+        if !completed {
+            return;
         }
     }
+}
+
+/// Persist the seen-set before announcing, so a crash or restart mid-announce
+/// cannot replay an alert. At-most-once: a shutdown between save and say
+/// drops the rest of this tick's lines. Returns `false` when cancelled.
+async fn save_then_announce<F, Fut>(
+    seen: &state::SeenState,
+    dirty: bool,
+    data_dir: &std::path::Path,
+    lines: Vec<String>,
+    lifecycle: &Lifecycle,
+    effect: F,
+) -> bool
+where
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    if dirty {
+        seen.save(data_dir).await;
+    }
+    announce_while_running(lines, lifecycle, effect).await
 }
 
 /// Parse a feed body. Any failure logs and yields `None`; the caller skips
@@ -265,10 +305,8 @@ where
     true
 }
 
-#[allow(clippy::too_many_arguments)] // one-shot poll: fetch, parse, dedupe, say
-async fn poll_feed<T, L, E: std::fmt::Debug>(
-    sender: &Arc<crate::twitch::ChatSender<T, L>>,
-    channel: &str,
+#[allow(clippy::too_many_arguments)] // one-shot poll: fetch, parse, dedupe
+async fn poll_feed<E: std::fmt::Debug>(
     http: &reqwest::Client,
     feed: &'static str,
     url: &str,
@@ -277,33 +315,27 @@ async fn poll_feed<T, L, E: std::fmt::Debug>(
     now: DateTime<Utc>,
     max_age: Duration,
     lifecycle: &Lifecycle,
-) -> PollStep
-where
-    T: twitch_irc::transport::Transport,
-    L: twitch_irc::login::LoginCredentials,
-{
+) -> PollStep {
     if lifecycle.is_cancelled() {
         return PollStep::Cancelled;
     }
     let Some(body) = fetch(http, url).await else {
-        return PollStep::Complete { dirty: false };
+        return PollStep::Complete {
+            lines: Vec::new(),
+            dirty: false,
+        };
     };
     if lifecycle.is_cancelled() {
         return PollStep::Cancelled;
     }
     let Some(cands) = parsed_or_skip(feed, parse(&body)) else {
-        return PollStep::Complete { dirty: false };
+        return PollStep::Complete {
+            lines: Vec::new(),
+            dirty: false,
+        };
     };
-    let (lines, marked) = select_announcements(cands, seen, now, max_age);
-    let completed = announce_while_running(lines, lifecycle, |line| {
-        let channel = channel.to_owned();
-        async move { sender.say(channel, line).await }
-    })
-    .await;
-    if !completed {
-        return PollStep::Cancelled;
-    }
-    PollStep::Complete { dirty: marked }
+    let (lines, dirty) = select_announcements(cands, seen, now, max_age);
+    PollStep::Complete { lines, dirty }
 }
 
 /// Fetch a feed body. Any failure logs and yields `None`; the caller skips
@@ -472,6 +504,36 @@ mod tests {
             sent.load(std::sync::atomic::Ordering::SeqCst),
             1,
             "the started effect finishes, but no second announcement starts"
+        );
+    }
+
+    #[tokio::test]
+    async fn seen_state_is_on_disk_before_the_announcement() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut seen = state::SeenState::default();
+        let (lines, dirty) = select_announcements(
+            vec![cand("a", 5)],
+            &mut seen.quake,
+            now(),
+            Duration::hours(2),
+        );
+        let on_disk_at_say = std::sync::Arc::new(std::sync::Mutex::new(None));
+
+        let completed =
+            save_then_announce(&seen, dirty, dir.path(), lines, &Lifecycle::new(), |_| {
+                let on_disk_at_say = on_disk_at_say.clone();
+                let path = dir.path().to_owned();
+                async move {
+                    *on_disk_at_say.lock().unwrap() = Some(state::SeenState::load(&path));
+                }
+            })
+            .await;
+
+        assert!(completed);
+        let loaded = on_disk_at_say.lock().unwrap().take().expect("announced");
+        assert!(
+            loaded.quake.contains(&"a".to_string()),
+            "a restart right after the say must not replay the alert"
         );
     }
 

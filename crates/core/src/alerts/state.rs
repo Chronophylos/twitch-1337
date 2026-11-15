@@ -57,8 +57,9 @@ impl SeenState {
         }
     }
 
-    /// Persist atomically. A failed write is logged, never propagated — the
-    /// alert already went to chat and the next poll rewrites the file.
+    /// Persist atomically, before the tick's alerts go to chat. A failed write
+    /// is logged, never propagated: the in-memory set still dedupes while
+    /// running, and the next poll rewrites the file.
     pub async fn save(&self, data_dir: &Path) {
         let path = data_dir.join(FILENAME);
         if let Err(error) = crate::util::persist::atomic_save_ron_async(self, &path).await {

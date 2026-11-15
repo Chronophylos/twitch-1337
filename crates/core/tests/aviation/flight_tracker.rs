@@ -1664,14 +1664,8 @@ async fn pending_flight_polls_when_due_and_becomes_visible() {
         "got: {visible}"
     );
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let requests = bot.adsb_mock.received_requests().await.unwrap();
-    let callsign_requests = requests
-        .iter()
-        .filter(|request| request.url.path() == "/callsign/EIN336")
-        .count();
-    assert_eq!(callsign_requests, 2);
-
+    // Read with no grace sleep: the tracker saves before it announces, so the
+    // state must already be on disk when the line arrives.
     let state_path = bot.data_dir.path().join("flights.ron");
     let persisted = tokio::fs::read_to_string(state_path).await.unwrap();
     let state: twitch_1337::aviation::tracker::FlightTrackerState =
@@ -1684,6 +1678,14 @@ async fn pending_flight_polls_when_due_and_becomes_visible() {
         flight.target_confirmation,
         TargetConfirmation::ConfirmedByCallsign
     );
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let requests = bot.adsb_mock.received_requests().await.unwrap();
+    let callsign_requests = requests
+        .iter()
+        .filter(|request| request.url.path() == "/callsign/EIN336")
+        .count();
+    assert_eq!(callsign_requests, 2);
 
     bot.shutdown().await;
 }

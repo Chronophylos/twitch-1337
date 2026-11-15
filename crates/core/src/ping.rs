@@ -446,6 +446,18 @@ impl PingManager {
         Ok(())
     }
 
+    /// Save, or roll the in-memory store back to `before` so a failed write
+    /// never leaves a ping that the command reported as failed live until
+    /// restart.
+    // ponytail: clones the whole store per edit; fine at chat-ping scale.
+    async fn save_or_revert(&mut self, before: PingStore) -> Result<()> {
+        let result = self.save().await;
+        if result.is_err() {
+            self.store = before;
+        }
+        result
+    }
+
     pub async fn create_ping(
         &mut self,
         name: String,
@@ -453,6 +465,7 @@ impl PingManager {
         created_by: String,
         cooldown: Option<u64>,
     ) -> Result<()> {
+        let before = self.store.clone();
         let name = name.to_ascii_lowercase();
         if name.is_empty() {
             bail!("Ping-Name darf nicht leer sein");
@@ -485,18 +498,20 @@ impl PingManager {
                 fire_count: 0,
             },
         );
-        self.save().await
+        self.save_or_revert(before).await
     }
 
     pub async fn delete_ping(&mut self, name: &str) -> Result<()> {
+        let before = self.store.clone();
         if self.store.pings.remove(name).is_none() {
             bail!("Ping \"{}\" gibt es nicht", name);
         }
         self.last_triggered.remove(name);
-        self.save().await
+        self.save_or_revert(before).await
     }
 
     pub async fn edit_template(&mut self, name: &str, template: String) -> Result<()> {
+        let before = self.store.clone();
         validate_template(&template)?;
         let ping = self
             .store
@@ -504,10 +519,11 @@ impl PingManager {
             .get_mut(name)
             .ok_or_else(|| eyre::eyre!("Ping \"{}\" gibt es nicht", name))?;
         ping.template = template;
-        self.save().await
+        self.save_or_revert(before).await
     }
 
     pub async fn add_member(&mut self, ping_name: &str, username: &str) -> Result<()> {
+        let before = self.store.clone();
         let ping = self
             .store
             .pings
@@ -517,10 +533,11 @@ impl PingManager {
         if !ping.members.insert(username_lower) {
             bail!("{} ist schon in \"{}\"", username, ping_name);
         }
-        self.save().await
+        self.save_or_revert(before).await
     }
 
     pub async fn remove_member(&mut self, ping_name: &str, username: &str) -> Result<()> {
+        let before = self.store.clone();
         let ping = self
             .store
             .pings
@@ -530,7 +547,7 @@ impl PingManager {
         if !ping.members.remove(&username_lower) {
             bail!("{} ist nicht in \"{}\"", username, ping_name);
         }
-        self.save().await
+        self.save_or_revert(before).await
     }
 
     pub fn get(&self, name: &str) -> Option<&Ping> {
@@ -788,6 +805,27 @@ mod tests {
             mgr.store.pings.get("test").unwrap().template,
             "Hey {mentions}!"
         );
+    }
+
+    #[tokio::test]
+    async fn failed_save_reverts_in_memory_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut mgr = test_manager(dir.path()).await;
+        // Unwritable target: the parent directory does not exist.
+        mgr.path = dir.path().join("gone").join(PINGS_FILENAME);
+
+        assert!(
+            mgr.create_ping("new".into(), "Hi {mentions}".into(), "admin".into(), None)
+                .await
+                .is_err()
+        );
+        assert!(!mgr.store.pings.contains_key("new"));
+
+        assert!(mgr.add_member("test", "alice").await.is_err());
+        assert!(!mgr.is_member("test", "alice"));
+
+        assert!(mgr.delete_ping("test").await.is_err());
+        assert!(mgr.store.pings.contains_key("test"));
     }
 
     #[test]
