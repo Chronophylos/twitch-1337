@@ -18,7 +18,7 @@ use tracing::{error, info, warn};
 use super::audit::{AuditEntry, AuditLog, berlin_now, diff_changes};
 use super::overrides::SettingsOverrides;
 use super::{SCHEMA_VERSION, Settings, SettingsError, SettingsHandle, SettingsSection};
-use load::{load_or_quarantine, load_overrides_async, quarantine};
+use load::{is_future_version, load_or_quarantine, load_overrides_async, quarantine};
 use merge::{merge_into, strip_ai_agents_legacy};
 
 const FILE_NAME: &str = "settings.ron";
@@ -62,7 +62,9 @@ impl SettingsStore {
                 ?errs,
                 "settings.ron failed validation; falling back to compile defaults"
             );
-            quarantine(&path)?;
+            if !is_future_version(&path) {
+                quarantine(&path)?;
+            }
             let changes = Arc::new(Notify::new());
             let handle = SettingsHandle::with_changes(defaults.clone(), Arc::clone(&changes));
             let store = Arc::new(Self {
@@ -119,6 +121,14 @@ impl SettingsStore {
         resolved: Settings,
         actor: Actor,
     ) -> Result<Settings, SettingsError> {
+        // Rewriting a newer build's file would drop every field this build
+        // doesn't know. Stay read-only until the newer build is back.
+        if current.schema_version > SCHEMA_VERSION {
+            return Err(SettingsError::FutureVersion {
+                found: current.schema_version,
+                supported: SCHEMA_VERSION,
+            });
+        }
         current.schema_version = SCHEMA_VERSION;
         crate::util::persist::atomic_save_ron_async(current, &self.path).await?;
         self.handle.swap(Arc::new(resolved.clone()));
@@ -497,6 +507,53 @@ mod tests {
                     .starts_with("settings.ron.quarantine-")
             });
         assert!(quarantined, "quarantine file must exist");
+    }
+
+    #[tokio::test]
+    async fn future_version_loads_but_refuses_to_save() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(FILE_NAME);
+        let body = format!(
+            "(schema_version: {}, cooldowns: (ai: Some(15)), from_the_future: true)",
+            SCHEMA_VERSION + 1
+        );
+        std::fs::write(&path, &body).expect("write");
+        let (store, handle) =
+            SettingsStore::open(dir.path(), Arc::new(MemoryAuditLog::new()), "test_chan")
+                .expect("open");
+        assert_eq!(handle.load().cooldowns.ai, 15);
+
+        let actor = Actor {
+            user_id: "1".into(),
+            user_login: "tester".into(),
+        };
+        let err = store
+            .apply(SettingsOverrides::default(), actor.clone())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SettingsError::FutureVersion { .. }), "{err}");
+        let err = store
+            .reset(SettingsSection::Cooldowns, actor)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SettingsError::FutureVersion { .. }), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
+    }
+
+    #[test]
+    fn unparseable_future_version_is_not_quarantined() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(FILE_NAME);
+        let body = format!(
+            "(schema_version: {}, cooldowns: NewShape(1))",
+            SCHEMA_VERSION + 1
+        );
+        std::fs::write(&path, &body).expect("write");
+        let (_store, handle) =
+            SettingsStore::open(dir.path(), Arc::new(MemoryAuditLog::new()), "test_chan")
+                .expect("open");
+        assert_eq!(*handle.load(), Settings::compiled_defaults());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
     }
 
     #[test]
