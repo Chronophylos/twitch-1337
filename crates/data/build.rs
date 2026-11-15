@@ -45,9 +45,8 @@ fn main() {
             .from_path(&runways_csv)
             .unwrap_or_else(|e| panic!("open {}: {e}", runways_csv.display()));
         for result in rdr.deserialize::<RawRunway>() {
-            let rwy = match result {
-                Ok(r) => r,
-                Err(_) => continue,
+            let Ok(rwy) = result else {
+                continue;
             };
             if rwy.closed == Some(1) {
                 continue;
@@ -76,9 +75,8 @@ fn main() {
             .from_path(&airports_csv)
             .unwrap_or_else(|e| panic!("open {}: {e}", airports_csv.display()));
         for result in rdr.deserialize::<RawAirport>() {
-            let apt = match result {
-                Ok(a) => a,
-                Err(_) => continue,
+            let Ok(apt) = result else {
+                continue;
             };
             // Skip non-airports
             match apt.airport_type.as_str() {
@@ -90,9 +88,8 @@ fn main() {
                 continue;
             }
             // Must have a hard-surface runway
-            let runway_len = match best_runway.get(&apt.ident) {
-                Some(&len) => len,
-                None => continue,
+            let Some(&runway_len) = best_runway.get(&apt.ident) else {
+                continue;
             };
             let elevation: i32 = apt
                 .elevation_ft

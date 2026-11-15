@@ -1,7 +1,7 @@
 //! Admin commands for transiently suspending other bot commands.
 //!
 //! `!suspend <command> [duration]` silences another command for the given
-//! duration (defaults to [`SuspendConfig::default_duration_secs`]).
+//! duration (defaults to `suspend.default_duration_secs` in settings).
 //! `!unsuspend <command>` lifts an active suspension.
 //!
 //! Both commands are gated to broadcaster/moderator badges or user ids listed

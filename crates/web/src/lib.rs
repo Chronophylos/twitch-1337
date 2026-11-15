@@ -78,7 +78,7 @@ pub fn spawn_web_runtime(
 }
 
 /// Persist sliding session activity on the same lifecycle as the web server.
-/// The returned pre-spawned handle is part of [`WebRuntimeTasks`].
+/// The returned pre-spawned handle is part of [`WebRuntimeTasks`](twitch_1337_core::WebRuntimeTasks).
 async fn persist_sessions(sessions: Arc<auth::session::SessionTable>, lifecycle: Lifecycle) {
     let mut tick = tokio::time::interval(SESSION_PERSIST_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -134,7 +134,10 @@ async fn root_redirect(
 }
 
 pub fn build_router(state: WebState) -> Router {
-    #[allow(unused_mut)]
+    #[cfg_attr(
+        not(feature = "dev-login"),
+        expect(unused_mut, reason = "only the dev-login block mutates the router")
+    )]
     let mut public = Router::new()
         .merge(routes::health::router(state.irc_connected.clone()))
         .merge(routes::assets::router())

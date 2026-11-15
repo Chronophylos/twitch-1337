@@ -74,14 +74,11 @@ pub async fn execute_search_packages(
         );
     }
 
-    let families = match parse_ecosystem(args.ecosystem.as_deref()) {
-        Ok(f) => f,
-        Err(_) => {
-            return ToolResultMessage::for_call(
-                call,
-                json!({"error": "unsupported_ecosystem"}).to_string(),
-            );
-        }
+    let Ok(families) = parse_ecosystem(args.ecosystem.as_deref()) else {
+        return ToolResultMessage::for_call(
+            call,
+            json!({"error": "unsupported_ecosystem"}).to_string(),
+        );
     };
 
     let cap_per_family = if families.len() == ALL_FAMILIES.len() {

@@ -3,7 +3,7 @@
 //! Production code uses [`SystemClock`], which delegates to
 //! [`chrono::Utc::now`] and [`tokio::time::sleep`]. Integration tests
 //! substitute a fake clock that the test body advances manually, paired
-//! with [`tokio::time::pause`] so tokio-native sleeps also advance
+//! with `tokio::time::pause` so tokio-native sleeps also advance
 //! deterministically.
 
 use async_trait::async_trait;

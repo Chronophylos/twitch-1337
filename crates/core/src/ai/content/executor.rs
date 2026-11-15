@@ -522,8 +522,7 @@ mod tests {
         assert_eq!(
             executor.live_media().max_image_size,
             ByteSize::b(1),
-            "live_media() must reflect updated cap; was {:?}",
-            default_cap
+            "live_media() must reflect updated cap; was {default_cap:?}"
         );
     }
 

@@ -62,7 +62,6 @@ impl FakeCommand {
         Self::with_aliases(id, name, &[], policy, true, action)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn with_aliases(
         id: &'static str,
         name: &'static str,

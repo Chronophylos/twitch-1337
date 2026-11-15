@@ -61,9 +61,8 @@ pub fn truncate_response(text: &str, max_chars: usize) -> String {
         return collapsed.chars().take(max_chars).collect();
     }
 
-    let byte_limit = match collapsed.char_indices().nth(max_chars) {
-        Some((byte_idx, _)) => byte_idx,
-        None => return collapsed,
+    let Some((byte_limit, _)) = collapsed.char_indices().nth(max_chars) else {
+        return collapsed;
     };
 
     let content_byte_limit = collapsed

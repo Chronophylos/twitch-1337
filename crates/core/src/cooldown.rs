@@ -92,9 +92,9 @@ pub fn format_duration_hm(d: Duration) -> String {
     let hours = total_mins / 60;
     let mins = total_mins % 60;
     if hours > 0 {
-        format!("{}h{}m", hours, mins)
+        format!("{hours}h{mins}m")
     } else {
-        format!("{}m", mins)
+        format!("{mins}m")
     }
 }
 

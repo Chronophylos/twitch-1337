@@ -1,7 +1,7 @@
 //! E2E harness: in-process dashboard server + headless Chrome client with
 //! an authenticated mod session. Reuses `tests/helpers` for state/auth.
 
-#![allow(dead_code)]
+#![allow(dead_code, reason = "not every e2e test uses every harness helper")]
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;

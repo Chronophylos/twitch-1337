@@ -99,9 +99,12 @@ pub(crate) struct FlightUpdate {
 /// What Advance's Seed sub-transition produced. Advance announces and detects
 /// Flight Phase transitions after Seed runs. See CONTEXT.md "Seed".
 pub(crate) struct Seed {
-    #[allow(
-        dead_code,
-        reason = "asserted by advance.rs unit tests as part of Seed's documented shape"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "asserted by advance.rs unit tests as part of Seed's documented shape"
+        )
     )]
     pub direct_target_confirmed: bool,
     pub phase_sample_confirmed: bool,

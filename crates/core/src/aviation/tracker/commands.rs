@@ -486,7 +486,10 @@ pub(crate) async fn process_command<T, L>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "command handler threads tracker state, client, and reply context"
+)]
 async fn handle_track<T, L>(
     identifier: FlightIdentifier,
     requested_by: &str,
@@ -758,7 +761,7 @@ async fn handle_track<T, L>(
     sender.reply(reply_to, response).await;
 }
 
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "command handler threads shared tracker deps + injected clock"
 )]
@@ -922,7 +925,7 @@ where
     .unwrap_or_default()
 }
 
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "poll cycle threads shared tracker dependencies, command input, and lifecycle"
 )]

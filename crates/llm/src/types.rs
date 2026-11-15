@@ -399,7 +399,7 @@ mod tool_definition_tests {
     use super::ToolDefinition;
 
     #[derive(Debug, Deserialize, JsonSchema)]
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "fields exist only to drive the JsonSchema derive")]
     struct DemoArgs {
         query: String,
         max_results: Option<u32>,

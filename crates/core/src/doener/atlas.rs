@@ -44,7 +44,6 @@ pub struct AtlasSearchResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AtlasCityRow {
-    #[allow(dead_code)]
     pub id: i64,
     pub name: String,
     pub slug: String,
@@ -63,9 +62,9 @@ pub struct AtlasShopRow {
 
 #[derive(Debug, Clone, Deserialize)]
 struct AtlasCityDetail {
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "deserialized for shape; only shop_count is read")]
     pub name: String,
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "deserialized for shape; only shop_count is read")]
     pub slug: String,
     pub shop_count: u32,
     #[serde(default)]

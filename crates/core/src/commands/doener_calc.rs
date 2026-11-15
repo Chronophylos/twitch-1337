@@ -220,7 +220,7 @@ fn format_doener_count(n: f64) -> String {
     if rounded_tenth >= 1.0 && (rounded_tenth - rounded_tenth.round()).abs() < 0.051 {
         format!("{}", rounded_tenth.round() as i64)
     } else {
-        format!("{:.1}", rounded_tenth).replace('.', ",")
+        format!("{rounded_tenth:.1}").replace('.', ",")
     }
 }
 

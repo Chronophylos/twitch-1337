@@ -548,7 +548,10 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
 }
 
 /// Background loop: never blocks chat turns.
-#[allow(clippy::too_many_arguments)] // services plus optional Langfuse observer
+#[expect(
+    clippy::too_many_arguments,
+    reason = "services plus optional Langfuse observer"
+)]
 pub async fn run_recap_batcher(
     handle: RecapHandle,
     settings: SettingsHandle,

@@ -3,7 +3,10 @@
 //! `Schedule` rows live in `settings.ron`; `ScheduleRuntime` lives in a
 //! sibling `schedule_runtime.ron` (telemetry only, not config).
 
-#[allow(clippy::module_inception)] // module `schedule` inside module `schedule`
+#[expect(
+    clippy::module_inception,
+    reason = "module schedule inside module schedule"
+)]
 pub mod schedule;
 pub mod telemetry;
 pub mod trigger;

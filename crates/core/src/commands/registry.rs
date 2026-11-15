@@ -395,13 +395,12 @@ mod tests {
 
     #[test]
     fn registry_rejects_duplicate_ids() {
-        let error = match CommandRegistry::from_commands([
+        let Err(error) = CommandRegistry::from_commands([
             FakeCommand::command("version", "!v", ExecutionClass::Inline),
             FakeCommand::command("version", "!p", ExecutionClass::Inline),
             catch_all(),
-        ]) {
-            Ok(_) => panic!("duplicate IDs must fail registry construction"),
-            Err(error) => error,
+        ]) else {
+            panic!("duplicate IDs must fail registry construction");
         };
 
         assert_eq!(
@@ -421,9 +420,8 @@ mod tests {
             aliases: &[],
             stale_matcher: false,
         };
-        let error = match CommandRegistry::from_commands([Arc::new(invalid), catch_all()]) {
-            Ok(_) => panic!("invalid IDs must fail registry construction"),
-            Err(error) => error,
+        let Err(error) = CommandRegistry::from_commands([Arc::new(invalid), catch_all()]) else {
+            panic!("invalid IDs must fail registry construction");
         };
 
         assert_eq!(
@@ -434,12 +432,11 @@ mod tests {
 
     #[test]
     fn registry_rejects_invalid_metadata() {
-        let error = match CommandRegistry::from_commands([
+        let Err(error) = CommandRegistry::from_commands([
             FakeCommand::command("empty", "", ExecutionClass::Inline),
             catch_all(),
-        ]) {
-            Ok(_) => panic!("invalid metadata must fail registry construction"),
-            Err(error) => error,
+        ]) else {
+            panic!("invalid metadata must fail registry construction");
         };
 
         assert!(matches!(
@@ -453,12 +450,11 @@ mod tests {
 
     #[test]
     fn registry_preserves_reserved_ping_drift_guard() {
-        let error = match CommandRegistry::from_commands([
+        let Err(error) = CommandRegistry::from_commands([
             FakeCommand::command("unreserved", "!new-command", ExecutionClass::Inline),
             catch_all(),
-        ]) {
-            Ok(_) => panic!("reserved-name drift must fail registry construction"),
-            Err(error) => error,
+        ]) else {
+            panic!("reserved-name drift must fail registry construction");
         };
 
         assert!(matches!(
@@ -469,12 +465,11 @@ mod tests {
 
     #[test]
     fn registry_rejects_catch_all_before_the_final_entry() {
-        let error = match CommandRegistry::from_commands([
+        let Err(error) = CommandRegistry::from_commands([
             catch_all(),
             FakeCommand::command("version", "!v", ExecutionClass::Inline),
-        ]) {
-            Ok(_) => panic!("a non-final catch-all must fail registry construction"),
-            Err(error) => error,
+        ]) else {
+            panic!("a non-final catch-all must fail registry construction");
         };
 
         assert!(matches!(
@@ -485,13 +480,12 @@ mod tests {
 
     #[test]
     fn registry_requires_the_catch_all() {
-        let error = match CommandRegistry::from_commands([FakeCommand::command(
+        let Err(error) = CommandRegistry::from_commands([FakeCommand::command(
             "version",
             "!v",
             ExecutionClass::Inline,
-        )]) {
-            Ok(_) => panic!("a registry without the catch-all must fail construction"),
-            Err(error) => error,
+        )]) else {
+            panic!("a registry without the catch-all must fail construction");
         };
 
         assert!(matches!(

@@ -212,7 +212,7 @@ impl ChatHistoryBuffer {
         );
     }
 
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "private helper, arity mirrors ChatHistoryEntry's fields 1:1"
     )]

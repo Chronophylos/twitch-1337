@@ -81,3 +81,14 @@ implicit_clone = "warn"
 needless_continue = "warn"
 redundant_closure_for_method_calls = "warn"
 semicolon_if_nothing_returned = "warn"
+# Debug leftovers.
+dbg_macro = "warn"
+todo = "warn"
+print_stdout = "warn"
+# tokio: flag futures big enough to blow task stacks.
+large_futures = "warn"
+# Suppressions must be #[expect(..., reason = "...")] so stale ones surface.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+uninlined_format_args = "warn"
+manual_let_else = "warn"

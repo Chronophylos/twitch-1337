@@ -471,8 +471,7 @@ mod tests {
         // fixed phases and Large/Large taxi add roughly half an hour on top.
         assert!(
             max > Duration::from_secs(23 * 3600) && max < Duration::from_secs(25 * 3600),
-            "A388 max block was {:?}",
-            max
+            "A388 max block was {max:?}"
         );
     }
 

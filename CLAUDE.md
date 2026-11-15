@@ -49,7 +49,7 @@ Linear history required, force-push + delete blocked, conversations must resolve
 | Check | Workflow | Purpose |
 |---|---|---|
 | `fmt` | ci.yml | cargo fmt --check |
-| `clippy` | ci.yml | cargo clippy --workspace --all-targets -- -D warnings |
+| `clippy` | ci.yml | cargo clippy --workspace --all-targets -- -D warnings, then `cargo doc` (broken intra-doc links) and `cargo machete` (unused deps) |
 | `test` | ci.yml | cargo llvm-cov nextest --workspace (lcov artifact; no threshold gate) |
 | `e2e` | ci.yml | web crate WebDriver tests (`--features e2e`, setup-chrome) |
 | `cargo deny` | ci.yml | `deny.toml`: RustSec advisories, banned crates (aws-lc-sys), allowed sources; also weekly on schedule |
@@ -286,7 +286,7 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 
 - `twitch_irc::irc!` macro needs standalone `use twitch_irc::irc;` — cannot be in braced `use twitch_irc::{...}`.
 - Request/response on broadcast (e.g. PING/PONG): subscribe BEFORE send to avoid race.
-- Clippy strict (`-D warnings`) + extra lints in `Cargo.toml [lints.clippy]`. Don't `#[allow]` without one-line reason.
+- Clippy strict (`-D warnings`) + extra lints in `Cargo.toml [workspace.lints.clippy]`. Suppress with `#[expect(lint, reason = "...")]` (lint-enforced; stale ones fail). Item only dead outside tests: `#[cfg_attr(not(test), expect(...))]`. Plain `#![allow]` only in test helpers shared across test binaries.
 - Log errors with `?error` not `%error` to include backtrace.
 
 ## Adding handler

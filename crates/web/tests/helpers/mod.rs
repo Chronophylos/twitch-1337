@@ -4,7 +4,10 @@
 //! module once per test crate. `#![allow(dead_code)]` still applies: not every
 //! grouped crate uses every helper.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "shared by several test crates; each uses a different subset"
+)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
