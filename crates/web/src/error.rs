@@ -62,6 +62,15 @@ pub struct ConflictPayload {
     pub current_mtime: u64,
     pub current_mtime_display: String,
     pub draft: String,
+    /// The editor's frontmatter inputs, carried into the resubmit form so
+    /// resubmitting doesn't drop them: username, display name and links for
+    /// a Character Sheet, `created_by` for Scratch.
+    pub show_user_fm: bool,
+    pub show_scratch_fm: bool,
+    pub fm_username: String,
+    pub fm_display_name: String,
+    pub fm_created_by: String,
+    pub fm_links: String,
     /// Hex-encoded csrf token to embed in the conflict resubmit form.
     /// The conflict template renders a fresh save form so the user can
     /// retry from inside the conflict page itself.
@@ -99,6 +108,12 @@ struct ConflictTpl<'a> {
     current_mtime: u64,
     current_mtime_display: &'a str,
     draft: &'a str,
+    show_user_fm: bool,
+    show_scratch_fm: bool,
+    fm_username: &'a str,
+    fm_display_name: &'a str,
+    fm_created_by: &'a str,
+    fm_links: &'a str,
     csrf: &'a str,
     user_login: &'a str,
     user_avatar_url: Option<&'a str>,
@@ -246,6 +261,12 @@ impl IntoResponse for WebError {
                     current_mtime: payload.current_mtime,
                     current_mtime_display: &payload.current_mtime_display,
                     draft: &payload.draft,
+                    show_user_fm: payload.show_user_fm,
+                    show_scratch_fm: payload.show_scratch_fm,
+                    fm_username: &payload.fm_username,
+                    fm_display_name: &payload.fm_display_name,
+                    fm_created_by: &payload.fm_created_by,
+                    fm_links: &payload.fm_links,
                     csrf: &payload.csrf,
                     user_login: &payload.user_login,
                     user_avatar_url: payload.user_avatar_url.as_deref(),

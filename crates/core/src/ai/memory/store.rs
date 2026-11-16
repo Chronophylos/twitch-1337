@@ -582,6 +582,28 @@ impl MemoryStore {
         }
     }
 
+    /// Forget: delete one user's Character Sheet (`users/<id>.md`) and
+    /// nothing else. Mentions in the Lore, other sheets and Transcripts stay.
+    /// Returns `Ok(false)` when no sheet existed. A non-numeric id is
+    /// rejected before any filesystem access, so it can't escape `users/`.
+    pub async fn forget_user(&self, user_id: &str) -> Result<bool, WriteError> {
+        if user_id.is_empty() || !user_id.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(WriteError::Io(eyre!("invalid user id")));
+        }
+        let rel = FileKind::User {
+            user_id: user_id.to_owned(),
+        }
+        .relative_path();
+        let abs = self.inner.memories_dir.join(&rel);
+        let lock = self.lock_for(&rel).await;
+        let _g = lock.lock().await;
+        match tokio::fs::remove_file(&abs).await {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(WriteError::Io(eyre!(e))),
+        }
+    }
+
     pub async fn list_users(&self) -> Result<Vec<MemoryFile>> {
         self.list_in_subdir("users", |stem| FileKind::User {
             user_id: stem.into(),
@@ -995,6 +1017,34 @@ mod tests {
         store.write_scratch(&kind, "x", Some("1")).await.unwrap();
         store.delete_scratch("quiz").await.unwrap();
         assert!(!dir.path().join("memories/scratch/quiz.md").exists());
+    }
+
+    #[tokio::test]
+    async fn forget_user_removes_only_that_sheet() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        for id in ["111", "222"] {
+            let kind = FileKind::User { user_id: id.into() };
+            store
+                .write(&kind, "mentions 111", UserIdentity::default())
+                .await
+                .unwrap();
+        }
+        store
+            .write(&FileKind::Lore, "111 did a bit", UserIdentity::default())
+            .await
+            .unwrap();
+
+        assert!(store.forget_user("111").await.unwrap());
+        let users = dir.path().join("memories/users");
+        assert!(!users.join("111.md").exists());
+        assert!(users.join("222.md").exists());
+        let lore = store.read_kind(&FileKind::Lore).await.unwrap();
+        assert!(lore.body.contains("111 did a bit"));
+
+        assert!(!store.forget_user("111").await.unwrap(), "already gone");
+        assert!(store.forget_user("../LORE").await.is_err());
+        assert!(dir.path().join("memories/LORE.md").exists());
     }
 
     #[tokio::test]

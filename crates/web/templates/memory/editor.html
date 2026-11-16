@@ -46,11 +46,12 @@
       <input type="text" class="editor-input" name="slug" placeholder="1-64 chars: a-z, 0-9, ._-" required autocomplete="off" spellcheck="false">
     </label>
     {% endif %}
-    <textarea name="body" rows="22" spellcheck="false">{{ body }}</textarea>
+    <textarea name="body" rows="22" spellcheck="false" data-byte-cap="{{ byte_cap }}">{{ body }}</textarea>
     <div class="editor-foot">
-      <div class="bytes">
-        <span>{{ body.len() }} / {{ byte_cap }} B</span>
-        <div class="bytes-bar"><span style="width: {{ pct }}%"></span></div>
+      <div class="bytes{% if body.len() > byte_cap %} over{% endif %}">
+        <span><span data-bytes-used>{{ body.len() }}</span> / {{ byte_cap }} B</span>
+        <div class="bytes-bar"><span data-bytes-fill style="width: {{ pct }}%"></span></div>
+        <span class="bytes-warn" data-bytes-warn{% if body.len() <= byte_cap %} hidden{% endif %}>Over the cap, saving will fail</span>
       </div>
       <span class="kbd-hint"><kbd data-mod-key>⌘</kbd><kbd>S</kbd> to save</span>
     </div>
@@ -61,7 +62,7 @@
   </div>
 </form>
 {% if let Some(url) = delete_url %}
-<form method="post" action="{{ url }}" class="editor-actions" onsubmit="return confirm('Delete?')">
+<form method="post" action="{{ url }}" class="editor-actions" data-confirm="Delete {{ meta_path }}?">
   <input type="hidden" name="_csrf" value="{{ csrf }}">
   <button type="submit" class="btn danger">Delete</button>
 </form>

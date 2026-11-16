@@ -701,3 +701,39 @@ window.addEventListener('beforeunload', (evt) => {
     if (!evt.matches && isOpen()) setOpen(false, false);
   });
 })();
+
+// ─── Confirm before submit ───────────────────────────────────────────────────
+// `form[data-confirm="…"]` asks first; declining cancels the submit. Runs on
+// `document`, before the unsaved-guard listener on `window` checks
+// `defaultPrevented`.
+document.addEventListener('submit', (evt) => {
+  const msg = evt.target.dataset?.confirm;
+  if (msg && !window.confirm(msg)) evt.preventDefault();
+});
+
+// ─── Live byte counter (memory editor) ───────────────────────────────────────
+// `textarea[data-byte-cap=N]` drives `[data-bytes-used]`, `[data-bytes-fill]`
+// and `[data-bytes-warn]` in its `.editor`. Counts UTF-8 bytes, like the
+// server-side cap, not UTF-16 `.length`.
+(function byteCounters() {
+  const utf8 = new TextEncoder();
+  for (const ta of document.querySelectorAll('textarea[data-byte-cap]')) {
+    const box = ta.closest('.editor');
+    const cap = parseInt(ta.dataset.byteCap, 10);
+    if (!box || Number.isNaN(cap)) continue;
+    const meter = box.querySelector('.bytes');
+    const used = box.querySelector('[data-bytes-used]');
+    const fill = box.querySelector('[data-bytes-fill]');
+    const warn = box.querySelector('[data-bytes-warn]');
+    const render = () => {
+      const n = utf8.encode(ta.value).length;
+      const over = n > cap;
+      if (used) used.textContent = String(n);
+      if (fill) fill.style.width = `${cap > 0 ? Math.min(100, Math.floor((n * 100) / cap)) : 100}%`;
+      if (warn) warn.hidden = !over;
+      meter?.classList.toggle('over', over);
+    };
+    ta.addEventListener('input', render);
+    render();
+  }
+})();

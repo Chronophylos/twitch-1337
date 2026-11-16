@@ -19,6 +19,26 @@
     <h3>Your draft (resubmit)</h3>
     <input type="hidden" name="_csrf" value="{{ csrf }}">
     <input type="hidden" name="mtime" value="{{ current_mtime }}">
+    {% if show_user_fm %}
+    <label class="editor-field">
+      <span class="editor-field-label">username</span>
+      <input type="text" class="editor-input" name="fm_username" value="{{ fm_username }}" placeholder="Twitch login — leave empty to preserve" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="editor-field">
+      <span class="editor-field-label">display name</span>
+      <input type="text" class="editor-input" name="fm_display_name" value="{{ fm_display_name }}" placeholder="leave empty to preserve" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="editor-field">
+      <span class="editor-field-label">links</span>
+      <textarea class="editor-input" name="fm_links" rows="4" placeholder="one per line: steam https://steamcommunity.com/id/…" autocomplete="off" spellcheck="false">{{ fm_links }}</textarea>
+    </label>
+    {% endif %}
+    {% if show_scratch_fm %}
+    <label class="editor-field">
+      <span class="editor-field-label">created by</span>
+      <input type="text" class="editor-input" name="fm_created_by" value="{{ fm_created_by }}" placeholder="Twitch user id — leave empty to preserve" autocomplete="off" spellcheck="false">
+    </label>
+    {% endif %}
     <textarea class="input" name="body" rows="24" spellcheck="false">{{ draft }}</textarea>
     <div class="form-actions">
       <button type="submit" class="btn primary">Save (overwrite current)</button>

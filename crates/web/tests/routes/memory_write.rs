@@ -18,7 +18,10 @@ use twitch_1337_web::build_router;
 use twitch_1337_web::helix::{HelixClient, HelixUser};
 
 use super::helpers;
-use helpers::{FakeHelix, build_state_with_dirs, cookie_header, insert_session, install_crypto};
+use helpers::{
+    FakeHelix, build_state_with_dirs, cookie_header, insert_session, insert_session_as,
+    install_crypto,
+};
 
 fn admin_helix(user_id: &str) -> Arc<dyn HelixClient> {
     let mut users = HashMap::new();
@@ -630,4 +633,166 @@ async fn delete_scratch_invalid_slug_400() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+async fn seed_sheet(state: &WebState, user_id: &str, display: &str) {
+    state
+        .memory_store
+        .write(
+            &FileKind::User {
+                user_id: user_id.into(),
+            },
+            "likes trains",
+            UserIdentity::of("login", display),
+        )
+        .await
+        .unwrap();
+}
+
+fn sheet_path(td_memory: &TempDir, user_id: &str) -> std::path::PathBuf {
+    td_memory
+        .path()
+        .join("memories/users")
+        .join(format!("{user_id}.md"))
+}
+
+#[tokio::test]
+async fn forget_deletes_only_that_sheet() {
+    let (state, sid, csrf, bare_csrf, _tdp, td_memory) = authed_setup().await;
+    seed_sheet(&state, "12345", "Doomed").await;
+    seed_sheet(&state, "67890", "Survivor").await;
+    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(post_form("/memory/users/12345/forget", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        res.headers().get(header::LOCATION).unwrap(),
+        "/memory/users"
+    );
+    let flash = res
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_owned())
+        .find(|c| c.starts_with("tw1337_flash="))
+        .expect("flash cookie set");
+    assert!(flash.contains("Doomed"), "flash names the user: {flash}");
+
+    assert!(!sheet_path(&td_memory, "12345").exists(), "sheet deleted");
+    assert!(sheet_path(&td_memory, "67890").exists(), "other sheet kept");
+
+    let lines = read_audit_lines(&td_memory);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["op"], "forget");
+    assert_eq!(lines[0]["kind"], "user");
+    assert_eq!(lines[0]["id"], "12345");
+    assert_eq!(lines[0]["actor_id"], "9001");
+    assert_eq!(lines[0]["result"], "ok");
+}
+
+#[tokio::test]
+async fn forget_as_viewer_is_403() {
+    install_crypto();
+    let (state, td_pings, td_memory) = build_state_with_dirs(admin_helix("9001")).await;
+    let _keep = td_pings;
+    seed_sheet(&state, "12345", "Kept").await;
+    let (sid, csrf, bare_csrf) =
+        insert_session_as(&state, "42", "alice", twitch_1337_web::auth::Role::Viewer);
+    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
+    let app = build_router(state);
+    let res = app
+        .oneshot(post_form("/memory/users/12345/forget", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(sheet_path(&td_memory, "12345").exists(), "sheet untouched");
+}
+
+#[tokio::test]
+async fn forget_without_csrf_rejected() {
+    let (state, sid, csrf, _bare, _tdp, td_memory) = authed_setup().await;
+    seed_sheet(&state, "12345", "Kept").await;
+    let app = build_router(state);
+    let res = app
+        .oneshot(post_form(
+            "/memory/users/12345/forget",
+            &sid,
+            &csrf,
+            "_csrf=nope".to_owned(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(sheet_path(&td_memory, "12345").exists(), "sheet untouched");
+}
+
+#[tokio::test]
+async fn forget_unknown_id_is_404_with_flash() {
+    let (state, sid, csrf, bare_csrf, _tdp, td_memory) = authed_setup().await;
+    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
+    let app = build_router(state);
+    let res = app
+        .oneshot(post_form("/memory/users/555/forget", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let html = body_string(res).await;
+    assert!(
+        html.contains("<div class=\"flash\">No Character Sheet for user 555.</div>"),
+        "404 page carries the flash; got {html}"
+    );
+    let lines = read_audit_lines(&td_memory);
+    assert_eq!(lines[0]["op"], "forget");
+    assert_eq!(lines[0]["result"], "not_found");
+}
+
+#[tokio::test]
+async fn users_list_offers_forget_not_reset() {
+    let (state, sid, csrf, _bare, _tdp, _tdm) = authed_setup().await;
+    seed_sheet(&state, "12345", "Alice").await;
+    let app = build_router(state);
+    let req = Request::builder()
+        .uri("/memory/users")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(html.contains("action=\"/memory/users/12345/forget\""));
+    assert!(
+        html.contains("data-confirm=\"Forget Alice (12345)?"),
+        "confirm names the user; got {html}"
+    );
+    assert!(!html.contains(">Reset<"), "fake Reset link is gone");
+    assert!(html.contains("+ New Character Sheet"));
+}
+
+#[tokio::test]
+async fn conflict_resubmit_preserves_character_sheet_frontmatter() {
+    let (state, sid, csrf, bare_csrf, _tdp, _tdm) = authed_setup().await;
+    seed_sheet(&state, "12345", "OnDisk").await;
+    // mtime=0 is stale against the seeded sheet, forcing the conflict page.
+    let body = format!(
+        "_csrf={csrf}&mtime=0&body=draft&fm_username=draftlogin&fm_display_name=DraftName&fm_links={links}",
+        csrf = urlencoding::encode(&bare_csrf),
+        links = urlencoding::encode("steam https://steamcommunity.com/id/draft"),
+    );
+    let app = build_router(state);
+    let res = app
+        .oneshot(post_form("/memory/users/12345", &sid, &csrf, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let html = body_string(res).await;
+    for needle in [
+        "name=\"fm_username\" value=\"draftlogin\"",
+        "name=\"fm_display_name\" value=\"DraftName\"",
+        "steam https://steamcommunity.com/id/draft</textarea>",
+    ] {
+        assert!(html.contains(needle), "missing {needle}; got {html}");
+    }
 }
