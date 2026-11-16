@@ -26,12 +26,12 @@
   <div class="tbody">
     {% for s in items %}
     <div class="tr" data-filter="{{ s.slug }} {{ s.created_by }}">
-      <div class="td col-name">
+      <div class="td col-name" data-label="Slug">
         <span class="ping-bullet">~</span>
         <a class="ping-name" href="/memory/scratch/{{ s.slug }}">{{ s.slug }}</a>
       </div>
-      <div class="td"><span class="muted mono">{{ s.updated_at }}</span></div>
-      <div class="td">
+      <div class="td" data-label="Updated"><span class="muted mono">{{ s.updated_at }}</span></div>
+      <div class="td" data-label="Created by">
         {% if s.created_by.is_empty() %}
           <span class="muted">—</span>
         {% else %}
@@ -46,7 +46,7 @@
           </span>
         {% endif %}
       </div>
-      <div class="td">
+      <div class="td" data-label="Bytes">
         <span class="bytes-bar mini"><span style="width: {{ s.pct }}%"></span></span>
         <span class="bytes-cell">{{ s.bytes }} B</span>
       </div>

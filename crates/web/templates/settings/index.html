@@ -25,6 +25,18 @@
 {% endif %}
 
 <div class="settings-grid">
+  {# Phone-width stand-in for the section nav; hidden on desktop. #}
+  <div class="settings-jump">
+    <select data-settings-jump aria-label="Jump to section">
+      {% for g in self.nav() %}
+      <optgroup label="{{ g.label }}">
+        {% for it in g.items %}
+        <option value="{{ it.target }}">{{ it.label }}</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+  </div>
   <aside class="settings-nav" aria-label="Settings sections">
     {% for g in self.nav() %}
     <div class="settings-nav-group" data-group="{{ g.id }}">
