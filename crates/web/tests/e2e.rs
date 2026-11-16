@@ -209,7 +209,7 @@ async fn settings_discard_restores_baseline() {
 
     s.fill(input, "47").await;
     s.wait_for("#settings-save-bar.visible").await;
-    s.eval("window.__e2eMarker = true;").await;
+    s.exec("window.__e2eMarker = true;").await;
 
     s.click("#settings-save-bar [data-discard]").await;
 
@@ -243,7 +243,7 @@ async fn memory_editor_ctrl_s_saves() {
     s.wait_and_fill(body, "saved via keyboard shortcut").await;
     // Non-Mac platform in headless Chrome, so the hint reads Ctrl.
     assert_eq!(s.wait_text("kbd[data-mod-key]").await, "Ctrl");
-    s.eval("window.__e2eMarker = true;").await;
+    s.exec("window.__e2eMarker = true;").await;
 
     s.find(body)
         .await
