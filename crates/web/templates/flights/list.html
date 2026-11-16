@@ -30,13 +30,13 @@
     <div class="tbody">
     {% for f in flights %}
       <div class="tr">
-        <div class="td col-id mono">{{ f.identifier }}</div>
-        <div class="td col-cs mono">{% match f.callsign %}{% when Some(v) %}{{ v }}{% when None %}—{% endmatch %}</div>
-        <div class="td col-by mono">{{ f.owner_login }}</div>
-        <div class="td col-phase mono">{{ f.phase }}</div>
-        <div class="td col-alt mono num">{% match f.altitude_ft %}{% when Some(v) %}{{ v }} ft{% when None %}—{% endmatch %}</div>
-        <div class="td col-gs mono num">{% match f.ground_speed_kts %}{% when Some(v) %}{{ v }} kt{% when None %}—{% endmatch %}</div>
-        <div class="td col-age mono num">{% match f.last_seen_secs_ago %}{% when Some(v) %}{{ v }}s{% when None %}—{% endmatch %}</div>
+        <div class="td col-id mono" data-label="ID">{{ f.identifier }}</div>
+        <div class="td col-cs mono" data-label="Callsign">{% match f.callsign %}{% when Some(v) %}{{ v }}{% when None %}—{% endmatch %}</div>
+        <div class="td col-by mono" data-label="Owner">{{ f.owner_login }}</div>
+        <div class="td col-phase mono" data-label="Phase">{{ f.phase }}</div>
+        <div class="td col-alt mono num" data-label="Altitude">{% match f.altitude_ft %}{% when Some(v) %}{{ v }} ft{% when None %}—{% endmatch %}</div>
+        <div class="td col-gs mono num" data-label="Speed">{% match f.ground_speed_kts %}{% when Some(v) %}{{ v }} kt{% when None %}—{% endmatch %}</div>
+        <div class="td col-age mono num" data-label="Seen">{% match f.last_seen_secs_ago %}{% when Some(v) %}{{ v }}s{% when None %}—{% endmatch %}</div>
         {% if is_mod %}
         <div class="td col-act">
           <form method="post" action="/flights/delete" style="display:inline" onsubmit="return confirm('Untrack {{ f.identifier }}?')">

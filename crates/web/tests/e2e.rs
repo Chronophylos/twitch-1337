@@ -319,3 +319,129 @@ async fn memory_editor_ctrl_s_saves() {
 
     s.close().await;
 }
+
+/// Every authed route at phone width (390×844) fits the viewport: no
+/// horizontal page scroll, and no inner scroller wider than its box.
+#[tokio::test]
+async fn phone_width_routes_have_no_horizontal_scroll() {
+    let s = E2eSession::start_as_owner().await;
+
+    // A row with a long unbreakable name, so the stacked pings table has
+    // real content to squeeze.
+    s.goto("/pings/new").await;
+    s.wait_and_fill("#ping-name", "a_very_long_ping_name_that_never_breaks")
+        .await;
+    s.fill(
+        "#ping-template",
+        "yo {mentions} lets go raid somewhere fun tonight",
+    )
+    .await;
+    s.click("button[type=\"submit\"].btn.primary").await;
+    s.wait_for("a.ping-name").await;
+
+    s.set_window_size(390, 844).await;
+    let paths = [
+        "/pings",
+        "/pings/new",
+        "/pings/a_very_long_ping_name_that_never_breaks",
+        "/leaderboard",
+        "/flights",
+        "/schedules",
+        "/schedules?new=true",
+        "/memory",
+        "/memory/soul",
+        "/memory/lore",
+        "/memory/users",
+        "/memory/users/new",
+        "/memory/scratch",
+        "/memory/scratch/new",
+        "/emotes",
+        "/emotes/audit",
+        "/emotes/usage",
+        "/logs",
+        "/ai-profiles",
+        "/settings",
+    ];
+    for path in paths {
+        s.goto(path).await;
+        s.wait_for(".topbar").await;
+        let fit = s
+            .eval(
+                "const d = document.documentElement; \
+                 const sc = document.querySelector('.scroll'); \
+                 return { iw: innerWidth, sw: d.scrollWidth, \
+                          inner: sc ? sc.scrollWidth - sc.clientWidth : 0 };",
+            )
+            .await;
+        let iw = fit["iw"].as_u64().unwrap();
+        assert!(iw <= 400, "{path}: viewport not at phone width ({iw}px)");
+        assert!(
+            fit["sw"].as_u64().unwrap() <= iw,
+            "{path}: page scrolls horizontally: {fit}"
+        );
+        assert!(
+            fit["inner"].as_i64().unwrap() <= 0,
+            "{path}: .scroll overflows horizontally: {fit}"
+        );
+    }
+
+    s.close().await;
+}
+
+/// At phone width the sidebar is a drawer behind ☰: it opens with focus
+/// inside, closes on Esc and on a scrim click, and hands focus back to ☰.
+#[tokio::test]
+async fn phone_width_drawer_opens_and_closes() {
+    let s = E2eSession::start().await;
+    s.set_window_size(390, 844).await;
+    s.goto("/pings").await;
+
+    let toggle = "button[data-drawer-toggle]";
+    let drawer_shown =
+        "return getComputedStyle(document.getElementById('sidebar')).visibility === 'visible';";
+    let drawer_hidden =
+        "return getComputedStyle(document.getElementById('sidebar')).visibility === 'hidden';";
+    let focus_on_toggle =
+        "return document.activeElement === document.querySelector('[data-drawer-toggle]');";
+
+    // Closed at rest: the rail is off-canvas and out of the tab order.
+    s.wait_js(drawer_hidden).await;
+    assert_eq!(
+        s.find(toggle).await.attr("aria-expanded").await.unwrap(),
+        Some("false".to_owned())
+    );
+
+    // Open: aria-expanded flips and focus lands inside the drawer.
+    s.click(toggle).await;
+    s.wait_js(drawer_shown).await;
+    assert_eq!(
+        s.find(toggle).await.attr("aria-expanded").await.unwrap(),
+        Some("true".to_owned())
+    );
+    s.wait_js("return document.getElementById('sidebar').contains(document.activeElement);")
+        .await;
+
+    // Esc closes and returns focus to ☰.
+    s.find("#sidebar .nav-item")
+        .await
+        .send_keys(&char::from(fantoccini::key::Key::Escape).to_string())
+        .await
+        .expect("send Escape");
+    s.wait_js(drawer_hidden).await;
+    s.wait_js(focus_on_toggle).await;
+    assert_eq!(
+        s.find(toggle).await.attr("aria-expanded").await.unwrap(),
+        Some("false".to_owned())
+    );
+
+    // Reopen, then a scrim click closes. The scrim's centre sits under the
+    // drawer, so dispatch the click on the scrim itself.
+    s.click(toggle).await;
+    s.wait_js(drawer_shown).await;
+    s.exec("document.querySelector('.drawer-scrim').click();")
+        .await;
+    s.wait_js(drawer_hidden).await;
+    s.wait_js(focus_on_toggle).await;
+
+    s.close().await;
+}

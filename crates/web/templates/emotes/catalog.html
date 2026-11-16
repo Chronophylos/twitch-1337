@@ -25,10 +25,10 @@
     <div class="tbody">
     {% for row in rows %}
       <div class="tr" data-filter="{{ row.name }} {{ row.emote_id }}">
-        <div class="td col-name">
+        <div class="td col-name" data-label="Name">
           <span class="ping-name">{{ row.name }}</span>
         </div>
-        <div class="td mono">{{ row.emote_id }}</div>
+        <div class="td mono" data-label="Emote id">{{ row.emote_id }}</div>
       </div>
     {% endfor %}
     </div>

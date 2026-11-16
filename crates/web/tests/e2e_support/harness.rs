@@ -181,6 +181,14 @@ impl E2eSession {
         self.client.goto(&url).await.expect("goto");
     }
 
+    /// Resize the browser window (headless Chrome: the viewport).
+    pub async fn set_window_size(&self, width: u32, height: u32) {
+        self.client
+            .set_window_size(width, height)
+            .await
+            .expect("set_window_size");
+    }
+
     /// Current browser URL as a string.
     pub async fn current_url(&self) -> String {
         self.client

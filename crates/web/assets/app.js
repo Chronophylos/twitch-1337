@@ -434,6 +434,9 @@ const unsavedGuards = [];
     refreshAll();
   });
 
+  // Phone-width section picker; mirrors the nav's active section.
+  const jump = document.querySelector('[data-settings-jump]');
+
   if (cards.length && 'IntersectionObserver' in window) {
     const byId = new Map(navItems.map((el) => [el.dataset.target, el]));
     let active = null;
@@ -445,6 +448,7 @@ const unsavedGuards = [];
       const activeItem = byId.get(section);
       const activeGroup = activeItem?.closest('.settings-nav-group');
       for (const g of navGroups) g.el.classList.toggle('has-active', g.el === activeGroup);
+      if (jump) jump.value = section;
     };
     setActive(cards[0].dataset.section);
     const io = new IntersectionObserver(
@@ -459,15 +463,19 @@ const unsavedGuards = [];
     for (const card of cards) io.observe(card);
   }
 
+  function scrollToSection(section) {
+    const target = document.getElementById('sec-' + section);
+    if (!target) return false;
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+    return true;
+  }
   for (const item of navItems) {
     item.addEventListener('click', (e) => {
-      const target = document.getElementById('sec-' + item.dataset.target);
-      if (!target) return;
-      e.preventDefault();
-      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+      if (scrollToSection(item.dataset.target)) e.preventDefault();
     });
   }
+  jump?.addEventListener('change', () => scrollToSection(jump.value));
 
   refreshAll();
 })();
@@ -650,5 +658,46 @@ window.addEventListener('beforeunload', (evt) => {
     if (!(isMac ? evt.metaKey : evt.ctrlKey)) return;
     evt.preventDefault();
     form.requestSubmit();
+  });
+})();
+
+// ─── Phone nav drawer ────────────────────────────────────────────────────────
+// Below the app.css phone breakpoint the sidebar is off-canvas. ☰ opens it;
+// Esc and the scrim close it. Focus moves into the drawer on open and back to
+// ☰ on close; the page behind is inert while the drawer is up.
+(function navDrawer() {
+  const toggle = document.querySelector('[data-drawer-toggle]');
+  const drawer = document.getElementById('sidebar');
+  if (!toggle || !drawer) return;
+  const page = toggle.closest('.main');
+  const phone = window.matchMedia('(max-width: 860px)');
+  const isOpen = () => document.body.classList.contains('drawer-open');
+
+  function setOpen(open, restoreFocus = true) {
+    document.body.classList.toggle('drawer-open', open);
+    toggle.setAttribute('aria-expanded', String(open));
+    if (page) page.inert = open;
+    if (open) {
+      const first =
+        drawer.querySelector('.nav-list > li.active .nav-item, .nav-group-link.active') ||
+        drawer.querySelector('a[href], button');
+      first?.focus();
+    } else if (restoreFocus) {
+      toggle.focus();
+    }
+  }
+
+  toggle.addEventListener('click', () => setOpen(!isOpen()));
+  for (const el of document.querySelectorAll('[data-drawer-close]')) {
+    el.addEventListener('click', () => setOpen(false));
+  }
+  document.addEventListener('keydown', (evt) => {
+    if (evt.key !== 'Escape' || !isOpen()) return;
+    evt.preventDefault();
+    setOpen(false);
+  });
+  // Widening past the breakpoint turns the drawer back into the rail.
+  phone.addEventListener('change', (evt) => {
+    if (!evt.matches && isOpen()) setOpen(false, false);
   });
 })();

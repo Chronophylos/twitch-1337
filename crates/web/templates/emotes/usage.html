@@ -56,13 +56,13 @@
     <div class="tbody">
     {% for row in rows %}
       <div class="tr{% if row.flagged %} row-flagged{% endif %}" data-filter="{{ row.filter_blob }}">
-        <div class="td mono">{{ row.at_berlin }}</div>
-        <div class="td col-name">
+        <div class="td mono" data-label="Time">{{ row.at_berlin }}</div>
+        <div class="td col-name" data-label="Emote">
           <span class="ping-name">{{ row.emote_name }}</span>
         </div>
-        <div class="td mono">{{ row.emote_id }}</div>
-        <div class="td">{{ row.user }}</div>
-        <div class="td">
+        <div class="td mono" data-label="Id">{{ row.emote_id }}</div>
+        <div class="td" data-label="User">{{ row.user }}</div>
+        <div class="td" data-label="Flagged">
           {% if row.flagged %}
             <span class="badge badge-flagged">flagged</span>
           {% else %}

@@ -53,13 +53,13 @@
     <div class="tbody">
     {% for row in rows %}
       <div class="tr{% if row.is_gap %} row-gap{% endif %}" data-filter="{{ row.filter_blob }}">
-        <div class="td mono{% if row.is_gap %} muted{% endif %}">{{ row.at_berlin }}</div>
-        <div class="td mono{% if row.is_gap %} muted{% endif %}">{{ row.kind }}</div>
-        <div class="td col-name{% if row.is_gap %} muted{% endif %}">{{ row.name }}</div>
-        <div class="td mono{% if row.is_gap %} muted{% endif %}">{% if row.emote_id.is_empty() %}<span class="muted">—</span>{% else %}{{ row.emote_id }}{% endif %}</div>
-        <div class="td{% if row.is_gap %} muted{% endif %}">{{ row.actor }}</div>
-        <div class="td{% if row.is_gap %} muted{% endif %}">{{ row.attribution }}</div>
-        <div class="td mono{% if row.is_gap %} muted{% endif %}">{% if row.gap_range.is_empty() %}<span class="muted">—</span>{% else %}{{ row.gap_range }}{% endif %}</div>
+        <div class="td mono{% if row.is_gap %} muted{% endif %}" data-label="Time">{{ row.at_berlin }}</div>
+        <div class="td mono{% if row.is_gap %} muted{% endif %}" data-label="Kind">{{ row.kind }}</div>
+        <div class="td col-name{% if row.is_gap %} muted{% endif %}" data-label="Name">{{ row.name }}</div>
+        <div class="td mono{% if row.is_gap %} muted{% endif %}" data-label="Emote id">{% if row.emote_id.is_empty() %}<span class="muted">—</span>{% else %}{{ row.emote_id }}{% endif %}</div>
+        <div class="td{% if row.is_gap %} muted{% endif %}" data-label="Actor">{{ row.actor }}</div>
+        <div class="td{% if row.is_gap %} muted{% endif %}" data-label="Attribution">{{ row.attribution }}</div>
+        <div class="td mono{% if row.is_gap %} muted{% endif %}" data-label="Gap range">{% if row.gap_range.is_empty() %}<span class="muted">—</span>{% else %}{{ row.gap_range }}{% endif %}</div>
       </div>
     {% endfor %}
     </div>

@@ -169,3 +169,18 @@ async fn sidebar_hides_memory_and_system_for_viewer() {
         "viewer footer renders empty role chip"
     );
 }
+
+/// The phone-width ☰ button names the sidebar it opens and starts closed.
+#[tokio::test]
+async fn drawer_toggle_controls_sidebar() {
+    let body = fetch_authed("/pings").await;
+    assert!(body.contains("<aside class=\"sidebar\" id=\"sidebar\">"));
+    let toggle = body
+        .split("data-drawer-toggle")
+        .nth(1)
+        .and_then(|rest| rest.split('>').next())
+        .expect("drawer toggle present");
+    assert!(toggle.contains("aria-controls=\"sidebar\""), "{toggle}");
+    assert!(toggle.contains("aria-expanded=\"false\""), "{toggle}");
+    assert!(body.contains("class=\"drawer-scrim\" data-drawer-close"));
+}

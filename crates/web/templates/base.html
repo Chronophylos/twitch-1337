@@ -15,8 +15,10 @@
   {% block layout %}
   <div class="shell">
     {% include "sidebar.html" %}
+    <div class="drawer-scrim" data-drawer-close aria-hidden="true"></div>
     <div class="main">
       <header class="topbar">
+        <button type="button" class="nav-toggle" data-drawer-toggle aria-controls="sidebar" aria-expanded="false" aria-label="Menu">☰</button>
         <nav class="crumbs" aria-label="Breadcrumb">
           <span class="crumb-root">~</span>
           {% for seg in current_page.split('_') %}

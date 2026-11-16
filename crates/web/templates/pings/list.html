@@ -57,7 +57,7 @@
     <div class="tbody">
     {% for row in rows %}
       <div class="tr" data-filter="{{ row.name }} {{ row.template }} {{ row.created_by }}">
-        <div class="td col-name">
+        <div class="td col-name" data-label="Name">
           <span class="ping-bullet">!</span>
           <a class="ping-name" href="/pings/{{ row.name }}">{{ row.name }}</a>
           {% if show_fired %}
@@ -68,10 +68,10 @@
             {% endif %}
           {% endif %}
         </div>
-        <div class="td col-tpl">
+        <div class="td col-tpl" data-label="Template">
           <code class="tpl">{{ row.template }}</code>
         </div>
-        <div class="td col-members">
+        <div class="td col-members" data-label="Members">
           {% if row.members == 0 %}
             <span class="muted">—</span>
           {% else %}
@@ -81,7 +81,7 @@
             </span>
           {% endif %}
         </div>
-        <div class="td col-by">
+        <div class="td col-by" data-label="Created by">
           <span class="by">
             <span class="avatar" style="width:18px;height:18px;font-size:10px;background:oklch(0.55 0.10 var(--accent-h));">{{ row.created_initial }}</span>
             {{ row.created_by }}
