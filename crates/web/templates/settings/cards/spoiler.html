@@ -14,9 +14,9 @@
   <div class="settings-rows">
     {% let spoiler_profile = current.spoiler.profile.as_str() %}
     <div class="settings-row" data-section="spoiler">
-      {% call m::row_head("spoiler.profile", "Decision profile used for the check. Only decision-kind profiles are listed; empty turns it off.") %}{% endcall %}
+      {% call m::row_head("spoiler.profile", "Decision profile used for the check. Only decision-kind profiles are listed; empty turns it off.", "spoiler_profile") %}{% endcall %}
       <div class="row-control-cell">
-        <select name="spoiler_profile" data-key="spoiler.profile" data-default="{{ defaults.spoiler.profile }}">
+        <select id="spoiler_profile" name="spoiler_profile" data-key="spoiler.profile" data-default="{{ defaults.spoiler.profile }}">
           <option value="">(off)</option>
           {% for p in current.ai.profiles %}
           {% if p.kind.as_str() == "decision" %}<option value="{{ p.name }}"{% if spoiler_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}

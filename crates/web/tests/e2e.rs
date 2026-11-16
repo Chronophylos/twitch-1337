@@ -231,6 +231,56 @@ async fn settings_discard_restores_baseline() {
     s.close().await;
 }
 
+/// Every visible settings control has an accessible name (its row key), and
+/// controls are shown at rest rather than behind a hover-only overlay.
+#[tokio::test]
+async fn settings_controls_have_accessible_names() {
+    let s = E2eSession::start_as_owner().await;
+    s.goto("/settings").await;
+    s.wait_for("#settings-form").await;
+
+    let controls = s
+        .find_all("#settings-form .settings-row :is(input:not([type=hidden]), select, textarea)")
+        .await;
+    assert!(controls.len() > 50, "settings form lost its controls");
+    let mut unnamed = Vec::new();
+    for el in &controls {
+        let (role, name) = s.accessibility(el).await;
+        if name.trim().is_empty() {
+            let id = el.attr("id").await.ok().flatten().unwrap_or_default();
+            unnamed.push(format!("{role} #{id}"));
+        }
+    }
+    assert!(
+        unnamed.is_empty(),
+        "controls without an accessible name: {unnamed:?}"
+    );
+
+    // Query by role and name: a number row, a switch, a bytes row's visible
+    // amount (its posted value lives in a hidden input), and a select.
+    for (css, role, name) in [
+        ("#cooldown_ai", "spinbutton", "ai"),
+        ("#alerts_quake_enabled", "switch", "enabled"),
+        ("#ai_memory_soul_bytes_display", "spinbutton", "soul_bytes"),
+        ("#ai_aurora_profile", "combobox", "ai.aurora.profile"),
+    ] {
+        let got = s.accessibility(&s.find(css).await).await;
+        assert_eq!(got, (role.to_owned(), name.to_owned()), "{css}");
+    }
+
+    // Resting state: no hover, no focus — the control itself is visible.
+    assert_eq!(
+        s.eval(
+            "document.activeElement.blur(); \
+             return getComputedStyle(document.querySelector('#cooldown_ai').closest('.num-wrap')).opacity;"
+        )
+        .await,
+        serde_json::Value::String("1".into()),
+    );
+
+    s.close().await;
+}
+
 /// Ctrl+S in the memory editor submits the form and the edit persists.
 #[tokio::test]
 async fn memory_editor_ctrl_s_saves() {

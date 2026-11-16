@@ -16,9 +16,9 @@
     {% let recap_profile = current.ai.recap.profile.as_deref().unwrap_or("") %}
     {% let recap_default = defaults.ai.recap.profile.as_deref().unwrap_or("") %}
     <div class="settings-row" data-section="ai_recap">
-      {% call m::row_head("ai.recap.profile", "Which provider profile Recap uses. Empty turns Recap off; it never inherits another agent's profile.") %}{% endcall %}
+      {% call m::row_head("ai.recap.profile", "Which provider profile Recap uses. Empty turns Recap off; it never inherits another agent's profile.", "ai_recap_profile") %}{% endcall %}
       <div class="row-control-cell">
-        <select name="ai_recap_profile" data-key="ai.recap.profile" data-default="{{ recap_default }}">
+        <select id="ai_recap_profile" name="ai_recap_profile" data-key="ai.recap.profile" data-default="{{ recap_default }}">
           <option value="">(off)</option>
           {% for p in current.ai.profiles %}
           {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if recap_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}

@@ -47,8 +47,9 @@
 
   --fg:   oklch(0.96 0 0);
   --fg-2: oklch(0.78 0 0);
-  --fg-3: oklch(0.62 0 0);
-  --fg-4: oklch(0.48 0 0);
+  --fg-3: oklch(0.70 0 0);
+  /* ≥4.5:1 on --bg-0..--bg-3 so it can carry small text. */
+  --fg-4: oklch(0.64 0 0);
 
   --warn:   oklch(0.78 0.13 75);
   --danger: oklch(0.7 0.16 25);
@@ -263,7 +264,7 @@ kbd {
 }
 .search:focus-within { border-color: var(--line-strong); background: var(--bg-2); }
 .search-icon { color: var(--fg-4); font-size: 14px; }
-.search input { background: transparent; border: 0; outline: 0; flex: 1; min-width: 0; }
+.search input { background: transparent; border: 0; flex: 1; min-width: 0; }
 .search input::placeholder { color: var(--fg-4); }
 
 .cmdk {
@@ -590,7 +591,8 @@ kbd {
 }
 .tr:last-child { border-bottom: 0; }
 .tr:hover { background: var(--bg-1); }
-.tr:hover .row-act { opacity: 1; }
+.tr:hover .row-act,
+.tr:focus-within .row-act { opacity: 1; }
 
 .td { min-width: 0; overflow: hidden; }
 
@@ -720,7 +722,7 @@ kbd {
 .editor-input {
   width: 100%;
   background: transparent;
-  border: 0; outline: 0;
+  border: 0;
   padding: 12px 16px;
   font-family: var(--mono);
   font-size: 13.5px;
@@ -753,7 +755,7 @@ kbd {
   width: 100%;
   min-height: 480px;
   background: oklch(0.165 0 0);
-  border: 0; outline: 0;
+  border: 0;
   font-family: var(--mono);
   font-size: 13.5px;
   line-height: 1.65;
@@ -827,7 +829,6 @@ kbd {
   font-family: var(--mono);
   font-size: 13px;
   color: var(--fg);
-  outline: none;
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 .input:focus { border-color: var(--line-strong); background: var(--bg-2); }
@@ -1261,35 +1262,6 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   align-items: center;
   min-height: 32px;
 }
-.row-pretty {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  font-family: var(--mono);
-  font-size: 13.5px;
-  color: var(--fg-2);
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-}
-.row-control-cell .num-wrap,
-.row-control-cell .toggle,
-.row-control-cell .bytes-wrap {
-  transition: opacity 0.12s ease;
-  opacity: 0;
-}
-.settings-row:hover .row-control-cell .num-wrap,
-.settings-row:hover .row-control-cell .toggle,
-.settings-row:hover .row-control-cell .bytes-wrap,
-.settings-row:focus-within .row-control-cell .num-wrap,
-.settings-row:focus-within .row-control-cell .toggle,
-.settings-row:focus-within .row-control-cell .bytes-wrap,
-.settings-row.is-dirty .row-control-cell .num-wrap,
-.settings-row.is-dirty .row-control-cell .toggle,
-.settings-row.is-dirty .row-control-cell .bytes-wrap { opacity: 1; }
-.settings-row:hover .row-pretty,
-.settings-row:focus-within .row-pretty,
-.settings-row.is-dirty .row-pretty { opacity: 0; }
 
 .row-right {
   display: flex;
@@ -1341,7 +1313,6 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 .num-input {
   background: transparent;
   border: 0;
-  outline: 0;
   font-family: var(--mono);
   font-size: 13.5px;
   font-variant-numeric: tabular-nums;
@@ -1412,7 +1383,6 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   background: var(--bg-3);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
-  outline: 0;
   font-family: var(--mono);
   font-size: 13.5px;
   color: var(--fg);
@@ -1428,18 +1398,10 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 }
 .settings-row.is-dirty .text-input { border-color: var(--accent-soft); }
 
-.row-control-cell .text-input { opacity: 0; }
-.settings-row:hover .row-control-cell .text-input,
-.settings-row:focus-within .row-control-cell .text-input,
-.settings-row.is-dirty .row-control-cell .text-input { opacity: 1; }
-
-/* Profile-picker rows have no .row-pretty overlay to fade in from, so
-   (unlike .text-input above) the select stays visible at rest. */
 .row-control-cell select {
   background: var(--bg-3);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
-  outline: 0;
   font-family: var(--mono);
   font-size: 13.5px;
   color: var(--fg);
@@ -1454,17 +1416,31 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 }
 .settings-row.is-dirty .row-control-cell select { border-color: var(--accent-soft); }
 
+/* Settings controls are always visible. At rest their frame is quiet;
+   hovering the row or focusing the control brings it back, and a dirty
+   row keeps its accent border. */
+.row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select) {
+  border-color: transparent;
+  background: transparent;
+}
+.settings-row:hover .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select) {
+  border-color: var(--line);
+  background: var(--bg-3);
+}
+.settings-row .row-control-cell :is(.num-wrap:focus-within, .bytes-wrap:focus-within, .text-input:focus, select:focus) {
+  border-color: var(--line-strong);
+  background: var(--bg-2);
+}
+.settings-row.is-dirty .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select) {
+  border-color: var(--accent-soft);
+}
+
 .range-wrap {
   display: inline-flex;
   align-items: center;
   gap: 10px;
   width: 260px;
-  opacity: 0;
-  transition: opacity 0.12s ease;
 }
-.settings-row:hover .range-wrap,
-.settings-row:focus-within .range-wrap,
-.settings-row.is-dirty .range-wrap { opacity: 1; }
 .range-wrap input[type=range] {
   flex: 1;
   accent-color: var(--accent);
@@ -1520,9 +1496,6 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 .toggle:has(input:checked) .toggle-thumb {
   left: calc(100% - 16px);
   background: var(--accent-ink);
-}
-.toggle:has(input:focus-visible) {
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 /* Offset by the sidebar so the bar doesn't visually fight the rail. */
@@ -1798,7 +1771,6 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   font-family: var(--mono);
   font-size: 13px;
   color: var(--fg);
-  outline: none;
   transition: border-color 0.12s ease, background 0.12s ease;
   color-scheme: dark;
   max-width: 420px;
@@ -1915,7 +1887,6 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   font-family: var(--mono);
   font-size: 13px;
   color: var(--fg);
-  outline: none;
   transition: border-color 0.12s ease, background 0.12s ease;
   color-scheme: dark;
   max-width: 420px;
@@ -1970,3 +1941,28 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 .toast-msg { flex: 1; overflow-wrap: anywhere; }
 .toast-close { color: var(--fg-3); line-height: 1; padding: 2px; }
 .toast-close:hover { color: var(--fg); }
+
+/* ====================== Accessibility ====================== */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Bare inputs inside a framed wrapper ring the wrapper instead. */
+.search input:focus-visible,
+.num-wrap .num-input:focus-visible,
+.bytes-wrap .bytes-display:focus-visible,
+.toggle input:focus-visible { outline: none; }
+.search:has(input:focus-visible),
+.num-wrap:has(.num-input:focus-visible),
+.bytes-wrap:has(.bytes-display:focus-visible),
+.toggle:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Full-bleed editor fields: ring inside the edge, not over neighbours. */
+.editor-input:focus-visible,
+.editor textarea:focus-visible { outline-offset: -2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; }
+}

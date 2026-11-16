@@ -25,6 +25,32 @@ fn webdriver_url() -> String {
 const WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 const WAIT_POLL: Duration = Duration::from_millis(100);
 
+/// WebDriver "Get Computed Role" / "Get Computed Label" for one element.
+/// fantoccini has no wrapper for these endpoints.
+#[derive(Debug)]
+struct ComputedA11y {
+    element: String,
+    endpoint: &'static str,
+}
+
+impl fantoccini::wd::WebDriverCompatibleCommand for ComputedA11y {
+    fn endpoint(
+        &self,
+        base_url: &url::Url,
+        session_id: Option<&str>,
+    ) -> Result<url::Url, url::ParseError> {
+        let session = session_id.expect("computed a11y needs a live session");
+        base_url.join(&format!(
+            "session/{session}/element/{}/{}",
+            self.element, self.endpoint
+        ))
+    }
+
+    fn method_and_body(&self, _: &url::Url) -> (axum::http::Method, Option<String>) {
+        (axum::http::Method::GET, None)
+    }
+}
+
 /// Selects which session role the harness injects.
 enum SessionKind {
     /// Authenticated mod (no owner configured). Default for `start()`.
@@ -262,6 +288,25 @@ impl E2eSession {
             .execute(js, vec![])
             .await
             .unwrap_or_else(|e| panic!("eval {js}: {e}"))
+    }
+
+    /// The browser's computed ARIA role and accessible name for `el`.
+    pub async fn accessibility(&self, el: &fantoccini::elements::Element) -> (String, String) {
+        let mut out = [String::new(), String::new()];
+        for (slot, endpoint) in out.iter_mut().zip(["computedrole", "computedlabel"]) {
+            let cmd = ComputedA11y {
+                element: el.element_id().to_string(),
+                endpoint,
+            };
+            let value = self
+                .client
+                .issue_cmd(cmd)
+                .await
+                .unwrap_or_else(|e| panic!("{endpoint}: {e}"));
+            *slot = value.as_str().unwrap_or_default().to_owned();
+        }
+        let [role, name] = out;
+        (role, name)
     }
 
     /// Wait until `js` (a script that `return`s a value) yields `true`.
