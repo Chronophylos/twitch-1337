@@ -4,9 +4,17 @@
 //! presentation rule for the user — `Forbidden` renders the denied page,
 //! `Conflict` renders the memory conflict page, etc. Internal errors log
 //! with backtrace + return a generic 500.
+//!
+//! `IntoResponse` has no access to the request, so the response is built
+//! for a full page load and carries an `HtmxFallback` extension. The
+//! [`htmx_errors`] middleware swaps it in when the request came from htmx:
+//! `HX-Redirect` instead of a 303 to `/login`, and short plain text instead
+//! of a full error page so `app.js` can show it in the toast.
 
 use askama::Template;
-use axum::http::StatusCode;
+use axum::extract::Request;
+use axum::http::{HeaderValue, StatusCode, Uri};
+use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 
 #[derive(Debug, thiserror::Error)]
@@ -101,6 +109,24 @@ struct ConflictTpl<'a> {
     cancel_url: &'static str,
 }
 
+#[derive(Template)]
+#[template(path = "error.html")]
+struct ErrorTpl<'a> {
+    heading: &'a str,
+    message: &'a str,
+}
+
+/// What an htmx request gets instead of the full-page response. Attached as
+/// a response extension by `WebError::into_response`, consumed by
+/// [`htmx_errors`].
+#[derive(Clone, Debug)]
+enum HtmxFallback {
+    /// Session gone: tell htmx to navigate the whole page to `/login`.
+    Login,
+    /// Short plain text for the toast.
+    Text(StatusCode, String),
+}
+
 /// Allow only same-origin absolute paths. Anything that smells like a
 /// scheme, host, or CRLF is rejected so the redirect can't be turned
 /// into an open-redirect or header-splitting vector. Backslashes are
@@ -127,28 +153,90 @@ fn render<T: Template>(status: StatusCode, tpl: &T) -> Response {
     }
 }
 
+/// Full error page for non-htmx requests, with the toast text attached for
+/// htmx requests.
+fn error_page(status: StatusCode, heading: &str, message: &str, toast: String) -> Response {
+    with_fallback(
+        render(status, &ErrorTpl { heading, message }),
+        HtmxFallback::Text(status, toast),
+    )
+}
+
+fn with_fallback(mut res: Response, fallback: HtmxFallback) -> Response {
+    res.extensions_mut().insert(fallback);
+    res
+}
+
+/// Path + query of the page htmx sent the request from (`HX-Current-URL`),
+/// if it is a safe login `next` target. `/` is dropped for the same reason
+/// `require_role` drops it: the post-login redirect already lands there.
+fn current_page(req: &Request) -> Option<String> {
+    let raw = req.headers().get("HX-Current-URL")?.to_str().ok()?;
+    let uri: Uri = raw.parse().ok()?;
+    let path = uri.path_and_query()?.as_str();
+    (path != "/" && is_safe_redirect(path)).then(|| path.to_owned())
+}
+
+/// Rewrites [`WebError`] responses for htmx requests (`HX-Request: true`).
+/// htmx does not swap 4xx/5xx bodies and follows 303s transparently, so an
+/// expired session would swap the login page into the target element.
+pub async fn htmx_errors(req: Request, next: Next) -> Response {
+    let is_htmx = req
+        .headers()
+        .get("HX-Request")
+        .is_some_and(|v| v.as_bytes() == b"true");
+    if !is_htmx {
+        return next.run(req).await;
+    }
+    let current = current_page(&req);
+    let mut res = next.run(req).await;
+    match res.extensions_mut().remove::<HtmxFallback>() {
+        None => res,
+        Some(HtmxFallback::Text(status, text)) => (status, text).into_response(),
+        Some(HtmxFallback::Login) => {
+            let target = match current {
+                Some(path) => format!("/login?next={}", urlencoding::encode(&path)),
+                None => "/login".to_owned(),
+            };
+            let mut res = StatusCode::OK.into_response();
+            // `target` is a fixed prefix plus a percent-encoded path, so it
+            // is always a valid header value.
+            if let Ok(value) = HeaderValue::from_str(&target) {
+                res.headers_mut().insert("HX-Redirect", value);
+            }
+            res
+        }
+    }
+}
+
 impl IntoResponse for WebError {
     fn into_response(self) -> Response {
         match self {
             WebError::Unauthenticated { next } => {
-                if let Some(path) = next.filter(|p| is_safe_redirect(p)) {
+                let res = if let Some(path) = next.filter(|p| is_safe_redirect(p)) {
                     Redirect::to(&format!("/login?next={}", urlencoding::encode(&path)))
                         .into_response()
                 } else {
                     Redirect::to("/login").into_response()
-                }
+                };
+                with_fallback(res, HtmxFallback::Login)
             }
-            WebError::Forbidden => render(StatusCode::FORBIDDEN, &DeniedTpl),
-            WebError::CsrfMismatch => (
+            WebError::Forbidden => with_fallback(
+                render(StatusCode::FORBIDDEN, &DeniedTpl),
+                HtmxFallback::Text(StatusCode::FORBIDDEN, "Access denied".to_owned()),
+            ),
+            WebError::CsrfMismatch => error_page(
                 StatusCode::FORBIDDEN,
-                "Session expired, reload and try again",
-            )
-                .into_response(),
-            WebError::Validation { field, msg } => (
+                "Session expired",
+                "The form's security token no longer matches your session. Go back, reload the page and submit again.",
+                "Session expired, reload and try again".to_owned(),
+            ),
+            WebError::Validation { field, msg } => error_page(
                 StatusCode::BAD_REQUEST,
+                "Invalid input",
+                &format!("{field}: {msg}"),
                 format!("validation: {field}: {msg}"),
-            )
-                .into_response(),
+            ),
             WebError::Conflict(payload) => render(
                 StatusCode::CONFLICT,
                 &ConflictTpl {
@@ -186,7 +274,12 @@ impl IntoResponse for WebError {
                     error = ?err,
                     "internal error"
                 );
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+                error_page(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Something went wrong",
+                    "The server hit an internal error. The details are in the bot's log.",
+                    "internal error".to_owned(),
+                )
             }
         }
     }

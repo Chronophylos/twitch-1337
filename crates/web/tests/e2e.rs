@@ -99,6 +99,36 @@ async fn pings_create_add_member_delete() {
     s.close().await;
 }
 
+/// A failing htmx delete (forged CSRF token) shows the server's plain-text
+/// error in the toast and leaves the row in place.
+#[tokio::test]
+async fn failing_htmx_delete_shows_toast() {
+    let s = E2eSession::start().await;
+
+    s.goto("/pings/new").await;
+    s.wait_and_fill("#ping-name", "doomed").await;
+    s.fill("#ping-template", "yo {mentions}").await;
+    s.click("button[type=\"submit\"].btn.primary").await;
+    s.wait_for("a.ping-name").await;
+
+    let del_btn = "button.row-act.danger[hx-post=\"/pings/doomed/delete\"]";
+    s.wait_for(del_btn).await;
+    s.exec(&format!(
+        "document.querySelector('{del_btn}').setAttribute('hx-headers', '{{\"X-Csrf-Token\": \"forged\"}}');"
+    ))
+    .await;
+    s.click(del_btn).await;
+
+    let toast = s.wait_text("#toast .toast-msg").await;
+    assert_eq!(toast, "Session expired, reload and try again");
+    s.find(del_btn).await;
+
+    s.click("#toast .toast-close").await;
+    s.wait_gone("#toast .toast").await;
+
+    s.close().await;
+}
+
 /// Create a disabled interval schedule, toggle it on, then delete it.
 #[tokio::test]
 async fn schedules_create_toggle_delete() {

@@ -1939,3 +1939,34 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   margin-top: 4px;
   border-top: 1px solid var(--line);
 }
+
+/* ====================== Error page + toast ====================== */
+.error-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.toast-region {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 50;
+}
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: min(420px, calc(100vw - 40px));
+  padding: 12px 12px 12px 14px;
+  border: 1px solid oklch(0.7 0.16 25 / 0.4);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--fg);
+  font-size: 13px;
+  box-shadow: 0 8px 24px oklch(0 0 0 / 0.4);
+}
+.toast-msg { flex: 1; overflow-wrap: anywhere; }
+.toast-close { color: var(--fg-3); line-height: 1; padding: 2px; }
+.toast-close:hover { color: var(--fg); }
