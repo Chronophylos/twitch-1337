@@ -93,7 +93,13 @@ _Avoid_: history, context, chat memory.
 **Character Sheet**:
 One user's durable Memory: their interests, bits, and relationships to other
 regulars. What remains after a day's events are drained into it.
-_Avoid_: user file, profile, user memory.
+_Avoid_: user file, profile, user memory, user note.
+
+**Forget**:
+A mod deleting one user's Character Sheet outright. It removes only that sheet:
+mentions in the Lore, in other Character Sheets, and in Transcripts stay, so a
+later Ritual may write a new sheet if the user shows up in chat again.
+_Avoid_: reset, clear, wipe.
 
 **Scratch**:
 A short-lived note the bot writes for itself mid-conversation — a running quiz, a
@@ -233,3 +239,26 @@ _Avoid_: outage (reserve for infra), downtime.
 A Twitch user whose usage rows are stored with `flagged = 1` (bot / clankers /
 deny-list) and excluded from default queries.
 _Avoid_: banned, ignored (1337 ignore is separate unless shared via `is_clanker`).
+
+## Dashboard access
+
+**Dashboard Tier**:
+How much of the web dashboard a signed-in Twitch account may use. Exactly one
+of Viewer, Mod, or Owner; each tier sees everything the tier below it sees.
+_Avoid_: role (ambiguous with Twitch chat roles), permission level.
+
+**Viewer**:
+An account on the viewer allowlist that is not a Mod. Reads the public pages
+(leaderboard, pings, flights) and changes nothing.
+_Avoid_: guest, read-only user.
+
+**Mod**:
+The broadcaster, a Twitch moderator of the channel, or a hidden admin. Manages
+pings, schedules, Memory, Scratch, and emotes. The broadcaster is a Mod shown
+with its own label, not a separate tier.
+_Avoid_: admin, moderator (when the dashboard tier is meant).
+
+**Owner**:
+The single account named in the bootstrap config. A Mod who also manages
+Settings, Profiles, and the logs. Cannot be granted from the dashboard itself.
+_Avoid_: admin, superuser.
