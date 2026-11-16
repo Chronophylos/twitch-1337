@@ -561,7 +561,11 @@ for (const ta of document.querySelectorAll('textarea[data-char-count]')) {
   });
 })();
 
-// Error page "← Back": history.back() keeps the user's form input.
+// Error page "← Back": history.back() keeps the user's form input. A tab
+// with no earlier entry (new tab, bookmark) would make Back a no-op, so go
+// home instead.
 document.addEventListener('click', (evt) => {
-  if (evt.target.closest?.('[data-history-back]')) history.back();
+  if (!evt.target.closest?.('[data-history-back]')) return;
+  if (history.length > 1) history.back();
+  else location.assign('/');
 });
