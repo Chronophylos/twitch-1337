@@ -11,7 +11,7 @@
 
 {% if let Some(e) = error %}<div class="error">{{ e }}</div>{% endif %}
 
-<form method="post" action="{{ save_url }}">
+<form method="post" action="{{ save_url }}" data-unsaved-guard data-save-shortcut>
   <input type="hidden" name="_csrf" value="{{ csrf }}">
   <input type="hidden" name="mtime" value="{{ mtime }}">
   <div class="editor">
@@ -52,7 +52,7 @@
         <span>{{ body.len() }} / {{ byte_cap }} B</span>
         <div class="bytes-bar"><span style="width: {{ pct }}%"></span></div>
       </div>
-      <span class="kbd-hint"><kbd>⌘</kbd><kbd>S</kbd> to save</span>
+      <span class="kbd-hint"><kbd data-mod-key>⌘</kbd><kbd>S</kbd> to save</span>
     </div>
   </div>
   <div class="editor-actions">

@@ -7,7 +7,7 @@
    `<fieldset disabled>` and the inline script below flips which one is
    enabled + visible. Server-side validation (settings::validation) stays
    the authority — this script is convenience only. #}
-<form method="post" action="{{ action }}" class="settings-rows profile-form">
+<form method="post" action="{{ action }}" class="settings-rows profile-form" data-unsaved-guard>
   <input type="hidden" name="_csrf" value="{{ csrf }}">
 
   <div class="row">

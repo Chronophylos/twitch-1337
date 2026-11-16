@@ -45,13 +45,13 @@
     </div>
     {% call m::num_row_bounded("ai_emotes", "ai_emotes_refresh_interval_secs", "refresh_interval_secs",
        "How often the bot re-pulls the emote list.",
-       e.refresh_interval_secs, 3600, "s", 60, 86400) %}{% endcall %}
+       e.refresh_interval_secs, 3600, "s", 60, 86400, "ai_emotes_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_emotes", "ai_emotes_max_prompt_emotes", "max_prompt_emotes",
        "Max emotes injected into a single prompt.",
-       e.max_prompt_emotes, 20, "", 1, 200) %}{% endcall %}
+       e.max_prompt_emotes, 20, "", 1, 200, "ai_emotes_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_emotes", "ai_emotes_min_baseline_emotes", "min_baseline_emotes",
        "Minimum baseline emotes retained even when filtering by recency.",
-       e.min_baseline_emotes, 4, "", 0, 200) %}{% endcall %}
+       e.min_baseline_emotes, 4, "", 0, 200, "ai_emotes_enabled") %}{% endcall %}
     <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai_emotes_enabled">
       {% call m::row_head("pinned_emotes", "Emote codes (one per line) always injected into the prompt — the persona's reflex emotes. Names not in the glossary are dropped; total must not exceed max_prompt_emotes.") %}{% endcall %}
       <div class="row-control-cell">
@@ -66,7 +66,7 @@
     {% let emotes_base_url = e.base_url.as_deref().unwrap_or("") %}
     {% call m::text_row("ai_emotes", "ai_emotes_base_url", "base_url",
        "Override emote-source base URL. Empty = built-in default.",
-       emotes_base_url, "", "(built-in default)") %}{% endcall %}
+       emotes_base_url, "", "(built-in default)", "ai_emotes_enabled") %}{% endcall %}
     {% when None %}
     <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai_emotes_enabled">
       {% call m::row_head("include_global", "Include Twitch/3rd-party global emotes (not just channel-specific).") %}{% endcall %}
@@ -86,13 +86,13 @@
     </div>
     {% call m::num_row_bounded("ai_emotes", "ai_emotes_refresh_interval_secs", "refresh_interval_secs",
        "How often the bot re-pulls the emote list.",
-       3600, 3600, "s", 60, 86400) %}{% endcall %}
+       3600, 3600, "s", 60, 86400, "ai_emotes_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_emotes", "ai_emotes_max_prompt_emotes", "max_prompt_emotes",
        "Max emotes injected into a single prompt.",
-       20, 20, "", 1, 200) %}{% endcall %}
+       20, 20, "", 1, 200, "ai_emotes_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_emotes", "ai_emotes_min_baseline_emotes", "min_baseline_emotes",
        "Minimum baseline emotes retained even when filtering by recency.",
-       4, 4, "", 0, 200) %}{% endcall %}
+       4, 4, "", 0, 200, "ai_emotes_enabled") %}{% endcall %}
     <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai_emotes_enabled">
       {% call m::row_head("pinned_emotes", "Emote codes (one per line) always injected into the prompt — the persona's reflex emotes. Names not in the glossary are dropped; total must not exceed max_prompt_emotes.") %}{% endcall %}
       <div class="row-control-cell">
@@ -107,7 +107,7 @@ okjj</textarea>
     </div>
     {% call m::text_row("ai_emotes", "ai_emotes_base_url", "base_url",
        "Override emote-source base URL. Empty = built-in default.",
-       "", "", "(built-in default)") %}{% endcall %}
+       "", "", "(built-in default)", "ai_emotes_enabled") %}{% endcall %}
     {% endmatch %}
   </div>
 </section>

@@ -11,7 +11,7 @@
 {% if let Some(e) = error %}<div class="error">{{ e }}</div>{% endif %}
 
 <div class="form-card">
-  <form method="post" action="{% if is_new %}/pings{% else %}/pings/{{ name }}{% endif %}">
+  <form method="post" action="{% if is_new %}/pings{% else %}/pings/{{ name }}{% endif %}" data-unsaved-guard>
     <input type="hidden" name="_csrf" value="{{ csrf }}">
     {% if is_new %}
     <div class="field">

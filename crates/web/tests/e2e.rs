@@ -129,7 +129,7 @@ async fn failing_htmx_delete_shows_toast() {
     s.close().await;
 }
 
-/// Create a disabled interval schedule, toggle it on, then delete it.
+/// Create an interval schedule (enabled by default), toggle it off, delete it.
 #[tokio::test]
 async fn schedules_create_toggle_delete() {
     let s = E2eSession::start().await;
@@ -140,22 +140,21 @@ async fn schedules_create_toggle_delete() {
     s.fill("textarea[name=\"message\"]", "daily standup time")
         .await;
     s.fill("input[name=\"interval_every\"]", "01:00").await;
-    // `enabled` left unchecked => created paused.
+    // `enabled` left untouched => the new-schedule default (checked) applies.
     s.click("button[type=\"submit\"].btn.primary").await;
 
-    // Card appears, paused. CSS `text-transform` may uppercase the rendered
+    // Card appears, active. CSS `text-transform` may uppercase the rendered
     // "off"/"on", so normalise to lowercase before comparing.
     let toggle_btn = "article.schedule-card form.card-toggle button.toggle-switch";
     let before = s.wait_text(toggle_btn).await.to_lowercase();
-    assert_eq!(before, "off", "new schedule should start disabled");
+    assert_eq!(before, "on", "new schedule should start enabled");
 
-    // Toggle on (full form POST + redirect to /schedules).
+    // Toggle off (full form POST + redirect to /schedules). The paused card
+    // only exists after the reload, so waiting for it confirms the POST.
     s.click(toggle_btn).await;
-    // Wait for the paused card to disappear — confirms the page has reloaded
-    // after the POST and the schedule is now enabled.
-    s.wait_gone("article.schedule-card.paused").await;
+    s.wait_for("article.schedule-card.paused").await;
     let after = s.wait_text(toggle_btn).await.to_lowercase();
-    assert_eq!(after, "on", "toggle did not enable the schedule");
+    assert_eq!(after, "off", "toggle did not disable the schedule");
 
     // Delete (JS confirm auto-accepted).
     s.click("form.js-delete-schedule[data-name=\"standup\"] button.chip.danger")
@@ -186,6 +185,87 @@ async fn settings_save_cooldown() {
         .unwrap_or_default()
         .unwrap_or_default();
     assert_eq!(val, "47", "cooldown_ai did not persist");
+
+    s.close().await;
+}
+
+/// Discard restores the load-time value in place. A reload would let
+/// Firefox's form restoration put the edit straight back, so the page must
+/// survive the click (the marker set before it is still there).
+#[tokio::test]
+async fn settings_discard_restores_baseline() {
+    let s = E2eSession::start_as_owner().await;
+    s.goto("/settings").await;
+
+    let input = "input[name=\"cooldown_ai\"]";
+    let baseline = s
+        .wait_for(input)
+        .await
+        .prop("value")
+        .await
+        .unwrap_or_default()
+        .unwrap_or_default();
+    assert_ne!(baseline, "47", "fixture default collides with the edit");
+
+    s.fill(input, "47").await;
+    s.wait_for("#settings-save-bar.visible").await;
+    s.exec("window.__e2eMarker = true;").await;
+
+    s.click("#settings-save-bar [data-discard]").await;
+
+    s.wait_gone("#settings-save-bar.visible").await;
+    let restored = s
+        .find(input)
+        .await
+        .prop("value")
+        .await
+        .unwrap_or_default()
+        .unwrap_or_default();
+    assert_eq!(restored, baseline, "discard must restore the baseline");
+    assert_eq!(
+        s.eval("return window.__e2eMarker === true;").await,
+        serde_json::Value::Bool(true),
+        "discard must not reload the page"
+    );
+
+    s.close().await;
+}
+
+/// Ctrl+S in the memory editor submits the form and the edit persists.
+#[tokio::test]
+async fn memory_editor_ctrl_s_saves() {
+    use fantoccini::key::Key;
+
+    let s = E2eSession::start().await;
+    s.goto("/memory/lore").await;
+
+    let body = "textarea[name=\"body\"]";
+    s.wait_and_fill(body, "saved via keyboard shortcut").await;
+    // Non-Mac platform in headless Chrome, so the hint reads Ctrl.
+    assert_eq!(s.wait_text("kbd[data-mod-key]").await, "Ctrl");
+    s.exec("window.__e2eMarker = true;").await;
+
+    s.find(body)
+        .await
+        .send_keys(&(Key::Control + "s"))
+        .await
+        .expect("send ctrl+s");
+
+    // The marker disappears once the POST navigated to a fresh document.
+    s.wait_js("return document.readyState === 'complete' && window.__e2eMarker === undefined;")
+        .await;
+    s.goto("/memory/lore").await;
+    let saved = s
+        .wait_for(body)
+        .await
+        .prop("value")
+        .await
+        .unwrap_or_default()
+        .unwrap_or_default();
+    assert!(
+        saved.contains("saved via keyboard shortcut"),
+        "Ctrl+S did not save; body was {saved:?}"
+    );
 
     s.close().await;
 }

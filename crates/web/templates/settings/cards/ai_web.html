@@ -28,41 +28,41 @@
     {% when Some with (w) %}
     {% call m::text_row("ai_web", "ai_web_base_url", "base_url",
        "SearXNG /search endpoint.",
-       w.base_url, "http://localhost:8080/search", "http://localhost:8080/search") %}{% endcall %}
+       w.base_url, "http://localhost:8080/search", "http://localhost:8080/search", "ai_web_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_timeout", "timeout",
        "Per-request timeout.",
-       w.timeout, 15, "s", 1, 120) %}{% endcall %}
+       w.timeout, 15, "s", 1, 120, "ai_web_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_max_results", "max_results",
        "Results returned to the model per query.",
-       w.max_results, 5, "", 1, 50) %}{% endcall %}
+       w.max_results, 5, "", 1, 50, "ai_web_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_max_rounds", "max_rounds",
        "Maximum search tool calls per !ai turn.",
-       w.max_rounds, 3, "", 1, 16) %}{% endcall %}
+       w.max_rounds, 3, "", 1, 16, "ai_web_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_cache_ttl_secs", "cache_ttl_secs",
        "How long a cached search is reused.",
-       w.cache_ttl_secs, 300, "s", 0, 86400) %}{% endcall %}
+       w.cache_ttl_secs, 300, "s", 0, 86400, "ai_web_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_cache_capacity", "cache_capacity",
        "Max entries in the LRU search cache.",
-       w.cache_capacity, 100, "", 1, 10000) %}{% endcall %}
+       w.cache_capacity, 100, "", 1, 10000, "ai_web_enabled") %}{% endcall %}
     {% when None %}
     {% call m::text_row("ai_web", "ai_web_base_url", "base_url",
        "SearXNG /search endpoint.",
-       "http://localhost:8080/search", "http://localhost:8080/search", "http://localhost:8080/search") %}{% endcall %}
+       "http://localhost:8080/search", "http://localhost:8080/search", "http://localhost:8080/search", "ai_web_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_timeout", "timeout",
        "Per-request timeout.",
-       15, 15, "s", 1, 120) %}{% endcall %}
+       15, 15, "s", 1, 120, "ai_web_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_max_results", "max_results",
        "Results returned to the model per query.",
-       5, 5, "", 1, 50) %}{% endcall %}
+       5, 5, "", 1, 50, "ai_web_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_max_rounds", "max_rounds",
        "Maximum search tool calls per !ai turn.",
-       3, 3, "", 1, 16) %}{% endcall %}
+       3, 3, "", 1, 16, "ai_web_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_cache_ttl_secs", "cache_ttl_secs",
        "How long a cached search is reused.",
-       300, 300, "s", 0, 86400) %}{% endcall %}
+       300, 300, "s", 0, 86400, "ai_web_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_cache_capacity", "cache_capacity",
        "Max entries in the LRU search cache.",
-       100, 100, "", 1, 10000) %}{% endcall %}
+       100, 100, "", 1, 10000, "ai_web_enabled") %}{% endcall %}
     {% endmatch %}
   </div>
 </section>

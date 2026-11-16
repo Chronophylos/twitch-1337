@@ -324,3 +324,57 @@ async fn edit_validation_failure_reopens_form_with_new_name() {
         "edit form for new name 'keep' must reopen on validation failure"
     );
 }
+
+/// Schedule validation rejects `/`, `%`, `#` and friends, but other names
+/// still need percent-encoding in a path (`;`, `<`, non-ASCII). The rendered
+/// edit action must round-trip through the router to the same row.
+#[tokio::test]
+async fn edit_form_action_round_trips_names_needing_encoding() {
+    install_crypto();
+    let name = "grüße;<x>";
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_schedules(
+        &state,
+        vec![interval_schedule(name, "hi"), interval_schedule("a", "hi")],
+    )
+    .await;
+    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let app = build_router(state.clone());
+
+    let req = Request::builder()
+        .uri(format!("/schedules?edit={}", urlencoding::encode(name)))
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let html = body_string(app.clone().oneshot(req).await.unwrap()).await;
+    let action = html
+        .split("action=\"")
+        .skip(1)
+        .filter_map(|s| s.split('"').next())
+        .find(|a| a.ends_with("/edit"))
+        .unwrap_or_else(|| panic!("no edit form action rendered; body was: {html}"))
+        .to_owned();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(&action)
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(interval_form(&bare_csrf, "renamed", "hi")))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "POST {action}");
+    let mut names: Vec<_> = state
+        .settings
+        .load()
+        .schedules
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        ["a", "renamed"],
+        "POST {action} must rename {name:?}"
+    );
+}

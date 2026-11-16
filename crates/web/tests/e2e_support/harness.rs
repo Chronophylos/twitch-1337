@@ -256,6 +256,30 @@ impl E2eSession {
             .unwrap_or_else(|e| panic!("exec {script}: {e}"));
     }
 
+    /// Run a synchronous script in the page and return its result.
+    pub async fn eval(&self, js: &str) -> serde_json::Value {
+        self.client
+            .execute(js, vec![])
+            .await
+            .unwrap_or_else(|e| panic!("eval {js}: {e}"))
+    }
+
+    /// Wait until `js` (a script that `return`s a value) yields `true`.
+    /// Script errors count as "not yet": polling across a navigation can hit
+    /// a destroyed execution context.
+    pub async fn wait_js(&self, js: &str) {
+        let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
+        loop {
+            if let Ok(serde_json::Value::Bool(true)) = self.client.execute(js, vec![]).await {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("wait_js {js}: not true after {WAIT_TIMEOUT:?}");
+            }
+            tokio::time::sleep(WAIT_POLL).await;
+        }
+    }
+
     /// Close the browser and stop the server.
     pub async fn close(self) {
         let _ = self.client.close().await;

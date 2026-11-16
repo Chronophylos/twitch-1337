@@ -599,6 +599,54 @@ async fn edit_rename_with_rejected_field_reopens_under_the_original_name_then_su
     assert_eq!(settings.ai.aurora.profile, "renamed");
 }
 
+/// Profile names are only checked for being non-blank. The rendered edit
+/// action must reach the same profile through the router when the name holds
+/// `/`, `%` or `#`, instead of 404ing or matching a different profile.
+#[tokio::test]
+async fn edit_form_action_round_trips_names_with_reserved_chars() {
+    install_crypto();
+    let name = "a/b 50%#x";
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile(name), profile("a")], "a").await;
+    let (sid, csrf_cookie, bare_csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let app = build_router(state.clone());
+
+    let req = Request::builder()
+        .uri(format!("/ai-profiles?edit={}", urlencoding::encode(name)))
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let html = body_string(app.clone().oneshot(req).await.unwrap()).await;
+    let action = html
+        .split("action=\"")
+        .skip(1)
+        .filter_map(|s| s.split('"').next())
+        .find(|a| a.ends_with("/edit"))
+        .unwrap_or_else(|| panic!("no edit form action rendered; body was: {html}"))
+        .to_owned();
+
+    let body = format!(
+        "_csrf={csrf}&name=renamed&provider=open_router&model=m2&timeout=30&key=k",
+        csrf = urlencoding::encode(&bare_csrf),
+    );
+    let res = post_form(app, &sid, &csrf_cookie, &action, body).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "POST {action}");
+    let settings = state.settings.load();
+    let mut names: Vec<_> = settings
+        .ai
+        .profiles
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        ["a", "renamed"],
+        "POST {action} must rename {name:?}"
+    );
+}
+
 fn decision(name: &str) -> AiProfile {
     AiProfile {
         kind: twitch_1337_core::settings::ProfileKind::Decision,

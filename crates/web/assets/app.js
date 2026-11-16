@@ -12,7 +12,17 @@ document.body.addEventListener('htmx:configRequest', (evt) => {
   if (!root) return;
   const labelEl = root.querySelector('.timer-label');
   const clockEl = root.querySelector('.timer-clock');
+  const tzEl = root.querySelector('.timer-tz');
   if (!labelEl || !clockEl) return;
+
+  // en-GB names Europe/Berlin "CET" / "CEST"; en-US would say "GMT+1".
+  const tzFmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Berlin',
+    timeZoneName: 'short',
+  });
+  function berlinTzAbbr(d) {
+    return tzFmt.formatToParts(d).find((p) => p.type === 'timeZoneName')?.value ?? '';
+  }
 
   const fmt = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/Berlin',
@@ -33,7 +43,9 @@ document.body.addEventListener('htmx:configRequest', (evt) => {
   }
 
   function tick() {
-    const [h, m, s] = berlinHMS(new Date());
+    const now = new Date();
+    if (tzEl) tzEl.textContent = berlinTzAbbr(now);
+    const [h, m, s] = berlinHMS(now);
     const armed = h === 13 && m === 37;
     if (armed) {
       root.classList.add('armed');
@@ -90,6 +102,9 @@ document.addEventListener(
   });
 })();
 
+// Predicates that report unsaved edits; consulted on `beforeunload`.
+const unsavedGuards = [];
+
 (function settingsPage() {
   const form = document.getElementById('settings-form');
   const saveBar = document.getElementById('settings-save-bar');
@@ -100,6 +115,9 @@ document.addEventListener(
   const previewEl = saveBar.querySelector('[data-preview]');
   const discardBtn = saveBar.querySelector('[data-discard]');
 
+  // Baselines are captured at load. `#settings-form` carries
+  // autocomplete="off" so Firefox can't restore pre-reload edits before this
+  // runs and have them mistaken for the saved values.
   const rows = Array.from(form.querySelectorAll('.settings-row'))
     .map((row) => {
       const inputs = Array.from(row.querySelectorAll('input[name], select[name], textarea[name]'));
@@ -109,18 +127,23 @@ document.addEventListener(
       const baseline = isRadio
         ? (inputs.find((i) => i.checked)?.value ?? '')
         : primary.type === 'checkbox' ? (primary.checked ? 'true' : 'false') : primary.value;
+      const pretty = row.querySelector('.row-pretty');
       return {
         el: row,
         input: primary,
         inputs,
+        initial: inputs.map((i) => ({ checked: i.checked, value: i.value })),
         isRadio,
         reset: row.querySelector('.row-reset'),
-        pretty: row.querySelector('.row-pretty'),
+        pretty,
+        prettyHtml: pretty?.innerHTML,
         section: row.dataset.section,
         baseline,
       };
     })
     .filter((r) => r);
+  let dirtyCount = 0;
+  unsavedGuards.push(() => dirtyCount > 0);
 
 
   const BYTES_UNIT_FACTOR = { B: 1, KiB: 1024, MiB: 1024 * 1024 };
@@ -267,6 +290,7 @@ document.addEventListener(
     }
 
     const total = dirtyKeys.length;
+    dirtyCount = total;
     countEl.textContent = String(total);
     nounEl.textContent = total === 1 ? 'change' : 'changes';
     const preview = dirtyKeys.slice(0, 3).join(' · ');
@@ -426,7 +450,24 @@ document.addEventListener(
     r.input.focus();
   });
 
-  discardBtn?.addEventListener('click', () => location.reload());
+  // Restore every control to its load-time value in place. A reload would
+  // let Firefox's form restoration put the edits straight back.
+  discardBtn?.addEventListener('click', () => {
+    for (const r of rows) {
+      r.inputs.forEach((input, i) => {
+        input.checked = r.initial[i].checked;
+        input.value = r.initial[i].value;
+      });
+      if (r.pretty && r.prettyHtml !== undefined) r.pretty.innerHTML = r.prettyHtml;
+    }
+    for (const b of bytesRows) syncBytesRow(b);
+    for (const m of magRows) syncMagRow(m);
+    for (const seg of form.querySelectorAll('.segmented .segment')) {
+      seg.classList.toggle('is-active', !!seg.querySelector('input')?.checked);
+    }
+    for (const card of cards) syncCardEnabled(card);
+    refreshAll();
+  });
 
   if (cards.length && 'IntersectionObserver' in window) {
     const byId = new Map(navItems.map((el) => [el.dataset.target, el]));
@@ -569,3 +610,79 @@ document.addEventListener('click', (evt) => {
   if (history.length > 1) history.back();
   else location.assign('/');
 });
+
+// ─── Unsaved-changes guard ───────────────────────────────────────────────────
+// `form[data-unsaved-guard]` is dirty when any enabled, user-editable control
+// differs from its server-rendered default (`defaultValue` / `defaultChecked`
+// / `defaultSelected`). Hidden inputs are skipped: they aren't user-editable.
+function formDirty(form) {
+  const radioGroups = new Map();
+  for (const el of form.elements) {
+    if (el.type === 'radio' && el.name) {
+      if (!radioGroups.has(el.name)) radioGroups.set(el.name, []);
+      radioGroups.get(el.name).push(el);
+      continue;
+    }
+    if (!el.name || el.type === 'hidden' || el.matches(':disabled')) continue;
+    if (el.type === 'checkbox') {
+      if (el.checked !== el.defaultChecked) return true;
+    } else if (el instanceof HTMLSelectElement && el.multiple) {
+      if (Array.from(el.options).some((o) => o.selected !== o.defaultSelected)) return true;
+    } else if (el instanceof HTMLSelectElement) {
+      // No `selected` attribute means the browser shows the first option.
+      const def = Array.from(el.options).find((o) => o.defaultSelected) ?? el.options[0];
+      if (el.value !== (def?.value ?? '')) return true;
+    } else if ('defaultValue' in el && el.value !== el.defaultValue) {
+      return true;
+    }
+  }
+  // A radio group spans the whole form, disabled fieldsets included (the
+  // profile form repeats `reasoning_effort` per provider). The parser leaves
+  // only the last `checked` radio of a group checked, so that is the default.
+  for (const radios of radioGroups.values()) {
+    const def = radios.findLast((r) => r.defaultChecked);
+    const cur = radios.find((r) => r.checked);
+    if (def !== cur) return true;
+  }
+  return false;
+}
+for (const form of document.querySelectorAll('form[data-unsaved-guard]')) {
+  unsavedGuards.push(() => formDirty(form));
+}
+
+let leavingViaSubmit = false;
+// Only submitting a guarded form saves its edits; any other POST on the page
+// (a card toggle, "Add member") would navigate away and drop them. Bubble
+// phase on window runs after per-form handlers, so a cancelled submit (e.g.
+// a declined delete confirm) keeps the guard armed.
+window.addEventListener('submit', (evt) => {
+  if (evt.defaultPrevented) return;
+  if (evt.target.matches?.('#settings-form, form[data-unsaved-guard]')) leavingViaSubmit = true;
+});
+// A page restored from the back/forward cache keeps its JS state; re-arm.
+window.addEventListener('pageshow', (evt) => {
+  if (evt.persisted) leavingViaSubmit = false;
+});
+window.addEventListener('beforeunload', (evt) => {
+  if (leavingViaSubmit || !unsavedGuards.some((dirty) => dirty())) return;
+  evt.preventDefault();
+  evt.returnValue = '';
+});
+
+// ─── Ctrl/Cmd+S submits `form[data-save-shortcut]` ───────────────────────────
+(function saveShortcut() {
+  const form = document.querySelector('form[data-save-shortcut]');
+  if (!form) return;
+  const platform = navigator.userAgentData?.platform ?? navigator.platform ?? '';
+  const isMac = /mac|iphone|ipad/i.test(platform);
+  for (const el of document.querySelectorAll('[data-mod-key]')) {
+    el.textContent = isMac ? '⌘' : 'Ctrl';
+  }
+  document.addEventListener('keydown', (evt) => {
+    // Chrome fires key-less keydown events for autofill.
+    if (evt.key?.toLowerCase() !== 's' || evt.altKey || evt.shiftKey) return;
+    if (!(isMac ? evt.metaKey : evt.ctrlKey)) return;
+    evt.preventDefault();
+    form.requestSubmit();
+  });
+})();
