@@ -11,11 +11,11 @@ pub mod emotes;
 pub mod flights;
 pub mod health;
 pub mod leaderboard;
+pub mod logs;
 pub mod memory;
 pub mod pings;
 pub mod schedules;
 pub mod settings;
-pub mod stubs;
 
 pub(crate) fn render<T: Template>(tpl: &T) -> Result<Response, WebError> {
     render_with(StatusCode::OK, tpl)

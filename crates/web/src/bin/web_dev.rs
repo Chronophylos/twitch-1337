@@ -42,7 +42,7 @@ use twitch_1337_web::{bind, build_router, serve_app};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    install_tracing();
+    let log_ring = install_tracing();
     install_crypto_provider();
 
     let bind_addr: SocketAddr = env::var("BIND_ADDR")
@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
         "web-dev starting (StubHelix, /_dev/login, no IRC) — DO NOT EXPOSE",
     );
 
-    let state = WebState::for_tests(WebTestConfig {
+    let mut state = WebState::for_tests(WebTestConfig {
         helix: Arc::new(StubHelix),
         clock: Arc::new(SystemClock),
         ping_dir: data_dir.clone(),
@@ -73,6 +73,8 @@ async fn main() -> Result<()> {
         public_url: format!("http://{bind_addr}"),
     })
     .await?;
+    // Feed the dashboard `/logs` page from this process's real subscriber.
+    state.log_ring = log_ring;
 
     // Inject the fixed dev session (bootstrap owner via DEV_USER_ID above so
     // the role-recheck gate admits it). Stored in the session table, not

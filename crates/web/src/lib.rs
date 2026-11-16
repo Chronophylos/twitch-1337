@@ -10,7 +10,8 @@
 //! - **Viewer** (allowlisted Twitch login): `/`, `/pings` (read), `/leaderboard`, `/flights`.
 //!   Read-only — non-GET/HEAD methods are rejected by `viewer_method_guard`.
 //! - **Mod** (broadcaster / hidden admins / helix moderators): pings mutations,
-//!   `/memory/{soul,lore,users,state}` CRUD, stubs.
+//!   `/memory/{soul,lore,users,state}` CRUD, schedules, emotes.
+//! - **Owner** (bootstrap `[twitch].owner`): `/settings`, `/ai-profiles`, `/logs`.
 
 pub mod auth;
 pub mod clock;
@@ -171,7 +172,6 @@ pub fn build_router(state: WebState) -> Router {
         .merge(routes::memory::router())
         .merge(routes::schedules::router())
         .merge(routes::emotes::router())
-        .merge(routes::stubs::router())
         .route_layer(axum::middleware::from_fn_with_state(
             mod_state.clone(),
             auth::require_mod,
@@ -182,6 +182,7 @@ pub fn build_router(state: WebState) -> Router {
     let owner_only = Router::new()
         .merge(routes::settings::owner_router())
         .merge(routes::ai_profiles::router())
+        .merge(routes::logs::router())
         .route_layer(axum::middleware::from_fn_with_state(
             owner_state.clone(),
             auth::require_owner,

@@ -323,6 +323,8 @@ Integration-testable via `TestBotBuilder` in `crates/core/tests/common/`. Core i
 
 `crates/core/src/aviation/tracker/debug_journal.rs`: `DEBUG_JOURNAL_KEEP_FILES=30` (daily JSONL files retained under `$DATA_DIR/flight-tracker-debug/`; older pruned on tracker startup + date-rollover).
 
+`crates/core/src/util/log_ring.rs`: `LOG_RING_CAPACITY=2000` (INFO+ tracing events kept in memory for the owner-only `/logs` page; values clamped to 2048 chars; a restart clears it, stdout stays the record).
+
 ## Binary / Docker
 
 Musl static build: `cargo build --release --target x86_64-unknown-linux-musl` (~29 MB stripped; works on Alpine/busybox, `FROM scratch` image). `[profile.release] strip = "symbols"` keeps the image ≈ binary size. rustls + **ring** only (no OpenSSL, no aws-lc — see ADR-0007); call `install_crypto_provider()` before any TLS client. Multi-stage Dockerfile with cargo-chef.

@@ -100,6 +100,9 @@ pub struct WebState {
     /// Shared chat-recap handle (same `Arc` the bot's recap batcher writes
     /// through). `None` when AI / LLM is disabled at startup.
     pub recap: Option<Arc<RecapHandle>>,
+    /// Recent INFO+ tracing events (same ring the bin's subscriber fills).
+    /// Read by the owner-only `/logs` page.
+    pub log_ring: Arc<twitch_1337_core::util::log_ring::LogRing>,
 }
 
 /// Web-owned construction inputs for [`WebState::new`]: everything the
@@ -158,6 +161,7 @@ impl WebState {
             settings_store: core.settings_store.clone(),
             telemetry: core.telemetry.clone(),
             recap: core.recap.clone(),
+            log_ring: core.log_ring.clone(),
         }
     }
     /// Stub-backed dashboard state for tests and the dev-login bin: owns its
@@ -242,6 +246,7 @@ impl WebState {
             settings_store,
             telemetry,
             recap: None,
+            log_ring: Arc::default(),
         })
     }
 }

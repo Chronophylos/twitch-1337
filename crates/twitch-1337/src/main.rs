@@ -75,7 +75,7 @@ pub async fn main() -> Result<()> {
     }
 
     color_eyre::install()?;
-    install_tracing();
+    let log_ring = install_tracing();
     install_crypto_provider();
     let config = load_configuration().await?;
 
@@ -343,6 +343,7 @@ pub async fn main() -> Result<()> {
         echo,
         suspension,
         recap: recap_handle,
+        log_ring,
     };
     let web_spawner = if config.web.enabled {
         Some(

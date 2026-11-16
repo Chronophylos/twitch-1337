@@ -201,6 +201,10 @@ pub struct Services {
 
     /// Shared chat-recap handle. `None` when AI / LLM is disabled.
     pub recap: Option<Arc<crate::ai::recap::RecapHandle>>,
+
+    /// Recent INFO+ tracing events, filled by the layer `install_tracing`
+    /// installs. Read by the dashboard `/logs` page. Tests pass an empty ring.
+    pub log_ring: Arc<crate::util::log_ring::LogRing>,
 }
 
 /// Pre-spawned web tasks transferred to the lifecycle supervisor.

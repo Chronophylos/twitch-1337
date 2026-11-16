@@ -9,6 +9,7 @@ mod emotes_routes;
 mod flights_route;
 mod healthz;
 mod leaderboard_route;
+mod logs_route;
 mod memory_read;
 mod memory_write;
 mod pings_filters;

@@ -632,6 +632,7 @@ impl TestBotBuilder {
                 echo,
                 suspension,
                 recap: recap_handle.clone(),
+                log_ring: Default::default(),
             };
             let web_spawner = if self.config.web.enabled {
                 let bind_addr: std::net::SocketAddr = self
