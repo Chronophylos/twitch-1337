@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Logs — twitch-1337{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Logs</h1>
+    <p class="page-sub">The last 2000 events at INFO and above, live. Kept in memory only — a restart clears them; stdout keeps the full record.</p>
+  </div>
+</div>
+
+<form class="filters log-filters" method="get" action="/logs">
+  <label class="filter-field">
+    <span class="filter-label">Level</span>
+    <select name="level" class="input">
+      <option value="info"{% if level == "info" %} selected{% endif %}>≥ INFO</option>
+      <option value="warn"{% if level == "warn" %} selected{% endif %}>≥ WARN</option>
+      <option value="error"{% if level == "error" %} selected{% endif %}>ERROR</option>
+    </select>
+  </label>
+  <label class="filter-field">
+    <span class="filter-label">Target</span>
+    <input type="text" name="target" class="input" value="{{ target }}" list="log-targets" placeholder="prefix" autocomplete="off" spellcheck="false">
+  </label>
+  <datalist id="log-targets">
+    {% for t in targets %}<option value="{{ t }}">{% endfor %}
+  </datalist>
+  <label class="filter-field">
+    <span class="filter-label">Text</span>
+    <input type="text" name="q" class="input" value="{{ q }}" placeholder="substring" autocomplete="off" spellcheck="false">
+  </label>
+  <button type="submit" class="btn primary">Filter</button>
+  <span class="filters-spacer"></span>
+  <button type="button" class="btn" data-log-pause aria-pressed="false">Pause</button>
+</form>
+
+<div class="log-tail">
+  <div id="log-rows" class="log-rows" role="log">{%- include "logs/_rows.html" -%}</div>
+  <div class="empty log-empty">No events{% if level != "info" || !target.is_empty() || !q.is_empty() %} match these filters{% endif %} yet.</div>
+</div>
+{% include "logs/_poller.html" %}
+{% endblock %}

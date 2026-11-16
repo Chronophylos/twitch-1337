@@ -737,3 +737,36 @@ document.addEventListener('submit', (evt) => {
     render();
   }
 })();
+
+// ─── Logs tail (/logs) ───────────────────────────────────────────────────────
+// `[data-log-poll]` polls every 2s. Ticks are skipped while the tab is hidden
+// or Pause is pressed; the `after=` cursor catches up on the next live tick.
+// The view stays pinned to the newest row if it was at the bottom, and the
+// DOM is capped at the server ring's size.
+(function logsTail() {
+  const rows = document.getElementById('log-rows');
+  if (!rows) return;
+  const MAX_ROWS = 2000;
+  const pause = document.querySelector('[data-log-pause]');
+  let paused = false;
+  pause?.addEventListener('click', () => {
+    paused = !paused;
+    pause.setAttribute('aria-pressed', String(paused));
+    pause.textContent = paused ? 'Resume' : 'Pause';
+  });
+  document.body.addEventListener('htmx:configRequest', (evt) => {
+    if (!evt.target.closest?.('[data-log-poll]')) return;
+    if (paused || document.hidden) evt.preventDefault();
+  });
+  let pinned = true;
+  document.body.addEventListener('htmx:beforeSwap', (evt) => {
+    if (evt.detail.target !== rows) return;
+    pinned = rows.scrollHeight - rows.scrollTop - rows.clientHeight < 24;
+  });
+  document.body.addEventListener('htmx:afterSwap', (evt) => {
+    if (evt.detail.target !== rows) return;
+    while (rows.childElementCount > MAX_ROWS) rows.firstElementChild.remove();
+    if (pinned) rows.scrollTop = rows.scrollHeight;
+  });
+  rows.scrollTop = rows.scrollHeight;
+})();

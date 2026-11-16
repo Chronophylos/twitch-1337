@@ -73,6 +73,8 @@ pub struct E2eSession {
     server: JoinHandle<()>,
     // Kept alive so the server's data dirs are not removed mid-test.
     _dirs: (tempfile::TempDir, tempfile::TempDir, tempfile::TempDir),
+    /// The server's tracing ring, so tests can feed the `/logs` page.
+    pub log_ring: std::sync::Arc<twitch_1337_core::util::log_ring::LogRing>,
 }
 
 impl E2eSession {
@@ -115,6 +117,7 @@ impl E2eSession {
         // accepts the domain: Chrome rejects IP-address domains with
         // "invalid argument: invalid 'domain'".
         let base_url = format!("http://localhost:{port}");
+        let log_ring = state.log_ring.clone();
         let app = build_router(state);
         let lifecycle = Lifecycle::new();
         let server = tokio::spawn({
@@ -172,6 +175,7 @@ impl E2eSession {
             lifecycle,
             server,
             _dirs: (d1, d2, d3),
+            log_ring,
         }
     }
 

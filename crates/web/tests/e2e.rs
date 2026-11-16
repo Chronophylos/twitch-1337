@@ -526,3 +526,64 @@ async fn memory_forget_character_sheet() {
 
     s.close().await;
 }
+
+/// `/logs` appends new ring entries via the 2s poll, and skips polling while
+/// paused or while the tab is hidden; the cursor catches up afterwards.
+#[tokio::test]
+async fn logs_tail_polls_and_pauses() {
+    let s = E2eSession::start_as_owner().await;
+    let push = |msg: &str| {
+        s.log_ring.push(
+            chrono::Utc::now(),
+            tracing::Level::INFO,
+            "e2e".to_owned(),
+            msg.to_owned(),
+            Vec::new(),
+        );
+    };
+    let row_present = |msg: &str| {
+        format!(
+            "return [...document.querySelectorAll('#log-rows .log-msg')]\
+             .some((el) => el.textContent.includes('{msg}'));"
+        )
+    };
+    let quiet = std::time::Duration::from_millis(3500);
+
+    push("snapshot-row");
+    s.goto("/logs").await;
+    s.wait_for("#log-rows .log-row").await;
+    assert!(s.source().await.contains("snapshot-row"));
+
+    push("polled-row");
+    s.wait_js(&row_present("polled-row")).await;
+
+    s.click("[data-log-pause]").await;
+    push("paused-row");
+    tokio::time::sleep(quiet).await;
+    assert_eq!(
+        s.eval(&row_present("paused-row")).await,
+        serde_json::Value::Bool(false),
+        "no polling while paused"
+    );
+    s.click("[data-log-pause]").await;
+    s.wait_js(&row_present("paused-row")).await;
+
+    s.exec("Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });")
+        .await;
+    push("hidden-row");
+    tokio::time::sleep(quiet).await;
+    assert_eq!(
+        s.eval(&row_present("hidden-row")).await,
+        serde_json::Value::Bool(false),
+        "no polling while the tab is hidden"
+    );
+    s.exec("delete document.hidden;").await;
+    s.wait_js(&row_present("hidden-row")).await;
+
+    let rows = s
+        .eval("return document.querySelectorAll('#log-rows .log-row').length;")
+        .await;
+    assert_eq!(rows, serde_json::json!(4), "each row appended exactly once");
+
+    s.close().await;
+}

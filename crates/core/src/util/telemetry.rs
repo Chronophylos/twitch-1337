@@ -1,5 +1,7 @@
 //! Tracing / observability initialisation.
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use chrono_tz::Europe::Berlin;
 use tracing_error::ErrorLayer;
@@ -7,6 +9,8 @@ use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
+
+use super::log_ring::{LogRing, LogRingLayer};
 
 /// `HH:MM:SS.mmm` in Europe/Berlin. The default `SystemTime` formatter emits
 /// the full RFC3339 timestamp on every line (~30 chars including date + tz +
@@ -28,22 +32,27 @@ impl FormatTime for ShortTimer {
     }
 }
 
-/// Install the global tracing subscriber (format + env-filter + error layer).
+/// Install the global tracing subscriber (format + env-filter + error layer +
+/// the dashboard's in-memory [`LogRing`]).
 ///
-/// Call once at program startup before any spans are created.
-pub fn install_tracing() {
+/// Call once at program startup before any spans are created. The returned
+/// ring backs the `/logs` page via `Services`.
+pub fn install_tracing() -> Arc<LogRing> {
     // `with_target(true)` surfaces the emitting module (e.g. `twitch_1337`
     // vs `twitch_irc` vs `reqwest`) so an unexpected line can be traced
     // back to a crate without grepping. Pair with `ShortTimer` for the
     // line-budget we just freed by dropping the date prefix.
     let fmt_layer = fmt::layer().with_target(true).with_timer(ShortTimer);
     let filter_layer = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let ring = Arc::new(LogRing::default());
 
     tracing_subscriber::registry()
         .with(filter_layer)
         .with(fmt_layer)
+        .with(LogRingLayer::new(ring.clone()))
         .with(ErrorLayer::default())
         .init();
+    ring
 }
 
 #[cfg(test)]

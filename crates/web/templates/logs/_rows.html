@@ -1,0 +1,13 @@
+{#- Log rows; appended to #log-rows by the poller. On a poll response (`oob`)
+    the poller rides along out-of-band so its `after=` cursor advances. -#}
+{%- for row in rows -%}
+<div class="log-row lvl-{{ row.level_class() }}" data-seq="{{ row.entry().seq }}">
+  <time class="log-time" title="{{ row.full_time() }}">{{ row.time() }}</time>
+  <span class="log-level">{{ row.level() }}</span>
+  <span class="log-target" title="{{ row.entry().target }}">{{ row.entry().target }}</span>
+  <span class="log-msg">{{ row.entry().message }}{% for (key, value) in row.entry().fields %} <span class="log-field"><span class="log-key">{{ key }}</span>={{ value }}</span>{% endfor %}</span>
+</div>
+{%- endfor -%}
+{%- if oob -%}
+{% include "logs/_poller.html" %}
+{%- endif -%}
