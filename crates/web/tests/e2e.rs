@@ -507,7 +507,12 @@ async fn memory_forget_character_sheet() {
     // The page reloads on submit, so record the prompt in sessionStorage.
     s.exec("window.confirm = (m) => { sessionStorage.setItem('confirm', m); return true; };")
         .await;
+    // This list already shows a `.flash` (the save above), so wait for the
+    // Forget POST to replace the document before reading the new one.
+    s.exec("window.__e2eMarker = true;").await;
     s.click(forget).await;
+    s.wait_js("return document.readyState === 'complete' && window.__e2eMarker === undefined;")
+        .await;
     let flash = s.wait_text(".flash").await;
     assert!(flash.contains("Doomed"), "flash: {flash}");
     let prompt = s.eval("return sessionStorage.getItem('confirm');").await;
