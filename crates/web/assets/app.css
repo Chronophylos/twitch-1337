@@ -613,6 +613,15 @@ kbd {
   white-space: nowrap;
 }
 .tr:hover .ping-name { color: var(--accent); }
+.ping-fired {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-4);
+  white-space: nowrap;
+}
 
 .tpl {
   font-family: var(--mono);

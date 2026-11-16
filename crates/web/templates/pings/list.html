@@ -30,16 +30,16 @@
   </div>
 </div>
 
-<div class="filters">
-  <button type="button" class="chip active">All <span class="chip-n">{{ total_pings }}</span></button>
-  <button type="button" class="chip">Mine</button>
-  <button type="button" class="chip">Public</button>
-  <button type="button" class="chip">Recently fired</button>
+<nav class="filters" aria-label="Filter and sort pings">
+  {% for chip in filter_chips %}
+  <a class="chip{% if chip.active %} active{% endif %}" href="{{ chip.href }}"{% if chip.active %} aria-current="page"{% endif %}>{{ chip.label }}{% if let Some(n) = chip.count %} <span class="chip-n">{{ n }}</span>{% endif %}</a>
+  {% endfor %}
   <div class="filters-spacer"></div>
-  {% if is_mod %}
-  <button type="button" class="chip ghost">Sort: A → Z ↓</button>
-  {% endif %}
-</div>
+  <span class="muted">Sort</span>
+  {% for chip in sort_chips %}
+  <a class="chip{% if chip.active %} active{% else %} ghost{% endif %}" href="{{ chip.href }}"{% if chip.active %} aria-current="true"{% endif %}>{{ chip.label }}</a>
+  {% endfor %}
+</nav>
 
 <div class="table pings">
   <div class="thead">
@@ -49,8 +49,10 @@
     <div class="th col-by">Created by</div>
     <div class="th col-act"></div>
   </div>
-  {% if rows.is_empty() %}
+  {% if total_pings == 0 %}
     <div class="empty">No pings yet — create the first one.</div>
+  {% else if rows.is_empty() %}
+    <div class="empty">No pings match this filter.</div>
   {% else %}
     <div class="tbody">
     {% for row in rows %}
@@ -58,6 +60,13 @@
         <div class="td col-name">
           <span class="ping-bullet">!</span>
           <a class="ping-name" href="/pings/{{ row.name }}">{{ row.name }}</a>
+          {% if show_fired %}
+            {% if let Some(ago) = row.last_fired %}
+            <span class="ping-fired" title="Last fired {{ ago }} · fire count {{ row.fire_count }}">{{ ago }} · {{ row.fire_count }}×</span>
+            {% else %}
+            <span class="ping-fired">never</span>
+            {% endif %}
+          {% endif %}
         </div>
         <div class="td col-tpl">
           <code class="tpl">{{ row.template }}</code>
@@ -67,7 +76,7 @@
             <span class="muted">—</span>
           {% else %}
             <span class="member-dots">
-              {% for _ in 0..4 %}{% if loop.index <= row.members %}<span class="dot"></span>{% endif %}{% endfor %}
+              {% for _ in 0..row.member_dots %}<span class="dot"></span>{% endfor %}
               <span class="member-count">{{ row.members }}</span>
             </span>
           {% endif %}

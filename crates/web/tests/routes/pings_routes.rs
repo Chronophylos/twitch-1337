@@ -651,8 +651,8 @@ async fn viewer_pings_list_has_no_mutation_controls() {
         "viewer must not see delete buttons; got {html}"
     );
     assert!(
-        !html.contains("Sort: A"),
-        "viewer must not see sort chip; got {html}"
+        html.contains(r#"href="/pings?sort=members""#),
+        "sorting is read-only, so viewers get the sort chips too; got {html}"
     );
 }
 
@@ -695,7 +695,7 @@ async fn mod_pings_list_shows_mutation_controls() {
         "mod must see delete buttons; got {html}"
     );
     assert!(
-        html.contains("Sort: A"),
-        "mod must see sort chip; got {html}"
+        html.contains(r#"href="/pings?sort=members""#),
+        "mod must see sort chips; got {html}"
     );
 }
