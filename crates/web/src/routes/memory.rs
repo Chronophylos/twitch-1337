@@ -45,6 +45,7 @@ pub fn router() -> Router<WebState> {
         // literal route wins over the dynamic capture.
         .route("/memory/users/new", get(new_user_form).post(create_user))
         .route("/memory/users/{user_id}", get(view_user).post(save_user))
+        .route("/memory/users/{user_id}/forget", post(forget_user))
         // `/memory/scratch/new` MUST precede `/memory/scratch/{slug}` so the
         // literal route wins over the dynamic capture.
         .route("/memory/scratch/new", get(new_scratch_form))
@@ -60,6 +61,10 @@ pub fn router() -> Router<WebState> {
 #[derive(Template)]
 #[template(path = "memory/tree.html")]
 struct TreeTpl {
+    soul_bytes: usize,
+    soul_cap: usize,
+    lore_bytes: usize,
+    lore_cap: usize,
     user_count: usize,
     scratch_count: usize,
     csrf: String,
@@ -126,6 +131,7 @@ struct ScratchRow {
 #[template(path = "memory/scratch_list.html")]
 struct ScratchListTpl {
     items: Vec<ScratchRow>,
+    flash: Option<String>,
     csrf: String,
     user_login: String,
     user_avatar_url: Option<String>,
@@ -153,6 +159,7 @@ struct UserRow {
 #[template(path = "memory/users_list.html")]
 struct UsersListTpl {
     items: Vec<UserRow>,
+    flash: Option<String>,
     csrf: String,
     user_login: String,
     user_avatar_url: Option<String>,
@@ -258,7 +265,7 @@ fn subtitle_for_kind(kind: &FileKind) -> &'static str {
     match kind {
         FileKind::Soul => "The bot's stable self-description. Read on every `!ai` turn.",
         FileKind::Lore => "Channel-wide history and running threads.",
-        FileKind::User { .. } => "Per-user character sheet.",
+        FileKind::User { .. } => "One user's Character Sheet.",
         FileKind::Scratch { .. } => "Ephemeral scratch note.",
     }
 }
@@ -318,6 +325,15 @@ async fn tree(
     Extension(session): Extension<Session>,
 ) -> Result<Response, WebError> {
     let store = &state.memory_store;
+    let soul = store
+        .read_kind(&FileKind::Soul)
+        .await
+        .map_err(|e| WebError::Internal(eyre::eyre!("read SOUL: {e}")))?;
+    let lore = store
+        .read_kind(&FileKind::Lore)
+        .await
+        .map_err(|e| WebError::Internal(eyre::eyre!("read LORE: {e}")))?;
+    let caps = store.caps();
     let users = store
         .list_users()
         .await
@@ -327,6 +343,10 @@ async fn tree(
         .await
         .map_err(|e| WebError::Internal(eyre::eyre!("list_scratch: {e}")))?;
     render(&TreeTpl {
+        soul_bytes: soul.body.len(),
+        soul_cap: caps.soul_bytes,
+        lore_bytes: lore.body.len(),
+        lore_cap: caps.lore_bytes,
         user_count: users.len(),
         scratch_count: states.len(),
         csrf: csrf::encode(&session.csrf_value),
@@ -430,6 +450,18 @@ async fn view_lore(
 async fn list_users(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
+    cookies: Cookies,
+) -> Result<Response, WebError> {
+    users_list_page(&state, &session, StatusCode::OK, flash::take(&cookies)).await
+}
+
+/// The Character Sheets list, also rendered (with a 404 status) when a
+/// Forget names a sheet that doesn't exist.
+async fn users_list_page(
+    state: &WebState,
+    session: &Session,
+    status: StatusCode,
+    flash: Option<String>,
 ) -> Result<Response, WebError> {
     let users: Vec<MemoryFile> = state
         .memory_store
@@ -444,7 +476,7 @@ async fn list_users(
             _ => None,
         })
         .collect();
-    let avatars = fetch_avatars(&state, &user_ids).await;
+    let avatars = fetch_avatars(state, &user_ids).await;
 
     let items = users
         .into_iter()
@@ -471,16 +503,20 @@ async fn list_users(
             }
         })
         .collect();
-    render(&UsersListTpl {
-        items,
-        csrf: csrf::encode(&session.csrf_value),
-        user_login: session.user_login.clone(),
-        user_avatar_url: session.avatar_url.clone(),
-        current_page: crate::nav::MEMORY_USERS,
-        is_mod: session.is_mod(),
-        is_broadcaster: session.is_broadcaster,
-        is_owner: matches!(session.role, crate::auth::Role::Owner),
-    })
+    render_with(
+        status,
+        &UsersListTpl {
+            items,
+            flash,
+            csrf: csrf::encode(&session.csrf_value),
+            user_login: session.user_login.clone(),
+            user_avatar_url: session.avatar_url.clone(),
+            current_page: crate::nav::MEMORY_USERS,
+            is_mod: session.is_mod(),
+            is_broadcaster: session.is_broadcaster,
+            is_owner: matches!(session.role, crate::auth::Role::Owner),
+        },
+    )
 }
 
 async fn view_user(
@@ -557,6 +593,7 @@ async fn create_user(
 async fn list_scratch(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
+    cookies: Cookies,
 ) -> Result<Response, WebError> {
     let items: Vec<MemoryFile> = state
         .memory_store
@@ -598,6 +635,7 @@ async fn list_scratch(
         .collect();
     render(&ScratchListTpl {
         items,
+        flash: flash::take(&cookies),
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
         user_avatar_url: session.avatar_url.clone(),
@@ -688,7 +726,7 @@ struct MemoryAuditEntry {
     ts: chrono::DateTime<chrono_tz::Tz>,
     actor_id: String,
     actor_login: String,
-    op: &'static str, // "write" | "create" | "delete"
+    op: &'static str, // "write" | "create" | "delete" | "forget"
     /// "soul" | "lore" | "user" | "scratch".
     ///
     /// Lines appended before the ADR-0003 rename (2026-07-16) use scratch's
@@ -887,6 +925,12 @@ async fn save_kind(
                 current_mtime_display: fmt_mtime_ms(current_mtime),
                 current_mtime,
                 draft: form.body,
+                show_user_fm: matches!(&kind, FileKind::User { .. }),
+                show_scratch_fm: matches!(&kind, FileKind::Scratch { .. }),
+                fm_username: form.fm_username,
+                fm_display_name: form.fm_display_name,
+                fm_created_by: form.fm_created_by,
+                fm_links: form.fm_links,
                 csrf: csrf_hex,
                 user_login: session.user_login.clone(),
                 user_avatar_url: session.avatar_url.clone(),
@@ -1245,4 +1289,81 @@ async fn delete_scratch(
     );
     flash::set(&cookies, &format!("scratch `{slug}` deleted"));
     Ok(Redirect::to("/memory/scratch").into_response())
+}
+
+/// Forget: delete one user's Character Sheet and nothing else (see
+/// CONTEXT.md). Mod-gated by the router layer; CSRF-checked here. An id with
+/// no sheet re-renders the list as a 404 with a flash.
+async fn forget_user(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    Path(user_id): Path<String>,
+    cookies: Cookies,
+    axum::Form(form): axum::Form<CsrfOnly>,
+) -> Result<Response, WebError> {
+    if !csrf::verify(&form.csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    if !is_valid_user_id(&user_id) {
+        return Err(WebError::Validation {
+            field: "user_id".into(),
+            msg: "must be numeric, 1-32 digits".into(),
+        });
+    }
+    // Read the name first so the flash can still say who was forgotten.
+    let mf = state
+        .memory_store
+        .read_kind(&FileKind::User {
+            user_id: user_id.clone(),
+        })
+        .await
+        .map_err(|e| WebError::Internal(eyre::eyre!("read_kind: {e}")))?;
+    let name = mf
+        .frontmatter
+        .display_name
+        .filter(|s| !s.is_empty())
+        .or(mf.frontmatter.username.filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| user_id.clone());
+    let existed = state
+        .memory_store
+        .forget_user(&user_id)
+        .await
+        .map_err(|e| WebError::Internal(eyre::eyre!("forget_user: {e}")))?;
+    let result = if existed { "ok" } else { "not_found" };
+    tracing::info!(
+        target: "twitch_1337_web",
+        user_id = %session.user_id,
+        user_login = %session.user_login,
+        action = "memory_forget",
+        target_label = "user",
+        target_id = %user_id,
+        result,
+    );
+    audit_memory(
+        &state,
+        &session,
+        "forget",
+        "user",
+        &user_id,
+        result.to_owned(),
+        None,
+        None,
+        None,
+    );
+    if !existed {
+        return users_list_page(
+            &state,
+            &session,
+            StatusCode::NOT_FOUND,
+            Some(format!("No Character Sheet for user {user_id}.")),
+        )
+        .await;
+    }
+    let msg = if name == user_id {
+        format!("Forgot the Character Sheet of user {user_id}.")
+    } else {
+        format!("Forgot the Character Sheet of {name} ({user_id}).")
+    };
+    flash::set(&cookies, &msg);
+    Ok(Redirect::to("/memory/users").into_response())
 }

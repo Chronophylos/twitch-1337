@@ -2188,3 +2188,10 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   .stat-strip.three,
   .stat-strip.two { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ====================== Memory: byte cap warning, Forget ====================== */
+.bytes.over { color: var(--danger); }
+.bytes.over .bytes-bar > span { background: var(--danger); }
+.bytes-warn[hidden] { display: none; }
+.inline-form { display: inline; margin: 0; }
+.link.danger { color: var(--danger); }

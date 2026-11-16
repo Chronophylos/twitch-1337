@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Scratch — twitch-1337{% endblock %}
 {% block content %}
+{% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
 <a href="/memory" class="link muted" style="display:inline-block;margin-bottom:6px;">← Back</a>
 <div class="page-head">
   <div>
@@ -52,7 +53,7 @@
       </div>
       <div class="td col-act">
         <a class="row-act" href="/memory/scratch/{{ s.slug }}" title="Edit">✎</a>
-        <form method="post" action="/memory/scratch/{{ s.slug }}/delete" style="display:inline" onsubmit="return confirm('Delete scratch {{ s.slug }}?')">
+        <form method="post" action="/memory/scratch/{{ s.slug }}/delete" class="inline-form" data-confirm="Delete scratch note `{{ s.slug }}`?">
           <input type="hidden" name="_csrf" value="{{ csrf }}">
           <button type="submit" class="row-act danger" title="Delete">✕</button>
         </form>

@@ -1,19 +1,20 @@
 {% extends "base.html" %}
-{% block title %}Users — twitch-1337{% endblock %}
+{% block title %}Character Sheets — twitch-1337{% endblock %}
 {% block content %}
+{% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
 <a href="/memory" class="link muted" style="display:inline-block;margin-bottom:6px;">← Back</a>
 <div class="page-head">
   <div>
-    <h1>Users <span class="count">({{ items.len() }})</span></h1>
-    <p class="page-sub">Per-user character sheets at <code>memories/users/&lt;id&gt;.md</code>. 4 KiB cap each.</p>
+    <h1>Character Sheets <span class="count">({{ items.len() }})</span></h1>
+    <p class="page-sub">One Character Sheet per user at <code>memories/users/&lt;id&gt;.md</code>. 4 KiB cap each.</p>
   </div>
   <div class="page-actions">
-    <a class="btn primary" href="/memory/users/new">+ New user note</a>
+    <a class="btn primary" href="/memory/users/new">+ New Character Sheet</a>
   </div>
 </div>
 
 {% if items.is_empty() %}
-  <div class="empty">No user notes yet.</div>
+  <div class="empty">No Character Sheets yet.</div>
 {% else %}
 <div class="user-grid">
   {% for u in items %}
@@ -34,7 +35,10 @@
     <div class="user-note">{% if u.note.is_empty() %}<span class="muted">(empty)</span>{% else %}{{ u.note }}{% endif %}</div>
     <div class="user-card-foot">
       <a class="link" href="/memory/users/{{ u.user_id }}">Open</a>
-      <span class="link muted" title="Reset is not exposed via the dashboard">Reset</span>
+      <form method="post" action="/memory/users/{{ u.user_id }}/forget" class="inline-form" data-confirm="Forget {% if u.display_name.is_empty() %}user {{ u.user_id }}{% else %}{{ u.display_name }} ({{ u.user_id }}){% endif %}? This deletes their Character Sheet. Mentions in the Lore, other sheets and Transcripts stay.">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <button type="submit" class="link danger">Forget</button>
+      </form>
     </div>
   </div>
   {% endfor %}

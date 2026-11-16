@@ -17,7 +17,7 @@
        "Hard cap on LORE.md size.",
        current.ai.memory.lore_bytes, defaults.ai.memory.lore_bytes) %}{% endcall %}
     {% call m::bytesize_row("ai_memory", "ai_memory_user_bytes", "user_bytes",
-       "Hard cap on each per-user character sheet.",
+       "Hard cap on each Character Sheet.",
        current.ai.memory.user_bytes, defaults.ai.memory.user_bytes) %}{% endcall %}
     {% call m::bytesize_row("ai_memory", "ai_memory_scratch_bytes", "scratch_bytes",
        "Hard cap on each per-scratch file.",

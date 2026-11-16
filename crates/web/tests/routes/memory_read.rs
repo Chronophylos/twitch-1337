@@ -90,18 +90,44 @@ async fn tree_renders_section_counts() {
         )
         .await
         .unwrap();
+    // `€` is 3 UTF-8 bytes: the tile counts bytes, not chars.
+    state
+        .memory_store
+        .write(&FileKind::Lore, "ab€", UserIdentity::default())
+        .await
+        .unwrap();
+    state
+        .memory_store
+        .write(&FileKind::Soul, "soul", UserIdentity::default())
+        .await
+        .unwrap();
+    let caps = state.memory_store.caps();
 
     let app = build_router(state);
     let res = app.oneshot(get("/memory", &sid, &csrf)).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_string(res).await;
     assert!(
-        html.contains(">1 <span class=\"stat-unit\">users</span>"),
-        "expected users count; got {html}"
+        html.contains(">1 <span class=\"stat-unit\">sheets</span>"),
+        "expected Character Sheet count; got {html}"
     );
     assert!(
         html.contains(">1 <span class=\"stat-unit\">notes</span>"),
         "expected scratch count; got {html}"
+    );
+    assert!(
+        html.contains(&format!(
+            ">4 <span class=\"stat-unit\">/ {} B</span>",
+            caps.soul_bytes
+        )),
+        "expected SOUL bytes vs cap; got {html}"
+    );
+    assert!(
+        html.contains(&format!(
+            ">5 <span class=\"stat-unit\">/ {} B</span>",
+            caps.lore_bytes
+        )),
+        "expected LORE bytes vs cap; got {html}"
     );
 }
 

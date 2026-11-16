@@ -445,3 +445,79 @@ async fn phone_width_drawer_opens_and_closes() {
 
     s.close().await;
 }
+
+/// The editor's byte counter follows typing in UTF-8 bytes and warns once
+/// the body passes the cap.
+#[tokio::test]
+async fn memory_editor_byte_counter_is_live() {
+    let s = E2eSession::start().await;
+    s.goto("/memory/users/12345").await;
+
+    let body = "textarea[name=\"body\"]";
+    // `€` is 3 UTF-8 bytes but 1 UTF-16 unit.
+    s.wait_and_fill(body, "a€").await;
+    assert_eq!(s.wait_text("[data-bytes-used]").await, "4");
+    assert_eq!(
+        s.eval("return document.querySelector('[data-bytes-warn]').hidden;")
+            .await,
+        serde_json::Value::Bool(true)
+    );
+
+    s.exec(
+        "const ta = document.querySelector('textarea[name=\"body\"]');\
+         ta.value = 'x'.repeat(Number(ta.dataset.byteCap) + 1);\
+         ta.dispatchEvent(new Event('input'));",
+    )
+    .await;
+    s.wait_js(
+        "return !document.querySelector('[data-bytes-warn]').hidden \
+         && document.querySelector('.editor .bytes').classList.contains('over');",
+    )
+    .await;
+
+    s.close().await;
+}
+
+/// Forget asks for confirmation naming the user, then deletes the sheet.
+#[tokio::test]
+async fn memory_forget_character_sheet() {
+    let s = E2eSession::start().await;
+    s.goto("/memory/users/12345").await;
+    s.wait_and_fill("input[name=\"fm_display_name\"]", "Doomed")
+        .await;
+    s.fill("textarea[name=\"body\"]", "likes trains").await;
+    s.exec("window.__e2eMarker = true;").await;
+    s.click("form[data-save-shortcut] button[type=\"submit\"]")
+        .await;
+    s.wait_js("return document.readyState === 'complete' && window.__e2eMarker === undefined;")
+        .await;
+
+    s.goto("/memory/users").await;
+    let forget = "form[action=\"/memory/users/12345/forget\"] button";
+    s.wait_for(forget).await;
+
+    // Declining the confirm keeps the sheet.
+    s.exec("window.confirm = () => false;").await;
+    s.click(forget).await;
+    assert!(
+        !s.find_all(forget).await.is_empty(),
+        "declined Forget still submitted"
+    );
+
+    // The page reloads on submit, so record the prompt in sessionStorage.
+    s.exec("window.confirm = (m) => { sessionStorage.setItem('confirm', m); return true; };")
+        .await;
+    s.click(forget).await;
+    let flash = s.wait_text(".flash").await;
+    assert!(flash.contains("Doomed"), "flash: {flash}");
+    let prompt = s.eval("return sessionStorage.getItem('confirm');").await;
+    assert!(
+        prompt
+            .as_str()
+            .is_some_and(|m| m.starts_with("Forget Doomed (12345)?")),
+        "confirm prompt: {prompt}"
+    );
+    assert!(s.find_all(forget).await.is_empty(), "sheet still listed");
+
+    s.close().await;
+}

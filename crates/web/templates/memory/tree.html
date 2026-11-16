@@ -11,15 +11,15 @@
 <div class="stat-strip">
   <a class="stat" href="/memory/soul" style="text-decoration:none;color:inherit;">
     <div class="stat-label">SOUL</div>
-    <div class="stat-value">— <span class="stat-unit">memories/SOUL.md</span></div>
+    <div class="stat-value">{{ soul_bytes }} <span class="stat-unit">/ {{ soul_cap }} B</span></div>
   </a>
   <a class="stat" href="/memory/lore" style="text-decoration:none;color:inherit;">
     <div class="stat-label">LORE</div>
-    <div class="stat-value">— <span class="stat-unit">memories/LORE.md</span></div>
+    <div class="stat-value">{{ lore_bytes }} <span class="stat-unit">/ {{ lore_cap }} B</span></div>
   </a>
   <a class="stat" href="/memory/users" style="text-decoration:none;color:inherit;">
-    <div class="stat-label">Users</div>
-    <div class="stat-value">{{ user_count }} <span class="stat-unit">users</span></div>
+    <div class="stat-label">Character Sheets</div>
+    <div class="stat-value">{{ user_count }} <span class="stat-unit">sheets</span></div>
   </a>
   <a class="stat" href="/memory/scratch" style="text-decoration:none;color:inherit;">
     <div class="stat-label">Scratch</div>
