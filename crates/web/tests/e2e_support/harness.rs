@@ -248,6 +248,14 @@ impl E2eSession {
             .to_owned()
     }
 
+    /// Run a JavaScript snippet in the page.
+    pub async fn exec(&self, script: &str) {
+        self.client
+            .execute(script, vec![])
+            .await
+            .unwrap_or_else(|e| panic!("exec {script}: {e}"));
+    }
+
     /// Close the browser and stop the server.
     pub async fn close(self) {
         let _ = self.client.close().await;

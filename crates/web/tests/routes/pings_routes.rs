@@ -247,6 +247,95 @@ async fn delete_without_csrf_rejected() {
     );
 }
 
+fn htmx_delete_without_session(current_url: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/pings/whatever/delete")
+        .header("HX-Request", "true")
+        .header("HX-Current-URL", current_url)
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn htmx_delete_without_session_answers_hx_redirect() {
+    let (state, _sid, _csrf, _bare_csrf, _td) = authed_setup().await;
+    let app = build_router(state);
+    let res = app
+        .oneshot(htmx_delete_without_session(
+            "http://localhost:8761/pings?filter=x",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "htmx would follow a 303 and swap the login page into the row"
+    );
+    assert!(res.headers().get(header::LOCATION).is_none());
+    assert_eq!(
+        res.headers().get("HX-Redirect").unwrap(),
+        "/login?next=%2Fpings%3Ffilter%3Dx",
+        "next must be the page the user is on, not the delete endpoint"
+    );
+}
+
+#[tokio::test]
+async fn htmx_redirect_drops_unsafe_current_url() {
+    let (state, _sid, _csrf, _bare_csrf, _td) = authed_setup().await;
+    let app = build_router(state);
+    let res = app
+        .oneshot(htmx_delete_without_session(
+            "http://localhost//evil.example/x",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.headers().get("HX-Redirect").unwrap(), "/login");
+}
+
+#[tokio::test]
+async fn csrf_mismatch_form_post_renders_error_page() {
+    let (state, sid, csrf, _bare_csrf, _td) = authed_setup().await;
+    let app = build_router(state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("_csrf=wrong&name=nope&template=hi"))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let ct = res.headers().get(header::CONTENT_TYPE).unwrap();
+    assert!(ct.to_str().unwrap().starts_with("text/html"), "got {ct:?}");
+    let html = body_string(res).await;
+    assert!(html.contains("Session expired"), "{html}");
+    assert!(html.contains("data-history-back"), "missing back button");
+    assert!(state.ping_actor.get_one("nope".into()).await.is_none());
+}
+
+#[tokio::test]
+async fn csrf_mismatch_htmx_returns_plain_text_for_toast() {
+    let (state, sid, csrf, _bare_csrf, _td) = authed_setup().await;
+    let app = build_router(state);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings/whatever/delete")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header("HX-Request", "true")
+        .header("X-Csrf-Token", "wrong")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let ct = res.headers().get(header::CONTENT_TYPE).unwrap();
+    assert!(ct.to_str().unwrap().starts_with("text/plain"), "got {ct:?}");
+    assert_eq!(
+        body_string(res).await,
+        "Session expired, reload and try again"
+    );
+}
+
 #[tokio::test]
 async fn create_duplicate_renders_form_with_error_and_user_draft() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;

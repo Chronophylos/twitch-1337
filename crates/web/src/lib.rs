@@ -192,6 +192,7 @@ pub fn build_router(state: WebState) -> Router {
         .merge(viewer)
         .merge(mod_only)
         .merge(owner_only)
+        .layer(axum::middleware::from_fn(error::htmx_errors))
         .layer(CookieManagerLayer::new())
         .layer(TraceLayer::new_for_http())
 }

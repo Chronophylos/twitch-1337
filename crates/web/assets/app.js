@@ -516,3 +516,56 @@ for (const ta of document.querySelectorAll('textarea[data-char-count]')) {
   ta.addEventListener('input', render);
   render();
 }
+
+// ─── Error toast ─────────────────────────────────────────────────────────────
+// htmx does not swap 4xx/5xx responses, so failed requests would otherwise be
+// silent. The server answers htmx errors with short plain text (see
+// `error::htmx_errors`); anything else falls back to the status code.
+(function errorToast() {
+  const region = document.getElementById('toast');
+  if (!region) return;
+  const TOAST_MS = 6000;
+  let timer;
+
+  function hide() {
+    clearTimeout(timer);
+    region.replaceChildren();
+  }
+
+  function show(text) {
+    hide();
+    const card = document.createElement('div');
+    card.className = 'toast';
+    const msg = document.createElement('span');
+    msg.className = 'toast-msg';
+    msg.textContent = text;
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'toast-close';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.textContent = '✕';
+    close.addEventListener('click', hide);
+    card.append(msg, close);
+    region.append(card);
+    timer = setTimeout(hide, TOAST_MS);
+  }
+
+  document.body.addEventListener('htmx:responseError', (evt) => {
+    const xhr = evt.detail.xhr;
+    const isText = (xhr.getResponseHeader('Content-Type') || '').startsWith('text/plain');
+    const text = isText ? xhr.responseText.trim() : '';
+    show(text && text.length <= 300 ? text : `Request failed (${xhr.status})`);
+  });
+  document.body.addEventListener('htmx:sendError', () => {
+    show('Request failed (network error)');
+  });
+})();
+
+// Error page "← Back": history.back() keeps the user's form input. A tab
+// with no earlier entry (new tab, bookmark) would make Back a no-op, so go
+// home instead.
+document.addEventListener('click', (evt) => {
+  if (!evt.target.closest?.('[data-history-back]')) return;
+  if (history.length > 1) history.back();
+  else location.assign('/');
+});
