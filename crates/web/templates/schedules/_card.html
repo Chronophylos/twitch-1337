@@ -2,7 +2,7 @@
 <article class="schedule-card {% if !card.enabled %}paused{% endif %}">
   <header class="card-head">
     <span class="card-title">{{ card.name }}</span>
-    <form method="post" action="/schedules/{{ card.name|urlencode }}/toggle" class="card-toggle">
+    <form method="post" action="/schedules/{{ card.name|urlencode_strict }}/toggle" class="card-toggle">
       <input type="hidden" name="_csrf" value="{{ csrf }}">
       <button class="toggle-switch" type="submit" aria-label="Toggle {{ card.name }}">
         {% if card.enabled %}on{% else %}off{% endif %}
@@ -27,8 +27,8 @@
       <span class="chip last">{{ last }}</span>
     {% endif %}
     <span class="chip today">{{ card.fires_today }} today</span>
-    <a class="chip edit-link" href="/schedules?edit={{ card.name|urlencode }}">edit</a>
-    <form method="post" action="/schedules/{{ card.name|urlencode }}/delete"
+    <a class="chip edit-link" href="/schedules?edit={{ card.name|urlencode_strict }}">edit</a>
+    <form method="post" action="/schedules/{{ card.name|urlencode_strict }}/delete"
           class="js-delete-schedule" data-name="{{ card.name }}">
       <input type="hidden" name="_csrf" value="{{ csrf }}">
       <button class="chip danger" type="submit">delete</button>

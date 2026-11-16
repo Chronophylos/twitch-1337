@@ -278,7 +278,12 @@ async fn list(
             .map(form_state_from_schedule)
     });
     let new_form = if q.new.unwrap_or(false) {
-        Some(FormState::default())
+        // A new schedule fires unless the user opts out; an unchecked default
+        // created rows that silently never ran.
+        Some(FormState {
+            enabled: true,
+            ..FormState::default()
+        })
     } else {
         None
     };

@@ -146,8 +146,8 @@
 {# Numeric row with caller-supplied min/max. Use for AI fields whose range
    exceeds the cooldowns 1..=3600 default (history length, byte budgets, etc.).
    Cooldowns + pings keep using the simpler `num_row` to avoid churn. #}
-{% macro num_row_bounded(section, field, key, hint, value, default, unit, min, max) %}
-<div class="settings-row" data-section="{{ section }}">
+{% macro num_row_bounded(section, field, key, hint, value, default, unit, min, max, enabled_by = "") %}
+<div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
   {% call row_head(key, hint) %}{% endcall %}
   <div class="row-control-cell">
     <span class="row-pretty" aria-hidden="true" data-pretty-unit="{{ unit }}">{{ value }}{% if !unit.is_empty() %} {{ unit }}{% endif %}</span>
@@ -174,8 +174,8 @@
 {# Generic free-text row (URLs, paths). `value` is the current string;
    `placeholder` shows when value is empty. Pretty span echoes the value
    (or placeholder hint when empty) and hides on hover/focus/dirty. #}
-{% macro text_row(section, field, key, hint, value, default, placeholder) %}
-<div class="settings-row" data-section="{{ section }}">
+{% macro text_row(section, field, key, hint, value, default, placeholder, enabled_by = "") %}
+<div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
   {% call row_head(key, hint) %}{% endcall %}
   <div class="row-control-cell">
     <span class="row-pretty" aria-hidden="true">{% if value.is_empty() %}<span class="muted">{{ placeholder }}</span>{% else %}{{ value }}{% endif %}</span>
@@ -195,8 +195,8 @@
 {% endmacro %}
 
 {# Time-of-day row for `HH:MM` strings (Berlin wallclock). #}
-{% macro time_row(section, field, key, hint, value, default) %}
-<div class="settings-row" data-section="{{ section }}">
+{% macro time_row(section, field, key, hint, value, default, enabled_by = "") %}
+<div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
   {% call row_head(key, hint) %}{% endcall %}
   <div class="row-control-cell">
     <span class="row-pretty" aria-hidden="true">{{ value }}</span>
@@ -215,8 +215,8 @@
 {% endmacro %}
 
 {# Slider row for 0..=1 floats (rendered as percentage). #}
-{% macro range_row(section, field, key, hint, value, default) %}
-<div class="settings-row" data-section="{{ section }}">
+{% macro range_row(section, field, key, hint, value, default, enabled_by = "") %}
+<div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
   {% call row_head(key, hint) %}{% endcall %}
   <div class="row-control-cell">
     <span class="row-pretty" aria-hidden="true" data-pretty-unit="pct">{{ value }}</span>

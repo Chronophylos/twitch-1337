@@ -47,7 +47,7 @@
        a real profile yet. Posting to a name-derived-from-the-attempt would
        target a row that doesn't exist and silently no-op on resubmit. #}
     {% let target = edit_target.as_deref().unwrap_or(form.name.as_str()) %}
-    {% let action_owned = format!("/ai-profiles/{}/edit", target) %}
+    {% let action_owned = format!("/ai-profiles/{}/edit", urlencoding::encode(target)) %}
     {% let action = action_owned.as_str() %}
     {% let cancel_href = Some("/ai-profiles") %}
     {% include "ai_profiles/_form.html" %}

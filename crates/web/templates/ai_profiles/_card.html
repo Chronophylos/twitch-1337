@@ -22,8 +22,8 @@
       <span class="chip today">tier: {{ tier }}</span>
     {% endif %}
     <span class="chip today">{{ card.timeout }}s</span>
-    <a class="chip edit-link" href="/ai-profiles?edit={{ card.name|urlencode }}">edit</a>
-    <form method="post" action="/ai-profiles/{{ card.name|urlencode }}/delete"
+    <a class="chip edit-link" href="/ai-profiles?edit={{ card.name|urlencode_strict }}">edit</a>
+    <form method="post" action="/ai-profiles/{{ card.name|urlencode_strict }}/delete"
           class="js-delete-profile" data-name="{{ card.name }}">
       <input type="hidden" name="_csrf" value="{{ csrf }}">
       <button class="chip danger" type="submit">delete</button>

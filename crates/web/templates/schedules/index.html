@@ -52,7 +52,7 @@
 {% if let Some(form) = edit_form %}
   <section class="settings-card">
     <header class="settings-card-head"><div><h2>Edit {{ form.name }}</h2></div></header>
-    {% let action_owned = format!("/schedules/{}/edit", form.name) %}
+    {% let action_owned = format!("/schedules/{}/edit", urlencoding::encode(form.name.as_str())) %}
     {% let action = action_owned.as_str() %}
     {% let cancel_href = Some("/schedules") %}
     {% include "schedules/_form.html" %}

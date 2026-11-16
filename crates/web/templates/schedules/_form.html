@@ -1,6 +1,6 @@
 {# Variant-picker schedule form. `form: &FormState`, `action: &str`, `cancel_href: Option<&str>` must
    be bound in the calling template's scope before this include. #}
-<form method="post" action="{{ action }}" class="settings-rows schedule-form">
+<form method="post" action="{{ action }}" class="settings-rows schedule-form" data-unsaved-guard>
   <input type="hidden" name="_csrf" value="{{ csrf }}">
 
   <div class="row">

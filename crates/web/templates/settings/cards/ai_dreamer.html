@@ -46,16 +46,16 @@
 
     {% call m::time_row("ai_dreamer", "ai_dreamer_run_at", "run_at",
        "Berlin-local wallclock for the nightly run (HH:MM).",
-       current.ai.dreamer.run_at, defaults.ai.dreamer.run_at) %}{% endcall %}
+       current.ai.dreamer.run_at, defaults.ai.dreamer.run_at, "ai_dreamer_enabled") %}{% endcall %}
 
     {% call m::num_row_bounded("ai_dreamer", "ai_dreamer_timeout_secs", "timeout_secs",
        "Per-pass timeout.",
-       current.ai.dreamer.timeout_secs, defaults.ai.dreamer.timeout_secs, "s", 5, 1800) %}{% endcall %}
+       current.ai.dreamer.timeout_secs, defaults.ai.dreamer.timeout_secs, "s", 5, 1800, "ai_dreamer_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_dreamer", "ai_dreamer_max_rounds", "max_rounds",
        "Maximum tool rounds the dreamer may take.",
-       current.ai.dreamer.max_rounds, defaults.ai.dreamer.max_rounds, "", 1, 128) %}{% endcall %}
+       current.ai.dreamer.max_rounds, defaults.ai.dreamer.max_rounds, "", 1, 128, "ai_dreamer_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_dreamer", "ai_dreamer_max_writes_per_turn", "max_writes_per_turn",
        "Maximum write_file calls the dreamer may make in one nightly pass. Separate from the chat-turn cap.",
-       current.ai.dreamer.max_writes_per_turn, defaults.ai.dreamer.max_writes_per_turn, "", 1, 64) %}{% endcall %}
+       current.ai.dreamer.max_writes_per_turn, defaults.ai.dreamer.max_writes_per_turn, "", 1, 64, "ai_dreamer_enabled") %}{% endcall %}
   </div>
 </section>

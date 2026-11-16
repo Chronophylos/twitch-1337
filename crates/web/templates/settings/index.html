@@ -7,7 +7,7 @@
 <div class="page-head">
   <div>
     <h1>Settings</h1>
-    <p class="page-sub">Tune how the bot behaves in chat. Changes take effect right away — no restart needed.</p>
+    <p class="page-sub">Tune how the bot behaves in chat. Most changes apply immediately; rows marked <em>restart required</em> need a bot restart.</p>
   </div>
 </div>
 
@@ -114,7 +114,7 @@
   </aside>
 
   <div class="settings-main">
-    <form id="settings-form" method="post" action="/settings">
+    <form id="settings-form" method="post" action="/settings" autocomplete="off">
       <input type="hidden" name="_csrf" value="{{ csrf }}">
       <div class="settings-group-divider" data-group="twitch"><span>TWITCH</span></div>
       {% include "settings/cards/twitch_permissions.html" %}

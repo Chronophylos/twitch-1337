@@ -28,20 +28,20 @@
     {% when Some with (p) %}
     {% call m::text_row("ai_prefill", "ai_prefill_base_url", "base_url",
        "Rustlog endpoint. Restart needed when changed.",
-       p.base_url, "https://logs.zonian.dev", "https://logs.zonian.dev") %}{% endcall %}
+       p.base_url, "https://logs.zonian.dev", "https://logs.zonian.dev", "ai_prefill_enabled") %}{% endcall %}
     {% call m::range_row("ai_prefill", "ai_prefill_threshold", "threshold",
        "If today's history is below this fraction, also pull yesterday.",
-       p.threshold, 0.5) %}{% endcall %}
+       p.threshold, 0.5, "ai_prefill_enabled") %}{% endcall %}
     {% when None %}
     {# Card is off: render the same fields with the compiled defaults so that
        enabling the toggle gives admins something sensible to edit. JS (Task
        20) disables them visually via data-card-enabled-by. #}
     {% call m::text_row("ai_prefill", "ai_prefill_base_url", "base_url",
        "Rustlog endpoint. Restart needed when changed.",
-       "https://logs.zonian.dev", "https://logs.zonian.dev", "https://logs.zonian.dev") %}{% endcall %}
+       "https://logs.zonian.dev", "https://logs.zonian.dev", "https://logs.zonian.dev", "ai_prefill_enabled") %}{% endcall %}
     {% call m::range_row("ai_prefill", "ai_prefill_threshold", "threshold",
        "If today's history is below this fraction, also pull yesterday.",
-       0.5, 0.5) %}{% endcall %}
+       0.5, 0.5, "ai_prefill_enabled") %}{% endcall %}
     {% endmatch %}
   </div>
 </section>
