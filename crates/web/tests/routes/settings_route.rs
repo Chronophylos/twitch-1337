@@ -940,13 +940,9 @@ async fn reset_ai_recap_restores_recap_off_default() {
 }
 
 #[tokio::test]
-async fn permissions_lists_render_pretty_resting_display() {
+async fn permissions_lists_render_saved_values() {
     // hidden_admins / viewer_allowlist / emote_usage_deny_list are the
-    // multi-line (textarea) rows. Like every other settings row they must
-    // carry a `.row-pretty` overlay so the value is visible at rest
-    // (controls are opacity:0 until hover). The textarea renders IDs
-    // newline-joined ("111\n222"); only the pretty span renders them
-    // comma-joined ("111, 222"), so finding that proves the span.
+    // multi-line (textarea) rows: one entry per line, posted back verbatim.
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     set_owner(&state, Some("123"));
@@ -979,7 +975,7 @@ async fn permissions_lists_render_pretty_resting_display() {
         "emote_usage_deny_list must persist from POST"
     );
 
-    // GET and confirm the pretty (comma-joined) display is present.
+    // GET and confirm each textarea renders its saved entries one per line.
     let app = build_router(state);
     let req = Request::builder()
         .uri("/settings")
@@ -989,22 +985,18 @@ async fn permissions_lists_render_pretty_resting_display() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_string(res).await;
-    assert!(
-        html.contains("row-pretty"),
-        "permissions rows must carry a .row-pretty overlay"
-    );
-    assert!(
-        html.contains("111, 222"),
-        "hidden_admins must render a comma-joined pretty display"
-    );
-    assert!(
-        html.contains("333, 444"),
-        "viewer_allowlist must render a comma-joined pretty display"
-    );
-    assert!(
-        html.contains("evilbot, otherbot"),
-        "emote_usage_deny_list must render a comma-joined pretty display"
-    );
+    for (name, joined) in [
+        ("twitch_hidden_admins", "111\n222"),
+        ("twitch_viewer_allowlist", "333\n444"),
+        ("twitch_emote_usage_deny_list", "evilbot\notherbot"),
+    ] {
+        let start = html
+            .find(&format!("name=\"{name}\""))
+            .unwrap_or_else(|| panic!("{name} textarea missing"));
+        let body = &html[start..];
+        let body = &body[body.find('>').unwrap() + 1..body.find("</textarea>").unwrap()];
+        assert_eq!(body, joined, "{name} must render its saved entries");
+    }
 }
 
 #[tokio::test]

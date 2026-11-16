@@ -15,11 +15,10 @@
   <input type="hidden" name="ai_dreamer_card_visible" value="1">
   <div class="settings-rows">
     <div class="settings-row" data-section="ai_dreamer">
-      {% call m::row_head("enabled", "Run the nightly ritual. Model, effort and tier come from the selected profile.") %}{% endcall %}
+      {% call m::row_head("enabled", "Run the nightly ritual. Model, effort and tier come from the selected profile.", "ai_dreamer_enabled") %}{% endcall %}
       <div class="row-control-cell">
-        <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">{% if current.ai.dreamer.enabled %}On{% else %}Off{% endif %}</span>
         <label class="toggle">
-          <input type="checkbox" name="ai_dreamer_enabled" data-card-toggle value="1"
+          <input type="checkbox" id="ai_dreamer_enabled" name="ai_dreamer_enabled" data-card-toggle value="1" role="switch"
                  data-key="ai.dreamer.enabled"
                  {% if current.ai.dreamer.enabled %}checked{% endif %}>
           <span class="toggle-thumb" aria-hidden="true"></span>
@@ -30,9 +29,9 @@
 
     {% let dreamer_profile = current.ai.dreamer.profile.as_str() %}
     <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
-      {% call m::row_head("profile", "Which provider profile this agent runs on.") %}{% endcall %}
+      {% call m::row_head("profile", "Which provider profile this agent runs on.", "ai_dreamer_profile") %}{% endcall %}
       <div class="row-control-cell">
-        <select name="ai_dreamer_profile" data-key="ai.dreamer.profile" data-default="{{ defaults.ai.dreamer.profile }}" required>
+        <select id="ai_dreamer_profile" name="ai_dreamer_profile" data-key="ai.dreamer.profile" data-default="{{ defaults.ai.dreamer.profile }}" required>
           {% for p in current.ai.profiles %}
           {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if dreamer_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
           {% endfor %}

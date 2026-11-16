@@ -15,20 +15,19 @@
   <div class="settings-rows">
     <div class="settings-row" data-section="aviationstack">
       <div class="row-left">
-        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">enabled</code><span class="restart-required">restart required</span></div>
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><label for="aviationstack_enabled"><code class="row-key">enabled</code></label><span class="restart-required">restart required</span></div>
         <div class="row-hint">Enable Aviationstack metadata enrichment for flight lookups.</div>
       </div>
       <div class="row-control-cell">
-        <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">{% if current.aviationstack.enabled %}On{% else %}Off{% endif %}</span>
         <label class="toggle">
           <input
             type="checkbox"
+            id="aviationstack_enabled"
             name="aviationstack_enabled"
             value="1"
             data-default="{{ defaults.aviationstack.enabled }}"
             data-key="enabled"
             role="switch"
-            aria-label="enabled"
             {% if current.aviationstack.enabled %}checked{% endif %}>
           <span class="toggle-thumb" aria-hidden="true"></span>
         </label>
@@ -40,13 +39,13 @@
     </div>
     <div class="settings-row" data-section="aviationstack">
       <div class="row-left">
-        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">base_url</code><span class="restart-required">restart required</span></div>
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><label for="aviationstack_base_url"><code class="row-key">base_url</code></label><span class="restart-required">restart required</span></div>
         <div class="row-hint">Aviationstack API base URL.</div>
       </div>
       <div class="row-control-cell">
-        <span class="row-pretty" aria-hidden="true">{% if current.aviationstack.base_url.is_empty() %}<span class="muted">{{ defaults.aviationstack.base_url }}</span>{% else %}{{ current.aviationstack.base_url }}{% endif %}</span>
         <input type="text"
                class="text-input is-wide"
+               id="aviationstack_base_url"
                name="aviationstack_base_url"
                value="{{ current.aviationstack.base_url }}"
                placeholder="{{ defaults.aviationstack.base_url }}"
@@ -60,15 +59,15 @@
     </div>
     <div class="settings-row" data-section="aviationstack">
       <div class="row-left">
-        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><code class="row-key">timeout_secs</code><span class="restart-required">restart required</span></div>
+        <div class="row-label"><span class="dirty-dot" aria-hidden="true"></span><label for="aviationstack_timeout_secs"><code class="row-key">timeout_secs</code></label><span class="restart-required">restart required</span></div>
         <div class="row-hint">Request timeout for Aviationstack API calls.</div>
       </div>
       <div class="row-control-cell">
-        <span class="row-pretty" aria-hidden="true" data-pretty-unit="s">{{ current.aviationstack.timeout_secs }} s</span>
         <div class="num-wrap">
           <input
             type="number"
             class="num-input"
+            id="aviationstack_timeout_secs"
             name="aviationstack_timeout_secs"
             min="1"
             max="120"

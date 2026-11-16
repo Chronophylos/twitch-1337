@@ -1,7 +1,10 @@
 {# crates/web/templates/settings/_macros.html
    Shared row macros for settings cards. Import with:
        {% import "settings/_macros.html" as m %}
-   then call e.g. {% call m::num_row(...) %}{% endcall %}.
+   then call e.g. {% call m::num_row_bounded(...) %}{% endcall %}.
+
+   Every row control carries `id="{{ field }}"` and the row key is a
+   `<label for>` pointing at it, so each input's accessible name is its key.
 #}
 
 {% macro nav_group_head(group_id, label, count) %}
@@ -25,11 +28,12 @@
 </li>
 {% endmacro %}
 
-{% macro row_head(key, hint) %}
+{# `for_id` + `for_suffix` is the id of the row's visible control. #}
+{% macro row_head(key, hint, for_id, for_suffix = "") %}
 <div class="row-left">
   <div class="row-label">
     <span class="dirty-dot" aria-hidden="true"></span>
-    <code class="row-key">{{ key }}</code>
+    <label for="{{ for_id }}{{ for_suffix }}"><code class="row-key">{{ key }}</code></label>
   </div>
   <div class="row-hint">{{ hint }}</div>
 </div>
@@ -44,45 +48,19 @@
   hidden>↺</button>
 {% endmacro %}
 
-{% macro num_row(section, field, key, hint, value, default, unit) %}
-<div class="settings-row" data-section="{{ section }}">
-  {% call row_head(key, hint) %}{% endcall %}
-  <div class="row-control-cell">
-    <span class="row-pretty" aria-hidden="true" data-pretty-unit="{{ unit }}">{{ value }} second{% if value != 1 %}s{% endif %}</span>
-    <div class="num-wrap">
-      <input
-        type="number"
-        class="num-input"
-        name="{{ field }}"
-        min="1"
-        max="3600"
-        value="{{ value }}"
-        data-default="{{ default }}"
-        data-key="{{ key }}">
-      <span class="num-unit">{{ unit }}</span>
-    </div>
-  </div>
-  <div class="row-right">
-    {% call row_reset(key) %}{% endcall %}
-    <span class="row-default">default <span class="mono">{{ default }}{{ unit }}</span></span>
-  </div>
-</div>
-{% endmacro %}
-
 {% macro toggle_row(section, field, key, hint, value, default) %}
 <div class="settings-row" data-section="{{ section }}">
-  {% call row_head(key, hint) %}{% endcall %}
+  {% call row_head(key, hint, field) %}{% endcall %}
   <div class="row-control-cell">
-    <span class="row-pretty" aria-hidden="true" data-pretty-unit="bool">{% if value %}On{% else %}Off{% endif %}</span>
     <label class="toggle">
       <input
         type="checkbox"
+        id="{{ field }}"
         name="{{ field }}"
         value="1"
         data-default="{{ default }}"
         data-key="{{ key }}"
         role="switch"
-        aria-label="{{ key }}"
         {% if value %}checked{% endif %}>
       <span class="toggle-thumb" aria-hidden="true"></span>
     </label>
@@ -94,67 +72,17 @@
 </div>
 {% endmacro %}
 
-{# Reserved for future use — askama 0.16 cannot pass inline dict literals from
-   templates, so AI cards inline their own radio groups and call `effort_segment`
-   for reasoning_effort. Kept here for Rust-side callers that can pre-compute
-   the options slice. #}
-{% macro segmented_row(section, field, key, hint, value, default, options) %}
-{# options is a list of {value, label}; renders a radiogroup #}
-<div class="settings-row" data-section="{{ section }}">
-  {% call row_head(key, hint) %}{% endcall %}
-  <div class="row-control-cell">
-    <div class="segmented" role="radiogroup" aria-label="{{ key }}">
-      {% for opt in options %}
-      <label class="segment{% if opt.value == value %} is-active{% endif %}">
-        <input type="radio"
-               name="{{ field }}"
-               value="{{ opt.value }}"
-               data-default="{{ default }}"
-               data-key="{{ key }}"
-               {% if opt.value == value %}checked{% endif %}>
-        <span>{{ opt.label }}</span>
-      </label>
-      {% endfor %}
-    </div>
-  </div>
-  <div class="row-right">
-    {% call row_reset(key) %}{% endcall %}
-    <span class="row-default">default <span class="mono">{{ default }}</span></span>
-  </div>
-</div>
-{% endmacro %}
-
-{% macro model_row(section, field, key, hint, value, default) %}
-<div class="settings-row" data-section="{{ section }}">
-  {% call row_head(key, hint) %}{% endcall %}
-  <div class="row-control-cell">
-    <span class="row-pretty" aria-hidden="true">{{ value }}</span>
-    <input type="text"
-           class="text-input"
-           name="{{ field }}"
-           value="{{ value }}"
-           data-default="{{ default }}"
-           data-key="{{ key }}">
-  </div>
-  <div class="row-right">
-    {% call row_reset(key) %}{% endcall %}
-    <span class="row-default">default <span class="mono">{{ default }}</span></span>
-  </div>
-</div>
-{% endmacro %}
-
-{# Numeric row with caller-supplied min/max. Use for AI fields whose range
-   exceeds the cooldowns 1..=3600 default (history length, byte budgets, etc.).
-   Cooldowns + pings keep using the simpler `num_row` to avoid churn. #}
+{# Numeric row with caller-supplied bounds. `unit` is shown beside the
+   input and after the default; empty means unitless. #}
 {% macro num_row_bounded(section, field, key, hint, value, default, unit, min, max, enabled_by = "") %}
 <div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
-  {% call row_head(key, hint) %}{% endcall %}
+  {% call row_head(key, hint, field) %}{% endcall %}
   <div class="row-control-cell">
-    <span class="row-pretty" aria-hidden="true" data-pretty-unit="{{ unit }}">{{ value }}{% if !unit.is_empty() %} {{ unit }}{% endif %}</span>
     <div class="num-wrap">
       <input
         type="number"
         class="num-input"
+        id="{{ field }}"
         name="{{ field }}"
         min="{{ min }}"
         max="{{ max }}"
@@ -171,16 +99,15 @@
 </div>
 {% endmacro %}
 
-{# Generic free-text row (URLs, paths). `value` is the current string;
-   `placeholder` shows when value is empty. Pretty span echoes the value
-   (or placeholder hint when empty) and hides on hover/focus/dirty. #}
+{# Generic free-text row (URLs, paths). `placeholder` shows when the value
+   is empty. #}
 {% macro text_row(section, field, key, hint, value, default, placeholder, enabled_by = "") %}
 <div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
-  {% call row_head(key, hint) %}{% endcall %}
+  {% call row_head(key, hint, field) %}{% endcall %}
   <div class="row-control-cell">
-    <span class="row-pretty" aria-hidden="true">{% if value.is_empty() %}<span class="muted">{{ placeholder }}</span>{% else %}{{ value }}{% endif %}</span>
     <input type="text"
            class="text-input is-wide"
+           id="{{ field }}"
            name="{{ field }}"
            value="{{ value }}"
            placeholder="{{ placeholder }}"
@@ -197,11 +124,11 @@
 {# Time-of-day row for `HH:MM` strings (Berlin wallclock). #}
 {% macro time_row(section, field, key, hint, value, default, enabled_by = "") %}
 <div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
-  {% call row_head(key, hint) %}{% endcall %}
+  {% call row_head(key, hint, field) %}{% endcall %}
   <div class="row-control-cell">
-    <span class="row-pretty" aria-hidden="true">{{ value }}</span>
     <input type="time"
            class="text-input is-narrow"
+           id="{{ field }}"
            name="{{ field }}"
            value="{{ value }}"
            data-default="{{ default }}"
@@ -217,12 +144,12 @@
 {# Slider row for 0..=1 floats (rendered as percentage). #}
 {% macro range_row(section, field, key, hint, value, default, enabled_by = "") %}
 <div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
-  {% call row_head(key, hint) %}{% endcall %}
+  {% call row_head(key, hint, field) %}{% endcall %}
   <div class="row-control-cell">
-    <span class="row-pretty" aria-hidden="true" data-pretty-unit="pct">{{ value }}</span>
     <div class="range-wrap">
       <input type="range"
              min="0" max="1" step="0.05"
+             id="{{ field }}"
              name="{{ field }}"
              value="{{ value }}"
              data-default="{{ default }}"
@@ -237,37 +164,23 @@
 </div>
 {% endmacro %}
 
-{# One segmented radio for the reasoning_effort selector. Lifted into a macro
-   because askama 0.16 can't iterate `[&str; N]` and compare against a `&str`
-   `selected` arg in the same expression without type-mismatch errors. #}
-{% macro effort_segment(field, key, value, selected) %}
-<label class="segment{% if value == selected %} is-active{% endif %}">
-  <input type="radio" name="{{ field }}" value="{{ value }}"
-         data-default="none" data-key="{{ key }}"
-         {% if value == selected %}checked{% endif %}>
-  <span>{{ value }}</span>
-</label>
-{% endmacro %}
-
-
 {# `bytes` and `default_bytes` are raw u64. The hidden input posts the
    canonical integer — `ByteSize::from_str` (server side) accepts it, and
    `Deserialize<Option<usize>>` does too — so this macro covers both
-   ByteSize-typed (ai.media) and usize-typed (ai.memory) fields. Pretty
-   text + default label are rendered from JS on init via formatBytesIec. #}
+   ByteSize-typed (ai.media) and usize-typed (ai.memory) fields. The visible
+   amount + default label are rendered from JS on init via formatBytesIec. #}
 {% macro bytesize_row(section, field, key, hint, bytes, default_bytes) %}
 <div class="settings-row" data-section="{{ section }}" data-bytes-row>
-  {% call row_head(key, hint) %}{% endcall %}
+  {% call row_head(key, hint, field, "_display") %}{% endcall %}
   <div class="row-control-cell">
-    <span class="row-pretty" aria-hidden="true" data-pretty-unit="bytes">{{ bytes }}</span>
     <div class="bytes-wrap">
       <input
         type="number"
         class="num-input bytes-display"
+        id="{{ field }}_display"
         min="0"
         step="any"
-        value=""
-        aria-label="{{ key }} amount">
+        value="">
       <div class="bytes-units" role="group" aria-label="{{ key }} unit">
         <button type="button" class="bytes-unit" data-unit="B" aria-pressed="false">B</button>
         <button type="button" class="bytes-unit" data-unit="KiB" aria-pressed="false">KiB</button>

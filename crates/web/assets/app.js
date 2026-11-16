@@ -127,7 +127,6 @@ const unsavedGuards = [];
       const baseline = isRadio
         ? (inputs.find((i) => i.checked)?.value ?? '')
         : primary.type === 'checkbox' ? (primary.checked ? 'true' : 'false') : primary.value;
-      const pretty = row.querySelector('.row-pretty');
       return {
         el: row,
         input: primary,
@@ -135,8 +134,6 @@ const unsavedGuards = [];
         initial: inputs.map((i) => ({ checked: i.checked, value: i.value })),
         isRadio,
         reset: row.querySelector('.row-reset'),
-        pretty,
-        prettyHtml: pretty?.innerHTML,
         section: row.dataset.section,
         baseline,
       };
@@ -163,26 +160,6 @@ const unsavedGuards = [];
     return `${n % f === 0 ? v : v.toFixed(2)} ${unit}`;
   }
 
-  function formatPretty(input, prettyEl) {
-    const unit = prettyEl?.dataset.prettyUnit ?? '';
-    if (unit === 'bytes' || unit === 'B') return formatBytesIec(input.value);
-    if (unit === 'mag') return formatMag(input.value);
-    if (unit === 'bool') return input.checked ? 'On' : 'Off';
-    if (input.tagName === 'TEXTAREA') {
-      // ID-list rows: mirror the server's comma-joined pretty (textarea holds
-      // one ID per line). Falls through to (empty) when blank.
-      const ids = input.value.split('\n').map((l) => l.trim()).filter(Boolean);
-      return ids.length ? ids.join(', ') : '(empty)';
-    }
-    if (input.type === 'text' || input.type === 'time' || input.type === 'email' || input.type === 'url') {
-      return input.value || (input.placeholder ? `(${input.placeholder})` : '');
-    }
-    const n = Number(input.value);
-    if (!Number.isFinite(n)) return input.value;
-    if (unit === 'pct') return `${Math.round(n * 100)}%`;
-    if (unit === 's') return n === 1 ? '1 second' : `${n} seconds`;
-    return unit ? `${n} ${unit}` : String(n);
-  }
   const cards = Array.from(form.querySelectorAll('.settings-card'));
   const navItems = Array.from(document.querySelectorAll('.settings-nav-item'));
   const navGroups = Array.from(document.querySelectorAll('.settings-nav-group')).map((el) => ({
@@ -243,14 +220,6 @@ const unsavedGuards = [];
       const offDefault = cur !== (r.input.dataset.default ?? '');
       r.el.classList.toggle('is-dirty', dirty);
       if (r.reset) r.reset.hidden = !offDefault;
-      if (r.pretty) {
-        const isText = ['text', 'time', 'email', 'url', 'textarea'].includes(r.input.type);
-        // Server already renders nuanced markup (placeholder/empty muted span,
-        // comma-joined ID lists for textareas) for text-type rows; only
-        // overwrite the pretty when the user has edited the value, otherwise
-        // leave the SSR markup intact.
-        if (!isText || dirty) r.pretty.textContent = formatPretty(r.input, r.pretty);
-      }
       if (r.input.type === 'range') {
         const valEl = r.el.querySelector('[data-range-value]');
         if (valEl) {
@@ -338,10 +307,7 @@ const unsavedGuards = [];
 
   function syncMagRow(m) {
     if (document.activeElement === m.display) return;
-    const value = formatMag(m.hidden.value);
-    m.display.value = value;
-    const pretty = m.el.querySelector('.row-pretty');
-    if (pretty) pretty.textContent = value;
+    m.display.value = formatMag(m.hidden.value);
   }
 
   function activeUnit(b) {
@@ -458,7 +424,6 @@ const unsavedGuards = [];
         input.checked = r.initial[i].checked;
         input.value = r.initial[i].value;
       });
-      if (r.pretty && r.prettyHtml !== undefined) r.pretty.innerHTML = r.prettyHtml;
     }
     for (const b of bytesRows) syncBytesRow(b);
     for (const m of magRows) syncMagRow(m);
@@ -499,7 +464,8 @@ const unsavedGuards = [];
       const target = document.getElementById('sec-' + item.dataset.target);
       if (!target) return;
       e.preventDefault();
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
     });
   }
 

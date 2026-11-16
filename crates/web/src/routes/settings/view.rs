@@ -7,6 +7,7 @@ use askama::Template;
 use axum::extract::{Extension, State};
 use axum::response::Response;
 use tower_cookies::Cookies;
+use twitch_1337_core::settings::ai::{AiEmotes, AiPrefill, AiWeb};
 use twitch_1337_core::settings::{FieldError, Settings};
 
 use crate::auth::Role;
@@ -32,6 +33,133 @@ pub(super) struct ShowTpl {
     pub(super) defaults: Settings,
     pub(super) errors: Vec<FieldError>,
     pub(super) recap_parked: bool,
+}
+
+/// A sidebar group: its id, label, and the sections it links to.
+pub(super) struct NavGroup {
+    pub(super) id: &'static str,
+    pub(super) label: &'static str,
+    pub(super) items: &'static [NavItem],
+}
+
+/// One sidebar link. `slug` is the card's `sec-<slug>` anchor, `target` its
+/// `data-section`.
+pub(super) struct NavItem {
+    pub(super) slug: &'static str,
+    pub(super) target: &'static str,
+    pub(super) label: &'static str,
+}
+
+const fn item(slug: &'static str, target: &'static str, label: &'static str) -> NavItem {
+    NavItem {
+        slug,
+        target,
+        label,
+    }
+}
+
+/// Sidebar sections, in page order. Group counts are derived from this.
+const NAV: &[NavGroup] = &[
+    NavGroup {
+        id: "twitch",
+        label: "Twitch",
+        items: &[
+            item("twitch_permissions", "twitch_permissions", "Permissions"),
+            item("twitch_channels", "twitch_channels", "Channels"),
+        ],
+    },
+    NavGroup {
+        id: "agents",
+        label: "Agents",
+        items: &[
+            item("ai-aurora", "ai_aurora", "Aurora"),
+            item("ai-grok", "ai_grok", "Grok"),
+            item("ai-recap", "ai_recap", "Recap"),
+            item("ai-dreamer", "ai_dreamer", "Dreamer"),
+            item("ai-media", "ai_media", "Media"),
+        ],
+    },
+    NavGroup {
+        id: "shared",
+        label: "Shared",
+        items: &[
+            item("ai-history", "ai_history", "History"),
+            item("ai-prefill", "ai_prefill", "Prefill"),
+            item("ai-memory", "ai_memory", "Memory"),
+            item("ai-emotes", "ai_emotes", "Emotes"),
+            item("ai-web", "ai_web", "Web"),
+        ],
+    },
+    NavGroup {
+        id: "commands",
+        label: "Commands",
+        items: &[
+            item("cooldowns", "cooldowns", "Cooldowns"),
+            item("pings", "pings", "Pings"),
+            item("suspend", "suspend", "Suspend"),
+            item("spoiler", "spoiler", "Spoiler check"),
+        ],
+    },
+    NavGroup {
+        id: "emote_tracker",
+        label: "Emote Tracker",
+        items: &[item(
+            "emote_tracker_potat",
+            "emote_tracker_potat",
+            "Potat attribution",
+        )],
+    },
+    NavGroup {
+        id: "flight_tracking",
+        label: "Flight Tracking",
+        items: &[item("aviationstack", "aviationstack", "Aviationstack")],
+    },
+    NavGroup {
+        id: "alerts",
+        label: "Alerts",
+        items: &[
+            item("alerts_quake", "alerts_quake", "Earthquakes"),
+            item("alerts_solar", "alerts_solar", "Solar flares"),
+            item("alerts_cme", "alerts_cme", "CMEs"),
+        ],
+    },
+    NavGroup {
+        id: "system",
+        label: "System",
+        items: &[item("web_runtime", "web_runtime", "Dashboard")],
+    },
+];
+
+/// An optional settings section as its card renders it: the saved value, or
+/// the Rust default while the card is off, next to that default.
+pub(super) struct Effective<T> {
+    pub(super) cur: T,
+    pub(super) def: T,
+}
+
+fn effective<T: Clone + Default>(saved: Option<&T>) -> Effective<T> {
+    Effective {
+        cur: saved.cloned().unwrap_or_default(),
+        def: T::default(),
+    }
+}
+
+impl ShowTpl {
+    fn nav(&self) -> &'static [NavGroup] {
+        NAV
+    }
+
+    fn ai_web(&self) -> Effective<AiWeb> {
+        effective(self.current.ai.web.as_ref())
+    }
+
+    fn ai_emotes(&self) -> Effective<AiEmotes> {
+        effective(self.current.ai.emotes.as_ref())
+    }
+
+    fn ai_prefill(&self) -> Effective<AiPrefill> {
+        effective(self.current.ai.prefill.as_ref())
+    }
 }
 
 pub(super) async fn recap_parked(state: &WebState) -> bool {

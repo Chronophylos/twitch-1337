@@ -12,9 +12,9 @@
   <div class="settings-rows">
     {% let media_profile = current.ai.media.profile.as_str() %}
     <div class="settings-row" data-section="ai_media">
-      {% call m::row_head("profile", "Which provider profile this agent runs on.") %}{% endcall %}
+      {% call m::row_head("profile", "Which provider profile this agent runs on.", "ai_media_profile") %}{% endcall %}
       <div class="row-control-cell">
-        <select name="ai_media_profile" data-key="ai.media.profile" data-default="{{ defaults.ai.media.profile }}" required>
+        <select id="ai_media_profile" name="ai_media_profile" data-key="ai.media.profile" data-default="{{ defaults.ai.media.profile }}" required>
           {% for p in current.ai.profiles %}
           {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if media_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
           {% endfor %}

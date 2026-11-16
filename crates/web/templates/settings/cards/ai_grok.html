@@ -12,9 +12,9 @@
   <div class="settings-rows">
     {% let grok_profile = current.ai.grok.profile.as_str() %}
     <div class="settings-row" data-section="ai_grok">
-      {% call m::row_head("ai.grok.profile", "Which provider profile this agent runs on.") %}{% endcall %}
+      {% call m::row_head("ai.grok.profile", "Which provider profile this agent runs on.", "ai_grok_profile") %}{% endcall %}
       <div class="row-control-cell">
-        <select name="ai_grok_profile" data-key="ai.grok.profile" data-default="{{ defaults.ai.grok.profile }}" required>
+        <select id="ai_grok_profile" name="ai_grok_profile" data-key="ai.grok.profile" data-default="{{ defaults.ai.grok.profile }}" required>
           {% for p in current.ai.profiles %}
           {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if grok_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
           {% endfor %}
