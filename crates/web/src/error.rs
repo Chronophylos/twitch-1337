@@ -284,3 +284,101 @@ impl IntoResponse for WebError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::Router;
+    use axum::body::{Body, to_bytes};
+    use axum::http::header;
+    use axum::routing::get;
+    use tower::ServiceExt as _;
+
+    fn app() -> Router {
+        Router::new()
+            .route("/forbidden", get(|| async { WebError::Forbidden }))
+            .route(
+                "/validation",
+                get(|| async {
+                    WebError::Validation {
+                        field: "name".into(),
+                        msg: "<b>bad</b>".into(),
+                    }
+                }),
+            )
+            .route(
+                "/internal",
+                get(|| async { WebError::Internal(eyre::eyre!("secret detail")) }),
+            )
+            .layer(axum::middleware::from_fn(htmx_errors))
+    }
+
+    async fn get_page(path: &str, hx: Option<&str>) -> (StatusCode, String, String) {
+        let mut req = Request::builder().uri(path);
+        if let Some(v) = hx {
+            req = req.header("HX-Request", v);
+        }
+        let res = app()
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = res.status();
+        let ct = res
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .map(|v| v.to_str().unwrap().to_owned())
+            .unwrap_or_default();
+        let body = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        (status, ct, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn htmx_requests_get_plain_text_for_the_toast() {
+        let cases = [
+            ("/forbidden", StatusCode::FORBIDDEN, "Access denied"),
+            (
+                "/validation",
+                StatusCode::BAD_REQUEST,
+                "validation: name: <b>bad</b>",
+            ),
+            (
+                "/internal",
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal error",
+            ),
+        ];
+        for (path, status, text) in cases {
+            let (got_status, ct, body) = get_page(path, Some("true")).await;
+            assert_eq!(got_status, status, "{path}");
+            assert!(ct.starts_with("text/plain"), "{path}: {ct}");
+            assert_eq!(body, text, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn non_htmx_requests_get_the_html_page() {
+        for hx in [None, Some("false")] {
+            for (path, status) in [
+                ("/forbidden", StatusCode::FORBIDDEN),
+                ("/validation", StatusCode::BAD_REQUEST),
+                ("/internal", StatusCode::INTERNAL_SERVER_ERROR),
+            ] {
+                let (got_status, ct, body) = get_page(path, hx).await;
+                assert_eq!(got_status, status, "{path} hx={hx:?}");
+                assert!(ct.starts_with("text/html"), "{path} hx={hx:?}: {ct}");
+                assert!(body.contains("<html"), "{path} hx={hx:?}");
+            }
+        }
+        let (_, _, body) = get_page("/validation", None).await;
+        assert!(body.contains("bad"), "validation message missing");
+        assert!(
+            !body.contains("<b>bad</b>"),
+            "validation message must be escaped"
+        );
+        let (_, _, body) = get_page("/internal", None).await;
+        assert!(
+            !body.contains("secret detail"),
+            "internal error detail must stay in the log"
+        );
+    }
+}
