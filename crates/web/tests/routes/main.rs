@@ -11,6 +11,7 @@ mod healthz;
 mod leaderboard_route;
 mod memory_read;
 mod memory_write;
+mod pings_filters;
 mod pings_routes;
 mod schedules_route;
 mod settings_route;

@@ -35,3 +35,18 @@ pub(crate) fn initial_of(name: &str) -> String {
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_else(|| "?".to_owned())
 }
+
+/// Compact past-relative label (`42s ago`, `5m ago`, `3h ago`, `2d ago`) for
+/// last-fired columns.
+pub(crate) fn humanize_delta(d: chrono::Duration) -> String {
+    let secs = d.num_seconds();
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86_400)
+    }
+}

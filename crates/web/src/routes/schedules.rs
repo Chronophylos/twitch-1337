@@ -22,7 +22,7 @@ use crate::auth::csrf;
 use crate::auth::session::Session;
 use crate::error::WebError;
 use crate::flash;
-use crate::routes::render;
+use crate::routes::{humanize_delta, render};
 use crate::state::WebState;
 
 #[derive(Debug, Clone)]
@@ -388,19 +388,6 @@ fn weekdays_short(days: &WeekdaySet) -> String {
         .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join("·")
-}
-
-fn humanize_delta(d: chrono::Duration) -> String {
-    let secs = d.num_seconds();
-    if secs < 60 {
-        format!("{secs}s ago")
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h ago", secs / 3600)
-    } else {
-        format!("{}d ago", secs / 86_400)
-    }
 }
 
 fn form_state_from_schedule(s: &Schedule) -> FormState {

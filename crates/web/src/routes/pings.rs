@@ -1,7 +1,9 @@
 //! `/pings` CRUD handlers.
 //!
 //! Surfaces split by auth tier:
-//! - [`viewer_router`]: `GET /pings` list — read-only, viewer-tier.
+//! - [`viewer_router`]: `GET /pings` list — read-only, viewer-tier. Filters
+//!   and orders server-side from `?filter=mine|joined|fired` and
+//!   `?sort=name|fired|members`.
 //! - [`mod_router`]: everything else (create, edit, delete, member ops) — mod-tier.
 //!
 //! Form POSTs validate the `_csrf` field against the session csrf value;
@@ -13,7 +15,7 @@ use std::collections::HashSet;
 
 use askama::Template;
 use axum::Router;
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -26,7 +28,7 @@ use crate::auth::csrf;
 use crate::auth::session::Session;
 use crate::error::WebError;
 use crate::flash;
-use crate::routes::{initial_of, render, render_with};
+use crate::routes::{humanize_delta, initial_of, render, render_with};
 use crate::state::WebState;
 use crate::user_facing::UserFacing;
 
@@ -51,19 +53,181 @@ pub fn mod_router() -> Router<WebState> {
         )
 }
 
+/// Member dots drawn per row; the count beside them carries the real number.
+const MAX_MEMBER_DOTS: usize = 4;
+
 #[derive(Clone)]
 struct RowView {
     name: String,
     template: String,
     members: usize,
+    /// `members` capped at [`MAX_MEMBER_DOTS`].
+    member_dots: usize,
     created_by: String,
     created_initial: String,
+    /// Relative time of the last fire (`3m ago`), `None` if never fired.
+    last_fired: Option<String>,
+    fire_count: u64,
+}
+
+/// `/pings?filter=…`. Absent or unknown values fall back to [`Filter::All`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Filter {
+    All,
+    /// Pings the session user created.
+    Mine,
+    /// Pings the session user is a member of.
+    Joined,
+    /// Pings that have fired at least once.
+    Fired,
+}
+
+impl Filter {
+    const CHIPS: [Self; 4] = [Self::All, Self::Mine, Self::Joined, Self::Fired];
+
+    fn parse(raw: Option<&str>) -> Self {
+        match raw {
+            Some("mine") => Self::Mine,
+            Some("joined") => Self::Joined,
+            Some("fired") => Self::Fired,
+            _ => Self::All,
+        }
+    }
+
+    /// Query value; `None` for the default so the All chip links to bare `/pings`.
+    fn param(self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            Self::Mine => Some("mine"),
+            Self::Joined => Some("joined"),
+            Self::Fired => Some("fired"),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Mine => "Mine",
+            Self::Joined => "Joined",
+            Self::Fired => "Recently fired",
+        }
+    }
+
+    /// Sort used when `?sort=` is absent or unknown: Recently fired lists
+    /// newest first, everything else A → Z.
+    fn default_sort(self) -> Sort {
+        match self {
+            Self::Fired => Sort::Fired,
+            Self::All | Self::Mine | Self::Joined => Sort::Name,
+        }
+    }
+
+    fn matches(self, view: &PingView, login: &str) -> bool {
+        // Logins compare ignoring case. Known limit: `created_by` and
+        // `members` store Twitch logins, not user ids, so after a rename a
+        // user's older pings no longer show under Mine / Joined.
+        match self {
+            Self::All => true,
+            Self::Mine => view.created_by.eq_ignore_ascii_case(login),
+            Self::Joined => view.members.iter().any(|m| m.eq_ignore_ascii_case(login)),
+            Self::Fired => view.last_fired_at.is_some(),
+        }
+    }
+}
+
+/// `/pings?sort=…`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sort {
+    /// Name A → Z.
+    Name,
+    /// Last fired, newest first; never-fired pings last.
+    Fired,
+    /// Member count, largest first.
+    Members,
+}
+
+impl Sort {
+    const CHIPS: [Self; 3] = [Self::Name, Self::Fired, Self::Members];
+
+    /// `None` when absent or unknown; the caller applies
+    /// [`Filter::default_sort`].
+    fn parse(raw: Option<&str>) -> Option<Self> {
+        match raw {
+            Some("name") => Some(Self::Name),
+            Some("fired") => Some(Self::Fired),
+            Some("members") => Some(Self::Members),
+            _ => None,
+        }
+    }
+
+    fn param(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Fired => "fired",
+            Self::Members => "members",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Name => "A → Z",
+            Self::Fired => "Last fired",
+            Self::Members => "Members",
+        }
+    }
+
+    fn apply(self, views: &mut [&PingView]) {
+        match self {
+            Self::Name => views.sort_by(|a, b| a.name.cmp(&b.name)),
+            // `Option` orders `None` first, so comparing b to a puts the
+            // newest fire first and never-fired pings last.
+            Self::Fired => views.sort_by(|a, b| {
+                b.last_fired_at
+                    .cmp(&a.last_fired_at)
+                    .then_with(|| a.name.cmp(&b.name))
+            }),
+            Self::Members => views.sort_by(|a, b| {
+                b.members
+                    .len()
+                    .cmp(&a.members.len())
+                    .then_with(|| a.name.cmp(&b.name))
+            }),
+        }
+    }
+}
+
+/// `/pings` link for a filter + optional explicit sort.
+fn list_href(filter: Filter, sort: Option<Sort>) -> String {
+    match (filter.param(), sort) {
+        (None, None) => "/pings".to_owned(),
+        (Some(f), None) => format!("/pings?filter={f}"),
+        (None, Some(s)) => format!("/pings?sort={}", s.param()),
+        (Some(f), Some(s)) => format!("/pings?filter={f}&sort={}", s.param()),
+    }
+}
+
+#[derive(Deserialize)]
+struct ListQuery {
+    filter: Option<String>,
+    sort: Option<String>,
+}
+
+struct ChipView {
+    label: &'static str,
+    href: String,
+    /// Matching ping count; `None` for sort chips.
+    count: Option<usize>,
+    active: bool,
 }
 
 #[derive(Template)]
 #[template(path = "pings/list.html")]
 struct ListTpl {
     rows: Vec<RowView>,
+    filter_chips: Vec<ChipView>,
+    sort_chips: Vec<ChipView>,
+    /// Show last-fired time + fire count on each row.
+    show_fired: bool,
     total_pings: usize,
     total_members: usize,
     custom_cooldowns: usize,
@@ -110,19 +274,17 @@ async fn list(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
     cookies: Cookies,
+    Query(q): Query<ListQuery>,
 ) -> Result<Response, WebError> {
+    let filter = Filter::parse(q.filter.as_deref());
+    let explicit_sort = Sort::parse(q.sort.as_deref());
+    let sort = explicit_sort.unwrap_or_else(|| filter.default_sort());
+    let login = session.user_login.as_str();
+
     let views = state.ping_actor.snapshot().await;
-    let mut rows: Vec<RowView> = Vec::new();
     let mut unique_members: HashSet<&str> = HashSet::new();
     let mut custom_cooldowns: usize = 0;
     for view in &views {
-        rows.push(RowView {
-            name: view.name.clone(),
-            template: view.template.clone(),
-            members: view.members.len(),
-            created_initial: initial_of(&view.created_by),
-            created_by: view.created_by.clone(),
-        });
         for m in &view.members {
             unique_members.insert(m.as_str());
         }
@@ -131,13 +293,53 @@ async fn list(
         }
     }
     let total_members = unique_members.len();
+    let total_pings = views.len();
 
-    rows.sort_by(|a, b| a.name.cmp(&b.name));
-    let total_pings = rows.len();
+    let filter_chips = Filter::CHIPS
+        .into_iter()
+        .map(|f| ChipView {
+            label: f.label(),
+            href: list_href(f, explicit_sort),
+            count: Some(views.iter().filter(|v| f.matches(v, login)).count()),
+            active: f == filter,
+        })
+        .collect();
+    let sort_chips = Sort::CHIPS
+        .into_iter()
+        .map(|s| ChipView {
+            label: s.label(),
+            href: list_href(filter, Some(s)),
+            count: None,
+            active: s == sort,
+        })
+        .collect();
+
+    let mut shown: Vec<&PingView> = views.iter().filter(|v| filter.matches(v, login)).collect();
+    sort.apply(&mut shown);
+    let now = chrono::Utc::now();
+    let rows = shown
+        .into_iter()
+        .map(|view| RowView {
+            name: view.name.clone(),
+            template: view.template.clone(),
+            members: view.members.len(),
+            member_dots: view.members.len().min(MAX_MEMBER_DOTS),
+            created_initial: initial_of(&view.created_by),
+            created_by: view.created_by.clone(),
+            last_fired: view
+                .last_fired_at
+                .map(|t| humanize_delta(now.signed_duration_since(t))),
+            fire_count: view.fire_count,
+        })
+        .collect();
+
     let is_mod = session.is_mod();
     let is_owner = matches!(session.role, crate::auth::Role::Owner);
     let tpl = ListTpl {
         rows,
+        filter_chips,
+        sort_chips,
+        show_fired: filter == Filter::Fired || sort == Sort::Fired,
         total_pings,
         total_members,
         custom_cooldowns,
