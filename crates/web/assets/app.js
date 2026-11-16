@@ -651,10 +651,17 @@ for (const form of document.querySelectorAll('form[data-unsaved-guard]')) {
 }
 
 let leavingViaSubmit = false;
-// Bubble phase on window: runs after per-form handlers, so a cancelled
-// submit (e.g. a declined delete confirm) keeps the guard armed.
+// Only submitting a guarded form saves its edits; any other POST on the page
+// (a card toggle, "Add member") would navigate away and drop them. Bubble
+// phase on window runs after per-form handlers, so a cancelled submit (e.g.
+// a declined delete confirm) keeps the guard armed.
 window.addEventListener('submit', (evt) => {
-  if (!evt.defaultPrevented) leavingViaSubmit = true;
+  if (evt.defaultPrevented) return;
+  if (evt.target.matches?.('#settings-form, form[data-unsaved-guard]')) leavingViaSubmit = true;
+});
+// A page restored from the back/forward cache keeps its JS state; re-arm.
+window.addEventListener('pageshow', (evt) => {
+  if (evt.persisted) leavingViaSubmit = false;
 });
 window.addEventListener('beforeunload', (evt) => {
   if (leavingViaSubmit || !unsavedGuards.some((dirty) => dirty())) return;

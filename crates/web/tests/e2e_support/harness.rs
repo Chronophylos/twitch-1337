@@ -265,9 +265,14 @@ impl E2eSession {
     }
 
     /// Wait until `js` (a script that `return`s a value) yields `true`.
+    /// Script errors count as "not yet": polling across a navigation can hit
+    /// a destroyed execution context.
     pub async fn wait_js(&self, js: &str) {
         let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
-        while self.eval(js).await != serde_json::Value::Bool(true) {
+        loop {
+            if let Ok(serde_json::Value::Bool(true)) = self.client.execute(js, vec![]).await {
+                return;
+            }
             if tokio::time::Instant::now() >= deadline {
                 panic!("wait_js {js}: not true after {WAIT_TIMEOUT:?}");
             }
