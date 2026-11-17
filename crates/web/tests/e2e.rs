@@ -785,3 +785,210 @@ async fn inline_filter_hides_non_matching_rows() {
 
     s.close().await;
 }
+
+/// Add an AI profile through the dashboard form.
+async fn add_profile(s: &E2eSession, name: &str) {
+    s.goto("/ai-profiles?new=true").await;
+    s.wait_and_fill("form.profile-form input[name=\"name\"]", name)
+        .await;
+    s.fill("form.profile-form input[name=\"key\"]", "k").await;
+    s.fill("form.profile-form input[name=\"model\"]", "some-model")
+        .await;
+    s.click("form.profile-form button[type=\"submit\"]").await;
+    s.wait_for(&format!("form[action=\"/ai-profiles/{name}/delete\"]"))
+        .await;
+}
+
+/// Every route renders under the strict CSP: no `securitypolicyviolation`
+/// events, JS errors or console errors. A deliberate inline `<style>` at the
+/// end proves the probe does see violations.
+#[tokio::test]
+async fn every_route_runs_clean_under_the_csp() {
+    let s = E2eSession::start_as_owner().await;
+
+    // One of everything that has its own page.
+    s.goto("/pings/new").await;
+    s.wait_and_fill("#ping-name", "squad").await;
+    s.fill("#ping-template", "yo {mentions}").await;
+    s.click("button[type=\"submit\"].btn.primary").await;
+    s.wait_for("a.ping-name").await;
+
+    s.goto("/schedules?new=true").await;
+    s.wait_and_fill("input[name=\"name\"]", "standup").await;
+    s.fill("textarea[name=\"message\"]", "daily standup time")
+        .await;
+    s.fill("input[name=\"interval_hours\"]", "1").await;
+    s.click("button[type=\"submit\"].btn.primary").await;
+    s.wait_for("article.schedule-card").await;
+
+    add_profile(&s, "alpha").await;
+
+    s.goto("/memory/scratch/new").await;
+    s.wait_and_fill("input[name=\"slug\"]", "notes").await;
+    s.fill("textarea[name=\"body\"]", "remember the raid").await;
+    s.click("form[data-save-shortcut] button[type=\"submit\"]")
+        .await;
+    s.wait_js("return location.pathname !== '/memory/scratch/new';")
+        .await;
+
+    let seeding = s.problems().await;
+    assert!(seeding.is_empty(), "while seeding: {seeding:#?}");
+
+    let paths = [
+        "/pings",
+        "/pings/new",
+        "/pings/squad",
+        "/leaderboard",
+        "/flights",
+        "/schedules",
+        "/schedules?new=true",
+        "/schedules?edit=standup",
+        "/memory",
+        "/memory/soul",
+        "/memory/lore",
+        "/memory/users",
+        "/memory/users/new",
+        "/memory/users/12345",
+        "/memory/scratch",
+        "/memory/scratch/new",
+        "/memory/scratch/notes",
+        "/emotes",
+        "/emotes/audit",
+        "/emotes/usage",
+        "/logs",
+        "/ai-profiles",
+        "/ai-profiles?new=true",
+        "/ai-profiles?edit=alpha",
+        "/settings",
+    ];
+    for path in paths {
+        s.goto(path).await;
+        s.wait_for(".topbar").await;
+        let problems = s.problems().await;
+        assert!(problems.is_empty(), "{path}: {problems:#?}");
+    }
+
+    s.goto("/login").await;
+    s.wait_for(".auth-card").await;
+    let problems = s.problems().await;
+    assert!(problems.is_empty(), "/login: {problems:#?}");
+
+    // The 404 page itself logs the failed document load, nothing else.
+    s.goto("/no-such-page").await;
+    s.wait_for("body").await;
+    let problems = s.problems().await;
+    assert!(
+        problems
+            .iter()
+            .all(|p| p.starts_with("console:") && p.contains("404")),
+        "/no-such-page: {problems:#?}"
+    );
+
+    // Positive control: an injected `<style>` element is refused and seen.
+    s.goto("/pings").await;
+    s.wait_for(".topbar").await;
+    s.exec(
+        "const st = document.createElement('style'); \
+         st.textContent = 'body { color: red; }'; \
+         document.head.append(st);",
+    )
+    .await;
+    s.wait_js("return window.__e2eProblems.some((p) => p.startsWith('csp style-src'));")
+        .await;
+
+    s.close().await;
+}
+
+/// The schedule form shows only the checked trigger's fields (app.js, not an
+/// inline script, so it runs under the CSP).
+#[tokio::test]
+async fn schedule_form_shows_only_the_checked_trigger() {
+    let s = E2eSession::start().await;
+    s.goto("/schedules?new=true").await;
+    s.wait_for("form.schedule-form").await;
+    let shown = "return [...document.querySelectorAll('form.schedule-form .trigger-fields')] \
+                 .filter((el) => getComputedStyle(el).display !== 'none') \
+                 .map((el) => el.dataset.for).join();";
+    assert_eq!(s.eval(shown).await, "interval");
+
+    s.click("input[name=\"kind\"][value=\"calendar\"]").await;
+    assert_eq!(s.eval(shown).await, "calendar");
+    s.click("input[name=\"kind\"][value=\"interval\"]").await;
+    assert_eq!(s.eval(shown).await, "interval");
+
+    let problems = s.problems().await;
+    assert!(problems.is_empty(), "{problems:#?}");
+    s.close().await;
+}
+
+/// AI profile delete asks first (`data-confirm`, handled in app.js), and the
+/// form's provider picker enables only the chosen provider's controls.
+#[tokio::test]
+async fn ai_profile_delete_confirms_and_provider_picker_toggles() {
+    let s = E2eSession::start_as_owner().await;
+    add_profile(&s, "alpha").await;
+    add_profile(&s, "doomed").await;
+
+    s.goto("/ai-profiles").await;
+    let delete = "form[action=\"/ai-profiles/doomed/delete\"] button";
+    s.wait_for(delete).await;
+    // Declining the confirm keeps the profile.
+    s.exec("window.confirm = () => false;").await;
+    s.click(delete).await;
+    assert!(
+        !s.find_all(delete).await.is_empty(),
+        "declined delete still submitted"
+    );
+    // Accepting deletes it; the prompt survives the reload in sessionStorage.
+    s.exec("window.confirm = (m) => { sessionStorage.setItem('confirm', m); return true; };")
+        .await;
+    s.exec("window.__e2eMarker = true;").await;
+    s.click(delete).await;
+    s.wait_js("return document.readyState === 'complete' && window.__e2eMarker === undefined;")
+        .await;
+    assert_eq!(
+        s.eval("return sessionStorage.getItem('confirm');").await,
+        "Delete profile “doomed”?"
+    );
+    assert!(s.find_all(delete).await.is_empty(), "profile still listed");
+
+    s.goto("/ai-profiles?new=true").await;
+    s.wait_for("form.profile-form").await;
+    let enabled = "return [...document.querySelectorAll('form.profile-form fieldset[data-provider]')] \
+                   .filter((el) => !el.hidden && !el.disabled) \
+                   .map((el) => el.dataset.provider).join();";
+    let provider = "form.profile-form select[name=\"provider\"]";
+    let kind = "form.profile-form select[name=\"kind\"]";
+    assert_eq!(s.eval(enabled).await, "open_router");
+    s.find(provider)
+        .await
+        .select_by_value("open_ai")
+        .await
+        .expect("pick open_ai");
+    assert_eq!(s.eval(enabled).await, "open_ai");
+    // Decision profiles are OpenRouter-only and carry no effort/tier.
+    s.find(kind)
+        .await
+        .select_by_value("decision")
+        .await
+        .expect("pick decision");
+    assert_eq!(
+        s.eval(&format!(
+            "return document.querySelector('{provider}').value;"
+        ))
+        .await,
+        "open_router"
+    );
+    assert_eq!(s.eval(enabled).await, "");
+    // Back to chat: the form is pristine again, so leaving it won't prompt.
+    s.find(kind)
+        .await
+        .select_by_value("chat")
+        .await
+        .expect("pick chat");
+    assert_eq!(s.eval(enabled).await, "open_router");
+
+    let problems = s.problems().await;
+    assert!(problems.is_empty(), "{problems:#?}");
+    s.close().await;
+}

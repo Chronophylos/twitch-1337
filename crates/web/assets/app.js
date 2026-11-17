@@ -703,6 +703,46 @@ document.addEventListener('submit', (evt) => {
   if (msg && !window.confirm(msg)) evt.preventDefault();
 });
 
+// ─── Schedule form trigger picker ────────────────────────────────────────────
+// `form.schedule-form` shows only the `.trigger-fields[data-for]` block of the
+// checked `kind` radio (interval or calendar).
+for (const form of document.querySelectorAll('form.schedule-form')) {
+  const refresh = () => {
+    const kind = form.querySelector('input[name="kind"]:checked')?.value ?? 'interval';
+    for (const el of form.querySelectorAll('.trigger-fields')) el.hidden = el.dataset.for !== kind;
+  };
+  for (const radio of form.querySelectorAll('input[name="kind"]')) radio.addEventListener('change', refresh);
+  refresh();
+}
+
+// ─── AI profile form provider picker ─────────────────────────────────────────
+// `form.profile-form` enables only the `fieldset[data-provider]` of the chosen
+// provider. Decision profiles are OpenRouter-only and show none of them: the
+// other providers are hidden and the select snaps to OpenRouter. Server-side
+// validation is the real gate.
+for (const form of document.querySelectorAll('form.profile-form')) {
+  const select = form.querySelector('select[name="provider"]');
+  const kind = form.querySelector('select[name="kind"]');
+  if (!select) continue;
+  const refresh = () => {
+    const decision = kind?.value === 'decision';
+    for (const opt of select.options) {
+      const ok = !decision || opt.dataset.decisionOk === '1';
+      opt.hidden = !ok;
+      opt.disabled = !ok;
+    }
+    if (decision && select.selectedOptions[0]?.dataset.decisionOk !== '1') select.value = 'open_router';
+    for (const el of form.querySelectorAll('fieldset[data-provider]')) {
+      const match = el.dataset.provider === select.value && !decision;
+      el.hidden = !match;
+      el.disabled = !match;
+    }
+  };
+  select.addEventListener('change', refresh);
+  kind?.addEventListener('change', refresh);
+  refresh();
+}
+
 // ─── Percent bars ────────────────────────────────────────────────────────────
 // `[data-pct=N]` sizes itself to N% wide. Templates carry no `style=""`
 // attributes so the dashboard can run under a strict CSP; setting the width

@@ -30,9 +30,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::http::{HeaderName, HeaderValue, header};
 use eyre::{Result, WrapErr as _};
 use tokio::net::TcpListener;
 use tower_cookies::CookieManagerLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 use twitch_1337_core::lifecycle::Lifecycle;
@@ -40,6 +42,23 @@ use twitch_1337_core::lifecycle::Lifecycle;
 pub use crate::state::WebState;
 
 const SESSION_PERSIST_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Sent on every response. Scripts and styles come only from `/assets/*`:
+/// templates carry no inline `<script>`, `<style>`, `style=""` or `on*=`.
+/// `img-src` admits Twitch avatars (Helix `profile_image_url`); no other
+/// remote image is rendered. The Twitch login is a link to `/auth/start`,
+/// which redirects; no form posts off-origin, so `form-action` stays `'self'`.
+pub const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
+     img-src 'self' https://static-cdn.jtvnw.net; \
+     style-src 'self'; script-src 'self'; connect-src 'self'; \
+     frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+
+/// Security headers set on every response, assets and error pages included.
+const SECURITY_HEADERS: [(HeaderName, &str); 3] = [
+    (header::CONTENT_SECURITY_POLICY, CONTENT_SECURITY_POLICY),
+    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+    (header::REFERRER_POLICY, "same-origin"),
+];
 
 pub struct WebDeps {
     pub bind_addr: SocketAddr,
@@ -184,11 +203,19 @@ pub fn build_router(state: WebState) -> Router {
         ))
         .with_state(owner_state);
 
-    public
+    let app = public
         .merge(viewer)
         .merge(mod_only)
         .merge(owner_only)
         .layer(axum::middleware::from_fn(error::htmx_errors))
-        .layer(CookieManagerLayer::new())
+        .layer(CookieManagerLayer::new());
+    SECURITY_HEADERS
+        .into_iter()
+        .fold(app, |app, (name, value)| {
+            app.layer(SetResponseHeaderLayer::overriding(
+                name,
+                HeaderValue::from_static(value),
+            ))
+        })
         .layer(TraceLayer::new_for_http())
 }

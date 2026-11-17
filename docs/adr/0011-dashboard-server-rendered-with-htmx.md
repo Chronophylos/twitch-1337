@@ -36,5 +36,8 @@ Every htmx request shares one contract:
 - No JS build step and no JSON API for the dashboard.
 - Handlers that serve htmx return fragments, so templates for swappable parts
   live as partials.
-- A strict CSP is possible once inline scripts move into `app.js`;
-  htmx needs `includeIndicatorStyles = false` to run under it.
+- Every response carries a strict CSP (`script-src 'self'; style-src 'self'`,
+  set in `crates/web/src/lib.rs`), so templates hold no inline `<script>`,
+  `<style>`, `style=""` or `on*=` handlers; behaviour lives in `app.js`, keyed
+  off `data-*` attributes. htmx runs with `includeIndicatorStyles: false` and
+  `allowEval: false`, so trigger filters, `hx-on` and `js:` values are out.

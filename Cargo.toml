@@ -60,7 +60,7 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 toml = "1.2.1"
 tower = { version = "0.5", features = ["util"] }
 tower-cookies = { version = "0.11", features = ["signed", "private"] }
-tower-http = { version = "0.7", features = ["fs", "trace"] }
+tower-http = { version = "0.7", features = ["fs", "set-header", "trace"] }
 tracing = "0.1"
 tracing-error = "0.2.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

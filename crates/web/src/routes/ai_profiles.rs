@@ -66,8 +66,8 @@ struct CardView {
 /// One `<option>` for the provider `<select>`, plus enough of its
 /// `ProviderCaps` for the form to render every provider's controls (all of
 /// them, not just the currently-selected one — askama can't re-render on a
-/// `<select>` change, so the template ships every variant's markup and a
-/// small inline script toggles which one is visible/enabled).
+/// `<select>` change, so the template ships every variant's markup and
+/// `app.js` toggles which one is visible/enabled).
 struct ProviderOption {
     value: &'static str,
     label: &'static str,

@@ -96,21 +96,3 @@
     {% endif %}
   </div>
 </form>
-
-<script>
-  (function () {
-    document.querySelectorAll('form.schedule-form').forEach(function (form) {
-      function refresh() {
-        var checked = form.querySelector('input[name="kind"]:checked');
-        var kind = checked ? checked.value : 'interval';
-        form.querySelectorAll('.trigger-fields').forEach(function (el) {
-          el.style.display = el.dataset.for === kind ? '' : 'none';
-        });
-      }
-      form.querySelectorAll('input[name="kind"]').forEach(function (r) {
-        r.addEventListener('change', refresh);
-      });
-      refresh();
-    });
-  })();
-</script>

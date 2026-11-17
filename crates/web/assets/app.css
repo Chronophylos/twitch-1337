@@ -1883,6 +1883,7 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   flex-direction: column;
   gap: 4px;
 }
+.schedule-form .trigger-fields[hidden] { display: none; }
 
 .schedule-form .weekday-row {
   flex-direction: row !important;
@@ -2011,6 +2012,16 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 .toast-msg { flex: 1; overflow-wrap: anywhere; }
 .toast-close { color: var(--fg-3); line-height: 1; padding: 2px; }
 .toast-close:hover { color: var(--fg); }
+
+/* ====================== htmx request indicator ======================
+   htmx's own copy of these rules is an injected `<style>`, which the CSP
+   blocks, so base.html sets `includeIndicatorStyles: false`. */
+.htmx-indicator { opacity: 0; }
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+  opacity: 1;
+  transition: opacity 200ms ease-in;
+}
 
 /* ====================== Accessibility ====================== */
 :focus-visible {
