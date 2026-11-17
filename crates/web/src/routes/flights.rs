@@ -1,10 +1,14 @@
 //! `/flights` — read-only live snapshot of currently tracked aircraft.
+//!
+//! The page polls `GET /flights?partial=rows` every 15s; htmx requests to it
+//! get just the table body, anything else the full page.
 
 use std::time::Duration;
 
 use askama::Template;
 use axum::Router;
-use axum::extract::{Extension, State};
+use axum::extract::{Extension, Query, State};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use serde::Deserialize;
@@ -14,10 +18,10 @@ use twitch_1337_core::aviation::tracker::{TrackedFlightView, TrackerCommand};
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
-use crate::error::WebError;
+use crate::error::{WebError, is_htmx};
 use crate::flash;
 use crate::nav;
-use crate::routes::render;
+use crate::routes::{render, vary_hx};
 use crate::state::WebState;
 
 #[derive(Template)]
@@ -34,6 +38,23 @@ struct ListTpl {
     is_mod: bool,
     is_broadcaster: bool,
     is_owner: bool,
+}
+
+/// Table body alone, for the 15s poll.
+#[derive(Template)]
+#[template(path = "flights/_rows.html")]
+struct RowsTpl {
+    flights: Vec<TrackedFlightView>,
+    aviation_disabled: bool,
+    tracker_busy: bool,
+    csrf: String,
+    is_mod: bool,
+    oob: bool,
+}
+
+#[derive(Deserialize)]
+struct ListQuery {
+    partial: Option<String>,
 }
 
 pub fn viewer_router() -> Router<WebState> {
@@ -76,6 +97,8 @@ async fn list(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
     cookies: Cookies,
+    headers: HeaderMap,
+    Query(q): Query<ListQuery>,
 ) -> Result<Response, WebError> {
     let aviation_disabled = state.tracker_tx.is_none();
     let (flights, tracker_busy) =
@@ -86,6 +109,19 @@ async fn list(
         };
     let csrf = csrf::encode(&session.csrf_value);
     let is_mod = session.is_mod();
+    if q.partial.as_deref() == Some("rows") && is_htmx(&headers) {
+        // No `flash::take` here: a poll must not eat a flash meant for the
+        // next full page load.
+        return render(&RowsTpl {
+            flights,
+            aviation_disabled,
+            tracker_busy,
+            csrf,
+            is_mod,
+            oob: true,
+        })
+        .map(vary_hx);
+    }
     let is_owner = matches!(session.role, crate::auth::Role::Owner);
     render(&ListTpl {
         flights,
@@ -100,6 +136,7 @@ async fn list(
         is_broadcaster: session.is_broadcaster,
         is_owner,
     })
+    .map(vary_hx)
 }
 
 #[derive(Deserialize)]

@@ -2,25 +2,28 @@
 //!
 //! The list page renders a card-grid of all schedules plus an add/edit form.
 //! Add: `?new=true`. Edit: `?edit=<name>`. Validation errors re-render the
-//! list with per-row error attribution.
+//! list with per-row error attribution. A card's on/off toggle and delete
+//! answer htmx with just that card (nothing after a delete) plus an
+//! out-of-band stat strip; plain form posts get a flash + redirect.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use askama::Template;
 use axum::Router;
 use axum::extract::{Extension, Path, Query, State};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use chrono::{NaiveDate, NaiveTime, Weekday};
 use serde::Deserialize;
 use tower_cookies::Cookies;
-use twitch_1337_core::schedule::{Schedule, Trigger, WeekdaySet};
+use twitch_1337_core::schedule::{Schedule, ScheduleRuntime, Trigger, WeekdaySet};
 use twitch_1337_core::settings::{Actor, SettingsError};
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
-use crate::error::WebError;
+use crate::error::{WebError, is_htmx};
 use crate::flash;
 use crate::routes::{humanize_delta, render};
 use crate::state::WebState;
@@ -68,6 +71,38 @@ struct NextFire {
     time: String,
 }
 
+/// Heading count + stat strip.
+struct StatsView {
+    total: usize,
+    active_count: usize,
+    fired_today: u32,
+    next_fire: Option<NextFire>,
+}
+
+impl StatsView {
+    fn new(
+        rows: &[Schedule],
+        telemetry: &HashMap<String, ScheduleRuntime>,
+        now_berlin: chrono::DateTime<chrono_tz::Tz>,
+    ) -> Self {
+        let next_fire = rows
+            .iter()
+            .filter(|r| r.enabled)
+            .filter_map(|r| r.next_active_fire(now_berlin).map(|t| (r.name.clone(), t)))
+            .min_by_key(|(_, t)| *t)
+            .map(|(name, t)| NextFire {
+                name,
+                time: t.format("%H:%M").to_string(),
+            });
+        Self {
+            total: rows.len(),
+            active_count: rows.iter().filter(|r| r.enabled).count(),
+            fired_today: telemetry.values().map(|r| r.fires_today).sum(),
+            next_fire,
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone)]
 struct FormState {
     name: String,
@@ -103,10 +138,33 @@ struct ListTpl {
     is_mod: bool,
     is_broadcaster: bool,
     is_owner: bool,
-    total: usize,
-    active_count: usize,
-    fired_today: u32,
-    next_fire: Option<NextFire>,
+    stats: StatsView,
+}
+
+/// htmx answer to a card toggle or delete: the card (`None` after a delete,
+/// so the `outerHTML` swap removes it) plus the out-of-band stat strip.
+#[derive(Template)]
+#[template(path = "schedules/_swap.html")]
+struct SwapTpl {
+    card: Option<CardView>,
+    csrf: String,
+    stats: StatsView,
+}
+
+/// Fresh [`SwapTpl`] from the persisted schedules; `card` names the card to
+/// re-render, if it still exists.
+async fn swap_tpl(state: &WebState, session: &Session, card: Option<&str>) -> SwapTpl {
+    let rows = state.settings.load().schedules.clone();
+    let now_utc = chrono::Utc::now();
+    let now_berlin = now_utc.with_timezone(&chrono_tz::Europe::Berlin);
+    let telemetry = state.telemetry.snapshot(now_utc).await;
+    SwapTpl {
+        card: card
+            .and_then(|name| rows.iter().find(|s| s.name == name))
+            .map(|s| card_view(s, telemetry.get(&s.name), now_utc, now_berlin)),
+        csrf: csrf::encode(&session.csrf_value),
+        stats: StatsView::new(&rows, &telemetry, now_berlin),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,20 +316,10 @@ async fn list(
     cookies: Cookies,
 ) -> Result<Response, WebError> {
     let rows = state.settings.load().schedules.clone();
-    let active_count = rows.iter().filter(|r| r.enabled).count();
     let now_utc = chrono::Utc::now();
     let telemetry = state.telemetry.snapshot(now_utc).await;
-    let fired_today: u32 = telemetry.values().map(|r| r.fires_today).sum();
     let now_berlin = now_utc.with_timezone(&chrono_tz::Europe::Berlin);
-    let next_fire = rows
-        .iter()
-        .filter(|r| r.enabled)
-        .filter_map(|r| r.next_active_fire(now_berlin).map(|t| (r.name.clone(), t)))
-        .min_by_key(|(_, t)| *t)
-        .map(|(name, t)| NextFire {
-            name,
-            time: t.format("%H:%M").to_string(),
-        });
+    let stats = StatsView::new(&rows, &telemetry, now_berlin);
     let edit_form = q.edit.as_ref().and_then(|name| {
         rows.iter()
             .find(|r| r.name == *name)
@@ -291,7 +339,6 @@ async fn list(
         .iter()
         .map(|s| card_view(s, telemetry.get(&s.name), now_utc, now_berlin))
         .collect();
-    let total = cards.len();
     render(&ListTpl {
         rows: cards,
         edit_form,
@@ -306,10 +353,7 @@ async fn list(
         is_mod: session.is_mod(),
         is_broadcaster: session.is_broadcaster,
         is_owner: matches!(session.role, crate::auth::Role::Owner),
-        total,
-        active_count,
-        fired_today,
-        next_fire,
+        stats,
     })
 }
 
@@ -545,30 +589,49 @@ async fn delete(
     Extension(session): Extension<Session>,
     Path(name): Path<String>,
     cookies: Cookies,
+    headers: HeaderMap,
     axum::Form(form): axum::Form<DeleteForm>,
 ) -> Result<Response, WebError> {
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    let name_for_mutate = name.clone();
-    apply_or_rerender(
-        &state,
-        &session,
-        cookies,
-        Box::new(move |o| {
-            let next: Vec<Schedule> = o
-                .schedules
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|s| s.name != name_for_mutate)
-                .collect();
-            o.schedules = Some(next);
+    let mutate: Mutator = Box::new(move |o| {
+        let next: Vec<Schedule> = o
+            .schedules
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| s.name != name)
+            .collect();
+        o.schedules = Some(next);
+    });
+    if !is_htmx(&headers) {
+        return apply_or_rerender(&state, &session, cookies, mutate, None, None).await;
+    }
+    match state
+        .settings_store
+        .apply_with(mutate, actor_of(&session))
+        .await
+    {
+        Ok(_) => render(&swap_tpl(&state, &session, None).await),
+        // No form to re-open from a card button; the toast carries the reason.
+        Err(SettingsError::Validation(errs)) => Err(WebError::Validation {
+            field: "schedules".into(),
+            msg: errs
+                .iter()
+                .map(|e| format!("{}: {}", e.field, e.message))
+                .collect::<Vec<_>>()
+                .join("; "),
         }),
-        None,
-        None,
-    )
-    .await
+        Err(e) => Err(WebError::Internal(eyre::eyre!("settings apply: {e}"))),
+    }
+}
+
+fn actor_of(session: &Session) -> Actor {
+    Actor {
+        user_id: session.user_id.clone(),
+        user_login: session.user_login.clone(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -581,15 +644,12 @@ async fn toggle(
     Extension(session): Extension<Session>,
     Path(name): Path<String>,
     cookies: Cookies,
+    headers: HeaderMap,
     axum::Form(form): axum::Form<ToggleForm>,
 ) -> Result<Response, WebError> {
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    let actor = Actor {
-        user_id: session.user_id.clone(),
-        user_login: session.user_login.clone(),
-    };
     let name_for = name.clone();
     state
         .settings_store
@@ -603,12 +663,16 @@ async fn toggle(
                     o.schedules = Some(next);
                 },
             ),
-            actor,
+            actor_of(&session),
         )
         .await
         .map_err(|e| WebError::Internal(eyre::eyre!("settings apply: {e}")))?;
-    flash::set(&cookies, &format!("Toggled {name}."));
-    Ok(Redirect::to("/schedules").into_response())
+    if !is_htmx(&headers) {
+        flash::set(&cookies, &format!("Toggled {name}."));
+        return Ok(Redirect::to("/schedules").into_response());
+    }
+    // A schedule deleted in the meantime renders no card, so the swap drops it.
+    render(&swap_tpl(&state, &session, Some(&name)).await)
 }
 
 type Mutator =
@@ -622,10 +686,7 @@ async fn apply_or_rerender(
     edit_on_error: Option<String>,
     submitted: Option<FormState>,
 ) -> Result<Response, WebError> {
-    let actor = Actor {
-        user_id: session.user_id.clone(),
-        user_login: session.user_login.clone(),
-    };
+    let actor = actor_of(session);
     match state.settings_store.apply_with(mutate, actor).await {
         Ok(_) => {
             flash::set(&cookies, "Schedules saved.");
@@ -689,8 +750,8 @@ fn render_validation(
     // schedules alongside the error.
     let now_utc = chrono::Utc::now();
     let now_berlin = now_utc.with_timezone(&chrono_tz::Europe::Berlin);
-    let active_count = rows.iter().filter(|r| r.enabled).count();
-    let total = rows.len();
+    // Telemetry isn't loaded on this path, so "fired today" reads 0.
+    let stats = StatsView::new(&rows, &HashMap::new(), now_berlin);
     let cards: Vec<CardView> = rows
         .iter()
         .map(|s| card_view(s, None, now_utc, now_berlin))
@@ -726,10 +787,7 @@ fn render_validation(
         is_mod: session.is_mod(),
         is_broadcaster: session.is_broadcaster,
         is_owner: matches!(session.role, crate::auth::Role::Owner),
-        total,
-        active_count,
-        fired_today: 0,
-        next_fire: None,
+        stats,
     };
     render(&resp)
 }

@@ -1,0 +1,7 @@
+{# Out-of-band count refresh after an htmx ping delete. The main swap is empty, which removes the row. #}
+<span class="count" id="pings-total" hx-swap-oob="true">({{ counts.total_pings }})</span>
+{% let oob = true %}
+{% include "pings/_stats.html" %}
+{% for (key, n) in counts.chips %}
+<span class="chip-n" id="ping-chip-n-{{ key }}" hx-swap-oob="true">{{ n }}</span>
+{% endfor %}

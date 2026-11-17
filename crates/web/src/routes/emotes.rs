@@ -1,8 +1,13 @@
 //! `/emotes` — mod-gated emote tracker browse (catalog + audit + usage).
+//!
+//! Usage pages through events 200 at a time with a keyset cursor
+//! (`before` + `before_id`); htmx "Load more" requests get only the next
+//! rows to append.
 
 use askama::Template;
 use axum::Router;
 use axum::extract::{Extension, Query, State};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use chrono::NaiveDateTime;
@@ -17,10 +22,10 @@ use twitch_1337_core::emote_tracker::{
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
-use crate::error::WebError;
+use crate::error::{WebError, is_htmx};
 use crate::flash;
 use crate::nav;
-use crate::routes::render;
+use crate::routes::{render, vary_hx};
 use crate::state::WebState;
 
 #[derive(Clone)]
@@ -95,10 +100,22 @@ struct UsageRowView {
     filter_blob: String,
 }
 
+/// Usage events per page; "Load more" fetches the next page by cursor.
+const USAGE_PAGE: u32 = 200;
+
+/// "Showing N of M" line plus the next page's URL, if there is one.
+struct UsageMoreView {
+    status: String,
+    more_href: Option<String>,
+}
+
 #[derive(Template)]
 #[template(path = "emotes/usage.html")]
 struct UsageTpl {
     rows: Vec<UsageRowView>,
+    /// Events matching the filters; `None` when the count query failed.
+    total: Option<u64>,
+    more: UsageMoreView,
     tracker_disabled: bool,
     load_failed: bool,
     include_flagged: bool,
@@ -117,6 +134,16 @@ struct UsageTpl {
     is_owner: bool,
 }
 
+/// htmx "Load more" answer: rows appended to `#usage-rows`, plus the
+/// status line and next button swapped out of band.
+#[derive(Template)]
+#[template(path = "emotes/_usage_page.html")]
+struct UsagePageTpl {
+    rows: Vec<UsageRowView>,
+    more: UsageMoreView,
+    oob: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UsageQuery {
     pub flagged: Option<String>,
@@ -125,7 +152,12 @@ pub struct UsageQuery {
     pub login: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
-    pub offset: Option<u32>,
+    /// Keyset cursor: `at` (ms) of the last row already shown...
+    pub before: Option<i64>,
+    /// ...and its id, which breaks ties between events of one message.
+    pub before_id: Option<i64>,
+    /// Rows already shown above the cursor, for "Showing N of M".
+    pub shown: Option<u64>,
 }
 
 fn merge_flash(existing: Option<String>, msg: &str) -> Option<String> {
@@ -310,19 +342,59 @@ async fn audit(
     .into_response())
 }
 
+/// `/emotes/usage` URL for the next page: the current filters plus the
+/// cursor after `last` and the running row count.
+fn usage_next_href(q: &UsageQuery, include_flagged: bool, last: (i64, i64), shown: u64) -> String {
+    let mut pairs: Vec<(&str, String)> = [
+        ("emote_id", &q.emote_id),
+        ("user", &q.user),
+        ("login", &q.login),
+        ("since", &q.since),
+        ("until", &q.until),
+    ]
+    .into_iter()
+    .filter_map(|(k, v)| {
+        v.as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| (k, s.to_owned()))
+    })
+    .collect();
+    if include_flagged {
+        pairs.push(("flagged", "1".to_owned()));
+    }
+    pairs.push(("before", last.0.to_string()));
+    pairs.push(("before_id", last.1.to_string()));
+    pairs.push(("shown", shown.to_string()));
+    let query = pairs
+        .iter()
+        .map(|(k, v)| format!("{k}={}", urlencoding::encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("/emotes/usage?{query}")
+}
+
+fn usage_status(shown: u64, total: Option<u64>, has_more: bool) -> String {
+    match total {
+        Some(total) if shown < total => format!("Showing {shown} of {total}"),
+        Some(total) => format!("Showing all {total}"),
+        None if has_more => format!("Showing the first {shown}"),
+        None => format!("Showing {shown}"),
+    }
+}
+
 async fn usage(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
     cookies: Cookies,
+    headers: HeaderMap,
     Query(q): Query<UsageQuery>,
 ) -> Result<Response, WebError> {
     let tracker_disabled = state.emote_tracker.is_none();
     let include_flagged = matches!(q.flagged.as_deref(), Some("1") | Some("true"));
-    let emote_id_filter = q.emote_id.clone().unwrap_or_default();
-    let user_filter = q.user.clone().unwrap_or_default();
-    let login_filter = q.login.clone().unwrap_or_default();
-    let since_filter = q.since.clone().unwrap_or_default();
-    let until_filter = q.until.clone().unwrap_or_default();
+    let before = q.before.zip(q.before_id);
+    // "Load more" appends to the page it came from; everything else, a
+    // cursor URL opened directly included, is a full page.
+    let load_more = before.is_some() && is_htmx(&headers);
     let (since_ms, since_invalid) = match parse_berlin_since_local(q.since.as_deref()) {
         Ok(v) => (v, false),
         Err(()) => (None, true),
@@ -331,30 +403,31 @@ async fn usage(
         Ok(v) => (v, false),
         Err(()) => (None, true),
     };
-    let mut flash_msg = flash::take(&cookies);
-    if since_invalid || until_invalid {
-        tracing::warn!(
-            since = q.since.as_deref(),
-            until = q.until.as_deref(),
-            "invalid since/until datetime filter; ignoring time bounds"
-        );
-        flash_msg = merge_flash(flash_msg, "Invalid since/until time; filter ignored.");
-    }
     let mut load_failed = false;
-    let rows = if let Some(ref h) = state.emote_tracker {
+    let mut total = None;
+    let mut last = None;
+    let mut rows = Vec::new();
+    if let Some(h) = &state.emote_tracker {
         let filter = UsageEventListFilter {
-            emote_id: q.emote_id.filter(|s| !s.is_empty()),
-            twitch_user_id: q.user.filter(|s| !s.is_empty()),
-            login_substr: q.login.filter(|s| !s.is_empty()),
+            emote_id: q.emote_id.clone().filter(|s| !s.is_empty()),
+            twitch_user_id: q.user.clone().filter(|s| !s.is_empty()),
+            login_substr: q.login.clone().filter(|s| !s.is_empty()),
             since_ms,
             until_ms,
             include_flagged,
-            limit: 200,
-            offset: q.offset.unwrap_or(0),
+            limit: USAGE_PAGE,
+            before,
         };
+        match h.count_usage_events(filter.clone()).await {
+            Ok(n) => total = Some(n),
+            Err(error) => tracing::warn!(?error, "failed to count emote usage events"),
+        }
         match h.list_usage_events(filter).await {
             Ok(events) => {
-                let mut out = Vec::with_capacity(events.len());
+                if events.len() == USAGE_PAGE as usize {
+                    last = events.last().map(|ev| (ev.at, ev.id));
+                }
+                rows.reserve(events.len());
                 for ev in events {
                     let emote_name = h
                         .get_emote(&ev.emote_id)
@@ -372,7 +445,7 @@ async fn usage(
                         "{} {} {} {} {}",
                         at_berlin, ev.emote_id, emote_name, user, ev.twitch_user_id
                     );
-                    out.push(UsageRowView {
+                    rows.push(UsageRowView {
                         at_berlin,
                         emote_id: ev.emote_id,
                         emote_name,
@@ -381,30 +454,59 @@ async fn usage(
                         filter_blob,
                     });
                 }
-                out
             }
             Err(error) => {
                 tracing::warn!(?error, "failed to load emote usage events");
                 load_failed = true;
-                Vec::new()
             }
         }
-    } else {
-        Vec::new()
+    }
+    if load_more && (tracker_disabled || load_failed) {
+        return Err(WebError::Internal(eyre::eyre!(
+            "emote usage page unavailable"
+        )));
+    }
+    let shown = before.map_or(0, |_| q.shown.unwrap_or(0)) + rows.len() as u64;
+    // A short page is the last one; a full page may be too when the count
+    // says nothing is left.
+    let last = last.filter(|_| total.is_none_or(|t| shown < t));
+    let more = UsageMoreView {
+        status: usage_status(shown, total, last.is_some()),
+        more_href: last.map(|last| usage_next_href(&q, include_flagged, last, shown)),
     };
+    if load_more {
+        return render(&UsagePageTpl {
+            rows,
+            more,
+            oob: true,
+        })
+        .map(vary_hx);
+    }
+
+    let mut flash_msg = flash::take(&cookies);
+    if since_invalid || until_invalid {
+        tracing::warn!(
+            since = q.since.as_deref(),
+            until = q.until.as_deref(),
+            "invalid since/until datetime filter; ignoring time bounds"
+        );
+        flash_msg = merge_flash(flash_msg, "Invalid since/until time; filter ignored.");
+    }
     let csrf = csrf::encode(&session.csrf_value);
     let is_mod = session.is_mod();
     let is_owner = matches!(session.role, crate::auth::Role::Owner);
-    Ok(render(&UsageTpl {
+    render(&UsageTpl {
         rows,
+        total,
+        more,
         tracker_disabled,
         load_failed,
         include_flagged,
-        emote_id_filter,
-        user_filter,
-        login_filter,
-        since_filter,
-        until_filter,
+        emote_id_filter: q.emote_id.unwrap_or_default(),
+        user_filter: q.user.unwrap_or_default(),
+        login_filter: q.login.unwrap_or_default(),
+        since_filter: q.since.unwrap_or_default(),
+        until_filter: q.until.unwrap_or_default(),
         user_avatar_url: session.avatar_url.clone(),
         user_login: session.user_login,
         csrf,
@@ -414,7 +516,7 @@ async fn usage(
         is_broadcaster: session.is_broadcaster,
         is_owner,
     })
-    .into_response())
+    .map(vary_hx)
 }
 
 #[cfg(test)]

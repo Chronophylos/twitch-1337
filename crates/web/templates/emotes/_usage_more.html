@@ -1,0 +1,7 @@
+{# "Showing N of M" + Load more. `more: UsageMoreView` and `oob: bool` must be in scope. #}
+<div class="load-more" id="usage-more"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <span class="muted">{{ more.status }}</span>
+  {% if let Some(href) = more.more_href %}
+  <button type="button" class="btn ghost" hx-get="{{ href }}" hx-target="#usage-rows" hx-swap="beforeend" hx-disabled-elt="this">Load more</button>
+  {% endif %}
+</div>

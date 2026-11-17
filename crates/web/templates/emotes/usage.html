@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>Emote usage <span class="count">({{ rows.len() }})</span></h1>
+    <h1>Emote usage <span class="count">({% if let Some(t) = total %}{{ t }}{% else %}{{ rows.len() }}{% endif %})</span></h1>
     <p class="page-sub">Chat usage timeline — who used which emote and when.</p>
   </div>
 </div>
@@ -55,25 +55,13 @@
   {% else if rows.is_empty() %}
     <div class="empty">No usage events match the current filters.</div>
   {% else %}
-    <div class="tbody">
-    {% for row in rows %}
-      <div class="tr{% if row.flagged %} row-flagged{% endif %}" data-filter="{{ row.filter_blob }}">
-        <div class="td mono" data-label="Time">{{ row.at_berlin }}</div>
-        <div class="td col-name" data-label="Emote">
-          <span class="ping-name">{{ row.emote_name }}</span>
-        </div>
-        <div class="td mono" data-label="Id">{{ row.emote_id }}</div>
-        <div class="td" data-label="User">{{ row.user }}</div>
-        <div class="td" data-label="Flagged">
-          {% if row.flagged %}
-            <span class="badge badge-flagged">flagged</span>
-          {% else %}
-            <span class="muted">—</span>
-          {% endif %}
-        </div>
-      </div>
-    {% endfor %}
+    <div class="tbody" id="usage-rows">
+    {% include "emotes/_usage_rows.html" %}
     </div>
   {% endif %}
 </div>
+{% if !tracker_disabled && !load_failed && !rows.is_empty() %}
+{% let oob = false %}
+{% include "emotes/_usage_more.html" %}
+{% endif %}
 {% endblock %}

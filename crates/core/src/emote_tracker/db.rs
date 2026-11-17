@@ -592,28 +592,23 @@ pub fn list_set_events(conn: &Connection, filter: &SetEventListFilter) -> Result
         .map_err(Into::into)
 }
 
-pub fn list_usage_events(
-    conn: &Connection,
-    filter: &UsageEventListFilter,
-) -> Result<Vec<UsageEventRow>> {
-    let limit = clamp_limit(if filter.limit == 0 { 200 } else { filter.limit });
-    let mut sql = String::from(
-        "SELECT id, at, emote_id, twitch_user_id, login, flagged
-         FROM usage_events WHERE 1=1",
-    );
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+type SqlParams = Vec<Box<dyn rusqlite::types::ToSql>>;
+
+/// Appends the `WHERE` conditions of `filter` that narrow the result set:
+/// everything but the cursor and `limit`, so the count matches the list.
+fn push_usage_conditions(filter: &UsageEventListFilter, sql: &mut String, params: &mut SqlParams) {
     if !filter.include_flagged {
         sql.push_str(" AND flagged = 0");
     }
-    if let Some(ref id) = filter.emote_id {
+    if let Some(id) = &filter.emote_id {
         sql.push_str(" AND emote_id = ?");
         params.push(Box::new(id.clone()));
     }
-    if let Some(ref uid) = filter.twitch_user_id {
+    if let Some(uid) = &filter.twitch_user_id {
         sql.push_str(" AND twitch_user_id = ?");
         params.push(Box::new(uid.clone()));
     }
-    if let Some(ref login) = filter.login_substr {
+    if let Some(login) = &filter.login_substr {
         sql.push_str(" AND login LIKE ?");
         params.push(Box::new(format!("%{login}%")));
     }
@@ -625,9 +620,27 @@ pub fn list_usage_events(
         sql.push_str(" AND at <= ?");
         params.push(Box::new(until));
     }
-    sql.push_str(" ORDER BY at DESC, id DESC LIMIT ? OFFSET ?");
+}
+
+pub fn list_usage_events(
+    conn: &Connection,
+    filter: &UsageEventListFilter,
+) -> Result<Vec<UsageEventRow>> {
+    let limit = clamp_limit(if filter.limit == 0 { 200 } else { filter.limit });
+    let mut sql = String::from(
+        "SELECT id, at, emote_id, twitch_user_id, login, flagged
+         FROM usage_events WHERE 1=1",
+    );
+    let mut params: SqlParams = Vec::new();
+    push_usage_conditions(filter, &mut sql, &mut params);
+    if let Some((at, id)) = filter.before {
+        sql.push_str(" AND (at < ? OR (at = ? AND id < ?))");
+        params.push(Box::new(at));
+        params.push(Box::new(at));
+        params.push(Box::new(id));
+    }
+    sql.push_str(" ORDER BY at DESC, id DESC LIMIT ?");
     params.push(Box::new(i64::from(limit)));
-    params.push(Box::new(i64::from(filter.offset)));
 
     let mut stmt = conn.prepare(&sql)?;
     let param_refs: Vec<&dyn rusqlite::types::ToSql> =
@@ -644,6 +657,17 @@ pub fn list_usage_events(
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
+}
+
+/// Number of events matching `filter`, ignoring `before` and `limit`.
+pub fn count_usage_events(conn: &Connection, filter: &UsageEventListFilter) -> Result<u64> {
+    let mut sql = String::from("SELECT COUNT(*) FROM usage_events WHERE 1=1");
+    let mut params: SqlParams = Vec::new();
+    push_usage_conditions(filter, &mut sql, &mut params);
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(std::convert::AsRef::as_ref).collect();
+    let n: i64 = conn.query_row(&sql, param_refs.as_slice(), |row| row.get(0))?;
+    Ok(u64::try_from(n).unwrap_or(0))
 }
 
 fn map_emote_meaning_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EmoteMeaningRow> {
@@ -1092,6 +1116,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(shown.len(), 2);
+    }
+
+    #[test]
+    fn usage_cursor_pages_through_shared_timestamps_and_count_ignores_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        upsert_emote(&conn, "aaaaaaaaaaaaaaaaaaaaaaaa", "Kappa", true, 1).unwrap();
+        // One chat message stamps all its emotes with the same `at`.
+        let events: Vec<NewUsageEvent> = [10, 20, 20, 20, 30]
+            .into_iter()
+            .map(|at| NewUsageEvent {
+                at,
+                emote_id: "aaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                twitch_user_id: "1".into(),
+                login: Some("alice".into()),
+                flagged: false,
+            })
+            .collect();
+        insert_usage_events(&conn, &events).unwrap();
+
+        let mut seen = Vec::new();
+        let mut before = None;
+        loop {
+            let page = list_usage_events(
+                &conn,
+                &UsageEventListFilter {
+                    limit: 2,
+                    before,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let Some(last) = page.last() else { break };
+            before = Some((last.at, last.id));
+            seen.extend(page.iter().map(|r| (r.at, r.id)));
+        }
+        assert_eq!(seen.len(), 5, "every event exactly once: {seen:?}");
+        let mut sorted = seen.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        assert_eq!(seen, sorted, "pages continue in (at, id) DESC order");
+
+        let filter = UsageEventListFilter {
+            before: Some((20, i64::MAX)),
+            ..Default::default()
+        };
+        assert_eq!(count_usage_events(&conn, &filter).unwrap(), 5);
     }
 
     #[test]

@@ -1,0 +1,35 @@
+{# Body of the flights table: polled by `#flight-rows` via `/flights?partial=rows`.
+   `oob: bool` adds the out-of-band heading count for the poll response. #}
+{% if aviation_disabled %}
+  <div class="empty">Aviation tracking is disabled.</div>
+{% else if tracker_busy %}
+  <div class="empty">Flight tracker busy — refresh to retry.</div>
+{% else if flights.is_empty() %}
+  <div class="empty">No flights tracked right now.</div>
+{% else %}
+  <div class="tbody">
+  {% for f in flights %}
+    <div class="tr">
+      <div class="td col-id mono" data-label="ID">{{ f.identifier }}</div>
+      <div class="td col-cs mono" data-label="Callsign">{% match f.callsign %}{% when Some(v) %}{{ v }}{% when None %}—{% endmatch %}</div>
+      <div class="td col-by mono" data-label="Owner">{{ f.owner_login }}</div>
+      <div class="td col-phase mono" data-label="Phase">{{ f.phase }}</div>
+      <div class="td col-alt mono num" data-label="Altitude">{% match f.altitude_ft %}{% when Some(v) %}{{ v }} ft{% when None %}—{% endmatch %}</div>
+      <div class="td col-gs mono num" data-label="Speed">{% match f.ground_speed_kts %}{% when Some(v) %}{{ v }} kt{% when None %}—{% endmatch %}</div>
+      <div class="td col-age mono num" data-label="Seen">{% match f.last_seen_secs_ago %}{% when Some(v) %}{{ v }}s{% when None %}—{% endmatch %}</div>
+      {% if is_mod %}
+      <div class="td col-act">
+        <form method="post" action="/flights/delete" style="display:inline" onsubmit="return confirm('Untrack {{ f.identifier }}?')">
+          <input type="hidden" name="_csrf" value="{{ csrf }}">
+          <input type="hidden" name="identifier" value="{{ f.identifier }}">
+          <button type="submit" class="row-act danger" title="Untrack">✕</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  {% endfor %}
+  </div>
+{% endif %}
+{% if oob %}
+<span class="count" id="flights-count" hx-swap-oob="true">({{ flights.len() }})</span>
+{% endif %}

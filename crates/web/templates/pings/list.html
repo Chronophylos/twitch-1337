@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>Pings <span class="count">({{ total_pings }})</span></h1>
+    <h1>Pings <span class="count" id="pings-total">({{ counts.total_pings }})</span></h1>
     <p class="page-sub">Template-based community shouts. Members can <code>!&lt;name&gt;</code> to fire.</p>
   </div>
   <div class="page-actions">
@@ -15,24 +15,12 @@
 
 {% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
 
-<div class="stat-strip three">
-  <div class="stat">
-    <div class="stat-label">Total pings</div>
-    <div class="stat-value">{{ total_pings }}</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Total members</div>
-    <div class="stat-value">{{ total_members }}</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Custom cooldowns</div>
-    <div class="stat-value">{{ custom_cooldowns }}</div>
-  </div>
-</div>
+{% let oob = false %}
+{% include "pings/_stats.html" %}
 
 <nav class="filters" aria-label="Filter and sort pings">
   {% for chip in filter_chips %}
-  <a class="chip{% if chip.active %} active{% endif %}" href="{{ chip.href }}"{% if chip.active %} aria-current="page"{% endif %}>{{ chip.label }}{% if let Some(n) = chip.count %} <span class="chip-n">{{ n }}</span>{% endif %}</a>
+  <a class="chip{% if chip.active %} active{% endif %}" href="{{ chip.href }}"{% if chip.active %} aria-current="page"{% endif %}>{{ chip.label }}{% if let Some((key, n)) = chip.count %} <span class="chip-n" id="ping-chip-n-{{ key }}">{{ n }}</span>{% endif %}</a>
   {% endfor %}
   <div class="filters-spacer"></div>
   <span class="muted">Sort</span>
@@ -51,7 +39,7 @@
     <div class="th col-by">Created by</div>
     <div class="th col-act"></div>
   </div>
-  {% if total_pings == 0 %}
+  {% if counts.total_pings == 0 %}
     <div class="empty">No pings yet — create the first one.</div>
   {% else if rows.is_empty() %}
     <div class="empty">No pings match this filter.</div>

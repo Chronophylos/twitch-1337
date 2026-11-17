@@ -232,7 +232,7 @@ async fn create_duplicate_name_restores_form_without_phantom_card() {
     // Exactly one card for "dup" — the persisted one. A phantom card for the
     // rejected attempt would push this to two.
     assert_eq!(
-        html.matches("/schedules/dup/toggle").count(),
+        html.matches(r#"action="/schedules/dup/toggle""#).count(),
         1,
         "no phantom card for the unsaved row"
     );
@@ -265,6 +265,163 @@ async fn delete_schedule_removes_row() {
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     let v = state.settings.load().schedules.clone();
     assert!(v.is_empty());
+}
+
+fn card_post(
+    uri: &str,
+    sid: &str,
+    csrf_cookie: &str,
+    bare_csrf: &str,
+    htmx: bool,
+) -> Request<Body> {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::COOKIE, cookie_header(sid, csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+    if htmx {
+        req = req.header("HX-Request", "true");
+    }
+    req.body(Body::from(format!(
+        "_csrf={}",
+        urlencoding::encode(bare_csrf)
+    )))
+    .unwrap()
+}
+
+/// htmx toggle answers with just the re-rendered card plus the
+/// out-of-band stat strip, never the full page.
+#[tokio::test]
+async fn toggle_via_htmx_returns_card_and_oob_stats() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_schedules(
+        &state,
+        vec![
+            interval_schedule("flip", "x"),
+            interval_schedule("other", "y"),
+        ],
+    )
+    .await;
+    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let res = build_router(state.clone())
+        .oneshot(card_post(
+            "/schedules/flip/toggle",
+            &sid,
+            &csrf_cookie,
+            &bare_csrf,
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(!html.contains("<html"), "fragment only; got {html}");
+    assert_eq!(
+        html.matches("<article").count(),
+        1,
+        "only the toggled card; got {html}"
+    );
+    assert!(
+        html.contains(r#"<article class="schedule-card paused">"#),
+        "card re-rendered as paused; got {html}"
+    );
+    assert!(html.contains("/schedules/flip/toggle"), "got {html}");
+    assert!(
+        html.contains(r#"id="schedule-stats" hx-swap-oob="true""#),
+        "stat strip out of band; got {html}"
+    );
+    assert!(html.contains("1 / 2"), "active count updated; got {html}");
+    let rows = state.settings.load().schedules.clone();
+    assert!(!rows.iter().find(|s| s.name == "flip").unwrap().enabled);
+}
+
+#[tokio::test]
+async fn toggle_without_htmx_redirects() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_schedules(&state, vec![interval_schedule("flip", "x")]).await;
+    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let res = build_router(state.clone())
+        .oneshot(card_post(
+            "/schedules/flip/toggle",
+            &sid,
+            &csrf_cookie,
+            &bare_csrf,
+            false,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(res.headers().get(header::LOCATION).unwrap(), "/schedules");
+    assert!(!state.settings.load().schedules[0].enabled);
+}
+
+/// htmx delete answers with no card (the `outerHTML` swap removes it) and
+/// the out-of-band counts.
+#[tokio::test]
+async fn delete_via_htmx_returns_only_oob_stats() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_schedules(&state, vec![interval_schedule("gone", "x")]).await;
+    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let res = build_router(state.clone())
+        .oneshot(card_post(
+            "/schedules/gone/delete",
+            &sid,
+            &csrf_cookie,
+            &bare_csrf,
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(!html.contains("<html"), "fragment only; got {html}");
+    assert!(
+        !html.contains("<article"),
+        "no card after delete; got {html}"
+    );
+    assert!(
+        html.contains(r#"<span class="muted" id="schedules-total" hx-swap-oob="true">(0)</span>"#),
+        "heading count out of band; got {html}"
+    );
+    assert!(
+        html.contains(r#"id="schedule-stats" hx-swap-oob="true""#),
+        "got {html}"
+    );
+    assert!(state.settings.load().schedules.is_empty());
+}
+
+/// The page renders the targets the htmx swaps rely on and no inline script.
+#[tokio::test]
+async fn list_wires_cards_for_htmx() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_schedules(&state, vec![interval_schedule("flip", "x")]).await;
+    let (sid, csrf_cookie, _bare) = insert_session(&state, "999", "mod");
+    let req = Request::builder()
+        .uri("/schedules")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let html = body_string(build_router(state).oneshot(req).await.unwrap()).await;
+    assert!(
+        html.contains(r#"hx-post="/schedules/flip/toggle""#),
+        "got {html}"
+    );
+    assert!(
+        html.contains(r#"hx-post="/schedules/flip/delete""#),
+        "got {html}"
+    );
+    assert!(
+        html.contains("hx-confirm="),
+        "delete asks first; got {html}"
+    );
+    assert!(html.contains(r#"id="schedule-stats""#));
+    assert!(html.contains(r#"id="schedules-total""#));
+    assert!(!html.contains("hx-swap-oob"), "the page itself is not oob");
+    assert!(!html.contains("<script>"), "no inline script; got {html}");
 }
 
 #[tokio::test]

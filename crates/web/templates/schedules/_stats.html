@@ -1,0 +1,14 @@
+{# Schedule stat strip. `stats: StatsView` and `oob: bool` must be in scope. #}
+<div class="stat-strip" id="schedule-stats"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="stat"><div class="stat-label">TOTAL</div><div class="stat-value">{{ stats.total }}</div></div>
+  <div class="stat"><div class="stat-label">ACTIVE</div><div class="stat-value">{{ stats.active_count }} / {{ stats.total }}</div></div>
+  <div class="stat"><div class="stat-label">FIRED TODAY</div><div class="stat-value">{{ stats.fired_today }}</div></div>
+  <div class="stat">
+    <div class="stat-label">NEXT FIRE</div>
+    {% if let Some(nf) = stats.next_fire %}
+      <div class="stat-value">{{ nf.time }} <span class="muted">· {{ nf.name }}</span></div>
+    {% else %}
+      <div class="stat-value muted">—</div>
+    {% endif %}
+  </div>
+</div>

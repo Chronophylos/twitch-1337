@@ -84,15 +84,18 @@ for (const el of document.querySelectorAll('[data-mod-key]')) {
 (function liveFilter() {
   const input = document.querySelector('[data-row-filter]');
   if (!input) return;
-  const items = Array.from(document.querySelectorAll('[data-filter]'), (el) => ({
-    el,
-    hay: (el.getAttribute('data-filter') || '').toLowerCase(),
-  }));
-  input.addEventListener('input', () => {
+  // Rows are looked up on every pass: htmx polls and "Load more" swap new
+  // `[data-filter]` rows in after page load.
+  function apply() {
     const q = input.value.trim().toLowerCase();
-    for (const { el, hay } of items) {
+    for (const el of document.querySelectorAll('[data-filter]')) {
+      const hay = (el.getAttribute('data-filter') || '').toLowerCase();
       el.style.display = !q || hay.includes(q) ? '' : 'none';
     }
+  }
+  input.addEventListener('input', apply);
+  document.body.addEventListener('htmx:afterSettle', () => {
+    if (input.value.trim()) apply();
   });
 })();
 
@@ -950,3 +953,13 @@ document.addEventListener('submit', (evt) => {
     true,
   );
 })();
+
+// ─── Polling pauses in background tabs ───────────────────────────────────────
+// `[data-poll-visible]` polls with `hx-trigger="every Ns, visibilitychange
+// from:document"`: ticks in a hidden tab are dropped here, and the
+// visibilitychange trigger refreshes at once when the tab comes back.
+// (An `every 15s [!document.hidden]` filter would need eval, which the CSP
+// rules out.)
+document.body.addEventListener('htmx:beforeRequest', (evt) => {
+  if (document.hidden && evt.detail.elt.matches?.('[data-poll-visible]')) evt.preventDefault();
+});

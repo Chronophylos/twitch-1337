@@ -4,7 +4,7 @@
 {% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
 <div class="page-head">
   <div>
-    <h1>Flights <span class="count">({{ flights.len() }})</span></h1>
+    <h1>Flights <span class="count" id="flights-count">({{ flights.len() }})</span></h1>
     <p class="page-sub">Currently tracked aircraft.</p>
   </div>
 </div>
@@ -20,35 +20,15 @@
     <div class="th col-age">Seen</div>
     {% if is_mod %}<div class="th col-act"></div>{% endif %}
   </div>
-  {% if aviation_disabled %}
-    <div class="empty">Aviation tracking is disabled.</div>
-  {% else if tracker_busy %}
-    <div class="empty">Flight tracker busy — refresh to retry.</div>
-  {% else if flights.is_empty() %}
-    <div class="empty">No flights tracked right now.</div>
-  {% else %}
-    <div class="tbody">
-    {% for f in flights %}
-      <div class="tr">
-        <div class="td col-id mono" data-label="ID">{{ f.identifier }}</div>
-        <div class="td col-cs mono" data-label="Callsign">{% match f.callsign %}{% when Some(v) %}{{ v }}{% when None %}—{% endmatch %}</div>
-        <div class="td col-by mono" data-label="Owner">{{ f.owner_login }}</div>
-        <div class="td col-phase mono" data-label="Phase">{{ f.phase }}</div>
-        <div class="td col-alt mono num" data-label="Altitude">{% match f.altitude_ft %}{% when Some(v) %}{{ v }} ft{% when None %}—{% endmatch %}</div>
-        <div class="td col-gs mono num" data-label="Speed">{% match f.ground_speed_kts %}{% when Some(v) %}{{ v }} kt{% when None %}—{% endmatch %}</div>
-        <div class="td col-age mono num" data-label="Seen">{% match f.last_seen_secs_ago %}{% when Some(v) %}{{ v }}s{% when None %}—{% endmatch %}</div>
-        {% if is_mod %}
-        <div class="td col-act">
-          <form method="post" action="/flights/delete" style="display:inline" onsubmit="return confirm('Untrack {{ f.identifier }}?')">
-            <input type="hidden" name="_csrf" value="{{ csrf }}">
-            <input type="hidden" name="identifier" value="{{ f.identifier }}">
-            <button type="submit" class="row-act danger" title="Untrack">✕</button>
-          </form>
-        </div>
-        {% endif %}
-      </div>
-    {% endfor %}
-    </div>
-  {% endif %}
+  {# Refreshes every 15s so "Seen" stays current; app.js skips polls while
+     the tab is hidden and the visibilitychange trigger catches up on return.
+     Disabled aviation can't come back without a restart, so it isn't polled. #}
+  <div id="flight-rows"{% if !aviation_disabled %} data-poll-visible
+       hx-get="/flights?partial=rows"
+       hx-trigger="every 15s, visibilitychange from:document"
+       hx-swap="innerHTML"{% endif %}>
+    {% let oob = false %}
+    {% include "flights/_rows.html" %}
+  </div>
 </div>
 {% endblock %}
