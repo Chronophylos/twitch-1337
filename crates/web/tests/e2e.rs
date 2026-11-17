@@ -587,3 +587,181 @@ async fn logs_tail_polls_and_pauses() {
 
     s.close().await;
 }
+
+/// The jump palette is open with focus in its combobox.
+const PALETTE_OPEN: &str = "return document.getElementById('palette').open \
+     && document.activeElement === document.getElementById('palette-input');";
+const PALETTE_CLOSED: &str = "return !document.getElementById('palette').open;";
+
+/// Labels of the palette's listed options, in order.
+async fn palette_labels(s: &E2eSession) -> Vec<String> {
+    let v = s
+        .eval(
+            "return [...document.querySelectorAll('#palette-list [role=option] .palette-opt-label')] \
+             .map((el) => el.textContent);",
+        )
+        .await;
+    serde_json::from_value(v).unwrap()
+}
+
+/// Ctrl+K opens the palette; typing "sett" and Enter lands on /settings.
+#[tokio::test]
+async fn palette_ctrl_k_jumps_to_settings() {
+    use fantoccini::key::Key;
+
+    let s = E2eSession::start_as_owner().await;
+    s.goto("/pings").await;
+    // Non-Mac platform in headless Chrome, so the trigger hint reads Ctrl K.
+    assert_eq!(s.wait_text(".cmdk kbd[data-mod-key]").await, "Ctrl");
+    s.exec("window.__e2eMarker = true;").await;
+
+    s.find("#sidebar .nav-item")
+        .await
+        .send_keys(&(Key::Control + "k"))
+        .await
+        .expect("send ctrl+k");
+    s.wait_js(PALETTE_OPEN).await;
+    let input = s.find("#palette-input").await;
+    assert_eq!(
+        s.accessibility(&input).await,
+        ("combobox".to_owned(), "Jump to".to_owned())
+    );
+
+    input.send_keys("sett").await.expect("type query");
+    s.wait_js(
+        "const opt = document.getElementById(\
+           document.getElementById('palette-input').getAttribute('aria-activedescendant')); \
+         return !!opt && opt.getAttribute('aria-selected') === 'true' \
+           && opt.querySelector('.palette-opt-label').textContent === 'Settings';",
+    )
+    .await;
+    input
+        .send_keys(&char::from(Key::Enter).to_string())
+        .await
+        .expect("send Enter");
+
+    // The marker disappears once the click navigated to a fresh document.
+    s.wait_js(
+        "return document.readyState === 'complete' && window.__e2eMarker === undefined \
+         && location.pathname === '/settings';",
+    )
+    .await;
+    assert!(s.current_url().await.ends_with("/settings"));
+
+    // On /settings the palette also lists sections; matching covers the
+    // group name, and choosing one scrolls to its card.
+    s.wait_for("#sidebar .nav-item")
+        .await
+        .send_keys(&(Key::Control + "k"))
+        .await
+        .expect("send ctrl+k");
+    s.wait_js(PALETTE_OPEN).await;
+    let input = s.find("#palette-input").await;
+    input.send_keys("agents grok").await.expect("type query");
+    s.wait_js(
+        "const opt = document.getElementById('palette-opt-0'); \
+         return !!opt && opt.getAttribute('aria-selected') === 'true' \
+           && opt.textContent === 'GrokSettings · Agents';",
+    )
+    .await;
+    input
+        .send_keys(&char::from(Key::Enter).to_string())
+        .await
+        .expect("send Enter");
+    s.wait_js(PALETTE_CLOSED).await;
+    s.wait_js(
+        "const top = document.getElementById('sec-ai-grok').getBoundingClientRect().top; \
+         return top >= 0 && top < 200;",
+    )
+    .await;
+
+    s.close().await;
+}
+
+/// `/` opens the palette with every page and page action listed, arrows move
+/// the active option, Esc closes it and focus returns to where it was. At
+/// phone width the icon trigger opens it.
+#[tokio::test]
+async fn palette_slash_opens_and_esc_restores_focus() {
+    use fantoccini::key::Key;
+
+    let s = E2eSession::start().await;
+    s.goto("/pings").await;
+    let link = s.wait_for("#sidebar .nav-item").await;
+    link.send_keys("/").await.expect("send /");
+    s.wait_js(PALETTE_OPEN).await;
+
+    let input = s.find("#palette-input").await;
+    assert_eq!(input.prop("value").await.unwrap(), Some(String::new()));
+    let labels = palette_labels(&s).await;
+    for want in ["New ping", "Pings", "Schedules", "Emote audit"] {
+        assert!(
+            labels.iter().any(|l| l == want),
+            "{want} missing: {labels:?}"
+        );
+    }
+
+    input
+        .send_keys(&char::from(Key::Down).to_string())
+        .await
+        .expect("send Down");
+    s.wait_js(
+        "return document.getElementById('palette-input') \
+         .getAttribute('aria-activedescendant') === 'palette-opt-1';",
+    )
+    .await;
+
+    input
+        .send_keys(&char::from(Key::Escape).to_string())
+        .await
+        .expect("send Escape");
+    s.wait_js(PALETTE_CLOSED).await;
+    s.wait_js("return document.activeElement === document.querySelector('#sidebar .nav-item');")
+        .await;
+
+    // Phone width: the icon-only trigger opens it too.
+    s.set_window_size(390, 844).await;
+    s.wait_and_click("button.cmdk").await;
+    s.wait_js(PALETTE_OPEN).await;
+    s.find("#palette-input")
+        .await
+        .send_keys(&char::from(Key::Escape).to_string())
+        .await
+        .expect("send Escape");
+    s.wait_js(PALETTE_CLOSED).await;
+    s.wait_js("return document.activeElement === document.querySelector('button.cmdk');")
+        .await;
+
+    s.close().await;
+}
+
+/// The inline Filter input above the table live-filters `[data-filter]` rows.
+#[tokio::test]
+async fn inline_filter_hides_non_matching_rows() {
+    let s = E2eSession::start().await;
+    for name in ["alpha", "beta"] {
+        s.goto("/pings/new").await;
+        s.wait_and_fill("#ping-name", name).await;
+        s.fill("#ping-template", "yo {mentions}").await;
+        s.click("button[type=\"submit\"].btn.primary").await;
+        s.wait_for(&format!("a.ping-name[href=\"/pings/{name}\"]"))
+            .await;
+    }
+
+    let visible = "return [...document.querySelectorAll('.tr[data-filter]')] \
+         .filter((r) => r.style.display !== 'none') \
+         .map((r) => r.querySelector('.ping-name').textContent.trim()).join(',')";
+    s.wait_and_fill("input[data-row-filter]", "alp").await;
+    s.wait_js(&format!("{visible} === 'alpha';")).await;
+
+    // Element Clear fires no `input` event, so erase with keystrokes.
+    let backspace = char::from(fantoccini::key::Key::Backspace).to_string();
+    s.find("input[data-row-filter]")
+        .await
+        .send_keys(&backspace.repeat(3))
+        .await
+        .expect("send Backspace");
+    s.wait_js(&format!("{visible} === 'alpha,beta';")).await;
+
+    s.close().await;
+}

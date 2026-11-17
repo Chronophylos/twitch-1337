@@ -248,3 +248,11 @@ async fn empty_filter_result_says_so() {
     assert!(html.contains("No pings match this filter."));
     assert!(!html.contains("No pings yet"));
 }
+
+#[tokio::test]
+async fn row_filter_sits_above_rows() {
+    let html = get("/pings").await;
+    let filter = html.find("data-row-filter").expect("inline filter present");
+    let table = html.find(r#"<div class="table pings">"#).unwrap();
+    assert!(filter < table, "filter input must precede the table");
+}

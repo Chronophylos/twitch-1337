@@ -27,19 +27,16 @@
           {% endfor %}
         </nav>
         <div class="topbar-right">
-          <label class="search">
-            <span class="search-icon" aria-hidden="true">⌕</span>
-            <input id="page-search" type="search" placeholder="Search" autocomplete="off" spellcheck="false">
-            <kbd>/</kbd>
-          </label>
           <div id="berlin-timer" class="timer-chip" data-armed="false">
             <span class="timer-pulse" aria-hidden="true"></span>
             <span class="timer-label">T-MINUS</span>
             <span class="timer-clock">--:--:--</span>
             <span class="timer-tz"></span>
           </div>
-          <button type="button" class="cmdk" aria-label="Command palette" disabled>
-            <kbd>⌘</kbd><kbd>K</kbd>
+          <button type="button" class="cmdk" data-palette-open aria-label="Jump to" aria-haspopup="dialog" aria-controls="palette" aria-keyshortcuts="Control+K Meta+K /">
+            <span class="cmdk-icon" aria-hidden="true">⌕</span>
+            <span class="cmdk-label" aria-hidden="true">Jump to…</span>
+            <span class="cmdk-keys" aria-hidden="true"><kbd data-mod-key>⌘</kbd><kbd>K</kbd></span>
           </button>
         </div>
       </header>
@@ -50,6 +47,22 @@
       </div>
     </div>
   </div>
+  {# Jump palette (app.js `jumpPalette`); options are built client-side. #}
+  <dialog id="palette" class="palette" aria-label="Jump to">
+    <div class="palette-box">
+      <div class="palette-field">
+        <span class="search-icon" aria-hidden="true">⌕</span>
+        <input id="palette-input" type="text" role="combobox" aria-label="Jump to" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list" placeholder="Jump to page, section or action…" autocomplete="off" spellcheck="false">
+      </div>
+      <ul id="palette-list" class="palette-list" role="listbox" aria-label="Results"></ul>
+      <p class="palette-empty" data-palette-empty hidden>No matches</p>
+      <div class="palette-foot" aria-hidden="true">
+        <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+        <span><kbd>↵</kbd> go</span>
+        <span><kbd>esc</kbd> close</span>
+      </div>
+    </div>
+  </dialog>
   {% endblock %}
   <div id="toast" class="toast-region" role="status" aria-live="polite"></div>
 </body>

@@ -2015,7 +2015,7 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
     container-type: normal;
   }
 
-  /* Top bar: ☰, crumbs, clock. */
+  /* Top bar: ☰, crumbs, clock, jump-palette icon. */
   .topbar {
     position: sticky;
     top: 0;
@@ -2039,8 +2039,6 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   .nav-toggle:hover { background: var(--bg-2); }
   .crumbs { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
   .topbar-right { flex-shrink: 0; }
-  .search,
-  .cmdk,
   .timer-pulse,
   .timer-label,
   .timer-tz { display: none; }
@@ -2215,3 +2213,98 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 .bytes-warn[hidden] { display: none; }
 .inline-form { display: inline; margin: 0; }
 .link.danger { color: var(--danger); }
+
+/* ====================== Jump palette ======================
+   Top-bar trigger, `dialog#palette`, and the inline row filter that
+   replaced the top-bar search (templates/row_filter.html). */
+.cmdk {
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 10px;
+  color: var(--fg-3);
+  font-size: 12.5px;
+}
+.cmdk:hover { color: var(--fg); }
+.cmdk-icon { color: var(--fg-4); font-size: 14px; }
+.cmdk-keys { display: inline-flex; gap: 2px; }
+
+.row-filter { width: 320px; max-width: 100%; margin-bottom: 14px; }
+
+.palette {
+  width: min(560px, calc(100vw - 24px));
+  margin: 12vh auto auto;
+  padding: 0;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r);
+  background: var(--bg-1);
+  color: var(--fg);
+  box-shadow: 0 24px 80px -20px oklch(0 0 0 / 0.8);
+  overflow: hidden;
+}
+.palette::backdrop { background: oklch(0 0 0 / 0.55); }
+.palette-box {
+  display: flex;
+  flex-direction: column;
+  max-height: min(480px, calc(100vh - 24px));
+}
+.palette-field {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.palette-field input {
+  flex: 1; min-width: 0;
+  background: transparent; border: 0;
+  font-size: 15px;
+}
+.palette-field input::placeholder { color: var(--fg-4); }
+.palette-field input:focus-visible { outline: none; }
+.palette-list {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+}
+.palette-opt {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.palette-opt[aria-selected="true"] { background: var(--accent-fade); color: var(--fg); }
+.palette-opt-group {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--fg-4);
+}
+.palette-empty { margin: 0; padding: 16px 14px; color: var(--fg-3); }
+.palette-foot {
+  display: flex; gap: 14px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  color: var(--fg-4);
+  font-size: 11.5px;
+}
+
+@media (max-width: 860px) {
+  /* Icon-only trigger: phones have no ⌘K, but the palette still reaches
+     every page and action in one tap. */
+  .cmdk {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+  }
+  .cmdk-icon { font-size: 16px; color: var(--fg-2); }
+  .cmdk-label,
+  .cmdk-keys,
+  .palette-foot { display: none; }
+  .palette { margin-top: 12px; }
+  .row-filter { width: 100%; }
+}

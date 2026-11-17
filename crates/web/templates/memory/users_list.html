@@ -9,13 +9,14 @@
     <p class="page-sub">One Character Sheet per user at <code>memories/users/&lt;id&gt;.md</code>. 4 KiB cap each.</p>
   </div>
   <div class="page-actions">
-    <a class="btn primary" href="/memory/users/new">+ New Character Sheet</a>
+    <a class="btn primary" href="/memory/users/new" data-palette>+ New Character Sheet</a>
   </div>
 </div>
 
 {% if items.is_empty() %}
   <div class="empty">No Character Sheets yet.</div>
 {% else %}
+{% include "row_filter.html" %}
 <div class="user-grid">
   {% for u in items %}
   <div class="user-card" data-filter="{{ u.user_id }} {{ u.display_name }} {{ u.note }}">

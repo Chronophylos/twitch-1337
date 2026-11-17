@@ -33,6 +33,8 @@
   <button type="submit" class="btn primary">Filter</button>
 </form>
 
+{% if !rows.is_empty() %}{% include "row_filter.html" %}{% endif %}
+
 <div class="table emotes-audit">
   <div class="thead">
     <div class="th">Time</div>
