@@ -19,7 +19,7 @@
       <div class="td col-age mono num" data-label="Seen">{% match f.last_seen_secs_ago %}{% when Some(v) %}{{ v }}s{% when None %}—{% endmatch %}</div>
       {% if is_mod %}
       <div class="td col-act">
-        <form method="post" action="/flights/delete" style="display:inline" onsubmit="return confirm('Untrack {{ f.identifier }}?')">
+        <form method="post" action="/flights/delete" class="inline-form" data-confirm="Untrack {{ f.identifier }}?">
           <input type="hidden" name="_csrf" value="{{ csrf }}">
           <input type="hidden" name="identifier" value="{{ f.identifier }}">
           <button type="submit" class="row-act danger" title="Untrack">✕</button>
