@@ -130,8 +130,11 @@ fn assert_filter_chips(html: &str, active_href: &str) {
         ("/pings?filter=fired", 2),
     ] {
         let c = chip(html, href);
+        let key = href.strip_prefix("/pings?filter=").unwrap_or("all");
         assert!(
-            c.contains(&format!(r#"<span class="chip-n">{count}</span>"#)),
+            c.contains(&format!(
+                r#"<span class="chip-n" id="ping-chip-n-{key}">{count}</span>"#
+            )),
             "chip {href} must count {count}; got {c}"
         );
         assert_eq!(is_active(c), href == active_href, "active state of {href}");

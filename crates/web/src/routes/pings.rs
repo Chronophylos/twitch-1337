@@ -7,7 +7,10 @@
 //! - [`mod_router`]: everything else (create, edit, delete, member ops) — mod-tier.
 //!
 //! Form POSTs validate the `_csrf` field against the session csrf value;
-//! the HTMX delete uses an `X-Csrf-Token` header (no body to round-trip).
+//! the HTMX deletes use an `X-Csrf-Token` header (no body to round-trip).
+//! For htmx they answer with an empty body (the row's `outerHTML` swap
+//! removes it) plus out-of-band swaps for the counts the delete changed;
+//! anything else gets a flash + redirect.
 //! Persistence + validation reuse `PingManager`'s existing checks
 //! (control-char rejection, duplicate detection, name allowlist).
 
@@ -26,7 +29,7 @@ use twitch_1337_core::ping::PingView;
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
-use crate::error::WebError;
+use crate::error::{WebError, is_htmx};
 use crate::flash;
 use crate::routes::{humanize_delta, initial_of, render, render_with};
 use crate::state::WebState;
@@ -102,6 +105,11 @@ impl Filter {
             Self::Joined => Some("joined"),
             Self::Fired => Some("fired"),
         }
+    }
+
+    /// Stable id suffix for the chip's count badge (`ping-chip-n-<key>`).
+    fn key(self) -> &'static str {
+        self.param().unwrap_or("all")
     }
 
     fn label(self) -> &'static str {
@@ -215,9 +223,49 @@ struct ListQuery {
 struct ChipView {
     label: &'static str,
     href: String,
-    /// Matching ping count; `None` for sort chips.
-    count: Option<usize>,
+    /// Matching ping count with its badge id key; `None` for sort chips.
+    count: Option<(&'static str, usize)>,
     active: bool,
+}
+
+/// Every count on `/pings` a mutation can change: heading, stat strip and
+/// filter-chip badges. Built once for the page and again for the
+/// out-of-band refresh after an htmx delete.
+struct CountsView {
+    total_pings: usize,
+    total_members: usize,
+    custom_cooldowns: usize,
+    /// `(Filter::key, matching pings)` in [`Filter::CHIPS`] order.
+    chips: Vec<(&'static str, usize)>,
+}
+
+impl CountsView {
+    fn new(views: &[PingView], login: &str) -> Self {
+        let mut unique_members: HashSet<&str> = HashSet::new();
+        let mut custom_cooldowns: usize = 0;
+        for view in views {
+            for m in &view.members {
+                unique_members.insert(m.as_str());
+            }
+            if view.cooldown.is_some() {
+                custom_cooldowns += 1;
+            }
+        }
+        Self {
+            total_pings: views.len(),
+            total_members: unique_members.len(),
+            custom_cooldowns,
+            chips: Filter::CHIPS
+                .into_iter()
+                .map(|f| {
+                    (
+                        f.key(),
+                        views.iter().filter(|v| f.matches(v, login)).count(),
+                    )
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Template)]
@@ -228,9 +276,7 @@ struct ListTpl {
     sort_chips: Vec<ChipView>,
     /// Show last-fired time + fire count on each row.
     show_fired: bool,
-    total_pings: usize,
-    total_members: usize,
-    custom_cooldowns: usize,
+    counts: CountsView,
     flash: Option<String>,
     csrf: String,
     user_login: String,
@@ -239,6 +285,22 @@ struct ListTpl {
     is_mod: bool,
     is_broadcaster: bool,
     is_owner: bool,
+}
+
+/// htmx answer to a ping delete: out-of-band swaps only.
+#[derive(Template)]
+#[template(path = "pings/_counts.html")]
+struct CountsTpl {
+    counts: CountsView,
+}
+
+/// Member count beside the edit form's "Members" heading. Rendered inline
+/// by `form.html` and as the out-of-band answer to an htmx member delete.
+#[derive(Template)]
+#[template(path = "pings/_member_count.html")]
+struct MemberCountTpl {
+    member_count: usize,
+    oob: bool,
 }
 
 #[derive(Template)]
@@ -282,25 +344,15 @@ async fn list(
     let login = session.user_login.as_str();
 
     let views = state.ping_actor.snapshot().await;
-    let mut unique_members: HashSet<&str> = HashSet::new();
-    let mut custom_cooldowns: usize = 0;
-    for view in &views {
-        for m in &view.members {
-            unique_members.insert(m.as_str());
-        }
-        if view.cooldown.is_some() {
-            custom_cooldowns += 1;
-        }
-    }
-    let total_members = unique_members.len();
-    let total_pings = views.len();
+    let counts = CountsView::new(&views, login);
 
     let filter_chips = Filter::CHIPS
         .into_iter()
-        .map(|f| ChipView {
+        .zip(&counts.chips)
+        .map(|(f, &count)| ChipView {
             label: f.label(),
             href: list_href(f, explicit_sort),
-            count: Some(views.iter().filter(|v| f.matches(v, login)).count()),
+            count: Some(count),
             active: f == filter,
         })
         .collect();
@@ -340,9 +392,7 @@ async fn list(
         filter_chips,
         sort_chips,
         show_fired: filter == Filter::Fired || sort == Sort::Fired,
-        total_pings,
-        total_members,
-        custom_cooldowns,
+        counts,
         flash: flash::take(&cookies),
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
@@ -673,14 +723,27 @@ async fn remove_member(
         target_user = %username,
         result = "ok",
     );
-    flash::set(&cookies, &format!("Removed `{username}` from `{name}`."));
-    // Empty body so HTMX `hx-swap="outerHTML"` removes the row.
-    Ok((StatusCode::OK, "").into_response())
+    if !is_htmx(&headers) {
+        flash::set(&cookies, &format!("Removed `{username}` from `{name}`."));
+        return Ok(Redirect::to(&format!("/pings/{}", urlencoding::encode(&name))).into_response());
+    }
+    // Empty main body so `hx-swap="outerHTML"` removes the row; the heading
+    // count updates out of band.
+    let member_count = state
+        .ping_actor
+        .get_one(name)
+        .await
+        .map_or(0, |v| v.members.len());
+    render(&MemberCountTpl {
+        member_count,
+        oob: true,
+    })
 }
 
 async fn delete(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
+    cookies: Cookies,
     Path(name): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, WebError> {
@@ -703,6 +766,14 @@ async fn delete(
         target_name = %name,
         result = "ok",
     );
-    // Empty body so HTMX `hx-swap="outerHTML"` removes the row.
-    Ok((StatusCode::OK, "").into_response())
+    if !is_htmx(&headers) {
+        flash::set(&cookies, &format!("Deleted ping `{name}`."));
+        return Ok(Redirect::to("/pings").into_response());
+    }
+    // Empty main body so `hx-swap="outerHTML"` removes the row; heading,
+    // stat strip and chip badges update out of band.
+    let views = state.ping_actor.snapshot().await;
+    render(&CountsTpl {
+        counts: CountsView::new(&views, &session.user_login),
+    })
 }

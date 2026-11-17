@@ -2308,3 +2308,14 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   .palette { margin-top: 12px; }
   .row-filter { width: 100%; }
 }
+
+/* ─── Paged table footer ("Showing N of M" + Load more) ─────────────────── */
+.load-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  font-size: 12px;
+}

@@ -95,6 +95,9 @@ async fn pings_create_add_member_delete() {
     let del_btn = "button.row-act.danger[hx-post=\"/pings/squad/delete\"]";
     s.wait_and_click(del_btn).await;
     s.wait_gone(del_btn).await;
+    // The heading count is refreshed out of band, no reload needed.
+    s.wait_js("return document.querySelector('#pings-total').textContent === '(0)';")
+        .await;
 
     s.close().await;
 }
@@ -149,18 +152,34 @@ async fn schedules_create_toggle_delete() {
     let before = s.wait_text(toggle_btn).await.to_lowercase();
     assert_eq!(before, "on", "new schedule should start enabled");
 
-    // Toggle off (full form POST + redirect to /schedules). The paused card
-    // only exists after the reload, so waiting for it confirms the POST.
+    // Toggle off via htmx: only the card is swapped, so a marker set on the
+    // window before the click survives (a reload would wipe it). No paused
+    // card exists before the swap, so waiting for one confirms it landed.
+    s.exec("window.__e2eMarker = true;").await;
     s.click(toggle_btn).await;
     s.wait_for("article.schedule-card.paused").await;
     let after = s.wait_text(toggle_btn).await.to_lowercase();
     assert_eq!(after, "off", "toggle did not disable the schedule");
+    assert_eq!(
+        s.eval("return window.__e2eMarker === true;").await,
+        serde_json::Value::Bool(true),
+        "toggling a schedule reloaded the page"
+    );
+    // The stat strip is refreshed out of band.
+    s.wait_js("return document.querySelector('#schedule-stats').textContent.includes('0 / 1');")
+        .await;
 
-    // Delete (JS confirm auto-accepted).
-    s.click("form.js-delete-schedule[data-name=\"standup\"] button.chip.danger")
+    // Delete via htmx (confirm auto-accepted): the card goes, the page stays.
+    let delete_form = "form[hx-post=\"/schedules/standup/delete\"]";
+    s.click(&format!("{delete_form} button.chip.danger")).await;
+    s.wait_gone(delete_form).await;
+    s.wait_js("return document.querySelector('#schedules-total').textContent === '(0)';")
         .await;
-    s.wait_gone("form.js-delete-schedule[data-name=\"standup\"]")
-        .await;
+    assert_eq!(
+        s.eval("return window.__e2eMarker === true;").await,
+        serde_json::Value::Bool(true),
+        "deleting a schedule reloaded the page"
+    );
 
     s.close().await;
 }

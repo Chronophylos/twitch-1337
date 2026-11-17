@@ -13,7 +13,7 @@
 
 use askama::Template;
 use axum::extract::Request;
-use axum::http::{HeaderValue, StatusCode, Uri};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 
@@ -192,14 +192,18 @@ fn current_page(req: &Request) -> Option<String> {
     (path != "/" && is_safe_redirect(path)).then(|| path.to_owned())
 }
 
+/// Whether the request came from htmx (`HX-Request: true`).
+pub(crate) fn is_htmx(headers: &HeaderMap) -> bool {
+    headers
+        .get("HX-Request")
+        .is_some_and(|v| v.as_bytes() == b"true")
+}
+
 /// Rewrites [`WebError`] responses for htmx requests (`HX-Request: true`).
 /// htmx does not swap 4xx/5xx bodies and follows 303s transparently, so an
 /// expired session would swap the login page into the target element.
 pub async fn htmx_errors(req: Request, next: Next) -> Response {
-    let is_htmx = req
-        .headers()
-        .get("HX-Request")
-        .is_some_and(|v| v.as_bytes() == b"true");
+    let is_htmx = is_htmx(req.headers());
     if !is_htmx {
         return next.run(req).await;
     }

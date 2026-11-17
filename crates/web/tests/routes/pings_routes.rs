@@ -194,8 +194,70 @@ async fn edit_round_trip() {
     assert_eq!(view.template, "Updated {mentions}");
 }
 
+/// htmx delete: the main swap is empty (so `outerHTML` removes the row) and
+/// every count the delete changed comes back as an out-of-band swap.
 #[tokio::test]
-async fn delete_via_htmx_header_succeeds() {
+async fn delete_via_htmx_returns_oob_counts() {
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
+    state
+        .ping_actor
+        .create_ping("doomed".into(), "{mentions}".into(), "admin".into(), None)
+        .await
+        .unwrap();
+    state
+        .ping_actor
+        .create_ping("kept".into(), "{mentions}".into(), "bob".into(), None)
+        .await
+        .unwrap();
+    state
+        .ping_actor
+        .add_member("kept".into(), "alice".into())
+        .await
+        .unwrap();
+    let app = build_router(state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings/doomed/delete")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header("X-Csrf-Token", bare_csrf.clone())
+        .header("HX-Request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        !res.headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .any(|c| c.to_str().unwrap_or_default().starts_with("tw1337_flash=")),
+        "an htmx delete must not leave a flash for the next page load"
+    );
+    let html = body_string(res).await;
+    assert!(!html.contains("<html"), "fragment only; got {html}");
+    assert!(
+        html.contains(r#"<span class="count" id="pings-total" hx-swap-oob="true">(1)</span>"#),
+        "heading count; got {html}"
+    );
+    assert!(
+        html.contains(r#"id="ping-stats" hx-swap-oob="true""#),
+        "stat strip; got {html}"
+    );
+    for (key, n) in [("all", 1), ("mine", 0), ("joined", 0), ("fired", 0)] {
+        let badge =
+            format!(r#"<span class="chip-n" id="ping-chip-n-{key}" hx-swap-oob="true">{n}</span>"#);
+        assert!(html.contains(&badge), "missing {badge}; got {html}");
+    }
+    // Every top-level element is out-of-band, so nothing lands in the row.
+    assert!(!html.contains("class=\"tr\""), "no row markup; got {html}");
+    assert!(
+        state.ping_actor.get_one("doomed".into()).await.is_none(),
+        "delete must remove the ping"
+    );
+}
+
+/// Without `HX-Request` the same endpoint redirects back to the list.
+#[tokio::test]
+async fn delete_without_htmx_redirects_to_list() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
@@ -211,16 +273,33 @@ async fn delete_via_htmx_header_succeeds() {
         .body(Body::empty())
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(res.headers().get(header::LOCATION).unwrap(), "/pings");
+    assert!(state.ping_actor.get_one("doomed".into()).await.is_none());
+}
+
+/// The list renders the ids the out-of-band swaps target.
+#[tokio::test]
+async fn list_carries_oob_target_ids() {
+    let (state, sid, csrf, _bare, _td) = authed_setup().await;
+    let req = Request::builder()
+        .uri("/pings")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .body(Body::empty())
+        .unwrap();
+    let res = build_router(state).oneshot(req).await.unwrap();
     let html = body_string(res).await;
-    assert_eq!(
-        html, "",
-        "delete returns empty body for HTMX outerHTML swap"
-    );
-    assert!(
-        state.ping_actor.get_one("doomed".into()).await.is_none(),
-        "delete must remove the ping"
-    );
+    for id in [
+        "pings-total",
+        "ping-stats",
+        "ping-chip-n-all",
+        "ping-chip-n-mine",
+        "ping-chip-n-joined",
+        "ping-chip-n-fired",
+    ] {
+        assert!(html.contains(&format!("id=\"{id}\"")), "missing #{id}");
+    }
+    assert!(!html.contains("hx-swap-oob"), "the page itself is not oob");
 }
 
 #[tokio::test]
@@ -507,7 +586,48 @@ async fn add_member_rejects_invalid_login() {
 }
 
 #[tokio::test]
-async fn remove_member_via_htmx_header_succeeds() {
+async fn remove_member_via_htmx_returns_oob_member_count() {
+    let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
+    state
+        .ping_actor
+        .create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
+        .await
+        .unwrap();
+    for m in ["alice", "bob"] {
+        state
+            .ping_actor
+            .add_member("team".into(), m.into())
+            .await
+            .unwrap();
+    }
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings/team/members/alice/delete")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header("X-Csrf-Token", bare_csrf.clone())
+        .header("HX-Request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let app = build_router(state.clone());
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert_eq!(
+        html.trim(),
+        r#"<span class="count" id="ping-member-count" hx-swap-oob="true">(1)</span>"#,
+        "empty main swap removes the row; the heading count updates out of band"
+    );
+    assert!(
+        !state
+            .ping_actor
+            .is_member("team".into(), "alice".into())
+            .await,
+        "alice must be removed"
+    );
+}
+
+#[tokio::test]
+async fn remove_member_without_htmx_redirects_to_edit_page() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
@@ -528,7 +648,8 @@ async fn remove_member_via_htmx_header_succeeds() {
         .unwrap();
     let app = build_router(state.clone());
     let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(res.headers().get(header::LOCATION).unwrap(), "/pings/team");
     assert!(
         !state
             .ping_actor

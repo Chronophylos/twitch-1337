@@ -1,0 +1,15 @@
+{# Ping stat strip. `counts: CountsView` and `oob: bool` must be in scope. #}
+<div class="stat-strip three" id="ping-stats"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="stat">
+    <div class="stat-label">Total pings</div>
+    <div class="stat-value">{{ counts.total_pings }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Total members</div>
+    <div class="stat-value">{{ counts.total_members }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Custom cooldowns</div>
+    <div class="stat-value">{{ counts.custom_cooldowns }}</div>
+  </div>
+</div>

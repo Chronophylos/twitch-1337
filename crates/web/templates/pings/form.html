@@ -37,7 +37,9 @@
 {% if !is_new %}
 <div class="page-head" style="margin-top:22px">
   <div>
-    <h1 style="font-size:18px;margin:0">Members <span class="count">({{ members.len() }})</span></h1>
+    {% let oob = false %}
+    {% let member_count = members.len() %}
+    <h1 style="font-size:18px;margin:0">Members {% include "pings/_member_count.html" %}</h1>
   </div>
 </div>
 

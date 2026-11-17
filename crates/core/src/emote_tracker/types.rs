@@ -238,7 +238,10 @@ pub struct UsageEventListFilter {
     pub until_ms: Option<i64>,
     pub include_flagged: bool,
     pub limit: u32,
-    pub offset: u32,
+    /// Keyset cursor `(at, id)`: only events strictly older in `(at DESC,
+    /// id DESC)` order. Carries the id because one chat message stamps all
+    /// its emotes with the same `at`, so a timestamp alone would skip rows.
+    pub before: Option<(i64, i64)>,
 }
 
 /// One row from `emote_meanings` (curated semantics; no FK to `emotes`).

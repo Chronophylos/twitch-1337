@@ -9,11 +9,11 @@ use thiserror::Error;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use super::db::{
-    apply_set_changes, catalog_is_empty, deactivate_emote, get_emote, get_emote_meaning,
-    insert_set_event, insert_usage_events, least_used_emotes, list_active_emotes,
-    list_emote_meanings_for_ids, list_set_events, list_usage_events, resolve_active_name,
-    resolve_viewer_twitch_id, top_usage_counts, top_users_by_usage, upsert_emote,
-    upsert_emote_meaning, usage_counts_for_user, usage_counts_of_emote,
+    apply_set_changes, catalog_is_empty, count_usage_events, deactivate_emote, get_emote,
+    get_emote_meaning, insert_set_event, insert_usage_events, least_used_emotes,
+    list_active_emotes, list_emote_meanings_for_ids, list_set_events, list_usage_events,
+    resolve_active_name, resolve_viewer_twitch_id, top_usage_counts, top_users_by_usage,
+    upsert_emote, upsert_emote_meaning, usage_counts_for_user, usage_counts_of_emote,
 };
 use super::migrate;
 use super::types::{
@@ -76,6 +76,10 @@ enum StoreCmd {
     ListUsageEvents {
         filter: UsageEventListFilter,
         reply: oneshot::Sender<Result<Vec<UsageEventRow>>>,
+    },
+    CountUsageEvents {
+        filter: UsageEventListFilter,
+        reply: oneshot::Sender<Result<u64>>,
     },
     TopUsageCounts {
         since_ms: Option<i64>,
@@ -301,6 +305,12 @@ impl EmoteTrackerHandle {
             .await
     }
 
+    /// Events matching `filter`, ignoring its cursor and limit.
+    pub async fn count_usage_events(&self, filter: UsageEventListFilter) -> Result<u64> {
+        self.send(|reply| StoreCmd::CountUsageEvents { filter, reply })
+            .await
+    }
+
     /// Top emotes by unflagged use count within a window.
     pub async fn top_usage_events(
         &self,
@@ -508,6 +518,9 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
             }
             StoreCmd::ListUsageEvents { filter, reply } => {
                 let _ = reply.send(list_usage_events(&conn, &filter));
+            }
+            StoreCmd::CountUsageEvents { filter, reply } => {
+                let _ = reply.send(count_usage_events(&conn, &filter));
             }
             StoreCmd::TopUsageCounts {
                 since_ms,

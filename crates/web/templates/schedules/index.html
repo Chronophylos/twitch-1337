@@ -4,25 +4,14 @@
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>Schedules <span class="muted">({{ total }})</span></h1>
+    <h1>Schedules <span class="muted" id="schedules-total">({{ stats.total }})</span></h1>
     <p class="page-sub">Recurring announcements fired by the bot.</p>
   </div>
   <a class="btn primary" href="/schedules?new=true" data-palette>+ New schedule</a>
 </div>
 
-<div class="stat-strip">
-  <div class="stat"><div class="stat-label">TOTAL</div><div class="stat-value">{{ total }}</div></div>
-  <div class="stat"><div class="stat-label">ACTIVE</div><div class="stat-value">{{ active_count }} / {{ total }}</div></div>
-  <div class="stat"><div class="stat-label">FIRED TODAY</div><div class="stat-value">{{ fired_today }}</div></div>
-  <div class="stat">
-    <div class="stat-label">NEXT FIRE</div>
-    {% if let Some(nf) = next_fire %}
-      <div class="stat-value">{{ nf.time }} <span class="muted">· {{ nf.name }}</span></div>
-    {% else %}
-      <div class="stat-value muted">—</div>
-    {% endif %}
-  </div>
-</div>
+{% let oob = false %}
+{% include "schedules/_stats.html" %}
 
 {% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
 
@@ -69,14 +58,4 @@
 <p class="empty">No schedules configured yet. Click <strong>+ New schedule</strong> to add one.</p>
 {% endif %}
 
-<script>
-  document.querySelectorAll('form.js-delete-schedule').forEach(function (form) {
-    form.addEventListener('submit', function (event) {
-      var name = form.dataset.name || '';
-      if (!window.confirm('Delete schedule “' + name + '”?')) {
-        event.preventDefault();
-      }
-    });
-  });
-</script>
 {% endblock %}
