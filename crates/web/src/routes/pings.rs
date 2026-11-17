@@ -230,12 +230,14 @@ struct ChipView {
 
 /// Every count on `/pings` a mutation can change: heading, stat strip and
 /// filter-chip badges. Built once for the page and again for the
-/// out-of-band refresh after an htmx delete.
+/// out-of-band refresh after an htmx delete. Each count shows once: the
+/// ping total sits in the heading, so the All chip carries no badge.
 struct CountsView {
     total_pings: usize,
     total_members: usize,
     custom_cooldowns: usize,
-    /// `(Filter::key, matching pings)` in [`Filter::CHIPS`] order.
+    /// `(Filter::key, matching pings)` for every chip but All, in
+    /// [`Filter::CHIPS`] order.
     chips: Vec<(&'static str, usize)>,
 }
 
@@ -257,6 +259,7 @@ impl CountsView {
             custom_cooldowns,
             chips: Filter::CHIPS
                 .into_iter()
+                .filter(|&f| f != Filter::All)
                 .map(|f| {
                     (
                         f.key(),
@@ -348,11 +351,14 @@ async fn list(
 
     let filter_chips = Filter::CHIPS
         .into_iter()
-        .zip(&counts.chips)
-        .map(|(f, &count)| ChipView {
+        .map(|f| ChipView {
             label: f.label(),
             href: list_href(f, explicit_sort),
-            count: Some(count),
+            count: counts
+                .chips
+                .iter()
+                .find(|(key, _)| *key == f.key())
+                .copied(),
             active: f == filter,
         })
         .collect();

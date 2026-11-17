@@ -65,6 +65,14 @@ async fn login_route_renders_landing_page() {
         html.contains("href=\"/auth/start\""),
         "landing page must link to /auth/start, got: {html}"
     );
+    assert!(
+        html.contains("Dashboard for testchannel. Sign in with Twitch."),
+        "landing page names the channel, got: {html}"
+    );
+    assert!(
+        !html.contains("Moderator dashboard"),
+        "old mod-only copy gone"
+    );
 }
 
 #[tokio::test]

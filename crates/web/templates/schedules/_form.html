@@ -1,5 +1,6 @@
 {# Variant-picker schedule form. `form: &FormState`, `action: &str`, `cancel_href: Option<&str>` must
    be bound in the calling template's scope before this include. #}
+{% import "schedules/_weekday_row.html" as wd %}
 <form method="post" action="{{ action }}" class="settings-rows schedule-form" data-unsaved-guard>
   <input type="hidden" name="_csrf" value="{{ csrf }}">
 
@@ -30,33 +31,29 @@
     </label>
     <div class="trigger-fields" data-for="interval">
       <div class="row">
-        <label>Every (hh:mm, e.g. 01:00 for hourly)
-          <input type="text" name="interval_every"
-            pattern="^\d{1,3}:[0-5]\d$"
-            placeholder="01:00"
-            value="{{ form.interval_every }}">
-        </label>
+        <span class="row-caption">Every (up to 24 h)</span>
+        <div class="interval-every" role="group" aria-label="Every">
+          <label class="interval-part">
+            <input type="number" name="interval_hours" min="0" max="24" step="1" inputmode="numeric" placeholder="1" value="{{ form.interval_hours }}" aria-label="Hours">
+            h
+          </label>
+          <label class="interval-part">
+            <input type="number" name="interval_minutes" min="0" max="59" step="1" inputmode="numeric" placeholder="0" value="{{ form.interval_minutes }}" aria-label="Minutes">
+            min
+          </label>
+        </div>
       </div>
       <div class="row">
         <label>Active from (Berlin, optional)
-          <input type="time" lang="de" name="interval_active_from" value="{{ form.interval_active_from }}">
+          <input type="time" name="interval_active_from" value="{{ form.interval_active_from }}">
         </label>
       </div>
       <div class="row">
         <label>Active to (Berlin, optional)
-          <input type="time" lang="de" name="interval_active_to" value="{{ form.interval_active_to }}">
+          <input type="time" name="interval_active_to" value="{{ form.interval_active_to }}">
         </label>
       </div>
-      <div class="row">Days (empty = every day):</div>
-      <div class="row weekday-row">
-        <label class="weekday-chip"><input type="checkbox" name="interval_days" value="Mon" {% if form.interval_days.contains("Mon") %}checked{% endif %}> Mon</label>
-        <label class="weekday-chip"><input type="checkbox" name="interval_days" value="Tue" {% if form.interval_days.contains("Tue") %}checked{% endif %}> Tue</label>
-        <label class="weekday-chip"><input type="checkbox" name="interval_days" value="Wed" {% if form.interval_days.contains("Wed") %}checked{% endif %}> Wed</label>
-        <label class="weekday-chip"><input type="checkbox" name="interval_days" value="Thu" {% if form.interval_days.contains("Thu") %}checked{% endif %}> Thu</label>
-        <label class="weekday-chip"><input type="checkbox" name="interval_days" value="Fri" {% if form.interval_days.contains("Fri") %}checked{% endif %}> Fri</label>
-        <label class="weekday-chip"><input type="checkbox" name="interval_days" value="Sat" {% if form.interval_days.contains("Sat") %}checked{% endif %}> Sat</label>
-        <label class="weekday-chip"><input type="checkbox" name="interval_days" value="Sun" {% if form.interval_days.contains("Sun") %}checked{% endif %}> Sun</label>
-      </div>
+      {% call wd::weekday_row("interval", form.interval_days) %}{% endcall %}
     </div>
 
     <label class="kind-radio">
@@ -67,30 +64,21 @@
     <div class="trigger-fields" data-for="calendar">
       <div class="row">
         <label>At (Berlin local time)
-          <input type="time" lang="de" name="calendar_at" value="{{ form.calendar_at }}">
+          <input type="time" name="calendar_at" value="{{ form.calendar_at }}">
         </label>
       </div>
-      <div class="row">Days (empty = every day):</div>
-      <div class="row weekday-row">
-        <label class="weekday-chip"><input type="checkbox" name="calendar_days" value="Mon" {% if form.calendar_days.contains("Mon") %}checked{% endif %}> Mon</label>
-        <label class="weekday-chip"><input type="checkbox" name="calendar_days" value="Tue" {% if form.calendar_days.contains("Tue") %}checked{% endif %}> Tue</label>
-        <label class="weekday-chip"><input type="checkbox" name="calendar_days" value="Wed" {% if form.calendar_days.contains("Wed") %}checked{% endif %}> Wed</label>
-        <label class="weekday-chip"><input type="checkbox" name="calendar_days" value="Thu" {% if form.calendar_days.contains("Thu") %}checked{% endif %}> Thu</label>
-        <label class="weekday-chip"><input type="checkbox" name="calendar_days" value="Fri" {% if form.calendar_days.contains("Fri") %}checked{% endif %}> Fri</label>
-        <label class="weekday-chip"><input type="checkbox" name="calendar_days" value="Sat" {% if form.calendar_days.contains("Sat") %}checked{% endif %}> Sat</label>
-        <label class="weekday-chip"><input type="checkbox" name="calendar_days" value="Sun" {% if form.calendar_days.contains("Sun") %}checked{% endif %}> Sun</label>
-      </div>
+      {% call wd::weekday_row("calendar", form.calendar_days) %}{% endcall %}
     </div>
   </fieldset>
 
   <div class="row">
     <label>Start date (Berlin, optional — inclusive)
-      <input type="date" lang="de" name="start_date" value="{{ form.start_date }}">
+      <input type="date" name="start_date" value="{{ form.start_date }}">
     </label>
   </div>
   <div class="row">
     <label>End date (Berlin, optional — inclusive)
-      <input type="date" lang="de" name="end_date" value="{{ form.end_date }}">
+      <input type="date" name="end_date" value="{{ form.end_date }}">
     </label>
   </div>
   <div class="row">

@@ -142,7 +142,8 @@ async fn schedules_create_toggle_delete() {
     s.wait_and_fill("input[name=\"name\"]", "standup").await;
     s.fill("textarea[name=\"message\"]", "daily standup time")
         .await;
-    s.fill("input[name=\"interval_every\"]", "01:00").await;
+    s.fill("input[name=\"interval_hours\"]", "1").await;
+    s.fill("input[name=\"interval_minutes\"]", "0").await;
     // `enabled` left untouched => the new-schedule default (checked) applies.
     s.click("button[type=\"submit\"].btn.primary").await;
 
@@ -166,7 +167,7 @@ async fn schedules_create_toggle_delete() {
         "toggling a schedule reloaded the page"
     );
     // The stat strip is refreshed out of band.
-    s.wait_js("return document.querySelector('#schedule-stats').textContent.includes('0 / 1');")
+    s.wait_js("return document.querySelector('#schedule-stat-active').textContent.trim() === '0';")
         .await;
 
     // Delete via htmx (confirm auto-accepted): the card goes, the page stays.

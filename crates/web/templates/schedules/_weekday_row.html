@@ -1,11 +1,10 @@
-{# weekday checkbox row — reused by interval and calendar variants.
-   Caller binds `prefix` (string) and `selected` (BTreeSet<String>). #}
+{# Weekday checkbox row shared by the interval and calendar variants.
+   `prefix` names the field (`<prefix>_days`); `selected` is the checked set. #}
+{% macro weekday_row(prefix, selected) %}
+<div class="row">Days (empty = every day):</div>
 <div class="row weekday-row">
-  <label class="weekday-chip"><input type="checkbox" name="{{ prefix }}_days" value="Mon" {% if selected.contains("Mon") %}checked{% endif %}> Mon</label>
-  <label class="weekday-chip"><input type="checkbox" name="{{ prefix }}_days" value="Tue" {% if selected.contains("Tue") %}checked{% endif %}> Tue</label>
-  <label class="weekday-chip"><input type="checkbox" name="{{ prefix }}_days" value="Wed" {% if selected.contains("Wed") %}checked{% endif %}> Wed</label>
-  <label class="weekday-chip"><input type="checkbox" name="{{ prefix }}_days" value="Thu" {% if selected.contains("Thu") %}checked{% endif %}> Thu</label>
-  <label class="weekday-chip"><input type="checkbox" name="{{ prefix }}_days" value="Fri" {% if selected.contains("Fri") %}checked{% endif %}> Fri</label>
-  <label class="weekday-chip"><input type="checkbox" name="{{ prefix }}_days" value="Sat" {% if selected.contains("Sat") %}checked{% endif %}> Sat</label>
-  <label class="weekday-chip"><input type="checkbox" name="{{ prefix }}_days" value="Sun" {% if selected.contains("Sun") %}checked{% endif %}> Sun</label>
+  {% for day in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] %}
+  <label class="weekday-chip"><input type="checkbox" name="{{ prefix }}_days" value="{{ day }}" {% if selected.contains(**day) %}checked{% endif %}> {{ day }}</label>
+  {% endfor %}
 </div>
+{% endmacro %}

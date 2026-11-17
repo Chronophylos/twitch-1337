@@ -63,12 +63,126 @@ fn interval_schedule(name: &str, message: &str) -> Schedule {
     }
 }
 
-/// Build a URL-encoded form body for a new/updated interval schedule.
+/// Build a URL-encoded form body for a new/updated hourly interval schedule.
 fn interval_form(csrf: &str, name: &str, message: &str) -> String {
+    interval_form_every(csrf, name, message, "1", "0")
+}
+
+/// Interval form body with explicit hours + minutes inputs.
+fn interval_form_every(
+    csrf: &str,
+    name: &str,
+    message: &str,
+    hours: &str,
+    minutes: &str,
+) -> String {
     format!(
-        "_csrf={csrf}&name={name}&message={message}&kind=interval&interval_every=01%3A00&interval_active_from=&interval_active_to=&start_date=&end_date=&enabled=true",
+        "_csrf={csrf}&name={name}&message={message}&kind=interval&interval_hours={hours}&interval_minutes={minutes}&interval_active_from=&interval_active_to=&start_date=&end_date=&enabled=true",
         csrf = urlencoding::encode(csrf),
     )
+}
+
+fn interval_secs(state: &twitch_1337_web::WebState, name: &str) -> u64 {
+    let rows = state.settings.load().schedules.clone();
+    match &rows
+        .iter()
+        .find(|s| s.name == name)
+        .expect("row exists")
+        .trigger
+    {
+        Trigger::Interval { every, .. } => every.as_secs(),
+        other => panic!("expected interval trigger, got {other:?}"),
+    }
+}
+
+/// The interval is two number inputs (hours, minutes). Create stores their
+/// sum, the edit form splits it back out, and posting that form unchanged
+/// keeps the same interval.
+#[tokio::test]
+async fn interval_inputs_round_trip_through_create_and_edit() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
+    let app = build_router(state.clone());
+    let post = |uri: &str, body: String| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap()
+    };
+
+    let res = app
+        .clone()
+        .oneshot(post(
+            "/schedules/add",
+            interval_form_every(&bare_csrf, "tick", "hi", "1", "30"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(interval_secs(&state, "tick"), 5400);
+
+    let req = Request::builder()
+        .uri("/schedules?edit=tick")
+        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
+        .body(Body::empty())
+        .unwrap();
+    let html = body_string(app.clone().oneshot(req).await.unwrap()).await;
+    assert!(
+        html.contains(r#"name="interval_hours" min="0" max="24""#),
+        "hours input; got {html}"
+    );
+    assert!(
+        !html.contains(r#"name="interval_every""#),
+        "no hh:mm text input"
+    );
+    assert!(
+        !html.contains(r#"lang="de""#),
+        "no lang on date/time inputs"
+    );
+    let value_of = |name: &str| {
+        let at = html
+            .find(&format!(r#"name="{name}""#))
+            .unwrap_or_else(|| panic!("no {name} input"));
+        let rest = &html[at..];
+        let v = &rest[rest.find(r#"value=""#).unwrap() + 7..];
+        v[..v.find('"').unwrap()].to_owned()
+    };
+    let (hours, minutes) = (value_of("interval_hours"), value_of("interval_minutes"));
+    assert_eq!((hours.as_str(), minutes.as_str()), ("1", "30"));
+
+    let res = app
+        .clone()
+        .oneshot(post(
+            "/schedules/tick/edit",
+            interval_form_every(&bare_csrf, "tick", "hi", &hours, &minutes),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        interval_secs(&state, "tick"),
+        5400,
+        "edit keeps the interval"
+    );
+
+    // Out-of-range minutes fail validation and leave the row untouched.
+    let res = app
+        .oneshot(post(
+            "/schedules/tick/edit",
+            interval_form_every(&bare_csrf, "tick", "hi", "1", "75"),
+        ))
+        .await
+        .unwrap();
+    let html = body_string(res).await;
+    assert!(
+        html.contains("must be 0–59"),
+        "minutes error shown; got {html}"
+    );
+    assert_eq!(interval_secs(&state, "tick"), 5400);
 }
 
 #[tokio::test]
@@ -331,7 +445,10 @@ async fn toggle_via_htmx_returns_card_and_oob_stats() {
         html.contains(r#"id="schedule-stats" hx-swap-oob="true""#),
         "stat strip out of band; got {html}"
     );
-    assert!(html.contains("1 / 2"), "active count updated; got {html}");
+    assert!(
+        html.contains(r#"id="schedule-stat-active">1</div>"#),
+        "active count updated; got {html}"
+    );
     let rows = state.settings.load().schedules.clone();
     assert!(!rows.iter().find(|s| s.name == "flip").unwrap().enabled);
 }
@@ -383,7 +500,7 @@ async fn delete_via_htmx_returns_only_oob_stats() {
         "no card after delete; got {html}"
     );
     assert!(
-        html.contains(r#"<span class="muted" id="schedules-total" hx-swap-oob="true">(0)</span>"#),
+        html.contains(r#"<span class="count" id="schedules-total" hx-swap-oob="true">(0)</span>"#),
         "heading count out of band; got {html}"
     );
     assert!(

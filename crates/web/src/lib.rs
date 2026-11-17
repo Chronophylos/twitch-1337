@@ -123,15 +123,10 @@ pub async fn serve_app(listener: TcpListener, app: Router, lifecycle: Lifecycle)
     Ok(())
 }
 
-async fn root_redirect(
-    axum::extract::Extension(session): axum::extract::Extension<auth::session::Session>,
-) -> axum::response::Redirect {
-    match session.role {
-        // Owner gets the same default landing as Mod — settings is one step
-        // beyond, but the management surface is shared.
-        auth::role::Role::Owner | auth::role::Role::Mod => axum::response::Redirect::to("/pings"),
-        auth::role::Role::Viewer => axum::response::Redirect::to("/leaderboard"),
-    }
+/// Every Dashboard Tier lands on `/pings`, the first sidebar entry, so the
+/// landing page and the nav order agree for Viewers too.
+async fn root_redirect() -> axum::response::Redirect {
+    axum::response::Redirect::to("/pings")
 }
 
 pub fn build_router(state: WebState) -> Router {

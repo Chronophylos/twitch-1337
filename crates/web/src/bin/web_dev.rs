@@ -9,7 +9,7 @@
 //! Env knobs:
 //!   - `BIND_ADDR`  default `127.0.0.1:8761`
 //!   - `DATA_DIR`   default `./dev-data`
-//!   - `CHANNEL`    default `devchannel`  (cosmetic, breadcrumb only)
+//!   - `CHANNEL`    default `devchannel`  (cosmetic, login/denied copy only)
 //!
 //! Caveat: The ping actor and `MemoryStore` use atomic tmp+rename to
 //! persist, so two processes against the same dir will not corrupt each

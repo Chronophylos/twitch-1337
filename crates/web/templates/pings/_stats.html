@@ -1,9 +1,6 @@
-{# Ping stat strip. `counts: CountsView` and `oob: bool` must be in scope. #}
-<div class="stat-strip three" id="ping-stats"{% if oob %} hx-swap-oob="true"{% endif %}>
-  <div class="stat">
-    <div class="stat-label">Total pings</div>
-    <div class="stat-value">{{ counts.total_pings }}</div>
-  </div>
+{# Ping stat strip. `counts: CountsView` and `oob: bool` must be in scope.
+   The ping total lives in the page heading only. #}
+<div class="stat-strip two" id="ping-stats"{% if oob %} hx-swap-oob="true"{% endif %}>
   <div class="stat">
     <div class="stat-label">Total members</div>
     <div class="stat-value">{{ counts.total_members }}</div>

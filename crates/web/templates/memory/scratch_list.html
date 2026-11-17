@@ -2,9 +2,9 @@
 {% block title %}Scratch — twitch-1337{% endblock %}
 {% block content %}
 {% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
-<a href="/memory" class="link muted" style="display:inline-block;margin-bottom:6px;">← Back</a>
 <div class="page-head">
   <div>
+    <a href="/memory" class="link muted back-link">← Back</a>
     <h1>Scratch <span class="count">({{ items.len() }})</span></h1>
     <p class="page-sub">Scratch notes at <code>memories/scratch/&lt;slug&gt;.md</code>. Byte cap and max count are set in Settings → AI · Memory.</p>
   </div>
@@ -43,14 +43,14 @@
             {% when Some(url) %}
               <img class="avatar avatar-img" src="{{ url }}" alt="" loading="lazy" width="18" height="18">
             {% when None %}
-              <span class="avatar" style="width:18px;height:18px;font-size:10px;background:oklch(0.55 0.10 var(--accent-h));">{{ s.created_initial }}</span>
+              <span class="avatar avatar-sm avatar-initial">{{ s.created_initial }}</span>
             {% endmatch %}
             <span class="mono">{{ s.created_by }}</span>
           </span>
         {% endif %}
       </div>
       <div class="td" data-label="Bytes">
-        <span class="bytes-bar mini"><span style="width: {{ s.pct }}%"></span></span>
+        <span class="bytes-bar mini"><span data-pct="{{ s.pct }}"></span></span>
         <span class="bytes-cell">{{ s.bytes }} B</span>
       </div>
       <div class="td col-act">

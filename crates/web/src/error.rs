@@ -24,8 +24,13 @@ pub enum WebError {
     /// successful login.
     #[error("unauthenticated; redirect to login")]
     Unauthenticated { next: Option<String> },
+    /// The Twitch account has no Dashboard Tier for this channel: not a
+    /// mod and not on the viewer allowlist. Renders the denied page.
     #[error("forbidden")]
-    Forbidden,
+    Forbidden { channel: std::sync::Arc<str> },
+    /// Signed in, but the page needs a higher Dashboard Tier.
+    #[error("dashboard tier too low")]
+    TierTooLow,
     #[error("csrf mismatch")]
     CsrfMismatch,
     #[error("validation: {field}: {msg}")]
@@ -93,7 +98,9 @@ pub struct ConflictPayload {
 
 #[derive(Template)]
 #[template(path = "auth/denied.html")]
-struct DeniedTpl;
+struct DeniedTpl<'a> {
+    channel: &'a str,
+}
 
 #[derive(Template)]
 #[template(path = "auth/oauth_failed.html")]
@@ -240,9 +247,15 @@ impl IntoResponse for WebError {
                 };
                 with_fallback(res, HtmxFallback::Login)
             }
-            WebError::Forbidden => with_fallback(
-                render(StatusCode::FORBIDDEN, &DeniedTpl),
+            WebError::Forbidden { channel } => with_fallback(
+                render(StatusCode::FORBIDDEN, &DeniedTpl { channel: &channel }),
                 HtmxFallback::Text(StatusCode::FORBIDDEN, "Access denied".to_owned()),
+            ),
+            WebError::TierTooLow => error_page(
+                StatusCode::FORBIDDEN,
+                "Not available",
+                "This page needs a higher dashboard tier than your account has.",
+                "Not available for your dashboard tier".to_owned(),
             ),
             WebError::CsrfMismatch => error_page(
                 StatusCode::FORBIDDEN,
@@ -321,7 +334,15 @@ mod tests {
 
     fn app() -> Router {
         Router::new()
-            .route("/forbidden", get(|| async { WebError::Forbidden }))
+            .route(
+                "/forbidden",
+                get(|| async {
+                    WebError::Forbidden {
+                        channel: "somechannel".into(),
+                    }
+                }),
+            )
+            .route("/tier", get(|| async { WebError::TierTooLow }))
             .route(
                 "/validation",
                 get(|| async {
@@ -385,6 +406,7 @@ mod tests {
         for hx in [None, Some("false")] {
             for (path, status) in [
                 ("/forbidden", StatusCode::FORBIDDEN),
+                ("/tier", StatusCode::FORBIDDEN),
                 ("/validation", StatusCode::BAD_REQUEST),
                 ("/internal", StatusCode::INTERNAL_SERVER_ERROR),
             ] {
@@ -405,5 +427,12 @@ mod tests {
             !body.contains("secret detail"),
             "internal error detail must stay in the log"
         );
+        let (_, _, body) = get_page("/forbidden", None).await;
+        assert!(
+            body.contains("Your account isn't a mod of somechannel or on the viewer allowlist."),
+            "denied page names the channel: {body}"
+        );
+        let (_, _, body) = get_page("/tier", None).await;
+        assert!(body.contains("dashboard tier"), "{body}");
     }
 }

@@ -67,11 +67,11 @@
       {% when Some(url) %}
         <img class="avatar avatar-img" src="{{ url }}" alt="" loading="lazy" width="28" height="28">
       {% when None %}
-        <span class="avatar" style="width:28px;height:28px;font-size:11px;background:oklch(0.6 0.12 280);">{{ user_login.chars().next().unwrap_or('?') }}</span>
+        <span class="avatar avatar-md avatar-me">{{ user_login.chars().next().unwrap_or('?') }}</span>
       {% endmatch %}
       <div class="me-meta">
         <span class="me-name">{{ user_login }}</span>
-        <span class="me-role">{% if is_owner %}owner{% else if is_broadcaster %}broadcaster{% else if is_mod %}mod{% endif %}</span>
+        <span class="me-role">{% if is_owner %}owner{% else if is_broadcaster %}broadcaster{% else if is_mod %}mod{% else %}viewer{% endif %}</span>
       </div>
     </div>
     <form class="logout-form" method="post" action="/logout">

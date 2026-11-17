@@ -672,14 +672,14 @@ async fn view_scratch(
     Path(slug): Path<String>,
 ) -> Result<Response, WebError> {
     validate_scratch_slug(&slug).map_err(|_| slug_err())?;
-    let title = format!("Scratch / {slug}");
     let save_url = format!("/memory/scratch/{slug}");
     let delete_url = format!("/memory/scratch/{slug}/delete");
+    // The breadcrumb already reads Memory / Scratch, so the title is the slug.
     view_kind(
         &state,
         &session,
         FileKind::Scratch { slug: slug.clone() },
-        title,
+        slug,
         save_url,
         Some(delete_url),
         None,

@@ -1,10 +1,10 @@
-{# Schedule stat strip. `stats: StatsView` and `oob: bool` must be in scope. #}
-<div class="stat-strip" id="schedule-stats"{% if oob %} hx-swap-oob="true"{% endif %}>
-  <div class="stat"><div class="stat-label">TOTAL</div><div class="stat-value">{{ stats.total }}</div></div>
-  <div class="stat"><div class="stat-label">ACTIVE</div><div class="stat-value">{{ stats.active_count }} / {{ stats.total }}</div></div>
-  <div class="stat"><div class="stat-label">FIRED TODAY</div><div class="stat-value">{{ stats.fired_today }}</div></div>
+{# Schedule stat strip. `stats: StatsView` and `oob: bool` must be in scope.
+   The schedule total lives in the page heading only. #}
+<div class="stat-strip three" id="schedule-stats"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="stat"><div class="stat-label">Active</div><div class="stat-value" id="schedule-stat-active">{{ stats.active_count }}</div></div>
+  <div class="stat"><div class="stat-label">Fired today</div><div class="stat-value">{{ stats.fired_today }}</div></div>
   <div class="stat">
-    <div class="stat-label">NEXT FIRE</div>
+    <div class="stat-label">Next fire</div>
     {% if let Some(nf) = stats.next_fire %}
       <div class="stat-value">{{ nf.time }} <span class="muted">· {{ nf.name }}</span></div>
     {% else %}
