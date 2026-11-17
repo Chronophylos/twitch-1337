@@ -9,9 +9,11 @@
     <p class="page-sub">Scratch notes at <code>memories/scratch/&lt;slug&gt;.md</code>. Byte cap and max count are set in Settings → AI · Memory.</p>
   </div>
   <div class="page-actions">
-    <a class="btn primary" href="/memory/scratch/new">+ New scratch note</a>
+    <a class="btn primary" href="/memory/scratch/new" data-palette>+ New scratch note</a>
   </div>
 </div>
+
+{% if !items.is_empty() %}{% include "row_filter.html" %}{% endif %}
 
 <div class="table scratch">
   <div class="thead">

@@ -8,7 +8,7 @@
   </div>
   <div class="page-actions">
     {% if is_mod %}
-    <a class="btn primary" href="/pings/new">+ New ping</a>
+    <a class="btn primary" href="/pings/new" data-palette>+ New ping</a>
     {% endif %}
   </div>
 </div>
@@ -40,6 +40,8 @@
   <a class="chip{% if chip.active %} active{% else %} ghost{% endif %}" href="{{ chip.href }}"{% if chip.active %} aria-current="true"{% endif %}>{{ chip.label }}</a>
   {% endfor %}
 </nav>
+
+{% if !rows.is_empty() %}{% include "row_filter.html" %}{% endif %}
 
 <div class="table pings">
   <div class="thead">

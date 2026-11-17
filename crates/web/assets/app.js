@@ -68,34 +68,28 @@ document.body.addEventListener('htmx:configRequest', (evt) => {
   setInterval(tick, 1000);
 })();
 
-document.addEventListener(
-  'keydown',
-  (evt) => {
-    if (evt.key !== '/' || evt.metaKey || evt.ctrlKey || evt.altKey) return;
-    const tag = (evt.target && evt.target.tagName) || '';
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || (evt.target && evt.target.isContentEditable)) {
-      return;
-    }
-    const search = document.getElementById('page-search');
-    if (search) {
-      evt.preventDefault();
-      search.focus();
-      search.select();
-    }
-  },
-  true,
+// ─── Platform modifier key ───────────────────────────────────────────────────
+// Shortcuts use ⌘ on Apple platforms and Ctrl elsewhere; `[data-mod-key]`
+// hints show whichever applies.
+const IS_MAC = /mac|iphone|ipad/i.test(
+  navigator.userAgentData?.platform ?? navigator.platform ?? '',
 );
+for (const el of document.querySelectorAll('[data-mod-key]')) {
+  el.textContent = IS_MAC ? '⌘' : 'Ctrl';
+}
 
+// ─── Inline row filter ───────────────────────────────────────────────────────
+// `input[data-row-filter]` (templates/row_filter.html) hides `[data-filter]`
+// rows whose text blob doesn't contain the query.
 (function liveFilter() {
-  const search = document.getElementById('page-search');
-  if (!search) return;
-  const items = Array.from(document.querySelectorAll('[data-filter]')).map((el) => ({
+  const input = document.querySelector('[data-row-filter]');
+  if (!input) return;
+  const items = Array.from(document.querySelectorAll('[data-filter]'), (el) => ({
     el,
     hay: (el.getAttribute('data-filter') || '').toLowerCase(),
   }));
-  if (items.length === 0) return;
-  search.addEventListener('input', () => {
-    const q = search.value.trim().toLowerCase();
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
     for (const { el, hay } of items) {
       el.style.display = !q || hay.includes(q) ? '' : 'none';
     }
@@ -647,15 +641,10 @@ window.addEventListener('beforeunload', (evt) => {
 (function saveShortcut() {
   const form = document.querySelector('form[data-save-shortcut]');
   if (!form) return;
-  const platform = navigator.userAgentData?.platform ?? navigator.platform ?? '';
-  const isMac = /mac|iphone|ipad/i.test(platform);
-  for (const el of document.querySelectorAll('[data-mod-key]')) {
-    el.textContent = isMac ? '⌘' : 'Ctrl';
-  }
   document.addEventListener('keydown', (evt) => {
     // Chrome fires key-less keydown events for autofill.
     if (evt.key?.toLowerCase() !== 's' || evt.altKey || evt.shiftKey) return;
-    if (!(isMac ? evt.metaKey : evt.ctrlKey)) return;
+    if (!(IS_MAC ? evt.metaKey : evt.ctrlKey)) return;
     evt.preventDefault();
     form.requestSubmit();
   });
@@ -769,4 +758,195 @@ document.addEventListener('submit', (evt) => {
     if (pinned) rows.scrollTop = rows.scrollHeight;
   });
   rows.scrollTop = rows.scrollHeight;
+})();
+
+// ─── Jump palette ────────────────────────────────────────────────────────────
+// Ctrl/⌘+K, or `/` outside a text field, opens `dialog#palette` over the
+// sidebar pages, the settings sections (only rendered on /settings) and page
+// actions marked `[data-palette]`. Choosing an entry clicks the original
+// element, so in-page handlers (settings section scroll) still run.
+(function jumpPalette() {
+  const dialog = document.getElementById('palette');
+  if (!dialog) return;
+  const input = dialog.querySelector('[role="combobox"]');
+  const list = dialog.querySelector('[role="listbox"]');
+  const empty = dialog.querySelector('[data-palette-empty]');
+  let entries = [];
+  let shown = [];
+  let active = 0;
+  let returnFocus = null;
+
+  // Visible text of `el`, skipping `hidden` / `aria-hidden` decorations
+  // (nav dots, dirty counters). A non-empty `data-palette` value wins.
+  function labelOf(el) {
+    if (el.dataset.palette) return el.dataset.palette;
+    let out = '';
+    (function walk(node) {
+      for (const c of node.childNodes) {
+        if (c.nodeType === Node.TEXT_NODE) out += c.textContent;
+        else if (c.nodeType === Node.ELEMENT_NODE && !c.hidden && c.getAttribute('aria-hidden') !== 'true') walk(c);
+      }
+    })(el);
+    return out.replace(/\s+/g, ' ').replace(/^\+\s*/, '').trim();
+  }
+
+  // Read at open time so htmx swaps since page load are reflected.
+  function collect() {
+    const out = [];
+    const seen = new Set();
+    // `extra` is matched but not shown in the label (a section's group name).
+    const add = (el, group, extra = '') => {
+      if (el.closest('[hidden]')) return;
+      const label = labelOf(el);
+      const key = `${group}\n${label}`;
+      if (!label || seen.has(key)) return;
+      seen.add(key);
+      out.push({ el, label, group, hay: `${label} ${extra}`.trim().toLowerCase() });
+    };
+    for (const el of document.querySelectorAll('[data-palette]')) add(el, 'Action');
+    for (const el of document.querySelectorAll('#sidebar .nav a[href]')) add(el, 'Page');
+    for (const el of document.querySelectorAll('.settings-nav-item')) {
+      const head = el.closest('.settings-nav-group')?.querySelector('.settings-nav-group-head .lbl');
+      const groupName = head ? head.textContent.trim() : '';
+      add(el, groupName ? `Settings · ${groupName}` : 'Settings', groupName);
+    }
+    return out;
+  }
+
+  // Fuzzy score; null unless every whitespace-separated token of the query
+  // is a subsequence of `hay` (tokens match in any order, so "agents grok"
+  // finds the Grok section of the Agents group). Consecutive hits and hits at
+  // word starts rank higher, as does a shorter label (so "sett" puts
+  // Settings above longer labels with the same hits).
+  function score(hay, tokens) {
+    let total = 0;
+    for (const token of tokens) {
+      let pos = -1;
+      let run = 0;
+      for (const ch of token) {
+        const i = hay.indexOf(ch, pos + 1);
+        if (i < 0) return null;
+        run = i === pos + 1 ? run + 1 : 0;
+        total += 1 + run * 2;
+        if (i === 0 || /[\s·/_.-]/.test(hay[i - 1])) total += 3;
+        pos = i;
+      }
+    }
+    return total - hay.length / 100;
+  }
+
+  function setActive(i) {
+    active = i;
+    for (const li of list.children) {
+      li.setAttribute('aria-selected', String(Number(li.dataset.index) === i));
+    }
+    const cur = list.children[i];
+    if (cur) {
+      input.setAttribute('aria-activedescendant', cur.id);
+      cur.scrollIntoView({ block: 'nearest' });
+    } else {
+      input.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  function render() {
+    const tokens = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+    shown = tokens.length
+      ? entries
+        .map((e) => ({ e, s: score(e.hay, tokens) }))
+        .filter((m) => m.s !== null)
+        .sort((a, b) => b.s - a.s)
+        .map((m) => m.e)
+      : entries;
+    list.replaceChildren(
+      ...shown.map((e, i) => {
+        const li = document.createElement('li');
+        li.id = `palette-opt-${i}`;
+        li.className = 'palette-opt';
+        li.setAttribute('role', 'option');
+        li.dataset.index = String(i);
+        const label = document.createElement('span');
+        label.className = 'palette-opt-label';
+        label.textContent = e.label;
+        const group = document.createElement('span');
+        group.className = 'palette-opt-group';
+        group.textContent = e.group;
+        li.append(label, group);
+        return li;
+      }),
+    );
+    empty.hidden = shown.length > 0;
+    setActive(0);
+  }
+
+  function open() {
+    if (dialog.open) return;
+    returnFocus = document.activeElement;
+    entries = collect();
+    input.value = '';
+    render();
+    dialog.showModal();
+    input.focus();
+  }
+
+  function go(entry) {
+    dialog.close();
+    entry.el.click();
+  }
+
+  // Covers Esc (native `cancel`), a backdrop click and choosing an entry.
+  dialog.addEventListener('close', () => {
+    const el = returnFocus;
+    returnFocus = null;
+    if (el && el.isConnected && typeof el.focus === 'function') el.focus();
+  });
+  // The box fills the dialog, so a click on the dialog itself is the backdrop.
+  dialog.addEventListener('click', (evt) => {
+    if (evt.target === dialog) dialog.close();
+  });
+
+  input.addEventListener('input', render);
+  input.addEventListener('keydown', (evt) => {
+    if (evt.key === 'ArrowDown' || evt.key === 'ArrowUp') {
+      evt.preventDefault();
+      if (!shown.length) return;
+      const step = evt.key === 'ArrowDown' ? 1 : -1;
+      setActive((active + step + shown.length) % shown.length);
+    } else if (evt.key === 'Enter') {
+      evt.preventDefault();
+      if (shown[active]) go(shown[active]);
+    }
+  });
+  list.addEventListener('click', (evt) => {
+    const li = evt.target.closest('[role="option"]');
+    if (li) go(shown[Number(li.dataset.index)]);
+  });
+  list.addEventListener('mousemove', (evt) => {
+    const li = evt.target.closest('[role="option"]');
+    if (li && Number(li.dataset.index) !== active) setActive(Number(li.dataset.index));
+  });
+
+  for (const btn of document.querySelectorAll('[data-palette-open]')) {
+    btn.addEventListener('click', open);
+  }
+
+  const typing = (el) =>
+    !!el && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable);
+  document.addEventListener(
+    'keydown',
+    (evt) => {
+      if (evt.altKey) return;
+      const isK = evt.key?.toLowerCase() === 'k' && !evt.shiftKey;
+      if (isK && (IS_MAC ? evt.metaKey : evt.ctrlKey)) {
+        evt.preventDefault();
+        if (dialog.open) dialog.close();
+        else open();
+      } else if (evt.key === '/' && !evt.metaKey && !evt.ctrlKey && !dialog.open && !typing(evt.target)) {
+        // No shiftKey check: `/` is Shift+7 on German layouts.
+        evt.preventDefault();
+        open();
+      }
+    },
+    true,
+  );
 })();

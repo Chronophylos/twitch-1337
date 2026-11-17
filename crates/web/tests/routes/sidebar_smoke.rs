@@ -184,3 +184,32 @@ async fn drawer_toggle_controls_sidebar() {
     assert!(toggle.contains("aria-expanded=\"false\""), "{toggle}");
     assert!(body.contains("class=\"drawer-scrim\" data-drawer-close"));
 }
+
+/// The top bar carries the jump-palette trigger instead of a search box,
+/// and every layout page ships the palette dialog with combobox/listbox ARIA.
+#[tokio::test]
+async fn topbar_has_palette_trigger_and_dialog() {
+    let body = fetch_authed("/pings").await;
+    assert!(!body.contains("page-search"), "top-bar search must be gone");
+    let trigger = body
+        .split("data-palette-open")
+        .nth(1)
+        .and_then(|rest| rest.split('>').next())
+        .expect("palette trigger present");
+    assert!(trigger.contains("aria-controls=\"palette\""), "{trigger}");
+    assert!(!trigger.contains("disabled"), "{trigger}");
+    assert!(body.contains("<dialog id=\"palette\""));
+    assert!(body.contains("role=\"combobox\""));
+    assert!(body.contains("aria-controls=\"palette-list\""));
+    assert!(body.contains("id=\"palette-list\" class=\"palette-list\" role=\"listbox\""));
+    // Page actions opt in to the palette.
+    assert!(body.contains("href=\"/pings/new\" data-palette>"));
+}
+
+/// The inline row filter renders only above rows it can filter.
+#[tokio::test]
+async fn row_filter_absent_without_rows() {
+    let body = fetch_authed("/pings").await;
+    assert!(body.contains("No pings yet"), "fixture has no pings");
+    assert!(!body.contains("data-row-filter"));
+}

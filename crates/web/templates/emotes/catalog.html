@@ -10,6 +10,8 @@
 
 {% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
 
+{% if !rows.is_empty() %}{% include "row_filter.html" %}{% endif %}
+
 <div class="table emotes-catalog">
   <div class="thead">
     <div class="th col-name">Name</div>
