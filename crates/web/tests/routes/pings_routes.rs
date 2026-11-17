@@ -242,11 +242,15 @@ async fn delete_via_htmx_returns_oob_counts() {
         html.contains(r#"id="ping-stats" hx-swap-oob="true""#),
         "stat strip; got {html}"
     );
-    for (key, n) in [("all", 1), ("mine", 0), ("joined", 0), ("fired", 0)] {
+    for (key, n) in [("mine", 0), ("joined", 0), ("fired", 0)] {
         let badge =
             format!(r#"<span class="chip-n" id="ping-chip-n-{key}" hx-swap-oob="true">{n}</span>"#);
         assert!(html.contains(&badge), "missing {badge}; got {html}");
     }
+    assert!(
+        !html.contains("ping-chip-n-all"),
+        "the ping total shows once, in the heading; got {html}"
+    );
     // Every top-level element is out-of-band, so nothing lands in the row.
     assert!(!html.contains("class=\"tr\""), "no row markup; got {html}");
     assert!(
@@ -292,7 +296,6 @@ async fn list_carries_oob_target_ids() {
     for id in [
         "pings-total",
         "ping-stats",
-        "ping-chip-n-all",
         "ping-chip-n-mine",
         "ping-chip-n-joined",
         "ping-chip-n-fired",
@@ -525,6 +528,34 @@ async fn edit_form_lists_members() {
     assert!(
         html.contains(r#"name="username""#),
         "add-member input present"
+    );
+}
+
+/// The edit page titles the ping as chat types it, and its breadcrumb links
+/// back to the list with the edit as the current leaf.
+#[tokio::test]
+async fn edit_form_titles_ping_with_bang() {
+    let (state, sid, csrf, _bare, _td) = authed_setup().await;
+    state
+        .ping_actor
+        .create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
+        .await
+        .unwrap();
+    let req = Request::builder()
+        .uri("/pings/team")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .body(Body::empty())
+        .unwrap();
+    let res = build_router(state).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(html.contains("<h1>Edit !team</h1>"), "{html}");
+    assert!(!html.contains("Edit `team`"), "no literal backticks");
+    assert!(html.contains("<title>Edit !team — twitch-1337</title>"));
+    assert!(html.contains(r#"<a class="crumb-link" href="/pings">Pings</a>"#));
+    assert!(
+        html.contains(r#"<span class="crumb-current" aria-current="page">Edit !team</span>"#),
+        "{html}"
     );
 }
 

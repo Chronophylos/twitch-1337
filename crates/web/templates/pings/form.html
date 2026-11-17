@@ -1,9 +1,11 @@
 {% extends "base.html" %}
-{% block title %}{% if is_new %}New ping{% else %}Edit {{ name }}{% endif %} — twitch-1337{% endblock %}
+{% import "_crumbs.html" as cr %}
+{% block title %}{% if is_new %}New ping{% else %}Edit !{{ name }}{% endif %} — twitch-1337{% endblock %}
+{% block crumbs %}{% call cr::parents(current_page) %}{% endcall %}{% if is_new %}{% call cr::here("New ping") %}{% endcall %}{% else %}{% call cr::here("Edit !" ~ name) %}{% endcall %}{% endif %}{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>{% if is_new %}New ping{% else %}Edit `{{ name }}`{% endif %}</h1>
+    <h1>{% if is_new %}New ping{% else %}Edit !{{ name }}{% endif %}</h1>
     <p class="page-sub">{% if is_new %}Pick a short name and a template body.{% else %}Update the template for <code>!{{ name }}</code>.{% endif %}</p>
   </div>
 </div>
@@ -35,23 +37,23 @@
 </div>
 
 {% if !is_new %}
-<div class="page-head" style="margin-top:22px">
+<div class="page-head sub-head">
   <div>
     {% let oob = false %}
     {% let member_count = members.len() %}
-    <h1 style="font-size:18px;margin:0">Members {% include "pings/_member_count.html" %}</h1>
+    <h2 class="sub-title">Members {% include "pings/_member_count.html" %}</h2>
   </div>
 </div>
 
 {% if let Some(e) = member_error %}<div class="error">{{ e }}</div>{% endif %}
 
-<div class="form-card" style="padding:0">
+<div class="form-card flush member-list">
   <div class="tbody">
     {% if members.is_empty() %}
       <div class="empty">No members yet — add the first one below.</div>
     {% else %}
       {% for m in members %}
-      <div class="tr" style="grid-template-columns: 1fr 80px;">
+      <div class="tr">
         <div class="td col-name">
           <span class="ping-bullet">@</span>
           <span class="ping-name">{{ m }}</span>
@@ -70,7 +72,7 @@
   </div>
 </div>
 
-<form method="post" action="/pings/{{ name }}/members" class="form-card" style="margin-top:14px">
+<form method="post" action="/pings/{{ name }}/members" class="form-card stacked">
   <input type="hidden" name="_csrf" value="{{ csrf }}">
   <div class="field">
     <label class="field-label" for="ping-add-member">Add member</label>

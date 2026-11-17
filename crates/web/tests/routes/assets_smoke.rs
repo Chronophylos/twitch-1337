@@ -119,3 +119,35 @@ async fn assets_emit_immutable_cache_control() {
         );
     }
 }
+
+/// Templates carry no `style=""` attributes or `lang="de"` on inputs: inline
+/// styles block a strict CSP, and the lang hint never changed Chromium's
+/// date/time pickers.
+#[test]
+fn templates_have_no_inline_styles() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for (i, line) in text.lines().enumerate() {
+                if line.contains("style=\"") || line.contains("lang=\"de\"") {
+                    out.push(format!("{}:{}: {line}", path.display(), i + 1));
+                }
+            }
+        }
+    }
+    let mut hits = Vec::new();
+    walk(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("templates"),
+        &mut hits,
+    );
+    assert!(
+        hits.is_empty(),
+        "inline style / lang attrs:\n{}",
+        hits.join("\n")
+    );
+}

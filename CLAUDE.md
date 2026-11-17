@@ -224,7 +224,7 @@ stay in config.toml; `session_ttl` and `mod_check_refresh` live in `settings.ron
 managed via `/settings → Web · Sessions`.
 
 Schedules live in `settings.ron`, managed via `/schedules` (mod-gated). Each
-row carries name, message, hh:mm interval, optional ISO 8601 date range, optional
+row carries name, message, an interval (hours + minutes inputs), optional ISO 8601 date range, optional
 HH:MM active-time window, an optional ping name (fired as a second
 message after the schedule message, respects the ping's cooldown, a missing
 ping just warns and skips), and an enabled toggle. Validation runs on save

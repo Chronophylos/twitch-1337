@@ -1,0 +1,21 @@
+{# Breadcrumb pieces for the top bar. Trails come from `crate::nav::crumbs`.
+   `trail(page)` is the default (parents linked, page current); a detail page
+   overrides `{% block crumbs %}` with `parents(page)` plus `here(leaf)`. #}
+{% macro trail(page) %}
+{% for c in crate::nav::crumbs(page) %}
+<span class="crumb-sep">/</span>
+{% if loop.last %}<span class="crumb-current" aria-current="page">{{ c.label }}</span>{% else %}<a class="crumb-link" href="{{ c.href }}">{{ c.label }}</a>{% endif %}
+{% endfor %}
+{% endmacro %}
+
+{% macro parents(page) %}
+{% for c in crate::nav::crumbs(page) %}
+<span class="crumb-sep">/</span>
+<a class="crumb-link" href="{{ c.href }}">{{ c.label }}</a>
+{% endfor %}
+{% endmacro %}
+
+{% macro here(label) %}
+<span class="crumb-sep">/</span>
+<span class="crumb-current" aria-current="page">{{ label }}</span>
+{% endmacro %}

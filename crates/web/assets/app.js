@@ -703,6 +703,21 @@ document.addEventListener('submit', (evt) => {
   if (msg && !window.confirm(msg)) evt.preventDefault();
 });
 
+// ─── Percent bars ────────────────────────────────────────────────────────────
+// `[data-pct=N]` sizes itself to N% wide. Templates carry no `style=""`
+// attributes so the dashboard can run under a strict CSP; setting the width
+// through the CSSOM is not an inline style.
+(function pctBars() {
+  const apply = (root) => {
+    for (const el of root.querySelectorAll('[data-pct]')) {
+      const pct = Math.min(100, Math.max(0, Number(el.dataset.pct) || 0));
+      el.style.width = `${pct}%`;
+    }
+  };
+  apply(document);
+  document.body.addEventListener('htmx:load', (evt) => apply(evt.detail.elt));
+})();
+
 // ─── Live byte counter (memory editor) ───────────────────────────────────────
 // `textarea[data-byte-cap=N]` drives `[data-bytes-used]`, `[data-bytes-fill]`
 // and `[data-bytes-warn]` in its `.editor`. Counts UTF-8 bytes, like the

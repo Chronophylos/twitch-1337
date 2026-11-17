@@ -93,7 +93,7 @@ async fn viewer_blocked_from_memory_and_mutations() {
 }
 
 #[tokio::test]
-async fn root_redirects_by_role() {
+async fn root_lands_every_tier_on_pings() {
     install_crypto();
     let helix = Arc::new(FakeHelix {
         moderators: vec!["9".into()],
@@ -119,8 +119,8 @@ async fn root_redirects_by_role() {
     assert!(resp.status().is_redirection(), "viewer / should redirect");
     assert_eq!(
         resp.headers().get("location").unwrap(),
-        "/leaderboard",
-        "viewer / should redirect to /leaderboard"
+        "/pings",
+        "viewer / lands on the first nav entry, like every tier"
     );
 
     let resp = app
@@ -198,4 +198,39 @@ async fn viewer_dropped_from_allowlist_after_recheck_window() {
         StatusCode::FORBIDDEN,
         "viewer dropped from allowlist should be 403 on next recheck",
     );
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(
+        html.contains("Your account isn't a mod of testchannel or on the viewer allowlist."),
+        "denied page names the channel: {html}"
+    );
+}
+
+/// A signed-in account below the page's tier gets a tier message, not the
+/// "not a mod or on the allowlist" copy that would be untrue for it.
+#[tokio::test]
+async fn viewer_on_mod_page_gets_tier_message() {
+    install_crypto();
+    let (state, _td_p, _td_m) = build_state_with_dirs(empty_helix()).await;
+    let (sid, csrf, _bare) = insert_session_as(&state, "42", "alice", Role::Viewer);
+    let resp = twitch_1337_web::build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/schedules")
+                .method(Method::GET)
+                .header("cookie", cookie_header(&sid, &csrf))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(html.contains("dashboard tier"), "{html}");
+    assert!(!html.contains("viewer allowlist"), "{html}");
 }

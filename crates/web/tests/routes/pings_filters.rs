@@ -122,15 +122,30 @@ fn is_active(chip: &str) -> bool {
     chip.contains("chip active")
 }
 
+/// Each count shows once: the ping total sits in the heading, so the All
+/// chip has no badge and the other chips count their matches.
 fn assert_filter_chips(html: &str, active_href: &str) {
+    assert!(
+        html.contains(r#"<span class="count" id="pings-total">(4)</span>"#),
+        "heading carries the ping total"
+    );
+    let all = chip(html, "/pings");
+    assert!(
+        !all.contains("chip-n"),
+        "All chip has no count badge: {all}"
+    );
+    assert_eq!(
+        is_active(all),
+        active_href == "/pings",
+        "active state of All"
+    );
     for (href, count) in [
-        ("/pings", 4),
         ("/pings?filter=mine", 2),
         ("/pings?filter=joined", 2),
         ("/pings?filter=fired", 2),
     ] {
         let c = chip(html, href);
-        let key = href.strip_prefix("/pings?filter=").unwrap_or("all");
+        let key = href.strip_prefix("/pings?filter=").unwrap();
         assert!(
             c.contains(&format!(
                 r#"<span class="chip-n" id="ping-chip-n-{key}">{count}</span>"#

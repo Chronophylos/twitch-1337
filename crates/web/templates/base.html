@@ -1,3 +1,4 @@
+{%- import "_crumbs.html" as cr -%}
 <!doctype html>
 <html lang="en">
 <head>
@@ -20,11 +21,8 @@
       <header class="topbar">
         <button type="button" class="nav-toggle" data-drawer-toggle aria-controls="sidebar" aria-expanded="false" aria-label="Menu">☰</button>
         <nav class="crumbs" aria-label="Breadcrumb">
-          <span class="crumb-root">~</span>
-          {% for seg in current_page.split('_') %}
-          <span class="crumb-sep">/</span>
-          <span class="crumb-current">{{ seg }}</span>
-          {% endfor %}
+          <a class="crumb-root" href="/" aria-label="Home">~</a>
+          {% block crumbs %}{% call cr::trail(current_page) %}{% endcall %}{% endblock %}
         </nav>
         <div class="topbar-right">
           <div id="berlin-timer" class="timer-chip" data-armed="false">

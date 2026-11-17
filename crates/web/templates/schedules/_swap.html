@@ -2,6 +2,6 @@
 {% if let Some(card) = card %}
 {% include "schedules/_card.html" %}
 {% endif %}
-<span class="muted" id="schedules-total" hx-swap-oob="true">({{ stats.total }})</span>
+<span class="count" id="schedules-total" hx-swap-oob="true">({{ stats.total }})</span>
 {% let oob = true %}
 {% include "schedules/_stats.html" %}

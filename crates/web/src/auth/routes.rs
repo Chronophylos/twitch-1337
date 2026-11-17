@@ -208,13 +208,17 @@ struct LoginParams {
 #[template(path = "auth/login.html")]
 struct LoginTpl {
     login_href: String,
+    channel: std::sync::Arc<str>,
 }
 
 /// Static landing page reached on first hit and after `/logout`. Without
 /// this stop, redirecting straight to Twitch's `/authorize` would silently
 /// re-authenticate via the still-active Twitch session and the user would
 /// appear to "fail to log out".
-async fn login_landing(Query(params): Query<LoginParams>) -> Response {
+async fn login_landing(
+    State(state): State<WebState>,
+    Query(params): Query<LoginParams>,
+) -> Response {
     let login_href = match params
         .next
         .as_deref()
@@ -224,7 +228,12 @@ async fn login_landing(Query(params): Query<LoginParams>) -> Response {
         None => "/auth/start".to_owned(),
     };
     use askama::Template as _;
-    match (LoginTpl { login_href }).render() {
+    match (LoginTpl {
+        login_href,
+        channel: state.channel.clone(),
+    })
+    .render()
+    {
         Ok(body) => axum::response::Html(body).into_response(),
         Err(err) => {
             tracing::error!(target: "twitch_1337_web", ?err, "login template render failed");
@@ -281,9 +290,12 @@ async fn callback(
     Query(params): Query<CallbackParams>,
     cookies: Cookies,
 ) -> Result<Response, WebError> {
-    let stored = cookies.get(OAUTH_STATE_COOKIE).ok_or(WebError::Forbidden)?;
+    let forbidden = || WebError::Forbidden {
+        channel: state.channel.clone(),
+    };
+    let stored = cookies.get(OAUTH_STATE_COOKIE).ok_or_else(forbidden)?;
     if stored.value() != params.state {
-        return Err(WebError::Forbidden);
+        return Err(forbidden());
     }
     cookies.remove(Cookie::build(OAUTH_STATE_COOKIE).path("/").build());
 
@@ -330,7 +342,7 @@ async fn callback(
                         action = "login",
                         result = "denied",
                     );
-                    return Err(WebError::Forbidden);
+                    return Err(forbidden());
                 }
             },
         }
@@ -487,7 +499,7 @@ pub async fn require_role(
         .ok_or_else(unauth)?;
 
     if session.role < min {
-        return Err(WebError::Forbidden);
+        return Err(WebError::TierTooLow);
     }
 
     let now = state.clock.now();
@@ -541,7 +553,9 @@ pub async fn require_role(
                     action = "role_recheck",
                     result = "denied",
                 );
-                return Err(WebError::Forbidden);
+                return Err(WebError::Forbidden {
+                    channel: state.channel.clone(),
+                });
             }
             Err(e) => {
                 tracing::warn!(

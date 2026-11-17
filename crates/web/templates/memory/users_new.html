@@ -1,23 +1,25 @@
 {% extends "base.html" %}
+{% import "_crumbs.html" as cr %}
 {% block title %}New Character Sheet — twitch-1337{% endblock %}
+{% block crumbs %}{% call cr::parents(current_page) %}{% endcall %}{% call cr::here("New") %}{% endcall %}{% endblock %}
 {% block content %}
-<a href="/memory/users" class="link muted" style="display:inline-block;margin-bottom:6px;">← Back</a>
 <div class="page-head">
   <div>
+    <a href="/memory/users" class="link muted back-link">← Back</a>
     <h1>New Character Sheet</h1>
     <p class="page-sub">Create a Character Sheet at <code>memories/users/&lt;id&gt;.md</code>. 4 KiB cap.</p>
   </div>
 </div>
 
-<form method="post" action="/memory/users/new" style="display:flex;flex-direction:column;gap:12px;max-width:420px;">
+<form method="post" action="/memory/users/new" class="form-card narrow">
   <input type="hidden" name="_csrf" value="{{ csrf }}">
-  <label>
-    <div class="muted" style="font-size:12px;margin-bottom:4px;">Twitch user id</div>
-    <input type="text" class="input" name="user_id" placeholder="e.g. 1234567" pattern="[0-9]{1,32}" inputmode="numeric" required autocomplete="off" spellcheck="false" autofocus>
-  </label>
-  <div class="page-actions" style="gap:8px;">
+  <div class="field">
+    <label class="field-label" for="sheet-user-id">Twitch user id</label>
+    <input id="sheet-user-id" type="text" class="input" name="user_id" placeholder="e.g. 1234567" pattern="[0-9]{1,32}" inputmode="numeric" required autocomplete="off" spellcheck="false" autofocus>
+  </div>
+  <div class="form-actions">
     <button type="submit" class="btn primary">Create</button>
-    <a class="btn" href="/memory/users">Cancel</a>
+    <a class="btn ghost" href="/memory/users">Cancel</a>
   </div>
 </form>
 {% endblock %}

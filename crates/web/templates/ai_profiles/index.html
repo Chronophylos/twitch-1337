@@ -4,14 +4,10 @@
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>AI Profiles <span class="muted">({{ total }})</span></h1>
+    <h1>AI Profiles <span class="count">({{ total }})</span></h1>
     <p class="page-sub">Provider configurations assigned to AI agents — no restart required.</p>
   </div>
   <a class="btn primary" href="/ai-profiles?new=true" data-palette>+ New profile</a>
-</div>
-
-<div class="stat-strip">
-  <div class="stat"><div class="stat-label">TOTAL</div><div class="stat-value">{{ total }}</div></div>
 </div>
 
 {% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}

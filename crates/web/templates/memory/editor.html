@@ -1,9 +1,12 @@
 {% extends "base.html" %}
+{% import "_crumbs.html" as cr %}
 {% block title %}{{ title }} — twitch-1337{% endblock %}
+{# SOUL and LORE are their own crumb; sheets and scratch notes sit under their list. #}
+{% block crumbs %}{% if cancel_url == "/memory" %}{% call cr::trail(current_page) %}{% endcall %}{% else %}{% call cr::parents(current_page) %}{% endcall %}{% call cr::here(title) %}{% endcall %}{% endif %}{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
-    <a href="{{ cancel_url }}" class="link muted" style="display:inline-block;margin-bottom:6px;">← Back</a>
+    <a href="{{ cancel_url }}" class="link muted back-link">← Back</a>
     <h1>{{ title }}</h1>
     <p class="page-sub">{{ subtitle }}</p>
   </div>
@@ -50,7 +53,7 @@
     <div class="editor-foot">
       <div class="bytes{% if body.len() > byte_cap %} over{% endif %}">
         <span><span data-bytes-used>{{ body.len() }}</span> / {{ byte_cap }} B</span>
-        <div class="bytes-bar"><span data-bytes-fill style="width: {{ pct }}%"></span></div>
+        <div class="bytes-bar"><span data-bytes-fill data-pct="{{ pct }}"></span></div>
         <span class="bytes-warn" data-bytes-warn{% if body.len() <= byte_cap %} hidden{% endif %}>Over the cap, saving will fail</span>
       </div>
       <span class="kbd-hint"><kbd data-mod-key>⌘</kbd><kbd>S</kbd> to save</span>

@@ -165,9 +165,106 @@ async fn sidebar_hides_memory_and_system_for_viewer() {
     assert!(!body.contains("/logs"), "logs hidden for viewer");
     assert!(!body.contains("/schedules"), "schedules hidden for viewer");
     assert!(
-        body.contains("class=\"me-role\"></span>"),
-        "viewer footer renders empty role chip"
+        body.contains("class=\"me-role\">viewer</span>"),
+        "viewer footer names the Dashboard Tier"
     );
+}
+
+/// GET `uri` as an Owner session (owner pages need it).
+async fn fetch_as_owner(uri: &str) -> String {
+    install_crypto();
+    let helix = fake_helix_with_mod("999", "boss");
+    let (state, _td_pings, _td_mem) = build_state_with_dirs(helix).await;
+    set_owner(&state, Some("999"));
+    let (sid, csrf, _bare) =
+        insert_session_as(&state, "999", "boss", twitch_1337_web::auth::Role::Owner);
+    let req = Request::builder()
+        .uri(uri)
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .body(Body::empty())
+        .unwrap();
+    let res = build_router(state).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{uri}: status");
+    let bytes = to_bytes(res.into_body(), 1024 * 1024).await.unwrap();
+    String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+/// The breadcrumb `<nav>` of a rendered page.
+fn crumbs(body: &str) -> &str {
+    let start = body.find(r#"<nav class="crumbs""#).expect("breadcrumb nav");
+    let nav = &body[start..];
+    &nav[..nav.find("</nav>").unwrap()]
+}
+
+#[tokio::test]
+async fn mod_and_owner_tiers_label_the_footer() {
+    let body = fetch_authed("/pings").await;
+    assert!(body.contains("class=\"me-role\">mod</span>"));
+    let body = fetch_as_owner("/pings").await;
+    assert!(body.contains("class=\"me-role\">owner</span>"));
+}
+
+/// Crumbs come from an explicit per-page trail, not the page slug split on
+/// `_`: `ai_profiles` reads "AI Profiles", not "ai / profiles".
+#[tokio::test]
+async fn breadcrumbs_use_page_labels() {
+    let body = fetch_as_owner("/ai-profiles").await;
+    let nav = crumbs(&body);
+    assert!(
+        nav.contains(r#"<span class="crumb-current" aria-current="page">AI Profiles</span>"#),
+        "{nav}"
+    );
+    assert!(
+        !nav.contains(">ai<") && !nav.contains(">profiles<"),
+        "{nav}"
+    );
+    assert!(nav.contains(r#"<a class="crumb-root" href="/""#), "{nav}");
+}
+
+/// Nested pages link their parent crumbs; the page itself is the current one.
+#[tokio::test]
+async fn breadcrumbs_link_parent_pages() {
+    let body = fetch_authed("/memory/users").await;
+    let nav = crumbs(&body);
+    assert!(
+        nav.contains(r#"<a class="crumb-link" href="/memory">Memory</a>"#),
+        "{nav}"
+    );
+    assert!(
+        nav.contains(r#"<span class="crumb-current" aria-current="page">Character Sheets</span>"#),
+        "{nav}"
+    );
+    assert!(!nav.contains(">memory<"), "no raw slug segments: {nav}");
+
+    let body = fetch_authed("/memory/users/new").await;
+    let nav = crumbs(&body);
+    assert!(
+        nav.contains(r#"<a class="crumb-link" href="/memory/users">Character Sheets</a>"#),
+        "{nav}"
+    );
+    assert!(
+        nav.contains(r#"<span class="crumb-current" aria-current="page">New</span>"#),
+        "{nav}"
+    );
+}
+
+/// Back links sit inside `page-head`, above the title, on every page that has one.
+#[tokio::test]
+async fn back_link_sits_inside_page_head() {
+    for uri in ["/memory/users", "/memory/scratch", "/memory/users/new"] {
+        let body = fetch_authed(uri).await;
+        let head = body
+            .split(r#"<div class="page-head">"#)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{uri}: no page-head"));
+        let back = head
+            .find("back-link")
+            .unwrap_or_else(|| panic!("{uri}: no back link"));
+        assert!(
+            back < head.find("<h1").unwrap(),
+            "{uri}: back link above the title"
+        );
+    }
 }
 
 /// The phone-width ☰ button names the sidebar it opens and starts closed.

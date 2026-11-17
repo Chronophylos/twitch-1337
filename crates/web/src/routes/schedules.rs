@@ -111,7 +111,9 @@ struct FormState {
     ping: String,
     /// "interval" | "calendar"
     kind: String,
-    interval_every: String,
+    /// Interval split for the two number inputs; blank reads as 0.
+    interval_hours: String,
+    interval_minutes: String,
     interval_active_from: String,
     interval_active_to: String,
     interval_days: BTreeSet<String>,
@@ -178,7 +180,9 @@ struct ScheduleForm {
     kind: String,
     // Interval fields
     #[serde(default)]
-    interval_every: String, // "hh:mm"
+    interval_hours: String,
+    #[serde(default)]
+    interval_minutes: String,
     #[serde(default)]
     interval_active_from: String,
     #[serde(default)]
@@ -205,15 +209,16 @@ impl ScheduleForm {
         let prefix = "form";
         let trigger = match self.kind.as_str() {
             "interval" => {
-                let secs = parse_hhmm_to_secs(&self.interval_every).unwrap_or(0);
-                // Checked here, not in `Schedule::validate`: that also runs at
-                // boot, where one failing row quarantines all of settings.ron.
-                if secs > 86_400 {
-                    errs.push(twitch_1337_core::settings::FieldError {
-                        field: format!("{prefix}.interval_every"),
-                        message: format!("must be ≤ 24:00 (got {:?})", self.interval_every),
-                    });
-                }
+                let secs = match parse_interval(&self.interval_hours, &self.interval_minutes) {
+                    Ok(secs) => secs,
+                    Err((field, message)) => {
+                        errs.push(twitch_1337_core::settings::FieldError {
+                            field: format!("{prefix}.{field}"),
+                            message,
+                        });
+                        0
+                    }
+                };
                 let days = parse_weekdays(&self.interval_days);
                 let active_from = parse_hhmm(&self.interval_active_from);
                 let active_to = parse_hhmm(&self.interval_active_to);
@@ -278,12 +283,39 @@ fn parse_hhmm(s: &str) -> Option<NaiveTime> {
     NaiveTime::parse_from_str(s, "%H:%M").ok()
 }
 
-fn parse_hhmm_to_secs(s: &str) -> Option<u64> {
-    let s = s.trim();
-    let (h, m) = s.split_once(':')?;
-    let h: u64 = h.parse().ok()?;
-    let m: u64 = m.parse().ok()?;
-    Some(h * 3600 + m * 60)
+/// Seconds for the interval's hours + minutes inputs. Blank reads as 0, so a
+/// zero interval reaches `Schedule::validate` (which rejects it) unchanged.
+/// The 24 h cap lives here, not in `Schedule::validate`: that also runs at
+/// boot, where one failing row quarantines all of settings.ron.
+fn parse_interval(hours: &str, minutes: &str) -> Result<u64, (&'static str, String)> {
+    fn number(s: &str) -> Option<u64> {
+        let s = s.trim();
+        if s.is_empty() {
+            Some(0)
+        } else {
+            s.parse().ok()
+        }
+    }
+    let h = number(hours).ok_or_else(|| {
+        (
+            "interval_hours",
+            format!("must be a whole number (got {hours:?})"),
+        )
+    })?;
+    let m = number(minutes).filter(|m| *m < 60).ok_or_else(|| {
+        (
+            "interval_minutes",
+            format!("must be 0–59 (got {minutes:?})"),
+        )
+    })?;
+    let secs = h.saturating_mul(3600).saturating_add(m * 60);
+    if secs > 86_400 {
+        return Err((
+            "interval",
+            format!("must be at most 24 h (got {h} h {m} min)"),
+        ));
+    }
+    Ok(secs)
 }
 
 fn parse_date(s: &str) -> Option<NaiveDate> {
@@ -459,7 +491,8 @@ fn form_state_from_schedule(s: &Schedule) -> FormState {
         } => {
             fs.kind = "interval".into();
             let total = every.as_secs();
-            fs.interval_every = format!("{:02}:{:02}", total / 3600, (total / 60) % 60);
+            fs.interval_hours = (total / 3600).to_string();
+            fs.interval_minutes = ((total / 60) % 60).to_string();
             fs.interval_active_from = active_from
                 .map(|t| t.format("%H:%M").to_string())
                 .unwrap_or_default();
@@ -491,7 +524,8 @@ fn form_state_from_form(form: &ScheduleForm) -> FormState {
         message: form.message.trim().to_owned(),
         ping: form.ping.trim().to_owned(),
         kind: form.kind.clone(),
-        interval_every: form.interval_every.clone(),
+        interval_hours: form.interval_hours.clone(),
+        interval_minutes: form.interval_minutes.clone(),
         interval_active_from: form.interval_active_from.clone(),
         interval_active_to: form.interval_active_to.clone(),
         interval_days: form.interval_days.iter().cloned().collect(),
@@ -794,7 +828,7 @@ fn render_validation(
 
 #[cfg(test)]
 mod try_into_schedule_tests {
-    use super::{ScheduleForm, parse_date, parse_hhmm, parse_hhmm_to_secs, parse_weekdays};
+    use super::{ScheduleForm, parse_date, parse_hhmm, parse_interval, parse_weekdays};
     use twitch_1337_core::schedule::Trigger;
 
     fn base_interval_form() -> ScheduleForm {
@@ -804,7 +838,8 @@ mod try_into_schedule_tests {
             name: "  noon  ".into(),
             message: "  hello world  ".into(),
             kind: "interval".into(),
-            interval_every: "01:00".into(),
+            interval_hours: "1".into(),
+            interval_minutes: "".into(),
             interval_active_from: "".into(),
             interval_active_to: "".into(),
             interval_days: vec![],
@@ -826,35 +861,54 @@ mod try_into_schedule_tests {
     #[test]
     fn interval_over_a_day_rejected() {
         let mut form = base_interval_form();
-        form.interval_every = "24:01".into();
+        form.interval_hours = "24".into();
+        form.interval_minutes = "1".into();
         let errs = form.try_into_schedule().unwrap_err();
-        assert!(errs.iter().any(|e| e.field == "form.interval_every"));
+        assert!(errs.iter().any(|e| e.field == "form.interval"));
     }
 
     #[test]
     fn interval_of_exactly_a_day_accepted() {
         let mut form = base_interval_form();
-        form.interval_every = "24:00".into();
+        form.interval_hours = "24".into();
         assert!(form.try_into_schedule().is_ok());
     }
 
     #[test]
-    fn interval_every_parsed_from_hhmm() {
-        let s = base_interval_form().try_into_schedule().unwrap();
+    fn interval_parsed_from_hours_and_minutes() {
+        let mut form = base_interval_form();
+        form.interval_minutes = "30".into();
+        let s = form.try_into_schedule().unwrap();
         if let Trigger::Interval { every, .. } = s.trigger {
-            assert_eq!(every.as_secs(), 3600);
+            assert_eq!(every.as_secs(), 5400);
         } else {
             panic!("expected Interval");
         }
     }
 
     #[test]
+    fn interval_minutes_out_of_range_rejected() {
+        let mut form = base_interval_form();
+        form.interval_minutes = "60".into();
+        let errs = form.try_into_schedule().unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "form.interval_minutes"));
+    }
+
+    #[test]
+    fn interval_hours_not_a_number_rejected() {
+        let mut form = base_interval_form();
+        form.interval_hours = "1:00".into();
+        let errs = form.try_into_schedule().unwrap_err();
+        assert!(errs.iter().any(|e| e.field == "form.interval_hours"));
+    }
+
+    #[test]
     fn interval_zero_passes_through_for_downstream_validation() {
         // The form parser must NOT clamp; Schedule::validate is responsible
-        // for rejecting intervals below 60s. Posting "00:00" should produce
-        // a Duration of 0 without any silent correction by the form layer.
+        // for rejecting intervals below 60s. Blank inputs read as 0 and must
+        // produce a Duration of 0 without any silent correction.
         let mut form = base_interval_form();
-        form.interval_every = "00:00".into(); // 0 secs — must not be silently clamped
+        form.interval_hours = "".into();
         let s = form.try_into_schedule().unwrap();
         if let Trigger::Interval { every, .. } = s.trigger {
             assert_eq!(
@@ -875,7 +929,8 @@ mod try_into_schedule_tests {
             name: "test".into(),
             message: "hi".into(),
             kind: "calendar".into(),
-            interval_every: "".into(),
+            interval_hours: "".into(),
+            interval_minutes: "".into(),
             interval_active_from: "".into(),
             interval_active_to: "".into(),
             interval_days: vec![],
@@ -897,7 +952,8 @@ mod try_into_schedule_tests {
             name: "test".into(),
             message: "hi".into(),
             kind: "bogus".into(),
-            interval_every: "".into(),
+            interval_hours: "".into(),
+            interval_minutes: "".into(),
             interval_active_from: "".into(),
             interval_active_to: "".into(),
             interval_days: vec![],
@@ -924,9 +980,11 @@ mod try_into_schedule_tests {
     }
 
     #[test]
-    fn parse_hhmm_to_secs_helper() {
-        assert_eq!(parse_hhmm_to_secs("01:30"), Some(5400));
-        assert_eq!(parse_hhmm_to_secs(""), None);
+    fn parse_interval_helper() {
+        assert_eq!(parse_interval("1", "30"), Ok(5400));
+        assert_eq!(parse_interval(" 2 ", ""), Ok(7200));
+        assert_eq!(parse_interval("", ""), Ok(0));
+        assert!(parse_interval("-1", "0").is_err());
     }
 
     #[test]

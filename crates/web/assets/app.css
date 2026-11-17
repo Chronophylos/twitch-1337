@@ -248,7 +248,10 @@ kbd {
   z-index: 2;
 }
 .crumbs { display: flex; align-items: baseline; gap: 8px; font-family: var(--mono); }
-.crumb-root { color: var(--fg-4); }
+.crumb-root,
+.crumb-link { color: var(--fg-4); text-decoration: none; }
+.crumb-root:hover,
+.crumb-link:hover { color: var(--fg-2); text-decoration: underline; text-underline-offset: 3px; }
 .crumb-sep  { color: var(--fg-4); }
 .crumb-current { color: var(--fg); font-weight: 600; }
 
@@ -346,7 +349,7 @@ kbd {
   align-items: center;
   gap: 6px;
 }
-.page-head h1 .count {
+.page-head :is(h1, .sub-title) .count {
   color: var(--fg-4);
   font-weight: 400;
   font-family: var(--mono);
@@ -355,6 +358,17 @@ kbd {
      nudge down to land optically between them. */
   transform: translateY(0.12em);
 }
+/* Second heading on a page (ping members), below the main form. */
+.page-head.sub-head { margin-top: 22px; }
+.page-head .sub-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+.back-link { display: inline-block; margin-bottom: 6px; }
 .page-sub {
   color: var(--fg-3);
   margin: 0;
@@ -456,6 +470,7 @@ kbd {
   position: relative;
 }
 .stat:last-child { border-right: 0; }
+.stat-link { text-decoration: none; color: inherit; }
 .stat-label {
   font-family: var(--mono);
   font-size: 10.5px;
@@ -698,6 +713,12 @@ kbd {
   text-transform: uppercase;
 }
 .avatar-img { object-fit: cover; }
+.avatar-sm { width: 18px; height: 18px; font-size: 10px; }
+.avatar-md { width: 28px; height: 28px; font-size: 11px; }
+.avatar-lg { width: 36px; height: 36px; font-size: 13px; }
+/* Initial circles: fallback when Twitch has no profile image. */
+.avatar-initial { background: oklch(0.55 0.10 var(--accent-h)); }
+.avatar-me { background: oklch(0.6 0.12 280); }
 
 /* ====================== Editor (SOUL/LORE/State) ====================== */
 .editor {
@@ -810,6 +831,10 @@ kbd {
   background: var(--bg-1);
   padding: 22px;
 }
+.form-card.flush { padding: 0; }
+.form-card.stacked { margin-top: 14px; }
+.form-card.narrow { max-width: 420px; }
+.member-list .tr { grid-template-columns: minmax(0, 1fr) 80px; }
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
 .field-label {
   font-family: var(--mono);
@@ -1642,6 +1667,8 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   font-size: 12px;
   margin-left: 8px;
 }
+/* The card-tag row spaces its children with `gap`. */
+.settings-card-tag .restart-required { margin-left: 0; }
 
 /* ====================== /schedules — card grid + variant form ===========
    The dashboard renders schedules as a responsive card grid. The form is
@@ -1790,6 +1817,7 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   font-size: 13px;
 }
 .schedule-form input[type="text"],
+.schedule-form input[type="number"],
 .schedule-form input[type="time"],
 .schedule-form input[type="date"],
 .schedule-form textarea {
@@ -1805,6 +1833,7 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   max-width: 420px;
 }
 .schedule-form input[type="text"]:focus,
+.schedule-form input[type="number"]:focus,
 .schedule-form input[type="time"]:focus,
 .schedule-form input[type="date"]:focus,
 .schedule-form textarea:focus {
@@ -1881,6 +1910,18 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   color: var(--accent);
 }
 .schedule-form .weekday-chip input { accent-color: var(--accent); }
+
+/* Interval: hours + minutes number inputs side by side. */
+.schedule-form .row-caption { font-size: 12.5px; color: var(--fg-3); }
+.schedule-form .interval-every { display: flex; flex-wrap: wrap; gap: 12px; }
+.schedule-form .row .interval-part {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  color: var(--fg-2);
+}
+.schedule-form .interval-part input { width: 84px; }
 
 .schedule-form .form-actions {
   flex-direction: row !important;
