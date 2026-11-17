@@ -120,11 +120,35 @@ async fn assets_emit_immutable_cache_control() {
     }
 }
 
-/// Templates carry no `style=""` attributes or `lang="de"` on inputs: inline
-/// styles block a strict CSP, and the lang hint never changed Chromium's
-/// date/time pickers.
+/// Templates carry no inline code the CSP (`script-src 'self'; style-src
+/// 'self'`) would block: no `<script>` bodies, `<style>` blocks, `style=""`
+/// attributes, `on*=` handlers, `hx-on` or `javascript:` URLs. Also no
+/// `lang="de"` on inputs: the hint never changed Chromium's date/time pickers.
 #[test]
-fn templates_have_no_inline_styles() {
+fn templates_have_no_inline_code() {
+    fn inline_code(line: &str) -> bool {
+        let lower = line.to_ascii_lowercase();
+        let inline_script = lower.contains("<script") && !lower.contains(" src=");
+        let handler = lower.split_whitespace().any(|token| {
+            token.strip_prefix("on").is_some_and(|rest| {
+                rest.split_once('=').is_some_and(|(name, _)| {
+                    !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase())
+                })
+            })
+        });
+        inline_script
+            || handler
+            || [
+                "<style",
+                "style=\"",
+                "style='",
+                "hx-on",
+                "javascript:",
+                "lang=\"de\"",
+            ]
+            .iter()
+            .any(|needle| lower.contains(needle))
+    }
     fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
@@ -134,7 +158,7 @@ fn templates_have_no_inline_styles() {
             }
             let text = std::fs::read_to_string(&path).unwrap();
             for (i, line) in text.lines().enumerate() {
-                if line.contains("style=\"") || line.contains("lang=\"de\"") {
+                if inline_code(line) {
                     out.push(format!("{}:{}: {line}", path.display(), i + 1));
                 }
             }
@@ -147,7 +171,7 @@ fn templates_have_no_inline_styles() {
     );
     assert!(
         hits.is_empty(),
-        "inline style / lang attrs:\n{}",
+        "inline script / style / handler / lang attrs:\n{}",
         hits.join("\n")
     );
 }

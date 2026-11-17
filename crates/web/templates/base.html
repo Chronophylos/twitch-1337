@@ -6,6 +6,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="darkreader-lock">
+  {# Strict CSP (lib.rs): htmx must not inject its indicator stylesheet
+     (app.css carries those rules) or use eval (trigger filters, js: values). #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false}'>
   <title>{% block title %}twitch-1337{% endblock %}</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v={{ env!("ASSET_V_FAVICON_SVG") }}">
   <link rel="stylesheet" href="/assets/app.css?v={{ env!("ASSET_V_APP_CSS") }}">

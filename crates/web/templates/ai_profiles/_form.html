@@ -4,9 +4,9 @@
 
    Askama can't re-render when the provider `<select>` changes, so every
    provider's effort/tier controls are rendered up front inside a
-   `<fieldset disabled>` and the inline script below flips which one is
+   `<fieldset disabled>` and app.js (`form.profile-form`) flips which one is
    enabled + visible. Server-side validation (settings::validation) stays
-   the authority — this script is convenience only. #}
+   the authority — that script is convenience only. #}
 <form method="post" action="{{ action }}" class="settings-rows profile-form" data-unsaved-guard>
   <input type="hidden" name="_csrf" value="{{ csrf }}">
 
@@ -107,35 +107,3 @@
     {% endif %}
   </div>
 </form>
-
-<script>
-  (function () {
-    document.querySelectorAll('form.profile-form').forEach(function (form) {
-      var select = form.querySelector('select[name="provider"]');
-      var kind = form.querySelector('select[name="kind"]');
-      if (!select) { return; }
-      function refresh() {
-        var decision = kind && kind.value === 'decision';
-        // Decision profiles are OpenRouter-only; hide the other providers
-        // and snap to OpenRouter. Server-side validation is the real gate.
-        Array.prototype.forEach.call(select.options, function (opt) {
-          var ok = !decision || opt.dataset.decisionOk === '1';
-          opt.hidden = !ok;
-          opt.disabled = !ok;
-        });
-        if (decision && select.selectedOptions[0] && select.selectedOptions[0].dataset.decisionOk !== '1') {
-          select.value = 'open_router';
-        }
-        var val = select.value;
-        form.querySelectorAll('fieldset[data-provider]').forEach(function (el) {
-          var match = el.dataset.provider === val && !decision;
-          el.hidden = !match;
-          el.disabled = !match;
-        });
-      }
-      select.addEventListener('change', refresh);
-      if (kind) { kind.addEventListener('change', refresh); }
-      refresh();
-    });
-  })();
-</script>

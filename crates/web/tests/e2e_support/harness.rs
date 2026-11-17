@@ -51,6 +51,70 @@ impl fantoccini::wd::WebDriverCompatibleCommand for ComputedA11y {
     }
 }
 
+/// chromedriver's "Execute CDP command" (`goog/cdp/execute`).
+#[derive(Debug)]
+struct CdpExecute {
+    cmd: &'static str,
+    params: serde_json::Value,
+}
+
+impl fantoccini::wd::WebDriverCompatibleCommand for CdpExecute {
+    fn endpoint(
+        &self,
+        base_url: &url::Url,
+        session_id: Option<&str>,
+    ) -> Result<url::Url, url::ParseError> {
+        let session = session_id.expect("cdp execute needs a live session");
+        base_url.join(&format!("session/{session}/goog/cdp/execute"))
+    }
+
+    fn method_and_body(&self, _: &url::Url) -> (axum::http::Method, Option<String>) {
+        let body = json!({ "cmd": self.cmd, "params": self.params });
+        (axum::http::Method::POST, Some(body.to_string()))
+    }
+}
+
+/// chromedriver's legacy "Get Log" (`se/log`): drains the browser console
+/// entries collected since the previous call. Needs `goog:loggingPrefs`.
+#[derive(Debug)]
+struct BrowserLog;
+
+impl fantoccini::wd::WebDriverCompatibleCommand for BrowserLog {
+    fn endpoint(
+        &self,
+        base_url: &url::Url,
+        session_id: Option<&str>,
+    ) -> Result<url::Url, url::ParseError> {
+        let session = session_id.expect("browser log needs a live session");
+        base_url.join(&format!("session/{session}/se/log"))
+    }
+
+    fn method_and_body(&self, _: &url::Url) -> (axum::http::Method, Option<String>) {
+        let body = json!({ "type": "browser" });
+        (axum::http::Method::POST, Some(body.to_string()))
+    }
+}
+
+/// Installed into every new document before any page script runs, so it
+/// sees CSP violations and errors raised while the page loads.
+const PROBLEM_PROBE: &str = r"(() => {
+  const problems = [];
+  Object.defineProperty(window, '__e2eProblems', { value: problems });
+  document.addEventListener('securitypolicyviolation', (e) => {
+    problems.push(`csp ${e.effectiveDirective}: ${e.blockedURI || 'inline'} at ${e.sourceFile}:${e.lineNumber}`);
+  }, true);
+  window.addEventListener('error', (e) => {
+    const what = e.message || e.target?.src || e.target?.href || e.type;
+    problems.push(`error: ${what}`);
+  }, true);
+  window.addEventListener('unhandledrejection', (e) => problems.push(`unhandledrejection: ${e.reason}`));
+  const consoleError = console.error.bind(console);
+  console.error = (...args) => {
+    problems.push(`console.error: ${args.join(' ')}`);
+    consoleError(...args);
+  };
+})();";
+
 /// Selects which session role the harness injects.
 enum SessionKind {
     /// Authenticated mod (no owner configured). Default for `start()`.
@@ -128,11 +192,13 @@ impl E2eSession {
         });
 
         // Headless Chrome capabilities; auto-accept confirm() dialogs so
-        // htmx hx-confirm and the JS delete-confirm proceed.
+        // htmx hx-confirm and the JS delete-confirm proceed. The browser log
+        // feeds `problems()`.
         let mut caps = json!({
             "goog:chromeOptions": {
                 "args": ["--headless=new", "--no-sandbox", "--disable-gpu", "--window-size=1400,900"],
             },
+            "goog:loggingPrefs": { "browser": "ALL" },
             "unhandledPromptBehavior": "accept",
         });
         // Pin the Chrome binary when given (CI sets this to the
@@ -156,12 +222,20 @@ impl E2eSession {
             .connect(&webdriver_url())
             .await
             .unwrap_or_else(|e| panic!("connect chromedriver at {}: {e}", webdriver_url()));
+        client
+            .issue_cmd(CdpExecute {
+                cmd: "Page.addScriptToEvaluateOnNewDocument",
+                params: json!({ "source": PROBLEM_PROBE }),
+            })
+            .await
+            .expect("install problem probe");
 
         // Cookies require being on the origin first. Navigate to the public
-        // health endpoint so the browser is on the right origin before we
-        // inject cookies. Using /healthz avoids auth redirects.
+        // login page so the browser is on the right origin before we inject
+        // cookies. It renders without a session and links its favicon, so
+        // Chrome doesn't log a 404 for `/favicon.ico` into `problems()`.
         client
-            .goto(&format!("{base_url}/healthz"))
+            .goto(&format!("{base_url}/login"))
             .await
             .expect("goto origin");
         // Use JavaScript to set the cookies — WebDriver's AddCookie command
@@ -335,6 +409,24 @@ impl E2eSession {
             }
             tokio::time::sleep(WAIT_POLL).await;
         }
+    }
+
+    /// CSP violations and errors on the current page, plus every `SEVERE`
+    /// browser console entry logged since the previous call (any page).
+    pub async fn problems(&self) -> Vec<String> {
+        let page = self.eval("return window.__e2eProblems ?? ['problem probe missing'];");
+        let mut out: Vec<String> = serde_json::from_value(page.await).expect("probe list");
+        let log = self
+            .client
+            .issue_cmd(BrowserLog)
+            .await
+            .expect("browser log");
+        for entry in log.as_array().expect("log entries") {
+            if entry["level"] == "SEVERE" {
+                out.push(format!("console: {}", entry["message"]));
+            }
+        }
+        out
     }
 
     /// Close the browser and stop the server.

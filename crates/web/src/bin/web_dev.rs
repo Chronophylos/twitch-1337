@@ -33,12 +33,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::http::{HeaderValue, header};
 use eyre::{Result, WrapErr as _};
+use tower_http::set_header::SetResponseHeaderLayer;
 use twitch_1337_core::{install_crypto_provider, install_tracing, lifecycle::Lifecycle};
 use twitch_1337_web::clock::SystemClock;
 use twitch_1337_web::dev::{DEV_CSRF, DEV_SID, DEV_USER_ID, StubHelix, dev_new_session};
 use twitch_1337_web::state::{WebState, WebTestConfig};
-use twitch_1337_web::{bind, build_router, serve_app};
+use twitch_1337_web::{CONTENT_SECURITY_POLICY, bind, build_router, serve_app};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -89,7 +91,13 @@ async fn main() -> Result<()> {
     let mut app = build_router(state);
     let livereload = tower_livereload::LiveReloadLayer::new();
     let reloader = livereload.reloader();
-    app = app.layer(livereload);
+    let csp = HeaderValue::from_str(&dev_csp().await?).wrap_err("dev CSP header")?;
+    app = app
+        .layer(livereload)
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CONTENT_SECURITY_POLICY,
+            csp,
+        ));
     install_asset_watcher(reloader);
 
     let mut serving = Box::pin(serve_app(listener, app, lifecycle.clone()));
@@ -101,6 +109,42 @@ async fn main() -> Result<()> {
             serving.await
         }
     }
+}
+
+/// The production CSP plus the hash of the inline script tower-livereload
+/// injects, so dev pages run under the same strict policy and still reload.
+/// The script is read back from the layer itself, so a tower-livereload
+/// bump can't leave a stale hash behind.
+async fn dev_csp() -> Result<String> {
+    use axum::body::{Body, to_bytes};
+    use axum::response::Html;
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    use tower::ServiceExt as _;
+
+    let probe = axum::Router::new()
+        .route(
+            "/",
+            axum::routing::get(|| async { Html("<html><head></head><body></body></html>") }),
+        )
+        .layer(tower_livereload::LiveReloadLayer::new());
+    let res = probe
+        .oneshot(axum::http::Request::new(Body::empty()))
+        .await?;
+    let html = to_bytes(res.into_body(), usize::MAX).await?;
+    let html = std::str::from_utf8(&html)?;
+    let script = html
+        .split_once("<script")
+        .and_then(|(_, rest)| rest.split_once('>'))
+        .and_then(|(_, rest)| rest.split_once("</script>"))
+        .map(|(script, _)| script)
+        .ok_or_else(|| eyre::eyre!("tower-livereload injected no script"))?;
+    let hash = base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(script));
+    Ok(CONTENT_SECURITY_POLICY.replacen(
+        "script-src 'self'",
+        &format!("script-src 'self' 'sha256-{hash}'"),
+        1,
+    ))
 }
 
 /// Watch `assets/` + `templates/` and ping the livereload SSE on

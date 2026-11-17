@@ -59,15 +59,4 @@
 {% else if new_form.is_none() && edit_form.is_none() %}
 <p class="empty">No profiles configured yet. Click <strong>+ New profile</strong> to add one.</p>
 {% endif %}
-
-<script>
-  document.querySelectorAll('form.js-delete-profile').forEach(function (form) {
-    form.addEventListener('submit', function (event) {
-      var name = form.dataset.name || '';
-      if (!window.confirm('Delete profile “' + name + '”?')) {
-        event.preventDefault();
-      }
-    });
-  });
-</script>
 {% endblock %}
