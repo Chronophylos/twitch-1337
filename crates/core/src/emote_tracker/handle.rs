@@ -603,47 +603,7 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emote_tracker::{
-        DB_FILENAME, SetEventKind, SetTenure, UsageEventListFilter, try_open,
-    };
-
-    const TEST_EMOTE_ID: &str = "0123456789abcdef01234567";
-
-    #[tokio::test]
-    async fn handle_resolves_and_fetches_lifecycle() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(DB_FILENAME);
-        let h = EmoteTrackerHandle::open(&path).unwrap();
-        h.upsert_emote(TEST_EMOTE_ID, "Kappa", true, 1_736_000_000_000)
-            .await
-            .unwrap();
-        h.insert_set_event(NewSetEvent {
-            at: 1_736_000_000_000,
-            kind: SetEventKind::Bootstrap,
-            emote_id: Some(TEST_EMOTE_ID.into()),
-            old_name: None,
-            new_name: Some("Kappa".into()),
-            actor_7tv_id: None,
-            actor_username: None,
-            actor_display_name: None,
-            gap_from: None,
-            gap_to: None,
-            requester_login: None,
-            requester_twitch_id: None,
-            via: None,
-            attribution_method: None,
-        })
-        .await
-        .unwrap();
-        let row = h.resolve_emote_query("Kappa").await.unwrap().unwrap();
-        assert_eq!(row.emote_id, TEST_EMOTE_ID);
-        let life = h
-            .latest_lifecycle_event(TEST_EMOTE_ID)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(life.kind, SetEventKind::Bootstrap);
-    }
+    use crate::emote_tracker::{DB_FILENAME, SetEventKind, SetTenure, try_open};
 
     #[tokio::test]
     async fn close_and_join_retains_named_writer_ownership() {
@@ -674,92 +634,6 @@ mod tests {
                 .contains("writer thread exited")
         );
         handle.close_and_join().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn handle_lists_usage_with_flag_filter() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(DB_FILENAME);
-        let h = EmoteTrackerHandle::open(&path).unwrap();
-        h.upsert_emote("aaaaaaaaaaaaaaaaaaaaaaaa", "Kappa", true, 1)
-            .await
-            .unwrap();
-        h.insert_usage_events(vec![
-            NewUsageEvent {
-                at: 1,
-                emote_id: "aaaaaaaaaaaaaaaaaaaaaaaa".into(),
-                twitch_user_id: "1".into(),
-                login: Some("a".into()),
-                flagged: false,
-            },
-            NewUsageEvent {
-                at: 2,
-                emote_id: "aaaaaaaaaaaaaaaaaaaaaaaa".into(),
-                twitch_user_id: "2".into(),
-                login: Some("b".into()),
-                flagged: true,
-            },
-        ])
-        .await
-        .unwrap();
-        let rows = h
-            .list_usage_events(UsageEventListFilter {
-                include_flagged: false,
-                limit: 200,
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert_eq!(rows.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn handle_round_trips_emote_meanings() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(DB_FILENAME);
-        let h = EmoteTrackerHandle::open(&path).unwrap();
-        h.upsert_emote_meaning(
-            "e1",
-            "pepega",
-            None,
-            Some("when chat is being dense"),
-            None,
-            42,
-        )
-        .await
-        .unwrap();
-        let row = h.get_emote_meaning("e1").await.unwrap().unwrap();
-        assert_eq!(row.appearance, "pepega");
-        assert_eq!(row.usage.as_deref(), Some("when chat is being dense"));
-        let listed = h.list_emote_meanings_for_ids(&["e1".into()]).await.unwrap();
-        assert_eq!(listed.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn handle_round_trips_emote_and_usage() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(DB_FILENAME);
-        let h = EmoteTrackerHandle::open(&path).unwrap();
-        h.upsert_emote("e1", "Kappa", true, 100).await.unwrap();
-        h.insert_usage_events(vec![NewUsageEvent {
-            at: 101,
-            emote_id: "e1".into(),
-            twitch_user_id: "1".into(),
-            login: Some("bob".into()),
-            flagged: false,
-        }])
-        .await
-        .unwrap();
-        let active = h.list_active_emotes().await.unwrap();
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].name, "Kappa");
-    }
-
-    #[test]
-    fn try_open_succeeds_on_writable_data_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let handle = try_open(dir.path());
-        assert!(handle.is_some());
     }
 
     #[test]

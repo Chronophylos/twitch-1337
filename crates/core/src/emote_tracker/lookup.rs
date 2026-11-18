@@ -132,19 +132,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_emote_query_empty_vs_text() {
+    fn parse_emote_query_missing_or_joined_with_space() {
         assert!(matches!(parse_emote_query(&[]), EmoteQueryParse::Missing));
-        match parse_emote_query(&["Kappa"]) {
-            EmoteQueryParse::Query(q) => assert_eq!(q, "Kappa"),
-            _ => panic!("expected query"),
-        }
-    }
-
-    #[test]
-    fn parse_emote_query_multi_arg_joins_with_space() {
-        match parse_emote_query(&["my", "emote"]) {
-            EmoteQueryParse::Query(q) => assert_eq!(q, "my emote"),
-            _ => panic!("expected query"),
+        for (args, expected) in [
+            (&["Kappa"][..], "Kappa"),
+            (&["my", "emote"][..], "my emote"),
+        ] {
+            match parse_emote_query(args) {
+                EmoteQueryParse::Query(q) => assert_eq!(q, expected),
+                _ => panic!("expected query for {args:?}"),
+            }
         }
     }
 

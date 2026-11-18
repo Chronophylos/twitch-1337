@@ -790,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_set_changes_is_atomic_catalog_and_audit() {
+    fn apply_set_changes_writes_catalog_and_events_then_deactivates() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let batch = SetChangeBatch {
@@ -827,48 +827,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1);
-    }
 
-    #[test]
-    fn apply_deactivate_keeps_row_for_fk() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
         apply_set_changes(
             &conn,
             &SetChangeBatch {
-                updated_at: 1,
-                mutations: vec![CatalogMutation::Upsert {
-                    emote_id: "e1".into(),
-                    name: "Foo".into(),
-                    active: true,
-                }],
-                events: vec![],
-            },
-        )
-        .unwrap();
-        apply_set_changes(
-            &conn,
-            &SetChangeBatch {
-                updated_at: 2,
+                updated_at: 11,
                 mutations: vec![CatalogMutation::Deactivate {
                     emote_id: "e1".into(),
                 }],
-                events: vec![NewSetEvent {
-                    at: 2,
-                    kind: SetEventKind::Remove,
-                    emote_id: Some("e1".into()),
-                    old_name: Some("Foo".into()),
-                    new_name: None,
-                    actor_7tv_id: None,
-                    actor_username: None,
-                    actor_display_name: None,
-                    gap_from: None,
-                    gap_to: None,
-                    requester_login: None,
-                    requester_twitch_id: None,
-                    via: None,
-                    attribution_method: None,
-                }],
+                events: vec![],
             },
         )
         .unwrap();

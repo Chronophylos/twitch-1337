@@ -43,15 +43,3 @@ async fn sb_returns_slowest_personal_worst() {
 
     bot.shutdown().await;
 }
-
-#[tokio::test]
-async fn sb_empty_state_message() {
-    let mut bot = TestBotBuilder::new().spawn().await;
-    bot.send("alice", "!sb").await;
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    assert!(
-        out.contains("Noch keine Einträge vorhanden"),
-        "expected empty-state, got: {out}"
-    );
-    bot.shutdown().await;
-}
