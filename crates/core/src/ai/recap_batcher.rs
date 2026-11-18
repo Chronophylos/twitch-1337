@@ -700,13 +700,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn five_failures_park_and_stop() {
-        let calls = Arc::new(AtomicU32::new(0));
-        let llm = CountingBoom {
-            calls: Arc::clone(&calls),
-        };
-        let settings = test_settings("tiny-model");
+    /// Primary buffer with three viewers and one flush-eligible Grok line.
+    async fn seeded_primary(settings: &SettingsHandle) -> Arc<Mutex<ChatHistoryBuffer>> {
         let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
             settings.clone(),
             crate::ai::chat_history::primary_history_capacity,
@@ -725,6 +720,37 @@ mod tests {
                 g.timestamp,
             );
         }
+        primary
+    }
+
+    fn note(body: &str, through_seq: u64, generation: u32) -> RecapNote {
+        RecapNote {
+            body: body.into(),
+            identities: vec![],
+            through_seq,
+            generation,
+        }
+    }
+
+    fn completion(llm: &dyn LlmClient) -> RecapCompletion<'_> {
+        RecapCompletion {
+            llm,
+            observer: None,
+            model: "m",
+            timeout: Duration::from_secs(1),
+            reasoning_effort: None,
+            service_tier: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn five_failures_park_and_stop() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let llm = CountingBoom {
+            calls: Arc::clone(&calls),
+        };
+        let settings = test_settings("tiny-model");
+        let primary = seeded_primary(&settings).await;
 
         let dir = tempfile::tempdir().unwrap();
         let handle = RecapHandle::load(dir.path().to_path_buf()).await;
@@ -768,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn trim_note_body_still_used_by_batcher_path() {
+    fn trim_note_body_caps_length() {
         let long = "x".repeat(900);
         assert!(trim_note_body(&long).len() <= crate::ai::recap::RECAP_NOTE_BYTES);
     }
@@ -776,24 +802,9 @@ mod tests {
     #[test]
     fn plan_coarsen_skips_high_gen_prefix() {
         let notes = vec![
-            RecapNote {
-                body: "high".into(),
-                identities: vec![],
-                through_seq: 1,
-                generation: RECAP_MAX_GENERATION,
-            },
-            RecapNote {
-                body: "a".into(),
-                identities: vec![],
-                through_seq: 2,
-                generation: 0,
-            },
-            RecapNote {
-                body: "b".into(),
-                identities: vec![],
-                through_seq: 3,
-                generation: 0,
-            },
+            note("high", 1, RECAP_MAX_GENERATION),
+            note("a", 2, 0),
+            note("b", 3, 0),
         ];
         let action = plan_coarsen_step(&notes, 2);
         assert!(matches!(action, Some(CoarsenAction::Fold(indices)) if indices == vec![1, 2]));
@@ -803,48 +814,16 @@ mod tests {
     async fn coarsen_fold_skips_high_gen_prefix() {
         let mut log = RecapChannelLog {
             notes: vec![
-                RecapNote {
-                    body: "high".into(),
-                    identities: vec![],
-                    through_seq: 1,
-                    generation: RECAP_MAX_GENERATION,
-                },
-                RecapNote {
-                    body: "a".into(),
-                    identities: vec![],
-                    through_seq: 2,
-                    generation: 0,
-                },
-                RecapNote {
-                    body: "b".into(),
-                    identities: vec![],
-                    through_seq: 3,
-                    generation: 0,
-                },
-                RecapNote {
-                    body: "c".into(),
-                    identities: vec![],
-                    through_seq: 4,
-                    generation: 0,
-                },
+                note("high", 1, RECAP_MAX_GENERATION),
+                note("a", 2, 0),
+                note("b", 3, 0),
+                note("c", 4, 0),
             ],
             ..Default::default()
         };
-        coarsen_if_needed(
-            &mut log,
-            3,
-            2,
-            Some(RecapCompletion {
-                llm: &OkLlm,
-                observer: None,
-                model: "m",
-                timeout: Duration::from_secs(1),
-                reasoning_effort: None,
-                service_tier: None,
-            }),
-        )
-        .await
-        .unwrap();
+        coarsen_if_needed(&mut log, 3, 2, Some(completion(&OkLlm)))
+            .await
+            .unwrap();
         assert_eq!(log.notes.len(), 3);
         assert_eq!(log.notes[0].body, "high");
         assert_eq!(log.notes[1].body, "zusammengefasst");
@@ -855,46 +834,15 @@ mod tests {
     #[tokio::test]
     async fn coarsen_fold_failure_drops_oldest_instead_of_parking() {
         let mut log = RecapChannelLog {
-            notes: vec![
-                RecapNote {
-                    body: "a".into(),
-                    identities: vec![],
-                    through_seq: 1,
-                    generation: 0,
-                },
-                RecapNote {
-                    body: "b".into(),
-                    identities: vec![],
-                    through_seq: 2,
-                    generation: 0,
-                },
-                RecapNote {
-                    body: "c".into(),
-                    identities: vec![],
-                    through_seq: 3,
-                    generation: 0,
-                },
-            ],
+            notes: vec![note("a", 1, 0), note("b", 2, 0), note("c", 3, 0)],
             ..Default::default()
         };
         let boom = CountingBoom {
             calls: Arc::new(AtomicU32::new(0)),
         };
-        coarsen_if_needed(
-            &mut log,
-            1,
-            2,
-            Some(RecapCompletion {
-                llm: &boom,
-                observer: None,
-                model: "m",
-                timeout: Duration::from_secs(1),
-                reasoning_effort: None,
-                service_tier: None,
-            }),
-        )
-        .await
-        .unwrap();
+        coarsen_if_needed(&mut log, 1, 2, Some(completion(&boom)))
+            .await
+            .unwrap();
         assert_eq!(log.notes.len(), 1);
         assert_eq!(log.notes[0].body, "c");
     }
@@ -958,33 +906,11 @@ mod tests {
         let handle = RecapHandle::load(dir.path().to_path_buf()).await;
         {
             let mut guard = handle.inner.lock().await;
-            guard.file.primary.notes.push(RecapNote {
-                body: "live".into(),
-                identities: vec![],
-                through_seq: 0,
-                generation: 0,
-            });
+            guard.file.primary.notes.push(note("live", 0, 0));
         }
 
         let settings = test_settings("tiny-model");
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-            settings.clone(),
-            crate::ai::chat_history::primary_history_capacity,
-        )));
-        {
-            let mut buf = primary.lock().await;
-            buf.push_user("v1", "a");
-            buf.push_user("v2", "b");
-            buf.push_user("v3", "c");
-            let g = grok_entry(4);
-            buf.push_bot_with_identity_at(
-                g.username,
-                g.display_name.as_deref(),
-                Agent::Grok,
-                g.text,
-                g.timestamp,
-            );
-        }
+        let primary = seeded_primary(&settings).await;
 
         let handle_bg = RecapHandle {
             inner: Arc::clone(&handle.inner),
@@ -1024,24 +950,7 @@ mod tests {
         use crate::ai::recap::RecapHandle;
 
         let settings = test_settings("tiny-model");
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-            settings.clone(),
-            crate::ai::chat_history::primary_history_capacity,
-        )));
-        {
-            let mut buf = primary.lock().await;
-            buf.push_user("v1", "a");
-            buf.push_user("v2", "b");
-            buf.push_user("v3", "c");
-            let g = grok_entry(4);
-            buf.push_bot_with_identity_at(
-                g.username,
-                g.display_name.as_deref(),
-                Agent::Grok,
-                g.text,
-                g.timestamp,
-            );
-        }
+        let primary = seeded_primary(&settings).await;
 
         let dir = tempfile::tempdir().unwrap();
         let handle = RecapHandle::load(dir.path().to_path_buf()).await;

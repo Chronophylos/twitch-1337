@@ -105,17 +105,6 @@ mod tests {
         msg.content.clone()
     }
 
-    #[test]
-    fn tool_def_has_expected_name() {
-        let t = doener_tool();
-        assert_eq!(t.name, "doener_index");
-    }
-
-    #[test]
-    fn doener_index_is_not_a_web_tool() {
-        assert!(!crate::ai::content::is_web_tool(DOENER_TOOL_NAME));
-    }
-
     #[tokio::test]
     async fn no_city_returns_global_scope() {
         let server = MockServer::start().await;

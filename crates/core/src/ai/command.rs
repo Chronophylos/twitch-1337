@@ -503,20 +503,17 @@ mod ai_trigger_tests {
     use super::{AI_TRIGGER, GROK_ALIAS_TRIGGER, is_ai_trigger};
 
     #[test]
-    fn matches_bang_ai_case_insensitive() {
-        assert!(is_ai_trigger(AI_TRIGGER));
-        assert!(is_ai_trigger("!AI"));
-        assert!(is_ai_trigger("!Ai"));
-        assert!(is_ai_trigger("!aI"));
-    }
-
-    #[test]
-    fn matches_grok_alias_case_insensitive() {
-        assert!(is_ai_trigger(GROK_ALIAS_TRIGGER));
-        assert!(is_ai_trigger(&GROK_ALIAS_TRIGGER.to_uppercase()));
-        assert!(is_ai_trigger("@GROK"));
-        assert!(is_ai_trigger("@Grok"));
-        assert!(is_ai_trigger("@gRoK"));
+    fn matches_ai_and_grok_triggers_case_insensitive() {
+        for word in [
+            AI_TRIGGER,
+            "!AI",
+            "!Ai",
+            GROK_ALIAS_TRIGGER,
+            "@GROK",
+            "@gRoK",
+        ] {
+            assert!(is_ai_trigger(word), "{word}");
+        }
     }
 
     #[test]

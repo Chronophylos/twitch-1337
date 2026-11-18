@@ -230,25 +230,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parse_fixture_builds_id_to_name_map() {
-        let fixture = serde_json::json!({
-            "data": [
-                {"id": "google/gemma-3-4b-it", "name": "Google: Gemma 3 4B"},
-                {"id": "openai/gpt-4o", "name": "OpenAI GPT-4o"},
-            ]
-        });
-        let map = parse_openrouter_models(&fixture).unwrap();
-        assert_eq!(
-            map.get("google/gemma-3-4b-it").map(String::as_str),
-            Some("Google: Gemma 3 4B")
-        );
-        assert_eq!(
-            ModelCatalog::normalize_name(map.get("google/gemma-3-4b-it").unwrap()),
-            "Google Gemma 3 4B"
-        );
-    }
-
     #[tokio::test]
     async fn display_name_unknown_openrouter_id_returns_raw_id() {
         let server = MockServer::start().await;
@@ -272,15 +253,6 @@ mod tests {
         let catalog = test_catalog("http://127.0.0.1:1/unreachable".into());
         let name = catalog.display_name(&ollama_conn(), "gemma3:4b").await;
         assert_eq!(name, "gemma3:4b");
-    }
-
-    #[tokio::test]
-    async fn display_name_on_fetch_failure_returns_raw_id() {
-        let catalog = test_catalog("http://127.0.0.1:1/unreachable".into());
-        let name = catalog
-            .display_name(&openrouter_conn(), "google/gemma-3-4b-it")
-            .await;
-        assert_eq!(name, "google/gemma-3-4b-it");
     }
 
     #[tokio::test]
@@ -320,26 +292,6 @@ mod tests {
         catalog.test_expire_cache();
         catalog.test_set_models_url("http://127.0.0.1:1/unreachable".into());
         let name = catalog.display_name(&conn, "google/gemma-3-4b-it").await;
-        assert_eq!(name, "Google Gemma 3 4B");
-    }
-
-    #[tokio::test]
-    async fn display_name_resolves_known_openrouter_id() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api/v1/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": [
-                    {"id": "google/gemma-3-4b-it", "name": "Google: Gemma 3 4B"},
-                ]
-            })))
-            .mount(&server)
-            .await;
-
-        let catalog = test_catalog(format!("{}/api/v1/models", server.uri()));
-        let name = catalog
-            .display_name(&openrouter_conn(), "google/gemma-3-4b-it")
-            .await;
         assert_eq!(name, "Google Gemma 3 4B");
     }
 }

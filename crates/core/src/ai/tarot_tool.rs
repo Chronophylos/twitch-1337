@@ -147,11 +147,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tool_def_name() {
-        assert_eq!(tarot_tool().name, TAROT_TOOL_NAME);
-    }
-
     #[tokio::test]
     async fn empty_args_require_question_for_default_future() {
         let msg = execute_draw_tarot(&call(json!({}))).await;

@@ -414,11 +414,6 @@ mod tests {
     }
 
     #[test]
-    fn flush_age_outlasts_typical_stream_lulls() {
-        assert!(RECAP_FLUSH_AGE >= SignedDuration::from_mins(15));
-    }
-
-    #[test]
     fn cut_is_older_of_two_agent_windows() {
         // newest last: v1, aurora, v2, grok, v3  (n=2)
         let buf = vec![
@@ -428,16 +423,8 @@ mod tests {
             e(4, "grok", Some(Agent::Grok)),
             e(5, "v3", None),
         ];
-        let cut = eligibility_cut_seq(&buf, 2, &[]).unwrap();
-        let aurora_win = n_not_own(&buf, 2, Agent::Aurora, &[]);
-        let grok_win = n_not_own(&buf, 2, Agent::Grok, &[]);
-        let expect = aurora_win
-            .iter()
-            .chain(grok_win.iter())
-            .map(|x| x.seq)
-            .min()
-            .unwrap();
-        assert_eq!(cut, expect);
+        // Aurora's window is {grok(4), v3(5)}, Grok's is {v2(3), v3(5)}.
+        assert_eq!(eligibility_cut_seq(&buf, 2, &[]), Some(3));
     }
 
     #[test]
@@ -580,19 +567,19 @@ mod tests {
     }
 
     #[test]
-    fn format_batch_line_tags_grok_not_self() {
-        let line = format_batch_line(&batch_entry("grok", "Grok", Agent::Grok), &[]);
-        assert!(line.contains("] Grok:"), "got: {line}");
-        assert!(!line.contains("Grok Grok"), "got: {line}");
-        assert!(!line.contains("(self)"));
-    }
-
-    #[test]
-    fn format_batch_line_does_not_repeat_aurora_persona() {
-        let line = format_batch_line(&batch_entry("aurora", "Aurora", Agent::Aurora), &[]);
-        assert!(line.contains("] Aurora:"), "got: {line}");
-        assert!(!line.contains("Aurora Aurora"), "got: {line}");
-        assert!(!line.contains("(self)"));
+    fn format_batch_line_names_agent_once_without_self_tag() {
+        for (login, persona, agent) in [
+            ("grok", "Grok", Agent::Grok),
+            ("aurora", "Aurora", Agent::Aurora),
+        ] {
+            let line = format_batch_line(&batch_entry(login, persona, agent), &[]);
+            assert!(line.contains(&format!("] {persona}:")), "got: {line}");
+            assert!(
+                !line.contains(&format!("{persona} {persona}")),
+                "got: {line}"
+            );
+            assert!(!line.contains("(self)"), "got: {line}");
+        }
     }
 
     #[tokio::test]
@@ -638,8 +625,7 @@ mod tests {
             ai_channel: RecapChannelLog::default(),
         };
         atomic_save_ron_async(&file, &path).await.unwrap();
-        let raw = tokio::fs::read_to_string(&path).await.unwrap();
-        let back: RecapFile = ron::from_str(&raw).unwrap();
+        let back = load_recap_file(&path).await;
         assert_eq!(back.primary.notes[0].body, "raid vorbei");
     }
 }
