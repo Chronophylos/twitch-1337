@@ -18,6 +18,7 @@ pub struct EmoteTrackerSettings {
 #[knobs(overrides = PotatAttributionOverrides)]
 pub struct PotatAttributionSettings {
     pub enabled: bool,
+    #[knob(min = 3, max = 120)]
     pub window_secs: u64,
     pub potat_7tv_user_id: String,
 }

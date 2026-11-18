@@ -14,6 +14,7 @@ pub struct SpoilerSettings {
     pub profile: String,
     pub default_game: String,
     /// Percent (0-100); integer so `Settings` keeps its `Eq` derive.
+    #[knob(max = 100)]
     pub confidence_floor: u8,
 }
 

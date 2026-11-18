@@ -192,19 +192,27 @@ pub struct Settings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct Cooldowns {
+    #[knob(min = 1, max = 3600)]
     pub ai: u64,
+    #[knob(min = 1, max = 3600)]
     pub news: u64,
+    #[knob(min = 1, max = 3600)]
     pub up: u64,
+    #[knob(min = 1, max = 3600)]
     pub feedback: u64,
+    #[knob(min = 1, max = 3600)]
     pub doener: u64,
+    #[knob(min = 1, max = 3600)]
     pub spoiler: u64,
     /// Per-user cooldown for `!servers` (AMP calls).
+    #[knob(min = 1, max = 3600)]
     pub servers: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 #[knobs(overrides = PingsOverrides)]
 pub struct PingsSettings {
+    #[knob(min = 1, max = 86_400)]
     pub cooldown: u64,
     pub public: bool,
 }

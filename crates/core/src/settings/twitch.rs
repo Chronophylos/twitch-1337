@@ -15,6 +15,7 @@ use super::knob::Knobs;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 #[knobs(overrides = TwitchOverrides)]
 pub struct TwitchRuntime {
+    #[knob(max = 1000)]
     pub expected_latency: u32,
     pub hidden_admins: Vec<String>,
     pub viewer_allowlist: Vec<String>,
