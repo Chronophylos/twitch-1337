@@ -1278,7 +1278,7 @@ mod tests {
         s.aviationstack.timeout_secs = 0;
         // Neither base_url nor timeout_secs should produce errors when disabled.
         s.validate(&ctx())
-        .expect("disabled aviationstack must not fail URL/timeout checks");
+            .expect("disabled aviationstack must not fail URL/timeout checks");
     }
 
     #[test]

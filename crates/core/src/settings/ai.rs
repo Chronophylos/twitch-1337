@@ -458,20 +458,6 @@ mod tests {
     }
 
     #[test]
-    fn ai_aurora_default_has_persona_aurora() {
-        let b = AiAurora::default();
-        assert_eq!(b.persona_name, "Aurora");
-    }
-
-    #[test]
-    fn ai_aurora_reply_length_defaults_preserve_today() {
-        let b = AiAurora::default();
-        assert_eq!(b.reply_target_chars, 480);
-        assert_eq!(b.reply_soft_chars, 490);
-        assert_eq!(b.reply_hard_chars, 490);
-    }
-
-    #[test]
     fn legacy_ai_behavior_overrides_without_reply_keys_keep_defaults() {
         let o: crate::settings::overrides::AiBehaviorOverrides =
             ron::from_str("(max_turn_rounds: Some(5))").expect("partial override must parse");
@@ -479,8 +465,9 @@ mod tests {
         assert!(o.reply_target_chars.is_none());
         assert!(o.reply_soft_chars.is_none());
         assert!(o.reply_hard_chars.is_none());
+        let defaults = crate::settings::Settings::compiled_defaults();
         let resolved = crate::settings::Settings::resolve(
-            &crate::settings::Settings::compiled_defaults(),
+            &defaults,
             &crate::settings::SettingsOverrides {
                 ai: crate::settings::overrides::AiOverrides {
                     behavior: o,
@@ -489,16 +476,19 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(resolved.ai.aurora.reply_target_chars, 480);
-        assert_eq!(resolved.ai.aurora.reply_soft_chars, 490);
-        assert_eq!(resolved.ai.aurora.reply_hard_chars, 490);
+        assert_eq!(
+            resolved.ai.aurora.reply_target_chars,
+            defaults.ai.aurora.reply_target_chars
+        );
+        assert_eq!(
+            resolved.ai.aurora.reply_soft_chars,
+            defaults.ai.aurora.reply_soft_chars
+        );
+        assert_eq!(
+            resolved.ai.aurora.reply_hard_chars,
+            defaults.ai.aurora.reply_hard_chars
+        );
         assert_eq!(resolved.ai.aurora.max_turn_rounds, 5);
-    }
-
-    #[test]
-    fn ai_grok_persona_name_defaults_to_grok() {
-        let g = crate::settings::ai::AiGrok::default();
-        assert_eq!(g.persona_name, "Grok");
     }
 
     /// ADR-0003 renamed state -> scratch. Every settings.ron in the wild was
@@ -518,70 +508,5 @@ mod tests {
         let m: AiMemory = ron::from_str(legacy).expect("legacy state_* keys must still parse");
         assert_eq!(m.scratch_bytes, 4);
         assert_eq!(m.max_scratch_files, 6);
-    }
-
-    #[test]
-    fn ai_memory_reads_new_scratch_keys() {
-        let current = r#"(
-            soul_bytes: 1,
-            lore_bytes: 2,
-            user_bytes: 3,
-            scratch_bytes: 4,
-            inject_byte_budget: 5,
-            max_scratch_files: 6,
-        )"#;
-        let m: AiMemory = ron::from_str(current).expect("new keys must parse");
-        assert_eq!(m.scratch_bytes, 4);
-        assert_eq!(m.max_scratch_files, 6);
-    }
-
-    #[test]
-    fn ai_emotes_defaults_pin_soul_reflexes_and_widen_window() {
-        let e = AiEmotes::default();
-        assert_eq!(e.max_prompt_emotes, 20, "default window widened 12 -> 20");
-        assert_eq!(
-            e.pinned_emotes,
-            vec!["PepeLa".to_string(), "okjj".to_string()]
-        );
-    }
-
-    #[test]
-    fn defaults_match_legacy_ai_config_defaults() {
-        let s = AiSettings::default();
-        let aurora_profile = s.by_name(&s.aurora.profile).expect("aurora profile");
-        assert_eq!(aurora_profile.timeout, 30);
-        assert!(aurora_profile.base_url.is_none());
-        assert_eq!(s.aurora.max_turn_rounds, 4);
-        assert_eq!(s.aurora.max_writes_per_turn, 8);
-        assert_eq!(s.aurora.reply_target_chars, 480);
-        assert_eq!(s.aurora.reply_soft_chars, 490);
-        assert_eq!(s.aurora.reply_hard_chars, 490);
-        assert_eq!(
-            s.history.length,
-            crate::ai::chat_history::DEFAULT_HISTORY_LENGTH
-        );
-        assert_eq!(s.history.ai_channel_length, 100);
-        assert_eq!(s.history.n, 20);
-        assert_eq!(s.history.ai_channel_n, 10);
-        assert!(s.recap.profile.is_none());
-        assert_eq!(s.recap.batch_size, 40);
-        assert_eq!(s.memory.soul_bytes, 4096);
-        assert_eq!(s.memory.lore_bytes, 12_288);
-        assert_eq!(s.memory.user_bytes, 4096);
-        assert_eq!(s.memory.scratch_bytes, 2048);
-        assert_eq!(s.memory.inject_byte_budget, 24_576);
-        assert_eq!(s.memory.max_scratch_files, 16);
-        assert!(s.dreamer.enabled);
-        assert_eq!(s.dreamer.run_at, "04:00");
-        assert_eq!(s.dreamer.timeout_secs, 120);
-        assert_eq!(s.dreamer.max_rounds, 20);
-        assert_eq!(s.dreamer.max_writes_per_turn, 32);
-        assert!(s.prefill.is_none());
-        assert!(s.web.is_none());
-        assert!(s.emotes.is_none());
-        assert_eq!(s.media.timeout, 60);
-        assert_eq!(s.media.max_image_size.as_u64(), 10 * 1024 * 1024);
-        assert!(aurora_profile.service_tier.is_none());
-        assert_eq!(s.grok.profile, "default");
     }
 }

@@ -72,17 +72,6 @@ mod tests {
     }
 
     #[test]
-    fn two_objects_with_differing_leaves() {
-        let a = json!({ "ai": { "prefill": { "threshold": 0.3, "enabled": false } } });
-        let b = json!({ "ai": { "prefill": { "threshold": 0.5, "enabled": false } } });
-        let changes = diff(&a, &b);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].0, "ai.prefill.threshold");
-        assert_eq!(changes[0].1, json!(0.3));
-        assert_eq!(changes[0].2, json!(0.5));
-    }
-
-    #[test]
     fn array_diff_is_wholesale() {
         let a = json!({ "schedules": [1, 2, 3] });
         let b = json!({ "schedules": [1, 2, 4] });

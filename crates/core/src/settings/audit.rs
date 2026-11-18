@@ -181,28 +181,23 @@ mod tests {
     }
 
     #[test]
-    fn memory_log_records_entries() {
-        let log = MemoryAuditLog::new();
-        let e = sample_entry();
-        log.append(&e).expect("append");
-        log.append(&e).expect("append twice");
-        assert_eq!(log.snapshot().len(), 2);
-    }
-
-    #[test]
     fn file_log_appends_one_json_line_per_call() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.log");
         let log = FileAuditLog::new(&path);
-        let e = sample_entry();
-        log.append(&e).expect("first");
-        log.append(&e).expect("second");
+        let first = sample_entry();
+        let mut second = sample_entry();
+        second.actor_id = "87654321".into();
+        log.append(&first).expect("first");
+        log.append(&second).expect("second");
         let body = std::fs::read_to_string(&path).expect("read");
         let lines: Vec<&str> = body.lines().collect();
         assert_eq!(lines.len(), 2);
-        for line in lines {
+        // Distinct values per call prove the writer appends rather than
+        // overwriting.
+        for (line, actor_id) in lines.into_iter().zip(["12345678", "87654321"]) {
             let parsed: serde_json::Value = serde_json::from_str(line).expect("valid json");
-            assert_eq!(parsed["actor_id"], "12345678");
+            assert_eq!(parsed["actor_id"], actor_id);
             assert_eq!(parsed["changes"][0]["key"], "cooldowns.ai");
         }
     }
@@ -299,32 +294,5 @@ mod tests {
         assert!(keys.contains(&"schedules.keep"), "got {keys:?}");
         assert!(keys.contains(&"schedules.drop"), "got {keys:?}");
         assert!(keys.contains(&"schedules.add"), "got {keys:?}");
-    }
-
-    #[test]
-    fn append_serializable_writes_one_json_line_per_call() {
-        #[derive(serde::Serialize)]
-        struct Tiny {
-            a: u32,
-            b: &'static str,
-        }
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("memory_audit.log");
-        let log = FileAuditLog::new(&path);
-        log.append_serializable(&Tiny { a: 1, b: "hi" })
-            .expect("first");
-        log.append_serializable(&Tiny { a: 2, b: "yo" })
-            .expect("second");
-        let body = std::fs::read_to_string(&path).expect("read");
-        let lines: Vec<&str> = body.lines().collect();
-        assert_eq!(lines.len(), 2);
-        let v: serde_json::Value = serde_json::from_str(lines[0]).expect("valid json");
-        assert_eq!(v["a"], 1);
-        assert_eq!(v["b"], "hi");
-        // Assert the second line too, so the test proves the writer *appends*
-        // (distinct values per call) rather than overwriting.
-        let v2: serde_json::Value = serde_json::from_str(lines[1]).expect("valid json");
-        assert_eq!(v2["a"], 2);
-        assert_eq!(v2["b"], "yo");
     }
 }

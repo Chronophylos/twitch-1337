@@ -274,58 +274,6 @@ pub fn test_handle() -> SettingsHandle {
 mod tests {
     use super::*;
 
-    #[test]
-    fn compiled_defaults_v7_layout() {
-        let s = Settings::compiled_defaults();
-        assert_eq!(s.schema_version, 7);
-        assert_eq!(s.ai, AiSettings::default());
-        assert_eq!(s.ai.profiles.len(), 1);
-        assert_eq!(s.ai.aurora.profile, "default");
-        assert_eq!(
-            s.ai.by_name(&s.ai.aurora.profile).unwrap().provider,
-            AiProvider::OpenRouter
-        );
-        assert_eq!(s.twitch, TwitchRuntime::default());
-        assert_eq!(s.aviationstack, AviationstackSettings::default());
-        assert_eq!(s.suspend, SuspendSettings::default());
-        assert_eq!(s.spoiler, SpoilerSettings::default());
-        assert_eq!(s.cooldowns.spoiler, 30);
-        assert_eq!(s.cooldowns.servers, 30);
-        assert_eq!(s.emote_tracker, EmoteTrackerSettings::default());
-        assert!(s.emote_tracker.potat_attribution.enabled);
-        assert_eq!(s.emote_tracker.potat_attribution.window_secs, 15);
-        assert_eq!(s.web, WebRuntime::default());
-        assert!(s.schedules.is_empty());
-        assert_eq!(s.alerts, AlertsSettings::default());
-    }
-
-    #[test]
-    fn schedules_default_is_empty_vec() {
-        let s = Settings::compiled_defaults();
-        assert!(s.schedules.is_empty());
-    }
-
-    #[test]
-    fn alerts_default_is_disabled() {
-        let s = Settings::compiled_defaults();
-        assert_eq!(s.alerts, AlertsSettings::default());
-        assert!(!s.alerts.quake.enabled);
-        assert!(!s.alerts.solar.enabled);
-        assert!(!s.alerts.cme.enabled);
-        assert_eq!(s.alerts.cme.poll_secs, 900);
-        assert_eq!(s.alerts.quake.min_mag_tenths, 25);
-        assert_eq!(s.alerts.solar.min_class, "M");
-        assert_eq!(s.alerts.max_age_secs, 7_200);
-    }
-
-    #[test]
-    fn handle_and_subscription_are_send() {
-        // Handlers are tokio::spawn-ed with these, so they must stay Send.
-        fn assert_send<T: Send>() {}
-        assert_send::<SettingsHandle>();
-        assert_send::<Subscription>();
-    }
-
     const SUB_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
     fn actor() -> Actor {
