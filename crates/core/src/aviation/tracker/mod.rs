@@ -348,7 +348,7 @@ mod tests {
         TrackedFlight {
             phase,
             polls_since_change,
-            ..tracked_flight()
+            ..pending_flight()
         }
     }
 
@@ -378,18 +378,18 @@ mod tests {
 
     #[test]
     fn clear_pending_callsign_hexes_drops_untrusted_hex_only_before_adsb_seen() {
-        let mut pending_callsign = tracked_flight();
+        let mut pending_callsign = pending_flight();
         pending_callsign.hex = Some("48C2A2".to_string());
 
-        let mut aviationstack_pending = tracked_flight();
+        let mut aviationstack_pending = pending_flight();
         aviationstack_pending.hex = Some("4CA87D".to_string());
         aviationstack_pending.hex_source = Some(HexSource::AviationStack);
 
-        let mut live_callsign = tracked_flight();
+        let mut live_callsign = pending_flight();
         live_callsign.hex = Some("3C6589".to_string());
         live_callsign.last_seen = Some(dt("2026-04-18T11:00:00Z"));
 
-        let mut pending_hex_identifier = tracked_flight();
+        let mut pending_hex_identifier = pending_flight();
         pending_hex_identifier.identifier = FlightIdentifier::Hex("48C2A2".to_string());
         pending_hex_identifier.hex = Some("48C2A2".to_string());
 
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn aircraft_matches_tracked_callsign_rejects_reused_airframe() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         flight.identifier = FlightIdentifier::Callsign("FR196".to_string());
         flight.callsign = Some("RYR196".to_string());
         let matching = NearbyAircraft {
@@ -486,10 +486,8 @@ mod tests {
     const PENDING_POLL_30_MIN: tokio::time::Duration = tokio::time::Duration::from_secs(1800);
 
     #[test]
-        let mut flight = tracked_flight();
-        let flight = tracked_flight();
     fn aviationstack_metadata_sets_route_and_actual_runway_takeoff() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         let mut m = metadata();
         m.departure_iata = Some("fra".to_string());
         m.arrival_iata = Some("muc".to_string());
@@ -514,7 +512,7 @@ mod tests {
 
     #[test]
     fn aviationstack_metadata_falls_back_to_actual_departure() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         let mut m = metadata();
         m.departure_actual = Some(dt("2026-04-18T10:00:00Z"));
 
@@ -525,7 +523,7 @@ mod tests {
 
     #[test]
     fn aviationstack_metadata_replaces_existing_resolved_callsign() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         flight.callsign = Some("EZY123".to_string());
         flight.alias_callsigns = vec!["U2123".to_string(), "EZY123".to_string()];
         let mut m = metadata();
@@ -541,7 +539,7 @@ mod tests {
 
     #[test]
     fn aviationstack_metadata_preserves_static_callsign_as_alias() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         flight.identifier = FlightIdentifier::Callsign("AF1234".to_string());
         flight.callsign = Some("AFR1234".to_string());
         flight.alias_callsigns = vec!["AF1234".to_string(), "AFR1234".to_string()];
@@ -564,7 +562,7 @@ mod tests {
 
     #[test]
     fn aviationstack_metadata_can_upgrade_iata_callsign_to_icao() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         flight.callsign = Some("LH1929".to_string());
         let mut m = metadata();
         m.flight_iata = Some("LH1929".to_string());
@@ -577,7 +575,7 @@ mod tests {
 
     #[test]
     fn pending_poll_schedule_uses_sparse_interval_far_before_departure() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         flight.scheduled_departure_at = Some(dt("2026-04-18T12:00:00Z"));
 
         assert_eq!(
@@ -588,7 +586,7 @@ mod tests {
 
     #[test]
     fn pending_poll_schedule_uses_issue_259_pre_departure_ramp() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         flight.scheduled_departure_at = Some(dt("2026-04-18T12:00:00Z"));
 
         assert_eq!(
@@ -607,7 +605,7 @@ mod tests {
 
     #[test]
     fn pending_poll_schedule_slows_after_departure_window() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         flight.scheduled_departure_at = Some(dt("2026-04-18T12:00:00Z"));
 
         assert_eq!(
@@ -622,7 +620,7 @@ mod tests {
 
     #[test]
     fn pending_poll_schedule_expires_scheduled_flights() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         flight.scheduled_departure_at = Some(dt("2026-04-18T12:00:00Z"));
 
         assert_pending_expired(&flight, dt("2026-04-19T00:00:00Z"));
@@ -630,7 +628,7 @@ mod tests {
 
     #[test]
     fn next_poll_at_strict_chills_until_three_hours_before_departure() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         let now = dt("2026-04-18T10:00:00Z");
         flight.scheduled_departure_at = Some(dt("2026-04-18T15:00:00Z"));
         flight.last_adsb_poll_at = None;
@@ -643,7 +641,7 @@ mod tests {
 
     #[test]
     fn next_poll_at_wakes_at_scheduled_cadence_boundaries() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         let now = dt("2026-04-18T10:59:00Z");
         flight.scheduled_departure_at = Some(dt("2026-04-18T12:00:00Z"));
         flight.last_adsb_poll_at = Some(dt("2026-04-18T10:50:00Z"));
@@ -656,7 +654,7 @@ mod tests {
 
     #[test]
     fn pending_poll_schedule_ramps_unknown_departure_and_expires() {
-        let flight = tracked_flight();
+        let flight = pending_flight();
 
         assert_eq!(
             pending_interval(&flight, dt("2026-04-18T10:05:00Z")),
@@ -675,7 +673,7 @@ mod tests {
 
     #[test]
     fn next_poll_at_respects_pending_due_time() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         let now = dt("2026-04-18T10:00:00Z");
         flight.scheduled_departure_at = Some(dt("2026-04-18T10:30:00Z"));
         flight.last_adsb_poll_at = Some(now);
@@ -791,7 +789,7 @@ mod tests {
 
     #[test]
     fn aircraft_matches_tracked_callsign_accepts_alias_callsigns() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         flight.identifier = FlightIdentifier::Callsign("AF1234".to_string());
         flight.callsign = Some("KLM1234".to_string());
         flight.alias_callsigns = vec![
@@ -812,7 +810,7 @@ mod tests {
 
     #[test]
     fn find_flight_index_matches_alias_callsigns() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         flight.identifier = FlightIdentifier::Callsign("AF1234".to_string());
         flight.callsign = Some("KLM1234".to_string());
         flight.alias_callsigns = vec!["AF1234".to_string(), "AFR1234".to_string()];
@@ -828,15 +826,13 @@ mod tests {
     }
 
     #[test]
-            ..tracked_flight()
-            ..tracked_flight()
     fn build_flight_view_computes_last_seen_secs_ago() {
         let seen_at = dt("2026-05-12T09:59:00Z");
         let now = dt("2026-05-12T10:00:00Z");
 
         let flight = TrackedFlight {
             last_seen: Some(seen_at),
-            ..tracked_flight()
+            ..pending_flight()
         };
 
         let state = FlightTrackerState {
@@ -855,7 +851,7 @@ mod tests {
             identifier: FlightIdentifier::Callsign("RYR42".to_string()),
             callsign: None,
             hex: None,
-            ..tracked_flight()
+            ..pending_flight()
         };
 
         let state = FlightTrackerState {
@@ -868,6 +864,4 @@ mod tests {
 
         assert_eq!(views[0].identifier, "RYR42");
     }
-            &FlightTrackerDebugEvent::track_started(&tracked_flight()),
-                ..tracked_flight()
 }
