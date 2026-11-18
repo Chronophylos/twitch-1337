@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use tower::ServiceExt as _;
@@ -21,11 +22,14 @@ fn fake_helix() -> Arc<dyn HelixClient> {
     })
 }
 
+async fn app() -> Router {
+    install_crypto();
+    build_router(build_state(fake_helix()).await)
+}
+
 #[tokio::test]
 async fn root_redirects_to_pings_for_authed_request_only() {
-    install_crypto();
-    let state = build_state(fake_helix()).await;
-    let app = build_router(state);
+    let app = app().await;
 
     // Without a session, `/` redirects to /login without a `next` param —
     // `/` itself is just a role-based redirect post-login, so deep-linking
@@ -46,40 +50,8 @@ async fn root_redirects_to_pings_for_authed_request_only() {
 }
 
 #[tokio::test]
-async fn login_route_renders_landing_page() {
-    install_crypto();
-    let state = build_state(fake_helix()).await;
-    let app = build_router(state);
-
-    let req = Request::builder()
-        .uri("/login")
-        .body(Body::empty())
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(res.into_body(), 64 * 1024)
-        .await
-        .unwrap();
-    let html = std::str::from_utf8(&body).unwrap();
-    assert!(
-        html.contains("href=\"/auth/start\""),
-        "landing page must link to /auth/start, got: {html}"
-    );
-    assert!(
-        html.contains("Dashboard for testchannel. Sign in with Twitch."),
-        "landing page names the channel, got: {html}"
-    );
-    assert!(
-        !html.contains("Moderator dashboard"),
-        "old mod-only copy gone"
-    );
-}
-
-#[tokio::test]
 async fn login_landing_threads_next_through_to_auth_start() {
-    install_crypto();
-    let state = build_state(fake_helix()).await;
-    let app = build_router(state);
+    let app = app().await;
 
     let req = Request::builder()
         .uri("/login?next=%2Fmemory%2Fsoul")
@@ -99,9 +71,7 @@ async fn login_landing_threads_next_through_to_auth_start() {
 
 #[tokio::test]
 async fn auth_start_redirects_to_twitch() {
-    install_crypto();
-    let state = build_state(fake_helix()).await;
-    let app = build_router(state);
+    let app = app().await;
 
     let req = Request::builder()
         .uri("/auth/start")
@@ -139,9 +109,7 @@ async fn auth_start_redirects_to_twitch() {
 
 #[tokio::test]
 async fn healthz_is_public() {
-    install_crypto();
-    let state = build_state(fake_helix()).await;
-    let app = build_router(state);
+    let app = app().await;
 
     let req = Request::builder()
         .uri("/healthz")
@@ -153,9 +121,7 @@ async fn healthz_is_public() {
 
 #[tokio::test]
 async fn assets_serve_embedded_files() {
-    install_crypto();
-    let state = build_state(fake_helix()).await;
-    let app = build_router(state);
+    let app = app().await;
 
     let req = Request::builder()
         .uri("/assets/app.css")

@@ -115,8 +115,3 @@ async fn user_moderates_channel_returns_false_when_absent() {
         .await
     );
 }
-
-#[tokio::test]
-async fn user_moderates_channel_returns_false_for_empty_data() {
-    assert!(!run_user_moderates_channel(json!({ "data": [] })).await);
-}

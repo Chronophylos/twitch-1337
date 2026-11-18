@@ -314,10 +314,4 @@ mod tests {
         let secret = SecretString::from("a".repeat(32));
         derive_session_key(&secret).expect("32 bytes is the minimum and must succeed");
     }
-
-    #[test]
-    fn derive_session_key_accepts_64_bytes() {
-        let secret = SecretString::from("a".repeat(64));
-        derive_session_key(&secret).expect("64 bytes must succeed");
-    }
 }

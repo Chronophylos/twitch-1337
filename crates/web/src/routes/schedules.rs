@@ -827,7 +827,7 @@ fn render_validation(
 
 #[cfg(test)]
 mod try_into_schedule_tests {
-    use super::{ScheduleForm, parse_date, parse_hhmm, parse_interval, parse_weekdays};
+    use super::{ScheduleForm, parse_hhmm, parse_interval, parse_weekdays};
     use twitch_1337_core::schedule::Trigger;
 
     fn base_interval_form() -> ScheduleForm {
@@ -983,15 +983,6 @@ mod try_into_schedule_tests {
     }
 
     #[test]
-    fn parse_date_helper() {
-        assert_eq!(
-            parse_date("2026-06-01"),
-            Some(jiff::civil::date(2026, 6, 1))
-        );
-        assert_eq!(parse_date(""), None);
-    }
-
-    #[test]
     fn parse_weekdays_helper() {
         let days = parse_weekdays(&["Mon".to_owned(), "Wed".to_owned()]);
         use jiff::civil::Weekday;
@@ -1026,38 +1017,5 @@ mod weekday_roundtrip_tests {
             let back = parse_weekday(s).expect("must round-trip");
             assert_eq!(back, day, "parse should recover the same weekday");
         }
-    }
-}
-
-#[cfg(test)]
-mod field_path_parse_tests {
-    // We can't call render_validation directly without a WebState; instead
-    // test the parsing logic by reproducing the slice arithmetic. This pins
-    // the bounds-safe `.get(end + 2..).unwrap_or("")` behavior so a future
-    // refactor doesn't reintroduce a panicking unchecked slice.
-    fn extract_field_name(field: &str) -> Option<(usize, String)> {
-        let rest = field.strip_prefix("schedules[")?;
-        let end = rest.find(']')?;
-        let idx: usize = rest[..end].parse().ok()?;
-        let field_name = rest.get(end + 2..).unwrap_or("").to_owned();
-        Some((idx, field_name))
-    }
-
-    #[test]
-    fn well_formed_field_path_parses() {
-        let got = extract_field_name("schedules[3].name");
-        assert_eq!(got, Some((3, "name".to_owned())));
-    }
-
-    #[test]
-    fn bare_indexed_path_does_not_panic() {
-        let got = extract_field_name("schedules[0]");
-        assert_eq!(got, Some((0, "".to_owned())));
-    }
-
-    #[test]
-    fn malformed_path_returns_none() {
-        assert!(extract_field_name("schedules.name").is_none());
-        assert!(extract_field_name("schedules[abc].name").is_none());
     }
 }

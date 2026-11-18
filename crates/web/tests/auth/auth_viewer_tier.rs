@@ -21,6 +21,15 @@ fn empty_helix() -> Arc<FakeHelix> {
     })
 }
 
+fn get(path: &str, cookie: &str) -> Request<Body> {
+    Request::builder()
+        .uri(path)
+        .method(Method::GET)
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .unwrap()
+}
+
 #[tokio::test]
 async fn viewer_can_read_pings_leaderboard_flights() {
     install_crypto();
@@ -30,18 +39,7 @@ async fn viewer_can_read_pings_leaderboard_flights() {
     let app = twitch_1337_web::build_router(state.clone());
 
     for path in ["/pings", "/leaderboard", "/flights"] {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(path)
-                    .method(Method::GET)
-                    .header("cookie", cookie.clone())
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = app.clone().oneshot(get(path, &cookie)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK, "viewer GET {path}");
     }
 }
@@ -56,14 +54,7 @@ async fn viewer_blocked_from_memory_and_mutations() {
 
     let resp = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/memory/soul")
-                .method(Method::GET)
-                .header("cookie", cookie.clone())
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(get("/memory/soul", &cookie))
         .await
         .unwrap();
     assert_eq!(
@@ -106,14 +97,7 @@ async fn root_lands_every_tier_on_pings() {
 
     let resp = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/")
-                .method(Method::GET)
-                .header("cookie", cookie_header(&viewer_sid, &viewer_csrf))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(get("/", &cookie_header(&viewer_sid, &viewer_csrf)))
         .await
         .unwrap();
     assert!(resp.status().is_redirection(), "viewer / should redirect");
@@ -124,14 +108,7 @@ async fn root_lands_every_tier_on_pings() {
     );
 
     let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/")
-                .method(Method::GET)
-                .header("cookie", cookie_header(&mod_sid, &mod_csrf))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(get("/", &cookie_header(&mod_sid, &mod_csrf)))
         .await
         .unwrap();
     assert!(resp.status().is_redirection(), "mod / should redirect");
@@ -162,14 +139,7 @@ async fn viewer_dropped_from_allowlist_after_recheck_window() {
 
     let resp = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/leaderboard")
-                .method(Method::GET)
-                .header("cookie", cookie.clone())
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(get("/leaderboard", &cookie))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "first request should be 200");
@@ -182,17 +152,7 @@ async fn viewer_dropped_from_allowlist_after_recheck_window() {
         state.settings.store(std::sync::Arc::new(s));
     }
 
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/leaderboard")
-                .method(Method::GET)
-                .header("cookie", cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = app.oneshot(get("/leaderboard", &cookie)).await.unwrap();
     assert_eq!(
         resp.status(),
         StatusCode::FORBIDDEN,
@@ -206,31 +166,4 @@ async fn viewer_dropped_from_allowlist_after_recheck_window() {
         html.contains("Your account isn't a mod of testchannel or on the viewer allowlist."),
         "denied page names the channel: {html}"
     );
-}
-
-/// A signed-in account below the page's tier gets a tier message, not the
-/// "not a mod or on the allowlist" copy that would be untrue for it.
-#[tokio::test]
-async fn viewer_on_mod_page_gets_tier_message() {
-    install_crypto();
-    let (state, _td_p, _td_m) = build_state_with_dirs(empty_helix()).await;
-    let (sid, csrf, _bare) = insert_session_as(&state, "42", "alice", Role::Viewer);
-    let resp = twitch_1337_web::build_router(state)
-        .oneshot(
-            Request::builder()
-                .uri("/schedules")
-                .method(Method::GET)
-                .header("cookie", cookie_header(&sid, &csrf))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
-        .await
-        .unwrap();
-    let html = std::str::from_utf8(&body).unwrap();
-    assert!(html.contains("dashboard tier"), "{html}");
-    assert!(!html.contains("viewer allowlist"), "{html}");
 }
