@@ -68,7 +68,7 @@ The environment runs with strict undefined, so a typo (`{{ speaker.usernam }}`) 
 ## Editing flow
 
 1. Edit the block in `preset.ron`, or the markdown file it points at, under `crates/data/assets/prompts/`.
-2. Commit on a branch, open a PR, merge. The rolling deploy ships it within minutes (see `CLAUDE.md` → Release flow).
+2. Commit on a branch, open a PR, merge. The rolling deploy ships it within minutes (see `AGENTS.md` → Release flow).
 3. To roll back, revert the commit and merge again.
 
 There is no live, no-restart edit: the running binary always reflects whatever was last merged. `SOUL.md` is unaffected — it's a runtime-owned memory file under `$DATA_DIR/memories/`, not a prompt template, and keeps its dreamer-driven rewriting.

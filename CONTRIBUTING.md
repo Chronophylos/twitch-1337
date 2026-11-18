@@ -1,12 +1,12 @@
 # Contributing
 
-Thanks for contributing to twitch-1337. This file covers repo conventions that aren't obvious from the code. For build/test/CI details see [CLAUDE.md](CLAUDE.md).
+Thanks for contributing to twitch-1337. This file covers repo conventions that aren't obvious from the code. For build/test/CI details see [AGENTS.md](AGENTS.md).
 
 ## PR flow
 
 1. Branch from `main`, commit, push.
 2. `gh pr create` — Conventional Commit title in the same brainrot-subject style as commits (squash uses the title), plus summary + test plan.
-3. Wait for the required status checks to go green (see CLAUDE.md § CI & branch policy).
+3. Wait for the required status checks to go green (see AGENTS.md § CI & branch policy).
 4. Rebase on `main` if the `strict` check blocks merge.
 5. `gh pr merge --squash` once reviews are in.
 
@@ -84,7 +84,7 @@ Subject ≤ 50 chars. Body explains the *why* when it isn't obvious from the dif
 
 ### AI agents (Cursor, Claude Code, etc.)
 
-Agents should follow [`.cursor/rules/git-commits.mdc`](.cursor/rules/git-commits.mdc): keep the conventional `type(scope):` prefix, but write the **subject** in unhinged gen-z slang. The **body** stays normal, professional prose — stupid subject, serious explanation. Example:
+Agents should follow [AGENTS.md § Agent workflow](AGENTS.md#agent-workflow): keep the conventional `type(scope):` prefix, but write the **subject** in unhinged gen-z slang. The **body** stays normal, professional prose — stupid subject, serious explanation. Example:
 
 ```
 fix(chat): bestie the websocket literally ate shit and died 💀

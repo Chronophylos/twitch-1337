@@ -8,5 +8,5 @@ and name `src/…` paths that no longer exist.
 
 Read them for *why* a thing was built the way it was. Do not implement against them.
 
-Current architecture lives in `CLAUDE.md`, domain language in `CONTEXT.md`, and
+Current architecture lives in `AGENTS.md`, domain language in `CONTEXT.md`, and
 decisions of record in `docs/adr/`.
