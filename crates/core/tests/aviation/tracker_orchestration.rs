@@ -2,8 +2,8 @@ use super::common;
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use common::{fake_adsb_provider::FakeAdsbProvider, fake_clock::FakeClock, fake_transport};
+use jiff::Timestamp;
 use tempfile::TempDir;
 use twitch_1337_core::aviation::tracker::{
     FlightIdentifier, FlightPhase, FlightTrackerState, TargetConfirmation, TrackedFlight,
@@ -14,11 +14,11 @@ use twitch_1337_core::twitch::ChatSender;
 use twitch_irc::ClientConfig;
 use twitch_irc::login::StaticLoginCredentials;
 
-fn dt(s: &str) -> DateTime<Utc> {
+fn dt(s: &str) -> Timestamp {
     s.parse().unwrap()
 }
 
-fn tracked_flight(now: DateTime<Utc>) -> TrackedFlight {
+fn tracked_flight(now: Timestamp) -> TrackedFlight {
     TrackedFlight {
         identifier: FlightIdentifier::Hex("3C6589".to_string()),
         callsign: None,

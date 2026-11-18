@@ -11,35 +11,35 @@ use twitch_1337_core as twitch_1337;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use jiff::{SignedDuration, Timestamp};
 use tokio::sync::oneshot;
 
 use twitch_1337::util::clock::Clock;
 
 struct Waiter {
-    target: DateTime<Utc>,
+    target: Timestamp,
     tx: oneshot::Sender<()>,
 }
 
 pub struct FakeClock {
-    now: Mutex<DateTime<Utc>>,
+    now: Mutex<Timestamp>,
     waiters: Mutex<Vec<Waiter>>,
 }
 
 impl FakeClock {
-    pub fn new(now: DateTime<Utc>) -> Arc<Self> {
+    pub fn new(now: Timestamp) -> Arc<Self> {
         Arc::new(Self {
             now: Mutex::new(now),
             waiters: Mutex::new(Vec::new()),
         })
     }
 
-    pub fn set(&self, t: DateTime<Utc>) {
+    pub fn set(&self, t: Timestamp) {
         *self.now.lock().unwrap() = t;
         self.wake_due(t);
     }
 
-    pub fn advance(&self, delta: Duration) {
+    pub fn advance(&self, delta: SignedDuration) {
         let now = {
             let mut guard = self.now.lock().unwrap();
             *guard += delta;
@@ -48,7 +48,7 @@ impl FakeClock {
         self.wake_due(now);
     }
 
-    fn wake_due(&self, now: DateTime<Utc>) {
+    fn wake_due(&self, now: Timestamp) {
         let mut waiters = self.waiters.lock().unwrap();
         let mut pending = Vec::with_capacity(waiters.len());
         for w in waiters.drain(..) {
@@ -64,11 +64,11 @@ impl FakeClock {
 
 #[async_trait]
 impl Clock for FakeClock {
-    fn now_utc(&self) -> DateTime<Utc> {
+    fn now_utc(&self) -> Timestamp {
         *self.now.lock().unwrap()
     }
 
-    async fn sleep_until(&self, target: DateTime<Utc>) {
+    async fn sleep_until(&self, target: Timestamp) {
         let now = *self.now.lock().unwrap();
         if target <= now {
             return;

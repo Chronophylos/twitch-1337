@@ -2,8 +2,7 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
-use chrono_tz::Europe::Berlin;
+use jiff::Timestamp;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
@@ -22,13 +21,13 @@ use super::log_ring::{LogRing, LogRingLayer};
 /// so the 13:37 event logs as 13:37.
 struct ShortTimer;
 
-fn short_time(t: DateTime<Utc>) -> String {
-    t.with_timezone(&Berlin).format("%H:%M:%S%.3f").to_string()
+fn short_time(t: Timestamp) -> String {
+    super::to_berlin(t).strftime("%H:%M:%S%.3f").to_string()
 }
 
 impl FormatTime for ShortTimer {
     fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
-        write!(w, "{}", short_time(Utc::now()))
+        write!(w, "{}", short_time(Timestamp::now()))
     }
 }
 
@@ -57,7 +56,7 @@ pub fn install_tracing() -> Arc<LogRing> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Duration, TimeZone, Utc};
+    use jiff::{SignedDuration, Timestamp};
 
     use super::short_time;
 
@@ -65,14 +64,15 @@ mod tests {
     fn short_time_formats_in_berlin_summer_time() {
         // 11:37 UTC in June is 13:37 CEST (UTC+2) — the 1337 event must
         // read as 13:37 in the logs.
-        let t = Utc.with_ymd_and_hms(2026, 6, 10, 11, 37, 0).unwrap() + Duration::milliseconds(123);
+        let t =
+            "2026-06-10T11:37:00Z".parse::<Timestamp>().unwrap() + SignedDuration::from_millis(123);
         assert_eq!(short_time(t), "13:37:00.123");
     }
 
     #[test]
     fn short_time_formats_in_berlin_winter_time() {
         // 12:37 UTC in January is 13:37 CET (UTC+1).
-        let t = Utc.with_ymd_and_hms(2026, 1, 15, 12, 37, 0).unwrap();
+        let t = "2026-01-15T12:37:00Z".parse::<Timestamp>().unwrap();
         assert_eq!(short_time(t), "13:37:00.000");
     }
 }

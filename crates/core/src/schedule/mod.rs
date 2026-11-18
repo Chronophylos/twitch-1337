@@ -3,6 +3,7 @@
 //! `Schedule` rows live in `settings.ron`; `ScheduleRuntime` lives in a
 //! sibling `schedule_runtime.ron` (telemetry only, not config).
 
+mod interval_serde;
 #[expect(
     clippy::module_inception,
     reason = "module schedule inside module schedule"
@@ -15,4 +16,4 @@ pub mod weekday;
 pub use schedule::Schedule;
 pub use telemetry::{ScheduleRuntime, TelemetryStore};
 pub use trigger::Trigger;
-pub use weekday::WeekdaySet;
+pub use weekday::{WeekdaySet, parse_weekday, weekday_abbr};

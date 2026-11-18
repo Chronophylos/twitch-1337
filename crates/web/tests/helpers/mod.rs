@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use jiff::{SignedDuration, Timestamp};
 use secrecy::SecretString;
 use tempfile::TempDir;
 use twitch_1337_web::WebState;
@@ -24,10 +24,10 @@ use twitch_1337_web::clock::Clock;
 use twitch_1337_web::helix::{HelixClient, HelixUser};
 use twitch_1337_web::state::WebTestConfig;
 
-pub struct FixedClock(pub DateTime<Utc>);
+pub struct FixedClock(pub Timestamp);
 
 impl Clock for FixedClock {
-    fn now(&self) -> DateTime<Utc> {
+    fn now(&self) -> Timestamp {
         self.0
     }
 }
@@ -37,12 +37,12 @@ impl Clock for FixedClock {
 /// Used to ensure that `elapsed > role_check_refresh` evaluates to `true`
 /// even when `role_check_refresh` is `Duration::ZERO`.
 pub struct StepClock {
-    base: DateTime<Utc>,
+    base: Timestamp,
     counter: AtomicI64,
 }
 
 impl StepClock {
-    pub fn new(base: DateTime<Utc>) -> Self {
+    pub fn new(base: Timestamp) -> Self {
         Self {
             base,
             counter: AtomicI64::new(0),
@@ -51,9 +51,9 @@ impl StepClock {
 }
 
 impl Clock for StepClock {
-    fn now(&self) -> DateTime<Utc> {
+    fn now(&self) -> Timestamp {
         let n = self.counter.fetch_add(1, Ordering::Relaxed);
-        self.base + chrono::Duration::seconds(n)
+        self.base + SignedDuration::from_secs(n)
     }
 }
 
@@ -123,7 +123,7 @@ pub async fn build_state_with_ping_dir(helix: Arc<dyn HelixClient>) -> (WebState
 /// keep them alive while exercising persistent CRUD paths.
 pub async fn build_state_with_dirs(helix: Arc<dyn HelixClient>) -> (WebState, TempDir, TempDir) {
     let clock: Arc<dyn Clock> = Arc::new(FixedClock(
-        chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 1, 0, 0, 0).unwrap(),
+        "2026-01-01T00:00:00Z".parse::<Timestamp>().unwrap(),
     ));
     build_state_inner(helix, 300, clock).await
 }
@@ -140,7 +140,7 @@ pub async fn build_state_with_overrides(
     role_check_refresh: Duration,
 ) -> (WebState, TempDir, TempDir) {
     let clock: Arc<dyn Clock> = Arc::new(StepClock::new(
-        chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 1, 0, 0, 0).unwrap(),
+        "2026-01-01T00:00:00Z".parse::<Timestamp>().unwrap(),
     ));
     build_state_inner(helix, role_check_refresh.as_secs(), clock).await
 }
@@ -152,7 +152,7 @@ pub async fn build_state_with_all_dirs(
     helix: Arc<dyn HelixClient>,
 ) -> (WebState, TempDir, TempDir, TempDir) {
     let clock: Arc<dyn Clock> = Arc::new(FixedClock(
-        chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 1, 0, 0, 0).unwrap(),
+        "2026-01-01T00:00:00Z".parse::<Timestamp>().unwrap(),
     ));
     build_state_inner_keep_settings(helix, 300, clock).await
 }

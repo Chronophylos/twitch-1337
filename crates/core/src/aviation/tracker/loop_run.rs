@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use jiff::tz::TimeZone;
 use tokio::sync::mpsc;
 use tracing::info;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
@@ -44,7 +45,7 @@ pub async fn run_flight_tracker<T, L>(
     if lifecycle.is_cancelled() {
         return;
     }
-    let mut last_journal_date = clock.now_utc().date_naive();
+    let mut last_journal_date = clock.now_utc().to_zoned_datetime(TimeZone::UTC).date();
 
     loop {
         if lifecycle.is_cancelled() {
@@ -140,7 +141,7 @@ pub async fn run_flight_tracker<T, L>(
             }
             let now = clock.now_utc();
             // Roll the journal forward: once the date changes, drop stale files.
-            let today = now.date_naive();
+            let today = now.to_zoned_datetime(TimeZone::UTC).date();
             if today != last_journal_date {
                 prune_debug_journals(&data_dir, DEBUG_JOURNAL_KEEP_FILES).await;
                 if lifecycle.is_cancelled() {

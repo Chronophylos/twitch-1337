@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Arc;
 
-use chrono::{DateTime, Duration, Utc};
+use jiff::{SignedDuration, Timestamp};
 
 use crate::lifecycle::Lifecycle;
 
@@ -26,7 +26,7 @@ use crate::lifecycle::Lifecycle;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     pub id: String,
-    pub at: DateTime<Utc>,
+    pub at: Timestamp,
     pub line: String,
 }
 
@@ -43,8 +43,8 @@ pub struct Candidate {
 pub(crate) fn select_announcements(
     candidates: Vec<Candidate>,
     seen: &mut VecDeque<String>,
-    now: DateTime<Utc>,
-    max_age: Duration,
+    now: Timestamp,
+    max_age: SignedDuration,
 ) -> (Vec<String>, bool) {
     let mut out = Vec::new();
     let mut changed = false;
@@ -67,15 +67,16 @@ pub(crate) fn select_announcements(
 /// very next wake — immediate via the settings change signal.
 #[derive(Debug, Default)]
 struct Due {
-    last: Option<DateTime<Utc>>,
+    last: Option<Timestamp>,
 }
 
 impl Due {
-    fn ready(&mut self, now: DateTime<Utc>, poll_secs: u64) -> bool {
+    fn ready(&mut self, now: Timestamp, poll_secs: u64) -> bool {
         let due = match self.last {
             None => true,
             Some(last) => {
-                now - last >= Duration::seconds(i64::try_from(poll_secs).unwrap_or(i64::MAX))
+                now - last
+                    >= SignedDuration::from_secs(i64::try_from(poll_secs).unwrap_or(i64::MAX))
             }
         };
         if due {
@@ -149,7 +150,8 @@ pub async fn run_alerts_handler<T, L>(
         }
         let now = clock.now_utc();
         let cfg = settings.load().alerts.clone();
-        let max_age = Duration::seconds(i64::try_from(cfg.max_age_secs).unwrap_or(i64::MAX));
+        let max_age =
+            SignedDuration::from_secs(i64::try_from(cfg.max_age_secs).unwrap_or(i64::MAX));
         let mut dirty = false;
         let mut lines = Vec::new();
 
@@ -315,8 +317,8 @@ async fn poll_feed<E: std::fmt::Debug>(
     url: &str,
     parse: impl FnOnce(&str) -> Result<Vec<Candidate>, E>,
     seen: &mut VecDeque<String>,
-    now: DateTime<Utc>,
-    max_age: Duration,
+    now: Timestamp,
+    max_age: SignedDuration,
     lifecycle: &Lifecycle,
 ) -> PollStep {
     if lifecycle.is_cancelled() {
@@ -371,28 +373,32 @@ async fn fetch(http: &reqwest::Client, url: &str) -> Option<String> {
 mod tests {
     use std::collections::VecDeque;
 
-    use chrono::{Duration, TimeZone, Utc};
+    use jiff::{SignedDuration, Timestamp};
 
     use super::*;
 
     fn cand(id: &str, minutes_ago: i64) -> Candidate {
         Candidate {
             id: id.to_owned(),
-            at: Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap()
-                - Duration::minutes(minutes_ago),
+            at: "2026-08-26T12:00:00Z".parse::<Timestamp>().unwrap()
+                - SignedDuration::from_mins(minutes_ago),
             line: format!("line-{id}"),
         }
     }
 
-    fn now() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap()
+    fn now() -> Timestamp {
+        "2026-08-26T12:00:00Z".parse().unwrap()
     }
 
     #[test]
     fn fresh_unseen_event_is_announced() {
         let mut seen = VecDeque::new();
-        let (out, _) =
-            select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
+        let (out, _) = select_announcements(
+            vec![cand("a", 5)],
+            &mut seen,
+            now(),
+            SignedDuration::from_hours(2),
+        );
         assert_eq!(out, vec!["line-a".to_string()]);
         assert!(seen.contains(&"a".to_string()));
     }
@@ -400,8 +406,12 @@ mod tests {
     #[test]
     fn stale_event_is_marked_seen_but_not_announced() {
         let mut seen = VecDeque::new();
-        let (out, _) =
-            select_announcements(vec![cand("old", 500)], &mut seen, now(), Duration::hours(2));
+        let (out, _) = select_announcements(
+            vec![cand("old", 500)],
+            &mut seen,
+            now(),
+            SignedDuration::from_hours(2),
+        );
         assert!(
             out.is_empty(),
             "a 500-minute-old event must not be announced"
@@ -415,10 +425,18 @@ mod tests {
     #[test]
     fn same_event_across_two_polls_announces_once() {
         let mut seen = VecDeque::new();
-        let (first, _) =
-            select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
-        let (second, _) =
-            select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
+        let (first, _) = select_announcements(
+            vec![cand("a", 5)],
+            &mut seen,
+            now(),
+            SignedDuration::from_hours(2),
+        );
+        let (second, _) = select_announcements(
+            vec![cand("a", 5)],
+            &mut seen,
+            now(),
+            SignedDuration::from_hours(2),
+        );
         assert_eq!(first.len(), 1);
         assert!(second.is_empty());
     }
@@ -430,7 +448,7 @@ mod tests {
             vec![cand("old", 500), cand("new", 1), cand("older", 9000)],
             &mut seen,
             now(),
-            Duration::hours(2),
+            SignedDuration::from_hours(2),
         );
         assert_eq!(out, vec!["line-new".to_string()]);
         assert_eq!(seen.len(), 3, "every candidate is recorded regardless");
@@ -439,16 +457,24 @@ mod tests {
     #[test]
     fn future_timestamps_are_treated_as_fresh() {
         let mut seen = VecDeque::new();
-        let (out, _) =
-            select_announcements(vec![cand("soon", -5)], &mut seen, now(), Duration::hours(2));
+        let (out, _) = select_announcements(
+            vec![cand("soon", -5)],
+            &mut seen,
+            now(),
+            SignedDuration::from_hours(2),
+        );
         assert_eq!(out, vec!["line-soon".to_string()]);
     }
 
     #[test]
     fn stale_only_batch_reports_the_seen_set_changed() {
         let mut seen = VecDeque::new();
-        let (out, changed) =
-            select_announcements(vec![cand("old", 500)], &mut seen, now(), Duration::hours(2));
+        let (out, changed) = select_announcements(
+            vec![cand("old", 500)],
+            &mut seen,
+            now(),
+            SignedDuration::from_hours(2),
+        );
         assert!(out.is_empty(), "stale catch-up stays out of chat");
         assert!(
             changed,
@@ -459,9 +485,18 @@ mod tests {
     #[test]
     fn already_seen_batch_does_not_report_change() {
         let mut seen = VecDeque::new();
-        let _ = select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
-        let (out, changed) =
-            select_announcements(vec![cand("a", 5)], &mut seen, now(), Duration::hours(2));
+        let _ = select_announcements(
+            vec![cand("a", 5)],
+            &mut seen,
+            now(),
+            SignedDuration::from_hours(2),
+        );
+        let (out, changed) = select_announcements(
+            vec![cand("a", 5)],
+            &mut seen,
+            now(),
+            SignedDuration::from_hours(2),
+        );
         assert!(out.is_empty());
         assert!(!changed, "an idle poll must not rewrite alerts.ron");
     }
@@ -474,7 +509,7 @@ mod tests {
             vec![cand("old", 500)],
             &mut state.quake,
             now(),
-            Duration::hours(2),
+            SignedDuration::from_hours(2),
         );
         assert!(lines.is_empty());
         assert!(changed);
@@ -518,7 +553,7 @@ mod tests {
             vec![cand("a", 5)],
             &mut seen.quake,
             now(),
-            Duration::hours(2),
+            SignedDuration::from_hours(2),
         );
         let on_disk_at_say = std::sync::Arc::new(std::sync::Mutex::new(None));
 
@@ -545,7 +580,7 @@ mod tests {
         let mut due = Due::default();
         let t0 = now();
         assert!(due.ready(t0, 300), "first call is always due");
-        assert!(!due.ready(t0 + Duration::seconds(100), 300));
-        assert!(due.ready(t0 + Duration::seconds(300), 300));
+        assert!(!due.ready(t0 + SignedDuration::from_secs(100), 300));
+        assert!(due.ready(t0 + SignedDuration::from_secs(300), 300));
     }
 }

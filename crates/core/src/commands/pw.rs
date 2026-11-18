@@ -59,12 +59,12 @@ where
             (Some(pw), true) => format!(
                 "Dein PW ist {} übrig am {}",
                 format_remaining(pw.ms),
-                pw.date.format("%d.%m.%Y")
+                pw.date.strftime("%d.%m.%Y")
             ),
             (Some(pw), false) => format!(
                 "PW von {target}: {} übrig am {}",
                 format_remaining(pw.ms),
-                pw.date.format("%d.%m.%Y")
+                pw.date.strftime("%d.%m.%Y")
             ),
             (None, true) => "Du hast noch keinen PW".to_string(),
             (None, false) => format!("{target} hat noch keinen PW"),

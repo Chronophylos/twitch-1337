@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::Utc;
 use eyre::{Result, WrapErr as _, eyre};
+use jiff::Timestamp;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
@@ -145,7 +145,7 @@ impl MemoryStore {
         // v1 disposal.
         let v1 = data_dir.join("ai_memory.ron");
         if tokio::fs::try_exists(&v1).await.unwrap_or(false) {
-            let ts = Utc::now().timestamp();
+            let ts = Timestamp::now().as_second();
             let dest = data_dir.join(format!("ai_memory.ron.discarded-{ts}"));
             tokio::fs::rename(&v1, &dest).await.ok();
             info!(target = %dest.display(), "Renamed v1 ai_memory.ron — v2 starts fresh");
@@ -155,7 +155,7 @@ impl MemoryStore {
         let soul_path = memories_dir.join("SOUL.md");
         if !tokio::fs::try_exists(&soul_path).await.unwrap_or(false) {
             let fm = Frontmatter {
-                updated_at: Utc::now(),
+                updated_at: Timestamp::now(),
                 username: None,
                 display_name: None,
                 created_by: None,
@@ -171,7 +171,7 @@ impl MemoryStore {
         let lore_path = memories_dir.join("LORE.md");
         if !tokio::fs::try_exists(&lore_path).await.unwrap_or(false) {
             let fm = Frontmatter {
-                updated_at: Utc::now(),
+                updated_at: Timestamp::now(),
                 username: None,
                 display_name: None,
                 created_by: None,
@@ -246,7 +246,7 @@ impl MemoryStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(MemoryFile {
                 kind: kind.clone(),
                 frontmatter: Frontmatter {
-                    updated_at: Utc::now(),
+                    updated_at: Timestamp::now(),
                     username: None,
                     display_name: None,
                     created_by: None,
@@ -332,7 +332,7 @@ impl MemoryStore {
         };
 
         let fm = Frontmatter {
-            updated_at: Utc::now(),
+            updated_at: Timestamp::now(),
             username,
             display_name,
             created_by: None,
@@ -414,7 +414,7 @@ impl MemoryStore {
         };
 
         let fm = Frontmatter {
-            updated_at: Utc::now(),
+            updated_at: Timestamp::now(),
             username: None,
             display_name: None,
             created_by,

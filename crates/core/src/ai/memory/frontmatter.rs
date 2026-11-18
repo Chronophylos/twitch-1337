@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use thiserror::Error;
 
 use crate::ai::memory::types::Frontmatter;
@@ -57,9 +57,10 @@ pub fn parse(raw: &str) -> Result<(Frontmatter, String), FrontmatterError> {
         match k.trim() {
             "links" => in_links = true,
             "updated_at" => {
-                let dt = DateTime::parse_from_rfc3339(v)
-                    .map_err(|e| FrontmatterError::BadTimestamp(e.to_string()))?
-                    .with_timezone(&Utc);
+                // Accepts any RFC 3339 offset; normalised to UTC.
+                let dt = v
+                    .parse::<Timestamp>()
+                    .map_err(|e| FrontmatterError::BadTimestamp(e.to_string()))?;
                 updated_at = Some(dt);
             }
             "username" if !v.is_empty() => username = Some(v.to_string()),
@@ -88,8 +89,8 @@ pub fn emit(fm: &Frontmatter, body: &str) -> String {
     s.push_str("---\n");
     s.push_str(&format!(
         "updated_at: {}\n",
-        fm.updated_at
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        // RFC 3339 in UTC, always millisecond precision, `Z` suffix.
+        fm.updated_at.strftime("%Y-%m-%dT%H:%M:%S%.3fZ")
     ));
     // `Some("")` emits a bare `key:` placeholder (no trailing space) so an
     // unknown-but-expected field is visible for later backfill; `parse` reads
@@ -123,12 +124,9 @@ pub fn emit(fm: &Frontmatter, body: &str) -> String {
 mod tests {
     use super::*;
     use crate::ai::memory::types::Frontmatter;
-    use chrono::TimeZone as _;
 
-    fn ts() -> chrono::DateTime<chrono::Utc> {
-        chrono::Utc
-            .with_ymd_and_hms(2026, 4, 28, 18, 42, 0)
-            .unwrap()
+    fn ts() -> Timestamp {
+        "2026-04-28T18:42:00Z".parse().unwrap()
     }
 
     #[test]

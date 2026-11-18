@@ -50,7 +50,7 @@ where
 
         let response =
             if let Some((username, pw)) = hall_of_shame.iter().max_by_key(|(_, pw)| pw.ms) {
-                let date = pw.date.format("%d.%m.%Y");
+                let date = pw.date.strftime("%d.%m.%Y");
                 format!(
                     "Der langsamste 1337 ist {username} mit {} übrig am {date}",
                     format_remaining(pw.ms),

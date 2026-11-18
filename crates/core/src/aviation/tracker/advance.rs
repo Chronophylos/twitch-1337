@@ -4,7 +4,7 @@
 //! describing the side effects the poll loop should perform. It does no I/O
 //! and is deterministic given `(flight, observation, now)`.
 
-use chrono::{DateTime, TimeDelta, Utc};
+use jiff::{SignedDuration, Timestamp};
 use tracing::{debug, info, warn};
 
 use super::debug_journal::{
@@ -50,7 +50,7 @@ pub(crate) enum Emit {
     Descent,
     Approach,
     Landing {
-        takeoff_at: Option<DateTime<Utc>>,
+        takeoff_at: Option<Timestamp>,
         /// Nearest airport label when the touchdown was away from the
         /// destination.
         elsewhere: Option<String>,
@@ -114,7 +114,7 @@ pub(crate) struct Seed {
 }
 
 /// Maps a semantic `Emit` to the existing chat formatter.
-pub(crate) fn format_emit(flight: &TrackedFlight, emit: &Emit, now: DateTime<Utc>) -> String {
+pub(crate) fn format_emit(flight: &TrackedFlight, emit: &Emit, now: Timestamp) -> String {
     match emit {
         Emit::AdsbVisible => msg_adsb_visible(flight),
         Emit::Takeoff => msg_takeoff(flight),
@@ -164,8 +164,8 @@ pub(crate) fn apply_route_outcome(
     )]
 }
 
-fn tracking_lost_threshold_delta() -> TimeDelta {
-    TimeDelta::from_std(TRACKING_LOST_THRESHOLD).unwrap_or_else(|_| TimeDelta::zero())
+fn tracking_lost_threshold_delta() -> SignedDuration {
+    SignedDuration::try_from(TRACKING_LOST_THRESHOLD).unwrap_or(SignedDuration::ZERO)
 }
 
 pub(crate) fn flight_matches_callsign(flight: &TrackedFlight, actual: &str) -> bool {
@@ -205,7 +205,7 @@ fn is_commercial_flight_number_shape(callsign: &str) -> bool {
         || crate::aviation::is_icao_flight_number(callsign)
 }
 
-fn inferred_by_hex_window(flight: &TrackedFlight, now: DateTime<Utc>) -> bool {
+fn inferred_by_hex_window(flight: &TrackedFlight, now: Timestamp) -> bool {
     if matches!(&flight.identifier, FlightIdentifier::Hex(_)) {
         return true;
     }
@@ -213,27 +213,27 @@ fn inferred_by_hex_window(flight: &TrackedFlight, now: DateTime<Utc>) -> bool {
     let Some(scheduled_departure_at) = flight.scheduled_departure_at else {
         return false;
     };
-    now >= scheduled_departure_at - TimeDelta::minutes(30)
-        && now <= scheduled_departure_at + TimeDelta::hours(3)
+    now >= scheduled_departure_at - SignedDuration::from_mins(30)
+        && now <= scheduled_departure_at + SignedDuration::from_hours(3)
 }
 
-pub(crate) fn last_seen_age_secs(flight: &TrackedFlight, now: DateTime<Utc>) -> Option<i64> {
+pub(crate) fn last_seen_age_secs(flight: &TrackedFlight, now: Timestamp) -> Option<i64> {
     flight
         .last_seen
-        .map(|last_seen| now.signed_duration_since(last_seen).num_seconds().max(0))
+        .map(|last_seen| now.duration_since(last_seen).as_secs().max(0))
 }
 
 fn should_keep_prior_confirmation(
     flight: &TrackedFlight,
     confirmation: TargetConfirmation,
     used_hex: bool,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> bool {
     used_hex
         && flight.target_confirmation.is_target_confirmed()
         && confirmation == TargetConfirmation::AircraftVisible
         && flight.last_seen.is_some_and(|last_seen| {
-            now.signed_duration_since(last_seen) <= tracking_lost_threshold_delta()
+            now.duration_since(last_seen) <= tracking_lost_threshold_delta()
         })
 }
 
@@ -241,7 +241,7 @@ pub(crate) fn target_confirmation_for_aircraft(
     flight: &TrackedFlight,
     ac: &NearbyAircraft,
     used_hex: bool,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Option<TargetConfirmation> {
     if aircraft_callsign(ac).is_some_and(|actual| flight_matches_callsign(flight, actual)) {
         return Some(TargetConfirmation::ConfirmedByCallsign);
@@ -328,7 +328,7 @@ pub(super) fn seed_from_observation(
     flight: &mut TrackedFlight,
     ac: &NearbyAircraft,
     used_hex: bool,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Option<Seed> {
     let was_target_confirmed = flight.target_confirmation.is_target_confirmed();
     let raw_confirmation = target_confirmation_for_aircraft(flight, ac, used_hex, now)?;
@@ -422,13 +422,14 @@ pub(super) fn seed_from_observation(
 pub(crate) fn advance_flight(
     flight: &mut TrackedFlight,
     obs: &Observation,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> FlightUpdate {
     let mut update = FlightUpdate::default();
     let was_pending = is_pending_adsb(flight);
     flight.last_adsb_poll_at = Some(now);
 
-    let removal_threshold = TimeDelta::from_std(TRACKING_LOST_REMOVAL).unwrap_or(TimeDelta::zero());
+    let removal_threshold =
+        SignedDuration::try_from(TRACKING_LOST_REMOVAL).unwrap_or(SignedDuration::ZERO);
     let lost_threshold = tracking_lost_threshold_delta();
 
     let ac = match &obs.outcome {
@@ -457,21 +458,21 @@ pub(crate) fn advance_flight(
             if flight.last_visible_at.is_none() {
                 flight.polls_since_change = flight.polls_since_change.saturating_add(1);
             } else if let Some(last_visible_at) = flight.last_visible_at {
-                let lost_duration = now.signed_duration_since(last_visible_at);
+                let lost_duration = now.duration_since(last_visible_at);
                 if lost_duration >= removal_threshold {
                     update.debug.push(FlightTrackerDebugEvent::tracking_removal(
                         flight,
                         "tracking_lost",
-                        Some(lost_duration.num_seconds()),
+                        Some(lost_duration.as_secs()),
                     ));
                     update.emits.push(Emit::TrackingLost);
                     update.removal = Some(RemovalReason::TrackingLost {
-                        secs: lost_duration.num_seconds(),
+                        secs: lost_duration.as_secs(),
                     });
                 } else if lost_duration >= lost_threshold {
                     debug!(
                         identifier = %flight.identifier,
-                        last_seen_secs_ago = lost_duration.num_seconds(),
+                        last_seen_secs_ago = lost_duration.as_secs(),
                         "Flight not visible via ADS-B"
                     );
                 }
@@ -1204,7 +1205,7 @@ mod tests {
             let upd = advance_flight(
                 &mut f,
                 &hit(descending_at(lat, 9_000), false),
-                start + TimeDelta::seconds(t),
+                start + SignedDuration::from_secs(t),
             );
             assert!(!upd.emits.contains(&Emit::PossibleDivert));
         }
@@ -1215,7 +1216,7 @@ mod tests {
             let upd = advance_flight(
                 &mut f,
                 &hit(descending_at(lat, 4_000), false),
-                start + TimeDelta::seconds(t),
+                start + SignedDuration::from_secs(t),
             );
             assert!(
                 !upd.emits.contains(&Emit::PossibleDivert),
@@ -1237,7 +1238,7 @@ mod tests {
             let upd = advance_flight(
                 &mut f,
                 &hit(ac, false),
-                start + TimeDelta::minutes(i64::from(i)),
+                start + SignedDuration::from_mins(i64::from(i)),
             );
             emitted += upd
                 .emits

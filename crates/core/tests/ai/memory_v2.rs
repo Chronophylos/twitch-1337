@@ -369,7 +369,7 @@ async fn ritual_transcript_injection() {
     bot.llm
         .push_tool(ToolChatCompletionResponse::Message("done".into()));
 
-    let yesterday = chrono::NaiveDate::from_ymd_opt(2026, 4, 29).unwrap();
+    let yesterday = jiff::civil::date(2026, 4, 29);
     bot.run_ritual_for(yesterday).await;
 
     // The dreamer request system prompt should contain <corrupt: rejected>.
@@ -430,7 +430,7 @@ async fn dreamer_uses_its_own_write_cap_not_chat_cap() {
     bot.llm
         .push_tool(ToolChatCompletionResponse::Message("done".into()));
 
-    let yesterday = chrono::NaiveDate::from_ymd_opt(2026, 4, 29).unwrap();
+    let yesterday = jiff::civil::date(2026, 4, 29);
     bot.run_ritual_for(yesterday).await;
 
     let soul = tokio::fs::read_to_string(bot.memories_dir().join("SOUL.md"))
@@ -472,7 +472,7 @@ async fn ritual_dreamer_failure() {
 
     // Push NO responses → FakeLlm returns LlmError::Provider("no tool response queued")
     // run_ritual handles the error with `warn!` and continues; it does not panic.
-    let yesterday = chrono::NaiveDate::from_ymd_opt(2026, 4, 29).unwrap();
+    let yesterday = jiff::civil::date(2026, 4, 29);
     // run_ritual should not fail (the function returns Ok regardless of LLM errors).
     bot.run_ritual_for(yesterday).await;
 

@@ -16,7 +16,7 @@
 //! State is deliberately not persisted: after a restart the closest distance
 //! starts at the current one, so a restart can never cause an alert.
 
-use chrono::{DateTime, TimeDelta, Utc};
+use jiff::{SignedDuration, Timestamp};
 use random_flight::geo::haversine_distance_nm;
 
 use super::{FlightPhase, TrackedFlight};
@@ -36,7 +36,7 @@ pub(crate) const DIVERT_AWAY_MARGIN_NM: f64 = 30.0;
 /// margin of its closest distance.
 pub(crate) const DIVERT_REARM_MARGIN_NM: f64 = 10.0;
 /// How long the aircraft must keep moving away before the alert fires.
-pub(crate) const DIVERT_SUSTAIN: TimeDelta = TimeDelta::minutes(5);
+pub(crate) const DIVERT_SUSTAIN: SignedDuration = SignedDuration::from_mins(5);
 /// A touchdown within this distance of the destination counts as landing
 /// there (multi-runway airports, coordinate offsets).
 pub(crate) const LANDED_AT_DEST_RADIUS_NM: f64 = 5.0;
@@ -48,7 +48,7 @@ pub struct DivertWatch {
     origin_fix: Option<(f64, f64)>,
     armed: bool,
     min_distance_nm: Option<f64>,
-    away_since: Option<DateTime<Utc>>,
+    away_since: Option<Timestamp>,
     alerted: bool,
 }
 
@@ -71,7 +71,7 @@ impl DivertWatch {
         phase: FlightPhase,
         position: (f64, f64),
         destination: (f64, f64),
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> DivertStep {
         let distance_nm =
             haversine_distance_nm(position.0, position.1, destination.0, destination.1);
@@ -114,8 +114,8 @@ impl DivertWatch {
             self.away_since = None;
         } else {
             let since = *self.away_since.get_or_insert(now);
-            let away = now.signed_duration_since(since);
-            step.away_secs = Some(away.num_seconds());
+            let away = now.duration_since(since);
+            step.away_secs = Some(away.as_secs());
             if away >= DIVERT_SUSTAIN {
                 self.alerted = true;
                 self.away_since = None;
@@ -152,8 +152,8 @@ mod tests {
         (DEST.0 + nm / 60.0, DEST.1)
     }
 
-    fn at(secs: i64) -> DateTime<Utc> {
-        dt("2026-04-18T12:00:00Z") + TimeDelta::seconds(secs)
+    fn at(secs: i64) -> Timestamp {
+        dt("2026-04-18T12:00:00Z") + SignedDuration::from_secs(secs)
     }
 
     fn armed_watch_at(nm: f64) -> DivertWatch {

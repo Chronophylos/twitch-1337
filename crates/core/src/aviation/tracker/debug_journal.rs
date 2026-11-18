@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use tokio::io::AsyncWriteExt as _;
@@ -252,7 +252,7 @@ impl FlightTrackerDebugEvent {
         }
         self
     }
-    fn with_timestamp(&self, now: DateTime<Utc>) -> Self {
+    fn with_timestamp(&self, now: Timestamp) -> Self {
         // `payload()` already sanitized every inserted value, so only the
         // timestamp is left to stamp here.
         let mut event = self.clone();
@@ -281,10 +281,10 @@ pub(crate) struct DiversionDebugInput {
     pub step: super::divert::DivertStep,
 }
 
-pub(crate) fn debug_journal_path(data_dir: &Path, now: DateTime<Utc>) -> PathBuf {
+pub(crate) fn debug_journal_path(data_dir: &Path, now: Timestamp) -> PathBuf {
     data_dir
         .join("flight-tracker-debug")
-        .join(format!("{}.jsonl", now.format("%Y-%m-%d")))
+        .join(format!("{}.jsonl", now.strftime("%Y-%m-%d")))
 }
 
 /// Delete all but the newest `keep` daily journal files (best-effort).
@@ -330,7 +330,7 @@ pub(crate) async fn prune_debug_journals(data_dir: &Path, keep: usize) {
     }
 }
 
-pub(crate) async fn append_debug_event<E>(data_dir: &Path, now: DateTime<Utc>, event: E)
+pub(crate) async fn append_debug_event<E>(data_dir: &Path, now: Timestamp, event: E)
 where
     E: Borrow<FlightTrackerDebugEvent>,
 {
@@ -371,8 +371,9 @@ where
     }
 }
 
-fn format_ts(dt: DateTime<Utc>) -> String {
-    dt.to_rfc3339_opts(SecondsFormat::Secs, true)
+fn format_ts(dt: Timestamp) -> String {
+    // RFC 3339 in UTC, whole seconds, `Z` suffix.
+    dt.strftime("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 fn route_summary(flight: &TrackedFlight) -> Value {

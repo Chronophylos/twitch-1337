@@ -87,9 +87,7 @@ where
         self.cooldown.record(user).await;
 
         // Write feedback to file
-        let now = chrono::Utc::now()
-            .with_timezone(&chrono_tz::Europe::Berlin)
-            .format("%Y-%m-%dT%H:%M:%S");
+        let now = crate::util::to_berlin(jiff::Timestamp::now()).strftime("%Y-%m-%dT%H:%M:%S");
         let line = format!("{now} {user}: {message}\n");
 
         let path = self.data_dir.join(FEEDBACK_FILENAME);

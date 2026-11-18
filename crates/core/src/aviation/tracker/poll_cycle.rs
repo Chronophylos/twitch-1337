@@ -7,7 +7,7 @@
 //! Parallelism over many flights stays in the orchestrator (JoinSet); this
 //! module is the per-flight unit.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use tracing::warn;
 
 use crate::aviation::{AdsbProvider, NearbyAircraft};
@@ -135,7 +135,7 @@ pub(crate) async fn fetch_observation<P: AdsbProvider>(
 pub(crate) async fn complete_poll_cycle<P: AdsbProvider>(
     flight: &mut TrackedFlight,
     observation: Observation,
-    now: DateTime<Utc>,
+    now: Timestamp,
     provider: &P,
 ) -> Option<FlightUpdate> {
     let mut update = decide_poll(flight, PollReadiness::Due, Some(&observation), now)?;

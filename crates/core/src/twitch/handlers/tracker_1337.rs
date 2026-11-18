@@ -12,8 +12,8 @@ use std::{
     },
 };
 
-use chrono::{TimeDelta, Timelike, Utc};
 use futures_util::FutureExt;
+use jiff::{SignedDuration, Timestamp, civil};
 use rand::seq::IndexedRandom as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -32,9 +32,8 @@ use twitch_irc::{
 
 use crate::{
     lifecycle::TaskGroup,
-    resolve_berlin_time,
     twitch::{ChatSender, clanker::is_clanker, echo::EchoGuard},
-    util::clock::Clock,
+    util::{clock::Clock, resolve_berlin_time, to_berlin},
 };
 
 pub const TARGET_HOUR: u32 = 13;
@@ -88,7 +87,7 @@ pub struct PersonalBest {
     /// Milliseconds after 13:37:00.000 (0-999)
     pub ms: u64,
     /// The date (Europe/Berlin) when this record was set
-    pub date: chrono::NaiveDate,
+    pub date: civil::Date,
 }
 
 /// A user's personal worst (slowest) time for the 1337 challenge.
@@ -98,7 +97,7 @@ pub struct PersonalBest {
 pub struct PersonalWorst {
     /// Milliseconds after 13:37:00.000 (elapsed; typically >= 50_000 when stored).
     pub ms: u64,
-    pub date: chrono::NaiveDate,
+    pub date: civil::Date,
 }
 
 /// How a sub-second winning time ranks against the existing leaderboard.
@@ -177,33 +176,36 @@ fn beats_own_worst(user: &str, ms: u64, map: &HashMap<String, PersonalWorst>) ->
     map.get(user).map(|pw| pw.ms).is_none_or(|own| ms > own)
 }
 
+/// Builds the Berlin wall-clock `date hour:minute:second` from `u32` parts.
+fn berlin_wall_time(date: civil::Date, hour: u32, minute: u32, second: u32) -> civil::DateTime {
+    let part = |v: u32| i8::try_from(v).expect("Invalid hour/minute for Berlin time");
+    civil::DateTime::new(
+        date.year(),
+        date.month(),
+        date.day(),
+        part(hour),
+        part(minute),
+        part(second),
+        0,
+    )
+    .expect("Invalid hour/minute for Berlin time")
+}
+
 /// Calculates the next occurrence of a daily time in Europe/Berlin timezone.
 ///
 /// If the specified time has already passed today, returns tomorrow's occurrence.
-pub(crate) fn calculate_next_occurrence(
-    clock: &dyn Clock,
-    hour: u32,
-    minute: u32,
-) -> chrono::DateTime<Utc> {
-    let berlin_now = clock.now_utc().with_timezone(&chrono_tz::Europe::Berlin);
+pub(crate) fn calculate_next_occurrence(clock: &dyn Clock, hour: u32, minute: u32) -> Timestamp {
+    let now = clock.now_utc();
+    let berlin_now = to_berlin(now);
 
-    let mut target = resolve_berlin_time(
-        berlin_now
-            .date_naive()
-            .and_hms_opt(hour, minute, 0)
-            .expect("Invalid hour/minute for Berlin time"),
-    );
+    let mut target = resolve_berlin_time(berlin_wall_time(berlin_now.date(), hour, minute, 0));
 
     if target <= berlin_now {
-        target = resolve_berlin_time(
-            (berlin_now + chrono::Duration::days(1))
-                .date_naive()
-                .and_hms_opt(hour, minute, 0)
-                .expect("Invalid hour/minute for Berlin time"),
-        );
+        let tomorrow = to_berlin(now + SignedDuration::from_hours(24)).date();
+        target = resolve_berlin_time(berlin_wall_time(tomorrow, hour, minute, 0));
     }
 
-    target.with_timezone(&Utc)
+    target.timestamp()
 }
 
 /// Sleeps until the next occurrence of a daily time in Europe/Berlin timezone.
@@ -215,8 +217,8 @@ pub(crate) async fn wait_until_schedule(clock: &dyn Clock, hour: u32, minute: u3
     if next_run > now {
         info!(
             next_run_utc = ?next_run,
-            next_run_berlin = ?next_run.with_timezone(&chrono_tz::Europe::Berlin),
-            wait_seconds = (next_run - now).num_seconds(),
+            next_run_berlin = ?to_berlin(next_run),
+            wait_seconds = (next_run - now).as_secs(),
             "Sleeping until next scheduled time"
         );
 
@@ -240,14 +242,10 @@ pub(crate) async fn sleep_until_hms(
     second: u32,
     expected_latency: u32,
 ) {
-    let now = clock.now_utc().with_timezone(&chrono_tz::Europe::Berlin);
-    let target = resolve_berlin_time(
-        now.date_naive()
-            .and_hms_opt(hour, minute, second)
-            .expect("Invalid stats time"),
-    )
-    .with_timezone(&Utc)
-        - TimeDelta::milliseconds(i64::from(expected_latency));
+    let now = to_berlin(clock.now_utc());
+    let target = resolve_berlin_time(berlin_wall_time(now.date(), hour, minute, second))
+        .timestamp()
+        - SignedDuration::from_millis(i64::from(expected_latency));
 
     let now_utc = clock.now_utc();
     if target > now_utc {
@@ -256,7 +254,7 @@ pub(crate) async fn sleep_until_hms(
             minute,
             second,
             expected_latency,
-            wait_seconds = (target - now_utc).num_seconds(),
+            wait_seconds = (target - now_utc).as_secs(),
             "Waiting until scheduled HMS"
         );
         clock.sleep_until(target).await;
@@ -518,10 +516,12 @@ async fn monitor_1337_messages(
                     continue;
                 }
 
-                let local = privmsg
-                    .server_timestamp
-                    .with_timezone(&chrono_tz::Europe::Berlin);
-                if (local.hour(), local.minute()) != (TARGET_HOUR, TARGET_MINUTE) {
+                let local = to_berlin(privmsg.server_timestamp);
+                if (
+                    u32::try_from(local.hour()).ok(),
+                    u32::try_from(local.minute()).ok(),
+                ) != (Some(TARGET_HOUR), Some(TARGET_MINUTE))
+                {
                     continue;
                 }
 
@@ -531,8 +531,8 @@ async fn monitor_1337_messages(
                         error!(max = MAX_USERS, "User limit reached");
                     } else if !users.contains_key(privmsg.sender.login.as_str()) {
                         let username = privmsg.sender.login.clone();
-                        let ms_since_minute = u64::from(local.second()) * 1000
-                            + u64::from(local.timestamp_subsec_millis());
+                        let ms_since_minute = u64::from(local.second().unsigned_abs()) * 1000
+                            + u64::from(local.millisecond().unsigned_abs());
                         if ms_since_minute < 1000 {
                             debug!(user = %username, ms = ms_since_minute, "User said 1337 at 13:37 (sub-second)");
                         } else {
@@ -752,10 +752,7 @@ pub async fn run_1337_handler<T, L>(
             return;
         }
         // Update leaderboard with today's sub-1s times
-        let today = clock
-            .now_utc()
-            .with_timezone(&chrono_tz::Europe::Berlin)
-            .date_naive();
+        let today = to_berlin(clock.now_utc()).date();
         {
             let users = total_users.lock().await;
             let mut leaderboard_guard = leaderboard.write().await;
@@ -886,12 +883,12 @@ fn classify_monitor_completion(
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDate;
+    use jiff::civil;
 
     use super::*;
 
     fn lb(entries: &[(&str, u64)]) -> HashMap<String, PersonalBest> {
-        let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let date = civil::date(2026, 1, 1);
         entries
             .iter()
             .map(|(user, ms)| ((*user).to_string(), PersonalBest { ms: *ms, date }))
@@ -1007,7 +1004,7 @@ mod tests {
 
     #[test]
     fn beats_own_worst_when_absent_or_strictly_slower() {
-        let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let date = civil::date(2026, 1, 1);
         let mut map = HashMap::new();
         map.insert("alice".into(), PersonalWorst { ms: 55_000, date });
         assert!(beats_own_worst("bob", 50_000, &map));

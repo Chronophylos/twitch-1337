@@ -57,12 +57,16 @@ where
 
         let response = match (pb, is_self) {
             (Some(pb), true) => {
-                format!("Dein PB ist {}ms am {}", pb.ms, pb.date.format("%d.%m.%Y"))
+                format!(
+                    "Dein PB ist {}ms am {}",
+                    pb.ms,
+                    pb.date.strftime("%d.%m.%Y")
+                )
             }
             (Some(pb), false) => format!(
                 "PB von {target}: {}ms am {}",
                 pb.ms,
-                pb.date.format("%d.%m.%Y")
+                pb.date.strftime("%d.%m.%Y")
             ),
             (None, true) => "Du hast noch keinen PB".to_string(),
             (None, false) => format!("{target} hat noch keinen PB"),

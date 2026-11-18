@@ -503,9 +503,9 @@ pub async fn require_role(
     }
 
     let now = state.clock.now();
-    let elapsed = now
-        .signed_duration_since(session.last_role_check)
-        .to_std()
+    let elapsed: std::time::Duration = now
+        .duration_since(session.last_role_check)
+        .try_into()
         .unwrap_or_default();
     if elapsed > std::time::Duration::from_secs(mod_check_refresh_secs) {
         // Load owner (bootstrap-only from config.toml) and settings fields

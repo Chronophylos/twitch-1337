@@ -1,7 +1,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use chrono::{DateTime, TimeDelta, Utc};
+use jiff::tz::TimeZone;
+use jiff::{SignedDuration, Timestamp};
 use tokio::sync::mpsc;
 use tokio::task::JoinError;
 use tracing::{info, warn};
@@ -114,7 +115,7 @@ fn append_consumed_emits(
     response: &mut String,
     flight: &TrackedFlight,
     emits: &[Emit],
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) {
     for emit in emits {
         match emit {
@@ -177,16 +178,16 @@ fn metadata_flight_date(metadata: &AviationstackFlightMetadata) -> Option<String
                 .as_ref()
                 .or(metadata.arrival_scheduled.as_ref())
                 .or(metadata.arrival_estimated.as_ref())
-                .map(|dt| dt.date_naive().to_string())
+                .map(|dt| dt.to_zoned_datetime(TimeZone::UTC).date().to_string())
         })
 }
 
 fn flight_info_cache_expiry(
     metadata: Option<&AviationstackFlightMetadata>,
-    now: DateTime<Utc>,
-) -> DateTime<Utc> {
+    now: Timestamp,
+) -> Timestamp {
     let Some(metadata) = metadata else {
-        return now + TimeDelta::minutes(10);
+        return now + SignedDuration::from_mins(10);
     };
 
     if metadata
@@ -194,7 +195,7 @@ fn flight_info_cache_expiry(
         .as_deref()
         .is_some_and(|status| status.eq_ignore_ascii_case("landed"))
     {
-        return now + TimeDelta::hours(24);
+        return now + SignedDuration::from_hours(24);
     }
 
     let arrival = metadata
@@ -204,16 +205,16 @@ fn flight_info_cache_expiry(
         .or_else(|| metadata.arrival_estimated.as_ref().cloned())
         .or_else(|| metadata.arrival_scheduled.as_ref().cloned());
     let expires_at = arrival
-        .map(|arrival| arrival + TimeDelta::hours(4))
-        .unwrap_or_else(|| now + TimeDelta::hours(4));
+        .map(|arrival| arrival + SignedDuration::from_hours(4))
+        .unwrap_or_else(|| now + SignedDuration::from_hours(4));
     if expires_at > now {
         expires_at
     } else {
-        now + TimeDelta::hours(4)
+        now + SignedDuration::from_hours(4)
     }
 }
 
-fn prune_flight_info_cache(state: &mut FlightTrackerState, now: DateTime<Utc>) -> bool {
+fn prune_flight_info_cache(state: &mut FlightTrackerState, now: Timestamp) -> bool {
     let before = state.flight_info_cache.len();
     state
         .flight_info_cache
@@ -224,7 +225,7 @@ fn prune_flight_info_cache(state: &mut FlightTrackerState, now: DateTime<Utc>) -
 fn cached_flight_info(
     state: &FlightTrackerState,
     aliases: &[String],
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Option<Option<AviationstackFlightMetadata>> {
     state
         .flight_info_cache
@@ -240,7 +241,7 @@ fn upsert_flight_info_cache(
     state: &mut FlightTrackerState,
     query_aliases: &[String],
     metadata: Option<AviationstackFlightMetadata>,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) {
     let mut aliases = query_aliases.to_vec();
     let flight_date = metadata.as_ref().and_then(metadata_flight_date);
@@ -286,7 +287,7 @@ async fn lookup_aviationstack_metadata(
     aviation_client: &AviationClient,
     identifier: &FlightIdentifier,
     callsign: Option<&str>,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> AviationstackLookup {
     let cache_changed = prune_flight_info_cache(state, now);
     let query_aliases = query_cache_aliases(identifier, callsign);
@@ -881,7 +882,7 @@ async fn resolve_route_if_needed(
     flight: &mut TrackedFlight,
     aviation_client: &AviationClient,
     data_dir: &Path,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) {
     if flight.route.is_none()
         && let Some(callsign) = flight.callsign.clone()

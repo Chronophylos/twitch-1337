@@ -3,8 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
-use chrono_tz::Europe::Berlin;
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -21,7 +20,7 @@ pub const RECAP_SHEET_LOGINS: usize = 16;
 /// chat) or partial batches fire every pause. Not a setting — `batch_size` is
 /// the live knob; eviction backpressure still drains before the raw window
 /// drops uncovered lines.
-pub const RECAP_FLUSH_AGE: chrono::Duration = chrono::Duration::minutes(30);
+pub const RECAP_FLUSH_AGE: SignedDuration = SignedDuration::from_mins(30);
 pub const RECAP_PARK_FAILURES: u32 = 5;
 pub const RECAP_BACKOFF_INITIAL: Duration = Duration::from_secs(2);
 pub const RECAP_BACKOFF_CAP: Duration = Duration::from_secs(300);
@@ -35,7 +34,7 @@ pub struct RecapIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LineFingerprint {
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Timestamp,
     pub username: String,
     pub text: String,
 }
@@ -61,7 +60,7 @@ pub struct RecapNote {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecapChannelLog {
     pub notes: Vec<RecapNote>,
-    pub through_ts: Option<DateTime<Utc>>,
+    pub through_ts: Option<Timestamp>,
     pub through_fp: Option<LineFingerprint>,
 }
 
@@ -323,7 +322,7 @@ impl RecapHandle {
 }
 
 pub fn format_batch_line(entry: &ChatHistoryEntry, self_logins: &[String]) -> String {
-    let ts = entry.timestamp.with_timezone(&Berlin).format("%H:%M");
+    let ts = crate::util::to_berlin(entry.timestamp).strftime("%H:%M");
     let name = match entry.agent {
         Some(Agent::Aurora) => "Aurora",
         Some(Agent::Grok) => "Grok",
@@ -410,13 +409,13 @@ mod tests {
                 ChatHistorySource::User
             },
             agent,
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
         }
     }
 
     #[test]
     fn flush_age_outlasts_typical_stream_lulls() {
-        assert!(RECAP_FLUSH_AGE >= chrono::Duration::minutes(15));
+        assert!(RECAP_FLUSH_AGE >= SignedDuration::from_mins(15));
     }
 
     #[test]
@@ -454,7 +453,7 @@ mod tests {
     #[test]
     fn rebind_matches_fingerprint_not_old_seq() {
         let fp = LineFingerprint {
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             username: "alice".into(),
             text: "hi".into(),
         };
@@ -472,7 +471,7 @@ mod tests {
 
     #[test]
     fn rebind_falls_back_to_through_ts_when_fp_missing() {
-        let ts = Utc::now() - chrono::Duration::hours(1);
+        let ts = Timestamp::now() - SignedDuration::from_hours(1);
         let log = RecapChannelLog {
             notes: vec![],
             through_ts: Some(ts),
@@ -483,9 +482,9 @@ mod tests {
             }),
         };
         let mut old = e(1, "x", None);
-        old.timestamp = ts - chrono::Duration::minutes(1);
+        old.timestamp = ts - SignedDuration::from_mins(1);
         let mut newer = e(2, "y", None);
-        newer.timestamp = ts + chrono::Duration::minutes(1);
+        newer.timestamp = ts + SignedDuration::from_mins(1);
         assert_eq!(rebind_through_seq(&log, &[old, newer]), 1);
     }
 
@@ -576,7 +575,7 @@ mod tests {
             text: "sigma".into(),
             source: ChatHistorySource::Bot,
             agent: Some(agent),
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
         }
     }
 
@@ -629,9 +628,9 @@ mod tests {
                     through_seq: 9,
                     generation: 0,
                 }],
-                through_ts: Some(Utc::now()),
+                through_ts: Some(Timestamp::now()),
                 through_fp: Some(LineFingerprint {
-                    timestamp: Utc::now(),
+                    timestamp: Timestamp::now(),
                     username: "alice".into(),
                     text: "hi".into(),
                 }),

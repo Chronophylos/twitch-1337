@@ -3,7 +3,7 @@
 //!
 //! See CONTEXT.md "Poll Decision". No I/O. Sibling of Advance (Observation-only).
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use tracing::error;
 
 use super::TrackedFlight;
@@ -29,7 +29,7 @@ pub(crate) enum PollPlan {
 pub(crate) fn poll_plan(
     flight: &TrackedFlight,
     readiness: PollReadiness,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> PollPlan {
     match readiness {
         PollReadiness::NotDue(_) => PollPlan::Skip,
@@ -50,7 +50,7 @@ pub(crate) fn decide_poll(
     flight: &mut TrackedFlight,
     readiness: PollReadiness,
     observation: Option<&Observation>,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Option<FlightUpdate> {
     match readiness {
         PollReadiness::NotDue(_) => None,
@@ -72,7 +72,7 @@ pub(crate) fn decide_poll(
     }
 }
 
-fn pending_expired_update(flight: &TrackedFlight, _now: DateTime<Utc>) -> FlightUpdate {
+fn pending_expired_update(flight: &TrackedFlight, _now: Timestamp) -> FlightUpdate {
     let mut update = FlightUpdate::default();
     update.debug.push(FlightTrackerDebugEvent::tracking_removal(
         flight,
@@ -93,7 +93,7 @@ mod tests {
         FlightIdentifier, FlightPhase, TargetConfirmation, TrackedFlight,
     };
 
-    fn pending_flight(tracked_at: DateTime<Utc>) -> TrackedFlight {
+    fn pending_flight(tracked_at: Timestamp) -> TrackedFlight {
         TrackedFlight {
             identifier: FlightIdentifier::Callsign("DLH1234".to_string()),
             callsign: Some("DLH1234".to_string()),

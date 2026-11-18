@@ -260,7 +260,7 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 
 ## Architecture invariants
 
-- Bot scheduling / display use `Europe/Berlin`. `chrono-tz` is built with the full IANA database (no `CHRONO_TZ_TIMEZONE_FILTER`) so Aviationstack airport timezones can reinterpret local wall times stamped as `+00:00`.
+- Bot scheduling / display use `Europe/Berlin` (`util::BERLIN`, `util::to_berlin`). Time is `jiff` throughout; it is built with `tzdb-bundle-always` so the musl `FROM scratch` image carries the full IANA database and Aviationstack airport timezones can reinterpret local wall times stamped as `+00:00`. `chrono`/`chrono-tz`/`humantime` were dropped as unmaintained (#609); schedule `every` still reads humantime's `1day` spelling.
 - 1337 tracker: messages containing "1337" or "DANKIES" at exactly 13:37:xx. Ignore "supibot", "potatbotat". Dedupe via HashSet (max 10k). Leaderboard = fastest sub-1s PB.
 - Broadcast channel capacity 100. Lagging handlers get `RecvError::Lagged`, continue.
 - Handlers independent. Errors in one don't crash others (`bail!` on startup only).

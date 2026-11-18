@@ -374,7 +374,7 @@ async fn list(
 
     let mut shown: Vec<&PingView> = views.iter().filter(|v| filter.matches(v, login)).collect();
     sort.apply(&mut shown);
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     let rows = shown
         .into_iter()
         .map(|view| RowView {
@@ -386,7 +386,7 @@ async fn list(
             created_by: view.created_by.clone(),
             last_fired: view
                 .last_fired_at
-                .map(|t| humanize_delta(now.signed_duration_since(t))),
+                .map(|t| humanize_delta(now.duration_since(t))),
             fire_count: view.fire_count,
         })
         .collect();

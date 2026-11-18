@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use eyre::{Result, WrapErr as _};
+use jiff::{SignedDuration, Timestamp};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -47,7 +47,7 @@ pub trait HelixClient: Send + Sync {
 /// back into `insert`.
 pub struct AvatarCache {
     entries: Mutex<HashMap<String, AvatarEntry>>,
-    ttl: chrono::Duration,
+    ttl: SignedDuration,
     /// Hard cap on cached entries. When `insert` or `prime` would push
     /// the map past this, expired entries are pruned first and the
     /// oldest survivor is dropped if still over. Prevents unbounded
@@ -57,7 +57,7 @@ pub struct AvatarCache {
 
 struct AvatarEntry {
     url: Option<String>,
-    fetched_at: DateTime<Utc>,
+    fetched_at: Timestamp,
 }
 
 pub struct AvatarLookup {
@@ -77,7 +77,7 @@ impl AvatarCache {
     pub fn with_capacity(ttl: Duration, max_entries: usize) -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
-            ttl: chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::hours(1)),
+            ttl: SignedDuration::try_from(ttl).unwrap_or(SignedDuration::from_hours(1)),
             max_entries: max_entries.max(1),
         }
     }
@@ -86,14 +86,14 @@ impl AvatarCache {
     /// oldest-fetched survivor. Called from the insert paths.
     fn evict_if_needed(
         entries: &mut HashMap<String, AvatarEntry>,
-        now: DateTime<Utc>,
-        ttl: chrono::Duration,
+        now: Timestamp,
+        ttl: SignedDuration,
         cap: usize,
     ) {
         if entries.len() < cap {
             return;
         }
-        entries.retain(|_, e| now.signed_duration_since(e.fetched_at) < ttl);
+        entries.retain(|_, e| now.duration_since(e.fetched_at) < ttl);
         while entries.len() >= cap {
             let Some(oldest) = entries
                 .iter()
@@ -113,7 +113,7 @@ impl AvatarCache {
         let mut missing = Vec::new();
         for id in ids {
             match entries.get(*id) {
-                Some(e) if now.signed_duration_since(e.fetched_at) < self.ttl => {
+                Some(e) if now.duration_since(e.fetched_at) < self.ttl => {
                     if let Some(url) = &e.url {
                         cached.insert((*id).to_owned(), url.clone());
                     }

@@ -10,13 +10,15 @@
 
 use std::time::Duration;
 
-use chrono::{
-    DateTime, Datelike, Duration as ChronoDuration, LocalResult, NaiveDateTime, NaiveTime, TimeZone,
+use jiff::{
+    SignedDuration, ToSpan, ZonedDateTime,
+    civil::{DateTime, Time},
+    tz::AmbiguousOffset,
 };
-use chrono_tz::{Europe::Berlin, Tz};
 use serde::{Deserialize, Serialize};
 
 use super::weekday::WeekdaySet;
+use crate::util::{BERLIN, to_berlin};
 
 const SECS_PER_DAY: i64 = 86_400;
 /// Length of the repeated hour when Berlin leaves summer time.
@@ -26,32 +28,32 @@ const FOLD_LENGTH: Duration = Duration::from_secs(3600);
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Trigger {
     Interval {
-        #[serde(with = "humantime_serde")]
+        #[serde(with = "super::interval_serde")]
         every: Duration,
         #[serde(default)]
         days: WeekdaySet,
         #[serde(default)]
-        active_from: Option<NaiveTime>,
+        active_from: Option<Time>,
         #[serde(default)]
-        active_to: Option<NaiveTime>,
+        active_to: Option<Time>,
     },
     Calendar {
         #[serde(default)]
         days: WeekdaySet,
-        at: NaiveTime,
+        at: Time,
     },
 }
 
 impl Trigger {
     /// Next instant strictly > `now` when this trigger should fire.
-    /// All arithmetic is Berlin-local; the returned `DateTime<Tz>` is
-    /// always `Tz::Berlin`.
+    /// All arithmetic is Berlin-local; the returned `ZonedDateTime` is
+    /// always in Europe/Berlin.
     ///
     /// DST: a slot in the spring-forward gap moves one hour later. A slot in
     /// the fall-back fold uses the first occurrence; intervals of an hour or
     /// less also fire on the second.
-    pub fn next_fire_after(&self, now: DateTime<Tz>) -> DateTime<Tz> {
-        let now = now.with_timezone(&Berlin);
+    pub fn next_fire_after(&self, now: ZonedDateTime) -> ZonedDateTime {
+        let now = to_berlin(now.timestamp());
         match self {
             Trigger::Interval {
                 every,
@@ -65,24 +67,27 @@ impl Trigger {
 }
 
 fn next_interval(
-    now: DateTime<Tz>,
+    now: ZonedDateTime,
     every: Duration,
     days: &WeekdaySet,
-    active_from: Option<NaiveTime>,
-    active_to: Option<NaiveTime>,
-) -> DateTime<Tz> {
+    active_from: Option<Time>,
+    active_to: Option<Time>,
+) -> ZonedDateTime {
     // A DST day has 23 or 25 hours, so slots must be counted on the local
     // clock. Adding real seconds to midnight shifts them by the DST offset.
     let repeat_in_fold = every <= FOLD_LENGTH;
     for offset in 0..=7 {
-        let date = now.date_naive() + ChronoDuration::days(offset);
+        let date = now
+            .date()
+            .checked_add(offset.days())
+            .expect("date within a week stays in range");
         if !days.allows(date.weekday()) {
             continue;
         }
-        let midnight = date.and_time(NaiveTime::MIN);
+        let midnight = date.to_datetime(Time::MIN);
         let next = (0..SECS_PER_DAY)
             .step_by(every.as_secs() as usize)
-            .map(|slot| midnight + ChronoDuration::seconds(slot))
+            .map(|slot| midnight + SignedDuration::from_secs(slot))
             .filter(|naive| in_window(naive.time(), active_from, active_to))
             .flat_map(|naive| slot_instants(naive, repeat_in_fold))
             .flatten()
@@ -94,41 +99,78 @@ fn next_interval(
     }
     // No slot ever lands in the window (e.g. every 12h, 08:00-10:00). Push it
     // far out rather than fire outside the window.
-    now + ChronoDuration::seconds(every.as_secs() as i64 * 14 * 1440)
+    now + SignedDuration::from_secs(every.as_secs() as i64 * 14 * 1440)
 }
 
 /// Real instants for one local slot. In the autumn fold a slot exists twice;
 /// the second one is only used when the interval is short enough that skipping
 /// it would leave a silent hour. A slot in the spring gap moves one hour later.
-fn slot_instants(naive: NaiveDateTime, repeat_in_fold: bool) -> [Option<DateTime<Tz>>; 2] {
-    match Berlin.from_local_datetime(&naive) {
-        LocalResult::Single(t) => [Some(t), None],
-        LocalResult::Ambiguous(first, second) => [Some(first), repeat_in_fold.then_some(second)],
-        LocalResult::None => [
-            Berlin
-                .from_local_datetime(&(naive + ChronoDuration::hours(1)))
-                .earliest(),
+fn slot_instants(naive: DateTime, repeat_in_fold: bool) -> [Option<ZonedDateTime>; 2] {
+    match berlin_local(naive) {
+        Local::Single(t) => [Some(t), None],
+        Local::Ambiguous(first, second) => [Some(first), repeat_in_fold.then_some(second)],
+        Local::None => [
+            berlin_local(naive + SignedDuration::from_hours(1)).earliest(),
             None,
         ],
     }
 }
 
-fn next_calendar(now: DateTime<Tz>, days: &WeekdaySet, at: NaiveTime) -> DateTime<Tz> {
-    let base_date = now.date_naive();
+/// How a Berlin wall-clock time maps to real instants.
+enum Local {
+    Single(ZonedDateTime),
+    /// Fall-back fold: (first, second) occurrence.
+    Ambiguous(ZonedDateTime, ZonedDateTime),
+    /// Spring-forward gap: the wall-clock time never happens.
+    None,
+}
+
+impl Local {
+    fn earliest(self) -> Option<ZonedDateTime> {
+        match self {
+            Local::Single(t) | Local::Ambiguous(t, _) => Some(t),
+            Local::None => None,
+        }
+    }
+
+    fn single(self) -> Option<ZonedDateTime> {
+        match self {
+            Local::Single(t) => Some(t),
+            Local::Ambiguous(..) | Local::None => None,
+        }
+    }
+}
+
+fn berlin_local(naive: DateTime) -> Local {
+    let at = |offset: jiff::tz::Offset| offset.to_timestamp(naive).ok().map(to_berlin);
+    match BERLIN.to_ambiguous_timestamp(naive).offset() {
+        AmbiguousOffset::Unambiguous { offset } => at(offset).map_or(Local::None, Local::Single),
+        AmbiguousOffset::Fold { before, after } => match (at(before), at(after)) {
+            (Some(first), Some(second)) => Local::Ambiguous(first, second),
+            _ => Local::None,
+        },
+        AmbiguousOffset::Gap { .. } => Local::None,
+    }
+}
+
+fn next_calendar(now: ZonedDateTime, days: &WeekdaySet, at: Time) -> ZonedDateTime {
+    let base_date = now.date();
     for offset in 0..=7 {
-        let date = base_date + ChronoDuration::days(offset);
+        let date = base_date
+            .checked_add(offset.days())
+            .expect("date within a week stays in range");
         let wd = date.weekday();
         if !days.allows(wd) {
             continue;
         }
-        let naive = date.and_time(at);
-        let candidate = match Berlin.from_local_datetime(&naive) {
-            LocalResult::Single(t) => t,
-            LocalResult::Ambiguous(t1, _t2) => t1,
-            LocalResult::None => {
+        let naive = date.to_datetime(at);
+        let candidate = match berlin_local(naive) {
+            Local::Single(t) => t,
+            Local::Ambiguous(t1, _t2) => t1,
+            Local::None => {
                 // Spring-forward gap: pick post-gap by adding 1h.
-                let bumped = naive + ChronoDuration::hours(1);
-                Berlin.from_local_datetime(&bumped).single().unwrap_or(now)
+                let bumped = naive + SignedDuration::from_hours(1);
+                berlin_local(bumped).single().unwrap_or_else(|| now.clone())
             }
         };
         if candidate > now {
@@ -136,15 +178,16 @@ fn next_calendar(now: DateTime<Tz>, days: &WeekdaySet, at: NaiveTime) -> DateTim
         }
     }
     // Fallback: 7 days from now at `at`.
-    let date = base_date + ChronoDuration::days(7);
-    let naive = date.and_time(at);
-    Berlin
-        .from_local_datetime(&naive)
+    let date = base_date
+        .checked_add(7.days())
+        .expect("date within a week stays in range");
+    let naive = date.to_datetime(at);
+    berlin_local(naive)
         .single()
-        .unwrap_or(now + ChronoDuration::days(7))
+        .unwrap_or_else(|| &now + SignedDuration::from_hours(7 * 24))
 }
 
-fn in_window(t: NaiveTime, from: Option<NaiveTime>, to: Option<NaiveTime>) -> bool {
+fn in_window(t: Time, from: Option<Time>, to: Option<Time>) -> bool {
     match (from, to) {
         (Some(f), Some(e)) => {
             if e < f {
@@ -161,15 +204,15 @@ fn in_window(t: NaiveTime, from: Option<NaiveTime>, to: Option<NaiveTime>) -> bo
 #[cfg(test)]
 mod ser_de_tests {
     use super::*;
-    use chrono::Weekday;
+    use jiff::civil::Weekday;
 
     #[test]
     fn interval_round_trips_in_ron() {
         let t = Trigger::Interval {
             every: Duration::from_secs(1800),
             days: WeekdaySet::default(),
-            active_from: Some(NaiveTime::from_hms_opt(8, 0, 0).unwrap()),
-            active_to: Some(NaiveTime::from_hms_opt(23, 0, 0).unwrap()),
+            active_from: Some(jiff::civil::time(8, 0, 0, 0)),
+            active_to: Some(jiff::civil::time(23, 0, 0, 0)),
         };
         let s = ron::to_string(&t).expect("ser");
         let back: Trigger = ron::from_str(&s).expect("de");
@@ -179,10 +222,10 @@ mod ser_de_tests {
     #[test]
     fn calendar_round_trips_in_ron() {
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Thu);
+        days.0.insert(Weekday::Thursday);
         let t = Trigger::Calendar {
             days,
-            at: NaiveTime::from_hms_opt(20, 0, 0).unwrap(),
+            at: jiff::civil::time(20, 0, 0, 0),
         };
         let s = ron::to_string(&t).expect("ser");
         let back: Trigger = ron::from_str(&s).expect("de");
@@ -193,7 +236,7 @@ mod ser_de_tests {
     fn calendar_empty_days_serializes_as_empty_set() {
         let t = Trigger::Calendar {
             days: WeekdaySet::default(),
-            at: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+            at: jiff::civil::time(9, 0, 0, 0),
         };
         let s = ron::to_string(&t).expect("ser");
         assert!(s.to_lowercase().contains("calendar"));
@@ -204,18 +247,16 @@ mod ser_de_tests {
 
 #[cfg(test)]
 mod interval_basic_tests {
-    use chrono::Timelike;
-
     use super::*;
 
-    fn t(h: u32, m: u32) -> NaiveTime {
-        NaiveTime::from_hms_opt(h, m, 0).unwrap()
+    fn t(h: i8, m: i8) -> Time {
+        jiff::civil::time(h, m, 0, 0)
     }
 
-    fn now_berlin(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Tz> {
-        Berlin
-            .with_ymd_and_hms(y, mo, d, h, mi, 0)
-            .single()
+    fn now_berlin(y: i16, mo: i8, d: i8, h: i8, mi: i8) -> ZonedDateTime {
+        jiff::civil::date(y, mo, d)
+            .at(h, mi, 0, 0)
+            .to_zoned_datetime(BERLIN.clone())
             .expect("valid")
     }
 
@@ -229,7 +270,7 @@ mod interval_basic_tests {
             active_from: None,
             active_to: None,
         };
-        let next = trig.next_fire_after(now);
+        let next = trig.next_fire_after(now.clone());
         assert_eq!(next.hour(), 9);
         assert_eq!(next.minute(), 30);
     }
@@ -244,7 +285,7 @@ mod interval_basic_tests {
             active_from: None,
             active_to: None,
         };
-        let next = trig.next_fire_after(now);
+        let next = trig.next_fire_after(now.clone());
         assert_eq!(next.hour(), 10);
         assert_eq!(next.minute(), 0);
     }
@@ -258,7 +299,7 @@ mod interval_basic_tests {
             active_from: None,
             active_to: None,
         };
-        let next = trig.next_fire_after(now);
+        let next = trig.next_fire_after(now.clone());
         assert_eq!(next.hour(), 10);
         assert_eq!(next.minute(), 0);
     }
@@ -278,12 +319,12 @@ mod interval_basic_tests {
 #[cfg(test)]
 mod interval_filter_tests {
     use super::*;
-    use chrono::{Datelike, Timelike, Weekday};
+    use jiff::civil::Weekday;
 
-    fn now_berlin(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Tz> {
-        Berlin
-            .with_ymd_and_hms(y, mo, d, h, mi, 0)
-            .single()
+    fn now_berlin(y: i16, mo: i8, d: i8, h: i8, mi: i8) -> ZonedDateTime {
+        jiff::civil::date(y, mo, d)
+            .at(h, mi, 0, 0)
+            .to_zoned_datetime(BERLIN.clone())
             .expect("valid")
     }
 
@@ -294,10 +335,10 @@ mod interval_filter_tests {
         let trig = Trigger::Interval {
             every: Duration::from_secs(3600),
             days: WeekdaySet::default(),
-            active_from: Some(NaiveTime::from_hms_opt(8, 0, 0).unwrap()),
-            active_to: Some(NaiveTime::from_hms_opt(18, 0, 0).unwrap()),
+            active_from: Some(jiff::civil::time(8, 0, 0, 0)),
+            active_to: Some(jiff::civil::time(18, 0, 0, 0)),
         };
-        let next = trig.next_fire_after(now);
+        let next = trig.next_fire_after(now.clone());
         assert_eq!(next.hour(), 8);
         assert_eq!(next.minute(), 0);
     }
@@ -309,10 +350,10 @@ mod interval_filter_tests {
         let trig = Trigger::Interval {
             every: Duration::from_secs(3600),
             days: WeekdaySet::default(),
-            active_from: Some(NaiveTime::from_hms_opt(8, 0, 0).unwrap()),
-            active_to: Some(NaiveTime::from_hms_opt(18, 0, 0).unwrap()),
+            active_from: Some(jiff::civil::time(8, 0, 0, 0)),
+            active_to: Some(jiff::civil::time(18, 0, 0, 0)),
         };
-        let next = trig.next_fire_after(now);
+        let next = trig.next_fire_after(now.clone());
         assert_eq!(next.day(), 29);
         assert_eq!(next.hour(), 8);
         assert_eq!(next.minute(), 0);
@@ -325,10 +366,10 @@ mod interval_filter_tests {
         let trig = Trigger::Interval {
             every: Duration::from_secs(3600),
             days: WeekdaySet::default(),
-            active_from: Some(NaiveTime::from_hms_opt(22, 0, 0).unwrap()),
-            active_to: Some(NaiveTime::from_hms_opt(2, 0, 0).unwrap()),
+            active_from: Some(jiff::civil::time(22, 0, 0, 0)),
+            active_to: Some(jiff::civil::time(2, 0, 0, 0)),
         };
-        let next = trig.next_fire_after(now);
+        let next = trig.next_fire_after(now.clone());
         assert_eq!(next.day(), 29);
         assert_eq!(next.hour(), 0);
         assert_eq!(next.minute(), 0);
@@ -340,16 +381,16 @@ mod interval_filter_tests {
         // now 17:30 -> 18:00 should still fire today (Thu).
         let now = now_berlin(2026, 5, 28, 17, 30);
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Tue);
-        days.0.insert(Weekday::Thu);
+        days.0.insert(Weekday::Tuesday);
+        days.0.insert(Weekday::Thursday);
         let trig = Trigger::Interval {
             every: Duration::from_secs(3600),
             days,
             active_from: None,
             active_to: None,
         };
-        let next = trig.next_fire_after(now);
-        assert_eq!(next.weekday(), Weekday::Thu);
+        let next = trig.next_fire_after(now.clone());
+        assert_eq!(next.weekday(), Weekday::Thursday);
         assert_eq!(next.day(), 28);
         assert_eq!(next.hour(), 18);
     }
@@ -359,16 +400,16 @@ mod interval_filter_tests {
         // 2026-05-29 is a Friday; days = {Tue, Thu}; should roll to Tue.
         let now = now_berlin(2026, 5, 29, 9, 0);
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Tue);
-        days.0.insert(Weekday::Thu);
+        days.0.insert(Weekday::Tuesday);
+        days.0.insert(Weekday::Thursday);
         let trig = Trigger::Interval {
             every: Duration::from_secs(3600),
             days,
             active_from: None,
             active_to: None,
         };
-        let next = trig.next_fire_after(now);
-        assert_eq!(next.weekday(), Weekday::Tue);
+        let next = trig.next_fire_after(now.clone());
+        assert_eq!(next.weekday(), Weekday::Tuesday);
     }
 
     #[test]
@@ -376,16 +417,16 @@ mod interval_filter_tests {
         // Tue/Thu, 18:00–23:00, every 30m, now Fri 10:00 -> Tue 18:00.
         let now = now_berlin(2026, 5, 29, 10, 0);
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Tue);
-        days.0.insert(Weekday::Thu);
+        days.0.insert(Weekday::Tuesday);
+        days.0.insert(Weekday::Thursday);
         let trig = Trigger::Interval {
             every: Duration::from_secs(1800),
             days,
-            active_from: Some(NaiveTime::from_hms_opt(18, 0, 0).unwrap()),
-            active_to: Some(NaiveTime::from_hms_opt(23, 0, 0).unwrap()),
+            active_from: Some(jiff::civil::time(18, 0, 0, 0)),
+            active_to: Some(jiff::civil::time(23, 0, 0, 0)),
         };
-        let next = trig.next_fire_after(now);
-        assert_eq!(next.weekday(), Weekday::Tue);
+        let next = trig.next_fire_after(now.clone());
+        assert_eq!(next.weekday(), Weekday::Tuesday);
         assert_eq!(next.hour(), 18);
         assert_eq!(next.minute(), 0);
     }
@@ -394,12 +435,12 @@ mod interval_filter_tests {
 #[cfg(test)]
 mod calendar_tests {
     use super::*;
-    use chrono::{Datelike, Timelike, Weekday};
+    use jiff::civil::Weekday;
 
-    fn now_berlin(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Tz> {
-        Berlin
-            .with_ymd_and_hms(y, mo, d, h, mi, 0)
-            .single()
+    fn now_berlin(y: i16, mo: i8, d: i8, h: i8, mi: i8) -> ZonedDateTime {
+        jiff::civil::date(y, mo, d)
+            .at(h, mi, 0, 0)
+            .to_zoned_datetime(BERLIN.clone())
             .expect("valid")
     }
 
@@ -409,9 +450,9 @@ mod calendar_tests {
         let now = now_berlin(2026, 5, 28, 9, 0);
         let trig = Trigger::Calendar {
             days: WeekdaySet::default(),
-            at: NaiveTime::from_hms_opt(20, 0, 0).unwrap(),
+            at: jiff::civil::time(20, 0, 0, 0),
         };
-        let next = trig.next_fire_after(now);
+        let next = trig.next_fire_after(now.clone());
         assert_eq!(next.day(), 28);
         assert_eq!(next.hour(), 20);
     }
@@ -422,9 +463,9 @@ mod calendar_tests {
         let now = now_berlin(2026, 5, 28, 21, 0);
         let trig = Trigger::Calendar {
             days: WeekdaySet::default(),
-            at: NaiveTime::from_hms_opt(20, 0, 0).unwrap(),
+            at: jiff::civil::time(20, 0, 0, 0),
         };
-        let next = trig.next_fire_after(now);
+        let next = trig.next_fire_after(now.clone());
         assert_eq!(next.day(), 29);
         assert_eq!(next.hour(), 20);
     }
@@ -434,13 +475,13 @@ mod calendar_tests {
         // Thu 19:00, days={Thu}, at 20:00 -> today 20:00.
         let now = now_berlin(2026, 5, 28, 19, 0);
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Thu);
+        days.0.insert(Weekday::Thursday);
         let trig = Trigger::Calendar {
             days,
-            at: NaiveTime::from_hms_opt(20, 0, 0).unwrap(),
+            at: jiff::civil::time(20, 0, 0, 0),
         };
-        let next = trig.next_fire_after(now);
-        assert_eq!(next.weekday(), Weekday::Thu);
+        let next = trig.next_fire_after(now.clone());
+        assert_eq!(next.weekday(), Weekday::Thursday);
         assert_eq!(next.day(), 28);
     }
 
@@ -449,13 +490,13 @@ mod calendar_tests {
         // Thu 21:00, days={Thu}, at 20:00 -> next Thu 4 June 2026.
         let now = now_berlin(2026, 5, 28, 21, 0);
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Thu);
+        days.0.insert(Weekday::Thursday);
         let trig = Trigger::Calendar {
             days,
-            at: NaiveTime::from_hms_opt(20, 0, 0).unwrap(),
+            at: jiff::civil::time(20, 0, 0, 0),
         };
-        let next = trig.next_fire_after(now);
-        assert_eq!(next.weekday(), Weekday::Thu);
+        let next = trig.next_fire_after(now.clone());
+        assert_eq!(next.weekday(), Weekday::Thursday);
         assert_eq!(next.day(), 4);
         assert_eq!(next.month(), 6);
     }
@@ -465,15 +506,15 @@ mod calendar_tests {
         // days={Mon, Wed, Fri}, at 09:00, now Tue 10:00 -> Wed 09:00.
         let now = now_berlin(2026, 5, 26, 10, 0); // Tue 2026-05-26
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Mon);
-        days.0.insert(Weekday::Wed);
-        days.0.insert(Weekday::Fri);
+        days.0.insert(Weekday::Monday);
+        days.0.insert(Weekday::Wednesday);
+        days.0.insert(Weekday::Friday);
         let trig = Trigger::Calendar {
             days,
-            at: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+            at: jiff::civil::time(9, 0, 0, 0),
         };
-        let next = trig.next_fire_after(now);
-        assert_eq!(next.weekday(), Weekday::Wed);
+        let next = trig.next_fire_after(now.clone());
+        assert_eq!(next.weekday(), Weekday::Wednesday);
     }
 }
 
@@ -481,10 +522,10 @@ mod calendar_tests {
 mod dst_tests {
     use super::*;
 
-    fn now_berlin(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Tz> {
-        Berlin
-            .with_ymd_and_hms(y, mo, d, h, mi, 0)
-            .single()
+    fn now_berlin(y: i16, mo: i8, d: i8, h: i8, mi: i8) -> ZonedDateTime {
+        jiff::civil::date(y, mo, d)
+            .at(h, mi, 0, 0)
+            .to_zoned_datetime(BERLIN.clone())
             .expect("valid")
     }
 
@@ -494,11 +535,10 @@ mod dst_tests {
         let now = now_berlin(2026, 3, 28, 23, 0);
         let trig = Trigger::Calendar {
             days: WeekdaySet::default(),
-            at: NaiveTime::from_hms_opt(2, 30, 0).unwrap(),
+            at: jiff::civil::time(2, 30, 0, 0),
         };
-        let next = trig.next_fire_after(now);
+        let next = trig.next_fire_after(now.clone());
         assert!(next > now);
-        use chrono::Datelike;
         assert_eq!(next.day(), 29);
     }
 
@@ -508,16 +548,15 @@ mod dst_tests {
         let now = now_berlin(2026, 10, 24, 23, 0);
         let trig = Trigger::Calendar {
             days: WeekdaySet::default(),
-            at: NaiveTime::from_hms_opt(2, 30, 0).unwrap(),
+            at: jiff::civil::time(2, 30, 0, 0),
         };
-        let next = trig.next_fire_after(now);
+        let next = trig.next_fire_after(now.clone());
         assert!(next > now);
-        use chrono::Datelike;
         assert_eq!(next.day(), 25);
     }
 
-    fn interval(every_mins: u64, window: Option<(u32, u32)>) -> Trigger {
-        let at = |h| NaiveTime::from_hms_opt(h, 0, 0).unwrap();
+    fn interval(every_mins: u64, window: Option<(i8, i8)>) -> Trigger {
+        let at = |h| jiff::civil::time(h, 0, 0, 0);
         Trigger::Interval {
             every: Duration::from_secs(every_mins * 60),
             days: WeekdaySet::default(),
@@ -528,11 +567,11 @@ mod dst_tests {
 
     /// The next `n` fires, walked like the runner does: each search starts
     /// from the previous fire.
-    fn fires(trig: &Trigger, mut now: DateTime<Tz>, n: usize) -> Vec<String> {
+    fn fires(trig: &Trigger, mut now: ZonedDateTime, n: usize) -> Vec<String> {
         (0..n)
             .map(|_| {
-                now = trig.next_fire_after(now);
-                now.format("%d %H:%M %Z").to_string()
+                now = trig.next_fire_after(now.clone());
+                now.strftime("%d %H:%M %Z").to_string()
             })
             .collect()
     }

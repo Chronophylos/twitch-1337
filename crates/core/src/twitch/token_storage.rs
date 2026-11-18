@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use chrono::Utc;
 use color_eyre::eyre::{self, Result, WrapErr as _};
+use jiff::Timestamp;
 use secrecy::{ExposeSecret, SecretString};
 use tokio::fs;
 use tracing::{debug, instrument, warn};
@@ -30,7 +30,7 @@ impl FileBasedTokenStorage {
     }
 
     fn fresh_token_from_config(&self) -> UserAccessToken {
-        let now = Utc::now();
+        let now = Timestamp::now();
         UserAccessToken {
             access_token: String::new(),
             refresh_token: self.initial_refresh_token.expose_secret().to_string(),
@@ -80,14 +80,14 @@ impl TokenStorage for FileBasedTokenStorage {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use jiff::Timestamp;
     use twitch_irc::login::UserAccessToken;
 
-    fn make_token(expires_at: Option<chrono::DateTime<Utc>>) -> UserAccessToken {
+    fn make_token(expires_at: Option<Timestamp>) -> UserAccessToken {
         UserAccessToken {
             access_token: "acc".into(),
             refresh_token: "ref".into(),
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
             expires_at,
         }
     }
@@ -102,12 +102,24 @@ mod tests {
 
     #[test]
     fn ron_roundtrip_expires_at_some() {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let t = make_token(Some(now));
         let s = ron::to_string(&t).unwrap();
         let t2: UserAccessToken = ron::from_str(&s).unwrap();
-        // subsecond precision may differ; compare at second granularity
-        assert_eq!(t2.expires_at.unwrap().timestamp(), now.timestamp());
+        assert_eq!(t2.expires_at, Some(now));
+    }
+
+    /// `token.ron` written by the chrono-era build must keep loading, or the
+    /// bot falls back to the config refresh token on every start.
+    #[test]
+    fn chrono_era_token_file_loads() {
+        let t: UserAccessToken = ron::from_str(
+            r#"(access_token: "acc", refresh_token: "ref",
+                created_at: "2026-07-19T12:00:00.123456789Z",
+                expires_at: Some("2026-07-19T16:00:00Z"))"#,
+        )
+        .expect("old token file must load");
+        assert_eq!(t.expires_at, Some("2026-07-19T16:00:00Z".parse().unwrap()));
     }
 
     #[test]

@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
 use eyre::{Result, WrapErr, bail};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
@@ -19,7 +19,7 @@ pub struct Ping {
     pub cooldown: Option<u64>,
     pub created_by: String,
     #[serde(default)]
-    pub last_fired_at: Option<DateTime<Utc>>,
+    pub last_fired_at: Option<Timestamp>,
     #[serde(default)]
     pub fire_count: u64,
 }
@@ -31,7 +31,7 @@ pub struct PingView {
     pub members: HashSet<String>,
     pub cooldown: Option<u64>,
     pub created_by: String,
-    pub last_fired_at: Option<DateTime<Utc>>,
+    pub last_fired_at: Option<Timestamp>,
     pub fire_count: u64,
 }
 
@@ -597,7 +597,7 @@ impl PingManager {
         };
         self.last_triggered
             .insert(ping_name.to_string(), Instant::now());
-        ping.last_fired_at = Some(Utc::now());
+        ping.last_fired_at = Some(Timestamp::now());
         ping.fire_count = ping.fire_count.saturating_add(1);
         self.save().await
     }

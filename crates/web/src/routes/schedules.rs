@@ -15,11 +15,15 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use chrono::{NaiveDate, NaiveTime, Weekday};
+use jiff::civil::{Date, Time, Weekday};
+use jiff::{Timestamp, ZonedDateTime};
 use serde::Deserialize;
 use tower_cookies::Cookies;
-use twitch_1337_core::schedule::{Schedule, ScheduleRuntime, Trigger, WeekdaySet};
+use twitch_1337_core::schedule::{
+    Schedule, ScheduleRuntime, Trigger, WeekdaySet, parse_weekday, weekday_abbr,
+};
 use twitch_1337_core::settings::{Actor, SettingsError};
+use twitch_1337_core::util::to_berlin;
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
@@ -83,16 +87,19 @@ impl StatsView {
     fn new(
         rows: &[Schedule],
         telemetry: &HashMap<String, ScheduleRuntime>,
-        now_berlin: chrono::DateTime<chrono_tz::Tz>,
+        now_berlin: &ZonedDateTime,
     ) -> Self {
         let next_fire = rows
             .iter()
             .filter(|r| r.enabled)
-            .filter_map(|r| r.next_active_fire(now_berlin).map(|t| (r.name.clone(), t)))
-            .min_by_key(|(_, t)| *t)
+            .filter_map(|r| {
+                r.next_active_fire(now_berlin.clone())
+                    .map(|t| (r.name.clone(), t))
+            })
+            .min_by_key(|(_, t)| t.timestamp())
             .map(|(name, t)| NextFire {
                 name,
-                time: t.format("%H:%M").to_string(),
+                time: t.strftime("%H:%M").to_string(),
             });
         Self {
             total: rows.len(),
@@ -157,15 +164,15 @@ struct SwapTpl {
 /// re-render, if it still exists.
 async fn swap_tpl(state: &WebState, session: &Session, card: Option<&str>) -> SwapTpl {
     let rows = state.settings.load().schedules.clone();
-    let now_utc = chrono::Utc::now();
-    let now_berlin = now_utc.with_timezone(&chrono_tz::Europe::Berlin);
+    let now_utc = Timestamp::now();
+    let now_berlin = to_berlin(now_utc);
     let telemetry = state.telemetry.snapshot(now_utc).await;
     SwapTpl {
         card: card
             .and_then(|name| rows.iter().find(|s| s.name == name))
-            .map(|s| card_view(s, telemetry.get(&s.name), now_utc, now_berlin)),
+            .map(|s| card_view(s, telemetry.get(&s.name), now_utc, &now_berlin)),
         csrf: csrf::encode(&session.csrf_value),
-        stats: StatsView::new(&rows, &telemetry, now_berlin),
+        stats: StatsView::new(&rows, &telemetry, &now_berlin),
     }
 }
 
@@ -237,7 +244,7 @@ impl ScheduleForm {
                             field: format!("{prefix}.calendar_at"),
                             message: format!("must be HH:MM (got {:?})", self.calendar_at),
                         });
-                        NaiveTime::MIN
+                        Time::MIN
                     }
                 };
                 let days = parse_weekdays(&self.calendar_days);
@@ -250,7 +257,7 @@ impl ScheduleForm {
                 });
                 Trigger::Calendar {
                     days: WeekdaySet::default(),
-                    at: NaiveTime::MIN,
+                    at: Time::MIN,
                 }
             }
         };
@@ -275,12 +282,12 @@ fn parse_ping(s: &str) -> Option<String> {
     (!s.is_empty()).then(|| s.to_owned())
 }
 
-fn parse_hhmm(s: &str) -> Option<NaiveTime> {
+fn parse_hhmm(s: &str) -> Option<Time> {
     let s = s.trim();
     if s.is_empty() {
         return None;
     }
-    NaiveTime::parse_from_str(s, "%H:%M").ok()
+    Time::strptime("%H:%M", s).ok()
 }
 
 /// Seconds for the interval's hours + minutes inputs. Blank reads as 0, so a
@@ -318,18 +325,18 @@ fn parse_interval(hours: &str, minutes: &str) -> Result<u64, (&'static str, Stri
     Ok(secs)
 }
 
-fn parse_date(s: &str) -> Option<NaiveDate> {
+fn parse_date(s: &str) -> Option<Date> {
     let s = s.trim();
     if s.is_empty() {
         return None;
     }
-    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+    Date::strptime("%Y-%m-%d", s).ok()
 }
 
 fn parse_weekdays(values: &[String]) -> WeekdaySet {
     let mut out = WeekdaySet::default();
     for v in values {
-        if let Ok(d) = v.parse::<Weekday>() {
+        if let Some(d) = parse_weekday(v) {
             out.0.insert(d);
         }
     }
@@ -348,10 +355,10 @@ async fn list(
     cookies: Cookies,
 ) -> Result<Response, WebError> {
     let rows = state.settings.load().schedules.clone();
-    let now_utc = chrono::Utc::now();
+    let now_utc = Timestamp::now();
     let telemetry = state.telemetry.snapshot(now_utc).await;
-    let now_berlin = now_utc.with_timezone(&chrono_tz::Europe::Berlin);
-    let stats = StatsView::new(&rows, &telemetry, now_berlin);
+    let now_berlin = to_berlin(now_utc);
+    let stats = StatsView::new(&rows, &telemetry, &now_berlin);
     let edit_form = q.edit.as_ref().and_then(|name| {
         rows.iter()
             .find(|r| r.name == *name)
@@ -369,7 +376,7 @@ async fn list(
     };
     let cards: Vec<CardView> = rows
         .iter()
-        .map(|s| card_view(s, telemetry.get(&s.name), now_utc, now_berlin))
+        .map(|s| card_view(s, telemetry.get(&s.name), now_utc, &now_berlin))
         .collect();
     render(&ListTpl {
         rows: cards,
@@ -392,17 +399,17 @@ async fn list(
 fn card_view(
     s: &Schedule,
     tele: Option<&twitch_1337_core::schedule::ScheduleRuntime>,
-    now_utc: chrono::DateTime<chrono::Utc>,
-    now_berlin: chrono::DateTime<chrono_tz::Tz>,
+    now_utc: Timestamp,
+    now_berlin: &ZonedDateTime,
 ) -> CardView {
     let (trigger_label, window_label) = trigger_human(&s.trigger);
     let last_fired_human = tele.and_then(|r| r.last_fired_at).map(|t| {
-        let delta = now_utc.signed_duration_since(t);
+        let delta = now_utc.duration_since(t);
         humanize_delta(delta)
     });
     let next_fire_human = if s.enabled {
-        s.next_active_fire(now_berlin)
-            .map(|t| t.format("%a %H:%M").to_string())
+        s.next_active_fire(now_berlin.clone())
+            .map(|t| t.strftime("%a %H:%M").to_string())
     } else {
         None
     };
@@ -440,7 +447,7 @@ fn trigger_human(t: &Trigger) -> (String, Option<String>) {
             }
             let window = match (active_from, active_to) {
                 (Some(f), Some(t2)) => {
-                    Some(format!("{}–{}", f.format("%H:%M"), t2.format("%H:%M")))
+                    Some(format!("{}–{}", f.strftime("%H:%M"), t2.strftime("%H:%M")))
                 }
                 _ => None,
             };
@@ -448,9 +455,9 @@ fn trigger_human(t: &Trigger) -> (String, Option<String>) {
         }
         Trigger::Calendar { days, at } => {
             let main = if days.is_empty() {
-                format!("daily at {}", at.format("%H:%M"))
+                format!("daily at {}", at.strftime("%H:%M"))
             } else {
-                format!("{} at {}", weekdays_short(days), at.format("%H:%M"))
+                format!("{} at {}", weekdays_short(days), at.strftime("%H:%M"))
             };
             (main, None)
         }
@@ -459,9 +466,9 @@ fn trigger_human(t: &Trigger) -> (String, Option<String>) {
 
 fn weekdays_short(days: &WeekdaySet) -> String {
     let mut wds: Vec<Weekday> = days.0.iter().copied().collect();
-    wds.sort_by_key(Weekday::num_days_from_monday);
+    wds.sort_by_key(|d| d.to_monday_zero_offset());
     wds.iter()
-        .map(std::string::ToString::to_string)
+        .map(|d| weekday_abbr(*d))
         .collect::<Vec<_>>()
         .join("·")
 }
@@ -474,11 +481,11 @@ fn form_state_from_schedule(s: &Schedule) -> FormState {
         enabled: s.enabled,
         start_date: s
             .start_date
-            .map(|d| d.format("%Y-%m-%d").to_string())
+            .map(|d| d.strftime("%Y-%m-%d").to_string())
             .unwrap_or_default(),
         end_date: s
             .end_date
-            .map(|d| d.format("%Y-%m-%d").to_string())
+            .map(|d| d.strftime("%Y-%m-%d").to_string())
             .unwrap_or_default(),
         ..FormState::default()
     };
@@ -494,25 +501,17 @@ fn form_state_from_schedule(s: &Schedule) -> FormState {
             fs.interval_hours = (total / 3600).to_string();
             fs.interval_minutes = ((total / 60) % 60).to_string();
             fs.interval_active_from = active_from
-                .map(|t| t.format("%H:%M").to_string())
+                .map(|t| t.strftime("%H:%M").to_string())
                 .unwrap_or_default();
             fs.interval_active_to = active_to
-                .map(|t| t.format("%H:%M").to_string())
+                .map(|t| t.strftime("%H:%M").to_string())
                 .unwrap_or_default();
-            fs.interval_days = days
-                .0
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect();
+            fs.interval_days = days.0.iter().map(|d| weekday_abbr(*d).to_owned()).collect();
         }
         Trigger::Calendar { days, at } => {
             fs.kind = "calendar".into();
-            fs.calendar_at = at.format("%H:%M").to_string();
-            fs.calendar_days = days
-                .0
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect();
+            fs.calendar_at = at.strftime("%H:%M").to_string();
+            fs.calendar_days = days.0.iter().map(|d| weekday_abbr(*d).to_owned()).collect();
         }
     }
     fs
@@ -782,13 +781,13 @@ fn render_validation(
     }
     // Rebuild card grid from the passed-in rows so the user can see existing
     // schedules alongside the error.
-    let now_utc = chrono::Utc::now();
-    let now_berlin = now_utc.with_timezone(&chrono_tz::Europe::Berlin);
+    let now_utc = Timestamp::now();
+    let now_berlin = to_berlin(now_utc);
     // Telemetry isn't loaded on this path, so "fired today" reads 0.
-    let stats = StatsView::new(&rows, &HashMap::new(), now_berlin);
+    let stats = StatsView::new(&rows, &HashMap::new(), &now_berlin);
     let cards: Vec<CardView> = rows
         .iter()
-        .map(|s| card_view(s, None, now_utc, now_berlin))
+        .map(|s| card_view(s, None, now_utc, &now_berlin))
         .collect();
 
     // When re-rendering on validation failure, restore the user's submitted
@@ -969,11 +968,7 @@ mod try_into_schedule_tests {
 
     #[test]
     fn parse_hhmm_helper() {
-        use chrono::NaiveTime;
-        assert_eq!(
-            parse_hhmm("08:30"),
-            Some(NaiveTime::from_hms_opt(8, 30, 0).unwrap())
-        );
+        assert_eq!(parse_hhmm("08:30"), Some(jiff::civil::time(8, 30, 0, 0)));
         assert_eq!(parse_hhmm(""), None);
         assert_eq!(parse_hhmm("  "), None);
         assert_eq!(parse_hhmm("invalid"), None);
@@ -989,10 +984,9 @@ mod try_into_schedule_tests {
 
     #[test]
     fn parse_date_helper() {
-        use chrono::NaiveDate;
         assert_eq!(
             parse_date("2026-06-01"),
-            Some(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap())
+            Some(jiff::civil::date(2026, 6, 1))
         );
         assert_eq!(parse_date(""), None);
     }
@@ -1000,33 +994,36 @@ mod try_into_schedule_tests {
     #[test]
     fn parse_weekdays_helper() {
         let days = parse_weekdays(&["Mon".to_owned(), "Wed".to_owned()]);
-        use chrono::Weekday;
-        assert!(days.0.contains(&Weekday::Mon));
-        assert!(days.0.contains(&Weekday::Wed));
-        assert!(!days.0.contains(&Weekday::Fri));
+        use jiff::civil::Weekday;
+        assert!(days.0.contains(&Weekday::Monday));
+        assert!(days.0.contains(&Weekday::Wednesday));
+        assert!(!days.0.contains(&Weekday::Friday));
     }
 }
 
 #[cfg(test)]
 mod weekday_roundtrip_tests {
+    use jiff::civil::Weekday;
+    use twitch_1337_core::schedule::{parse_weekday, weekday_abbr};
+
     #[test]
     fn weekday_string_roundtrip_matches_template() {
-        // `form_state_from_schedule` serialises weekdays via `.to_string()`.
-        // The form parser deserialises them via `.parse::<Weekday>()`.
+        // `form_state_from_schedule` serialises weekdays via `weekday_abbr`.
+        // The form parser deserialises them via `parse_weekday`.
         // Both ends must agree on the short-form strings the template renders.
         let cases = [
-            (chrono::Weekday::Mon, "Mon"),
-            (chrono::Weekday::Tue, "Tue"),
-            (chrono::Weekday::Wed, "Wed"),
-            (chrono::Weekday::Thu, "Thu"),
-            (chrono::Weekday::Fri, "Fri"),
-            (chrono::Weekday::Sat, "Sat"),
-            (chrono::Weekday::Sun, "Sun"),
+            (Weekday::Monday, "Mon"),
+            (Weekday::Tuesday, "Tue"),
+            (Weekday::Wednesday, "Wed"),
+            (Weekday::Thursday, "Thu"),
+            (Weekday::Friday, "Fri"),
+            (Weekday::Saturday, "Sat"),
+            (Weekday::Sunday, "Sun"),
         ];
         for (day, expected) in cases {
-            let s = day.to_string();
-            assert_eq!(s, expected, "Display for {day:?} should be short form");
-            let back: chrono::Weekday = s.parse().expect("must round-trip");
+            let s = weekday_abbr(day);
+            assert_eq!(s, expected, "abbr for {day:?} should be short form");
+            let back = parse_weekday(s).expect("must round-trip");
             assert_eq!(back, day, "parse should recover the same weekday");
         }
     }

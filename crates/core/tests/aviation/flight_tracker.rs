@@ -3,8 +3,8 @@ use twitch_1337_core as twitch_1337;
 
 use std::time::Duration;
 
-use chrono::Duration as ChronoDuration;
 use common::{TestBot, TestBotBuilder, fake_clock::FakeClock, fake_transport};
+use jiff::{SignedDuration, Timestamp};
 use secrecy::SecretString;
 use twitch_1337::aviation::AviationClient;
 use twitch_1337::aviation::tracker::{
@@ -203,11 +203,12 @@ async fn track_command_enriches_flight_from_aviationstack_once() {
         TargetConfirmation::ConfirmedByCallsign
     );
     assert_eq!(
-        flight.takeoff_at.map(|dt| dt.timestamp()),
+        flight.takeoff_at.map(Timestamp::as_second),
         Some(
-            chrono::DateTime::parse_from_rfc3339("2026-04-18T10:05:00+00:00")
+            "2026-04-18T10:05:00+00:00"
+                .parse::<Timestamp>()
                 .unwrap()
-                .timestamp()
+                .as_second()
         )
     );
     assert!(flight.aviationstack_checked);
@@ -957,7 +958,7 @@ async fn confirmed_aviationstack_hex_with_later_mismatched_callsign_suppresses_t
     let ack = bot.expect_say(Duration::from_secs(5)).await;
     assert!(ack.contains("DLH1929"), "got: {ack}");
 
-    bot.clock.advance(ChronoDuration::seconds(30));
+    bot.clock.advance(SignedDuration::from_secs(30));
     bot.expect_silent(Duration::from_millis(300)).await;
 
     let state_path = bot.data_dir.path().join("flights.ron");
@@ -973,7 +974,7 @@ async fn confirmed_aviationstack_hex_with_later_mismatched_callsign_suppresses_t
     assert_eq!(flight.callsign.as_deref(), Some("DLH1929"));
     assert_eq!(flight.hex_source, Some(HexSource::Adsb));
 
-    bot.clock.advance(ChronoDuration::minutes(31));
+    bot.clock.advance(SignedDuration::from_mins(31));
     bot.expect_silent(Duration::from_millis(300)).await;
 
     let persisted = tokio::fs::read_to_string(&state_path).await.unwrap();
@@ -1106,7 +1107,7 @@ async fn visible_assigned_hex_then_one_empty_poll_keeps_flight_within_grace_wind
     // (~35 min) pushes `last_seen` far past TRACKING_LOST_REMOVAL (1800s). With
     // `last_visible_at` driving the removal timer, the flight stays tracked.
     for _ in 0..5 {
-        bot.clock.advance(ChronoDuration::minutes(7));
+        bot.clock.advance(SignedDuration::from_mins(7));
         bot.expect_silent(Duration::from_millis(200)).await;
     }
 
@@ -1124,7 +1125,7 @@ async fn visible_assigned_hex_then_one_empty_poll_keeps_flight_within_grace_wind
 
     // One transient empty poll. The flight must survive the grace window: it is
     // still tracked, still AircraftVisible, and NO "Signal verloren" was sent.
-    bot.clock.advance(ChronoDuration::minutes(7));
+    bot.clock.advance(SignedDuration::from_mins(7));
     bot.expect_silent(Duration::from_millis(300)).await;
 
     let persisted = tokio::fs::read_to_string(&state_path).await.unwrap();
@@ -1141,7 +1142,7 @@ async fn visible_assigned_hex_then_one_empty_poll_keeps_flight_within_grace_wind
 
     // Keep returning empty past TRACKING_LOST_REMOVAL measured from the last
     // visible poll. The flight is removed and the loss is announced.
-    bot.clock.advance(ChronoDuration::minutes(31));
+    bot.clock.advance(SignedDuration::from_mins(31));
     let lost = bot.expect_say(Duration::from_secs(5)).await;
     assert!(
         lost.contains("Signal verloren"),
@@ -1443,19 +1444,21 @@ async fn track_command_accepts_aviationstack_flight_before_adsb_appears() {
     assert_eq!(flight.aircraft_type.as_deref(), Some("A320"));
     assert_eq!(flight.last_seen, None);
     assert_eq!(
-        flight.scheduled_departure_at.map(|dt| dt.timestamp()),
+        flight.scheduled_departure_at.map(Timestamp::as_second),
         Some(
-            chrono::DateTime::parse_from_rfc3339("2026-04-18T10:30:00+00:00")
+            "2026-04-18T10:30:00+00:00"
+                .parse::<Timestamp>()
                 .unwrap()
-                .timestamp()
+                .as_second()
         )
     );
     assert_eq!(
-        flight.last_adsb_poll_at.map(|dt| dt.timestamp()),
+        flight.last_adsb_poll_at.map(Timestamp::as_second),
         Some(
-            chrono::DateTime::parse_from_rfc3339("2026-04-18T11:00:00+00:00")
+            "2026-04-18T11:00:00+00:00"
+                .parse::<Timestamp>()
                 .unwrap()
-                .timestamp()
+                .as_second()
         )
     );
     assert_eq!(
@@ -1558,11 +1561,12 @@ async fn track_command_keeps_pending_flight_with_stale_scheduled_departure() {
     assert_eq!(flight.aircraft_type.as_deref(), Some("B38M"));
     assert_eq!(flight.last_seen, None);
     assert_eq!(
-        flight.scheduled_departure_at.map(|dt| dt.timestamp()),
+        flight.scheduled_departure_at.map(Timestamp::as_second),
         Some(
-            chrono::DateTime::parse_from_rfc3339("2026-04-17T10:30:00+00:00")
+            "2026-04-17T10:30:00+00:00"
+                .parse::<Timestamp>()
                 .unwrap()
-                .timestamp()
+                .as_second()
         )
     );
 
@@ -1656,7 +1660,7 @@ async fn pending_flight_polls_when_due_and_becomes_visible() {
     assert!(ack.contains("EIN336"), "got: {ack}");
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    bot.clock.advance(ChronoDuration::minutes(2));
+    bot.clock.advance(SignedDuration::from_mins(2));
 
     let visible = bot.expect_say(Duration::from_secs(5)).await;
     assert!(
@@ -1743,7 +1747,7 @@ async fn pending_flight_expires_without_extra_adsb_call() {
     assert!(ack.contains("EIN336"), "got: {ack}");
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    bot.clock.advance(ChronoDuration::hours(13));
+    bot.clock.advance(SignedDuration::from_hours(13));
 
     let expired = bot.expect_say(Duration::from_secs(5)).await;
     assert!(
@@ -1784,9 +1788,7 @@ async fn pending_flight_expires_without_extra_adsb_call() {
 #[tokio::test]
 async fn tracker_answers_dashboard_commands_while_polling() {
     twitch_1337::install_crypto_provider();
-    let now = chrono::DateTime::parse_from_rfc3339("2026-04-18T11:00:00Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
+    let now: Timestamp = "2026-04-18T11:00:00Z".parse().unwrap();
     let data_dir = tempfile::TempDir::new().unwrap();
     let state = FlightTrackerState {
         flights: vec![TrackedFlight {

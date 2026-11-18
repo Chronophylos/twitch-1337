@@ -3,15 +3,13 @@
 //! Consolidates the `dt` timestamp helper and a full-field [`TrackedFlight`]
 //! builder so the `mod.rs` and `state.rs` test modules don't each carry a copy.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use super::{FlightIdentifier, FlightPhase, HexSource, TargetConfirmation, TrackedFlight};
 
-/// Parse an RFC 3339 timestamp into a UTC `DateTime`, panicking on bad input.
-pub(crate) fn dt(value: &str) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(value)
-        .unwrap()
-        .with_timezone(&Utc)
+/// Parse an RFC 3339 timestamp into a `Timestamp`, panicking on bad input.
+pub(crate) fn dt(value: &str) -> Timestamp {
+    value.parse().unwrap()
 }
 
 /// A fully populated `AircraftVisible` flight fixture (callsign tracked by hex,

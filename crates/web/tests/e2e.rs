@@ -554,7 +554,7 @@ async fn logs_tail_polls_and_pauses() {
     let s = E2eSession::start_as_owner().await;
     let push = |msg: &str| {
         s.log_ring.push(
-            chrono::Utc::now(),
+            jiff::Timestamp::now(),
             tracing::Level::INFO,
             "e2e".to_owned(),
             msg.to_owned(),

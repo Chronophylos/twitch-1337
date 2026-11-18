@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 
-use chrono::{DateTime, Datelike, Utc};
-use chrono_tz::Europe::Berlin;
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -50,9 +49,9 @@ async fn fetch_messages_for_date(
     http: &reqwest::Client,
     base_url: &str,
     channel: &str,
-    date: chrono::NaiveDate,
+    date: jiff::civil::Date,
     limit: usize,
-) -> Vec<(String, String, DateTime<Utc>)> {
+) -> Vec<(String, String, Timestamp)> {
     let url = format!(
         "{}/channel/{}/{}/{}/{}?jsonBasic=1&limit={}&reverse=1",
         base_url.trim_end_matches('/'),
@@ -92,7 +91,7 @@ async fn fetch_messages_for_date(
 
     // API returns newest-first with reverse=1, so reverse to get chronological order.
     // Prefilled messages lack exact timestamps; use the fetch time as a proxy.
-    let fetched_at = Utc::now();
+    let fetched_at = Timestamp::now();
     log_response
         .messages
         .into_iter()
@@ -114,7 +113,7 @@ pub async fn prefill_chat_history(
     channel: &str,
     history_length: usize,
     config: &HistoryPrefillConfig,
-) -> VecDeque<(String, String, DateTime<Utc>)> {
+) -> VecDeque<(String, String, Timestamp)> {
     let http = match reqwest::Client::builder().timeout(PREFILL_TIMEOUT).build() {
         Ok(client) => client,
         Err(e) => {
@@ -123,9 +122,9 @@ pub async fn prefill_chat_history(
         }
     };
 
-    let now = chrono::Utc::now().with_timezone(&Berlin);
-    let today = now.date_naive();
-    let yesterday = today - chrono::Duration::days(1);
+    let now = crate::util::to_berlin(Timestamp::now());
+    let today = now.date();
+    let yesterday = today.yesterday().expect("valid prev day");
 
     // Fetch today's messages
     let today_messages =

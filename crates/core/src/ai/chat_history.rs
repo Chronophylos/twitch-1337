@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::settings::{Settings, SettingsHandle};
@@ -33,7 +33,7 @@ pub struct ChatHistoryEntry {
     pub source: ChatHistorySource,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<Agent>,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Timestamp,
 }
 
 #[derive(Debug)]
@@ -85,11 +85,11 @@ impl ChatHistoryBuffer {
         messages: I,
     ) -> Self
     where
-        I: IntoIterator<Item = (String, String, DateTime<Utc>)>,
+        I: IntoIterator<Item = (String, String, Timestamp)>,
     {
         let mut buf = Self::new(settings, capacity_getter);
         let cap = buf.current_capacity();
-        let mut items: Vec<(String, String, DateTime<Utc>)> = messages.into_iter().collect();
+        let mut items: Vec<(String, String, Timestamp)> = messages.into_iter().collect();
         if items.len() > cap {
             items.drain(..items.len() - cap);
         }
@@ -112,14 +112,14 @@ impl ChatHistoryBuffer {
     }
 
     pub fn push_user(&mut self, username: impl Into<String>, text: impl Into<String>) {
-        self.push_user_at(username, text, Utc::now());
+        self.push_user_at(username, text, Timestamp::now());
     }
 
     pub fn push_user_at(
         &mut self,
         username: impl Into<String>,
         text: impl Into<String>,
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     ) {
         self.push(
             username,
@@ -139,7 +139,7 @@ impl ChatHistoryBuffer {
         user_id: Option<&str>,
         text: impl Into<String>,
     ) {
-        self.push_user_with_identity_at(username, display_name, user_id, text, Utc::now());
+        self.push_user_with_identity_at(username, display_name, user_id, text, Timestamp::now());
     }
 
     pub fn push_user_with_identity_at(
@@ -148,7 +148,7 @@ impl ChatHistoryBuffer {
         display_name: Option<&str>,
         user_id: Option<&str>,
         text: impl Into<String>,
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     ) {
         self.push(
             username,
@@ -162,7 +162,7 @@ impl ChatHistoryBuffer {
     }
 
     pub fn push_bot(&mut self, username: impl Into<String>, text: impl Into<String>, agent: Agent) {
-        self.push_bot_at(username, text, agent, Utc::now());
+        self.push_bot_at(username, text, agent, Timestamp::now());
     }
 
     pub fn push_bot_at(
@@ -170,7 +170,7 @@ impl ChatHistoryBuffer {
         username: impl Into<String>,
         text: impl Into<String>,
         agent: Agent,
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     ) {
         self.push(
             username,
@@ -190,7 +190,7 @@ impl ChatHistoryBuffer {
         agent: Agent,
         text: impl Into<String>,
     ) {
-        self.push_bot_with_identity_at(username, display_name, agent, text, Utc::now());
+        self.push_bot_with_identity_at(username, display_name, agent, text, Timestamp::now());
     }
 
     pub fn push_bot_with_identity_at(
@@ -199,7 +199,7 @@ impl ChatHistoryBuffer {
         display_name: Option<&str>,
         agent: Agent,
         text: impl Into<String>,
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     ) {
         self.push(
             username,
@@ -224,7 +224,7 @@ impl ChatHistoryBuffer {
         text: impl Into<String>,
         source: ChatHistorySource,
         agent: Option<Agent>,
-        timestamp: DateTime<Utc>,
+        timestamp: Timestamp,
     ) {
         let cap = self.current_capacity();
         if cap == 0 {
@@ -414,9 +414,9 @@ mod tests {
             handle,
             primary_history_capacity,
             vec![
-                ("alice".to_string(), "one".to_string(), Utc::now()),
-                ("bob".to_string(), "two".to_string(), Utc::now()),
-                ("carol".to_string(), "three".to_string(), Utc::now()),
+                ("alice".to_string(), "one".to_string(), Timestamp::now()),
+                ("bob".to_string(), "two".to_string(), Timestamp::now()),
+                ("carol".to_string(), "three".to_string(), Timestamp::now()),
             ],
         );
 

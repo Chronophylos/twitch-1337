@@ -29,7 +29,7 @@ struct RowView {
     rank: usize,
     login: String,
     ms: u64,
-    date: chrono::NaiveDate,
+    date: jiff::civil::Date,
 }
 
 pub fn router() -> Router<WebState> {
@@ -41,7 +41,7 @@ async fn list(
     Extension(session): Extension<Session>,
 ) -> Result<Response, WebError> {
     let lb = state.leaderboard.read().await;
-    let mut entries: Vec<(String, u64, chrono::NaiveDate)> = lb
+    let mut entries: Vec<(String, u64, jiff::civil::Date)> = lb
         .iter()
         .map(|(login, pb)| (login.clone(), pb.ms, pb.date))
         .collect();

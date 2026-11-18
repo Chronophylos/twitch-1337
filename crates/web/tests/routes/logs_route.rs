@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
-use chrono::Utc;
+use jiff::Timestamp;
 use tower::ServiceExt as _;
 use tracing::Level;
 use twitch_1337_web::WebState;
@@ -32,7 +32,7 @@ async fn owner_state() -> (WebState, tempfile::TempDir, tempfile::TempDir) {
 
 fn push(state: &WebState, level: Level, target: &str, message: &str) -> u64 {
     state.log_ring.push(
-        Utc::now(),
+        Timestamp::now(),
         level,
         target.to_owned(),
         message.to_owned(),

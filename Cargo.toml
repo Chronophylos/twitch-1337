@@ -31,17 +31,16 @@ axum = { version = "0.8", default-features = false, features = ["form", "http1",
 axum-extra = { version = "0.12", default-features = false, features = ["form"] }
 base64 = "0.23"
 bytesize = { version = "2", features = ["serde"] }
-chrono = { version = "0.4.45", features = ["now", "serde"], default-features = false }
-# Full IANA DB (no filter-by-regex): Aviationstack airport timezones must resolve.
-chrono-tz = { version = "0.10.4" }
 color-eyre = "0.6"
 csv = "1.4.0"
 eyre = "0.6.14"
 futures-util = "0.3"
 hex = "0.4"
-humantime-serde = "1"
 indexmap = { version = "2.14", features = ["serde"] }
 infer = { version = "0.22", default-features = false }
+# Bundled IANA DB: the musl FROM-scratch image has no /usr/share/zoneinfo, and
+# Aviationstack airport timezones must resolve.
+jiff = { version = "1.0.1", default-features = false, features = ["std", "serde", "tzdb-bundle-always"] }
 tokio-util = "0.7"
 rand = "0.10.3"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "stream"] }

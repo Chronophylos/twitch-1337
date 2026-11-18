@@ -636,14 +636,13 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    use chrono_tz::Europe::Berlin;
     loop {
-        let now_berlin = clock.now_utc().with_timezone(&Berlin);
+        let now_berlin = crate::util::to_berlin(clock.now_utc());
         let Some(next_berlin) = schedule.next_active_fire(now_berlin) else {
             info!("past end_date, exiting");
             return ScheduleCompletion::Expired;
         };
-        let next_utc = next_berlin.with_timezone(&chrono::Utc);
+        let next_utc = next_berlin.timestamp();
         tokio::select! {
             biased;
             () = cancel.cancelled() => {

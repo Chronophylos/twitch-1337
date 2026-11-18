@@ -17,15 +17,13 @@ arc-swap = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bytesize = { workspace = true }
-chrono = { workspace = true }
-chrono-tz = { workspace = true }
 color-eyre = { workspace = true }
 eyre = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
-humantime-serde = { workspace = true }
 indexmap = { workspace = true }
 infer = { workspace = true }
+jiff = { workspace = true }
 llm = { path = "../llm" }
 minijinja = { version = "3.1.0", default-features = false, features = [
   "builtins",
@@ -51,7 +49,7 @@ twitch-1337-data = { path = "../data" }
 tracing = { workspace = true }
 tracing-error = { workspace = true }
 tracing-subscriber = { workspace = true }
-twitch-irc = { git = "https://github.com/Chronophylos/twitch-irc-rs", rev = "515e259d33b7ba8b0108e5d3f1364ddd40a705ab", default-features = false, features = [
+twitch-irc = { git = "https://github.com/Chronophylos/twitch-irc-rs", rev = "30fc7534c6f47cc95279a5774b1d0d8c5125e752", default-features = false, features = [
   "refreshing-token-rustls-webpki-roots",
   "transport-tcp-rustls-webpki-roots",
 ] }
@@ -89,7 +87,3 @@ path = "tests/tracker/main.rs"
 [[test]]
 name = "irc"
 path = "tests/irc/main.rs"
-
-# humantime_serde is only named inside #[serde(with = "...")], which machete can't see.
-[package.metadata.cargo-machete]
-ignored = ["humantime-serde"]

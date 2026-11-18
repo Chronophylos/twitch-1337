@@ -13,8 +13,8 @@ alwaysApply: true
 
 ## Time
 
-- Bot scheduling / local display use `Europe/Berlin`
-- `chrono-tz` ships the full IANA DB (no `filter-by-regex` / `CHRONO_TZ_TIMEZONE_FILTER`) so Aviationstack airport timezones can reinterpret local wall times stamped as `+00:00`
+- Bot scheduling / local display use `Europe/Berlin` (`util::BERLIN`, `util::to_berlin`)
+- Time is `jiff` only (no `chrono`/`chrono-tz`/`humantime`, unmaintained); `jiff` uses `tzdb-bundle-always` so the musl `FROM scratch` image has the full IANA DB and Aviationstack airport timezones can reinterpret local wall times stamped as `+00:00`
 
 ## Config security
 

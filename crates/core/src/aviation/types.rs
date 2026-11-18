@@ -4,8 +4,9 @@
 //! Internal envelope types (`AdsbDbResponse`, `Aviationstack*`) are
 //! `pub(super)` so `client.rs` can deserialize them.
 
-use chrono::{DateTime, MappedLocalTime, Utc};
-use chrono_tz::Tz;
+use jiff::Timestamp;
+use jiff::fmt::temporal::Pieces;
+use jiff::tz::{AmbiguousOffset, TimeZone};
 use serde::{Deserialize, Serialize};
 
 // --- ADS-B v2 response types ---
@@ -204,10 +205,10 @@ pub struct AviationstackFlightMetadata {
     pub departure_timezone: Option<String>,
     pub departure_terminal: Option<String>,
     pub departure_gate: Option<String>,
-    pub departure_scheduled: Option<DateTime<Utc>>,
-    pub departure_estimated: Option<DateTime<Utc>>,
-    pub departure_actual: Option<DateTime<Utc>>,
-    pub departure_actual_runway: Option<DateTime<Utc>>,
+    pub departure_scheduled: Option<Timestamp>,
+    pub departure_estimated: Option<Timestamp>,
+    pub departure_actual: Option<Timestamp>,
+    pub departure_actual_runway: Option<Timestamp>,
     pub departure_delay_minutes: Option<i64>,
     pub arrival_airport: Option<String>,
     pub arrival_iata: Option<String>,
@@ -216,9 +217,9 @@ pub struct AviationstackFlightMetadata {
     pub arrival_terminal: Option<String>,
     pub arrival_gate: Option<String>,
     pub arrival_baggage: Option<String>,
-    pub arrival_scheduled: Option<DateTime<Utc>>,
-    pub arrival_estimated: Option<DateTime<Utc>>,
-    pub arrival_actual: Option<DateTime<Utc>>,
+    pub arrival_scheduled: Option<Timestamp>,
+    pub arrival_estimated: Option<Timestamp>,
+    pub arrival_actual: Option<Timestamp>,
     pub arrival_delay_minutes: Option<i64>,
     pub aircraft_registration: Option<String>,
     pub aircraft_icao24: Option<String>,
@@ -226,7 +227,7 @@ pub struct AviationstackFlightMetadata {
 }
 
 impl AviationstackFlightMetadata {
-    pub fn takeoff_time(&self) -> Option<DateTime<Utc>> {
+    pub fn takeoff_time(&self) -> Option<Timestamp> {
         self.departure_actual_runway
             .as_ref()
             .cloned()
@@ -237,7 +238,7 @@ impl AviationstackFlightMetadata {
     /// says `scheduled` (or omits status) while the corrected schedule window
     /// contains `now` and no actual departure is known, treat the flight as
     /// `active`. Covers Aviationstack lag on airborne flights.
-    pub fn effective_flight_status(&self, now: DateTime<Utc>) -> Option<&str> {
+    pub fn effective_flight_status(&self, now: Timestamp) -> Option<&str> {
         let raw = self
             .flight_status
             .as_deref()
@@ -333,35 +334,37 @@ impl From<AviationstackFlight> for AviationstackFlightMetadata {
 /// in that zone and the numeric offset is ignored. Aviationstack commonly
 /// stamps local schedules as `+00:00` while still providing the correct IANA
 /// zone (e.g. `09:15+00:00` + `Asia/Karachi` → 04:15Z).
-fn parse_aviationstack_datetime(
-    value: Option<&str>,
-    timezone: Option<&str>,
-) -> Option<DateTime<Utc>> {
+fn parse_aviationstack_datetime(value: Option<&str>, timezone: Option<&str>) -> Option<Timestamp> {
     let value = value?.trim();
     if value.is_empty() {
         return None;
     }
-    let parsed = DateTime::parse_from_rfc3339(value).ok()?;
-    let naive = parsed.naive_local();
+    let stamped: Timestamp = value.parse().ok()?;
 
     if let Some(tz_name) = timezone.map(str::trim).filter(|name| !name.is_empty())
-        && let Ok(tz) = tz_name.parse::<Tz>()
+        && let Ok(tz) = TimeZone::get(tz_name)
     {
-        return match naive.and_local_timezone(tz) {
-            MappedLocalTime::Single(dt) | MappedLocalTime::Ambiguous(dt, _) => {
-                Some(dt.with_timezone(&Utc))
-            }
-            MappedLocalTime::None => None,
+        let pieces = Pieces::parse(value).ok()?;
+        let wall = pieces.date().to_datetime(pieces.time()?);
+        // Fold → earlier occurrence; gap → the wall time never happened.
+        let offset = match tz.to_ambiguous_timestamp(wall).offset() {
+            AmbiguousOffset::Unambiguous { offset } => offset,
+            AmbiguousOffset::Fold { before, .. } => before,
+            AmbiguousOffset::Gap { .. } => return None,
         };
+        return offset.to_timestamp(wall).ok();
     }
 
-    Some(parsed.with_timezone(&Utc))
+    Some(stamped)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone as _;
+
+    fn utc(value: &str) -> Timestamp {
+        value.parse().unwrap()
+    }
 
     fn metadata_from_json(value: serde_json::Value) -> AviationstackFlightMetadata {
         let flight: AviationstackFlight = serde_json::from_value(value).unwrap();
@@ -446,21 +449,44 @@ mod tests {
 
         assert_eq!(
             metadata.departure_scheduled,
-            Some(Utc.with_ymd_and_hms(2026, 7, 19, 4, 15, 0).unwrap())
+            Some(utc("2026-07-19T04:15:00Z"))
         );
         assert_eq!(
             metadata.departure_estimated,
-            Some(Utc.with_ymd_and_hms(2026, 7, 19, 4, 15, 0).unwrap())
+            Some(utc("2026-07-19T04:15:00Z"))
         );
         assert_eq!(
             metadata.arrival_scheduled,
-            Some(Utc.with_ymd_and_hms(2026, 7, 19, 10, 30, 0).unwrap())
+            Some(utc("2026-07-19T10:30:00Z"))
         );
         assert_eq!(metadata.departure_timezone.as_deref(), Some("Asia/Karachi"));
         assert_eq!(
             metadata.arrival_timezone.as_deref(),
             Some("Europe/Istanbul")
         );
+    }
+
+    #[test]
+    fn aviationstack_timezone_edges() {
+        let at = |value: &str, tz: Option<&str>| parse_aviationstack_datetime(Some(value), tz);
+        // Berlin fall-back fold: the earlier (CEST) occurrence wins.
+        assert_eq!(
+            at("2026-10-25T02:30:00+00:00", Some("Europe/Berlin")),
+            Some(utc("2026-10-25T00:30:00Z"))
+        );
+        // Berlin spring-forward gap: the wall time never happened.
+        assert_eq!(at("2026-03-29T02:30:00+00:00", Some("Europe/Berlin")), None);
+        // Unknown or blank zone: keep the stamped offset.
+        assert_eq!(
+            at("2026-07-19T09:15:00+02:00", Some("Mars/Olympus")),
+            Some(utc("2026-07-19T07:15:00Z"))
+        );
+        assert_eq!(
+            at("2026-07-19T09:15:00+02:00", Some("  ")),
+            Some(utc("2026-07-19T07:15:00Z"))
+        );
+        assert_eq!(at("not a time", Some("Europe/Berlin")), None);
+        assert_eq!(parse_aviationstack_datetime(Some("  "), None), None);
     }
 
     #[test]
@@ -476,7 +502,7 @@ mod tests {
                 "scheduled": "2026-07-19T13:30:00+00:00"
             }
         }));
-        let now = Utc.with_ymd_and_hms(2026, 7, 19, 7, 13, 0).unwrap();
+        let now = utc("2026-07-19T07:13:00Z");
 
         assert_eq!(metadata.effective_flight_status(now), Some("active"));
     }
@@ -494,7 +520,7 @@ mod tests {
                 "scheduled": "2026-07-19T13:30:00+00:00"
             }
         }));
-        let now = Utc.with_ymd_and_hms(2026, 7, 19, 3, 0, 0).unwrap();
+        let now = utc("2026-07-19T03:00:00Z");
 
         assert_eq!(metadata.effective_flight_status(now), Some("scheduled"));
     }
