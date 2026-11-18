@@ -15,6 +15,7 @@ Single persistent IRC connection, broadcast channel routes to independent handle
 | `crates/core` | Bot logic: IRC handlers, aviation, AI memory, pings, schedules, config/settings types |
 | `crates/data` (`twitch-1337-data`) | Baked assets: location CSVs, emotes, prompts, flight-plan DB generation |
 | `crates/random-flight` | In-tree geo + route selection + flight-plan math (depends on `twitch-1337-data`) |
+| `crates/settings-derive` (`twitch-1337-settings-derive`) | `#[derive(Knobs)]` proc macro for the settings knob table; used only by core |
 | `crates/llm` | LLM backends, agent loop, tool calling |
 | `crates/web` | Axum dashboard, routes, templates, auth |
 | `crates/twitch-1337` | Binary entrypoint (`main.rs`), builds `Services`, calls `run_bot` |
@@ -189,6 +190,8 @@ preserve the `GIT_SHA` / build-number injection (Justfile `build` recipe).
 `config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (`[ai.keys]` named credentials only, optional), `[aviationstack]` (api_key only, optional), `[dhl]` (api_key only, optional), `[amp]` (url/username/password, optional), `[langfuse]` (public/secret keys, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
 
 Adding a knob: a secret, or something that must exist before the dashboard, goes in `config.toml.example` + loader; anything runtime-tunable goes in the settings schema + a dashboard card. Never both. Legacy hoisted keys were migrated once via sentinels (`.ai_migrated_v2`, `.config_migrated_v3`, `.schedules_migrated_v3`); edits to migrated legacy keys are ignored.
+
+Runtime knobs are declared once, on the effective struct in `crates/core/src/settings/`, via `#[derive(Knobs)]` (crate `crates/settings-derive`, runtime in `settings/knob.rs`). The derive generates the sparse `*Overrides` mirror, resolve, merge, dotted-path form parsing, and the `KnobMeta` table. A new field needs: the struct field (plus `#[knob(min = .., max = ..)]` for a constant range, `#[knob(restart)]` if it is read only at startup), its default, and a row in the card template calling a `_macros.html` row macro with `self.knob("<dotted.path>")`. The form `name` is the dotted path; structs with bool fields render a hidden `<path>.__shown` sentinel. Cross-field and semantic checks go in `validation.rs`. A route test fails if a form knob has no template row or a row posts a name the table does not know.
 
 `[twitch]` holds OAuth credentials (`refresh_token`, `client_id`, `client_secret`), `channel`, `username`, and `owner` (optional Twitch user ID with full dashboard access). `owner` is bootstrap-only and lives here because it gates the settings page — it must not be editable from the thing it controls. Permission lists (`hidden_admins`, `viewer_allowlist`), channel pointers (`admin_channel`, `ai_channel`), and `expected_latency` live in `settings.ron`, managed via `/settings → Twitch · Permissions` and `Twitch · Channels`. `admin_channel` and `ai_channel` changes require a bot restart. Mods always pass the dashboard auth check; `viewer_allowlist` grants read-only access to non-mods.
 

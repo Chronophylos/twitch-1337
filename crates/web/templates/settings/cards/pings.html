@@ -11,8 +11,10 @@
       <span class="card-dirty" hidden>0 modified</span>
     </div>
   </header>
+  {# Sentinel: the card was rendered, so an absent checkbox means "off". #}
+  <input type="hidden" name="pings.__shown" value="1">
   <div class="settings-rows">
-    {% call m::num_row_bounded("pings", "ping_cooldown", "cooldown", "Minimum interval between any two ping fires from the same user.", current.pings.cooldown, defaults.pings.cooldown, "s", 1, 3600) %}{% endcall %}
-    {% call m::toggle_row("pings", "ping_public", "public", "Non-members can also trigger pings. Membership only affects who gets @-mentioned.", current.pings.public, defaults.pings.public) %}{% endcall %}
+    {% call m::num_row("pings", self.knob("pings.cooldown"), "Minimum interval between any two ping fires from the same user.", current.pings.cooldown, defaults.pings.cooldown, "s") %}{% endcall %}
+    {% call m::toggle_row("pings", self.knob("pings.public"), "Non-members can also trigger pings. Membership only affects who gets @-mentioned.", current.pings.public, defaults.pings.public) %}{% endcall %}
   </div>
 </section>

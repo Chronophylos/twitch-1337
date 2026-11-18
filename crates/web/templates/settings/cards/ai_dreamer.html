@@ -9,52 +9,51 @@
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
-  {# Marker so the POST handler can tell "card rendered, toggle off" from
-     "card not in the form at all". The dreamer card is always rendered, but
-     the same hidden input is kept for symmetry with the optional cards. #}
-  <input type="hidden" name="ai_dreamer_card_visible" value="1">
+  {# Sentinel: the card was rendered, so an absent checkbox means "off". #}
+  <input type="hidden" name="ai.dreamer.__shown" value="1">
   <div class="settings-rows">
     <div class="settings-row" data-section="ai_dreamer">
-      {% call m::row_head("enabled", "Run the nightly ritual. Model, effort and tier come from the selected profile.", "ai_dreamer_enabled") %}{% endcall %}
+      {% call m::row_head("enabled", "Run the nightly ritual. Model, effort and tier come from the selected profile.", "ai.dreamer.enabled") %}{% endcall %}
       <div class="row-control-cell">
         <label class="toggle">
-          <input type="checkbox" id="ai_dreamer_enabled" name="ai_dreamer_enabled" data-card-toggle value="1" role="switch"
+          <input type="checkbox" id="ai.dreamer.enabled" name="ai.dreamer.enabled" data-card-toggle value="1" role="switch"
                  data-key="ai.dreamer.enabled"
                  {% if current.ai.dreamer.enabled %}checked{% endif %}>
           <span class="toggle-thumb" aria-hidden="true"></span>
         </label>
       </div>
-      <div class="row-right"></div>
+      <div class="row-right">{% call m::restart_badge(self.knob("ai.dreamer.enabled")) %}{% endcall %}</div>
     </div>
 
     {% let dreamer_profile = current.ai.dreamer.profile.as_str() %}
-    <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai_dreamer_enabled">
-      {% call m::row_head("profile", "Which provider profile this agent runs on.", "ai_dreamer_profile") %}{% endcall %}
+    <div class="settings-row" data-section="ai_dreamer" data-card-enabled-by="ai.dreamer.enabled">
+      {% call m::row_head("profile", "Which provider profile this agent runs on.", "ai.dreamer.profile") %}{% endcall %}
       <div class="row-control-cell">
-        <select id="ai_dreamer_profile" name="ai_dreamer_profile" data-key="ai.dreamer.profile" data-default="{{ defaults.ai.dreamer.profile }}" required>
+        <select id="ai.dreamer.profile" name="ai.dreamer.profile" data-key="ai.dreamer.profile" data-default="{{ defaults.ai.dreamer.profile }}" required>
           {% for p in current.ai.profiles %}
           {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if dreamer_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
           {% endfor %}
         </select>
       </div>
       <div class="row-right">
+        {% call m::restart_badge(self.knob("ai.dreamer.profile")) %}{% endcall %}
         {% call m::row_reset("ai.dreamer.profile") %}{% endcall %}
         <span class="row-default">default <span class="mono">{{ defaults.ai.dreamer.profile }}</span></span>
       </div>
     </div>
 
-    {% call m::time_row("ai_dreamer", "ai_dreamer_run_at", "run_at",
+    {% call m::time_row("ai_dreamer", self.knob("ai.dreamer.run_at"),
        "Berlin-local wallclock for the nightly run (HH:MM).",
-       current.ai.dreamer.run_at, defaults.ai.dreamer.run_at, "ai_dreamer_enabled") %}{% endcall %}
+       current.ai.dreamer.run_at, defaults.ai.dreamer.run_at, "ai.dreamer.enabled") %}{% endcall %}
 
-    {% call m::num_row_bounded("ai_dreamer", "ai_dreamer_timeout_secs", "timeout_secs",
+    {% call m::num_row("ai_dreamer", self.knob("ai.dreamer.timeout_secs"),
        "Per-pass timeout.",
-       current.ai.dreamer.timeout_secs, defaults.ai.dreamer.timeout_secs, "s", 5, 1800, "ai_dreamer_enabled") %}{% endcall %}
-    {% call m::num_row_bounded("ai_dreamer", "ai_dreamer_max_rounds", "max_rounds",
+       current.ai.dreamer.timeout_secs, defaults.ai.dreamer.timeout_secs, "s", "ai.dreamer.enabled") %}{% endcall %}
+    {% call m::num_row("ai_dreamer", self.knob("ai.dreamer.max_rounds"),
        "Maximum tool rounds the dreamer may take.",
-       current.ai.dreamer.max_rounds, defaults.ai.dreamer.max_rounds, "", 1, 128, "ai_dreamer_enabled") %}{% endcall %}
-    {% call m::num_row_bounded("ai_dreamer", "ai_dreamer_max_writes_per_turn", "max_writes_per_turn",
+       current.ai.dreamer.max_rounds, defaults.ai.dreamer.max_rounds, "", "ai.dreamer.enabled") %}{% endcall %}
+    {% call m::num_row("ai_dreamer", self.knob("ai.dreamer.max_writes_per_turn"),
        "Maximum write_file calls the dreamer may make in one nightly pass. Separate from the chat-turn cap.",
-       current.ai.dreamer.max_writes_per_turn, defaults.ai.dreamer.max_writes_per_turn, "", 1, 64, "ai_dreamer_enabled") %}{% endcall %}
+       current.ai.dreamer.max_writes_per_turn, defaults.ai.dreamer.max_writes_per_turn, "", "ai.dreamer.enabled") %}{% endcall %}
   </div>
 </section>

@@ -2,7 +2,8 @@
 {% import "settings/_macros.html" as m %}
 
 <section id="sec-alerts_solar" class="settings-card" data-section="alerts_solar">
-  <input type="hidden" name="alerts_solar_card_visible" value="1">
+  {# Sentinel: the card was rendered, so an absent checkbox means "off". #}
+  <input type="hidden" name="alerts.solar.__shown" value="1">
   <header class="settings-card-head">
     <div>
       <h2>Alerts · Solar flares</h2>
@@ -13,17 +14,17 @@
     </div>
   </header>
   <div class="settings-rows">
-    {% call m::toggle_row("alerts_solar", "alerts_solar_enabled", "enabled",
+    {% call m::toggle_row("alerts_solar", self.knob("alerts.solar.enabled"),
        "Announce solar flares in chat.",
        current.alerts.solar.enabled, defaults.alerts.solar.enabled) %}{% endcall %}
-    {% call m::num_row_bounded("alerts_solar", "alerts_solar_poll_secs", "poll_secs",
+    {% call m::num_row("alerts_solar", self.knob("alerts.solar.poll_secs"),
        "How often the NOAA SWPC feed is polled.",
-       current.alerts.solar.poll_secs, defaults.alerts.solar.poll_secs, "s", 60, 86400) %}{% endcall %}
-    {% call m::text_row("alerts_solar", "alerts_solar_min_class", "min_class",
+       current.alerts.solar.poll_secs, defaults.alerts.solar.poll_secs, "s") %}{% endcall %}
+    {% call m::text_row("alerts_solar", self.knob("alerts.solar.min_class"),
        "Minimum class: A, B, C, M or X — optionally with a magnitude, e.g. M6 or M6.5.",
        current.alerts.solar.min_class, defaults.alerts.solar.min_class, defaults.alerts.solar.min_class) %}{% endcall %}
-    {% call m::num_row_bounded("alerts_solar", "alerts_max_age_secs", "max_age_secs",
+    {% call m::num_row("alerts_solar", self.knob("alerts.max_age_secs"),
        "Events older than this are marked seen silently instead of announced. Applies to all alert feeds.",
-       current.alerts.max_age_secs, defaults.alerts.max_age_secs, "s", 60, 604800) %}{% endcall %}
+       current.alerts.max_age_secs, defaults.alerts.max_age_secs, "s") %}{% endcall %}
   </div>
 </section>

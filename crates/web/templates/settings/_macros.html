@@ -1,10 +1,14 @@
 {# crates/web/templates/settings/_macros.html
    Shared row macros for settings cards. Import with:
        {% import "settings/_macros.html" as m %}
-   then call e.g. {% call m::num_row_bounded(...) %}{% endcall %}.
+   then call e.g. {% call m::num_row(..., self.knob("cooldowns.ai"), ...) %}{% endcall %}.
 
-   Every row control carries `id="{{ field }}"` and the row key is a
-   `<label for>` pointing at it, so each input's accessible name is its key.
+   `k` is the row's `KnobMeta` from the knob table. Its dotted path is the
+   control's `id`, `name` and `data-key`, so the form posts the same string
+   validation errors and the table use. Bounds and the restart badge come
+   from the table too; only prose and layout live here. The row key is a
+   `<label for>` pointing at the control, so each input's accessible name is
+   its key.
 #}
 
 {% macro nav_group_head(group_id, label, count) %}
@@ -48,52 +52,59 @@
   hidden>↺</button>
 {% endmacro %}
 
-{% macro toggle_row(section, field, key, hint, value, default) %}
+{% macro restart_badge(k) %}
+{% if k.badge() %}<span class="restart-required">restart required</span>{% endif %}
+{% endmacro %}
+
+{% macro toggle_row(section, k, hint, value, default) %}
 <div class="settings-row" data-section="{{ section }}">
-  {% call row_head(key, hint, field) %}{% endcall %}
+  {% call row_head(k.label(), hint, k.path) %}{% endcall %}
   <div class="row-control-cell">
     <label class="toggle">
       <input
         type="checkbox"
-        id="{{ field }}"
-        name="{{ field }}"
+        id="{{ k.path }}"
+        name="{{ k.path }}"
         value="1"
         data-default="{{ default }}"
-        data-key="{{ key }}"
+        data-key="{{ k.path }}"
         role="switch"
         {% if value %}checked{% endif %}>
       <span class="toggle-thumb" aria-hidden="true"></span>
     </label>
   </div>
   <div class="row-right">
-    {% call row_reset(key) %}{% endcall %}
+    {% call restart_badge(k) %}{% endcall %}
+    {% call row_reset(k.path) %}{% endcall %}
     <span class="row-default">default <span class="mono">{% if default %}on{% else %}off{% endif %}</span></span>
   </div>
 </div>
 {% endmacro %}
 
-{# Numeric row with caller-supplied bounds. `unit` is shown beside the
-   input and after the default; empty means unitless. #}
-{% macro num_row_bounded(section, field, key, hint, value, default, unit, min, max, enabled_by = "") %}
+{# Numeric row. `min`/`max` render only when the knob table declares them.
+   `unit` is shown beside the input and after the default; empty means
+   unitless. #}
+{% macro num_row(section, k, hint, value, default, unit, enabled_by = "") %}
 <div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
-  {% call row_head(key, hint, field) %}{% endcall %}
+  {% call row_head(k.label(), hint, k.path) %}{% endcall %}
   <div class="row-control-cell">
     <div class="num-wrap">
       <input
         type="number"
         class="num-input"
-        id="{{ field }}"
-        name="{{ field }}"
-        min="{{ min }}"
-        max="{{ max }}"
+        id="{{ k.path }}"
+        name="{{ k.path }}"
+        {% if let Some(v) = k.min.as_deref() %}min="{{ v }}"{% endif %}
+        {% if let Some(v) = k.max.as_deref() %}max="{{ v }}"{% endif %}
         value="{{ value }}"
         data-default="{{ default }}"
-        data-key="{{ key }}">
+        data-key="{{ k.path }}">
       {% if !unit.is_empty() %}<span class="num-unit">{{ unit }}</span>{% endif %}
     </div>
   </div>
   <div class="row-right">
-    {% call row_reset(key) %}{% endcall %}
+    {% call restart_badge(k) %}{% endcall %}
+    {% call row_reset(k.path) %}{% endcall %}
     <span class="row-default">default <span class="mono">{{ default }}{% if !unit.is_empty() %}{{ unit }}{% endif %}</span></span>
   </div>
 </div>
@@ -101,101 +112,104 @@
 
 {# Generic free-text row (URLs, paths). `placeholder` shows when the value
    is empty. #}
-{% macro text_row(section, field, key, hint, value, default, placeholder, enabled_by = "") %}
+{% macro text_row(section, k, hint, value, default, placeholder, enabled_by = "") %}
 <div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
-  {% call row_head(key, hint, field) %}{% endcall %}
+  {% call row_head(k.label(), hint, k.path) %}{% endcall %}
   <div class="row-control-cell">
     <input type="text"
            class="text-input is-wide"
-           id="{{ field }}"
-           name="{{ field }}"
+           id="{{ k.path }}"
+           name="{{ k.path }}"
            value="{{ value }}"
            placeholder="{{ placeholder }}"
            data-default="{{ default }}"
-           data-key="{{ key }}">
+           data-key="{{ k.path }}">
   </div>
   <div class="row-right">
-    {% call row_reset(key) %}{% endcall %}
+    {% call restart_badge(k) %}{% endcall %}
+    {% call row_reset(k.path) %}{% endcall %}
     <span class="row-default">default <span class="mono">{% if default.is_empty() %}(empty){% else %}{{ default }}{% endif %}</span></span>
   </div>
 </div>
 {% endmacro %}
 
 {# Time-of-day row for `HH:MM` strings (Berlin wallclock). #}
-{% macro time_row(section, field, key, hint, value, default, enabled_by = "") %}
+{% macro time_row(section, k, hint, value, default, enabled_by = "") %}
 <div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
-  {% call row_head(key, hint, field) %}{% endcall %}
+  {% call row_head(k.label(), hint, k.path) %}{% endcall %}
   <div class="row-control-cell">
     <input type="time"
            class="text-input is-narrow"
-           id="{{ field }}"
-           name="{{ field }}"
+           id="{{ k.path }}"
+           name="{{ k.path }}"
            value="{{ value }}"
            data-default="{{ default }}"
-           data-key="{{ key }}">
+           data-key="{{ k.path }}">
   </div>
   <div class="row-right">
-    {% call row_reset(key) %}{% endcall %}
+    {% call restart_badge(k) %}{% endcall %}
+    {% call row_reset(k.path) %}{% endcall %}
     <span class="row-default">default <span class="mono">{{ default }}</span></span>
   </div>
 </div>
 {% endmacro %}
 
 {# Slider row for 0..=1 floats (rendered as percentage). #}
-{% macro range_row(section, field, key, hint, value, default, enabled_by = "") %}
+{% macro range_row(section, k, hint, value, default, enabled_by = "") %}
 <div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
-  {% call row_head(key, hint, field) %}{% endcall %}
+  {% call row_head(k.label(), hint, k.path) %}{% endcall %}
   <div class="row-control-cell">
     <div class="range-wrap">
       <input type="range"
              min="0" max="1" step="0.05"
-             id="{{ field }}"
-             name="{{ field }}"
+             id="{{ k.path }}"
+             name="{{ k.path }}"
              value="{{ value }}"
              data-default="{{ default }}"
-             data-key="{{ key }}">
+             data-key="{{ k.path }}">
       <span class="range-value" data-range-value>{{ value }}</span>
     </div>
   </div>
   <div class="row-right">
-    {% call row_reset(key) %}{% endcall %}
+    {% call restart_badge(k) %}{% endcall %}
+    {% call row_reset(k.path) %}{% endcall %}
     <span class="row-default">default <span class="mono">{{ default }}</span></span>
   </div>
 </div>
 {% endmacro %}
 
 {# `bytes` and `default_bytes` are raw u64. The hidden input posts the
-   canonical integer — `ByteSize::from_str` (server side) accepts it, and
-   `Deserialize<Option<usize>>` does too — so this macro covers both
-   ByteSize-typed (ai.media) and usize-typed (ai.memory) fields. The visible
-   amount + default label are rendered from JS on init via formatBytesIec. #}
-{% macro bytesize_row(section, field, key, hint, bytes, default_bytes) %}
+   canonical integer, which both `ByteSize` (ai.media) and `usize`
+   (ai.memory) parse. The visible amount + default label are rendered from
+   JS on init via formatBytesIec. #}
+{% macro bytesize_row(section, k, hint, bytes, default_bytes) %}
 <div class="settings-row" data-section="{{ section }}" data-bytes-row>
-  {% call row_head(key, hint, field, "_display") %}{% endcall %}
+  {% call row_head(k.label(), hint, k.path, "_display") %}{% endcall %}
   <div class="row-control-cell">
     <div class="bytes-wrap">
       <input
         type="number"
         class="num-input bytes-display"
-        id="{{ field }}_display"
+        id="{{ k.path }}_display"
         min="0"
         step="any"
         value="">
-      <div class="bytes-units" role="group" aria-label="{{ key }} unit">
+      <div class="bytes-units" role="group" aria-label="{{ k.label() }} unit">
         <button type="button" class="bytes-unit" data-unit="B" aria-pressed="false">B</button>
         <button type="button" class="bytes-unit" data-unit="KiB" aria-pressed="false">KiB</button>
         <button type="button" class="bytes-unit" data-unit="MiB" aria-pressed="false">MiB</button>
       </div>
       <input type="hidden"
              class="bytes-canonical"
-             name="{{ field }}"
+             name="{{ k.path }}"
              value="{{ bytes }}"
              data-default="{{ default_bytes }}"
-             data-key="{{ key }}">
+             data-key="{{ k.path }}">
     </div>
   </div>
   <div class="row-right">
-    {% call row_reset(key) %}{% endcall %}
+    {% call restart_badge(k) %}{% endcall %}
+    {% call row_reset(k.path) %}{% endcall %}
     <span class="row-default">default <span class="mono" data-bytes-default="{{ default_bytes }}">{{ default_bytes }}</span></span>
   </div>
 </div>

@@ -144,19 +144,19 @@ async fn settings_save_cooldown() {
     s.goto("/settings").await;
 
     // Pick a value inside [1, 3600] unlikely to be the default.
-    s.wait_and_fill("input[name=\"cooldown_ai\"]", "47").await;
+    s.wait_and_fill("input[name=\"cooldowns.ai\"]", "47").await;
     s.click("button[type=\"submit\"].btn.primary[form=\"settings-form\"]")
         .await;
 
     // Reload settings and confirm the saved value renders back.
     s.goto("/settings").await;
-    let el = s.wait_for("input[name=\"cooldown_ai\"]").await;
+    let el = s.wait_for("input[name=\"cooldowns.ai\"]").await;
     let val = el
         .prop("value")
         .await
         .unwrap_or_default()
         .unwrap_or_default();
-    assert_eq!(val, "47", "cooldown_ai did not persist");
+    assert_eq!(val, "47", "cooldowns.ai did not persist");
 
     s.close().await;
 }
@@ -169,7 +169,7 @@ async fn settings_discard_restores_baseline() {
     let s = E2eSession::start_as_owner().await;
     s.goto("/settings").await;
 
-    let input = "input[name=\"cooldown_ai\"]";
+    let input = "input[name=\"cooldowns.ai\"]";
     let baseline = s
         .wait_for(input)
         .await
@@ -231,10 +231,18 @@ async fn settings_controls_have_accessible_names() {
     // Query by role and name: a number row, a switch, a bytes row's visible
     // amount (its posted value lives in a hidden input), and a select.
     for (css, role, name) in [
-        ("#cooldown_ai", "spinbutton", "ai"),
-        ("#alerts_quake_enabled", "switch", "enabled"),
-        ("#ai_memory_soul_bytes_display", "spinbutton", "soul_bytes"),
-        ("#ai_aurora_profile", "combobox", "ai.aurora.profile"),
+        ("[id=\"cooldowns.ai\"]", "spinbutton", "ai"),
+        ("[id=\"alerts.quake.enabled\"]", "switch", "enabled"),
+        (
+            "[id=\"ai.memory.soul_bytes_display\"]",
+            "spinbutton",
+            "soul_bytes",
+        ),
+        (
+            "[id=\"ai.aurora.profile\"]",
+            "combobox",
+            "ai.aurora.profile",
+        ),
     ] {
         let got = s.accessibility(&s.find(css).await).await;
         assert_eq!(got, (role.to_owned(), name.to_owned()), "{css}");
@@ -244,7 +252,7 @@ async fn settings_controls_have_accessible_names() {
     assert_eq!(
         s.eval(
             "document.activeElement.blur(); \
-             return getComputedStyle(document.querySelector('#cooldown_ai').closest('.num-wrap')).opacity;"
+             return getComputedStyle(document.querySelector('[id=\"cooldowns.ai\"]').closest('.num-wrap')).opacity;"
         )
         .await,
         serde_json::Value::String("1".into()),

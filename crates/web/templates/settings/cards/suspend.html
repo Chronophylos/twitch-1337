@@ -12,8 +12,8 @@
     </div>
   </header>
   <div class="settings-rows">
-    {% call m::num_row_bounded("suspend", "suspend_default_duration_secs", "default_duration_secs",
+    {% call m::num_row("suspend", self.knob("suspend.default_duration_secs"),
        "Default suspension length in seconds (1 s – 7 days).",
-       current.suspend.default_duration_secs, defaults.suspend.default_duration_secs, "s", 1, 604800) %}{% endcall %}
+       current.suspend.default_duration_secs, defaults.suspend.default_duration_secs, "s") %}{% endcall %}
   </div>
 </section>

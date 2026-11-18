@@ -12,12 +12,12 @@
     </div>
   </header>
   <div class="settings-rows">
-    {% call m::num_row_bounded("cooldowns", "cooldown_ai", "ai", "Per-user cooldown for !ai.", current.cooldowns.ai, defaults.cooldowns.ai, "s", 1, 3600) %}{% endcall %}
-    {% call m::num_row_bounded("cooldowns", "cooldown_news", "news", "Per-user cooldown for !news.", current.cooldowns.news, defaults.cooldowns.news, "s", 1, 3600) %}{% endcall %}
-    {% call m::num_row_bounded("cooldowns", "cooldown_up", "up", "Per-user cooldown for !up.", current.cooldowns.up, defaults.cooldowns.up, "s", 1, 3600) %}{% endcall %}
-    {% call m::num_row_bounded("cooldowns", "cooldown_feedback", "feedback", "Per-user cooldown for !fb.", current.cooldowns.feedback, defaults.cooldowns.feedback, "s", 1, 3600) %}{% endcall %}
-    {% call m::num_row_bounded("cooldowns", "cooldown_doener", "doener", "Per-user cooldown for !dpi and !döner (!doener); both use Döneratlas.", current.cooldowns.doener, defaults.cooldowns.doener, "s", 1, 3600) %}{% endcall %}
-    {% call m::num_row_bounded("cooldowns", "cooldown_spoiler", "spoiler", "Per-user cooldown for !spoiler.", current.cooldowns.spoiler, defaults.cooldowns.spoiler, "s", 1, 3600) %}{% endcall %}
-    {% call m::num_row_bounded("cooldowns", "cooldown_servers", "servers", "Per-user cooldown for !servers.", current.cooldowns.servers, defaults.cooldowns.servers, "s", 1, 3600) %}{% endcall %}
+    {% call m::num_row("cooldowns", self.knob("cooldowns.ai"), "Per-user cooldown for !ai.", current.cooldowns.ai, defaults.cooldowns.ai, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", self.knob("cooldowns.news"), "Per-user cooldown for !news.", current.cooldowns.news, defaults.cooldowns.news, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", self.knob("cooldowns.up"), "Per-user cooldown for !up.", current.cooldowns.up, defaults.cooldowns.up, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", self.knob("cooldowns.feedback"), "Per-user cooldown for !fb.", current.cooldowns.feedback, defaults.cooldowns.feedback, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", self.knob("cooldowns.doener"), "Per-user cooldown for !dpi and !döner (!doener); both use Döneratlas.", current.cooldowns.doener, defaults.cooldowns.doener, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", self.knob("cooldowns.spoiler"), "Per-user cooldown for !spoiler.", current.cooldowns.spoiler, defaults.cooldowns.spoiler, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", self.knob("cooldowns.servers"), "Per-user cooldown for !servers.", current.cooldowns.servers, defaults.cooldowns.servers, "s") %}{% endcall %}
   </div>
 </section>

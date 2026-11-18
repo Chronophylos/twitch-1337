@@ -16,9 +16,9 @@
     {% let recap_profile = current.ai.recap.profile.as_deref().unwrap_or("") %}
     {% let recap_default = defaults.ai.recap.profile.as_deref().unwrap_or("") %}
     <div class="settings-row" data-section="ai_recap">
-      {% call m::row_head("ai.recap.profile", "Which provider profile Recap uses. Empty turns Recap off; it never inherits another agent's profile.", "ai_recap_profile") %}{% endcall %}
+      {% call m::row_head("ai.recap.profile", "Which provider profile Recap uses. Empty turns Recap off; it never inherits another agent's profile.", "ai.recap.profile") %}{% endcall %}
       <div class="row-control-cell">
-        <select id="ai_recap_profile" name="ai_recap_profile" data-key="ai.recap.profile" data-default="{{ recap_default }}">
+        <select id="ai.recap.profile" name="ai.recap.profile" data-key="ai.recap.profile" data-default="{{ recap_default }}">
           <option value="">(off)</option>
           {% for p in current.ai.profiles %}
           {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if recap_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
@@ -26,18 +26,19 @@
         </select>
       </div>
       <div class="row-right">
+        {% call m::restart_badge(self.knob("ai.recap.profile")) %}{% endcall %}
         {% call m::row_reset("ai.recap.profile") %}{% endcall %}
         <span class="row-default">default <span class="mono">(off)</span></span>
       </div>
     </div>
-    {% call m::num_row_bounded("ai_recap", "ai_recap_batch_size", "ai.recap.batch_size",
+    {% call m::num_row("ai_recap", self.knob("ai.recap.batch_size"),
        "Chat lines processed per Recap batch.",
-       current.ai.recap.batch_size, defaults.ai.recap.batch_size, "lines", 1, 5000) %}{% endcall %}
-    {% call m::num_row_bounded("ai_recap", "ai_recap_max_notes", "ai.recap.max_notes",
+       current.ai.recap.batch_size, defaults.ai.recap.batch_size, "lines") %}{% endcall %}
+    {% call m::num_row("ai_recap", self.knob("ai.recap.max_notes"),
        "Max Recap note paragraphs injected into the prompt.",
-       current.ai.recap.max_notes, defaults.ai.recap.max_notes, "notes", 1, 64) %}{% endcall %}
-    {% call m::num_row_bounded("ai_recap", "ai_recap_merge_width", "ai.recap.merge_width",
-       "Existing notes merged per Recap pass when coarsening.",
-       current.ai.recap.merge_width, defaults.ai.recap.merge_width, "notes", 2, 64) %}{% endcall %}
+       current.ai.recap.max_notes, defaults.ai.recap.max_notes, "notes") %}{% endcall %}
+    {% call m::num_row("ai_recap", self.knob("ai.recap.merge_width"),
+       "Existing notes merged per Recap pass when coarsening (2 up to max_notes).",
+       current.ai.recap.merge_width, defaults.ai.recap.merge_width, "notes") %}{% endcall %}
   </div>
 </section>
