@@ -74,10 +74,12 @@ async fn tracker_1337_posts_reminder_and_stats() {
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
-    // 2 users, neither "gargoyletec" → generate_stats_message produces "2 … gnocci …"
+    // 2 users, neither "gargoyletec" → generate_stats_message produces "2… gnocci …".
+    // twitch-irc say() prepends ". " to prevent slash-command execution.
+    let stats_body = stats.trim_start_matches(". ");
     assert!(
-        stats.contains('2') || stats.to_lowercase().contains("gnocci"),
-        "expected 2-user stats, got: {stats}"
+        stats_body.starts_with('2') && stats_body.contains(" gnocci "),
+        "expected 2-user stats, got: {stats:?}"
     );
 
     bot.shutdown().await;

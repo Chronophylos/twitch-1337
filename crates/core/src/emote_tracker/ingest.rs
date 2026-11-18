@@ -754,7 +754,48 @@ mod tests {
     use rusqlite::Connection;
 
     use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, MockBuilder, MockServer, ResponseTemplate};
+
+    const POTAT_LOGIN: &str = "euterheissgetraenk";
+    const POTAT_7TV_ID: &str = "01GNRG2MDG0000DM7N933JH49Y";
+
+    fn rest_mock(channel_id: &str) -> MockBuilder {
+        Mock::given(method("GET")).and(path(format!("/v3/users/twitch/{channel_id}")))
+    }
+
+    fn history_mock() -> MockBuilder {
+        Mock::given(method("GET")).and(path(format!("/emotes/history/{POTAT_LOGIN}")))
+    }
+
+    /// Config pointing 7TV REST at `mock`.
+    fn rest_cfg(mock: &MockServer, channel_id: &str) -> IngestConfig {
+        IngestConfig {
+            twitch_channel_id: channel_id.into(),
+            twitch_channel_login: "testchannel".into(),
+            rest_base_url: format!("{}/v3", mock.uri()),
+            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: POTAT_HISTORY_BASE_URL.into(),
+        }
+    }
+
+    /// Config pointing potat history at `mock`.
+    fn potat_cfg(mock: &MockServer) -> IngestConfig {
+        IngestConfig {
+            twitch_channel_id: "123".into(),
+            twitch_channel_login: POTAT_LOGIN.into(),
+            rest_base_url: "https://7tv.io/v3".into(),
+            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
+            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
+        }
+    }
+
+    fn batch_of(events: Vec<NewSetEvent>) -> SetChangeBatch {
+        SetChangeBatch {
+            updated_at: 1,
+            mutations: vec![],
+            events,
+        }
+    }
 
     fn count_events(path: &std::path::Path, kind: SetEventKind) -> i64 {
         let conn = Connection::open(path).unwrap();
@@ -790,8 +831,7 @@ mod tests {
             "set123",
             r#"[{"id": "e1", "name": "Kappa"}, {"id": "e2", "name": "Pog"}]"#,
         );
-        Mock::given(method("GET"))
-            .and(path(format!("/v3/users/twitch/{channel_id}")))
+        rest_mock(channel_id)
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
             .mount(&mock)
             .await;
@@ -799,14 +839,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join(DB_FILENAME);
         let handle = EmoteTrackerHandle::open(&db_path).unwrap();
-
-        let cfg = IngestConfig {
-            twitch_channel_id: channel_id.into(),
-            twitch_channel_login: "testchannel".into(),
-            rest_base_url: format!("{}/v3", mock.uri()),
-            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
-            potat_history_base_url: POTAT_HISTORY_BASE_URL.into(),
-        };
+        let cfg = rest_cfg(&mock, channel_id);
 
         let result = startup_reconcile_once(&handle, &reqwest::Client::new(), &cfg, None)
             .await
@@ -827,8 +860,7 @@ mod tests {
         crate::install_crypto_provider();
         let mock = MockServer::start().await;
         let channel_id = "12345";
-        Mock::given(method("GET"))
-            .and(path(format!("/v3/users/twitch/{channel_id}")))
+        rest_mock(channel_id)
             .respond_with(ResponseTemplate::new(500))
             .expect(0)
             .mount(&mock)
@@ -837,13 +869,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join(DB_FILENAME);
         let handle = EmoteTrackerHandle::open(&db_path).unwrap();
-        let cfg = IngestConfig {
-            twitch_channel_id: channel_id.into(),
-            twitch_channel_login: "testchannel".into(),
-            rest_base_url: format!("{}/v3", mock.uri()),
-            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
-            potat_history_base_url: POTAT_HISTORY_BASE_URL.into(),
-        };
+        let cfg = rest_cfg(&mock, channel_id);
         let lifecycle = Lifecycle::new();
         lifecycle.request_graceful_stop();
 
@@ -887,8 +913,7 @@ mod tests {
         let channel_id = "784681545";
         let active_set = "01FZKKA0A8000FP66RDQP75B9A";
         let body = user_set_body(active_set, active_set, r#"[{"id": "e1", "name": "Kappa"}]"#);
-        Mock::given(method("GET"))
-            .and(path(format!("/v3/users/twitch/{channel_id}")))
+        rest_mock(channel_id)
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
             .mount(&mock)
             .await;
@@ -896,13 +921,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join(DB_FILENAME);
         let handle = EmoteTrackerHandle::open(&db_path).unwrap();
-        let cfg = IngestConfig {
-            twitch_channel_id: channel_id.into(),
-            twitch_channel_login: "testchannel".into(),
-            rest_base_url: format!("{}/v3", mock.uri()),
-            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
-            potat_history_base_url: POTAT_HISTORY_BASE_URL.into(),
-        };
+        let cfg = rest_cfg(&mock, channel_id);
 
         startup_reconcile_once(&handle, &reqwest::Client::new(), &cfg, None)
             .await
@@ -946,14 +965,12 @@ mod tests {
             r#"[{"id": "e1", "name": "Kappa"}, {"id": "e2", "name": "Pog"}]"#,
         );
 
-        Mock::given(method("GET"))
-            .and(path(format!("/v3/users/twitch/{channel_id}")))
+        rest_mock(channel_id)
             .respond_with(ResponseTemplate::new(200).set_body_string(initial))
             .up_to_n_times(1)
             .mount(&mock)
             .await;
-        Mock::given(method("GET"))
-            .and(path(format!("/v3/users/twitch/{channel_id}")))
+        rest_mock(channel_id)
             .respond_with(ResponseTemplate::new(200).set_body_string(switched))
             .mount(&mock)
             .await;
@@ -961,13 +978,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join(DB_FILENAME);
         let handle = EmoteTrackerHandle::open(&db_path).unwrap();
-        let cfg = IngestConfig {
-            twitch_channel_id: channel_id.into(),
-            twitch_channel_login: "testchannel".into(),
-            rest_base_url: format!("{}/v3", mock.uri()),
-            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
-            potat_history_base_url: POTAT_HISTORY_BASE_URL.into(),
-        };
+        let cfg = rest_cfg(&mock, channel_id);
 
         startup_reconcile_once(&handle, &reqwest::Client::new(), &cfg, None)
             .await
@@ -1000,7 +1011,7 @@ mod tests {
         s.emote_tracker.potat_attribution = PotatAttributionSettings {
             enabled,
             window_secs: 15,
-            potat_7tv_user_id: "01GNRG2MDG0000DM7N933JH49Y".into(),
+            potat_7tv_user_id: POTAT_7TV_ID.into(),
         };
         SettingsHandle::from_settings(s)
     }
@@ -1028,28 +1039,16 @@ mod tests {
     async fn live_batch_attributes_from_mocked_potat_history() {
         crate::install_crypto_provider();
         let mock = MockServer::start().await;
-        let login = "euterheissgetraenk";
         let body = include_str!("fixtures/potat_history_standard.json");
-        Mock::given(method("GET"))
-            .and(path(format!("/emotes/history/{login}")))
+        history_mock()
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
             .expect(1)
             .mount(&mock)
             .await;
 
-        let cfg = IngestConfig {
-            twitch_channel_id: "123".into(),
-            twitch_channel_login: login.into(),
-            rest_base_url: "https://7tv.io/v3".into(),
-            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
-            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
-        };
+        let cfg = potat_cfg(&mock);
         let settings = potat_settings_handle(true);
-        let mut batch = SetChangeBatch {
-            updated_at: 1,
-            mutations: vec![],
-            events: vec![add_event("e1", Some("01GNRG2MDG0000DM7N933JH49Y"))],
-        };
+        let mut batch = batch_of(vec![add_event("e1", Some(POTAT_7TV_ID))]);
 
         maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
 
@@ -1065,27 +1064,15 @@ mod tests {
     async fn attribution_skipped_when_disabled() {
         crate::install_crypto_provider();
         let mock = MockServer::start().await;
-        let login = "euterheissgetraenk";
-        Mock::given(method("GET"))
-            .and(path(format!("/emotes/history/{login}")))
+        history_mock()
             .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
             .expect(0)
             .mount(&mock)
             .await;
 
-        let cfg = IngestConfig {
-            twitch_channel_id: "123".into(),
-            twitch_channel_login: login.into(),
-            rest_base_url: "https://7tv.io/v3".into(),
-            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
-            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
-        };
+        let cfg = potat_cfg(&mock);
         let settings = potat_settings_handle(false);
-        let mut batch = SetChangeBatch {
-            updated_at: 1,
-            mutations: vec![],
-            events: vec![add_event("e1", Some("01GNRG2MDG0000DM7N933JH49Y"))],
-        };
+        let mut batch = batch_of(vec![add_event("e1", Some(POTAT_7TV_ID))]);
 
         maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
 
@@ -1097,7 +1084,6 @@ mod tests {
     async fn multi_emote_batch_fetches_history_once() {
         crate::install_crypto_provider();
         let mock = MockServer::start().await;
-        let login = "euterheissgetraenk";
         let body = r#"{
           "data": [{
             "history": [
@@ -1122,29 +1108,18 @@ mod tests {
             ]
           }]
         }"#;
-        Mock::given(method("GET"))
-            .and(path(format!("/emotes/history/{login}")))
+        history_mock()
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
             .expect(1)
             .mount(&mock)
             .await;
 
-        let cfg = IngestConfig {
-            twitch_channel_id: "123".into(),
-            twitch_channel_login: login.into(),
-            rest_base_url: "https://7tv.io/v3".into(),
-            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
-            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
-        };
+        let cfg = potat_cfg(&mock);
         let settings = potat_settings_handle(true);
-        let mut batch = SetChangeBatch {
-            updated_at: 1,
-            mutations: vec![],
-            events: vec![
-                add_event("e1", Some("01GNRG2MDG0000DM7N933JH49Y")),
-                add_event("e2", Some("01GNRG2MDG0000DM7N933JH49Y")),
-            ],
-        };
+        let mut batch = batch_of(vec![
+            add_event("e1", Some(POTAT_7TV_ID)),
+            add_event("e2", Some(POTAT_7TV_ID)),
+        ]);
 
         maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
 
@@ -1156,26 +1131,14 @@ mod tests {
     async fn soft_fail_leaves_attribution_null_on_http_error() {
         crate::install_crypto_provider();
         let mock = MockServer::start().await;
-        let login = "euterheissgetraenk";
-        Mock::given(method("GET"))
-            .and(path(format!("/emotes/history/{login}")))
+        history_mock()
             .respond_with(ResponseTemplate::new(500))
             .mount(&mock)
             .await;
 
-        let cfg = IngestConfig {
-            twitch_channel_id: "123".into(),
-            twitch_channel_login: login.into(),
-            rest_base_url: "https://7tv.io/v3".into(),
-            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
-            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
-        };
+        let cfg = potat_cfg(&mock);
         let settings = potat_settings_handle(true);
-        let mut batch = SetChangeBatch {
-            updated_at: 1,
-            mutations: vec![],
-            events: vec![add_event("e1", Some("01GNRG2MDG0000DM7N933JH49Y"))],
-        };
+        let mut batch = batch_of(vec![add_event("e1", Some(POTAT_7TV_ID))]);
 
         maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
 
@@ -1200,7 +1163,6 @@ mod tests {
 
         let emote_id = batch.events[0].emote_id.clone().unwrap();
         let mock = MockServer::start().await;
-        let login = "euterheissgetraenk";
         let history = format!(
             r#"{{
               "data": [{{
@@ -1216,20 +1178,13 @@ mod tests {
               }}]
             }}"#
         );
-        Mock::given(method("GET"))
-            .and(path(format!("/emotes/history/{login}")))
+        history_mock()
             .respond_with(ResponseTemplate::new(200).set_body_string(history))
             .expect(1)
             .mount(&mock)
             .await;
 
-        let cfg = IngestConfig {
-            twitch_channel_id: "123".into(),
-            twitch_channel_login: login.into(),
-            rest_base_url: "https://7tv.io/v3".into(),
-            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
-            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
-        };
+        let cfg = potat_cfg(&mock);
         let settings = potat_settings_handle(true);
 
         maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
@@ -1250,30 +1205,18 @@ mod tests {
     async fn history_fetch_skipped_when_all_gates_permanently_closed() {
         crate::install_crypto_provider();
         let mock = MockServer::start().await;
-        let login = "euterheissgetraenk";
-        Mock::given(method("GET"))
-            .and(path(format!("/emotes/history/{login}")))
+        history_mock()
             .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
             .expect(0)
             .mount(&mock)
             .await;
 
-        let cfg = IngestConfig {
-            twitch_channel_id: "123".into(),
-            twitch_channel_login: login.into(),
-            rest_base_url: "https://7tv.io/v3".into(),
-            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
-            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
-        };
+        let cfg = potat_cfg(&mock);
         let settings = potat_settings_handle(true);
-        let mut batch = SetChangeBatch {
-            updated_at: 1,
-            mutations: vec![],
-            events: vec![
-                add_event("e1", Some("01HUMANEDITOR0000000000000")),
-                add_event("e2", Some("01ANOTHERHUMAN000000000000")),
-            ],
-        };
+        let mut batch = batch_of(vec![
+            add_event("e1", Some("01HUMANEDITOR0000000000000")),
+            add_event("e2", Some("01ANOTHERHUMAN000000000000")),
+        ]);
 
         maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
 
@@ -1288,9 +1231,7 @@ mod tests {
         // would otherwise look like "no Step B hit" and trigger a second GET.
         crate::install_crypto_provider();
         let mock = MockServer::start().await;
-        let login = "euterheissgetraenk";
-        Mock::given(method("GET"))
-            .and(path(format!("/emotes/history/{login}")))
+        history_mock()
             .respond_with(
                 ResponseTemplate::new(200).set_body_string(r#"{"data":[{"history":[]}]}"#),
             )
@@ -1298,25 +1239,14 @@ mod tests {
             .mount(&mock)
             .await;
 
-        let cfg = IngestConfig {
-            twitch_channel_id: "123".into(),
-            twitch_channel_login: login.into(),
-            rest_base_url: "https://7tv.io/v3".into(),
-            eventapi_url: super::super::eventapi::EVENTAPI_URL.into(),
-            potat_history_base_url: format!("{}/emotes/history", mock.uri()),
-        };
+        let cfg = potat_cfg(&mock);
         let potat = PotatAttributionSettings {
             enabled: true,
             window_secs: 15,
-            potat_7tv_user_id: "01GNRG2MDG0000DM7N933JH49Y".into(),
+            potat_7tv_user_id: POTAT_7TV_ID.into(),
         };
         let soft_cap = potat.window_secs.saturating_add(SMALL_SLACK_SECS);
-        let batch = SetChangeBatch {
-            updated_at: 1,
-            mutations: vec![],
-            events: vec![add_event("e1", Some("01HUMANEDITOR0000000000000"))],
-        };
-
+        let batch = batch_of(vec![add_event("e1", Some("01HUMANEDITOR0000000000000"))]);
         // Call fetch_with_retry directly so we exercise the no-retry branch
         // even though maybe_attribute_batch now skips the fetch entirely.
         let history = fetch_with_retry(
