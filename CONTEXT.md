@@ -262,3 +262,24 @@ _Avoid_: admin, moderator (when the dashboard tier is meant).
 The single account named in the bootstrap config. A Mod who also manages
 Settings, Profiles, and the logs. Cannot be granted from the dashboard itself.
 _Avoid_: admin, superuser.
+
+## Errors
+
+**Rejection**:
+The bot refusing a request for a reason the requester caused — bad input, an
+unknown Ping, a cooldown. Told to the requester in their Surface's own words;
+not a problem the bot has.
+_Avoid_: validation error, user error, failure (reserve for things the bot
+could not do).
+
+**Surface**:
+Where a Rejection or failure is shown: Chat (German, to viewers), Dashboard
+(English, to Mods and the Owner), or Model (stable codes in a tool result).
+Each Surface words the same Rejection its own way.
+_Avoid_: frontend, channel (that is the Twitch channel), UI.
+
+**Fault**:
+A bug or a lost task that ends the whole runtime; the bot then restarts. A
+single command's bug is a Fault too — the runtime never keeps running on
+half-broken state.
+_Avoid_: crash, error, outage.
