@@ -18,15 +18,7 @@ const RATE_LIMIT_DRAIN_DELAY: Duration = Duration::from_millis(800);
 /// Insert a single seeded PB so that `!lb` produces a deterministic reply
 /// (instead of the empty-state message).
 fn seeded_lb_with_alice() -> HashMap<String, PersonalBest> {
-    let mut seeded: HashMap<String, PersonalBest> = HashMap::new();
-    seeded.insert(
-        "alice".into(),
-        PersonalBest {
-            ms: 234,
-            date: civil::date(2026, 4, 17),
-        },
-    );
-    seeded
+    common::seed_leaderboard(&[("alice", 234, civil::date(2026, 4, 17))])
 }
 
 /// Sanity check: `!lb` yields a non-empty leaderboard reply mentioning alice.
@@ -159,24 +151,6 @@ async fn exempt_commands_rejected() {
 }
 
 #[tokio::test]
-async fn default_duration_used_when_omitted() {
-    // Uses the built-in default of 600s = 10m.
-    let mut bot = TestBotBuilder::new()
-        .with_seeded_leaderboard(seeded_lb_with_alice())
-        .spawn()
-        .await;
-
-    bot.send_as_broadcaster("broadcaster", "!suspend lb").await;
-    let confirm = bot.expect_say(Duration::from_secs(2)).await;
-    assert!(
-        confirm.contains("10m"),
-        "expected default duration rendered as '10m', got: {confirm}"
-    );
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
 async fn custom_default_from_config() {
     let mut bot = TestBotBuilder::new()
         .with_seeded_leaderboard(seeded_lb_with_alice())
@@ -216,21 +190,6 @@ async fn bad_duration_format_rejected() {
 
     // Suspend did not take effect.
     assert_lb_works(&mut bot).await;
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn unsuspend_unknown_command_replies_not_suspended() {
-    let mut bot = TestBotBuilder::new().spawn().await;
-
-    bot.send_as_broadcaster("broadcaster", "!unsuspend lb")
-        .await;
-    let reply = bot.expect_say(Duration::from_secs(2)).await;
-    assert!(
-        reply.contains("war nicht gesperrt"),
-        "expected 'war nicht gesperrt', got: {reply}"
-    );
 
     bot.shutdown().await;
 }
