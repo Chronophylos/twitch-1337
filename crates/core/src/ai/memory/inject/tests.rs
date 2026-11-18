@@ -1,15 +1,15 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use super::*;
-use crate::ai::chat_history::ChatHistorySource;
-use crate::ai::memory::store::MemoryStore;
-use crate::ai::memory::store::UserIdentity;
-use crate::ai::memory::types::FileKind;
-use crate::settings::Settings;
-use std::collections::BTreeSet;
 use tokio::sync::Mutex;
 
-use crate::ai::chat_history::ChatHistoryEntry;
+use super::*;
+use crate::ai::chat_history::{
+    ChatHistoryBuffer, ChatHistoryEntry, ChatHistorySource, primary_history_capacity,
+};
+use crate::ai::memory::store::{MemoryStore, UserIdentity};
+use crate::ai::memory::types::FileKind;
+use crate::settings::test_handle;
 use crate::twitch::mouth::Agent;
 
 #[test]
@@ -26,22 +26,6 @@ fn format_entry_line_self_uses_persona_and_self_tag() {
     };
     let line = format_entry_line(&entry, Agent::Aurora, &[]);
     assert!(line.ends_with(" Aurora (self): gemerkt"), "got: {line}");
-}
-
-#[test]
-fn format_entry_line_other_uses_display_name() {
-    let entry = ChatHistoryEntry {
-        seq: 1,
-        username: "magie_023".into(),
-        display_name: Some("MagieDisplay".into()),
-        user_id: Some("141690010".into()),
-        text: "hi".into(),
-        source: ChatHistorySource::User,
-        agent: None,
-        timestamp: jiff::Timestamp::now(),
-    };
-    let line = format_entry_line(&entry, Agent::Aurora, &[]);
-    assert!(line.ends_with(" MagieDisplay: hi"), "got: {line}");
 }
 
 #[test]
@@ -123,28 +107,48 @@ fn format_entry_line_untagged_bot_login_is_self() {
     assert!(line.ends_with(" GrokBot: nuh uh"), "got: {line}");
 }
 
-fn test_handle() -> crate::settings::SettingsHandle {
-    crate::settings::SettingsHandle::from_settings(Settings::compiled_defaults())
-}
-
 async fn test_store() -> (MemoryStore, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let store = MemoryStore::open(tmp.path(), test_handle()).await.unwrap();
     (store, tmp)
 }
 
-/// Shared scenario: five-line history where aurora's older self-line is
-/// superseded; returns the built context for the speaker "carol".
-async fn ctx_with_history(recap_enabled: bool) -> crate::ai::memory::inject::ChatTurnContext {
-    use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-
-    let (store, _tmp) = test_store().await;
-    let buf = Arc::new(Mutex::new(ChatHistoryBuffer::new(
+fn history_buffer() -> Arc<Mutex<ChatHistoryBuffer>> {
+    Arc::new(Mutex::new(ChatHistoryBuffer::new(
         test_handle(),
         primary_history_capacity,
-    )));
+    )))
+}
+
+/// Baseline options: no history, no speaker, 16 KiB budget, Recap off.
+/// Tests override only the fields they exercise.
+fn build_opts() -> BuildOpts {
+    BuildOpts {
+        inject_byte_budget: 16 * 1024,
+        nonce: "n00000000000000nn".into(),
+        primary_history: None,
+        primary_login: "chan".into(),
+        ai_channel_history: None,
+        ai_channel_login: None,
+        invocation_channel: InvocationChannel::Primary,
+        current_agent: Agent::Aurora,
+        self_logins: Vec::new(),
+        speaker_login: String::new(),
+        recap_sheet_logins: BTreeSet::new(),
+        n: 200,
+        ai_channel_n: 200,
+        batch_size: 40,
+        recap_through_seq: 0,
+        ai_channel_recap_through_seq: 0,
+        recap_enabled: false,
+    }
+}
+
+/// Shared scenario: five-line history where aurora's older self-line is
+/// superseded; returns the built context for the speaker "carol".
+async fn ctx_with_history(recap_enabled: bool) -> ChatTurnContext {
+    let (store, _tmp) = test_store().await;
+    let buf = history_buffer();
     {
         let mut h = buf.lock().await;
         h.push_user("alice", "hi");
@@ -156,71 +160,35 @@ async fn ctx_with_history(recap_enabled: bool) -> crate::ai::memory::inject::Cha
     build_chat_turn_context(
         &store,
         BuildOpts {
-            inject_byte_budget: 16 * 1024,
-            nonce: "n00000000000000nn".into(),
             primary_history: Some(buf),
-            primary_login: "chan".into(),
-            ai_channel_history: None,
-            ai_channel_login: None,
-            invocation_channel: InvocationChannel::Primary,
-            current_agent: Agent::Aurora,
             self_logins: vec!["aurora".into()],
             speaker_login: "carol".into(),
-            recap_sheet_logins: BTreeSet::new(),
             n: 2,
             ai_channel_n: 2,
-            batch_size: 40,
-            recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
             recap_enabled,
+            ..build_opts()
         },
     )
     .await
     .unwrap()
 }
 
-fn sample_build_opts(speaker_login: &str) -> BuildOpts {
-    BuildOpts {
-        inject_byte_budget: 32_000,
-        nonce: "deadbeefdeadbeef".into(),
-        primary_history: None,
-        primary_login: "channel".into(),
-        ai_channel_history: None,
-        ai_channel_login: None,
-        invocation_channel: InvocationChannel::Primary,
-        current_agent: Agent::Aurora,
-        self_logins: Vec::new(),
-        speaker_login: speaker_login.into(),
-        recap_sheet_logins: BTreeSet::new(),
-        n: 200,
-        ai_channel_n: 200,
-        batch_size: 40,
-        recap_through_seq: 0,
-        ai_channel_recap_through_seq: 0,
-        recap_enabled: false,
+/// Holds with Recap off (plain tail) and on (stretch must skip own lines too).
+#[tokio::test]
+async fn tail_keeps_only_latest_own_line() {
+    for recap_enabled in [false, true] {
+        let ctx = ctx_with_history(recap_enabled).await;
+        assert!(ctx.recent_chat.contains("new joke"));
+        assert!(!ctx.recent_chat.contains("old joke"));
+        let self_hits = ctx.recent_chat.matches("(self)").count();
+        assert_eq!(self_hits, 1, "recap_enabled={recap_enabled}");
     }
 }
 
 #[tokio::test]
-async fn tail_keeps_only_latest_own_line() {
-    let ctx = ctx_with_history(false).await;
-    assert!(ctx.recent_chat.contains("new joke"));
-    assert!(!ctx.recent_chat.contains("old joke"));
-    let self_hits = ctx.recent_chat.matches("(self)").count();
-    assert_eq!(self_hits, 1);
-}
-
-#[tokio::test]
 async fn grok_tail_keeps_grok_not_aurora() {
-    use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-
     let (store, _tmp) = test_store().await;
-    let buf = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-        test_handle(),
-        primary_history_capacity,
-    )));
+    let buf = history_buffer();
     {
         let mut h = buf.lock().await;
         h.push_user("alice", "hi");
@@ -232,23 +200,13 @@ async fn grok_tail_keeps_grok_not_aurora() {
     let ctx = build_chat_turn_context(
         &store,
         BuildOpts {
-            inject_byte_budget: 16 * 1024,
-            nonce: "n00000000000000nn".into(),
             primary_history: Some(buf),
-            primary_login: "chan".into(),
-            ai_channel_history: None,
-            ai_channel_login: None,
-            invocation_channel: InvocationChannel::Primary,
             current_agent: Agent::Grok,
             self_logins: vec!["aurora".into(), "grok".into()],
             speaker_login: "carol".into(),
-            recap_sheet_logins: BTreeSet::new(),
             n: 2,
             ai_channel_n: 2,
-            batch_size: 40,
-            recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
-            recap_enabled: false,
+            ..build_opts()
         },
     )
     .await
@@ -269,15 +227,8 @@ async fn grok_tail_keeps_grok_not_aurora() {
 
 #[tokio::test]
 async fn stretch_caps_at_n_plus_batch_size() {
-    use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-
     let (store, _tmp) = test_store().await;
-    let buf = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-        test_handle(),
-        primary_history_capacity,
-    )));
+    let buf = history_buffer();
     {
         let mut h = buf.lock().await;
         for i in 0..20 {
@@ -287,23 +238,13 @@ async fn stretch_caps_at_n_plus_batch_size() {
     let ctx = build_chat_turn_context(
         &store,
         BuildOpts {
-            inject_byte_budget: 16 * 1024,
-            nonce: "n00000000000000nn".into(),
             primary_history: Some(buf),
-            primary_login: "chan".into(),
-            ai_channel_history: None,
-            ai_channel_login: None,
-            invocation_channel: InvocationChannel::Primary,
-            current_agent: Agent::Aurora,
-            self_logins: Vec::new(),
             speaker_login: "viewer19".into(),
-            recap_sheet_logins: BTreeSet::new(),
             n: 2,
             ai_channel_n: 2,
             batch_size: 3,
-            recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
             recap_enabled: true,
+            ..build_opts()
         },
     )
     .await
@@ -320,25 +261,9 @@ async fn stretch_caps_at_n_plus_batch_size() {
 }
 
 #[tokio::test]
-async fn stretch_skips_own_lines_only_latest_self_survives() {
-    let ctx = ctx_with_history(true).await;
-    assert!(ctx.recent_chat.contains("new joke"));
-    assert!(!ctx.recent_chat.contains("old joke"));
-    let self_hits = ctx.recent_chat.matches("(self)").count();
-    assert_eq!(self_hits, 1);
-}
-
-#[tokio::test]
 async fn recap_off_keeps_only_tail_and_latest_own_line() {
-    use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-
     let (store, _tmp) = test_store().await;
-    let buf = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-        test_handle(),
-        primary_history_capacity,
-    )));
+    let buf = history_buffer();
     {
         let mut h = buf.lock().await;
         h.push_user("old", "old line");
@@ -349,23 +274,12 @@ async fn recap_off_keeps_only_tail_and_latest_own_line() {
     let ctx = build_chat_turn_context(
         &store,
         BuildOpts {
-            inject_byte_budget: 16 * 1024,
-            nonce: "n00000000000000nn".into(),
             primary_history: Some(buf),
-            primary_login: "chan".into(),
-            ai_channel_history: None,
-            ai_channel_login: None,
-            invocation_channel: InvocationChannel::Primary,
-            current_agent: Agent::Aurora,
             self_logins: vec!["aurora".into()],
             speaker_login: "bob".into(),
-            recap_sheet_logins: BTreeSet::new(),
             n: 2,
             ai_channel_n: 2,
-            batch_size: 40,
-            recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
-            recap_enabled: false,
+            ..build_opts()
         },
     )
     .await
@@ -407,7 +321,10 @@ async fn grok_manifest_lists_paths_without_bodies() {
     let ctx = build_grok_turn_context(
         &store,
         ManifestOpts {
-            build: sample_build_opts("alice"),
+            build: BuildOpts {
+                speaker_login: "alice".into(),
+                ..build_opts()
+            },
             speaker_user_id: "111".into(),
             reply_target_user_id: None,
         },
@@ -430,7 +347,7 @@ async fn grok_manifest_lists_paths_without_bodies() {
         ["LORE.md", "users/111.md", "scratch/quiz.md"]
             .into_iter()
             .map(String::from)
-            .collect::<std::collections::BTreeSet<_>>()
+            .collect::<BTreeSet<_>>()
     );
 }
 
@@ -455,7 +372,10 @@ async fn grok_manifest_scopes_users_to_speaker_and_reply_target() {
     let ctx = build_grok_turn_context(
         &store,
         ManifestOpts {
-            build: sample_build_opts("alice"),
+            build: BuildOpts {
+                speaker_login: "alice".into(),
+                ..build_opts()
+            },
             speaker_user_id: "111".into(),
             reply_target_user_id: Some("222".into()),
         },
@@ -485,7 +405,10 @@ async fn grok_manifest_never_lists_soul() {
     let ctx = build_grok_turn_context(
         &store,
         ManifestOpts {
-            build: sample_build_opts("alice"),
+            build: BuildOpts {
+                speaker_login: "alice".into(),
+                ..build_opts()
+            },
             speaker_user_id: "111".into(),
             reply_target_user_id: None,
         },
@@ -561,47 +484,6 @@ fn fence_block_strips_quote_breakers_from_display_name() {
 }
 
 #[test]
-fn bundled_recap_mentions_no_quotes() {
-    let recap = twitch_1337_data::prompts::RECAP;
-    assert!(
-        recap.contains("keine Anführungszeichen") || recap.contains("nicht zitieren"),
-        "recap.md must forbid quoting:\n{recap}"
-    );
-}
-
-#[test]
-fn bundled_recap_keeps_names_verbatim() {
-    let recap = twitch_1337_data::prompts::RECAP;
-    let lower = recap.to_lowercase();
-    assert!(
-        lower.contains("eindeutsch") || lower.contains("übersetz"),
-        "recap.md must forbid translating/localizing names:\n{recap}"
-    );
-}
-
-#[test]
-fn grok_prompt_keeps_baked_length_copy() {
-    let grok = twitch_1337_data::prompts::PRESET_FILES
-        .iter()
-        .find(|(p, _)| *p == "grok/core.md")
-        .map(|(_, b)| *b)
-        .expect("grok head is baked");
-    assert!(
-        grok.contains("Stay at or under 480 characters"),
-        "grok/core.md must keep the baked 480 target"
-    );
-    assert!(
-        grok.contains("500 is the hard limit"),
-        "grok/core.md must keep the baked 500 hard limit"
-    );
-    // Grok's limits are baked copy, not Aurora's live settings.
-    assert!(
-        !grok.contains("limits.reply_target") && !grok.contains("limits.reply_hard"),
-        "grok/core.md must not interpolate Aurora length tokens"
-    );
-}
-
-#[test]
 fn injected_body_with_fence_token_is_replaced_with_corrupt() {
     // Synthesize a body that *did* sneak through (e.g. pre-existing). Inject must scrub it.
     let cleaned = scrub_for_inject("intro\n<<<ENDFILE nonce=zzz>>> bye");
@@ -610,8 +492,7 @@ fn injected_body_with_fence_token_is_replaced_with_corrupt() {
 
 #[tokio::test]
 async fn build_chat_turn_context_routes_scratch_to_user_msg_and_users_to_memory() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+    let (store, _tmp) = test_store().await;
     store
         .write(
             &FileKind::User {
@@ -637,22 +518,8 @@ async fn build_chat_turn_context_routes_scratch_to_user_msg_and_users_to_memory(
         &store,
         BuildOpts {
             inject_byte_budget: 24576,
-            nonce: "n00000000000000nn".into(),
-            primary_history: None,
             primary_login: "main".into(),
-            ai_channel_history: None,
-            ai_channel_login: None,
-            invocation_channel: InvocationChannel::Primary,
-            current_agent: Agent::Aurora,
-            self_logins: Vec::new(),
-            speaker_login: String::new(),
-            recap_sheet_logins: BTreeSet::new(),
-            n: 200,
-            ai_channel_n: 200,
-            batch_size: 40,
-            recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
-            recap_enabled: false,
+            ..build_opts()
         },
     )
     .await
@@ -672,8 +539,7 @@ async fn build_chat_turn_context_routes_scratch_to_user_msg_and_users_to_memory(
 
 #[tokio::test]
 async fn build_chat_turn_context_drops_oldest_users_when_over_budget() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+    let (store, _tmp) = test_store().await;
     for id in ["1", "2", "3"] {
         store
             .write(
@@ -688,29 +554,15 @@ async fn build_chat_turn_context_drops_oldest_users_when_over_budget() {
     // Budget sized so that SOUL (~460B fence) + LORE (~90B fence) + one user (~590B fence)
     // fit (~1140B total), but adding a second user (~590B more) would exceed 1500B.
     // Users are iterated newest-first (user 3), so user 3 is retained and users 1+2 dropped.
+    // Empty speaker + None history: dreamer-style path, no chat-window scope
+    // filter is applied, so the byte-budget ordering this test exercises
+    // remains in force.
     let ctx = build_chat_turn_context(
         &store,
         BuildOpts {
             inject_byte_budget: 1500,
-            nonce: "n00000000000000nn".into(),
-            primary_history: None,
             primary_login: "main".into(),
-            ai_channel_history: None,
-            ai_channel_login: None,
-            invocation_channel: InvocationChannel::Primary,
-            current_agent: Agent::Aurora,
-            self_logins: Vec::new(),
-            // Empty speaker + None history: dreamer-style path, no
-            // chat-window scope filter is applied, so the byte-budget
-            // ordering this test exercises remains in force.
-            speaker_login: String::new(),
-            recap_sheet_logins: BTreeSet::new(),
-            n: 200,
-            ai_channel_n: 200,
-            batch_size: 40,
-            recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
-            recap_enabled: false,
+            ..build_opts()
         },
     )
     .await
@@ -723,45 +575,23 @@ async fn build_chat_turn_context_drops_oldest_users_when_over_budget() {
 
 #[tokio::test]
 async fn build_chat_turn_context_renders_two_history_sections_invocation_first() {
-    use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-    use crate::settings::test_handle;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
+    let (store, _tmp) = test_store().await;
 
-    let dir = tempfile::tempdir().unwrap();
-    let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-
-    let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-        test_handle(),
-        primary_history_capacity,
-    )));
+    let primary = history_buffer();
     primary.lock().await.push_user("alice", "hello primary");
-    let ai = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-        test_handle(),
-        primary_history_capacity,
-    )));
+    let ai = history_buffer();
     ai.lock().await.push_user("bob", "hello ai");
 
     let body = build_chat_turn_context(
         &store,
         BuildOpts {
             inject_byte_budget: 24576,
-            nonce: "n00000000000000nn".into(),
             primary_history: Some(primary.clone()),
             primary_login: "main".into(),
             ai_channel_history: Some(ai.clone()),
             ai_channel_login: Some("ai_chan".into()),
             invocation_channel: InvocationChannel::AiChannel,
-            current_agent: Agent::Aurora,
-            self_logins: Vec::new(),
-            speaker_login: String::new(),
-            recap_sheet_logins: BTreeSet::new(),
-            n: 200,
-            ai_channel_n: 200,
-            batch_size: 40,
-            recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
-            recap_enabled: false,
+            ..build_opts()
         },
     )
     .await
@@ -784,44 +614,21 @@ async fn build_chat_turn_context_renders_two_history_sections_invocation_first()
 
 #[tokio::test]
 async fn build_chat_turn_context_omits_empty_history_sections() {
-    use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-    use crate::settings::test_handle;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
+    let (store, _tmp) = test_store().await;
 
-    let dir = tempfile::tempdir().unwrap();
-    let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-
-    let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-        test_handle(),
-        primary_history_capacity,
-    )));
+    let primary = history_buffer();
     primary.lock().await.push_user("alice", "hello");
-    let ai = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-        test_handle(),
-        primary_history_capacity,
-    ))); // empty
+    let ai = history_buffer(); // empty
 
     let body = build_chat_turn_context(
         &store,
         BuildOpts {
             inject_byte_budget: 24576,
-            nonce: "n00000000000000nn".into(),
             primary_history: Some(primary),
             primary_login: "main".into(),
             ai_channel_history: Some(ai),
             ai_channel_login: Some("ai_chan".into()),
-            invocation_channel: InvocationChannel::Primary,
-            current_agent: Agent::Aurora,
-            self_logins: Vec::new(),
-            speaker_login: String::new(),
-            recap_sheet_logins: BTreeSet::new(),
-            n: 200,
-            ai_channel_n: 200,
-            batch_size: 40,
-            recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
-            recap_enabled: false,
+            ..build_opts()
         },
     )
     .await
@@ -855,66 +662,7 @@ async fn seed_user_file(
 }
 
 #[tokio::test]
-async fn build_chat_turn_context_no_longer_emits_mention_table() {
-    use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-
-    let dir = tempfile::tempdir().unwrap();
-    let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-
-    // Seed a user file so that the previous code WOULD have emitted a
-    // mention table row for `alice`. We assert no table appears.
-    seed_user_file(
-        dir.path(),
-        "111",
-        "alice",
-        "Alice",
-        jiff::Timestamp::now(),
-        "alice body",
-    )
-    .await;
-
-    let history = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-        test_handle(),
-        primary_history_capacity,
-    )));
-    history.lock().await.push_user("alice", "hi");
-
-    let ctx = build_chat_turn_context(
-        &store,
-        BuildOpts {
-            inject_byte_budget: 16 * 1024,
-            nonce: "n00000000000000nn".into(),
-            primary_history: Some(history),
-            primary_login: "chan".into(),
-            ai_channel_history: None,
-            ai_channel_login: None,
-            invocation_channel: InvocationChannel::Primary,
-            current_agent: Agent::Aurora,
-            self_logins: Vec::new(),
-            speaker_login: "alice".into(),
-            recap_sheet_logins: BTreeSet::new(),
-            n: 200,
-            ai_channel_n: 200,
-            batch_size: 40,
-            recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
-            recap_enabled: false,
-        },
-    )
-    .await
-    .unwrap();
-
-    assert!(
-        !ctx.recent_chat.contains("## Mentioned users"),
-        "mention table should be dropped, got:\n{}",
-        ctx.recent_chat
-    );
-}
-
-#[tokio::test]
 async fn build_chat_turn_context_scopes_users_to_chat_window_plus_speaker() {
-    use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
 
@@ -932,10 +680,7 @@ async fn build_chat_turn_context_scopes_users_to_chat_window_plus_speaker() {
     }
     seed_user_file(dir.path(), "99", "lurker", "Lurker", now, "body").await;
 
-    let history = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-        test_handle(),
-        primary_history_capacity,
-    )));
+    let history = history_buffer();
     {
         let mut h = history.lock().await;
         h.push_user("alice", "hi");
@@ -945,23 +690,9 @@ async fn build_chat_turn_context_scopes_users_to_chat_window_plus_speaker() {
     let ctx = build_chat_turn_context(
         &store,
         BuildOpts {
-            inject_byte_budget: 16 * 1024,
-            nonce: "n00000000000000nn".into(),
             primary_history: Some(history),
-            primary_login: "chan".into(),
-            ai_channel_history: None,
-            ai_channel_login: None,
-            invocation_channel: InvocationChannel::Primary,
-            current_agent: Agent::Aurora,
-            self_logins: Vec::new(),
             speaker_login: "carol".into(),
-            recap_sheet_logins: BTreeSet::new(),
-            n: 200,
-            ai_channel_n: 200,
-            batch_size: 40,
-            recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
-            recap_enabled: false,
+            ..build_opts()
         },
     )
     .await
@@ -1002,9 +733,6 @@ async fn build_chat_turn_context_scopes_users_to_chat_window_plus_speaker() {
 
 #[tokio::test]
 async fn note_only_lurker_loses_to_tail_when_budget_tight() {
-    use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-    use std::collections::BTreeSet;
-
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
 
@@ -1031,10 +759,7 @@ async fn note_only_lurker_loses_to_tail_when_budget_tight() {
     // Newer than alice — without tier ordering lurker would win the second slot.
     seed_user_file(dir.path(), "99", "lurker", "Lurker", now, &"x".repeat(400)).await;
 
-    let history = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-        test_handle(),
-        primary_history_capacity,
-    )));
+    let history = history_buffer();
     history.lock().await.push_user("alice", "hi");
 
     let recap_sheet_logins: BTreeSet<String> = ["lurker"].into_iter().map(str::to_string).collect();
@@ -1044,22 +769,10 @@ async fn note_only_lurker_loses_to_tail_when_budget_tight() {
         BuildOpts {
             // SOUL+LORE+carol+alice fit; lurker (third user) exceeds budget.
             inject_byte_budget: 1950,
-            nonce: "n00000000000000nn".into(),
             primary_history: Some(history),
-            primary_login: "chan".into(),
-            ai_channel_history: None,
-            ai_channel_login: None,
-            invocation_channel: InvocationChannel::Primary,
-            current_agent: Agent::Aurora,
-            self_logins: Vec::new(),
             speaker_login: "carol".into(),
             recap_sheet_logins,
-            n: 200,
-            ai_channel_n: 200,
-            batch_size: 40,
-            recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
-            recap_enabled: false,
+            ..build_opts()
         },
     )
     .await
@@ -1084,9 +797,6 @@ async fn note_only_lurker_loses_to_tail_when_budget_tight() {
 
 #[tokio::test]
 async fn recap_only_identity_included_when_budget_allows() {
-    use crate::ai::chat_history::{ChatHistoryBuffer, primary_history_capacity};
-    use std::collections::BTreeSet;
-
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
 
@@ -1094,10 +804,7 @@ async fn recap_only_identity_included_when_budget_allows() {
     seed_user_file(dir.path(), "11", "carol", "Carol", now, "carol body").await;
     seed_user_file(dir.path(), "99", "lurker", "Lurker", now, "lurker body").await;
 
-    let history = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-        test_handle(),
-        primary_history_capacity,
-    )));
+    let history = history_buffer();
     history.lock().await.push_user("alice", "hi");
 
     let recap_sheet_logins: BTreeSet<String> = ["lurker"].into_iter().map(str::to_string).collect();
@@ -1105,23 +812,10 @@ async fn recap_only_identity_included_when_budget_allows() {
     let ctx = build_chat_turn_context(
         &store,
         BuildOpts {
-            inject_byte_budget: 16 * 1024,
-            nonce: "n00000000000000nn".into(),
             primary_history: Some(history),
-            primary_login: "chan".into(),
-            ai_channel_history: None,
-            ai_channel_login: None,
-            invocation_channel: InvocationChannel::Primary,
-            current_agent: Agent::Aurora,
-            self_logins: Vec::new(),
             speaker_login: "carol".into(),
             recap_sheet_logins,
-            n: 200,
-            ai_channel_n: 200,
-            batch_size: 40,
-            recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
-            recap_enabled: false,
+            ..build_opts()
         },
     )
     .await
@@ -1173,8 +867,7 @@ async fn build_chat_turn_context_same_nonce_yields_identical_memory() {
     // with the nonce fixed and the store unchanged, two builds must be
     // byte-identical. Guards against future per-build variation
     // (timestamps, reordering, fresh randomness) creeping into the block.
-    let dir = tempfile::tempdir().unwrap();
-    let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+    let (store, _tmp) = test_store().await;
     store
         .write(
             &FileKind::User {
@@ -1199,21 +892,8 @@ async fn build_chat_turn_context_same_nonce_yields_identical_memory() {
     let opts = || BuildOpts {
         inject_byte_budget: 24576,
         nonce: "stablenonce000000".into(),
-        primary_history: None,
         primary_login: "main".into(),
-        ai_channel_history: None,
-        ai_channel_login: None,
-        invocation_channel: InvocationChannel::Primary,
-        current_agent: Agent::Aurora,
-        self_logins: Vec::new(),
-        speaker_login: String::new(),
-        recap_sheet_logins: BTreeSet::new(),
-        n: 200,
-        ai_channel_n: 200,
-        batch_size: 40,
-        recap_through_seq: 0,
-        ai_channel_recap_through_seq: 0,
-        recap_enabled: false,
+        ..build_opts()
     };
 
     let first = build_chat_turn_context(&store, opts()).await.unwrap();

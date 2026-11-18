@@ -450,11 +450,7 @@ not a transcript line
         let in_gap = jiff::civil::time(2, 30, 0, 0);
         let resolved = resolve_berlin_run_at(date, in_gap).expect("falls through past gap");
         assert_eq!(resolved.hour(), 3, "should bump into the post-DST hour");
-    }
 
-    #[test]
-    fn resolve_berlin_run_at_default_safe() {
-        let date = jiff::civil::date(2026, 3, 29);
         let four_am = jiff::civil::time(4, 0, 0, 0);
         let resolved = resolve_berlin_run_at(date, four_am).expect("04:00 always resolves");
         assert_eq!(resolved.hour(), 4);

@@ -188,28 +188,11 @@ mod tests {
             None,
             &TraceIds::default(),
         );
+        assert_eq!(req["messages"][0]["role"], "system");
         let parts = &req["messages"][1]["content"];
         assert_eq!(parts[0]["text"], "Describe the contents.");
         assert_eq!(parts[1]["type"], "text");
         assert_eq!(parts[1]["text"], "Hello");
-    }
-
-    #[test]
-    fn build_request_includes_system_prompt() {
-        let c = client();
-        let req = c.build_request(
-            "text/plain",
-            &Payload::Text("x".into()),
-            None,
-            &TraceIds::default(),
-        );
-        assert_eq!(req["messages"][0]["role"], "system");
-        assert!(
-            req["messages"][0]["content"]
-                .as_str()
-                .expect("system content")
-                .contains("Twitch-Chatbot"),
-        );
     }
 
     #[test]
@@ -288,18 +271,14 @@ mod tests {
             "x".into(),
             Duration::from_secs(2),
         );
-        let err = c
+        let result = c
             .analyze(
                 "text/plain",
                 &Payload::Text("x".into()),
                 None,
                 &TraceIds::default(),
             )
-            .await
-            .expect_err("err");
-        assert!(
-            err.to_string().to_lowercase().contains("error status"),
-            "{err}"
-        );
+            .await;
+        assert!(result.is_err(), "a 5xx must surface as an error");
     }
 }

@@ -52,11 +52,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn header_image_jpeg_returns_image() {
-        assert_eq!(
-            detect("image/jpeg; charset=binary", &[]),
-            Some(Bucket::Image)
-        );
+    fn header_maps_to_bucket_ignoring_params() {
+        for (header, expected) in [
+            ("image/jpeg; charset=binary", Bucket::Image),
+            ("text/html; charset=utf-8", Bucket::Text),
+            ("audio/mpeg", Bucket::Audio),
+            ("video/mp4", Bucket::Video),
+        ] {
+            assert_eq!(detect(header, &[]), Some(expected), "{header}");
+        }
     }
 
     #[test]
@@ -71,23 +75,8 @@ mod tests {
     }
 
     #[test]
-    fn header_text_html_returns_text() {
-        assert_eq!(detect("text/html; charset=utf-8", &[]), Some(Bucket::Text));
-    }
-
-    #[test]
     fn header_missing_magic_png_returns_image() {
         let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         assert_eq!(detect("", &png), Some(Bucket::Image));
-    }
-
-    #[test]
-    fn audio_mp3_via_header() {
-        assert_eq!(detect("audio/mpeg", &[]), Some(Bucket::Audio));
-    }
-
-    #[test]
-    fn video_mp4_via_header() {
-        assert_eq!(detect("video/mp4", &[]), Some(Bucket::Video));
     }
 }

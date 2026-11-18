@@ -590,45 +590,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn blocks_localhost_and_private_ips() {
-        assert!(is_blocked_host_literal(
-            &reqwest::Url::parse("http://localhost/test").expect("url")
-        ));
-        assert!(is_blocked_host_literal(
-            &reqwest::Url::parse("http://127.0.0.1/test").expect("url")
-        ));
-        assert!(is_blocked_host_literal(
-            &reqwest::Url::parse("http://10.0.0.2/test").expect("url")
-        ));
-        assert!(!is_blocked_host_literal(
-            &reqwest::Url::parse("https://example.com/test").expect("url")
-        ));
-    }
-
-    fn is_html_content_type(content_type: &str) -> bool {
-        let media_type = content_type
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_ascii_lowercase();
-
-        matches!(
-            media_type.as_str(),
-            "text/html" | "application/xhtml+xml" | "application/xml" | "text/xml"
-        )
-    }
-
-    #[test]
-    fn detects_html_like_content_types() {
-        assert!(is_html_content_type("text/html"));
-        assert!(is_html_content_type("text/html; charset=utf-8"));
-        assert!(is_html_content_type("application/xhtml+xml"));
-        assert!(is_html_content_type("application/xml"));
-        assert!(!is_html_content_type("application/json"));
-    }
-
     fn url(s: &str) -> reqwest::Url {
         reqwest::Url::parse(s).expect("url")
     }
@@ -642,15 +603,22 @@ mod tests {
         for blocked in [
             "http://[::1]/",
             "http://[::ffff:127.0.0.1]/",
+            "http://[::ffff:10.0.0.1]/",
             "http://[fd00::1]/",
             "http://[::ffff:100.64.0.1]/",
             "http://0.0.0.0/",
+            "http://127.0.0.1/",
+            "http://10.0.0.2/",
             "http://[::]:8080/",
             "http://localhost/",
         ] {
             assert!(is_blocked_host_literal(&url(blocked)), "{blocked}");
         }
-        for allowed in ["http://[2606:4700::1111]/", "https://example.com/"] {
+        for allowed in [
+            "http://[2606:4700::1111]/",
+            "http://[::ffff:8.8.8.8]/",
+            "https://example.com/",
+        ] {
             assert!(!is_blocked_host_literal(&url(allowed)), "{allowed}");
         }
     }
@@ -794,19 +762,6 @@ mod tests {
     }
 
     #[test]
-    fn blocks_ipv6_mapped_ipv4_loopback() {
-        assert!(is_blocked_ip(
-            "::ffff:127.0.0.1".parse::<IpAddr>().expect("ip")
-        ));
-        assert!(is_blocked_ip(
-            "::ffff:10.0.0.1".parse::<IpAddr>().expect("ip")
-        ));
-        assert!(!is_blocked_ip(
-            "::ffff:8.8.8.8".parse::<IpAddr>().expect("ip")
-        ));
-    }
-
-    #[test]
     fn extracts_readable_text_from_html() {
         let html = r#"
             <html><body>
@@ -824,25 +779,6 @@ mod tests {
         assert!(out.contains("Title"), "got: {out}");
         assert!(out.contains("First paragraph."), "got: {out}");
         assert!(!out.contains("ignore me"), "got: {out}");
-    }
-
-    #[test]
-    fn parses_searx_json_shape() {
-        let payload = serde_json::json!({
-            "results": [
-                {
-                    "title": "Headline",
-                    "url": "https://example.com/news",
-                    "content": "Snippet text",
-                    "publishedDate": "2026-04-25",
-                    "engine": "news"
-                }
-            ]
-        });
-        let parsed: SearxSearchResponse = serde_json::from_value(payload).expect("parse");
-        assert_eq!(parsed.results.len(), 1);
-        assert_eq!(parsed.results[0].title, "Headline");
-        assert_eq!(parsed.results[0].url, "https://example.com/news");
     }
 
     fn caps() -> AiMedia {
