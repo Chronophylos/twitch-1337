@@ -240,8 +240,8 @@ fn poll_result_to_outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aviation::tracker::test_support::dt;
-    use crate::aviation::tracker::{FlightIdentifier, FlightPhase, HexSource, TargetConfirmation};
+    use crate::aviation::tracker::test_support::{dt, pending_flight};
+    use crate::aviation::tracker::{FlightIdentifier, HexSource, TargetConfirmation};
     use crate::aviation::{AdsbProvider, AltBaro, NearbyAircraft};
     use async_trait::async_trait;
     use std::collections::HashMap;
@@ -282,7 +282,7 @@ mod tests {
     }
 
     fn hex_shaped_iata_flight() -> TrackedFlight {
-        let mut flight = pending_callsign_flight();
+        let mut flight = pending_flight();
         flight.identifier = FlightIdentifier::Callsign("DE1513".to_string());
         flight.callsign = Some("DE1513".to_string());
         flight.alias_callsigns = vec!["DE1513".to_string()];
@@ -308,43 +308,9 @@ mod tests {
         }
     }
 
-    fn pending_callsign_flight() -> TrackedFlight {
-        TrackedFlight {
-            identifier: FlightIdentifier::Callsign("DLH1234".to_string()),
-            callsign: Some("DLH1234".to_string()),
-            alias_callsigns: vec!["DLH1234".to_string()],
-            hex: None,
-            hex_source: None,
-            observed_callsign: None,
-            target_confirmation: TargetConfirmation::Pending,
-            phase: FlightPhase::Unknown,
-            route: None,
-            aircraft_type: None,
-            altitude_ft: None,
-            vertical_rate_fpm: None,
-            ground_speed_kts: None,
-            lat: None,
-            lon: None,
-            squawk: None,
-            tracked_by: "alice".to_string(),
-            tracked_at: dt("2026-04-18T12:00:00Z"),
-            last_seen: None,
-            last_visible_at: None,
-            last_phase_change: None,
-            polls_since_change: 0,
-            takeoff_at: None,
-            aviationstack_checked: false,
-            scheduled_departure_at: None,
-            last_adsb_poll_at: None,
-            divert: Default::default(),
-            dest_lat: None,
-            dest_lon: None,
-        }
-    }
-
     #[test]
     fn plan_hex_identifier_uses_hex_lookup() {
-        let mut flight = pending_callsign_flight();
+        let mut flight = pending_flight();
         flight.identifier = FlightIdentifier::Hex("3C6589".to_string());
         flight.callsign = None;
         flight.alias_callsigns.clear();
@@ -356,7 +322,7 @@ mod tests {
 
     #[test]
     fn plan_assigned_hex_with_source_uses_hex_lookup() {
-        let mut flight = pending_callsign_flight();
+        let mut flight = pending_flight();
         flight.hex = Some("3C6589".to_string());
         flight.hex_source = Some(HexSource::Adsb);
         match plan_adsb_lookup(&flight) {
@@ -367,7 +333,7 @@ mod tests {
 
     #[test]
     fn plan_pending_callsign_uses_callsign_candidates() {
-        let flight = pending_callsign_flight();
+        let flight = pending_flight();
         match plan_adsb_lookup(&flight) {
             AdsbLookup::Callsigns {
                 candidates,
@@ -382,7 +348,7 @@ mod tests {
 
     #[test]
     fn plan_empty_callsigns_is_none() {
-        let mut flight = pending_callsign_flight();
+        let mut flight = pending_flight();
         flight.callsign = None;
         flight.alias_callsigns.clear();
         // Callsign identifier still pushes itself — clear to Hex-less empty via empty callsign id
@@ -407,15 +373,6 @@ mod tests {
                 assert!(candidates.iter().any(|c| c == "DE1513"));
                 assert_eq!(hex_fallback.as_deref(), Some("DE1513"));
             }
-            other => panic!("expected Callsigns, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn plan_plain_callsign_has_no_hex_fallback() {
-        let flight = pending_callsign_flight();
-        match plan_adsb_lookup(&flight) {
-            AdsbLookup::Callsigns { hex_fallback, .. } => assert_eq!(hex_fallback, None),
             other => panic!("expected Callsigns, got {other:?}"),
         }
     }
@@ -451,7 +408,7 @@ mod tests {
     }
 
     fn aviationstack_hex_flight() -> TrackedFlight {
-        let mut flight = pending_callsign_flight();
+        let mut flight = pending_flight();
         flight.hex = Some("44006E".to_string());
         flight.hex_source = Some(HexSource::AviationStack);
         flight

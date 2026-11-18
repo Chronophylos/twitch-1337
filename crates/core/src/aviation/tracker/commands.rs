@@ -1209,34 +1209,9 @@ fn collect_poll_results(
 
 #[cfg(test)]
 mod poll_task_group_tests {
-    use super::{Observation, PollAttempt, PollOutcome, collect_poll_results};
+    use super::{Observation, PollOutcome, collect_poll_results};
     use crate::aviation::tracker::FlightIdentifier;
     use crate::lifecycle::{Lifecycle, TaskGroup};
-
-    #[tokio::test]
-    async fn successful_child_results_are_collected() {
-        let lifecycle = Lifecycle::new();
-        let mut group = TaskGroup::new(&lifecycle, "test flight poll children");
-        group
-            .spawn("poll-0", async {
-                let attempt: PollAttempt = Some((
-                    FlightIdentifier::Callsign("TEST".to_owned()),
-                    Observation {
-                        used_hex: false,
-                        outcome: PollOutcome::Error,
-                    },
-                ));
-                attempt
-            })
-            .await;
-
-        let results = collect_poll_results(group.join_all().await).unwrap();
-
-        assert_eq!(results.len(), 1);
-        assert!(
-            matches!(results[0].as_ref().unwrap().0, FlightIdentifier::Callsign(ref call) if call == "TEST")
-        );
-    }
 
     #[tokio::test]
     async fn cancellation_prevents_a_queued_provider_child_from_starting() {

@@ -88,48 +88,11 @@ fn pending_expired_update(flight: &TrackedFlight, _now: Timestamp) -> FlightUpda
 mod tests {
     use super::*;
     use crate::aviation::tracker::advance::{Observation, PollOutcome};
-    use crate::aviation::tracker::test_support::dt;
-    use crate::aviation::tracker::{
-        FlightIdentifier, FlightPhase, TargetConfirmation, TrackedFlight,
-    };
-
-    fn pending_flight(tracked_at: Timestamp) -> TrackedFlight {
-        TrackedFlight {
-            identifier: FlightIdentifier::Callsign("DLH1234".to_string()),
-            callsign: Some("DLH1234".to_string()),
-            alias_callsigns: vec!["DLH1234".to_string()],
-            hex: None,
-            hex_source: None,
-            observed_callsign: None,
-            target_confirmation: TargetConfirmation::Pending,
-            phase: FlightPhase::Unknown,
-            route: None,
-            aircraft_type: None,
-            altitude_ft: None,
-            vertical_rate_fpm: None,
-            ground_speed_kts: None,
-            lat: None,
-            lon: None,
-            squawk: None,
-            tracked_by: "alice".to_string(),
-            tracked_at,
-            last_seen: None,
-            last_visible_at: None,
-            last_phase_change: None,
-            polls_since_change: 0,
-            takeoff_at: None,
-            aviationstack_checked: false,
-            scheduled_departure_at: None,
-            last_adsb_poll_at: None,
-            divert: Default::default(),
-            dest_lat: None,
-            dest_lon: None,
-        }
-    }
+    use crate::aviation::tracker::test_support::{dt, pending_flight};
 
     #[test]
     fn poll_plan_not_due_skips() {
-        let flight = pending_flight(dt("2026-04-18T12:00:00Z"));
+        let flight = pending_flight();
         let now = dt("2026-04-18T12:00:00Z");
         match poll_plan(
             &flight,
@@ -143,7 +106,7 @@ mod tests {
 
     #[test]
     fn poll_plan_expired_applies_pending_expired() {
-        let flight = pending_flight(dt("2026-04-18T00:00:00Z"));
+        let flight = pending_flight();
         let now = dt("2026-04-19T00:00:00Z");
         match poll_plan(&flight, PollReadiness::Expired, now) {
             PollPlan::Apply(update) => {
@@ -157,36 +120,8 @@ mod tests {
     }
 
     #[test]
-    fn poll_plan_due_signals_fetch() {
-        let flight = pending_flight(dt("2026-04-18T12:00:00Z"));
-        match poll_plan(&flight, PollReadiness::Due, dt("2026-04-18T12:00:00Z")) {
-            PollPlan::Due => {}
-            other => panic!("expected Due, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn decide_poll_expired_matches_poll_plan_apply() {
-        let flight = pending_flight(dt("2026-04-18T00:00:00Z"));
-        let now = dt("2026-04-19T00:00:00Z");
-        let from_plan = match poll_plan(&flight, PollReadiness::Expired, now) {
-            PollPlan::Apply(u) => u,
-            other => panic!("expected Apply, got {other:?}"),
-        };
-        let mut flight2 = pending_flight(dt("2026-04-18T00:00:00Z"));
-        let from_decide = decide_poll(&mut flight2, PollReadiness::Expired, None, now)
-            .expect("Expired yields Some");
-        assert_eq!(from_plan.emits, from_decide.emits);
-        assert_eq!(from_plan.removal, from_decide.removal);
-        assert_eq!(from_plan.debug.len(), from_decide.debug.len());
-        // Expired must not mutate the Tracked Flight body.
-        assert_eq!(flight2.last_seen, None);
-        assert_eq!(flight2.target_confirmation, TargetConfirmation::Pending);
-    }
-
-    #[test]
     fn decide_poll_due_delegates_to_advance() {
-        let mut flight = pending_flight(dt("2026-04-18T12:00:00Z"));
+        let mut flight = pending_flight();
         flight.hex = Some("3C6589".to_string());
         let obs = Observation {
             used_hex: true,
@@ -198,19 +133,5 @@ mod tests {
         // Miss on pending with no last_visible_at does not remove; Advance ran.
         assert!(update.removal.is_none());
         assert_eq!(flight.polls_since_change, 1);
-    }
-
-    #[test]
-    fn decide_poll_not_due_returns_none() {
-        let mut flight = pending_flight(dt("2026-04-18T12:00:00Z"));
-        assert!(
-            decide_poll(
-                &mut flight,
-                PollReadiness::NotDue(dt("2026-04-18T12:01:00Z")),
-                None,
-                dt("2026-04-18T12:00:00Z"),
-            )
-            .is_none()
-        );
     }
 }

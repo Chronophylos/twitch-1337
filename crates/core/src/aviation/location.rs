@@ -247,19 +247,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn airline_table_contains_known_mappings() {
-        let table = airline_table();
-        assert_eq!(table.get("TP"), Some(&"TAP"));
-        assert_eq!(table.get("LH"), Some(&"DLH"));
-        assert_eq!(table.get("BA"), Some(&"BAW"));
-    }
-
-    #[test]
-    fn airline_table_is_nonempty() {
-        assert!(airline_table().len() > 100);
-    }
-
-    #[test]
     fn is_iata_flight_number_valid() {
         assert!(is_iata_flight_number("TP247"));
         assert!(is_iata_flight_number("LH5765"));

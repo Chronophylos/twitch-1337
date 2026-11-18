@@ -52,8 +52,9 @@ async fn up_command_lists_aircraft_above_plz() {
     bot.send("alice", "!up 10115").await;
     let out = bot.expect_say(Duration::from_secs(5)).await;
     assert!(
-        out.contains("DLH1234") || out.contains("DLH"),
         "expected DLH1234 in up output: {out}"
+        out.contains("FRA→TXL"),
+        "expected adsbdb route in up output: {out}"
     );
 
     bot.shutdown().await;

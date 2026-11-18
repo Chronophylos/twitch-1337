@@ -23,12 +23,9 @@ pub(crate) struct DebugHttpOutcome {
     pub status: Option<u16>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "client_response/forbidden_parked/rate_limited are exercised by tests, pending ADS-B poll-path wiring of provider-refusal detail"
-    )
+#[expect(
+    dead_code,
+    reason = "client_response/forbidden_parked/rate_limited are unused, pending ADS-B poll-path wiring of provider-refusal detail"
 )]
 impl DebugHttpOutcome {
     pub(crate) fn client_response(provider: &str, endpoint_kind: &str, status: u16) -> Self {

@@ -146,15 +146,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_callsign_passes_through_icao() {
+    async fn resolve_callsign_passes_through_non_iata() {
         let client = aviation_client();
         assert_eq!(client.resolve_callsign("TAP247").await, "TAP247");
         assert_eq!(client.resolve_callsign("DLH5765").await, "DLH5765");
-    }
-
-    #[tokio::test]
-    async fn resolve_callsign_passes_through_hex() {
-        let client = aviation_client();
         assert_eq!(client.resolve_callsign("4CA87D").await, "4CA87D");
     }
 
