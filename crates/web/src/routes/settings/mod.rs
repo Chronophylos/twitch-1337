@@ -1,27 +1,27 @@
-//! Owner-only settings page: live cooldowns + pings runtime knobs.
+//! Owner-only settings page: every dashboard-managed runtime knob.
 //!
 //! The page reads `state.settings` for the current effective values and
 //! `state.settings_store.defaults()` to show the compile-time fallbacks
 //! beside each input. Saves go through `SettingsStore::apply`, which
 //! validates, atomically persists, swaps the shared handle, and records an
-//! audit entry. Reset clears one section (`cooldowns` or `pings`) back to
-//! its defaults.
+//! audit entry. Per-row reset is client-side: it refills the input with the
+//! default and the next save persists it.
 //!
 //! Form deserialization + field conversion live in `forms`; the page-render
-//! template lives in `view`. This module keeps the router and the apply
-//! handlers (`save`, `reset`).
+//! template lives in `view`. This module keeps the router and the `save`
+//! handler.
 
 mod forms;
 mod view;
 
 use axum::Router;
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, State};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, post};
+use axum::routing::get;
 use serde::Deserialize;
 use tower_cookies::Cookies;
 use twitch_1337_core::settings::{
-    Actor, AiSettings, Cooldowns, PingsSettings, Settings, SettingsError, SettingsSection,
+    Actor, AiSettings, Cooldowns, PingsSettings, Settings, SettingsError,
 };
 
 use crate::auth::Role;
@@ -34,9 +34,7 @@ use crate::state::WebState;
 use view::{ShowTpl, show};
 
 pub fn owner_router() -> Router<WebState> {
-    Router::new()
-        .route("/settings", get(show).post(save))
-        .route("/settings/reset/{section}", post(reset))
+    Router::new().route("/settings", get(show).post(save))
 }
 
 // ---------------------------------------------------------------------------
@@ -429,58 +427,4 @@ async fn save(
         }
         Err(e) => Err(WebError::Internal(eyre::eyre!("settings apply: {e}"))),
     }
-}
-
-#[derive(Deserialize)]
-struct ResetForm {
-    #[serde(rename = "_csrf")]
-    csrf: String,
-}
-
-async fn reset(
-    State(state): State<WebState>,
-    Extension(session): Extension<Session>,
-    cookies: Cookies,
-    Path(section): Path<String>,
-    axum::Form(form): axum::Form<ResetForm>,
-) -> Result<Response, WebError> {
-    if !csrf::verify(&form.csrf, &session.csrf_value) {
-        return Err(WebError::CsrfMismatch);
-    }
-    let section = match section.as_str() {
-        "cooldowns" => SettingsSection::Cooldowns,
-        "pings" => SettingsSection::Pings,
-        "twitch_permissions" => SettingsSection::TwitchPermissions,
-        "twitch_channels" => SettingsSection::TwitchChannels,
-        "aviationstack" => SettingsSection::Aviationstack,
-        "suspend" => SettingsSection::Suspend,
-        "spoiler" => SettingsSection::Spoiler,
-        "emote_tracker_potat" => SettingsSection::EmoteTrackerPotat,
-        "alerts_quake" => SettingsSection::AlertsQuake,
-        "alerts_solar" => SettingsSection::AlertsSolar,
-        "alerts_cme" => SettingsSection::AlertsCme,
-        "web_runtime" => SettingsSection::WebRuntime,
-        "ai_behavior" | "ai_aurora" => SettingsSection::AiAurora,
-        "ai_recap" => SettingsSection::AiRecap,
-        other => {
-            return Err(WebError::Validation {
-                field: "section".into(),
-                msg: format!("unknown section `{other}`"),
-            });
-        }
-    };
-    let actor = Actor {
-        user_id: session.user_id.clone(),
-        user_login: session.user_login.clone(),
-    };
-    state.settings_store.reset(section, actor).await?;
-    tracing::info!(
-        target: "twitch_1337_web",
-        user_id = %session.user_id,
-        action = "settings_reset",
-        section = ?section,
-        result = "ok",
-    );
-    flash::set(&cookies, "Reset to defaults.");
-    Ok(Redirect::to("/settings").into_response())
 }

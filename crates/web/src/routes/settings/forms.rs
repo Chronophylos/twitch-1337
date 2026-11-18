@@ -186,7 +186,6 @@ impl AiHistoryForm {
             ai_channel_length: self.ai_history_ai_channel_length,
             n: self.ai_history_n,
             ai_channel_n: self.ai_history_ai_channel_n,
-            ..Default::default()
         }
     }
 }

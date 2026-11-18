@@ -178,34 +178,6 @@ pub struct PingsSettings {
     pub public: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsSection {
-    Cooldowns,
-    Pings,
-    AiProfiles,
-    AiAurora,
-    AiRecap,
-    AiHistory,
-    AiMemory,
-    AiDreamer,
-    AiGrok,
-    AiPrefill,
-    AiWeb,
-    AiEmotes,
-    AiMedia,
-    TwitchPermissions,
-    TwitchChannels,
-    Aviationstack,
-    Suspend,
-    Spoiler,
-    EmoteTrackerPotat,
-    AlertsQuake,
-    AlertsSolar,
-    AlertsCme,
-    WebRuntime,
-    Schedules,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldError {
     pub field: String,

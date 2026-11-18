@@ -16,7 +16,7 @@ use tracing::{error, info, warn};
 
 use super::audit::{AuditEntry, AuditLog, diff_changes};
 use super::overrides::SettingsOverrides;
-use super::{SCHEMA_VERSION, Settings, SettingsError, SettingsHandle, SettingsSection};
+use super::{SCHEMA_VERSION, Settings, SettingsError, SettingsHandle};
 use load::{is_future_version, load_or_quarantine, load_overrides_async, quarantine};
 use merge::merge_into;
 
@@ -175,60 +175,6 @@ impl SettingsStore {
         self.commit(&mut current, &prior_resolved, resolved, actor)
             .await
     }
-
-    pub async fn reset(
-        &self,
-        section: SettingsSection,
-        actor: Actor,
-    ) -> Result<Settings, SettingsError> {
-        let _g = self.write_lock.lock().await;
-        let mut current = load_overrides_async(&self.path).await?.unwrap_or_default();
-        let prior_resolved = Settings::resolve(&self.defaults, &current);
-        match section {
-            SettingsSection::Cooldowns => current.cooldowns = Default::default(),
-            SettingsSection::Pings => current.pings = Default::default(),
-            SettingsSection::AiProfiles => current.ai.profiles = None,
-            SettingsSection::AiAurora => current.ai.aurora = Default::default(),
-            SettingsSection::AiRecap => current.ai.recap = Default::default(),
-            SettingsSection::AiHistory => current.ai.history = Default::default(),
-            SettingsSection::AiMemory => current.ai.memory = Default::default(),
-            SettingsSection::AiDreamer => current.ai.dreamer = Default::default(),
-            SettingsSection::AiGrok => current.ai.grok = Default::default(),
-            SettingsSection::AiPrefill => current.ai.prefill = Default::default(),
-            SettingsSection::AiWeb => current.ai.web = Default::default(),
-            SettingsSection::AiEmotes => current.ai.emotes = Default::default(),
-            SettingsSection::AiMedia => current.ai.media = Default::default(),
-            SettingsSection::TwitchPermissions => {
-                current.twitch.hidden_admins = None;
-                current.twitch.viewer_allowlist = None;
-                current.twitch.emote_usage_deny_list = None;
-            }
-            SettingsSection::TwitchChannels => {
-                current.twitch.admin_channel = None;
-                current.twitch.ai_channel = None;
-                // expected_latency is a network-tuning knob; intentionally not
-                // reset here so channel resets don't clobber latency tweaks.
-                // Users can clear it by setting the field to the default value.
-            }
-            SettingsSection::Aviationstack => current.aviationstack = Default::default(),
-            SettingsSection::Suspend => current.suspend = Default::default(),
-            SettingsSection::Spoiler => current.spoiler = Default::default(),
-            SettingsSection::EmoteTrackerPotat => current.emote_tracker = Default::default(),
-            SettingsSection::AlertsQuake => current.alerts.quake = Default::default(),
-            SettingsSection::AlertsSolar => {
-                current.alerts.solar = Default::default();
-                // max_age_secs is shared by all alert feeds and has no card of
-                // its own; it rides with the solar card so a reset can clear it.
-                current.alerts.max_age_secs = None;
-            }
-            SettingsSection::AlertsCme => current.alerts.cme = Default::default(),
-            SettingsSection::WebRuntime => current.web = Default::default(),
-            SettingsSection::Schedules => current.schedules = None,
-        }
-        let resolved = Settings::resolve(&self.defaults, &current);
-        self.commit(&mut current, &prior_resolved, resolved, actor)
-            .await
-    }
 }
 
 #[cfg(test)]
@@ -362,81 +308,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reset_clears_section_back_to_defaults() {
-        let (_dir, store, handle, _log) = fixture();
-        let patch = SettingsOverrides {
-            cooldowns: CooldownsOverrides {
-                ai: Some(15),
-                news: Some(45),
-                ..Default::default()
-            },
-            ..SettingsOverrides::default()
-        };
-        store.apply(patch, actor()).await.expect("apply");
-        assert_eq!(handle.load().cooldowns.ai, 15);
-        store
-            .reset(SettingsSection::Cooldowns, actor())
-            .await
-            .expect("reset");
-        let s = handle.load();
-        assert_eq!(s.cooldowns.ai, Settings::compiled_defaults().cooldowns.ai);
-        assert_eq!(
-            s.cooldowns.news,
-            Settings::compiled_defaults().cooldowns.news
-        );
-    }
 
-    #[tokio::test]
-    async fn spoiler_reset_restores_defaults() {
-        use crate::settings::overrides::SpoilerOverrides;
-        let (_dir, store, handle, _log) = fixture();
-        let patch = SettingsOverrides {
-            spoiler: SpoilerOverrides {
-                default_game: Some("Hades II".into()),
-                confidence_floor: Some(80),
-                ..Default::default()
-            },
-            ..SettingsOverrides::default()
-        };
-        store.apply(patch, actor()).await.expect("apply");
-        assert_eq!(handle.load().spoiler.confidence_floor, 80);
-        store
-            .reset(SettingsSection::Spoiler, actor())
-            .await
-            .expect("reset");
-        assert_eq!(handle.load().spoiler, Settings::compiled_defaults().spoiler);
-    }
-
-    #[tokio::test]
-    async fn alerts_cme_reset_does_not_clear_max_age() {
-        let (_dir, store, handle, _log) = fixture();
-        let patch = SettingsOverrides {
-            alerts: crate::settings::overrides::AlertsOverrides {
-                cme: crate::settings::overrides::CmeAlertsOverrides {
-                    enabled: Some(true),
-                    poll_secs: Some(600),
-                },
-                max_age_secs: Some(99),
-                ..Default::default()
-            },
-            ..SettingsOverrides::default()
-        };
-        store.apply(patch, actor()).await.expect("apply");
-        assert!(handle.load().alerts.cme.enabled);
-        assert_eq!(handle.load().alerts.max_age_secs, 99);
-        store
-            .reset(SettingsSection::AlertsCme, actor())
-            .await
-            .expect("reset");
-        let s = handle.load();
-        assert_eq!(s.alerts.cme, Settings::compiled_defaults().alerts.cme);
-        assert_eq!(
-            s.alerts.max_age_secs, 99,
-            "max_age rides with the solar card"
-        );
-    }
-
-    #[tokio::test]
     async fn corrupt_ron_falls_back_to_defaults_and_quarantines() {
         let (dir, _store, handle) = open_with_file("not valid ron");
         assert_eq!(*handle.load(), Settings::compiled_defaults());
@@ -456,11 +328,6 @@ mod tests {
 
         let err = store
             .apply(SettingsOverrides::default(), actor())
-            .await
-            .unwrap_err();
-        assert!(matches!(err, SettingsError::FutureVersion { .. }), "{err}");
-        let err = store
-            .reset(SettingsSection::Cooldowns, actor())
             .await
             .unwrap_err();
         assert!(matches!(err, SettingsError::FutureVersion { .. }), "{err}");
@@ -564,53 +431,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reset_schedules_clears_override() {
-        let (_dir, store, _handle, _log) = fixture();
-        store
-            .apply(
-                SettingsOverrides {
-                    schedules: Some(vec![schedule("x")]),
-                    ..Default::default()
-                },
-                actor(),
-            )
-            .await
-            .expect("apply");
-        let s = store
-            .reset(SettingsSection::Schedules, actor())
-            .await
-            .expect("reset");
-        assert!(s.schedules.is_empty());
-    }
 
-    #[tokio::test]
-    async fn reset_signals_change_notify() {
-        let (_dir, store, handle, _log) = fixture();
-        // Seed a non-default cooldowns override so reset has something to clear.
-        store
-            .apply(
-                SettingsOverrides {
-                    cooldowns: CooldownsOverrides {
-                        ai: Some(15),
-                        ..Default::default()
-                    },
-                    ..SettingsOverrides::default()
-                },
-                actor(),
-            )
-            .await
-            .expect("apply");
-        let mut sub = handle.subscribe();
-        store
-            .reset(SettingsSection::Cooldowns, actor())
-            .await
-            .expect("reset");
-        tokio::time::timeout(std::time::Duration::from_millis(500), sub.next())
-            .await
-            .expect("reset must notify change waiters within 500ms");
-    }
-
-    #[tokio::test]
     async fn concurrent_apply_with_does_not_lose_updates() {
         let (_dir, store, _handle, _log) = fixture();
 
@@ -646,31 +467,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reset_twitch_permissions_clears_only_perm_fields() {
-        let (_dir, store, _handle, _log) = fixture();
-        store
-            .apply(
-                SettingsOverrides {
-                    twitch: crate::settings::overrides::TwitchOverrides {
-                        expected_latency: Some(250),
-                        hidden_admins: Some(vec!["111".into()]),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                actor(),
-            )
-            .await
-            .expect("apply");
-        let s = store
-            .reset(SettingsSection::TwitchPermissions, actor())
-            .await
-            .expect("reset");
-        assert!(s.twitch.hidden_admins.is_empty());
-        assert_eq!(s.twitch.expected_latency, 250); // perm reset does not touch channels
-    }
 
-    #[tokio::test]
     async fn prod_shaped_v7_file_with_inert_connection_block_loads() {
         // Prod's settings.ron still carries the pre-schema-6 `connection`
         // block; the field is gone, so serde must ignore it rather than
@@ -727,34 +524,5 @@ mod tests {
             .expect("apply");
         let body = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
         assert!(!body.contains("connection"), "{body}");
-    }
-
-    #[tokio::test]
-    async fn reset_twitch_channels_preserves_expected_latency() {
-        let (_dir, store, _handle, _log) = fixture();
-        store
-            .apply(
-                SettingsOverrides {
-                    twitch: crate::settings::overrides::TwitchOverrides {
-                        expected_latency: Some(300),
-                        admin_channel: Some(Some("admins".into())),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                actor(),
-            )
-            .await
-            .expect("apply");
-        let s = store
-            .reset(SettingsSection::TwitchChannels, actor())
-            .await
-            .expect("reset");
-        // Channels reset clears admin_channel/ai_channel but not expected_latency.
-        assert!(s.twitch.admin_channel.is_none());
-        assert_eq!(
-            s.twitch.expected_latency, 300,
-            "TwitchChannels reset must not wipe expected_latency"
-        );
     }
 }

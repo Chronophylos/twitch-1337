@@ -88,13 +88,6 @@ impl Owner {
         let body = save_form_body(&self.csrf, base, extra);
         self.post(state, "/settings", body).await
     }
-
-    /// POST `/settings/reset/{section}`.
-    async fn reset(&self, state: &WebState, section: &str) -> Response<Body> {
-        let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&self.csrf));
-        self.post(state, &format!("/settings/reset/{section}"), body)
-            .await
-    }
 }
 
 /// POST `/settings` as a fresh owner session, based on the live settings.
@@ -580,53 +573,7 @@ async fn ai_history_length_below_n_plus_batch_returns_400() {
 }
 
 #[tokio::test]
-async fn reset_ai_aurora_restores_reply_length_defaults() {
-    let (state, _dirs) = owner_state().await;
-    let owner = Owner::login(&state);
-    let defaults = state.settings_store.defaults().clone();
-    let res = owner
-        .save(
-            &state,
-            &defaults,
-            &[
-                ("ai_aurora_reply_target_chars", "200"),
-                ("ai_aurora_reply_soft_chars", "300"),
-                ("ai_aurora_reply_hard_chars", "400"),
-            ],
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
-    let res = owner.reset(&state, "ai_aurora").await;
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    let snap = state.settings.load();
-    assert_eq!(snap.ai.aurora.reply_target_chars, 480);
-    assert_eq!(snap.ai.aurora.reply_soft_chars, 490);
-    assert_eq!(snap.ai.aurora.reply_hard_chars, 490);
-}
-
-#[tokio::test]
-async fn reset_ai_recap_restores_recap_off_default() {
-    let (state, _dirs) = owner_state().await;
-    let owner = Owner::login(&state);
-    let current = state.settings.load();
-    let res = owner
-        .save(
-            &state,
-            &current,
-            &[("ai_recap_profile", current.ai.aurora.profile.as_str())],
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    assert!(state.settings.load().ai.recap.profile.is_some());
-
-    let res = owner.reset(&state, "ai_recap").await;
-
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    assert_eq!(state.settings.load().ai.recap.profile, None);
-}
-
-#[tokio::test]
 async fn permissions_lists_render_saved_values() {
     // hidden_admins / viewer_allowlist / emote_usage_deny_list are the
     // multi-line (textarea) rows: one entry per line, posted back verbatim.
@@ -678,32 +625,7 @@ async fn permissions_lists_render_saved_values() {
 }
 
 #[tokio::test]
-async fn reset_cooldowns_clears_section_overrides() {
-    let (state, _dirs) = owner_state().await;
-    let owner = Owner::login(&state);
-    let defaults = state.settings_store.defaults().clone();
-    // First push a non-default value via /settings POST.
-    let res = owner
-        .save(&state, &defaults, &[("cooldown_ai", "15")])
-        .await;
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    assert_eq!(state.settings.load().cooldowns.ai, 15);
 
-    // Then reset just the cooldowns section.
-    let res = owner.reset(&state, "cooldowns").await;
-    assert_eq!(
-        res.status(),
-        StatusCode::SEE_OTHER,
-        "reset should redirect on success",
-    );
-    assert_eq!(
-        state.settings.load().cooldowns.ai,
-        defaults.cooldowns.ai,
-        "reset must restore the compiled default",
-    );
-}
-
-#[tokio::test]
 async fn dreamer_checkbox_absent_sets_enabled_false() {
     // The dreamer card always renders (no *_card_visible pattern), so
     // omitting ai_dreamer_enabled from the POST means "disabled".
@@ -916,60 +838,6 @@ async fn web_runtime_save_persists() {
     assert_eq!(
         s.web.mod_check_refresh_secs, 60,
         "mod_check_refresh_secs must persist"
-    );
-}
-
-#[tokio::test]
-async fn reset_twitch_permissions_clears_section() {
-    let (state, _dirs) = owner_state().await;
-    let owner = Owner::login(&state);
-
-    // Push non-default values. owner is bootstrap-only (config.toml), not a form field.
-    let defaults = state.settings_store.defaults().clone();
-    let _ = owner
-        .save(&state, &defaults, &[("twitch_hidden_admins", "111")])
-        .await;
-    assert_eq!(
-        state.settings.load().twitch.hidden_admins,
-        vec!["111".to_owned()]
-    );
-
-    // Reset the section.
-    let res = owner.reset(&state, "twitch_permissions").await;
-    assert_eq!(res.status(), StatusCode::SEE_OTHER, "reset must redirect");
-    assert!(
-        state.settings.load().twitch.hidden_admins.is_empty(),
-        "reset must clear hidden_admins",
-    );
-}
-
-#[tokio::test]
-async fn reset_aviationstack_clears_section() {
-    let (state, _dirs) = owner_state().await;
-    let owner = Owner::login(&state);
-
-    // Push a non-default enabled state.
-    let defaults = state.settings_store.defaults().clone();
-    let _ = owner
-        .save(
-            &state,
-            &defaults,
-            &[
-                ("aviationstack_card_visible", "1"),
-                ("aviationstack_enabled", "1"),
-                ("aviationstack_timeout_secs", "30"),
-            ],
-        )
-        .await;
-    assert!(state.settings.load().aviationstack.enabled);
-
-    // Reset the section.
-    let res = owner.reset(&state, "aviationstack").await;
-    assert_eq!(res.status(), StatusCode::SEE_OTHER, "reset must redirect");
-    assert_eq!(
-        state.settings.load().aviationstack,
-        defaults.aviationstack,
-        "aviationstack must be restored to defaults after reset",
     );
 }
 
