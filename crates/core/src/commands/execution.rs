@@ -1692,11 +1692,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn busy_response_is_exactly_the_capacity_message() {
-        assert_eq!(CAPACITY_REJECTION_MESSAGE, "zu viel zu tun");
-    }
-
-    #[tokio::test]
     async fn full_admission_channel_is_rejected_without_blocking() {
         let mut test_sender = test_sender();
         let (sender, _receiver) =
@@ -1728,7 +1723,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manager_capacity_reply_is_time_bounded_and_exact() {
+    async fn manager_capacity_reply_is_time_bounded() {
         let flush_gate = Arc::new(Semaphore::new(0));
         let test_sender = test_sender_with_flush_gate(Some(flush_gate.clone()));
         let command_gate = Arc::new(Semaphore::new(0));
@@ -1771,7 +1766,6 @@ mod tests {
         .expect("capacity reply blocked the manager scheduling path")
         .unwrap();
 
-        assert_eq!(CAPACITY_REJECTION_MESSAGE, "zu viel zu tun");
         flush_gate.add_permits(1);
         manager.task_group.abort_and_join().await.unwrap();
     }

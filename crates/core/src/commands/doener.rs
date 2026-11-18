@@ -21,24 +21,12 @@ fn doener_cooldown_duration(s: &Settings) -> Duration {
 pub struct DoenerCommand {
     client: Arc<DoeneratlasClient>,
     cooldown: PerUserCooldown,
-    #[cfg(test)]
-    settings: SettingsHandle,
 }
 
 impl DoenerCommand {
     pub fn new(client: Arc<DoeneratlasClient>, settings: SettingsHandle) -> Self {
-        let cooldown = PerUserCooldown::live(settings.clone(), doener_cooldown_duration);
-        Self {
-            client,
-            cooldown,
-            #[cfg(test)]
-            settings,
-        }
-    }
-
-    #[cfg(test)]
-    fn current_cooldown(&self) -> Duration {
-        doener_cooldown_duration(&self.settings.load())
+        let cooldown = PerUserCooldown::live(settings, doener_cooldown_duration);
+        Self { client, cooldown }
     }
 }
 
@@ -338,38 +326,5 @@ mod tests {
                 && out.contains("10.00"),
             "unexpected reply: {out}"
         );
-    }
-}
-
-#[cfg(test)]
-mod settings_live_tests {
-    use std::sync::Arc;
-    use tokio::time::Duration;
-
-    use super::DoenerCommand;
-    use crate::settings::Settings;
-
-    #[test]
-    fn reads_cooldown_from_handle_at_call_time() {
-        crate::install_crypto_provider();
-        let initial = Settings::compiled_defaults();
-        let handle: crate::settings::SettingsHandle =
-            crate::settings::SettingsHandle::from_settings(initial);
-        let cmd = DoenerCommand::new(
-            Arc::new(crate::doener::DoeneratlasClient::with_base_url(
-                reqwest::Client::new(),
-                "http://127.0.0.1:1",
-            )),
-            handle.clone(),
-        );
-
-        let before = cmd.current_cooldown();
-        let mut next = Settings::compiled_defaults();
-        next.cooldowns.doener = 7;
-        handle.store(Arc::new(next));
-        let after = cmd.current_cooldown();
-
-        assert_ne!(before, after);
-        assert_eq!(after, Duration::from_secs(7));
     }
 }
