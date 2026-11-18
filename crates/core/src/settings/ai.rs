@@ -110,28 +110,6 @@ impl Default for AiSettings {
     }
 }
 
-/// MIGRATION(ai-profiles): only reachable through the legacy
-/// `ai.connection` override block in pre-schema-6 settings.ron files.
-/// New code uses [`AiProvider`].
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum AiBackendKind {
-    OpenAi,
-    Ollama,
-}
-
-impl AiBackendKind {
-    /// Stable lowercase string form — matches the `serde(rename_all)` output
-    /// and is consumed by the settings page (`<input value=…>`) plus the POST
-    /// parser. Keeping this in code lets templates avoid re-doing the match.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::OpenAi => "openai",
-            Self::Ollama => "ollama",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiAurora {
     pub profile: String,
@@ -455,40 +433,6 @@ mod tests {
         for k in ProfileKind::ALL {
             assert_eq!(ron::to_string(&k).unwrap(), k.as_str());
         }
-    }
-
-    #[test]
-    fn legacy_ai_behavior_overrides_without_reply_keys_keep_defaults() {
-        let o: crate::settings::overrides::AiBehaviorOverrides =
-            ron::from_str("(max_turn_rounds: Some(5))").expect("partial override must parse");
-        assert_eq!(o.max_turn_rounds, Some(5));
-        assert!(o.reply_target_chars.is_none());
-        assert!(o.reply_soft_chars.is_none());
-        assert!(o.reply_hard_chars.is_none());
-        let defaults = crate::settings::Settings::compiled_defaults();
-        let resolved = crate::settings::Settings::resolve(
-            &defaults,
-            &crate::settings::SettingsOverrides {
-                ai: crate::settings::overrides::AiOverrides {
-                    behavior: o,
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        );
-        assert_eq!(
-            resolved.ai.aurora.reply_target_chars,
-            defaults.ai.aurora.reply_target_chars
-        );
-        assert_eq!(
-            resolved.ai.aurora.reply_soft_chars,
-            defaults.ai.aurora.reply_soft_chars
-        );
-        assert_eq!(
-            resolved.ai.aurora.reply_hard_chars,
-            defaults.ai.aurora.reply_hard_chars
-        );
-        assert_eq!(resolved.ai.aurora.max_turn_rounds, 5);
     }
 
     /// ADR-0003 renamed state -> scratch. Every settings.ron in the wild was

@@ -5,11 +5,11 @@
 
 use serde::Deserialize;
 use twitch_1337_core::settings::overrides::{
-    AiAuroraOverrides, AiConnectionOverrides, AiDreamerOverrides, AiEmotesOverrides,
-    AiGrokOverrides, AiHistoryOverrides, AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides,
-    AiRecapOverrides, AiWebOverrides, AlertsOverrides, AviationstackOverrides, CmeAlertsOverrides,
-    EmoteTrackerOverrides, PotatAttributionOverrides, QuakeAlertsOverrides, SolarAlertsOverrides,
-    SpoilerOverrides, SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
+    AiAuroraOverrides, AiDreamerOverrides, AiEmotesOverrides, AiGrokOverrides, AiHistoryOverrides,
+    AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides, AiRecapOverrides, AiWebOverrides,
+    AlertsOverrides, AviationstackOverrides, CmeAlertsOverrides, EmoteTrackerOverrides,
+    PotatAttributionOverrides, QuakeAlertsOverrides, SolarAlertsOverrides, SpoilerOverrides,
+    SuspendOverrides, TwitchOverrides, WebRuntimeOverrides,
 };
 use twitch_1337_core::settings::{
     AiOverrides, CooldownsOverrides, FieldError, PingsOverrides, SettingsOverrides,
@@ -677,16 +677,6 @@ pub(super) fn overrides_from_save_form(form: SaveForm) -> SettingsOverrides {
         ai: AiOverrides {
             // Profiles are managed wholesale on /ai-profiles, not this form.
             profiles: None,
-            active_profile: None,
-            // MIGRATION(ai-profiles): `connection` is a kept legacy field —
-            // the settings form no longer writes to it, so every save is a
-            // no-op on that block. Do NOT delete it from `settings::` core;
-            // removing it would drop a live deployment's existing override
-            // on the next save.
-            connection: AiConnectionOverrides::default(),
-            // MIGRATION(ai-agents): legacy fields are read-only and stripped
-            // from the next persisted schema-7 save.
-            behavior: Default::default(),
             aurora: AiAuroraForm {
                 ai_aurora_profile: form.ai_aurora_profile,
                 ai_aurora_max_turn_rounds: form.ai_aurora_max_turn_rounds,

@@ -8,7 +8,6 @@
 use serde::{Deserialize, Serialize};
 
 use super::SCHEMA_VERSION;
-use super::ai::AiBackendKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SettingsOverrides {
@@ -89,24 +88,11 @@ pub struct PingsOverrides {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiOverrides {
-    /// MIGRATION(ai-profiles): pre-schema-6 files carry a single
-    /// `connection` block. It is read-only — folded into a profile named
-    /// "default" at resolve time and never written back. Deleting this
-    /// field would make serde silently drop a live deployment's connection
-    /// override and revert the bot to compiled defaults on next start.
-    #[serde(default)]
-    pub connection: AiConnectionOverrides,
     /// Whole-list override, same shape as `SettingsOverrides::schedules`:
     /// per-field sparseness makes no sense for rows that can be added and
     /// removed.
     #[serde(default)]
     pub profiles: Option<Vec<crate::settings::ai::AiProfile>>,
-    /// MIGRATION(ai-agents): pre-schema-7 active pointer. Read-only; stripped on persist.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_profile: Option<String>,
-    /// MIGRATION(ai-agents): pre-schema-7 aurora knobs. Read-only; stripped on persist.
-    #[serde(default, skip_serializing_if = "ai_behavior_overrides_is_empty")]
-    pub behavior: AiBehaviorOverrides,
     #[serde(default)]
     pub aurora: AiAuroraOverrides,
     #[serde(default)]
@@ -127,52 +113,6 @@ pub struct AiOverrides {
     pub emotes: AiEmotesOverrides,
     #[serde(default)]
     pub media: AiMediaOverrides,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AiConnectionOverrides {
-    #[serde(default)]
-    pub backend: Option<AiBackendKind>,
-    /// `Option<Option<String>>`: outer `None` = leave at default, outer
-    /// `Some(None)` = explicitly clear, `Some(Some(x))` = set to x.
-    #[serde(default)]
-    pub base_url: Option<Option<String>>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub timeout: Option<u64>,
-    #[serde(default)]
-    pub reasoning_effort: Option<Option<String>>,
-    #[serde(default)]
-    pub service_tier: Option<Option<String>>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AiBehaviorOverrides {
-    #[serde(default)]
-    pub max_turn_rounds: Option<usize>,
-    #[serde(default)]
-    pub max_writes_per_turn: Option<usize>,
-    #[serde(default)]
-    pub persona_name: Option<String>,
-    #[serde(default)]
-    pub min_response_delay_ms: Option<u64>,
-    #[serde(default)]
-    pub reply_target_chars: Option<usize>,
-    #[serde(default)]
-    pub reply_soft_chars: Option<usize>,
-    #[serde(default)]
-    pub reply_hard_chars: Option<usize>,
-}
-
-fn ai_behavior_overrides_is_empty(b: &AiBehaviorOverrides) -> bool {
-    b.max_turn_rounds.is_none()
-        && b.max_writes_per_turn.is_none()
-        && b.persona_name.is_none()
-        && b.min_response_delay_ms.is_none()
-        && b.reply_target_chars.is_none()
-        && b.reply_soft_chars.is_none()
-        && b.reply_hard_chars.is_none()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -205,18 +145,6 @@ pub struct AiHistoryOverrides {
     pub n: Option<u64>,
     #[serde(default)]
     pub ai_channel_n: Option<u64>,
-    // MIGRATION(ai-agents): pre-schema-7 Recap fields. Read-only; stripped on persist.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recap_profile: Option<Option<String>>,
-    // MIGRATION(ai-agents)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub batch_size: Option<u64>,
-    // MIGRATION(ai-agents)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_notes: Option<u64>,
-    // MIGRATION(ai-agents)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub merge_width: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

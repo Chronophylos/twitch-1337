@@ -3,71 +3,7 @@
 //! leaves the existing value untouched (except list/option fields, which the
 //! patch replaces wholesale when present).
 
-use crate::settings::overrides::{AiBehaviorOverrides, SettingsOverrides};
-
-pub(super) fn strip_ai_agents_legacy(into: &mut SettingsOverrides) {
-    let legacy_active = into
-        .ai
-        .active_profile
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("default")
-        .to_string();
-
-    materialize_required_profile(&mut into.ai.aurora.profile, &legacy_active);
-    materialize_required_profile(&mut into.ai.grok.profile, &legacy_active);
-    materialize_required_profile(&mut into.ai.dreamer.profile, &legacy_active);
-    materialize_required_profile(&mut into.ai.media.profile, &legacy_active);
-
-    if into.ai.recap.profile.is_none() {
-        into.ai.recap.profile = into.ai.history.recap_profile.clone();
-    }
-    if into.ai.recap.batch_size.is_none() {
-        into.ai.recap.batch_size = into.ai.history.batch_size;
-    }
-    if into.ai.recap.max_notes.is_none() {
-        into.ai.recap.max_notes = into.ai.history.max_notes;
-    }
-    if into.ai.recap.merge_width.is_none() {
-        into.ai.recap.merge_width = into.ai.history.merge_width;
-    }
-
-    if into.ai.aurora.max_turn_rounds.is_none() {
-        into.ai.aurora.max_turn_rounds = into.ai.behavior.max_turn_rounds;
-    }
-    if into.ai.aurora.max_writes_per_turn.is_none() {
-        into.ai.aurora.max_writes_per_turn = into.ai.behavior.max_writes_per_turn;
-    }
-    if into.ai.aurora.persona_name.is_none() {
-        into.ai.aurora.persona_name = into.ai.behavior.persona_name.clone();
-    }
-    if into.ai.aurora.min_response_delay_ms.is_none() {
-        into.ai.aurora.min_response_delay_ms = into.ai.behavior.min_response_delay_ms;
-    }
-    if into.ai.aurora.reply_target_chars.is_none() {
-        into.ai.aurora.reply_target_chars = into.ai.behavior.reply_target_chars;
-    }
-    if into.ai.aurora.reply_soft_chars.is_none() {
-        into.ai.aurora.reply_soft_chars = into.ai.behavior.reply_soft_chars;
-    }
-    if into.ai.aurora.reply_hard_chars.is_none() {
-        into.ai.aurora.reply_hard_chars = into.ai.behavior.reply_hard_chars;
-    }
-
-    into.ai.active_profile = None;
-    into.ai.behavior = AiBehaviorOverrides::default();
-    into.ai.history.recap_profile = None;
-    into.ai.history.batch_size = None;
-    into.ai.history.max_notes = None;
-    into.ai.history.merge_width = None;
-}
-
-fn materialize_required_profile(slot: &mut Option<Option<String>>, legacy_active: &str) {
-    if !matches!(slot, Some(Some(name)) if !name.trim().is_empty()) {
-        *slot = Some(Some(legacy_active.to_string()));
-    }
-}
+use crate::settings::overrides::SettingsOverrides;
 
 pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides) {
     if let Some(v) = patch.cooldowns.ai {
@@ -100,26 +36,6 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     // AI profiles (whole-list, like schedules)
     if patch.ai.profiles.is_some() {
         into.ai.profiles = patch.ai.profiles.clone();
-    }
-    // MIGRATION(ai-profiles): legacy connection block, still merged so an
-    // existing settings.ron keeps resolving until it is rewritten.
-    if let Some(v) = patch.ai.connection.backend {
-        into.ai.connection.backend = Some(v);
-    }
-    if patch.ai.connection.base_url.is_some() {
-        into.ai.connection.base_url = patch.ai.connection.base_url.clone();
-    }
-    if let Some(v) = patch.ai.connection.model.as_ref() {
-        into.ai.connection.model = Some(v.clone());
-    }
-    if let Some(v) = patch.ai.connection.timeout {
-        into.ai.connection.timeout = Some(v);
-    }
-    if patch.ai.connection.reasoning_effort.is_some() {
-        into.ai.connection.reasoning_effort = patch.ai.connection.reasoning_effort.clone();
-    }
-    if patch.ai.connection.service_tier.is_some() {
-        into.ai.connection.service_tier = patch.ai.connection.service_tier.clone();
     }
     // AI aurora
     if patch.ai.aurora.profile.is_some() {
@@ -390,8 +306,6 @@ pub(super) fn merge_into(into: &mut SettingsOverrides, patch: &SettingsOverrides
     if patch.schedules.is_some() {
         into.schedules = patch.schedules.clone();
     }
-
-    strip_ai_agents_legacy(into);
 }
 
 #[cfg(test)]
@@ -412,22 +326,6 @@ mod tests {
         assert_eq!(
             into.ai.grok.profile.as_ref().and_then(|v| v.as_deref()),
             Some("cheap")
-        );
-    }
-
-    #[test]
-    fn patch_round_trips_service_tier_on_connection() {
-        let mut into = SettingsOverrides::default();
-        let mut patch = SettingsOverrides::default();
-        patch.ai.connection.service_tier = Some(Some("flex".to_string()));
-        merge_into(&mut into, &patch);
-        assert_eq!(
-            into.ai
-                .connection
-                .service_tier
-                .as_ref()
-                .and_then(|v| v.as_deref()),
-            Some("flex")
         );
     }
 
@@ -631,7 +529,6 @@ mod tests {
     fn merge_skips_profiles_when_patch_is_none() {
         let mut into = SettingsOverrides::default();
         into.ai.profiles = Some(vec![make_profile("keep", "m")]);
-        into.ai.active_profile = Some("keep".to_string());
         let patch = SettingsOverrides::default();
 
         merge_into(&mut into, &patch);
@@ -639,9 +536,5 @@ mod tests {
         let v = into.ai.profiles.expect("Some");
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].name, "keep");
-        assert!(
-            into.ai.active_profile.is_none(),
-            "strip clears MIGRATION(ai-agents) active_profile on persist"
-        );
     }
 }

@@ -232,7 +232,6 @@ async fn seed_chat_profiles(state: &WebState, names: &[&str], grok_profile: &str
             SettingsOverrides {
                 ai: AiOverrides {
                     profiles: Some(names.iter().copied().map(chat_profile).collect()),
-                    active_profile: Some("a".to_owned()),
                     aurora: AiAuroraOverrides {
                         profile: Some(Some("a".into())),
                         ..Default::default()

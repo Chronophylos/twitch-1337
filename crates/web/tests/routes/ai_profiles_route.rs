@@ -50,7 +50,6 @@ async fn seed_profiles(state: &twitch_1337_web::WebState, rows: Vec<AiProfile>, 
             SettingsOverrides {
                 ai: twitch_1337_core::settings::AiOverrides {
                     profiles: Some(rows),
-                    active_profile: Some(active.to_owned()),
                     aurora: twitch_1337_core::settings::overrides::AiAuroraOverrides {
                         profile: Some(Some(active.to_owned())),
                         ..Default::default()
@@ -304,20 +303,6 @@ async fn edit_renaming_profile_rewrites_all_five_agent_pointers() {
         .await
         .expect("seed recap pointer");
     let settings_path = td_s.path().join("settings.ron");
-    let mut legacy: SettingsOverrides =
-        ron::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
-    legacy.ai.active_profile = Some("old".into());
-    legacy.ai.aurora.profile = None;
-    legacy.ai.grok.profile = None;
-    legacy.ai.dreamer.profile = None;
-    legacy.ai.media.profile = None;
-    legacy.ai.recap.profile = None;
-    legacy.ai.history.recap_profile = Some(Some("old".into()));
-    fs::write(
-        &settings_path,
-        ron::ser::to_string_pretty(&legacy, ron::ser::PrettyConfig::default()).unwrap(),
-    )
-    .unwrap();
     let (sid, csrf_cookie, bare_csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());

@@ -1,9 +1,7 @@
 //! Override → effective `Settings` resolution. Each field falls through to the
 //! compile-time default when the sparse override leaves it unset.
 
-use super::ai::{AiBackendKind, AiProfile};
 use super::overrides;
-use super::provider::AiProvider;
 use super::{
     AiEmotes, AiPrefill, AiSettings, AiWeb, AlertsSettings, AviationstackSettings, CmeAlerts,
     Cooldowns, EmoteTrackerSettings, PingsSettings, PotatAttributionSettings, QuakeAlerts,
@@ -272,59 +270,51 @@ fn heal_history_window(
 fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
     use super::ai::{AiAurora, AiDreamer, AiGrok, AiHistory, AiMedia, AiMemory, AiRecap};
 
-    let profiles = resolve_profiles(defaults, o);
-    let legacy_active = o
-        .active_profile
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| legacy_profile(o).map(|p| p.name))
-        .unwrap_or_else(|| "default".to_string());
-
     AiSettings {
-        profiles,
+        profiles: o
+            .profiles
+            .clone()
+            .unwrap_or_else(|| defaults.profiles.clone()),
         aurora: AiAurora {
-            profile: fold_required_profile_slot(&o.aurora.profile, &legacy_active),
+            profile: match &o.aurora.profile {
+                Some(Some(n)) if !n.trim().is_empty() => n.clone(),
+                _ => defaults.aurora.profile.clone(),
+            },
             max_turn_rounds: o
                 .aurora
                 .max_turn_rounds
-                .or(o.behavior.max_turn_rounds)
                 .unwrap_or(defaults.aurora.max_turn_rounds),
             max_writes_per_turn: o
                 .aurora
                 .max_writes_per_turn
-                .or(o.behavior.max_writes_per_turn)
                 .unwrap_or(defaults.aurora.max_writes_per_turn),
             persona_name: o
                 .aurora
                 .persona_name
                 .clone()
-                .or_else(|| o.behavior.persona_name.clone())
                 .unwrap_or_else(|| defaults.aurora.persona_name.clone()),
             min_response_delay_ms: o
                 .aurora
                 .min_response_delay_ms
-                .or(o.behavior.min_response_delay_ms)
                 .unwrap_or(defaults.aurora.min_response_delay_ms),
             reply_target_chars: o
                 .aurora
                 .reply_target_chars
-                .or(o.behavior.reply_target_chars)
                 .unwrap_or(defaults.aurora.reply_target_chars),
             reply_soft_chars: o
                 .aurora
                 .reply_soft_chars
-                .or(o.behavior.reply_soft_chars)
                 .unwrap_or(defaults.aurora.reply_soft_chars),
             reply_hard_chars: o
                 .aurora
                 .reply_hard_chars
-                .or(o.behavior.reply_hard_chars)
                 .unwrap_or(defaults.aurora.reply_hard_chars),
         },
         grok: AiGrok {
-            profile: fold_required_profile_slot(&o.grok.profile, &legacy_active),
+            profile: match &o.grok.profile {
+                Some(Some(n)) if !n.trim().is_empty() => n.clone(),
+                _ => defaults.grok.profile.clone(),
+            },
             persona_name: o
                 .grok
                 .persona_name
@@ -332,26 +322,20 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .unwrap_or_else(|| defaults.grok.persona_name.clone()),
         },
         recap: AiRecap {
-            profile: fold_opt_string(o.recap.profile.as_ref(), o.history.recap_profile.as_ref()),
-            batch_size: o
-                .recap
-                .batch_size
-                .or(o.history.batch_size)
-                .unwrap_or(defaults.recap.batch_size),
-            max_notes: o
-                .recap
-                .max_notes
-                .or(o.history.max_notes)
-                .unwrap_or(defaults.recap.max_notes),
-            merge_width: o
-                .recap
-                .merge_width
-                .or(o.history.merge_width)
-                .unwrap_or(defaults.recap.merge_width),
+            profile: match &o.recap.profile {
+                Some(v) => v.clone(),
+                None => defaults.recap.profile.clone(),
+            },
+            batch_size: o.recap.batch_size.unwrap_or(defaults.recap.batch_size),
+            max_notes: o.recap.max_notes.unwrap_or(defaults.recap.max_notes),
+            merge_width: o.recap.merge_width.unwrap_or(defaults.recap.merge_width),
         },
         dreamer: AiDreamer {
             enabled: o.dreamer.enabled.unwrap_or(defaults.dreamer.enabled),
-            profile: fold_required_profile_slot(&o.dreamer.profile, &legacy_active),
+            profile: match &o.dreamer.profile {
+                Some(Some(n)) if !n.trim().is_empty() => n.clone(),
+                _ => defaults.dreamer.profile.clone(),
+            },
             run_at: o
                 .dreamer
                 .run_at
@@ -368,7 +352,10 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
                 .unwrap_or(defaults.dreamer.max_writes_per_turn),
         },
         media: AiMedia {
-            profile: fold_required_profile_slot(&o.media.profile, &legacy_active),
+            profile: match &o.media.profile {
+                Some(Some(n)) if !n.trim().is_empty() => n.clone(),
+                _ => defaults.media.profile.clone(),
+            },
             timeout: o.media.timeout.unwrap_or(defaults.media.timeout),
             max_image_size: o
                 .media
@@ -421,87 +408,6 @@ fn resolve_ai(defaults: &AiSettings, o: &overrides::AiOverrides) -> AiSettings {
         web: resolve_web(defaults.web.as_ref(), &o.web),
         emotes: resolve_emotes(defaults.emotes.as_ref(), &o.emotes),
     }
-}
-
-fn fold_required_profile_slot(slot: &Option<Option<String>>, legacy_active: &str) -> String {
-    match slot {
-        Some(Some(name)) if !name.trim().is_empty() => name.clone(),
-        _ => legacy_active.to_string(),
-    }
-}
-
-fn fold_opt_string(new: Option<&Option<String>>, old: Option<&Option<String>>) -> Option<String> {
-    match new {
-        Some(v) => v.clone(),
-        None => old.and_then(Clone::clone),
-    }
-}
-
-/// MIGRATION(ai-profiles): fold a pre-schema-6 `ai.connection` override into
-/// a single profile named "default". Returns `None` when the legacy block is
-/// entirely empty (a fresh install, or a file already on the new shape).
-fn legacy_profile(o: &overrides::AiOverrides) -> Option<AiProfile> {
-    let c = &o.connection;
-    if c.backend.is_none()
-        && c.base_url.is_none()
-        && c.model.is_none()
-        && c.timeout.is_none()
-        && c.reasoning_effort.is_none()
-        && c.service_tier.is_none()
-    {
-        return None;
-    }
-    let base_url = c.base_url.clone().flatten();
-    // Reproduces the pre-profiles sniff exactly: an empty base_url meant
-    // OpenRouter's default, and only "openrouter.ai" in the URL unlocked
-    // the reasoning-object + service-tier dialect.
-    let provider = match c.backend.unwrap_or(AiBackendKind::OpenAi) {
-        AiBackendKind::Ollama => AiProvider::Ollama,
-        AiBackendKind::OpenAi => match base_url.as_deref() {
-            None | Some("") => AiProvider::OpenRouter,
-            Some(u) if u.contains("openrouter.ai") => AiProvider::OpenRouter,
-            Some(_) => AiProvider::OpenAiCompatible,
-        },
-    };
-    let caps = provider.caps();
-    Some(AiProfile {
-        name: "default".to_string(),
-        key: None,
-        provider,
-        base_url: base_url.filter(|u| !u.is_empty()),
-        model: c.model.clone().unwrap_or_default(),
-        timeout: c.timeout.unwrap_or(30),
-        // The old dashboard hid these rows for backends that couldn't use
-        // them rather than clearing the stored value (a hidden row is
-        // absent from the POST, which the tri-state merge reads as
-        // stale value from a since-abandoned backend can't fail the new,
-        // stricter caps validation and quarantine the whole file. The tier
-        // is narrowed further to OpenRouter: the old dashboard only ever
-        // offered a tier while the connection pointed at OpenRouter, so a
-        // legacy tier on a compatible-mapped fold is stale, and keeping it
-        // would push a field that endpoint never received.
-        reasoning_effort: c
-            .reasoning_effort
-            .clone()
-            .flatten()
-            .filter(|v| caps.allows_effort(v.trim())),
-        service_tier: c
-            .service_tier
-            .clone()
-            .flatten()
-            .filter(|_| provider == AiProvider::OpenRouter),
-        ..Default::default()
-    })
-}
-
-fn resolve_profiles(defaults: &AiSettings, o: &overrides::AiOverrides) -> Vec<AiProfile> {
-    if let Some(list) = &o.profiles {
-        return list.clone();
-    }
-    if let Some(legacy) = legacy_profile(o) {
-        return vec![legacy];
-    }
-    defaults.profiles.clone()
 }
 
 fn resolve_prefill(
@@ -564,20 +470,6 @@ mod tests {
     use super::overrides::{CooldownsOverrides, PingsOverrides, SettingsOverrides};
     use super::*;
 
-    fn profile_named(name: &str) -> AiProfile {
-        AiProfile {
-            name: name.into(),
-            key: None,
-            provider: AiProvider::Ollama,
-            base_url: Some("http://127.0.0.1:1".into()),
-            model: name.into(),
-            timeout: 30,
-            reasoning_effort: None,
-            service_tier: None,
-            ..Default::default()
-        }
-    }
-
     #[test]
     fn empty_overrides_equal_defaults() {
         let defaults = Settings::compiled_defaults();
@@ -623,22 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn service_tier_explicit_clear_resolves_to_none() {
-        // Set a non-None default to prove `Some(None)` clears it.
-        let mut defaults = Settings::compiled_defaults();
-        defaults.ai.profiles[0].service_tier = Some("flex".to_string());
-        let mut overrides = overrides::SettingsOverrides::default();
-        overrides.ai.connection.service_tier = Some(None);
-        let s = Settings::resolve(&defaults, &overrides);
-        assert!(
-            s.ai.by_name(&s.ai.aurora.profile)
-                .unwrap()
-                .service_tier
-                .is_none()
-        );
-    }
 
-    #[test]
     fn twitch_override_resolves() {
         use crate::settings::overrides::TwitchOverrides;
         let defaults = Settings::compiled_defaults();
@@ -797,84 +674,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_connection_override_folds_into_a_default_profile() {
-        let mut o = SettingsOverrides::default();
-        o.ai.connection.backend = Some(AiBackendKind::OpenAi);
-        o.ai.connection.base_url = Some(Some("https://openrouter.ai/api/v1".into()));
-        o.ai.connection.model = Some("z-ai/glm-4.6".into());
-        o.ai.connection.reasoning_effort = Some(Some("high".into()));
-
-        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
-
-        assert_eq!(s.ai.aurora.profile, "default");
-        let p = s.ai.by_name(&s.ai.aurora.profile).unwrap();
-        assert_eq!(p.name, "default");
-        assert_eq!(p.provider, AiProvider::OpenRouter);
-        assert_eq!(p.model, "z-ai/glm-4.6");
-        assert_eq!(p.reasoning_effort.as_deref(), Some("high"));
-        o.ai.connection.service_tier = Some(Some("priority".into()));
-        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
-        let p = s.ai.by_name(&s.ai.aurora.profile).unwrap();
-        assert_eq!(p.service_tier.as_deref(), Some("priority"));
-    }
-
-    #[test]
-    fn legacy_ollama_backend_folds_to_the_ollama_provider() {
-        let mut o = SettingsOverrides::default();
-        o.ai.connection.backend = Some(AiBackendKind::Ollama);
-        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
-        assert_eq!(
-            s.ai.by_name(&s.ai.aurora.profile).unwrap().provider,
-            AiProvider::Ollama
-        );
-    }
-
-    #[test]
-    fn legacy_openai_with_a_third_party_url_folds_to_compatible() {
-        let mut o = SettingsOverrides::default();
-        o.ai.connection.backend = Some(AiBackendKind::OpenAi);
-        o.ai.connection.base_url = Some(Some("https://api.deepseek.com/v1".into()));
-        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
-        assert_eq!(
-            s.ai.by_name(&s.ai.aurora.profile).unwrap().provider,
-            AiProvider::OpenAiCompatible
-        );
-    }
-
-    #[test]
-    fn legacy_tier_is_dropped_when_the_fold_maps_to_compatible() {
-        // Pre-profiles dashboards only offered a tier while the connection
-        // pointed at OpenRouter; a tier surviving a later base_url change is
-        // stale and must not reach the folded compatible profile.
-        let mut o = SettingsOverrides::default();
-        o.ai.connection.backend = Some(AiBackendKind::OpenAi);
-        o.ai.connection.base_url = Some(Some("https://api.deepseek.com/v1".into()));
-        o.ai.connection.service_tier = Some(Some("priority".into()));
-        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
-        let p = s.ai.by_name(&s.ai.aurora.profile).unwrap();
-        assert_eq!(p.provider, AiProvider::OpenAiCompatible);
-        assert!(p.service_tier.is_none());
-    }
-
-    #[test]
-    fn explicit_profiles_win_over_the_legacy_connection_block() {
-        let mut o = SettingsOverrides::default();
-        o.ai.connection.model = Some("legacy-model".into());
-        o.ai.profiles = Some(vec![AiProfile {
-            model: "qwen3:8b".into(),
-            ..profile_named("local")
-        }]);
-        o.ai.active_profile = Some("local".into());
-
-        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
-        assert_eq!(s.ai.profiles.len(), 1);
-        assert_eq!(
-            s.ai.by_name(&s.ai.aurora.profile).unwrap().model,
-            "qwen3:8b"
-        );
-    }
-
-    #[test]
     fn alerts_override_wins_per_field() {
         let defaults = Settings::compiled_defaults();
         let overrides = crate::settings::overrides::SettingsOverrides {
@@ -896,79 +695,5 @@ mod tests {
         assert_eq!(r.alerts.cme, defaults.alerts.cme);
         assert_eq!(r.alerts.solar, defaults.alerts.solar);
         assert_eq!(r.alerts.max_age_secs, defaults.alerts.max_age_secs);
-    }
-
-    #[test]
-    fn v6_stale_active_profile_remains_a_required_agent_pointer() {
-        let mut o = SettingsOverrides::default();
-        o.ai.profiles = Some(vec![profile_named("a")]);
-        o.ai.active_profile = Some("gone".into());
-        let s = Settings::resolve(&Settings::compiled_defaults(), &o);
-        assert_eq!(s.ai.aurora.profile, "gone");
-    }
-
-    #[test]
-    fn v6_active_profile_stamps_required_agents_and_leaves_recap_off() {
-        let defaults = Settings::compiled_defaults();
-        let mut o = SettingsOverrides::default();
-        o.ai.profiles = Some(vec![profile_named("cheap")]);
-        o.ai.active_profile = Some("cheap".into());
-        let s = Settings::resolve(&defaults, &o);
-        assert_eq!(s.ai.aurora.profile, "cheap");
-        assert_eq!(s.ai.grok.profile, "cheap");
-        assert_eq!(s.ai.dreamer.profile, "cheap");
-        assert_eq!(s.ai.media.profile, "cheap");
-        assert!(s.ai.recap.profile.is_none());
-    }
-
-    #[test]
-    fn v6_grok_pin_wins_over_active_profile() {
-        let defaults = Settings::compiled_defaults();
-        let mut o = SettingsOverrides::default();
-        o.ai.profiles = Some(vec![profile_named("cheap"), profile_named("local")]);
-        o.ai.active_profile = Some("cheap".into());
-        o.ai.grok.profile = Some(Some("local".into()));
-        let s = Settings::resolve(&defaults, &o);
-        assert_eq!(s.ai.aurora.profile, "cheap");
-        assert_eq!(s.ai.grok.profile, "local");
-        assert_eq!(s.ai.dreamer.profile, "cheap");
-    }
-
-    #[test]
-    fn v6_history_recap_profile_lands_on_ai_recap() {
-        let defaults = Settings::compiled_defaults();
-        let mut o = SettingsOverrides::default();
-        o.ai.profiles = Some(vec![profile_named("tiny")]);
-        o.ai.history.recap_profile = Some(Some("tiny".into()));
-        o.ai.history.batch_size = Some(7);
-        o.ai.history.max_notes = Some(4);
-        o.ai.history.merge_width = Some(2);
-        let s = Settings::resolve(&defaults, &o);
-        assert_eq!(s.ai.recap.profile.as_deref(), Some("tiny"));
-        assert_eq!(s.ai.recap.batch_size, 7);
-        assert_eq!(s.ai.recap.max_notes, 4);
-        assert_eq!(s.ai.recap.merge_width, 2);
-        // history no longer carries recap fields
-    }
-
-    #[test]
-    fn v6_behavior_persona_lands_on_aurora() {
-        let defaults = Settings::compiled_defaults();
-        let mut o = SettingsOverrides::default();
-        o.ai.behavior.persona_name = Some("Nyx".into());
-        o.ai.behavior.max_turn_rounds = Some(6);
-        let s = Settings::resolve(&defaults, &o);
-        assert_eq!(s.ai.aurora.persona_name, "Nyx");
-        assert_eq!(s.ai.aurora.max_turn_rounds, 6);
-    }
-
-    #[test]
-    fn aurora_override_wins_over_legacy_behavior() {
-        let defaults = Settings::compiled_defaults();
-        let mut o = SettingsOverrides::default();
-        o.ai.behavior.persona_name = Some("Nyx".into());
-        o.ai.aurora.persona_name = Some("Vesper".into());
-        let s = Settings::resolve(&defaults, &o);
-        assert_eq!(s.ai.aurora.persona_name, "Vesper");
     }
 }
