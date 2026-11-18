@@ -262,6 +262,30 @@ async fn delete_without_htmx_redirects_to_list() {
     assert!(state.ping_actor.get_one("doomed".into()).await.is_none());
 }
 
+/// A delete whose persist fails must surface as a 500, not a success swap.
+#[tokio::test]
+async fn delete_with_failing_persist_returns_500() {
+    let (state, sid, csrf, bare_csrf, td) = authed_setup().await;
+    state
+        .ping_actor
+        .create_ping("doomed".into(), "{mentions}".into(), "admin".into(), None)
+        .await
+        .unwrap();
+    // Remove the data dir so the atomic save has no parent to write into.
+    std::fs::remove_dir_all(td.path()).unwrap();
+    let app = build_router(state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pings/doomed/delete")
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .header("X-Csrf-Token", bare_csrf.clone())
+        .header("HX-Request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 /// The list renders the ids the out-of-band swaps target.
 #[tokio::test]
 async fn list_carries_oob_target_ids() {
@@ -426,7 +450,7 @@ async fn create_duplicate_renders_form_with_error_and_user_draft() {
         "user draft must round-trip into the form; got {html}"
     );
     assert!(
-        html.contains("gibt es schon"),
+        html.contains("ping `foo` already exists"),
         "error message must render; got {html}"
     );
     assert!(

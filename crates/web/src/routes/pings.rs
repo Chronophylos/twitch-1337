@@ -33,7 +33,8 @@ use crate::error::{WebError, is_htmx};
 use crate::flash;
 use crate::routes::{humanize_delta, initial_of, render, render_with};
 use crate::state::WebState;
-use crate::user_facing::UserFacing;
+use crate::user_facing::ping_error_for_form;
+use twitch_1337_core::ping::PingError;
 
 /// Viewer-tier surface: GET /pings list. Detail (`/pings/{name}` GET) and
 /// form (`/pings/new` GET) stay on the mod router because they target
@@ -461,13 +462,14 @@ async fn create(
         )
         .await
     {
-        tracing::warn!(
+        let msg = ping_error_for_form(e)?;
+        tracing::info!(
             target: "twitch_1337_web",
             user_id = %session.user_id,
             action = "ping_create",
             target_name = %name,
             result = "validation",
-            error = ?e,
+            error = %msg,
         );
         return render_with(
             StatusCode::BAD_REQUEST,
@@ -476,7 +478,7 @@ async fn create(
                 name: &name,
                 template_text: &template,
                 csrf: &csrf_hex,
-                error: Some(e.user_message()),
+                error: Some(msg),
                 user_login: &session.user_login,
                 user_avatar_url: session.avatar_url.as_deref(),
                 current_page: crate::nav::PINGS,
@@ -558,13 +560,14 @@ async fn update(
         .edit_template(name.clone(), template.clone())
         .await
     {
-        tracing::warn!(
+        let msg = ping_error_for_form(e)?;
+        tracing::info!(
             target: "twitch_1337_web",
             user_id = %session.user_id,
             action = "ping_update",
             target_name = %name,
             result = "validation",
-            error = ?e,
+            error = %msg,
         );
         let members = state
             .ping_actor
@@ -579,7 +582,7 @@ async fn update(
                 name: &name,
                 template_text: &template,
                 csrf: &csrf_hex,
-                error: Some(e.user_message()),
+                error: Some(msg),
                 user_login: &session.user_login,
                 user_avatar_url: session.avatar_url.as_deref(),
                 current_page: crate::nav::PINGS,
@@ -637,11 +640,14 @@ async fn add_member(
     let result = if invalid_login {
         Err("username must be 1\u{2013}25 chars: lowercase letters, digits, underscore".to_owned())
     } else {
-        state
+        match state
             .ping_actor
             .add_member(name.clone(), username.clone())
             .await
-            .map_err(|e| e.user_message())
+        {
+            Ok(()) => Ok(()),
+            Err(e) => Err(ping_error_for_form(e)?),
+        }
     };
 
     let view = state
@@ -716,10 +722,14 @@ async fn remove_member(
 
     // Idempotent: missing ping or non-member is a no-op so the row swap
     // succeeds without flashing an error to the user.
-    let _ = state
+    match state
         .ping_actor
         .remove_member(name.clone(), username.clone())
-        .await;
+        .await
+    {
+        Ok(()) | Err(PingError::NotFound { .. } | PingError::NotMember { .. }) => {}
+        Err(e) => return Err(WebError::Internal(eyre::Report::new(e))),
+    }
 
     tracing::info!(
         target: "twitch_1337_web",
@@ -763,7 +773,10 @@ async fn delete(
 
     // Idempotent: delete on a missing ping is a no-op. The HTMX row swap
     // removes the visible row either way; double-clicks should not 4xx.
-    let _ = state.ping_actor.delete_ping(name.clone()).await;
+    match state.ping_actor.delete_ping(name.clone()).await {
+        Ok(()) | Err(PingError::NotFound { .. }) => {}
+        Err(e) => return Err(WebError::Internal(eyre::Report::new(e))),
+    }
 
     tracing::info!(
         target: "twitch_1337_web",

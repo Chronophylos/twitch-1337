@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use crate::ping::PingHandle;
+use crate::ping::{PingError, PingHandle};
 use crate::settings::SettingsHandle;
 
 use super::{
@@ -11,6 +11,67 @@ use super::{
 
 fn normalize_ping_name(name: &str) -> String {
     name.to_lowercase()
+}
+
+/// Chat wording for a ping failure. `Persist` details are logged, never shown.
+fn chat_error(e: &PingError) -> String {
+    match e {
+        PingError::NotFound { name } => format!("Ping \"{name}\" gibt es nicht FDM"),
+        PingError::AlreadyExists { name } => format!("Ping \"{name}\" gibt es schon FDM"),
+        PingError::ReservedCommand { name } => format!("Ping \"{name}\" ist schon ein Befehl FDM"),
+        PingError::EmptyName => "Ping-Name darf nicht leer sein FDM".to_string(),
+        PingError::InvalidName => {
+            "Ping-Name darf nur Buchstaben, Zahlen, - und _ enthalten FDM".to_string()
+        }
+        PingError::ControlChars => {
+            "Template darf keine Steuerzeichen (z.B. Zeilenumbrüche) enthalten FDM".to_string()
+        }
+        PingError::AlreadyMember { ping, user } => format!("{user} ist schon in \"{ping}\" FDM"),
+        PingError::NotMember { ping, user } => format!("{user} ist nicht in \"{ping}\" FDM"),
+        PingError::Unavailable => "Ping-System ist gerade nicht verfügbar FDM".to_string(),
+        PingError::Persist(_) => {
+            tracing::error!(error = ?e, "Failed to persist ping change");
+            "Konnte Pings nicht speichern FDM".to_string()
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AdminOp {
+    Create,
+    Delete,
+    Edit,
+    Member(MemberOp),
+}
+
+#[derive(Clone, Copy)]
+enum MemberOp {
+    Add,
+    Remove,
+}
+
+impl MemberOp {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SelfOp {
+    Join,
+    Leave,
+}
+
+impl SelfOp {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Join => "join",
+            Self::Leave => "leave",
+        }
+    }
 }
 
 pub struct PingAdminCommand {
@@ -52,24 +113,30 @@ where
 
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let subcommand = ctx.args.first().map(String::as_str).unwrap_or("");
-        match subcommand {
-            "create" | "delete" | "edit" | "add" | "remove" => {
-                let hidden_admins = self.settings.load();
-                if !is_admin(&ctx.privmsg, &hidden_admins.twitch.hidden_admins) {
-                    ctx.sender.reply(&ctx.privmsg, ADMIN_DENIED_MSG).await;
-                    return Ok(());
-                }
-                match subcommand {
-                    "create" => self.handle_create(&ctx).await,
-                    "delete" => self.handle_delete(&ctx).await,
-                    "edit" => self.handle_edit(&ctx).await,
-                    "add" => self.handle_member_op(&ctx, "add").await,
-                    "remove" => self.handle_member_op(&ctx, "remove").await,
-                    _ => unreachable!(),
-                }
+        let admin_op = match subcommand {
+            "create" => Some(AdminOp::Create),
+            "delete" => Some(AdminOp::Delete),
+            "edit" => Some(AdminOp::Edit),
+            "add" => Some(AdminOp::Member(MemberOp::Add)),
+            "remove" => Some(AdminOp::Member(MemberOp::Remove)),
+            _ => None,
+        };
+        if let Some(op) = admin_op {
+            let hidden_admins = self.settings.load();
+            if !is_admin(&ctx.privmsg, &hidden_admins.twitch.hidden_admins) {
+                ctx.sender.reply(&ctx.privmsg, ADMIN_DENIED_MSG).await;
+                return Ok(());
             }
-            "join" => self.handle_self_op(&ctx, "join").await,
-            "leave" => self.handle_self_op(&ctx, "leave").await,
+            return match op {
+                AdminOp::Create => self.handle_create(&ctx).await,
+                AdminOp::Delete => self.handle_delete(&ctx).await,
+                AdminOp::Edit => self.handle_edit(&ctx).await,
+                AdminOp::Member(op) => self.handle_member_op(&ctx, op).await,
+            };
+        }
+        match subcommand {
+            "join" => self.handle_self_op(&ctx, SelfOp::Join).await,
+            "leave" => self.handle_self_op(&ctx, SelfOp::Leave).await,
             "list" => self.handle_list(&ctx).await,
             _ => {
                 ctx.sender
@@ -114,7 +181,7 @@ impl PingAdminCommand {
                     .await;
             }
             Err(e) => {
-                ctx.sender.reply(&ctx.privmsg, format!("{e} FDM")).await;
+                ctx.sender.reply(&ctx.privmsg, chat_error(&e)).await;
             }
         }
         Ok(())
@@ -141,7 +208,7 @@ impl PingAdminCommand {
                     .await;
             }
             Err(e) => {
-                ctx.sender.reply(&ctx.privmsg, format!("{e} FDM")).await;
+                ctx.sender.reply(&ctx.privmsg, chat_error(&e)).await;
             }
         }
         Ok(())
@@ -167,47 +234,48 @@ impl PingAdminCommand {
                     .await;
             }
             Err(e) => {
-                ctx.sender.reply(&ctx.privmsg, format!("{e} FDM")).await;
+                ctx.sender.reply(&ctx.privmsg, chat_error(&e)).await;
             }
         }
         Ok(())
     }
 
-    async fn handle_member_op<T, L>(&self, ctx: &CommandContext<T, L>, op: &str) -> Result<()>
+    async fn handle_member_op<T, L>(&self, ctx: &CommandContext<T, L>, op: MemberOp) -> Result<()>
     where
         T: Transport,
         L: LoginCredentials,
     {
         if ctx.args.len() < 3 {
             ctx.sender
-                .reply(&ctx.privmsg, format!("Nutze: !p {op} <name> <user>"))
+                .reply(
+                    &ctx.privmsg,
+                    format!("Nutze: !p {} <name> <user>", op.as_str()),
+                )
                 .await;
             return Ok(());
         }
         let name = normalize_ping_name(&ctx.args[1]);
         let user = normalize_username(&ctx.args[2]);
         let result = match op {
-            "add" => self.ping.add_member(name.clone(), user.clone()).await,
-            "remove" => self.ping.remove_member(name.clone(), user.clone()).await,
-            _ => unreachable!(),
+            MemberOp::Add => self.ping.add_member(name.clone(), user.clone()).await,
+            MemberOp::Remove => self.ping.remove_member(name.clone(), user.clone()).await,
         };
         match result {
             Ok(()) => {
                 let msg = match op {
-                    "add" => format!("{user} zu \"{name}\" hinzugefügt Okayge"),
-                    "remove" => format!("{user} aus \"{name}\" entfernt Okayge"),
-                    _ => unreachable!(),
+                    MemberOp::Add => format!("{user} zu \"{name}\" hinzugefügt Okayge"),
+                    MemberOp::Remove => format!("{user} aus \"{name}\" entfernt Okayge"),
                 };
                 ctx.sender.reply(&ctx.privmsg, msg).await;
             }
             Err(e) => {
-                ctx.sender.reply(&ctx.privmsg, format!("{e} FDM")).await;
+                ctx.sender.reply(&ctx.privmsg, chat_error(&e)).await;
             }
         }
         Ok(())
     }
 
-    async fn handle_self_op<T, L>(&self, ctx: &CommandContext<T, L>, op: &str) -> Result<()>
+    async fn handle_self_op<T, L>(&self, ctx: &CommandContext<T, L>, op: SelfOp) -> Result<()>
     where
         T: Transport,
         L: LoginCredentials,
@@ -216,23 +284,22 @@ impl PingAdminCommand {
             Some(n) => normalize_ping_name(n),
             None => {
                 ctx.sender
-                    .reply(&ctx.privmsg, format!("Nutze: !p {op} <name>"))
+                    .reply(&ctx.privmsg, format!("Nutze: !p {} <name>", op.as_str()))
                     .await;
                 return Ok(());
             }
         };
         let result = match op {
-            "join" => {
+            SelfOp::Join => {
                 self.ping
                     .add_member(name.clone(), ctx.privmsg.sender.login.clone())
                     .await
             }
-            "leave" => {
+            SelfOp::Leave => {
                 self.ping
                     .remove_member(name.clone(), ctx.privmsg.sender.login.clone())
                     .await
             }
-            _ => unreachable!(),
         };
         match result {
             Ok(()) => {
@@ -241,15 +308,14 @@ impl PingAdminCommand {
                     .await;
             }
             Err(e) => {
-                let err_str = e.to_string();
-                let msg = if err_str.contains("gibt es nicht") {
-                    format!("{err_str} FDM")
-                } else {
-                    match op {
-                        "join" => "Bist du schon FDM".to_string(),
-                        "leave" => "Bist du nicht drin FDM".to_string(),
-                        _ => unreachable!(),
+                let msg = match (op, &e) {
+                    (SelfOp::Join, PingError::AlreadyMember { .. }) => {
+                        "Bist du schon FDM".to_string()
                     }
+                    (SelfOp::Leave, PingError::NotMember { .. }) => {
+                        "Bist du nicht drin FDM".to_string()
+                    }
+                    _ => chat_error(&e),
                 };
                 ctx.sender.reply(&ctx.privmsg, msg).await;
             }

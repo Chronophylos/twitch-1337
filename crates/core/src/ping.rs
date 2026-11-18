@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use eyre::{Result, WrapErr, bail};
+use eyre::{Result, WrapErr};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -11,6 +11,32 @@ use tracing::{debug, info, warn};
 
 const PINGS_FILENAME: &str = "pings.ron";
 const PING_ACTOR_CHANNEL: usize = 64;
+
+/// Why a ping mutation failed. `Display` is neutral English for logs; each
+/// Surface (chat, dashboard) words the variants itself (ADR-0012).
+#[derive(Debug, thiserror::Error)]
+pub enum PingError {
+    #[error("ping {name:?} not found")]
+    NotFound { name: String },
+    #[error("ping {name:?} already exists")]
+    AlreadyExists { name: String },
+    #[error("ping name {name:?} is a built-in command")]
+    ReservedCommand { name: String },
+    #[error("ping name is empty")]
+    EmptyName,
+    #[error("ping name contains characters other than [a-z0-9_-]")]
+    InvalidName,
+    #[error("ping template contains control characters")]
+    ControlChars,
+    #[error("{user} is already a member of ping {ping:?}")]
+    AlreadyMember { ping: String, user: String },
+    #[error("{user} is not a member of ping {ping:?}")]
+    NotMember { ping: String, user: String },
+    #[error("ping actor unavailable")]
+    Unavailable,
+    #[error("failed to persist pings")]
+    Persist(#[source] eyre::Report),
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ping {
@@ -67,26 +93,26 @@ pub enum PingCommand {
         template: String,
         created_by: String,
         cooldown: Option<u64>,
-        reply: oneshot::Sender<Result<()>>,
+        reply: oneshot::Sender<Result<(), PingError>>,
     },
     DeletePing {
         name: String,
-        reply: oneshot::Sender<Result<()>>,
+        reply: oneshot::Sender<Result<(), PingError>>,
     },
     EditTemplate {
         name: String,
         template: String,
-        reply: oneshot::Sender<Result<()>>,
+        reply: oneshot::Sender<Result<(), PingError>>,
     },
     AddMember {
         ping_name: String,
         username: String,
-        reply: oneshot::Sender<Result<()>>,
+        reply: oneshot::Sender<Result<(), PingError>>,
     },
     RemoveMember {
         ping_name: String,
         username: String,
-        reply: oneshot::Sender<Result<()>>,
+        reply: oneshot::Sender<Result<(), PingError>>,
     },
     TryRecordTrigger {
         ping_name: String,
@@ -139,8 +165,8 @@ impl PingHandle {
         }
     }
 
-    fn actor_gone_err<T>() -> Result<T> {
-        Err(eyre::eyre!("Ping-System ist gerade nicht verfügbar"))
+    fn actor_gone_err() -> Result<(), PingError> {
+        Err(PingError::Unavailable)
     }
 
     pub async fn create_ping(
@@ -149,7 +175,7 @@ impl PingHandle {
         template: String,
         created_by: String,
         cooldown: Option<u64>,
-    ) -> Result<()> {
+    ) -> Result<(), PingError> {
         self.send(|reply| PingCommand::CreatePing {
             name,
             template,
@@ -160,12 +186,12 @@ impl PingHandle {
         .await
         .unwrap_or_else(Self::actor_gone_err)
     }
-    pub async fn delete_ping(&self, name: String) -> Result<()> {
+    pub async fn delete_ping(&self, name: String) -> Result<(), PingError> {
         self.send(|reply| PingCommand::DeletePing { name, reply })
             .await
             .unwrap_or_else(Self::actor_gone_err)
     }
-    pub async fn edit_template(&self, name: String, template: String) -> Result<()> {
+    pub async fn edit_template(&self, name: String, template: String) -> Result<(), PingError> {
         self.send(|reply| PingCommand::EditTemplate {
             name,
             template,
@@ -174,7 +200,7 @@ impl PingHandle {
         .await
         .unwrap_or_else(Self::actor_gone_err)
     }
-    pub async fn add_member(&self, ping_name: String, username: String) -> Result<()> {
+    pub async fn add_member(&self, ping_name: String, username: String) -> Result<(), PingError> {
         self.send(|reply| PingCommand::AddMember {
             ping_name,
             username,
@@ -183,7 +209,11 @@ impl PingHandle {
         .await
         .unwrap_or_else(Self::actor_gone_err)
     }
-    pub async fn remove_member(&self, ping_name: String, username: String) -> Result<()> {
+    pub async fn remove_member(
+        &self,
+        ping_name: String,
+        username: String,
+    ) -> Result<(), PingError> {
         self.send(|reply| PingCommand::RemoveMember {
             ping_name,
             username,
@@ -387,11 +417,17 @@ fn publish_names(manager: &PingManager, tx: &watch::Sender<HashSet<String>>) {
     let _ = tx.send(names);
 }
 
-fn validate_template(template: &str) -> Result<()> {
+fn validate_template(template: &str) -> Result<(), PingError> {
     if template.chars().any(char::is_control) {
-        bail!("Template darf keine Steuerzeichen (z.B. Zeilenumbrüche) enthalten");
+        return Err(PingError::ControlChars);
     }
     Ok(())
+}
+
+fn not_found(name: &str) -> PingError {
+    PingError::NotFound {
+        name: name.to_owned(),
+    }
 }
 
 pub struct PingManager {
@@ -450,12 +486,12 @@ impl PingManager {
     /// never leaves a ping that the command reported as failed live until
     /// restart.
     // ponytail: clones the whole store per edit; fine at chat-ping scale.
-    async fn save_or_revert(&mut self, before: PingStore) -> Result<()> {
+    async fn save_or_revert(&mut self, before: PingStore) -> Result<(), PingError> {
         let result = self.save().await;
         if result.is_err() {
             self.store = before;
         }
-        result
+        result.map_err(PingError::Persist)
     }
 
     pub async fn create_ping(
@@ -464,28 +500,28 @@ impl PingManager {
         template: String,
         created_by: String,
         cooldown: Option<u64>,
-    ) -> Result<()> {
+    ) -> Result<(), PingError> {
         let before = self.store.clone();
         let name = name.to_ascii_lowercase();
         if name.is_empty() {
-            bail!("Ping-Name darf nicht leer sein");
+            return Err(PingError::EmptyName);
         }
         if !name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
-            bail!("Ping-Name darf nur Buchstaben, Zahlen, - und _ enthalten");
+            return Err(PingError::InvalidName);
         }
         // A ping named after a built-in command never fires: the dispatcher
         // scans commands in order and the ping catch-all is last, so the
         // command always wins. Reject it here rather than letting it sit in
         // pings.ron looking registered but silently dead.
         if crate::commands::is_reserved_ping_name(&name) {
-            bail!("Ping \"{}\" ist schon ein Befehl", name);
+            return Err(PingError::ReservedCommand { name });
         }
         validate_template(&template)?;
         if self.store.pings.contains_key(&name) {
-            bail!("Ping \"{}\" gibt es schon", name);
+            return Err(PingError::AlreadyExists { name });
         }
         self.store.pings.insert(
             name,
@@ -501,51 +537,61 @@ impl PingManager {
         self.save_or_revert(before).await
     }
 
-    pub async fn delete_ping(&mut self, name: &str) -> Result<()> {
+    pub async fn delete_ping(&mut self, name: &str) -> Result<(), PingError> {
         let before = self.store.clone();
         if self.store.pings.remove(name).is_none() {
-            bail!("Ping \"{}\" gibt es nicht", name);
+            return Err(not_found(name));
         }
         self.last_triggered.remove(name);
         self.save_or_revert(before).await
     }
 
-    pub async fn edit_template(&mut self, name: &str, template: String) -> Result<()> {
+    pub async fn edit_template(&mut self, name: &str, template: String) -> Result<(), PingError> {
         let before = self.store.clone();
         validate_template(&template)?;
         let ping = self
             .store
             .pings
             .get_mut(name)
-            .ok_or_else(|| eyre::eyre!("Ping \"{}\" gibt es nicht", name))?;
+            .ok_or_else(|| not_found(name))?;
         ping.template = template;
         self.save_or_revert(before).await
     }
 
-    pub async fn add_member(&mut self, ping_name: &str, username: &str) -> Result<()> {
+    pub async fn add_member(&mut self, ping_name: &str, username: &str) -> Result<(), PingError> {
         let before = self.store.clone();
         let ping = self
             .store
             .pings
             .get_mut(ping_name)
-            .ok_or_else(|| eyre::eyre!("Ping \"{}\" gibt es nicht", ping_name))?;
+            .ok_or_else(|| not_found(ping_name))?;
         let username_lower = username.to_lowercase();
         if !ping.members.insert(username_lower) {
-            bail!("{} ist schon in \"{}\"", username, ping_name);
+            return Err(PingError::AlreadyMember {
+                ping: ping_name.to_owned(),
+                user: username.to_owned(),
+            });
         }
         self.save_or_revert(before).await
     }
 
-    pub async fn remove_member(&mut self, ping_name: &str, username: &str) -> Result<()> {
+    pub async fn remove_member(
+        &mut self,
+        ping_name: &str,
+        username: &str,
+    ) -> Result<(), PingError> {
         let before = self.store.clone();
         let ping = self
             .store
             .pings
             .get_mut(ping_name)
-            .ok_or_else(|| eyre::eyre!("Ping \"{}\" gibt es nicht", ping_name))?;
+            .ok_or_else(|| not_found(ping_name))?;
         let username_lower = username.to_lowercase();
         if !ping.members.remove(&username_lower) {
-            bail!("{} ist nicht in \"{}\"", username, ping_name);
+            return Err(PingError::NotMember {
+                ping: ping_name.to_owned(),
+                user: username.to_owned(),
+            });
         }
         self.save_or_revert(before).await
     }
@@ -683,7 +729,10 @@ mod tests {
             .create_ping("lb".into(), "Hey {mentions}!".into(), "admin".into(), None)
             .await
             .expect_err("a built-in command name must be rejected");
-        assert!(err.to_string().contains("schon ein Befehl"), "{err}");
+        assert!(
+            matches!(err, PingError::ReservedCommand { ref name } if name == "lb"),
+            "{err}"
+        );
 
         // The name is lowercased before the check, so casing is no escape.
         assert!(
@@ -723,13 +772,16 @@ mod tests {
         let (tx, rx) = mpsc::channel(1);
         drop(rx);
         let handle = PingHandle::new(tx);
-        assert!(
+        assert!(matches!(
             handle
                 .create_ping("x".into(), "Hey {mentions}".into(), "admin".into(), None)
-                .await
-                .is_err()
-        );
-        assert!(handle.delete_ping("x".into()).await.is_err());
+                .await,
+            Err(PingError::Unavailable)
+        ));
+        assert!(matches!(
+            handle.delete_ping("x".into()).await,
+            Err(PingError::Unavailable)
+        ));
         assert!(matches!(
             handle
                 .try_record_trigger("x".into(), "alice".into(), Duration::from_secs(1), false)
@@ -775,8 +827,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut mgr = test_manager(dir.path()).await;
         let result = mgr.edit_template("nope", "whatever".into()).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("gibt es nicht"));
+        assert!(matches!(result, Err(PingError::NotFound { .. })));
     }
 
     #[tokio::test]
@@ -791,7 +842,7 @@ mod tests {
                 None,
             )
             .await;
-        assert!(result.is_err());
+        assert!(matches!(result, Err(PingError::ControlChars)));
         assert!(!mgr.store.pings.contains_key("bad"));
     }
 
@@ -800,7 +851,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut mgr = test_manager(dir.path()).await;
         let result = mgr.edit_template("test", "Hey\x00injection".into()).await;
-        assert!(result.is_err());
+        assert!(matches!(result, Err(PingError::ControlChars)));
         assert_eq!(
             mgr.store.pings.get("test").unwrap().template,
             "Hey {mentions}!"
@@ -814,17 +865,23 @@ mod tests {
         // Unwritable target: the parent directory does not exist.
         mgr.path = dir.path().join("gone").join(PINGS_FILENAME);
 
-        assert!(
+        assert!(matches!(
             mgr.create_ping("new".into(), "Hi {mentions}".into(), "admin".into(), None)
-                .await
-                .is_err()
-        );
+                .await,
+            Err(PingError::Persist(_))
+        ));
         assert!(!mgr.store.pings.contains_key("new"));
 
-        assert!(mgr.add_member("test", "alice").await.is_err());
+        assert!(matches!(
+            mgr.add_member("test", "alice").await,
+            Err(PingError::Persist(_))
+        ));
         assert!(!mgr.is_member("test", "alice"));
 
-        assert!(mgr.delete_ping("test").await.is_err());
+        assert!(matches!(
+            mgr.delete_ping("test").await,
+            Err(PingError::Persist(_))
+        ));
         assert!(mgr.store.pings.contains_key("test"));
     }
 
