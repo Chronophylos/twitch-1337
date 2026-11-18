@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
+use eyre::WrapErr as _;
 use futures_util::FutureExt;
 use thiserror::Error;
 use tokio::sync::{Notify, mpsc};
@@ -133,22 +134,20 @@ pub async fn run_orchestrator<T, L>(
     clock: Arc<dyn Clock>,
     lifecycle: Lifecycle,
     ping: SchedulePing,
-) where
+) -> eyre::Result<()>
+where
     T: Transport,
     L: LoginCredentials,
 {
-    if let Err(error) = try_run_orchestrator(
+    try_run_orchestrator(
         sender, settings, telemetry, channel, shutdown, clock, &lifecycle, &ping,
     )
     .await
-    {
-        panic!("scheduled-message child supervision failed: {error}");
-    }
+    .wrap_err("scheduled-message child supervision failed")
 }
 
-/// Error-returning schedule orchestration seam. Runtime composition should
-/// adopt this future under the lifecycle supervisor after the shared lifecycle
-/// value is threaded into the handler factory.
+/// Typed schedule orchestration seam. A child failure returns `Err`, which
+/// [`run_orchestrator`] hands to the lifecycle supervisor as a Fault.
 #[expect(
     clippy::too_many_arguments,
     reason = "orchestrator owns every dependency its schedule children need"

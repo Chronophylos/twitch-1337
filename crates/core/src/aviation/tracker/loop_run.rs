@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use eyre::WrapErr as _;
 use jiff::tz::TimeZone;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -19,6 +20,8 @@ use super::{
     state::load_tracker_state,
 };
 
+/// Returns `Err` when a nested flight-poll child fails, which Faults the
+/// runtime.
 pub async fn run_flight_tracker<T, L>(
     mut cmd_rx: mpsc::Receiver<TrackerCommand>,
     sender: Arc<ChatSender<T, L>>,
@@ -27,30 +30,31 @@ pub async fn run_flight_tracker<T, L>(
     data_dir: PathBuf,
     clock: Arc<dyn Clock>,
     lifecycle: Lifecycle,
-) where
+) -> eyre::Result<()>
+where
     T: Transport,
     L: LoginCredentials,
 {
     if lifecycle.is_cancelled() {
-        return;
+        return Ok(());
     }
 
     let mut state = load_tracker_state(&data_dir).await;
     info!(flights = state.flights.len(), "Flight tracker started");
 
     if lifecycle.is_cancelled() {
-        return;
+        return Ok(());
     }
     prune_debug_journals(&data_dir, DEBUG_JOURNAL_KEEP_FILES).await;
     if lifecycle.is_cancelled() {
-        return;
+        return Ok(());
     }
     let mut last_journal_date = clock.now_utc().to_zoned_datetime(TimeZone::UTC).date();
 
     loop {
         if lifecycle.is_cancelled() {
             info!("Flight tracker lifecycle cancelled, shutting down");
-            return;
+            return Ok(());
         }
 
         if state.flights.is_empty() {
@@ -58,16 +62,16 @@ pub async fn run_flight_tracker<T, L>(
                 biased;
                 _ = lifecycle.wait_for_cancellation() => {
                     info!("Flight tracker lifecycle cancelled, shutting down");
-                    return;
+                    return Ok(());
                 }
                 cmd = cmd_rx.recv() => cmd,
             };
             let Some(cmd) = cmd else {
                 info!("Flight tracker command channel closed, shutting down");
-                return;
+                return Ok(());
             };
             if lifecycle.is_cancelled() {
-                return;
+                return Ok(());
             }
             process_command(
                 cmd,
@@ -81,7 +85,7 @@ pub async fn run_flight_tracker<T, L>(
         } else {
             loop {
                 if lifecycle.is_cancelled() {
-                    return;
+                    return Ok(());
                 }
                 match cmd_rx.try_recv() {
                     Ok(cmd) => {
@@ -98,7 +102,7 @@ pub async fn run_flight_tracker<T, L>(
                     Err(mpsc::error::TryRecvError::Empty) => break,
                     Err(mpsc::error::TryRecvError::Disconnected) => {
                         info!("Flight tracker command channel closed, shutting down");
-                        return;
+                        return Ok(());
                     }
                 }
             }
@@ -114,16 +118,14 @@ pub async fn run_flight_tracker<T, L>(
                 &lifecycle,
             )
             .await
-            .unwrap_or_else(|source| {
-                panic!("nested flight-poll child failed: {source}");
-            });
+            .wrap_err("nested flight-poll child failed")?;
             let Some(deferred_commands) = deferred_commands else {
                 info!("Flight tracker lifecycle cancelled during poll, shutting down");
-                return;
+                return Ok(());
             };
             for cmd in deferred_commands {
                 if lifecycle.is_cancelled() {
-                    return;
+                    return Ok(());
                 }
                 process_command(
                     cmd,
@@ -137,7 +139,7 @@ pub async fn run_flight_tracker<T, L>(
             }
 
             if lifecycle.is_cancelled() {
-                return;
+                return Ok(());
             }
             let now = clock.now_utc();
             // Roll the journal forward: once the date changes, drop stale files.
@@ -145,7 +147,7 @@ pub async fn run_flight_tracker<T, L>(
             if today != last_journal_date {
                 prune_debug_journals(&data_dir, DEBUG_JOURNAL_KEEP_FILES).await;
                 if lifecycle.is_cancelled() {
-                    return;
+                    return Ok(());
                 }
                 last_journal_date = today;
             }
@@ -160,7 +162,7 @@ pub async fn run_flight_tracker<T, L>(
                 biased;
                 _ = lifecycle.wait_for_cancellation() => {
                     info!("Flight tracker lifecycle cancelled, shutting down");
-                    return;
+                    return Ok(());
                 }
                 _ = clock.sleep_until(next_at) => None,
                 cmd = cmd_rx.recv() => cmd,
@@ -169,7 +171,7 @@ pub async fn run_flight_tracker<T, L>(
                 continue;
             };
             if lifecycle.is_cancelled() {
-                return;
+                return Ok(());
             }
             process_command(
                 cmd,
