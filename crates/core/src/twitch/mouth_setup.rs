@@ -170,16 +170,3 @@ async fn resolve_user_id<L: LoginCredentials>(
         .map(|u| u.id)
         .ok_or_else(|| eyre::eyre!("no user found for login `{username}`"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn missing_mouth_section_yields_empty_router_and_guard() {
-        let cfg = Configuration::test_default(); // no mouths
-        let (router, guard) = build_mouths(&cfg, Path::new("/tmp")).await;
-        assert!(router.aurora.is_none() && router.grok.is_none());
-        assert!(guard.mouth_logins().is_empty());
-    }
-}

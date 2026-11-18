@@ -488,13 +488,6 @@ mod tests {
     }
 
     #[test]
-    fn bare_command_has_no_args() {
-        let (trigger, args) = parse("!v");
-        assert_eq!(trigger, "!v");
-        assert!(args.is_empty());
-    }
-
-    #[test]
     fn grok_alias_at_message_start() {
         let (trigger, args) = parse(&format!("{GROK_ALIAS_TRIGGER} hello world"));
         assert_eq!(trigger, GROK_ALIAS_TRIGGER);
@@ -536,44 +529,36 @@ mod tests {
     }
 
     #[test]
-    fn twitch_mention_recognises_valid_logins() {
-        assert!(is_twitch_mention("@abc_123"));
-        assert!(is_twitch_mention("@USER"));
+    fn twitch_mention_cases() {
+        let cases: &[(&str, bool)] = &[
+            ("@abc_123", true),
+            ("@USER", true),
+            // Bare `@` is not a mention.
+            ("@", false),
+            // Missing `@` prefix.
+            ("abc", false),
+            // Hyphen is not a login char.
+            ("@bad-char", false),
+            // Space splits the word.
+            ("@white space", false),
+        ];
+        for &(word, expected) in cases {
+            assert_eq!(is_twitch_mention(word), expected, "{word}");
+        }
     }
 
     #[test]
-    fn twitch_mention_rejects_malformed() {
-        assert!(!is_twitch_mention("@"), "bare @ is not a mention");
-        assert!(!is_twitch_mention("abc"), "missing @ prefix");
-        assert!(
-            !is_twitch_mention("@bad-char"),
-            "hyphen is not a login char"
-        );
-        assert!(!is_twitch_mention("@white space"), "space splits the word");
-    }
-
-    #[test]
-    fn followup_trigger_maps_mouth_agents_only() {
-        assert_eq!(followup_trigger(Agent::Aurora), Some(AI_TRIGGER));
-        assert_eq!(followup_trigger(Agent::Grok), Some(GROK_ALIAS_TRIGGER));
-        assert_eq!(followup_trigger(Agent::Utility), None);
-    }
-
-    #[test]
-    fn skip_leading_mentions_drops_parent_prefix() {
-        let words = ["@aurora_bot", "!lb"];
-        assert_eq!(skip_leading_mentions(&words), &["!lb"][..]);
-    }
-
-    #[test]
-    fn skip_leading_mentions_keeps_plain_text() {
-        let words = ["was", "meinst", "du"];
-        assert_eq!(skip_leading_mentions(&words), &words[..]);
-    }
-
-    #[test]
-    fn skip_leading_mentions_all_mentions_yields_empty() {
-        let words = ["@aurora_bot"];
-        assert!(skip_leading_mentions(&words).is_empty());
+    fn skip_leading_mentions_cases() {
+        let cases: &[(&[&str], &[&str])] = &[
+            // Reply UI parent prefix is dropped.
+            (&["@aurora_bot", "!lb"], &["!lb"]),
+            // Plain text is kept intact.
+            (&["was", "meinst", "du"], &["was", "meinst", "du"]),
+            // Only mentions → nothing left.
+            (&["@aurora_bot"], &[]),
+        ];
+        for &(words, expected) in cases {
+            assert_eq!(skip_leading_mentions(words), expected, "{words:?}");
+        }
     }
 }

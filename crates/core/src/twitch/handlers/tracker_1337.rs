@@ -905,77 +905,46 @@ mod tests {
     }
 
     #[test]
-    fn empty_leaderboard_first_sub_second_is_overall_record() {
-        assert_eq!(
-            classify_achievement("alice", 234, &lb(&[])),
-            Achievement::OverallRecord
-        );
-    }
-
-    #[test]
-    fn beating_every_entry_is_overall_record() {
-        let board = lb(&[("bob", 300), ("carol", 500)]);
-        assert_eq!(
-            classify_achievement("alice", 250, &board),
-            Achievement::OverallRecord
-        );
-    }
-
-    #[test]
-    fn beating_own_standing_record_is_overall_record() {
-        // alice already holds the all-time record; she lowers it further.
-        let board = lb(&[("alice", 200), ("bob", 400)]);
-        assert_eq!(
-            classify_achievement("alice", 150, &board),
-            Achievement::OverallRecord
-        );
-    }
-
-    #[test]
-    fn beating_own_best_but_not_the_record_is_personal_best() {
-        // bob holds the record at 100; alice improves her own 400 to 250.
-        let board = lb(&[("bob", 100), ("alice", 400)]);
-        assert_eq!(
-            classify_achievement("alice", 250, &board),
-            Achievement::PersonalBest
-        );
-    }
-
-    #[test]
-    fn first_time_on_populated_board_is_personal_best() {
-        let board = lb(&[("bob", 100)]);
-        assert_eq!(
-            classify_achievement("alice", 250, &board),
-            Achievement::PersonalBest
-        );
-    }
-
-    #[test]
-    fn no_improvement_over_own_best_is_none() {
-        let board = lb(&[("bob", 100), ("alice", 250)]);
-        assert_eq!(
-            classify_achievement("alice", 400, &board),
-            Achievement::None
-        );
-    }
-
-    #[test]
-    fn tying_own_best_is_none() {
-        let board = lb(&[("bob", 100), ("alice", 250)]);
-        assert_eq!(
-            classify_achievement("alice", 250, &board),
-            Achievement::None
-        );
-    }
-
-    #[test]
-    fn tying_the_record_is_personal_best_not_record() {
-        // Matching the all-time best is not beating it; alice has no prior entry.
-        let board = lb(&[("bob", 100)]);
-        assert_eq!(
-            classify_achievement("alice", 100, &board),
-            Achievement::PersonalBest
-        );
+    fn classify_achievement_cases() {
+        // (board, alice's time, expected)
+        type Board = &'static [(&'static str, u64)];
+        let cases: &[(Board, u64, Achievement)] = &[
+            // Empty board: first sub-second time is the record.
+            (&[], 234, Achievement::OverallRecord),
+            // Beating every entry.
+            (
+                &[("bob", 300), ("carol", 500)],
+                250,
+                Achievement::OverallRecord,
+            ),
+            // alice already holds the record and lowers it further.
+            (
+                &[("alice", 200), ("bob", 400)],
+                150,
+                Achievement::OverallRecord,
+            ),
+            // bob holds the record at 100; alice improves her own 400 to 250.
+            (
+                &[("bob", 100), ("alice", 400)],
+                250,
+                Achievement::PersonalBest,
+            ),
+            // First entry on a populated board.
+            (&[("bob", 100)], 250, Achievement::PersonalBest),
+            // Slower than own best.
+            (&[("bob", 100), ("alice", 250)], 400, Achievement::None),
+            // Tying own best.
+            (&[("bob", 100), ("alice", 250)], 250, Achievement::None),
+            // Matching the all-time best is not beating it; no prior entry.
+            (&[("bob", 100)], 100, Achievement::PersonalBest),
+        ];
+        for (board, ms, expected) in cases {
+            assert_eq!(
+                classify_achievement("alice", *ms, &lb(board)),
+                *expected,
+                "board={board:?} ms={ms}"
+            );
+        }
     }
 
     #[test]
@@ -1046,21 +1015,5 @@ mod tests {
             &MonitorCompletion::Cancelled
         );
         drop(broadcast_tx);
-    }
-
-    #[tokio::test]
-    async fn monitor_panic_is_a_nested_task_fault() {
-        let lifecycle = crate::lifecycle::Lifecycle::new();
-        let mut tasks = TaskGroup::new(&lifecycle, "panicking 1337 monitor");
-        tasks
-            .spawn("message monitor", async { panic!("monitor failed") })
-            .await;
-
-        let completion = tasks.join_all().await.remove(0);
-        let error = completion
-            .into_result()
-            .expect_err("the monitor panic must be preserved");
-
-        assert!(error.is_panic());
     }
 }

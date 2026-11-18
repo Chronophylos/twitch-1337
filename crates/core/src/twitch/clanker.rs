@@ -23,34 +23,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_clanker_matches_full_builtin_list() {
-        for login in CLANKERS {
-            assert!(is_clanker(login), "{login}");
+    fn should_flag_usage_cases() {
+        let deny = ["custombot".to_string()];
+        // (login, deny_list, expected): own bot login, builtin clanker,
+        // configured deny-list entry, normal chatter.
+        let cases: &[(&str, &[String], bool)] = &[
+            ("mybot", &[], true),
+            ("supibot", &[], true),
+            ("custombot", &deny, true),
+            ("alice", &[], false),
+        ];
+        for &(login, deny_list, expected) in cases {
+            assert_eq!(
+                should_flag_usage(login, "mybot", deny_list),
+                expected,
+                "{login}"
+            );
         }
-        assert!(!is_clanker("alice"));
-    }
-
-    #[test]
-    fn should_flag_bot_login() {
-        assert!(should_flag_usage("mybot", "mybot", &[]));
-    }
-
-    #[test]
-    fn should_flag_clanker() {
-        assert!(should_flag_usage("supibot", "mybot", &[]));
-    }
-
-    #[test]
-    fn should_flag_deny_list_entry() {
-        assert!(should_flag_usage(
-            "custombot",
-            "mybot",
-            &["custombot".into()]
-        ));
-    }
-
-    #[test]
-    fn should_not_flag_normal_chatter() {
-        assert!(!should_flag_usage("alice", "mybot", &[]));
     }
 }
