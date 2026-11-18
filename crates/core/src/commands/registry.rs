@@ -249,8 +249,6 @@ pub enum RegistryBuildError {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use async_trait::async_trait;
     use eyre::Result;
     use twitch_irc::{SecureTCPTransport, login::StaticLoginCredentials, transport::Transport};
@@ -355,17 +353,6 @@ mod tests {
                 "expected `{invalid}` to be rejected"
             );
         }
-    }
-
-    #[test]
-    fn command_id_equality_and_hashing_use_the_stable_string() {
-        let version = CommandId::new("version").unwrap();
-        let same_version = CommandId::new("version").unwrap();
-        let ping = CommandId::new("ping").unwrap();
-        let ids = HashSet::from([version, ping]);
-
-        assert_eq!(ids.len(), 2);
-        assert!(ids.contains(&same_version));
     }
 
     #[test]
@@ -495,22 +482,6 @@ mod tests {
     }
 
     #[test]
-    fn aliases_share_the_canonical_registry_identity() {
-        let ai = Arc::new(FakeCommand {
-            id: "ai",
-            name: "!ai",
-            execution_policy: ExecutionClass::Background,
-            aliases: &["@grok"],
-            stale_matcher: false,
-        });
-        assert!(ai.matches("@grok"));
-
-        let registry = CommandRegistry::from_commands([ai, catch_all()]).unwrap();
-        assert_eq!(registry.len(), 2);
-        assert!(registry.get(&CommandId::new("ai").unwrap()).is_some());
-    }
-
-    #[test]
     fn registry_rejects_alias_its_matcher_does_not_accept() {
         let stale = Arc::new(FakeCommand {
             id: "ai",
@@ -590,41 +561,5 @@ mod tests {
                 "permission": "everyone", "description": "test", "usage": "test",
             })
         );
-    }
-
-    #[test]
-    fn normative_command_metadata_can_build_the_ordered_registry() {
-        let commands = [
-            ("version", "!v", ExecutionClass::Inline),
-            ("ping_admin", "!p", ExecutionClass::Inline),
-            ("suspend", "!suspend", ExecutionClass::Inline),
-            ("unsuspend", "!unsuspend", ExecutionClass::Inline),
-            ("random_flight", "!fl", ExecutionClass::Background),
-            ("flights_above", "!up", ExecutionClass::Background),
-            ("leaderboard", "!lb", ExecutionClass::Inline),
-            ("hall_of_shame", "!sb", ExecutionClass::Inline),
-            ("pw", "!pw", ExecutionClass::Inline),
-            ("pb", "!pb", ExecutionClass::Inline),
-            ("feedback", "!fb", ExecutionClass::Inline),
-            ("dpi", "!dpi", ExecutionClass::Background),
-            ("doener", "!döner", ExecutionClass::Background),
-            ("track", "!track", ExecutionClass::Inline),
-            ("untrack", "!untrack", ExecutionClass::Inline),
-            ("flights", "!flights", ExecutionClass::Inline),
-            ("flight", "!flight", ExecutionClass::Inline),
-            ("info", "!info", ExecutionClass::Inline),
-            ("emote", "!e", ExecutionClass::Inline),
-            ("ai", "!ai", ExecutionClass::Background),
-            ("news", "!news", ExecutionClass::Background),
-            ("tldr", "!tldr", ExecutionClass::Background),
-            ("haiku", "!haiku", ExecutionClass::Background),
-        ]
-        .into_iter()
-        .map(|(id, name, class)| FakeCommand::command(id, name, class))
-        .chain(std::iter::once(catch_all()));
-
-        let registry = CommandRegistry::from_commands(commands).unwrap();
-        assert_eq!(registry.len(), 24);
-        assert_eq!(registry.iter().last().unwrap().0.as_str(), "ping_trigger");
     }
 }

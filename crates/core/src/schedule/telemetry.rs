@@ -173,19 +173,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn flush_writes_atomic_file() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let s = TelemetryStore::open(dir.path());
-        s.record_fire("a", Timestamp::now()).await;
-        s.flush().await;
-        let path = dir.path().join("schedule_runtime.ron");
-        assert!(path.exists());
-        let parsed: HashMap<String, ScheduleRuntime> =
-            ron::from_str(&std::fs::read_to_string(&path).expect("read")).expect("de");
-        assert!(parsed.contains_key("a"));
-    }
-
-    #[tokio::test]
     async fn reopen_restores_state() {
         let dir = tempfile::tempdir().expect("tmp");
         {
@@ -193,6 +180,8 @@ mod tests {
             s.record_fire("a", Timestamp::now()).await;
             s.flush().await;
         }
+        // The on-disk filename is the persistence contract across releases.
+        assert!(dir.path().join("schedule_runtime.ron").exists());
         let s2 = TelemetryStore::open(dir.path());
         assert!(s2.snapshot(Timestamp::now()).await.contains_key("a"));
     }

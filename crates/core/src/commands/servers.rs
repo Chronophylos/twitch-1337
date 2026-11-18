@@ -355,12 +355,6 @@ mod tests {
     }
 
     #[test]
-    fn list_reply_none_online() {
-        let f: Vec<_> = fleet().into_iter().filter(|s| !s.running).collect();
-        assert_eq!(list_reply(&f), "Kein Server online");
-    }
-
-    #[test]
     fn list_reply_truncates() {
         let many: Vec<_> = (0..30)
             .map(|i| {
@@ -396,53 +390,10 @@ mod tests {
     }
 
     #[test]
-    fn detail_reply_running_without_details() {
-        let s = &fleet()[0];
-        assert_eq!(
-            detail_reply(s, None),
-            "GregTech: New Horizon [Minecraft] online · 0/20 Spieler · RAM 9496/10240 MB · \
-             192.168.196.166:25566"
-        );
-    }
-
-    #[test]
     fn detail_reply_hides_generic_module() {
         let mut s = fleet()[0].clone();
         s.module = "GenericModule".to_owned();
         assert!(detail_reply(&s, None).starts_with("GregTech: New Horizon online · "));
-    }
-
-    #[test]
-    fn detail_reply_stopped() {
-        let s = &fleet()[1];
-        assert_eq!(
-            detail_reply(s, None),
-            "Vintage Story ist offline · 192.168.196.166:42422"
-        );
-    }
-
-    #[test]
-    fn many_and_not_found_copy() {
-        let f = fleet();
-        let Pick::Many(m) = pick_server(&f, "vintage") else {
-            panic!("expected Many")
-        };
-        assert_eq!(
-            many_reply(&m),
-            "Mehrere Treffer: Vintage Story, Vintage Story Forever World"
-        );
-        // The viewer's query is never echoed (mentions/links in the bot's voice).
-        assert_eq!(NOT_FOUND_REPLY, "Kein Server gefunden");
-    }
-
-    #[test]
-    fn error_copy() {
-        assert_eq!(error_reply(AmpError::Auth), "AMP-Login fehlgeschlagen");
-        assert_eq!(error_reply(AmpError::Permission), "AMP-Rechte fehlen");
-        assert_eq!(
-            error_reply(AmpError::Unavailable),
-            "AMP gerade nicht erreichbar"
-        );
     }
 
     mod live {

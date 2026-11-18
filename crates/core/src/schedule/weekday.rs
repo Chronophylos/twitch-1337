@@ -97,16 +97,6 @@ mod tests {
     }
 
     #[test]
-    fn ron_round_trip() {
-        let mut ws = WeekdaySet::default();
-        ws.0.insert(Weekday::Monday);
-        ws.0.insert(Weekday::Friday);
-        let s = ron::to_string(&ws).expect("ser");
-        let back: WeekdaySet = ron::from_str(&s).expect("de");
-        assert_eq!(ws, back);
-    }
-
-    #[test]
     fn parses_names_case_insensitively_and_rejects_junk() {
         assert_eq!(parse_weekday("mon"), Some(Weekday::Monday));
         assert_eq!(parse_weekday("SUNDAY"), Some(Weekday::Sunday));

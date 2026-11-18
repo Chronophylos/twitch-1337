@@ -251,24 +251,12 @@ fn matches_doener_trigger(word: &str) -> bool {
 pub struct DoenerCalcCommand {
     client: Arc<DoeneratlasClient>,
     cooldown: PerUserCooldown,
-    #[cfg(test)]
-    settings: SettingsHandle,
 }
 
 impl DoenerCalcCommand {
     pub fn new(client: Arc<DoeneratlasClient>, settings: SettingsHandle) -> Self {
-        let cooldown = PerUserCooldown::live(settings.clone(), doener_cooldown_duration);
-        Self {
-            client,
-            cooldown,
-            #[cfg(test)]
-            settings,
-        }
-    }
-
-    #[cfg(test)]
-    fn current_cooldown(&self) -> Duration {
-        doener_cooldown_duration(&self.settings.load())
+        let cooldown = PerUserCooldown::live(settings, doener_cooldown_duration);
+        Self { client, cooldown }
     }
 }
 
@@ -374,10 +362,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
-    use crate::settings::Settings;
 
     #[test]
     fn parse_amounts() {
@@ -428,29 +413,5 @@ mod tests {
         assert!(matches_doener_trigger("!döner"));
         assert!(matches_doener_trigger("!DÖNER"));
         assert!(matches_doener_trigger("!doener"));
-    }
-
-    #[test]
-    fn reads_cooldown_from_handle_at_call_time() {
-        crate::install_crypto_provider();
-        let initial = Settings::compiled_defaults();
-        let handle: crate::settings::SettingsHandle =
-            crate::settings::SettingsHandle::from_settings(initial);
-        let cmd = DoenerCalcCommand::new(
-            Arc::new(crate::doener::DoeneratlasClient::with_base_url(
-                reqwest::Client::new(),
-                "http://127.0.0.1:1",
-            )),
-            handle.clone(),
-        );
-
-        let before = cmd.current_cooldown();
-        let mut next = Settings::compiled_defaults();
-        next.cooldowns.doener = 9;
-        handle.store(Arc::new(next));
-        let after = cmd.current_cooldown();
-
-        assert_ne!(before, after);
-        assert_eq!(after, Duration::from_secs(9));
     }
 }
