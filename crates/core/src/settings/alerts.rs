@@ -4,13 +4,20 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+use super::knob::Knobs;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = AlertsOverrides)]
 pub struct AlertsSettings {
+    #[knob(nested)]
     pub quake: QuakeAlerts,
+    #[knob(nested)]
     pub solar: SolarAlerts,
+    #[knob(nested)]
     pub cme: CmeAlerts,
     /// Shared catch-up cutoff. An unseen event older than this is marked
     /// seen without being announced, so a long outage is absorbed quietly.
+    #[knob(min = 60, max = 604_800)]
     pub max_age_secs: u64,
 }
 
@@ -25,13 +32,16 @@ impl Default for AlertsSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = QuakeAlertsOverrides)]
 pub struct QuakeAlerts {
     pub enabled: bool,
+    #[knob(min = 60, max = 86_400)]
     pub poll_secs: u64,
     /// Minimum magnitude times ten (`25` = M2.5). Integer tenths because
     /// `Settings` derives `Eq`; a `f64` here would force `Eq` off the whole
     /// settings tree, including the snapshot diffing behind the audit log.
+    #[knob(max = 100)]
     pub min_mag_tenths: u32,
 }
 
@@ -45,9 +55,11 @@ impl Default for QuakeAlerts {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = SolarAlertsOverrides)]
 pub struct SolarAlerts {
     pub enabled: bool,
+    #[knob(min = 60, max = 86_400)]
     pub poll_secs: u64,
     /// Minimum GOES X-ray flare class letter: `A`, `B`, `C`, `M` or `X`.
     /// Flares are a whole-sun event, so there is no region to configure.
@@ -64,9 +76,11 @@ impl Default for SolarAlerts {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = CmeAlertsOverrides)]
 pub struct CmeAlerts {
     pub enabled: bool,
+    #[knob(min = 60, max = 86_400)]
     pub poll_secs: u64,
 }
 

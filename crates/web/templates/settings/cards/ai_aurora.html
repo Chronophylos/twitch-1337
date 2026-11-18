@@ -12,38 +12,39 @@
   <div class="settings-rows">
     {% let aurora_profile = current.ai.aurora.profile.as_str() %}
     <div class="settings-row" data-section="ai_aurora">
-      {% call m::row_head("ai.aurora.profile", "Which provider profile the !ai agent runs on.", "ai_aurora_profile") %}{% endcall %}
+      {% call m::row_head("ai.aurora.profile", "Which provider profile the !ai agent runs on.", "ai.aurora.profile") %}{% endcall %}
       <div class="row-control-cell">
-        <select id="ai_aurora_profile" name="ai_aurora_profile" data-key="ai.aurora.profile" data-default="{{ defaults.ai.aurora.profile }}" required>
+        <select id="ai.aurora.profile" name="ai.aurora.profile" data-key="ai.aurora.profile" data-default="{{ defaults.ai.aurora.profile }}" required>
           {% for p in current.ai.profiles %}
           {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if aurora_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
           {% endfor %}
         </select>
       </div>
       <div class="row-right">
+        {% call m::restart_badge(self.knob("ai.aurora.profile")) %}{% endcall %}
         {% call m::row_reset("ai.aurora.profile") %}{% endcall %}
         <span class="row-default">default <span class="mono">{{ defaults.ai.aurora.profile }}</span></span>
       </div>
     </div>
-    {% call m::num_row_bounded("ai_aurora", "ai_aurora_max_turn_rounds", "ai.aurora.max_turn_rounds",
+    {% call m::num_row("ai_aurora", self.knob("ai.aurora.max_turn_rounds"),
        "Maximum tool-use rounds inside a single !ai turn.",
-       current.ai.aurora.max_turn_rounds, defaults.ai.aurora.max_turn_rounds, "", 1, 32) %}{% endcall %}
-    {% call m::num_row_bounded("ai_aurora", "ai_aurora_max_writes_per_turn", "ai.aurora.max_writes_per_turn",
+       current.ai.aurora.max_turn_rounds, defaults.ai.aurora.max_turn_rounds, "") %}{% endcall %}
+    {% call m::num_row("ai_aurora", self.knob("ai.aurora.max_writes_per_turn"),
        "How many memory writes the model may issue per turn.",
-       current.ai.aurora.max_writes_per_turn, defaults.ai.aurora.max_writes_per_turn, "", 0, 64) %}{% endcall %}
-    {% call m::num_row_bounded("ai_aurora", "ai_aurora_min_response_delay_ms", "ai.aurora.min_response_delay_ms",
+       current.ai.aurora.max_writes_per_turn, defaults.ai.aurora.max_writes_per_turn, "") %}{% endcall %}
+    {% call m::num_row("ai_aurora", self.knob("ai.aurora.min_response_delay_ms"),
        "Minimum wall time (ms) a turn takes before the reply is spoken. 0 = off.",
-       current.ai.aurora.min_response_delay_ms, defaults.ai.aurora.min_response_delay_ms, "", 0, 60000) %}{% endcall %}
-    {% call m::num_row_bounded("ai_aurora", "ai_aurora_reply_target_chars", "ai.aurora.reply_target_chars",
+       current.ai.aurora.min_response_delay_ms, defaults.ai.aurora.min_response_delay_ms, "") %}{% endcall %}
+    {% call m::num_row("ai_aurora", self.knob("ai.aurora.reply_target_chars"),
        "What Aurora is told to aim for (characters).",
-       current.ai.aurora.reply_target_chars, defaults.ai.aurora.reply_target_chars, "", 1, 500) %}{% endcall %}
-    {% call m::num_row_bounded("ai_aurora", "ai_aurora_reply_soft_chars", "ai.aurora.reply_soft_chars",
+       current.ai.aurora.reply_target_chars, defaults.ai.aurora.reply_target_chars, "") %}{% endcall %}
+    {% call m::num_row("ai_aurora", self.knob("ai.aurora.reply_soft_chars"),
        "Reword once if the reply is longer than this.",
-       current.ai.aurora.reply_soft_chars, defaults.ai.aurora.reply_soft_chars, "", 1, 500) %}{% endcall %}
-    {% call m::num_row_bounded("ai_aurora", "ai_aurora_reply_hard_chars", "ai.aurora.reply_hard_chars",
+       current.ai.aurora.reply_soft_chars, defaults.ai.aurora.reply_soft_chars, "") %}{% endcall %}
+    {% call m::num_row("ai_aurora", self.knob("ai.aurora.reply_hard_chars"),
        "Trim with an ellipsis if still longer after reword.",
-       current.ai.aurora.reply_hard_chars, defaults.ai.aurora.reply_hard_chars, "", 1, 500) %}{% endcall %}
-    {% call m::text_row("ai_aurora", "ai_aurora_persona_name", "ai.aurora.persona_name",
+       current.ai.aurora.reply_hard_chars, defaults.ai.aurora.reply_hard_chars, "") %}{% endcall %}
+    {% call m::text_row("ai_aurora", self.knob("ai.aurora.persona_name"),
        "Bot persona name used in chat-history identity and rendered chat lines.",
        current.ai.aurora.persona_name, defaults.ai.aurora.persona_name, "Aurora") %}{% endcall %}
   </div>

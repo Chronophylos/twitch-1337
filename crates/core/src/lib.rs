@@ -107,7 +107,7 @@ pub struct Services {
     /// `WebState` (for the dashboard settings page).
     pub settings: crate::settings::SettingsHandle,
     /// Owner of `settings.ron`. The bin keeps an `Arc` for `WebState` (the
-    /// POST handler calls `.apply()` / `.reset()`); the bot itself only
+    /// POST handlers call `.apply()` / `.apply_with()`); the bot itself only
     /// reads via the handle.
     pub settings_store: Arc<crate::settings::SettingsStore>,
     /// Shared connectivity flag flipped by the latency monitor. Read by the

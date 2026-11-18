@@ -12,20 +12,21 @@
   <div class="settings-rows">
     {% let grok_profile = current.ai.grok.profile.as_str() %}
     <div class="settings-row" data-section="ai_grok">
-      {% call m::row_head("ai.grok.profile", "Which provider profile this agent runs on.", "ai_grok_profile") %}{% endcall %}
+      {% call m::row_head("ai.grok.profile", "Which provider profile this agent runs on.", "ai.grok.profile") %}{% endcall %}
       <div class="row-control-cell">
-        <select id="ai_grok_profile" name="ai_grok_profile" data-key="ai.grok.profile" data-default="{{ defaults.ai.grok.profile }}" required>
+        <select id="ai.grok.profile" name="ai.grok.profile" data-key="ai.grok.profile" data-default="{{ defaults.ai.grok.profile }}" required>
           {% for p in current.ai.profiles %}
           {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if grok_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
           {% endfor %}
         </select>
       </div>
       <div class="row-right">
+        {% call m::restart_badge(self.knob("ai.grok.profile")) %}{% endcall %}
         {% call m::row_reset("ai.grok.profile") %}{% endcall %}
         <span class="row-default">default <span class="mono">{{ defaults.ai.grok.profile }}</span></span>
       </div>
     </div>
-    {% call m::text_row("ai_grok", "ai_grok_persona_name", "ai.grok.persona_name",
+    {% call m::text_row("ai_grok", self.knob("ai.grok.persona_name"),
        "Persona name used for chat-history identity and rendered chat lines.",
        current.ai.grok.persona_name, defaults.ai.grok.persona_name, "Grok") %}{% endcall %}
   </div>

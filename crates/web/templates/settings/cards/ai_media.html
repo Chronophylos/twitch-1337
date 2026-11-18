@@ -12,36 +12,37 @@
   <div class="settings-rows">
     {% let media_profile = current.ai.media.profile.as_str() %}
     <div class="settings-row" data-section="ai_media">
-      {% call m::row_head("profile", "Which provider profile this agent runs on.", "ai_media_profile") %}{% endcall %}
+      {% call m::row_head("profile", "Which provider profile this agent runs on.", "ai.media.profile") %}{% endcall %}
       <div class="row-control-cell">
-        <select id="ai_media_profile" name="ai_media_profile" data-key="ai.media.profile" data-default="{{ defaults.ai.media.profile }}" required>
+        <select id="ai.media.profile" name="ai.media.profile" data-key="ai.media.profile" data-default="{{ defaults.ai.media.profile }}" required>
           {% for p in current.ai.profiles %}
           {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if media_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
           {% endfor %}
         </select>
       </div>
       <div class="row-right">
+        {% call m::restart_badge(self.knob("ai.media.profile")) %}{% endcall %}
         {% call m::row_reset("ai.media.profile") %}{% endcall %}
         <span class="row-default">default <span class="mono">{{ defaults.ai.media.profile }}</span></span>
       </div>
     </div>
 
-    {% call m::num_row_bounded("ai_media", "ai_media_timeout", "timeout",
+    {% call m::num_row("ai_media", self.knob("ai.media.timeout"),
        "Per-request timeout for media calls.",
-       current.ai.media.timeout, defaults.ai.media.timeout, "s", 5, 600) %}{% endcall %}
-    {% call m::bytesize_row("ai_media", "ai_media_max_image_size", "max_image_size",
+       current.ai.media.timeout, defaults.ai.media.timeout, "s") %}{% endcall %}
+    {% call m::bytesize_row("ai_media", self.knob("ai.media.max_image_size"),
        "Maximum image size accepted.",
        current.ai.media.max_image_size.as_u64(), defaults.ai.media.max_image_size.as_u64()) %}{% endcall %}
-    {% call m::bytesize_row("ai_media", "ai_media_max_pdf_size", "max_pdf_size",
+    {% call m::bytesize_row("ai_media", self.knob("ai.media.max_pdf_size"),
        "Maximum PDF size accepted.",
        current.ai.media.max_pdf_size.as_u64(), defaults.ai.media.max_pdf_size.as_u64()) %}{% endcall %}
-    {% call m::bytesize_row("ai_media", "ai_media_max_audio_size", "max_audio_size",
+    {% call m::bytesize_row("ai_media", self.knob("ai.media.max_audio_size"),
        "Maximum audio size accepted.",
        current.ai.media.max_audio_size.as_u64(), defaults.ai.media.max_audio_size.as_u64()) %}{% endcall %}
-    {% call m::bytesize_row("ai_media", "ai_media_max_video_size", "max_video_size",
+    {% call m::bytesize_row("ai_media", self.knob("ai.media.max_video_size"),
        "Maximum video size accepted.",
        current.ai.media.max_video_size.as_u64(), defaults.ai.media.max_video_size.as_u64()) %}{% endcall %}
-    {% call m::bytesize_row("ai_media", "ai_media_max_text_size", "max_text_size",
+    {% call m::bytesize_row("ai_media", self.knob("ai.media.max_text_size"),
        "Maximum raw-text size accepted (per attachment).",
        current.ai.media.max_text_size.as_u64(), defaults.ai.media.max_text_size.as_u64()) %}{% endcall %}
   </div>

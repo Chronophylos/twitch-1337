@@ -10,23 +10,23 @@
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
   <div class="settings-rows">
-    {% call m::bytesize_row("ai_memory", "ai_memory_soul_bytes", "soul_bytes",
+    {% call m::bytesize_row("ai_memory", self.knob("ai.memory.soul_bytes"),
        "Hard cap on SOUL.md size.",
        current.ai.memory.soul_bytes, defaults.ai.memory.soul_bytes) %}{% endcall %}
-    {% call m::bytesize_row("ai_memory", "ai_memory_lore_bytes", "lore_bytes",
+    {% call m::bytesize_row("ai_memory", self.knob("ai.memory.lore_bytes"),
        "Hard cap on LORE.md size.",
        current.ai.memory.lore_bytes, defaults.ai.memory.lore_bytes) %}{% endcall %}
-    {% call m::bytesize_row("ai_memory", "ai_memory_user_bytes", "user_bytes",
+    {% call m::bytesize_row("ai_memory", self.knob("ai.memory.user_bytes"),
        "Hard cap on each Character Sheet.",
        current.ai.memory.user_bytes, defaults.ai.memory.user_bytes) %}{% endcall %}
-    {% call m::bytesize_row("ai_memory", "ai_memory_scratch_bytes", "scratch_bytes",
+    {% call m::bytesize_row("ai_memory", self.knob("ai.memory.scratch_bytes"),
        "Hard cap on each per-scratch file.",
        current.ai.memory.scratch_bytes, defaults.ai.memory.scratch_bytes) %}{% endcall %}
-    {% call m::bytesize_row("ai_memory", "ai_memory_inject_byte_budget", "inject_byte_budget",
+    {% call m::bytesize_row("ai_memory", self.knob("ai.memory.inject_byte_budget"),
        "Total memory bytes injected into a single !ai prompt.",
        current.ai.memory.inject_byte_budget, defaults.ai.memory.inject_byte_budget) %}{% endcall %}
-    {% call m::num_row_bounded("ai_memory", "ai_memory_max_scratch_files", "max_scratch_files",
+    {% call m::num_row("ai_memory", self.knob("ai.memory.max_scratch_files"),
        "Max per-scratch files kept on disk.",
-       current.ai.memory.max_scratch_files, defaults.ai.memory.max_scratch_files, "", 1, 256) %}{% endcall %}
+       current.ai.memory.max_scratch_files, defaults.ai.memory.max_scratch_files, "") %}{% endcall %}
   </div>
 </section>

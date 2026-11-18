@@ -7,7 +7,7 @@ use std::{fs, sync::Arc};
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use tower::ServiceExt as _;
-use twitch_1337_core::settings::{Actor, AiProfile, AiProvider, overrides::SettingsOverrides};
+use twitch_1337_core::settings::{Actor, AiProfile, AiProvider, SettingsOverrides};
 use twitch_1337_web::build_router;
 
 use super::helpers;
@@ -50,24 +50,23 @@ async fn seed_profiles(state: &twitch_1337_web::WebState, rows: Vec<AiProfile>, 
             SettingsOverrides {
                 ai: twitch_1337_core::settings::AiOverrides {
                     profiles: Some(rows),
-                    active_profile: Some(active.to_owned()),
-                    aurora: twitch_1337_core::settings::overrides::AiAuroraOverrides {
+                    aurora: twitch_1337_core::settings::AiAuroraOverrides {
                         profile: Some(Some(active.to_owned())),
                         ..Default::default()
                     },
-                    grok: twitch_1337_core::settings::overrides::AiGrokOverrides {
+                    grok: twitch_1337_core::settings::AiGrokOverrides {
                         profile: Some(Some(active.to_owned())),
                         ..Default::default()
                     },
-                    dreamer: twitch_1337_core::settings::overrides::AiDreamerOverrides {
+                    dreamer: twitch_1337_core::settings::AiDreamerOverrides {
                         profile: Some(Some(active.to_owned())),
                         ..Default::default()
                     },
-                    media: twitch_1337_core::settings::overrides::AiMediaOverrides {
+                    media: twitch_1337_core::settings::AiMediaOverrides {
                         profile: Some(Some(active.to_owned())),
                         ..Default::default()
                     },
-                    recap: twitch_1337_core::settings::overrides::AiRecapOverrides {
+                    recap: twitch_1337_core::settings::AiRecapOverrides {
                         profile: Some(None),
                         ..Default::default()
                     },
@@ -288,7 +287,7 @@ async fn edit_renaming_profile_rewrites_all_five_agent_pointers() {
         .apply(
             SettingsOverrides {
                 ai: twitch_1337_core::settings::AiOverrides {
-                    recap: twitch_1337_core::settings::overrides::AiRecapOverrides {
+                    recap: twitch_1337_core::settings::AiRecapOverrides {
                         profile: Some(Some("old".into())),
                         ..Default::default()
                     },
@@ -304,20 +303,6 @@ async fn edit_renaming_profile_rewrites_all_five_agent_pointers() {
         .await
         .expect("seed recap pointer");
     let settings_path = td_s.path().join("settings.ron");
-    let mut legacy: SettingsOverrides =
-        ron::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
-    legacy.ai.active_profile = Some("old".into());
-    legacy.ai.aurora.profile = None;
-    legacy.ai.grok.profile = None;
-    legacy.ai.dreamer.profile = None;
-    legacy.ai.media.profile = None;
-    legacy.ai.recap.profile = None;
-    legacy.ai.history.recap_profile = Some(Some("old".into()));
-    fs::write(
-        &settings_path,
-        ron::ser::to_string_pretty(&legacy, ron::ser::PrettyConfig::default()).unwrap(),
-    )
-    .unwrap();
     let (sid, csrf_cookie, bare_csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());

@@ -1,7 +1,10 @@
-//! Per-field validation for a resolved `Settings` snapshot.
+//! Cross-field and semantic validation for a resolved `Settings` snapshot.
+//! Constant per-knob ranges live on the fields (`#[knob(min, max)]`) and run
+//! first through `Knobs::check_knob_ranges`.
 
 use std::collections::BTreeSet;
 
+use super::knob::Knobs;
 use super::provider::Efforts;
 use super::spoiler::is_valid_game_name;
 use super::{AiProvider, AiSettings, FieldError, ProfileKind, Settings};
@@ -12,23 +15,6 @@ use super::{AiProvider, AiSettings, FieldError, ProfileKind, Settings};
 #[derive(Debug, Clone)]
 pub struct ValidationContext {
     pub channel: String,
-}
-
-/// Push a "must be lo..=hi seconds" `FieldError` when `v` is out of range.
-/// Generic over the numeric type so any bounded `..._secs` field can use it.
-fn bound<T: PartialOrd + std::fmt::Display>(
-    name: &str,
-    v: T,
-    lo: T,
-    hi: T,
-    errs: &mut Vec<FieldError>,
-) {
-    if v < lo || v > hi {
-        errs.push(FieldError {
-            field: name.to_owned(),
-            message: format!("must be {lo}..={hi} seconds (got {v})"),
-        });
-    }
 }
 
 impl Settings {
@@ -50,46 +36,9 @@ impl Settings {
         validate_agent_profile_targets: bool,
     ) -> Result<(), Vec<FieldError>> {
         let mut errs = Vec::new();
-        bound("cooldowns.ai", self.cooldowns.ai, 1, 3600, &mut errs);
-        bound("cooldowns.news", self.cooldowns.news, 1, 3600, &mut errs);
-        bound("cooldowns.up", self.cooldowns.up, 1, 3600, &mut errs);
-        bound(
-            "cooldowns.feedback",
-            self.cooldowns.feedback,
-            1,
-            3600,
-            &mut errs,
-        );
-        bound(
-            "cooldowns.doener",
-            self.cooldowns.doener,
-            1,
-            3600,
-            &mut errs,
-        );
-        bound(
-            "cooldowns.spoiler",
-            self.cooldowns.spoiler,
-            1,
-            3600,
-            &mut errs,
-        );
-        bound(
-            "cooldowns.servers",
-            self.cooldowns.servers,
-            1,
-            3600,
-            &mut errs,
-        );
-        bound("pings.cooldown", self.pings.cooldown, 1, 86_400, &mut errs);
+        self.check_knob_ranges("", &mut errs);
         validate_ai(&self.ai, validate_agent_profile_targets, &mut errs);
         validate_spoiler(self, validate_agent_profile_targets, &mut errs);
-        if self.twitch.expected_latency > 1000 {
-            errs.push(FieldError {
-                field: "twitch.expected_latency".into(),
-                message: format!("must be <= 1000ms (got {})", self.twitch.expected_latency),
-            });
-        }
         for (field, val) in [
             ("twitch.admin_channel", self.twitch.admin_channel.as_deref()),
             ("twitch.ai_channel", self.twitch.ai_channel.as_deref()),
@@ -145,22 +94,7 @@ impl Settings {
                 });
             }
         }
-        if !(1..=604_800).contains(&self.suspend.default_duration_secs) {
-            errs.push(FieldError {
-                field: "suspend.default_duration_secs".into(),
-                message: format!(
-                    "must be 1..=604800 (got {})",
-                    self.suspend.default_duration_secs
-                ),
-            });
-        }
         let potat = &self.emote_tracker.potat_attribution;
-        if !(3..=120).contains(&potat.window_secs) {
-            errs.push(FieldError {
-                field: "emote_tracker.potat_attribution.window_secs".into(),
-                message: format!("must be 3..=120 (got {})", potat.window_secs),
-            });
-        }
         if potat.enabled && potat.potat_7tv_user_id.trim().is_empty() {
             errs.push(FieldError {
                 field: "emote_tracker.potat_attribution.potat_7tv_user_id".into(),
@@ -183,21 +117,6 @@ impl Settings {
                     message: "must be > 0".into(),
                 });
             }
-        }
-        if !(3600..=2_592_000).contains(&self.web.session_ttl_secs) {
-            errs.push(FieldError {
-                field: "web.session_ttl_secs".into(),
-                message: format!("must be 3600..=2592000 (got {})", self.web.session_ttl_secs),
-            });
-        }
-        if !(30..=3600).contains(&self.web.mod_check_refresh_secs) {
-            errs.push(FieldError {
-                field: "web.mod_check_refresh_secs".into(),
-                message: format!(
-                    "must be 30..=3600 (got {})",
-                    self.web.mod_check_refresh_secs
-                ),
-            });
         }
         // Schedules
         let mut seen_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -226,44 +145,11 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
         });
     }
 
-    if !(1..=20).contains(&ai.aurora.max_turn_rounds) {
-        err(
-            errs,
-            "ai.aurora.max_turn_rounds",
-            format!("must be 1..=20 (got {})", ai.aurora.max_turn_rounds),
-        );
-    }
-    if ai.aurora.min_response_delay_ms > 60_000 {
-        err(
-            errs,
-            "ai.aurora.min_response_delay_ms",
-            format!(
-                "must be 0..=60000 (got {})",
-                ai.aurora.min_response_delay_ms
-            ),
-        );
-    }
-    if !(1..=64).contains(&ai.aurora.max_writes_per_turn) {
-        err(
-            errs,
-            "ai.aurora.max_writes_per_turn",
-            format!("must be 1..=64 (got {})", ai.aurora.max_writes_per_turn),
-        );
-    }
     if ai.aurora.persona_name.trim().is_empty() {
         err(errs, "ai.aurora.persona_name", "must not be empty".into());
     }
     if ai.grok.persona_name.trim().is_empty() {
         err(errs, "ai.grok.persona_name", "must not be empty".into());
-    }
-    for (field, value) in [
-        ("ai.aurora.reply_target_chars", ai.aurora.reply_target_chars),
-        ("ai.aurora.reply_soft_chars", ai.aurora.reply_soft_chars),
-        ("ai.aurora.reply_hard_chars", ai.aurora.reply_hard_chars),
-    ] {
-        if !(1..=500).contains(&value) {
-            err(errs, field, format!("must be 1..=500 (got {value})"));
-        }
     }
     if ai.aurora.reply_target_chars > ai.aurora.reply_soft_chars {
         err(
@@ -284,32 +170,6 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
                 ai.aurora.reply_soft_chars, ai.aurora.reply_hard_chars
             ),
         );
-    }
-    if ai.history.length > crate::ai::chat_history::MAX_HISTORY_LENGTH {
-        err(
-            errs,
-            "ai.history.length",
-            format!("must be <= {}", crate::ai::chat_history::MAX_HISTORY_LENGTH),
-        );
-    }
-    if ai.history.ai_channel_length > crate::ai::chat_history::MAX_HISTORY_LENGTH {
-        err(
-            errs,
-            "ai.history.ai_channel_length",
-            format!("must be <= {}", crate::ai::chat_history::MAX_HISTORY_LENGTH),
-        );
-    }
-    if ai.history.n == 0 {
-        err(errs, "ai.history.n", "must be >= 1".into());
-    }
-    if ai.history.ai_channel_n == 0 {
-        err(errs, "ai.history.ai_channel_n", "must be >= 1".into());
-    }
-    if ai.recap.batch_size == 0 {
-        err(errs, "ai.recap.batch_size", "must be >= 1".into());
-    }
-    if ai.recap.max_notes == 0 {
-        err(errs, "ai.recap.max_notes", "must be >= 1".into());
     }
     if ai.recap.merge_width < 2 || ai.recap.merge_width > ai.recap.max_notes {
         err(
@@ -345,43 +205,12 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
             ),
         );
     }
-    if ai.history.n > crate::ai::chat_history::MAX_HISTORY_LENGTH {
-        err(
-            errs,
-            "ai.history.n",
-            format!("must be <= {}", crate::ai::chat_history::MAX_HISTORY_LENGTH),
-        );
-    }
-    if ai.history.ai_channel_n > crate::ai::chat_history::MAX_HISTORY_LENGTH {
-        err(
-            errs,
-            "ai.history.ai_channel_n",
-            format!("must be <= {}", crate::ai::chat_history::MAX_HISTORY_LENGTH),
-        );
-    }
     if ai.memory.inject_byte_budget < ai.memory.soul_bytes + ai.memory.lore_bytes {
         err(
             errs,
             "ai.memory.inject_byte_budget",
             "must be >= soul_bytes + lore_bytes".into(),
         );
-    }
-    if !(1..=200).contains(&ai.dreamer.max_rounds) {
-        err(
-            errs,
-            "ai.dreamer.max_rounds",
-            format!("must be 1..=200 (got {})", ai.dreamer.max_rounds),
-        );
-    }
-    if !(1..=64).contains(&ai.dreamer.max_writes_per_turn) {
-        err(
-            errs,
-            "ai.dreamer.max_writes_per_turn",
-            format!("must be 1..=64 (got {})", ai.dreamer.max_writes_per_turn),
-        );
-    }
-    if ai.dreamer.timeout_secs == 0 {
-        err(errs, "ai.dreamer.timeout_secs", "must be > 0".into());
     }
     if jiff::civil::Time::strptime("%H:%M", &ai.dreamer.run_at).is_err() {
         err(
@@ -573,47 +402,16 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
             err(errs, "ai.prefill", "requires ai.history.length > 0".into());
         }
     }
-    if let Some(web) = &ai.web {
-        if reqwest::Url::parse(&web.base_url).is_err() {
-            err(
-                errs,
-                "ai.web.base_url",
-                format!("must be a valid URL (got {:?})", web.base_url),
-            );
-        }
-        if !(1..=10).contains(&web.max_results) {
-            err(
-                errs,
-                "ai.web.max_results",
-                format!("must be 1..=10 (got {})", web.max_results),
-            );
-        }
-        if !(1..=6).contains(&web.max_rounds) {
-            err(
-                errs,
-                "ai.web.max_rounds",
-                format!("must be 1..=6 (got {})", web.max_rounds),
-            );
-        }
-        if web.cache_capacity == 0 {
-            err(errs, "ai.web.cache_capacity", "must be > 0".into());
-        }
+    if let Some(web) = &ai.web
+        && reqwest::Url::parse(&web.base_url).is_err()
+    {
+        err(
+            errs,
+            "ai.web.base_url",
+            format!("must be a valid URL (got {:?})", web.base_url),
+        );
     }
     if let Some(em) = &ai.emotes {
-        if em.refresh_interval_secs == 0 {
-            err(
-                errs,
-                "ai.emotes.refresh_interval_secs",
-                "must be > 0".into(),
-            );
-        }
-        if !(1..=200).contains(&em.max_prompt_emotes) {
-            err(
-                errs,
-                "ai.emotes.max_prompt_emotes",
-                format!("must be 1..=200 (got {})", em.max_prompt_emotes),
-            );
-        }
         if em.min_baseline_emotes > em.max_prompt_emotes {
             err(
                 errs,
@@ -650,12 +448,6 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
 
 fn validate_spoiler(s: &Settings, validate_profile_target: bool, errs: &mut Vec<FieldError>) {
     let sp = &s.spoiler;
-    if sp.confidence_floor > 100 {
-        errs.push(FieldError {
-            field: "spoiler.confidence_floor".into(),
-            message: format!("must be 0..=100 (got {})", sp.confidence_floor),
-        });
-    }
     if !is_valid_game_name(&sp.default_game) {
         errs.push(FieldError {
             field: "spoiler.default_game".into(),
@@ -683,28 +475,6 @@ fn validate_spoiler(s: &Settings, validate_profile_target: bool, errs: &mut Vec<
 }
 
 fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldError>) {
-    bound(
-        "alerts.quake.poll_secs",
-        a.quake.poll_secs,
-        60,
-        86_400,
-        errs,
-    );
-    bound(
-        "alerts.solar.poll_secs",
-        a.solar.poll_secs,
-        60,
-        86_400,
-        errs,
-    );
-    bound("alerts.cme.poll_secs", a.cme.poll_secs, 60, 86_400, errs);
-    bound("alerts.max_age_secs", a.max_age_secs, 60, 604_800, errs);
-    if a.quake.min_mag_tenths > 100 {
-        errs.push(FieldError {
-            field: "alerts.quake.min_mag_tenths".into(),
-            message: format!("must be 0..=100 (got {})", a.quake.min_mag_tenths),
-        });
-    }
     if crate::alerts::class_rank(&a.solar.min_class).is_none() {
         errs.push(FieldError {
             field: "alerts.solar.min_class".into(),
@@ -739,6 +509,25 @@ mod tests {
             service_tier: None,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn table_ranges_reject_out_of_bound_presence_fields() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.web = Some(crate::settings::AiWeb {
+            max_rounds: 12,
+            ..Default::default()
+        });
+        let errs = s
+            .validate(&ctx())
+            .expect_err("max_rounds 12 is out of range");
+        assert!(
+            errs.contains(&FieldError {
+                field: "ai.web.max_rounds".into(),
+                message: "must be 1..=6 (got 12)".into(),
+            }),
+            "{errs:?}"
+        );
     }
 
     fn decision_profile() -> AiProfile {

@@ -8,7 +8,7 @@ use axum::extract::{Extension, State};
 use axum::response::Response;
 use tower_cookies::Cookies;
 use twitch_1337_core::settings::ai::{AiEmotes, AiPrefill, AiWeb};
-use twitch_1337_core::settings::{FieldError, Settings};
+use twitch_1337_core::settings::{FieldError, KnobMeta, Settings};
 
 use crate::auth::Role;
 use crate::auth::csrf;
@@ -147,6 +147,12 @@ fn effective<T: Clone + Default>(saved: Option<&T>) -> Effective<T> {
 impl ShowTpl {
     fn nav(&self) -> &'static [NavGroup] {
         NAV
+    }
+
+    /// Table entry for a row: its dotted path names the control, its bounds
+    /// and restart flag drive `min`/`max` and the badge.
+    pub(super) fn knob(&self, path: &str) -> &'static KnobMeta {
+        twitch_1337_core::settings::knob(path)
     }
 
     fn ai_web(&self) -> Effective<AiWeb> {

@@ -3,10 +3,18 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+use super::knob::Knobs;
+
+/// The aviation client is built once at startup, so every field needs a
+/// restart to take effect.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = AviationstackOverrides)]
 pub struct AviationstackSettings {
+    #[knob(restart)]
     pub enabled: bool,
+    #[knob(restart)]
     pub base_url: String,
+    #[knob(restart)]
     pub timeout_secs: u64,
 }
 

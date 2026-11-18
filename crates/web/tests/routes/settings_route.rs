@@ -12,10 +12,8 @@ use axum::http::{Request, Response, StatusCode, header};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
 use twitch_1337_core::settings::{
-    Actor, AiOverrides, AiProfile, AiProvider, ProfileKind, Settings,
-    overrides::{
-        AiAuroraOverrides, AiDreamerOverrides, AiGrokOverrides, AiMediaOverrides, SettingsOverrides,
-    },
+    Actor, AiAuroraOverrides, AiDreamerOverrides, AiGrokOverrides, AiMediaOverrides, AiOverrides,
+    AiProfile, AiProvider, ProfileKind, Settings, SettingsOverrides,
 };
 use twitch_1337_web::WebState;
 use twitch_1337_web::auth::Role;
@@ -88,13 +86,6 @@ impl Owner {
         let body = save_form_body(&self.csrf, base, extra);
         self.post(state, "/settings", body).await
     }
-
-    /// POST `/settings/reset/{section}`.
-    async fn reset(&self, state: &WebState, section: &str) -> Response<Body> {
-        let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&self.csrf));
-        self.post(state, &format!("/settings/reset/{section}"), body)
-            .await
-    }
 }
 
 /// POST `/settings` as a fresh owner session, based on the live settings.
@@ -130,38 +121,38 @@ fn select_inner<'a>(html: &'a str, name: &str) -> &'a str {
 fn save_form_body(bare_csrf: &str, current: &Settings, extra: &[(&str, &str)]) -> String {
     let mut fields = vec![
         ("_csrf".to_owned(), bare_csrf.to_owned()),
-        ("cooldown_ai".to_owned(), current.cooldowns.ai.to_string()),
+        ("cooldowns.ai".to_owned(), current.cooldowns.ai.to_string()),
         (
-            "cooldown_news".to_owned(),
+            "cooldowns.news".to_owned(),
             current.cooldowns.news.to_string(),
         ),
-        ("cooldown_up".to_owned(), current.cooldowns.up.to_string()),
+        ("cooldowns.up".to_owned(), current.cooldowns.up.to_string()),
         (
-            "cooldown_feedback".to_owned(),
+            "cooldowns.feedback".to_owned(),
             current.cooldowns.feedback.to_string(),
         ),
         (
-            "cooldown_doener".to_owned(),
+            "cooldowns.doener".to_owned(),
             current.cooldowns.doener.to_string(),
         ),
         (
-            "ping_cooldown".to_owned(),
+            "pings.cooldown".to_owned(),
             current.pings.cooldown.to_string(),
         ),
         (
-            "ai_aurora_profile".to_owned(),
+            "ai.aurora.profile".to_owned(),
             current.ai.aurora.profile.clone(),
         ),
         (
-            "ai_grok_profile".to_owned(),
+            "ai.grok.profile".to_owned(),
             current.ai.grok.profile.clone(),
         ),
         (
-            "ai_dreamer_profile".to_owned(),
+            "ai.dreamer.profile".to_owned(),
             current.ai.dreamer.profile.clone(),
         ),
         (
-            "ai_media_profile".to_owned(),
+            "ai.media.profile".to_owned(),
             current.ai.media.profile.clone(),
         ),
     ];
@@ -232,7 +223,6 @@ async fn seed_chat_profiles(state: &WebState, names: &[&str], grok_profile: &str
             SettingsOverrides {
                 ai: AiOverrides {
                     profiles: Some(names.iter().copied().map(chat_profile).collect()),
-                    active_profile: Some("a".to_owned()),
                     aurora: AiAuroraOverrides {
                         profile: Some(Some("a".into())),
                         ..Default::default()
@@ -267,7 +257,7 @@ async fn owner_can_save_cooldown_and_handle_reflects_change() {
     // the one knob we're changing.
     let defaults = state.settings_store.defaults().clone();
     let res = Owner::login(&state)
-        .save(&state, &defaults, &[("cooldown_ai", "15")])
+        .save(&state, &defaults, &[("cooldowns.ai", "15")])
         .await;
     assert_eq!(
         res.status(),
@@ -320,12 +310,12 @@ async fn validation_error_renders_form_with_errors() {
         defaults.cooldowns.news, 900,
         "fixture assumes the default news cooldown is not already 900",
     );
-    // cooldown_ai = 0 violates the 1..=3600 bound.
+    // cooldowns.ai = 0 violates the 1..=3600 bound.
     let res = Owner::login(&state)
         .save(
             &state,
             &defaults,
-            &[("cooldown_ai", "0"), ("cooldown_news", "900")],
+            &[("cooldowns.ai", "0"), ("cooldowns.news", "900")],
         )
         .await;
     assert_eq!(
@@ -360,7 +350,7 @@ async fn a_required_dreamer_profile_round_trips_through_the_settings_post() {
     let owner = Owner::login(&state);
     let current = state.settings.load();
     let res = owner
-        .save(&state, &current, &[("ai_dreamer_profile", "b")])
+        .save(&state, &current, &[("ai.dreamer.profile", "b")])
         .await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     assert_eq!(
@@ -371,7 +361,7 @@ async fn a_required_dreamer_profile_round_trips_through_the_settings_post() {
 
     let current = state.settings.load();
     let res = owner
-        .save(&state, &current, &[("ai_dreamer_profile", "")])
+        .save(&state, &current, &[("ai.dreamer.profile", "")])
         .await;
     assert_eq!(
         res.status(),
@@ -404,14 +394,10 @@ async fn a_recap_profile_round_trips_through_the_settings_post() {
             &state,
             &current,
             &[
-                ("ai_recap_profile", "b"),
-                ("ai_recap_batch_size", "30"),
-                ("ai_recap_max_notes", "250"),
-                ("ai_recap_merge_width", "25"),
-                // Legacy History recap fields must be ignored by schema-7 saves.
-                ("ai_history_batch_size", "1"),
-                ("ai_history_max_notes", "1"),
-                ("ai_history_merge_width", "1"),
+                ("ai.recap.profile", "b"),
+                ("ai.recap.batch_size", "30"),
+                ("ai.recap.max_notes", "250"),
+                ("ai.recap.merge_width", "25"),
             ],
         )
         .await;
@@ -427,7 +413,7 @@ async fn a_recap_profile_round_trips_through_the_settings_post() {
 
     let current = state.settings.load();
     let res = owner
-        .save(&state, &current, &[("ai_recap_profile", "")])
+        .save(&state, &current, &[("ai.recap.profile", "")])
         .await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     assert_eq!(
@@ -446,8 +432,8 @@ async fn grok_profile_and_persona_round_trip_through_the_settings_post() {
             &state,
             &current,
             &[
-                ("ai_grok_profile", current.ai.grok.profile.as_str()),
-                ("ai_grok_persona_name", "Grok Prime"),
+                ("ai.grok.profile", current.ai.grok.profile.as_str()),
+                ("ai.grok.persona_name", "Grok Prime"),
             ],
         )
         .await;
@@ -472,18 +458,18 @@ async fn post_settings_enabling_prefill_card_flags_restart() {
             &state,
             &defaults,
             &[
-                ("ai_prefill_card_visible", "1"),
-                ("ai_prefill_enabled", "1"),
-                ("ai_prefill_base_url", "https://logs.zonian.dev"),
-                ("ai_prefill_threshold", "0.5"),
+                ("ai.prefill.__shown", "1"),
+                ("ai.prefill.enabled", "1"),
+                ("ai.prefill.base_url", "https://logs.zonian.dev"),
+                ("ai.prefill.threshold", "0.5"),
             ],
         )
         .await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     let flash = read_flash(&res).expect("save must emit a flash cookie");
     assert!(
-        flash.contains("ai.prefill"),
-        "enabling prefill must mention the field in the restart hint; got {flash:?}",
+        flash.contains("ai.prefill (enabling requires restart)"),
+        "enabling prefill must mention the section in the restart hint; got {flash:?}",
     );
     assert!(
         state.settings.load().ai.prefill.is_some(),
@@ -493,7 +479,7 @@ async fn post_settings_enabling_prefill_card_flags_restart() {
 
 #[tokio::test]
 async fn post_settings_card_invisible_leaves_toggle_alone() {
-    // Regression for the *_card_visible hidden-input pattern: a save that
+    // Regression for the `<path>.__shown` sentinel pattern: a save that
     // does not render a toggle card must NOT inadvertently disable it.
     let (state, _dirs) = owner_state().await;
     let owner = Owner::login(&state);
@@ -506,10 +492,10 @@ async fn post_settings_card_invisible_leaves_toggle_alone() {
             &state,
             &defaults,
             &[
-                ("ai_prefill_card_visible", "1"),
-                ("ai_prefill_enabled", "1"),
-                ("ai_prefill_base_url", "https://logs.zonian.dev"),
-                ("ai_prefill_threshold", "0.5"),
+                ("ai.prefill.__shown", "1"),
+                ("ai.prefill.enabled", "1"),
+                ("ai.prefill.base_url", "https://logs.zonian.dev"),
+                ("ai.prefill.threshold", "0.5"),
             ],
         )
         .await;
@@ -521,7 +507,7 @@ async fn post_settings_card_invisible_leaves_toggle_alone() {
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     assert!(
         state.settings.load().ai.prefill.is_some(),
-        "a save without the card_visible marker must NOT clear an enabled card",
+        "a save without the ai.prefill.__shown sentinel must NOT clear an enabled card",
     );
 }
 
@@ -534,9 +520,9 @@ async fn owner_can_save_aurora_reply_length() {
             &state,
             &defaults,
             &[
-                ("ai_aurora_reply_target_chars", "200"),
-                ("ai_aurora_reply_soft_chars", "300"),
-                ("ai_aurora_reply_hard_chars", "400"),
+                ("ai.aurora.reply_target_chars", "200"),
+                ("ai.aurora.reply_soft_chars", "300"),
+                ("ai.aurora.reply_hard_chars", "400"),
             ],
         )
         .await;
@@ -552,7 +538,7 @@ async fn owner_can_save_ai_history_n() {
     let (state, _dirs) = owner_state().await;
     let defaults = state.settings_store.defaults().clone();
     let res = Owner::login(&state)
-        .save(&state, &defaults, &[("ai_history_n", "25")])
+        .save(&state, &defaults, &[("ai.history.n", "25")])
         .await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     assert_eq!(state.settings.load().ai.history.n, 25);
@@ -566,7 +552,7 @@ async fn ai_history_length_below_n_plus_batch_returns_400() {
     assert_eq!(defaults.ai.recap.batch_size, 40);
 
     let res = Owner::login(&state)
-        .save(&state, &defaults, &[("ai_history_length", "10")])
+        .save(&state, &defaults, &[("ai.history.length", "10")])
         .await;
     assert_eq!(
         res.status(),
@@ -578,53 +564,6 @@ async fn ai_history_length_below_n_plus_batch_returns_400() {
         html.contains("ai.history.length"),
         "response must surface the failing field; got: {html}",
     );
-}
-
-#[tokio::test]
-async fn reset_ai_aurora_restores_reply_length_defaults() {
-    let (state, _dirs) = owner_state().await;
-    let owner = Owner::login(&state);
-    let defaults = state.settings_store.defaults().clone();
-    let res = owner
-        .save(
-            &state,
-            &defaults,
-            &[
-                ("ai_aurora_reply_target_chars", "200"),
-                ("ai_aurora_reply_soft_chars", "300"),
-                ("ai_aurora_reply_hard_chars", "400"),
-            ],
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-
-    let res = owner.reset(&state, "ai_aurora").await;
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    let snap = state.settings.load();
-    assert_eq!(snap.ai.aurora.reply_target_chars, 480);
-    assert_eq!(snap.ai.aurora.reply_soft_chars, 490);
-    assert_eq!(snap.ai.aurora.reply_hard_chars, 490);
-}
-
-#[tokio::test]
-async fn reset_ai_recap_restores_recap_off_default() {
-    let (state, _dirs) = owner_state().await;
-    let owner = Owner::login(&state);
-    let current = state.settings.load();
-    let res = owner
-        .save(
-            &state,
-            &current,
-            &[("ai_recap_profile", current.ai.aurora.profile.as_str())],
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    assert!(state.settings.load().ai.recap.profile.is_some());
-
-    let res = owner.reset(&state, "ai_recap").await;
-
-    assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    assert_eq!(state.settings.load().ai.recap.profile, None);
 }
 
 #[tokio::test]
@@ -641,9 +580,9 @@ async fn permissions_lists_render_saved_values() {
             &state,
             &defaults,
             &[
-                ("twitch_hidden_admins", "111\n222"),
-                ("twitch_viewer_allowlist", "333\n444"),
-                ("twitch_emote_usage_deny_list", "evilbot\notherbot"),
+                ("twitch.hidden_admins", "111\n222"),
+                ("twitch.viewer_allowlist", "333\n444"),
+                ("twitch.emote_usage_deny_list", "evilbot\notherbot"),
             ],
         )
         .await;
@@ -665,9 +604,9 @@ async fn permissions_lists_render_saved_values() {
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_string(res).await;
     for (name, joined) in [
-        ("twitch_hidden_admins", "111\n222"),
-        ("twitch_viewer_allowlist", "333\n444"),
-        ("twitch_emote_usage_deny_list", "evilbot\notherbot"),
+        ("twitch.hidden_admins", "111\n222"),
+        ("twitch.viewer_allowlist", "333\n444"),
+        ("twitch.emote_usage_deny_list", "evilbot\notherbot"),
     ] {
         let start = html
             .find(&format!("name=\"{name}\""))
@@ -679,49 +618,38 @@ async fn permissions_lists_render_saved_values() {
 }
 
 #[tokio::test]
-async fn reset_cooldowns_clears_section_overrides() {
+async fn dreamer_checkbox_absent_with_sentinel_sets_enabled_false() {
+    // With the `ai.dreamer.__shown` sentinel posted, omitting
+    // `ai.dreamer.enabled` means the box was unticked: "disabled".
     let (state, _dirs) = owner_state().await;
-    let owner = Owner::login(&state);
-    let defaults = state.settings_store.defaults().clone();
-    // First push a non-default value via /settings POST.
-    let res = owner
-        .save(&state, &defaults, &[("cooldown_ai", "15")])
-        .await;
+
+    let res = post_settings(
+        &state,
+        &[("ai.dreamer.__shown", "1"), ("ai.dreamer.enabled", "1")],
+    )
+    .await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
-    assert_eq!(state.settings.load().cooldowns.ai, 15);
+    assert!(state.settings.load().ai.dreamer.enabled);
 
-    // Then reset just the cooldowns section.
-    let res = owner.reset(&state, "cooldowns").await;
-    assert_eq!(
-        res.status(),
-        StatusCode::SEE_OTHER,
-        "reset should redirect on success",
+    // Without the sentinel, the absent checkbox is "no change".
+    let res = post_settings(&state, &[]).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(
+        state.settings.load().ai.dreamer.enabled,
+        "absent checkbox without the sentinel must leave dreamer.enabled alone",
     );
-    assert_eq!(
-        state.settings.load().cooldowns.ai,
-        defaults.cooldowns.ai,
-        "reset must restore the compiled default",
-    );
-}
 
-#[tokio::test]
-async fn dreamer_checkbox_absent_sets_enabled_false() {
-    // The dreamer card always renders (no *_card_visible pattern), so
-    // omitting ai_dreamer_enabled from the POST means "disabled".
-    let (state, _dirs) = owner_state().await;
-    let defaults = state.settings_store.defaults().clone();
-    // Send the form without ai_dreamer_enabled.
-    let res = Owner::login(&state).save(&state, &defaults, &[]).await;
+    let res = post_settings(&state, &[("ai.dreamer.__shown", "1")]).await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     assert!(
         !state.settings.load().ai.dreamer.enabled,
-        "missing ai_dreamer_enabled checkbox must set dreamer.enabled = false",
+        "missing ai.dreamer.enabled with the sentinel must set dreamer.enabled = false",
     );
 }
 
 #[tokio::test]
-async fn emotes_card_include_global_absent_without_card_visible() {
-    // When ai_emotes_card_visible is not submitted (card not rendered),
+async fn emotes_card_include_global_untouched_without_sentinel() {
+    // When ai.emotes.__shown is not submitted (card not rendered),
     // include_global override must be None — i.e. no change to the existing value.
     let (state, _dirs) = owner_state().await;
     let owner = Owner::login(&state);
@@ -733,9 +661,9 @@ async fn emotes_card_include_global_absent_without_card_visible() {
             &state,
             &defaults,
             &[
-                ("ai_emotes_card_visible", "1"),
-                ("ai_emotes_enabled", "1"),
-                ("ai_emotes_include_global", "1"),
+                ("ai.emotes.__shown", "1"),
+                ("ai.emotes.enabled", "1"),
+                ("ai.emotes.include_global", "1"),
             ],
         )
         .await;
@@ -749,7 +677,7 @@ async fn emotes_card_include_global_absent_without_card_visible() {
         .map(|e| e.include_global);
     assert_eq!(include_global_before, Some(true));
 
-    // Now submit a form without the card_visible marker: include_global must stay.
+    // Now submit a form without the sentinel: include_global must stay.
     let res = owner.save(&state, &defaults, &[]).await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     let include_global_after = state
@@ -762,7 +690,7 @@ async fn emotes_card_include_global_absent_without_card_visible() {
     assert_eq!(
         include_global_after,
         Some(true),
-        "include_global must not change when card_visible was absent",
+        "include_global must not change when ai.emotes.__shown was absent",
     );
 }
 
@@ -777,10 +705,10 @@ async fn emotes_card_pinned_emotes_persists_from_textarea() {
             &state,
             &defaults,
             &[
-                ("ai_emotes_card_visible", "1"),
-                ("ai_emotes_enabled", "1"),
-                ("ai_emotes_max_prompt_emotes", "20"),
-                ("ai_emotes_pinned_emotes", "PepeLa\nokjj\nClueless"),
+                ("ai.emotes.__shown", "1"),
+                ("ai.emotes.enabled", "1"),
+                ("ai.emotes.max_prompt_emotes", "20"),
+                ("ai.emotes.pinned_emotes", "PepeLa\nokjj\nClueless"),
             ],
         )
         .await;
@@ -805,7 +733,7 @@ async fn twitch_channels_save_persists() {
     let (state, _dirs) = owner_state().await;
     let defaults = state.settings_store.defaults().clone();
     let res = Owner::login(&state)
-        .save(&state, &defaults, &[("twitch_expected_latency", "200")])
+        .save(&state, &defaults, &[("twitch.expected_latency", "200")])
         .await;
     assert_eq!(
         res.status(),
@@ -825,7 +753,7 @@ async fn twitch_expected_latency_out_of_range_returns_400() {
     let defaults = state.settings_store.defaults().clone();
     // 1500 exceeds the 0..=1000 bound.
     let res = Owner::login(&state)
-        .save(&state, &defaults, &[("twitch_expected_latency", "1500")])
+        .save(&state, &defaults, &[("twitch.expected_latency", "1500")])
         .await;
     assert_eq!(
         res.status(),
@@ -843,10 +771,10 @@ async fn aviationstack_save_persists() {
             &state,
             &defaults,
             &[
-                ("aviationstack_card_visible", "1"),
-                ("aviationstack_enabled", "1"),
-                ("aviationstack_base_url", "https://api.example.com/v1"),
-                ("aviationstack_timeout_secs", "10"),
+                ("aviationstack.__shown", "1"),
+                ("aviationstack.enabled", "1"),
+                ("aviationstack.base_url", "https://api.example.com/v1"),
+                ("aviationstack.timeout_secs", "10"),
             ],
         )
         .await;
@@ -875,7 +803,7 @@ async fn suspend_save_persists() {
         .save(
             &state,
             &defaults,
-            &[("suspend_default_duration_secs", "1800")],
+            &[("suspend.default_duration_secs", "1800")],
         )
         .await;
     assert_eq!(
@@ -899,8 +827,8 @@ async fn web_runtime_save_persists() {
             &state,
             &defaults,
             &[
-                ("web_session_ttl_secs", "14400"),
-                ("web_mod_check_refresh_secs", "60"),
+                ("web.session_ttl_secs", "14400"),
+                ("web.mod_check_refresh_secs", "60"),
             ],
         )
         .await;
@@ -920,60 +848,6 @@ async fn web_runtime_save_persists() {
     );
 }
 
-#[tokio::test]
-async fn reset_twitch_permissions_clears_section() {
-    let (state, _dirs) = owner_state().await;
-    let owner = Owner::login(&state);
-
-    // Push non-default values. owner is bootstrap-only (config.toml), not a form field.
-    let defaults = state.settings_store.defaults().clone();
-    let _ = owner
-        .save(&state, &defaults, &[("twitch_hidden_admins", "111")])
-        .await;
-    assert_eq!(
-        state.settings.load().twitch.hidden_admins,
-        vec!["111".to_owned()]
-    );
-
-    // Reset the section.
-    let res = owner.reset(&state, "twitch_permissions").await;
-    assert_eq!(res.status(), StatusCode::SEE_OTHER, "reset must redirect");
-    assert!(
-        state.settings.load().twitch.hidden_admins.is_empty(),
-        "reset must clear hidden_admins",
-    );
-}
-
-#[tokio::test]
-async fn reset_aviationstack_clears_section() {
-    let (state, _dirs) = owner_state().await;
-    let owner = Owner::login(&state);
-
-    // Push a non-default enabled state.
-    let defaults = state.settings_store.defaults().clone();
-    let _ = owner
-        .save(
-            &state,
-            &defaults,
-            &[
-                ("aviationstack_card_visible", "1"),
-                ("aviationstack_enabled", "1"),
-                ("aviationstack_timeout_secs", "30"),
-            ],
-        )
-        .await;
-    assert!(state.settings.load().aviationstack.enabled);
-
-    // Reset the section.
-    let res = owner.reset(&state, "aviationstack").await;
-    assert_eq!(res.status(), StatusCode::SEE_OTHER, "reset must redirect");
-    assert_eq!(
-        state.settings.load().aviationstack,
-        defaults.aviationstack,
-        "aviationstack must be restored to defaults after reset",
-    );
-}
-
 /// A validation error must re-render untouched cards from the *stored*
 /// settings, not from compiled defaults: the whole page posts as one form,
 /// so a card echoed at its default gets submitted as an explicit
@@ -990,7 +864,7 @@ async fn validation_error_preserves_stored_ai_settings() {
         .save(
             &state,
             &current,
-            &[("ai_memory_inject_byte_budget", "1024")],
+            &[("ai.memory.inject_byte_budget", "1024")],
         )
         .await;
     assert_eq!(
@@ -1004,7 +878,7 @@ async fn validation_error_preserves_stored_ai_settings() {
         "response must surface the failing field; got: {html}",
     );
     assert!(
-        html.contains("name=\"ai_grok_profile\"") && html.contains("value=\"b\" selected"),
+        html.contains("name=\"ai.grok.profile\"") && html.contains("value=\"b\" selected"),
         "stored grok profile override must survive the validation re-render; got: {html}",
     );
     assert_eq!(
@@ -1052,11 +926,11 @@ async fn spoiler_card_save_persists() {
     let res = post_settings(
         &state,
         &[
-            ("spoiler_profile", "dec"),
-            ("spoiler_default_game", "Elden Ring"),
-            ("spoiler_confidence_floor", "65"),
-            ("cooldown_spoiler", "45"),
-            ("cooldown_servers", "50"),
+            ("spoiler.profile", "dec"),
+            ("spoiler.default_game", "Elden Ring"),
+            ("spoiler.confidence_floor", "65"),
+            ("cooldowns.spoiler", "45"),
+            ("cooldowns.servers", "50"),
         ],
     )
     .await;
@@ -1077,9 +951,9 @@ async fn empty_spoiler_profile_persists_as_off() {
     let res = post_settings(
         &state,
         &[
-            ("spoiler_profile", ""),
-            ("spoiler_default_game", "Hades 2"),
-            ("spoiler_confidence_floor", "70"),
+            ("spoiler.profile", ""),
+            ("spoiler.default_game", "Hades 2"),
+            ("spoiler.confidence_floor", "70"),
         ],
     )
     .await;
@@ -1093,7 +967,7 @@ async fn empty_spoiler_profile_persists_as_off() {
 async fn save_without_spoiler_fields_keeps_persisted_spoiler_settings() {
     let (state, _dirs) = owner_state().await;
     seed_decision_profile(&state, true).await;
-    let res = post_settings(&state, &[("cooldown_ai", "99")]).await;
+    let res = post_settings(&state, &[("cooldowns.ai", "99")]).await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     let s = state.settings.load();
     assert_eq!(s.cooldowns.ai, 99);
@@ -1110,9 +984,9 @@ async fn posted_spoiler_fields_round_trip_unchanged() {
     let res = post_settings(
         &state,
         &[
-            ("spoiler_profile", "dec"),
-            ("spoiler_default_game", "Hades 2"),
-            ("spoiler_confidence_floor", "70"),
+            ("spoiler.profile", "dec"),
+            ("spoiler.default_game", "Hades 2"),
+            ("spoiler.confidence_floor", "70"),
         ],
     )
     .await;
@@ -1130,9 +1004,9 @@ async fn profile_pickers_list_only_eligible_profiles() {
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_string(res).await;
     assert!(html.contains("id=\"sec-spoiler\""), "spoiler card missing");
-    assert!(html.contains("name=\"cooldown_spoiler\""));
-    assert!(html.contains("name=\"cooldown_servers\""));
-    let inner = select_inner(&html, "spoiler_profile");
+    assert!(html.contains("name=\"cooldowns.spoiler\""));
+    assert!(html.contains("name=\"cooldowns.servers\""));
+    let inner = select_inner(&html, "spoiler.profile");
     assert!(
         inner.contains("value=\"\""),
         "needs the off option: {inner}"
@@ -1155,11 +1029,11 @@ async fn profile_pickers_list_only_eligible_profiles() {
         );
     }
     for agent in [
-        "ai_aurora_profile",
-        "ai_grok_profile",
-        "ai_dreamer_profile",
-        "ai_media_profile",
-        "ai_recap_profile",
+        "ai.aurora.profile",
+        "ai.grok.profile",
+        "ai.dreamer.profile",
+        "ai.media.profile",
+        "ai.recap.profile",
     ] {
         let inner = select_inner(&html, agent);
         assert!(
@@ -1168,10 +1042,10 @@ async fn profile_pickers_list_only_eligible_profiles() {
         );
     }
     for required in [
-        "ai_aurora_profile",
-        "ai_grok_profile",
-        "ai_dreamer_profile",
-        "ai_media_profile",
+        "ai.aurora.profile",
+        "ai.grok.profile",
+        "ai.dreamer.profile",
+        "ai.media.profile",
     ] {
         let inner = select_inner(&html, required);
         assert!(
@@ -1180,7 +1054,160 @@ async fn profile_pickers_list_only_eligible_profiles() {
         );
     }
     assert!(
-        select_inner(&html, "ai_recap_profile").contains("value=\"\""),
+        select_inner(&html, "ai.recap.profile").contains("value=\"\""),
         "Recap profile picker must retain an empty (off) option",
     );
+}
+
+/// Return the opening tag (`<input …>`, `<select …>`, …) that carries
+/// `name="{name}"`.
+fn tag_with_name<'a>(html: &'a str, name: &str) -> &'a str {
+    let marker = format!("name=\"{name}\"");
+    let at = html
+        .find(&marker)
+        .unwrap_or_else(|| panic!("missing element with {marker}"));
+    let start = html[..at].rfind('<').expect("tag open");
+    let end = at + html[at..].find('>').expect("tag close");
+    &html[start..=end]
+}
+
+/// The markup between `<form id="settings-form"` and its `</form>`.
+fn settings_form(html: &str) -> &str {
+    let start = html
+        .find("<form id=\"settings-form\"")
+        .expect("settings form present");
+    let end = start + html[start..].find("</form>").expect("settings form closed");
+    &html[start..end]
+}
+
+/// Value of `attr="…"` inside a single tag (attributes may be separated by
+/// any whitespace).
+fn attr<'a>(tag: &'a str, attr: &str) -> Option<&'a str> {
+    let marker = format!("{attr}=\"");
+    let mut from = 0;
+    while let Some(rel) = tag[from..].find(&marker) {
+        let at = from + rel;
+        if tag[..at].ends_with(char::is_whitespace) {
+            let v = &tag[at + marker.len()..];
+            return Some(&v[..v.find('"')?]);
+        }
+        from = at + marker.len();
+    }
+    None
+}
+
+/// POST only `_csrf` plus `fields` (no baseline form fields).
+async fn post_raw(state: &WebState, fields: &[(&str, &str)]) -> Response<Body> {
+    let owner = Owner::login(state);
+    let body = std::iter::once(("_csrf", owner.csrf.as_str()))
+        .chain(fields.iter().copied())
+        .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    owner.post(state, "/settings", body).await
+}
+
+/// Every form knob in the table has a rendered control, every rendered
+/// control is a form knob (or `_csrf` / a `.__shown` sentinel), and number
+/// inputs carry exactly the table's min/max.
+#[tokio::test]
+async fn settings_form_names_match_the_knob_table() {
+    let (state, _dirs) = owner_state().await;
+    let res = Owner::login(&state).get(&state, "/settings").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    let form = settings_form(&html);
+
+    let mut names = std::collections::BTreeSet::new();
+    let mut from = 0;
+    while let Some(rel) = form[from..].find("name=\"") {
+        let at = from + rel;
+        let v = &form[at + "name=\"".len()..];
+        let end = v.find('"').expect("closed name attr");
+        if form[..at].ends_with(char::is_whitespace) {
+            names.insert(v[..end].to_owned());
+        }
+        from = at + "name=\"".len() + end;
+    }
+
+    let knobs = twitch_1337_core::settings::knobs();
+    let form_paths: std::collections::BTreeSet<&str> = knobs
+        .iter()
+        .filter(|k| k.form)
+        .map(|k| k.path.as_str())
+        .collect();
+    for path in &form_paths {
+        assert!(names.contains(*path), "form knob {path} is not rendered");
+    }
+    for name in &names {
+        assert!(
+            form_paths.contains(name.as_str()) || name == "_csrf" || name.ends_with(".__shown"),
+            "rendered name {name} is not a form knob path",
+        );
+    }
+
+    for k in knobs.iter().filter(|k| k.form) {
+        let tag = tag_with_name(form, &k.path);
+        if attr(tag, "type") != Some("number") {
+            continue;
+        }
+        assert_eq!(attr(tag, "min"), k.min.as_deref(), "{} min", k.path);
+        assert_eq!(attr(tag, "max"), k.max.as_deref(), "{} max", k.path);
+    }
+    let ai = tag_with_name(form, "cooldowns.ai");
+    assert_eq!(attr(ai, "min"), Some("1"));
+    assert_eq!(attr(ai, "max"), Some("3600"));
+    assert_eq!(
+        attr(tag_with_name(form, "ai.web.max_rounds"), "max"),
+        Some("6")
+    );
+}
+
+#[tokio::test]
+async fn unparseable_value_returns_400_and_changes_nothing() {
+    let (state, _dirs) = owner_state().await;
+    let before = state.settings.load().cooldowns.ai;
+    let res = post_raw(&state, &[("cooldowns.ai", "abc")]).await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let html = body_string(res).await;
+    assert!(
+        html.contains("cooldowns.ai") && html.contains("invalid value"),
+        "response must surface the invalid field; got: {html}",
+    );
+    assert_eq!(state.settings.load().cooldowns.ai, before);
+}
+
+#[tokio::test]
+async fn changing_a_restart_knob_flashes_its_path() {
+    let (state, _dirs) = owner_state().await;
+    assert_ne!(state.settings.load().aviationstack.timeout_secs, 20);
+    let res = post_raw(
+        &state,
+        &[
+            ("aviationstack.__shown", "1"),
+            ("aviationstack.enabled", "1"),
+            ("aviationstack.timeout_secs", "20"),
+        ],
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let flash = read_flash(&res).expect("save must emit a flash cookie");
+    assert!(
+        flash.contains("Restart bot to apply: ") && flash.contains("aviationstack.timeout_secs"),
+        "restart flash must list the changed knob; got {flash:?}",
+    );
+}
+
+#[tokio::test]
+async fn old_flat_field_name_is_rejected_as_unknown() {
+    let (state, _dirs) = owner_state().await;
+    let before = state.settings.load().cooldowns.ai;
+    let res = post_raw(&state, &[("cooldown_ai", "45")]).await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let html = body_string(res).await;
+    assert!(
+        html.contains("unknown field"),
+        "old flat names must be rejected; got: {html}"
+    );
+    assert_eq!(state.settings.load().cooldowns.ai, before);
 }

@@ -13,32 +13,35 @@
   </header>
   <div class="settings-rows">
     <div class="settings-row" data-section="twitch_permissions">
-      {% call m::row_head("hidden_admins", "Twitch user IDs (one per line). Treated as mods for admin-only commands without requiring mod role.", "twitch_hidden_admins") %}{% endcall %}
+      {% call m::row_head("hidden_admins", "Twitch user IDs (one per line). Treated as mods for admin-only commands without requiring mod role.", "twitch.hidden_admins") %}{% endcall %}
       <div class="row-control-cell">
-        <textarea class="text-input is-wide" rows="4" id="twitch_hidden_admins" name="twitch_hidden_admins" data-key="hidden_admins" data-default="">{{ current.twitch.hidden_admins.join("\n") }}</textarea>
+        <textarea class="text-input is-wide" rows="4" id="twitch.hidden_admins" name="twitch.hidden_admins" data-key="twitch.hidden_admins" data-default="">{{ current.twitch.hidden_admins.join("\n") }}</textarea>
       </div>
       <div class="row-right">
-        {% call m::row_reset("hidden_admins") %}{% endcall %}
+        {% call m::restart_badge(self.knob("twitch.hidden_admins")) %}{% endcall %}
+        {% call m::row_reset("twitch.hidden_admins") %}{% endcall %}
         <span class="row-default">default <span class="mono">(empty)</span></span>
       </div>
     </div>
     <div class="settings-row" data-section="twitch_permissions">
-      {% call m::row_head("viewer_allowlist", "Twitch user IDs (one per line) granted read-only dashboard access.", "twitch_viewer_allowlist") %}{% endcall %}
+      {% call m::row_head("viewer_allowlist", "Twitch user IDs (one per line) granted read-only dashboard access.", "twitch.viewer_allowlist") %}{% endcall %}
       <div class="row-control-cell">
-        <textarea class="text-input is-wide" rows="4" id="twitch_viewer_allowlist" name="twitch_viewer_allowlist" data-key="viewer_allowlist" data-default="">{{ current.twitch.viewer_allowlist.join("\n") }}</textarea>
+        <textarea class="text-input is-wide" rows="4" id="twitch.viewer_allowlist" name="twitch.viewer_allowlist" data-key="twitch.viewer_allowlist" data-default="">{{ current.twitch.viewer_allowlist.join("\n") }}</textarea>
       </div>
       <div class="row-right">
-        {% call m::row_reset("viewer_allowlist") %}{% endcall %}
+        {% call m::restart_badge(self.knob("twitch.viewer_allowlist")) %}{% endcall %}
+        {% call m::row_reset("twitch.viewer_allowlist") %}{% endcall %}
         <span class="row-default">default <span class="mono">(empty)</span></span>
       </div>
     </div>
     <div class="settings-row" data-section="twitch_permissions">
-      {% call m::row_head("emote_usage_deny_list", "Twitch logins (one per line) whose emote usage is stored flagged and excluded from default usage queries.", "twitch_emote_usage_deny_list") %}{% endcall %}
+      {% call m::row_head("emote_usage_deny_list", "Twitch logins (one per line) whose emote usage is stored flagged and excluded from default usage queries.", "twitch.emote_usage_deny_list") %}{% endcall %}
       <div class="row-control-cell">
-        <textarea class="text-input is-wide" rows="4" id="twitch_emote_usage_deny_list" name="twitch_emote_usage_deny_list" data-key="emote_usage_deny_list" data-default="">{{ current.twitch.emote_usage_deny_list.join("\n") }}</textarea>
+        <textarea class="text-input is-wide" rows="4" id="twitch.emote_usage_deny_list" name="twitch.emote_usage_deny_list" data-key="twitch.emote_usage_deny_list" data-default="">{{ current.twitch.emote_usage_deny_list.join("\n") }}</textarea>
       </div>
       <div class="row-right">
-        {% call m::row_reset("emote_usage_deny_list") %}{% endcall %}
+        {% call m::restart_badge(self.knob("twitch.emote_usage_deny_list")) %}{% endcall %}
+        {% call m::row_reset("twitch.emote_usage_deny_list") %}{% endcall %}
         <span class="row-default">default <span class="mono">(empty)</span></span>
       </div>
     </div>

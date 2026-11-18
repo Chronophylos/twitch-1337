@@ -13,7 +13,7 @@ use twitch_1337::aviation::tracker::{
 };
 use twitch_1337::config::AviationstackBootstrap;
 use twitch_1337::lifecycle::Lifecycle;
-use twitch_1337::settings::overrides::SettingsOverrides;
+use twitch_1337::settings::SettingsOverrides;
 use twitch_1337::twitch::ChatSender;
 use twitch_irc::ClientConfig;
 use twitch_irc::login::StaticLoginCredentials;

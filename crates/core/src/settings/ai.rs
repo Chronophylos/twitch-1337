@@ -7,22 +7,36 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::knob::Knobs;
 use super::provider::AiProvider;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = AiOverrides)]
 pub struct AiSettings {
     /// Named provider configurations. Agent profile changes are dashboard
-    /// actions; no restart, no config.toml edit.
+    /// actions; no restart, no config.toml edit. Whole-list override,
+    /// managed on `/ai-profiles`.
+    #[knob(form = false)]
     pub profiles: Vec<AiProfile>,
+    #[knob(nested)]
     pub aurora: AiAurora,
+    #[knob(nested)]
     pub grok: AiGrok,
+    #[knob(nested)]
     pub recap: AiRecap,
+    #[knob(nested)]
     pub dreamer: AiDreamer,
+    #[knob(nested)]
     pub media: AiMedia,
+    #[knob(nested)]
     pub history: AiHistory,
+    #[knob(nested)]
     pub memory: AiMemory,
+    #[knob(presence, restart)]
     pub prefill: Option<AiPrefill>,
+    #[knob(presence, restart)]
     pub web: Option<AiWeb>,
+    #[knob(presence, restart)]
     pub emotes: Option<AiEmotes>,
 }
 
@@ -110,32 +124,13 @@ impl Default for AiSettings {
     }
 }
 
-/// MIGRATION(ai-profiles): only reachable through the legacy
-/// `ai.connection` override block in pre-schema-6 settings.ron files.
-/// New code uses [`AiProvider`].
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum AiBackendKind {
-    OpenAi,
-    Ollama,
-}
-
-impl AiBackendKind {
-    /// Stable lowercase string form — matches the `serde(rename_all)` output
-    /// and is consumed by the settings page (`<input value=…>`) plus the POST
-    /// parser. Keeping this in code lets templates avoid re-doing the match.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::OpenAi => "openai",
-            Self::Ollama => "ollama",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiAurora {
+    #[knob(required_profile)]
     pub profile: String,
+    #[knob(min = 1, max = 20)]
     pub max_turn_rounds: usize,
+    #[knob(min = 1, max = 64)]
     pub max_writes_per_turn: usize,
     /// Persona name the bot uses in chat-history identity push and chat-line
     /// rendering. Defaults to `"Aurora"`. Missing in pre-existing settings.ron
@@ -148,15 +143,19 @@ pub struct AiAurora {
     /// as a bot; padding the tail makes it look like it thought about it.
     /// `0` disables the padding.
     #[serde(default)]
+    #[knob(max = 60_000)]
     pub min_response_delay_ms: u64,
     /// What Aurora is told to aim for in `system.md` (`{reply_target}`).
     #[serde(default = "default_reply_target_chars")]
+    #[knob(min = 1, max = 500)]
     pub reply_target_chars: usize,
     /// Rewrite once if the cleaned reply is longer than this.
     #[serde(default = "default_reply_soft_chars")]
+    #[knob(min = 1, max = 500)]
     pub reply_soft_chars: usize,
     /// Ellipsis-clamp if the line is still longer after the rewrite.
     #[serde(default = "default_reply_hard_chars")]
+    #[knob(min = 1, max = 500)]
     pub reply_hard_chars: usize,
 }
 
@@ -176,27 +175,33 @@ fn default_reply_hard_chars() -> usize {
     490
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiHistory {
+    #[knob(max = crate::ai::chat_history::MAX_HISTORY_LENGTH)]
     pub length: u64,
+    #[knob(max = crate::ai::chat_history::MAX_HISTORY_LENGTH)]
     pub ai_channel_length: u64,
     #[serde(default)]
+    #[knob(min = 1, max = crate::ai::chat_history::MAX_HISTORY_LENGTH)]
     pub n: u64,
     #[serde(default)]
+    #[knob(min = 1, max = crate::ai::chat_history::MAX_HISTORY_LENGTH)]
     pub ai_channel_n: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiRecap {
     /// Profile Recap paraphrases on. `None` / empty = Recap off.
     #[serde(default)]
     pub profile: Option<String>,
+    #[knob(min = 1)]
     pub batch_size: u64,
+    #[knob(min = 1)]
     pub max_notes: u64,
     pub merge_width: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiMemory {
     pub soul_bytes: usize,
     pub lore_bytes: usize,
@@ -211,24 +216,29 @@ pub struct AiMemory {
     pub max_scratch_files: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiDreamer {
     pub enabled: bool,
     /// Required profile name to run this agent on.
+    #[knob(required_profile)]
     pub profile: String,
     pub run_at: String,
+    #[knob(min = 1)]
     pub timeout_secs: u64,
+    #[knob(min = 1, max = 200)]
     pub max_rounds: usize,
     /// Per-turn `write_file` quota for the dreamer ritual. Separate from the
     /// chat-turn cap (`AiAurora::max_writes_per_turn`): the dreamer rewrites
     /// SOUL + LORE + many user files in one pass, so it defaults higher (32 vs
     /// the chat cap's 8). Both are bounded to the same `1..=64` range.
+    #[knob(min = 1, max = 64)]
     pub max_writes_per_turn: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiGrok {
     /// Required profile name to run this agent on.
+    #[knob(required_profile)]
     pub profile: String,
     /// Persona name for the `@grok` alias, used in chat-history identity push
     /// and chat-line rendering (mirrors `AiAurora::persona_name` for
@@ -252,8 +262,11 @@ fn default_grok_persona_name() -> String {
 }
 
 /// Prefill config — `threshold` is `f64` compared as bits to allow `Eq`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Knobs)]
+#[knobs(presence)]
 pub struct AiPrefill {
+    /// Read once when the prefill client is built at startup.
+    #[knob(restart)]
     pub base_url: String,
     pub threshold: f64,
 }
@@ -266,20 +279,27 @@ impl PartialEq for AiPrefill {
 
 impl Eq for AiPrefill {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(presence)]
 pub struct AiWeb {
     pub base_url: String,
     pub timeout: u64,
+    #[knob(min = 1, max = 10)]
     pub max_results: usize,
+    #[knob(min = 1, max = 6)]
     pub max_rounds: usize,
     pub cache_ttl_secs: u64,
+    #[knob(min = 1)]
     pub cache_capacity: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(presence)]
 pub struct AiEmotes {
     pub include_global: bool,
+    #[knob(min = 1)]
     pub refresh_interval_secs: u64,
+    #[knob(min = 1, max = 200)]
     pub max_prompt_emotes: usize,
     pub min_baseline_emotes: usize,
     /// Emote codes always injected into the per-turn block (the persona's
@@ -298,9 +318,10 @@ fn default_pinned_emotes() -> Vec<String> {
     vec!["PepeLa".to_string(), "okjj".to_string()]
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiMedia {
     /// Required profile name to run this agent on.
+    #[knob(required_profile)]
     pub profile: String,
     pub timeout: u64,
     pub max_image_size: bytesize::ByteSize,
@@ -455,40 +476,6 @@ mod tests {
         for k in ProfileKind::ALL {
             assert_eq!(ron::to_string(&k).unwrap(), k.as_str());
         }
-    }
-
-    #[test]
-    fn legacy_ai_behavior_overrides_without_reply_keys_keep_defaults() {
-        let o: crate::settings::overrides::AiBehaviorOverrides =
-            ron::from_str("(max_turn_rounds: Some(5))").expect("partial override must parse");
-        assert_eq!(o.max_turn_rounds, Some(5));
-        assert!(o.reply_target_chars.is_none());
-        assert!(o.reply_soft_chars.is_none());
-        assert!(o.reply_hard_chars.is_none());
-        let defaults = crate::settings::Settings::compiled_defaults();
-        let resolved = crate::settings::Settings::resolve(
-            &defaults,
-            &crate::settings::SettingsOverrides {
-                ai: crate::settings::overrides::AiOverrides {
-                    behavior: o,
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        );
-        assert_eq!(
-            resolved.ai.aurora.reply_target_chars,
-            defaults.ai.aurora.reply_target_chars
-        );
-        assert_eq!(
-            resolved.ai.aurora.reply_soft_chars,
-            defaults.ai.aurora.reply_soft_chars
-        );
-        assert_eq!(
-            resolved.ai.aurora.reply_hard_chars,
-            defaults.ai.aurora.reply_hard_chars
-        );
-        assert_eq!(resolved.ai.aurora.max_turn_rounds, 5);
     }
 
     /// ADR-0003 renamed state -> scratch. Every settings.ron in the wild was

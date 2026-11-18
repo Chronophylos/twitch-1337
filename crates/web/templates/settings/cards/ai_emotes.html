@@ -10,25 +10,26 @@
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
-  <input type="hidden" name="ai_emotes_card_visible" value="1">
+  {# Sentinel: the card was rendered, so an absent checkbox means "off". #}
+  <input type="hidden" name="ai.emotes.__shown" value="1">
   <div class="settings-rows">
     <div class="settings-row" data-section="ai_emotes">
-      {% call m::row_head("enabled", "Inject channel + global emote names into the system prompt. Enabling requires a restart.", "ai_emotes_enabled") %}{% endcall %}
+      {% call m::row_head("enabled", "Inject channel + global emote names into the system prompt. Enabling requires a restart.", "ai.emotes.enabled") %}{% endcall %}
       <div class="row-control-cell">
         <label class="toggle">
-          <input type="checkbox" id="ai_emotes_enabled" name="ai_emotes_enabled" data-card-toggle value="1" role="switch"
+          <input type="checkbox" id="ai.emotes.enabled" name="ai.emotes.enabled" data-card-toggle value="1" role="switch"
                  data-key="ai.emotes.enabled"
                  {% if current.ai.emotes.is_some() %}checked{% endif %}>
           <span class="toggle-thumb" aria-hidden="true"></span>
         </label>
       </div>
-      <div class="row-right"></div>
+      <div class="row-right">{% call m::restart_badge(self.knob("ai.emotes.enabled")) %}{% endcall %}</div>
     </div>
-    <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai_emotes_enabled">
-      {% call m::row_head("include_global", "Include Twitch/3rd-party global emotes (not just channel-specific).", "ai_emotes_include_global") %}{% endcall %}
+    <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai.emotes.enabled">
+      {% call m::row_head("include_global", "Include Twitch/3rd-party global emotes (not just channel-specific).", "ai.emotes.include_global") %}{% endcall %}
       <div class="row-control-cell">
         <label class="toggle">
-          <input type="checkbox" id="ai_emotes_include_global" name="ai_emotes_include_global" value="1"
+          <input type="checkbox" id="ai.emotes.include_global" name="ai.emotes.include_global" value="1"
                  data-default="{{ e.def.include_global }}" data-key="ai.emotes.include_global"
                  role="switch"
                  {% if e.cur.include_global %}checked{% endif %}>
@@ -36,33 +37,35 @@
         </label>
       </div>
       <div class="row-right">
+        {% call m::restart_badge(self.knob("ai.emotes.include_global")) %}{% endcall %}
         {% call m::row_reset("ai.emotes.include_global") %}{% endcall %}
         <span class="row-default">default <span class="mono">{% if e.def.include_global %}on{% else %}off{% endif %}</span></span>
       </div>
     </div>
-    {% call m::num_row_bounded("ai_emotes", "ai_emotes_refresh_interval_secs", "refresh_interval_secs",
+    {% call m::num_row("ai_emotes", self.knob("ai.emotes.refresh_interval_secs"),
        "How often the bot re-pulls the emote list.",
-       e.cur.refresh_interval_secs, e.def.refresh_interval_secs, "s", 60, 86400, "ai_emotes_enabled") %}{% endcall %}
-    {% call m::num_row_bounded("ai_emotes", "ai_emotes_max_prompt_emotes", "max_prompt_emotes",
+       e.cur.refresh_interval_secs, e.def.refresh_interval_secs, "s", "ai.emotes.enabled") %}{% endcall %}
+    {% call m::num_row("ai_emotes", self.knob("ai.emotes.max_prompt_emotes"),
        "Max emotes injected into a single prompt.",
-       e.cur.max_prompt_emotes, e.def.max_prompt_emotes, "", 1, 200, "ai_emotes_enabled") %}{% endcall %}
-    {% call m::num_row_bounded("ai_emotes", "ai_emotes_min_baseline_emotes", "min_baseline_emotes",
+       e.cur.max_prompt_emotes, e.def.max_prompt_emotes, "", "ai.emotes.enabled") %}{% endcall %}
+    {% call m::num_row("ai_emotes", self.knob("ai.emotes.min_baseline_emotes"),
        "Minimum baseline emotes retained even when filtering by recency.",
-       e.cur.min_baseline_emotes, e.def.min_baseline_emotes, "", 0, 200, "ai_emotes_enabled") %}{% endcall %}
-    <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai_emotes_enabled">
-      {% call m::row_head("pinned_emotes", "Emote codes (one per line) always injected into the prompt — the persona's reflex emotes. Names not in the glossary are dropped; total must not exceed max_prompt_emotes.", "ai_emotes_pinned_emotes") %}{% endcall %}
+       e.cur.min_baseline_emotes, e.def.min_baseline_emotes, "", "ai.emotes.enabled") %}{% endcall %}
+    <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai.emotes.enabled">
+      {% call m::row_head("pinned_emotes", "Emote codes (one per line) always injected into the prompt — the persona's reflex emotes. Names not in the glossary are dropped; total must not exceed max_prompt_emotes.", "ai.emotes.pinned_emotes") %}{% endcall %}
       <div class="row-control-cell">
-        <textarea class="text-input is-wide" rows="4" id="ai_emotes_pinned_emotes" name="ai_emotes_pinned_emotes" data-key="ai.emotes.pinned_emotes" data-default="{{ e.def.pinned_emotes.join("\n") }}">{{ e.cur.pinned_emotes.join("\n") }}</textarea>
+        <textarea class="text-input is-wide" rows="4" id="ai.emotes.pinned_emotes" name="ai.emotes.pinned_emotes" data-key="ai.emotes.pinned_emotes" data-default="{{ e.def.pinned_emotes.join("\n") }}">{{ e.cur.pinned_emotes.join("\n") }}</textarea>
       </div>
       <div class="row-right">
+        {% call m::restart_badge(self.knob("ai.emotes.pinned_emotes")) %}{% endcall %}
         {% call m::row_reset("ai.emotes.pinned_emotes") %}{% endcall %}
         <span class="row-default">default <span class="mono">{% if e.def.pinned_emotes.is_empty() %}(empty){% else %}{{ e.def.pinned_emotes.join(", ") }}{% endif %}</span></span>
       </div>
     </div>
     {% let emotes_base_url = e.cur.base_url.as_deref().unwrap_or("") %}
     {% let emotes_base_url_default = e.def.base_url.as_deref().unwrap_or("") %}
-    {% call m::text_row("ai_emotes", "ai_emotes_base_url", "base_url",
+    {% call m::text_row("ai_emotes", self.knob("ai.emotes.base_url"),
        "Override emote-source base URL. Empty = built-in default.",
-       emotes_base_url, emotes_base_url_default, "(built-in default)", "ai_emotes_enabled") %}{% endcall %}
+       emotes_base_url, emotes_base_url_default, "(built-in default)", "ai.emotes.enabled") %}{% endcall %}
   </div>
 </section>

@@ -3231,6 +3231,7 @@ dependencies = [
  "tracing-subscriber",
  "twitch-1337-core",
  "twitch-1337-data",
+ "twitch-1337-settings-derive",
  "twitch-1337-web",
  "twitch-irc",
  "url",
@@ -3244,6 +3245,15 @@ dependencies = [
  "csv",
  "serde",
  "toml",
+]
+
+[[package]]
+name = "twitch-1337-settings-derive"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

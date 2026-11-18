@@ -2,8 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+use super::knob::Knobs;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = SuspendOverrides)]
 pub struct SuspendSettings {
+    #[knob(min = 1, max = 604_800)]
     pub default_duration_secs: u64,
 }
 

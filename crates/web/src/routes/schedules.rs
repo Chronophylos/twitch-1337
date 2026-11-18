@@ -688,7 +688,7 @@ async fn toggle(
         .settings_store
         .apply_with(
             Box::new(
-                move |o: &mut twitch_1337_core::settings::overrides::SettingsOverrides| {
+                move |o: &mut twitch_1337_core::settings::SettingsOverrides| {
                     let mut next = o.schedules.clone().unwrap_or_default();
                     if let Some(s) = next.iter_mut().find(|s| s.name == name_for) {
                         s.enabled = !s.enabled;
@@ -708,8 +708,7 @@ async fn toggle(
     render(&swap_tpl(&state, &session, Some(&name)).await)
 }
 
-type Mutator =
-    Box<dyn FnOnce(&mut twitch_1337_core::settings::overrides::SettingsOverrides) + Send>;
+type Mutator = Box<dyn FnOnce(&mut twitch_1337_core::settings::SettingsOverrides) + Send>;
 
 async fn apply_or_rerender(
     state: &WebState,

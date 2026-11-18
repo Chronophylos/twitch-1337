@@ -191,7 +191,6 @@ impl TestBotBuilder {
                     service_tier: None,
                     ..Default::default()
                 }]);
-                o.ai.active_profile = Some("default".into());
             }
         }
         self

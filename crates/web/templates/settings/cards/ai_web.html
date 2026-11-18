@@ -10,37 +10,38 @@
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
-  <input type="hidden" name="ai_web_card_visible" value="1">
+  {# Sentinel: the card was rendered, so an absent checkbox means "off". #}
+  <input type="hidden" name="ai.web.__shown" value="1">
   <div class="settings-rows">
     <div class="settings-row" data-section="ai_web">
-      {% call m::row_head("enabled", "Let the model search a SearXNG instance. Enabling requires a restart.", "ai_web_enabled") %}{% endcall %}
+      {% call m::row_head("enabled", "Let the model search a SearXNG instance. Enabling requires a restart.", "ai.web.enabled") %}{% endcall %}
       <div class="row-control-cell">
         <label class="toggle">
-          <input type="checkbox" id="ai_web_enabled" name="ai_web_enabled" data-card-toggle value="1" role="switch"
+          <input type="checkbox" id="ai.web.enabled" name="ai.web.enabled" data-card-toggle value="1" role="switch"
                  data-key="ai.web.enabled"
                  {% if current.ai.web.is_some() %}checked{% endif %}>
           <span class="toggle-thumb" aria-hidden="true"></span>
         </label>
       </div>
-      <div class="row-right"></div>
+      <div class="row-right">{% call m::restart_badge(self.knob("ai.web.enabled")) %}{% endcall %}</div>
     </div>
-    {% call m::text_row("ai_web", "ai_web_base_url", "base_url",
+    {% call m::text_row("ai_web", self.knob("ai.web.base_url"),
        "SearXNG /search endpoint.",
-       w.cur.base_url, w.def.base_url, w.def.base_url, "ai_web_enabled") %}{% endcall %}
-    {% call m::num_row_bounded("ai_web", "ai_web_timeout", "timeout",
+       w.cur.base_url, w.def.base_url, w.def.base_url, "ai.web.enabled") %}{% endcall %}
+    {% call m::num_row("ai_web", self.knob("ai.web.timeout"),
        "Per-request timeout.",
-       w.cur.timeout, w.def.timeout, "s", 1, 120, "ai_web_enabled") %}{% endcall %}
-    {% call m::num_row_bounded("ai_web", "ai_web_max_results", "max_results",
+       w.cur.timeout, w.def.timeout, "s", "ai.web.enabled") %}{% endcall %}
+    {% call m::num_row("ai_web", self.knob("ai.web.max_results"),
        "Results returned to the model per query.",
-       w.cur.max_results, w.def.max_results, "", 1, 50, "ai_web_enabled") %}{% endcall %}
-    {% call m::num_row_bounded("ai_web", "ai_web_max_rounds", "max_rounds",
+       w.cur.max_results, w.def.max_results, "", "ai.web.enabled") %}{% endcall %}
+    {% call m::num_row("ai_web", self.knob("ai.web.max_rounds"),
        "Maximum web_search + read_url calls per !ai / @grok turn.",
-       w.cur.max_rounds, w.def.max_rounds, "", 1, 16, "ai_web_enabled") %}{% endcall %}
-    {% call m::num_row_bounded("ai_web", "ai_web_cache_ttl_secs", "cache_ttl_secs",
+       w.cur.max_rounds, w.def.max_rounds, "", "ai.web.enabled") %}{% endcall %}
+    {% call m::num_row("ai_web", self.knob("ai.web.cache_ttl_secs"),
        "How long a cached search is reused.",
-       w.cur.cache_ttl_secs, w.def.cache_ttl_secs, "s", 0, 86400, "ai_web_enabled") %}{% endcall %}
-    {% call m::num_row_bounded("ai_web", "ai_web_cache_capacity", "cache_capacity",
+       w.cur.cache_ttl_secs, w.def.cache_ttl_secs, "s", "ai.web.enabled") %}{% endcall %}
+    {% call m::num_row("ai_web", self.knob("ai.web.cache_capacity"),
        "Max entries in the LRU search cache.",
-       w.cur.cache_capacity, w.def.cache_capacity, "", 1, 10000, "ai_web_enabled") %}{% endcall %}
+       w.cur.cache_capacity, w.def.cache_capacity, "", "ai.web.enabled") %}{% endcall %}
   </div>
 </section>
