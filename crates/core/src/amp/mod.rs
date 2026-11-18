@@ -2,7 +2,7 @@
 //! the session id in the body. Game instances sit behind the controller's
 //! proxy (`ADSModule/Servers/{id}/API/...`) and need their own login there;
 //! the controller session is rejected. Probed against AMP 2.8.0.10; see the
-//! `[amp]` section in CLAUDE.md.
+//! `[amp]` section in AGENTS.md.
 
 use std::{collections::HashMap, time::Duration};
 

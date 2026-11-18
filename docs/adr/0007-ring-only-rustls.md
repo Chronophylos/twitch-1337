@@ -1,7 +1,7 @@
 # ADR-0007: Ring-only rustls (no aws-lc)
 
 **Status:** Accepted (2026-07-18)
-**Relates to:** musl / `FROM scratch` deploy ([CLAUDE.md](../../CLAUDE.md) § Binary / Docker);
+**Relates to:** musl / `FROM scratch` deploy ([AGENTS.md](../../AGENTS.md) § Binary / Docker);
 [`install_crypto_provider`](../../crates/core/src/util/mod.rs)
 
 ## Context
