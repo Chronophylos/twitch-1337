@@ -5,6 +5,7 @@
 //! per-variant match arms at every call site.
 
 use twitch_1337_core::ai::memory::store::WriteError;
+use twitch_1337_core::ping::PingError;
 
 use crate::error::WebError;
 
@@ -28,10 +29,22 @@ impl UserFacing for WriteError {
     }
 }
 
-/// Ping create/update/member validation errors from `PingHandle`.
-impl UserFacing for eyre::Report {
+impl UserFacing for PingError {
     fn user_message(&self) -> String {
-        self.to_string()
+        match self {
+            PingError::NotFound { name } => format!("ping `{name}` does not exist"),
+            PingError::AlreadyExists { name } => format!("ping `{name}` already exists"),
+            PingError::ReservedCommand { name } => format!("`{name}` is a built-in command"),
+            PingError::EmptyName => "name must not be empty".to_owned(),
+            PingError::InvalidName => "name may only contain letters, digits, - and _".to_owned(),
+            PingError::ControlChars => {
+                "template must not contain control characters (e.g. line breaks)".to_owned()
+            }
+            PingError::AlreadyMember { user, .. } => format!("`{user}` is already a member"),
+            PingError::NotMember { user, .. } => format!("`{user}` is not a member"),
+            // Internal failures bubble via [`ping_error_for_form`], not display.
+            PingError::Unavailable | PingError::Persist(_) => "internal error".to_owned(),
+        }
     }
 }
 
@@ -40,6 +53,17 @@ impl UserFacing for eyre::Report {
 pub fn write_error_for_form(err: WriteError) -> Result<String, WebError> {
     match err {
         WriteError::Io(e) => Err(WebError::Internal(e)),
+        e => Ok(e.user_message()),
+    }
+}
+
+/// `PingError::{Persist, Unavailable}` bubble to `WebError::Internal`;
+/// other variants become an inline form message.
+pub fn ping_error_for_form(err: PingError) -> Result<String, WebError> {
+    match err {
+        PingError::Unavailable | PingError::Persist(_) => {
+            Err(WebError::Internal(eyre::Report::new(err)))
+        }
         e => Ok(e.user_message()),
     }
 }

@@ -100,3 +100,19 @@ async fn ping_admin_rejects_non_admin_create() {
 
     bot.shutdown().await;
 }
+
+/// Joining a ping that does not exist names the missing ping, not the
+/// generic "already joined" reply.
+#[tokio::test]
+async fn ping_join_missing_reports_not_found() {
+    let mut bot = TestBotBuilder::new().spawn().await;
+
+    bot.send("alice", "!p join ghost").await;
+    let out = bot.expect_say(Duration::from_secs(2)).await;
+    assert!(
+        out.contains("Ping \"ghost\" gibt es nicht"),
+        "expected not-found reply, got: {out}"
+    );
+
+    bot.shutdown().await;
+}
