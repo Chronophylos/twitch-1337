@@ -167,7 +167,10 @@ async fn flights_partial_rows_without_htmx_returns_full_page() {
     assert!(!html.contains("hx-swap-oob"), "the page itself is not oob");
 }
 
+/// Without a tracker (aviation disabled) the page still renders, and since
+/// that state can't recover without a restart, nothing polls.
 #[tokio::test]
+async fn flights_without_tracker_renders_without_polling() {
     install_crypto();
     let (state, _td_pings, _td_mem) = build_state_with_dirs(mod_helix()).await;
     let (sid, csrf, _bare) = insert_session(&state, "42", "admin");
@@ -176,5 +179,8 @@ async fn flights_partial_rows_without_htmx_returns_full_page() {
         .header(header::COOKIE, cookie_header(&sid, &csrf))
         .body(Body::empty())
         .unwrap();
+    let res = app(state).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
     assert!(!html.contains("hx-get=\"/flights"), "got {html}");
 }

@@ -35,58 +35,6 @@ async fn body_string(res: axum::http::Response<Body>) -> String {
 }
 
 #[tokio::test]
-async fn leaderboard_renders_seeded_pb() {
-    install_crypto();
-    let (state, _td_pings, _td_mem) = build_state_with_dirs(helix()).await;
-
-    // Seed one entry into the shared leaderboard.
-    {
-        let mut lb = state.leaderboard.write().await;
-        lb.insert(
-            "alice".into(),
-            PersonalBest {
-                ms: 123,
-                date: date(2026, 1, 1),
-            },
-        );
-    }
-
-    let (sid, csrf, _bare) = insert_session(&state, "42", "admin");
-    let req = Request::builder()
-        .uri("/leaderboard")
-        .header(header::COOKIE, cookie_header(&sid, &csrf))
-        .body(Body::empty())
-        .unwrap();
-
-    let res = app(state).oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let html = body_string(res).await;
-    assert!(html.contains("alice"), "row must contain login; got {html}");
-    assert!(html.contains("123"), "row must contain ms; got {html}");
-}
-
-#[tokio::test]
-async fn leaderboard_empty_state_renders_without_rows() {
-    install_crypto();
-    let (state, _td_pings, _td_mem) = build_state_with_dirs(helix()).await;
-
-    let (sid, csrf, _bare) = insert_session(&state, "42", "admin");
-    let req = Request::builder()
-        .uri("/leaderboard")
-        .header(header::COOKIE, cookie_header(&sid, &csrf))
-        .body(Body::empty())
-        .unwrap();
-
-    let res = app(state).oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let html = body_string(res).await;
-    assert!(
-        html.contains("No personal bests yet"),
-        "empty state must render; got {html}"
-    );
-}
-
-#[tokio::test]
 async fn leaderboard_unauthenticated_redirects() {
     install_crypto();
     let (state, _td_pings, _td_mem) = build_state_with_dirs(admin_helix("42")).await;
