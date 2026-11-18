@@ -10,6 +10,7 @@ use super::common;
 use std::time::Duration;
 
 use common::TestBotBuilder;
+use jiff::SignedDuration;
 
 const AI_CHAN: &str = "ai_chan";
 
@@ -31,99 +32,76 @@ async fn ai_command_works_in_ai_channel() {
     bot.shutdown().await;
 }
 
+/// Every non-AI command goes through the same `is_ai_trigger` gate in the
+/// dispatcher; one bot exercises it for a few representative commands.
 #[tokio::test]
-async fn lb_is_ignored_in_ai_channel() {
+async fn non_ai_commands_are_ignored_in_ai_channel() {
     let mut bot = TestBotBuilder::new()
         .with_settings(|o| o.twitch.ai_channel = Some(Some(AI_CHAN.into())))
         .spawn()
         .await;
 
-    bot.send_to(AI_CHAN, "viewer", "!lb").await;
-    bot.expect_silent(Duration::from_millis(300)).await;
+    for line in ["!lb", "!p list", "!fb please add X"] {
+        bot.send_to(AI_CHAN, "viewer", line).await;
+        bot.expect_silent(Duration::from_millis(300)).await;
+    }
 
     bot.shutdown().await;
 }
 
-#[tokio::test]
-async fn ping_is_ignored_in_ai_channel() {
-    let mut bot = TestBotBuilder::new()
-        .with_settings(|o| o.twitch.ai_channel = Some(Some(AI_CHAN.into())))
-        .spawn()
-        .await;
-
-    bot.send_to(AI_CHAN, "viewer", "!p list").await;
-    bot.expect_silent(Duration::from_millis(300)).await;
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn track_is_ignored_in_ai_channel() {
-    let mut bot = TestBotBuilder::new()
-        .with_settings(|o| o.twitch.ai_channel = Some(Some(AI_CHAN.into())))
-        .spawn()
-        .await;
-
-    bot.send_to(AI_CHAN, "viewer", "!track DLH400").await;
-    bot.expect_silent(Duration::from_millis(300)).await;
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn aviation_lookup_is_ignored_in_ai_channel() {
-    let mut bot = TestBotBuilder::new()
-        .with_settings(|o| o.twitch.ai_channel = Some(Some(AI_CHAN.into())))
-        .spawn()
-        .await;
-
-    bot.send_to(AI_CHAN, "viewer", "!up EDDF").await;
-    bot.expect_silent(Duration::from_millis(300)).await;
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn feedback_is_ignored_in_ai_channel() {
-    let mut bot = TestBotBuilder::new()
-        .with_settings(|o| o.twitch.ai_channel = Some(Some(AI_CHAN.into())))
-        .spawn()
-        .await;
-
-    bot.send_to(AI_CHAN, "viewer", "!fb please add X").await;
-    bot.expect_silent(Duration::from_millis(300)).await;
-
-    bot.shutdown().await;
-}
-
+/// A primary-channel scorer is the positive control: the leaderboard must be
+/// written and contain her, while the ai_channel "1337" is absent.
 #[tokio::test]
 async fn tracker_1337_ignores_ai_channel_messages() {
-    // 13:37 Berlin → UTC instant; format as a `tmi-sent-ts` (ms since epoch)
-    // matching what Twitch puts on incoming PRIVMSGs.
-    let at_1337 = jiff::civil::date(2026, 4, 28)
-        .at(13, 37, 0, 0)
-        .in_tz("Europe/Berlin")
-        .unwrap()
-        .timestamp();
-    let ts_ms: i64 = at_1337.as_millisecond();
+    async fn yield_a_bit() {
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    let berlin = |h: i8, m: i8| {
+        jiff::civil::date(2026, 4, 28)
+            .at(h, m, 0, 0)
+            .in_tz("Europe/Berlin")
+            .unwrap()
+            .timestamp()
+    };
 
-    let bot = TestBotBuilder::new()
-        .at(at_1337)
+    let mut bot = TestBotBuilder::new()
+        .at(berlin(13, 35))
         .with_settings(|o| o.twitch.ai_channel = Some(Some(AI_CHAN.into())))
         .spawn()
         .await;
 
-    bot.send_to_at(AI_CHAN, "viewer", "1337", ts_ms).await;
+    // 13:35 → 13:36:30: monitor spawns and posts the reminder.
+    bot.clock.advance(SignedDuration::from_secs(60));
+    yield_a_bit().await;
+    bot.clock.advance(SignedDuration::from_secs(30));
+    yield_a_bit().await;
+    let _reminder = bot.expect_say(Duration::from_secs(2)).await;
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // `tmi-sent-ts` at 13:37:00.234 Berlin for both messages.
+    let ts_ms = berlin(13, 37).as_millisecond() + 234;
+    let primary = bot.channel.clone();
+    bot.send_to_at(AI_CHAN, "viewer", "1337", ts_ms).await;
+    bot.send_to_at(&primary, "alice", "1337", ts_ms).await;
+    yield_a_bit().await;
+
+    // Past the 13:38:01 grace end: stats are posted and the leaderboard saved.
+    bot.clock.advance(SignedDuration::from_secs(91));
+    yield_a_bit().await;
+    let _stats = bot.expect_say(Duration::from_secs(3)).await;
+
     let lb_path = bot.data_dir.path().join("leaderboard.ron");
-    if lb_path.exists() {
-        let contents = std::fs::read_to_string(&lb_path).expect("read leaderboard");
-        assert!(
-            !contents.contains("viewer"),
-            "ai_channel 1337 must not appear in leaderboard: {contents}"
-        );
-    }
+    let contents = std::fs::read_to_string(&lb_path).expect("read leaderboard");
+    assert!(
+        contents.contains("alice"),
+        "primary 1337 missing: {contents}"
+    );
+    assert!(
+        !contents.contains("viewer"),
+        "ai_channel 1337 must not appear in leaderboard: {contents}"
+    );
 
     bot.shutdown().await;
 }

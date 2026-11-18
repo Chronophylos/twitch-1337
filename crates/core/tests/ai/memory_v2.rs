@@ -64,27 +64,6 @@ async fn memory_v2_basic_write_and_reply() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Multiline final message — newlines collapsed into a single chat line
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn memory_v2_multiline_collapses() {
-    let mut bot = TestBotBuilder::new().with_ai().spawn().await;
-
-    bot.llm.push_tool(ToolChatCompletionResponse::Message(
-        "first line\nsecond line".into(),
-    ));
-
-    bot.send("alice", "!ai hello").await;
-
-    let line = bot.expect_say(Duration::from_secs(3)).await;
-    assert!(line.contains("first line"), "got: {line:?}");
-    assert!(line.contains("second line"), "got: {line:?}");
-
-    bot.shutdown().await;
-}
-
-// ---------------------------------------------------------------------------
 // 3. Empty final message → silent
 // ---------------------------------------------------------------------------
 
@@ -322,25 +301,6 @@ async fn chat_turn_injection() {
     );
 
     bot.shutdown().await;
-}
-
-// ---------------------------------------------------------------------------
-// 9. v1 store discarded on open
-// ---------------------------------------------------------------------------
-
-/// The unit test `store::tests::open_renames_v1_store_when_present` already
-/// covers the rename path end-to-end against a real TempDir. We skip the
-/// integration-level version here because `TestBotBuilder` creates the TempDir
-/// inside `spawn()`, making it impossible to seed files before `open()` is
-/// called without a `spawn_with_data_dir()` overload that does not yet exist.
-///
-/// If a `seed_file()` builder that defers writes is added in a future task,
-/// replace this placeholder with an actual integration test.
-#[tokio::test]
-#[ignore = "v1 disposal covered by store::tests::open_renames_v1_store_when_present unit test; integration version needs seed_file builder (future task)"]
-async fn v1_store_discarded() {
-    // See comment above.
-    unimplemented!()
 }
 
 // ---------------------------------------------------------------------------

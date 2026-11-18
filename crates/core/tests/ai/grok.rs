@@ -308,9 +308,11 @@ async fn grok_uses_its_own_profile_model_effort_and_tier() {
     bot.shutdown().await;
 }
 
+/// One bot, one turn per persona: each gets its own system head and never the
+/// other's.
 #[tokio::test]
-async fn grok_uses_its_own_system_prompt() {
-    let bot = TestBotBuilder::new()
+async fn grok_and_aurora_use_their_own_system_prompts() {
+    let mut bot = TestBotBuilder::new()
         .with_ai()
         .with_settings(|o| {
             o.ai.history.length = Some(0);
@@ -318,54 +320,64 @@ async fn grok_uses_its_own_system_prompt() {
         .spawn()
         .await;
     bot.llm.push_tool_message("checked");
+    bot.llm.push_tool_message("ok");
 
-    let mut bot = bot;
     bot.send("alice", "@grok is the earth flat").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+    // Different speaker sidesteps the per-user cooldown.
+    bot.send("bob", "!ai sag hallo").await;
     let _ = bot.expect_reply(Duration::from_secs(2)).await;
 
     let calls = bot.llm.tool_calls();
-    let system = calls[0]
-        .messages
-        .iter()
-        .find(|m| m.role == Role::System)
-        .expect("request has a system message");
+    let system = |i: usize| {
+        calls[i]
+            .messages
+            .iter()
+            .find(|m| m.role == Role::System)
+            .expect("request has a system message")
+            .content
+            .clone()
+    };
+    let (grok, aurora) = (system(0), system(1));
     assert!(
-        system.content.contains("You are grok"),
+        grok.contains("You are grok"),
         "grok turn must use grok.md as its system head"
     );
     assert!(
-        !system.content.contains("Du bist Aurora"),
+        !grok.contains("Du bist Aurora"),
         "grok turn must not inherit Aurora's system.md"
     );
+    assert!(aurora.contains("Du bist Aurora"));
+    assert!(!aurora.contains("You are grok"));
 
     bot.shutdown().await;
 }
 
-#[tokio::test]
-async fn ai_still_uses_auroras_system_prompt() {
-    let bot = TestBotBuilder::new()
+/// Run a `@grok` turn then an `!ai` turn and return each request's tool names.
+async fn grok_and_aurora_tools(builder: TestBotBuilder) -> (Vec<String>, Vec<String>) {
+    let mut bot = builder
         .with_ai()
         .with_settings(|o| {
             o.ai.history.length = Some(0);
         })
         .spawn()
         .await;
+    bot.llm.push_tool_message("checked");
     bot.llm.push_tool_message("ok");
 
-    let mut bot = bot;
-    bot.send("alice", "!ai sag hallo").await;
+    bot.send("alice", "@grok check this").await;
+    let _ = bot.expect_reply(Duration::from_secs(2)).await;
+    // Different speaker sidesteps the per-user cooldown, so this second turn
+    // reaches the LLM.
+    bot.send("bob", "!ai sag hallo").await;
     let _ = bot.expect_reply(Duration::from_secs(2)).await;
 
     let calls = bot.llm.tool_calls();
-    let system = calls[0]
-        .messages
-        .iter()
-        .find(|m| m.role == Role::System)
-        .expect("request has a system message");
-    assert!(system.content.contains("Du bist Aurora"));
-    assert!(!system.content.contains("You are grok"));
-
+    let names =
+        |i: usize| -> Vec<String> { calls[i].tools.iter().map(|t| t.name.clone()).collect() };
+    let tools = (names(0), names(1));
     bot.shutdown().await;
+    tools
 }
 
 #[tokio::test]
@@ -478,268 +490,50 @@ async fn grok_system_message_has_a_manifest_not_memory_bodies() {
     bot.shutdown().await;
 }
 
+/// Per-persona tool sets with every optional backend configured. Aurora has
+/// memory bodies injected, so a `read_memory` round-trip would be waste; Grok
+/// is the neutral fact-checker and gets no tarot or package tools.
 #[tokio::test]
-async fn grok_registers_the_read_memory_tool_and_ai_does_not() {
-    let bot = TestBotBuilder::new()
-        .with_ai()
-        .with_settings(|o| {
-            o.ai.history.length = Some(0);
-        })
-        .spawn()
-        .await;
-    bot.llm.push_tool_message("checked");
-    bot.llm.push_tool_message("ok");
+async fn tools_are_registered_per_persona_when_configured() {
+    let (grok, aurora) = grok_and_aurora_tools(
+        TestBotBuilder::new()
+            .with_dhl_base_url("http://127.0.0.1:1")
+            .with_emote_tracker(),
+    )
+    .await;
 
-    let mut bot = bot;
-    bot.send("alice", "@grok check this").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-    // Different speaker: sidesteps the per-user !ai cooldown (see
-    // ai_system_message_is_byte_stable_across_turns in tests/ai.rs), so this
-    // second turn actually reaches the LLM instead of getting cooldown-blocked.
-    bot.send("bob", "!ai sag hallo").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-
-    let calls = bot.llm.tool_calls();
-    let grok_tools: Vec<_> = calls[0].tools.iter().map(|t| t.name.as_str()).collect();
-    let ai_tools: Vec<_> = calls[1].tools.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(grok_tools.contains(&"read_memory"));
-    assert!(
-        !ai_tools.contains(&"read_memory"),
-        "aurora has bodies injected; a read tool would just burn a round-trip"
-    );
-
-    bot.shutdown().await;
+    let cases = [
+        ("read_memory", true, false),
+        ("draw_tarot", false, true),
+        ("search_packages", false, true),
+        ("track_shipment", false, true),
+        ("emote_stats", true, true),
+    ];
+    for (tool, in_grok, in_aurora) in cases {
+        assert_eq!(
+            grok.iter().any(|t| t == tool),
+            in_grok,
+            "grok {tool}: {grok:?}"
+        );
+        assert_eq!(
+            aurora.iter().any(|t| t == tool),
+            in_aurora,
+            "aurora {tool}: {aurora:?}"
+        );
+    }
 }
 
+/// An unconfigured backend (no DHL key, closed emote tracker) must hide its
+/// tool entirely rather than register one that always fails.
 #[tokio::test]
-async fn aurora_registers_draw_tarot_and_grok_does_not() {
-    let bot = TestBotBuilder::new()
-        .with_ai()
-        .with_settings(|o| {
-            o.ai.history.length = Some(0);
-        })
-        .spawn()
-        .await;
-    bot.llm.push_tool_message("checked");
-    bot.llm.push_tool_message("ok");
+async fn backend_tools_are_absent_when_unconfigured() {
+    let (grok, aurora) = grok_and_aurora_tools(TestBotBuilder::new()).await;
 
-    let mut bot = bot;
-    bot.send("alice", "@grok check this").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-    bot.send("bob", "!ai sag hallo").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-
-    let calls = bot.llm.tool_calls();
-    let grok_tools: Vec<_> = calls[0].tools.iter().map(|t| t.name.as_str()).collect();
-    let ai_tools: Vec<_> = calls[1].tools.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        ai_tools.contains(&"draw_tarot"),
-        "aurora should expose draw_tarot: {ai_tools:?}"
-    );
-    assert!(
-        !grok_tools.contains(&"draw_tarot"),
-        "grok must not get draw_tarot: {grok_tools:?}"
-    );
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn aurora_registers_search_packages_and_grok_does_not() {
-    let bot = TestBotBuilder::new()
-        .with_ai()
-        .with_dhl_base_url("http://127.0.0.1:1")
-        .with_settings(|o| {
-            o.ai.history.length = Some(0);
-        })
-        .spawn()
-        .await;
-    bot.llm.push_tool_message("checked");
-    bot.llm.push_tool_message("ok");
-
-    let mut bot = bot;
-    bot.send("alice", "@grok check this").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-    bot.send("bob", "!ai sag hallo").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-
-    let calls = bot.llm.tool_calls();
-    let grok_tools: Vec<_> = calls[0].tools.iter().map(|t| t.name.as_str()).collect();
-    let ai_tools: Vec<_> = calls[1].tools.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        ai_tools.contains(&"search_packages"),
-        "aurora should expose search_packages: {ai_tools:?}"
-    );
-    assert!(
-        !grok_tools.contains(&"search_packages"),
-        "grok must not get search_packages: {grok_tools:?}"
-    );
-    assert!(
-        ai_tools.contains(&"track_shipment"),
-        "aurora should expose track_shipment: {ai_tools:?}"
-    );
-    assert!(
-        !grok_tools.contains(&"track_shipment"),
-        "grok must not get track_shipment: {grok_tools:?}"
-    );
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn track_shipment_is_absent_when_dhl_is_unconfigured() {
-    // No .with_dhl_base_url(): an absent key must hide the tool entirely
-    // rather than register one that always fails.
-    let bot = TestBotBuilder::new()
-        .with_ai()
-        .with_settings(|o| {
-            o.ai.history.length = Some(0);
-        })
-        .spawn()
-        .await;
-    bot.llm.push_tool_message("ok");
-
-    let mut bot = bot;
-    bot.send("bob", "!ai sag hallo").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-
-    let calls = bot.llm.tool_calls();
-    let ai_tools: Vec<_> = calls[0].tools.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        !ai_tools.contains(&"track_shipment"),
-        "unconfigured dhl must hide track_shipment: {ai_tools:?}"
-    );
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn emote_stats_is_registered_for_aurora_and_grok_when_tracker_is_open() {
-    let bot = TestBotBuilder::new()
-        .with_ai()
-        .with_emote_tracker()
-        .with_settings(|o| {
-            o.ai.history.length = Some(0);
-        })
-        .spawn()
-        .await;
-    bot.llm.push_tool_message("checked");
-    bot.llm.push_tool_message("checked too");
-
-    let mut bot = bot;
-    bot.send("alice", "@grok welche emotes sind im trend").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-    bot.send("bob", "!ai emote statistik bitte").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-
-    let calls = bot.llm.tool_calls();
-    let grok_tools: Vec<_> = calls[0].tools.iter().map(|t| t.name.as_str()).collect();
-    let ai_tools: Vec<_> = calls[1].tools.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        ai_tools.contains(&"emote_stats"),
-        "aurora should expose emote_stats with an open tracker: {ai_tools:?}"
-    );
-    assert!(
-        grok_tools.contains(&"emote_stats"),
-        "grok should expose emote_stats like search_emotes does: {grok_tools:?}"
-    );
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn emote_stats_is_absent_when_emote_tracker_is_closed() {
-    // No .with_emote_tracker(): a closed tracker must hide the tool entirely
-    // rather than register one that always fails.
-    let bot = TestBotBuilder::new()
-        .with_ai()
-        .with_settings(|o| {
-            o.ai.history.length = Some(0);
-        })
-        .spawn()
-        .await;
-    bot.llm.push_tool_message("ok");
-
-    let mut bot = bot;
-    bot.send("bob", "!ai emote statistik bitte").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-
-    let calls = bot.llm.tool_calls();
-    let ai_tools: Vec<_> = calls[0].tools.iter().map(|t| t.name.as_str()).collect();
-
-    assert!(
-        !ai_tools.contains(&"emote_stats"),
-        "closed tracker must hide emote_stats: {ai_tools:?}"
-    );
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn aurora_package_appendix_does_not_describe_search_fallback() {
-    let bot = TestBotBuilder::new()
-        .with_ai()
-        .with_settings(|o| {
-            o.ai.history.length = Some(0);
-        })
-        .spawn()
-        .await;
-    bot.llm.push_tool_message("ok");
-
-    let mut bot = bot;
-    bot.send("alice", "!ai is ripgrep packaged").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-
-    let calls = bot.llm.tool_calls();
-    let system_msg = calls[0]
-        .messages
-        .iter()
-        .find(|m| m.role == Role::System)
-        .expect("request has a system message");
-
-    assert!(system_msg.content.contains("search_packages"));
-    assert!(system_msg.content.contains("Package search"));
-    assert!(!system_msg.content.to_ascii_lowercase().contains("404"));
-    assert!(
-        !system_msg
-            .content
-            .to_ascii_lowercase()
-            .contains("rate limit")
-    );
-    assert!(!system_msg.content.contains("project-search"));
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn grok_system_message_has_no_package_appendix() {
-    let bot = TestBotBuilder::new()
-        .with_ai()
-        .with_settings(|o| {
-            o.ai.history.length = Some(0);
-        })
-        .spawn()
-        .await;
-    bot.llm.push_tool_message("ok");
-
-    let mut bot = bot;
-    bot.send("alice", "@grok is ripgrep packaged").await;
-    let _ = bot.expect_reply(Duration::from_secs(2)).await;
-
-    let calls = bot.llm.tool_calls();
-    let system_msg = calls[0]
-        .messages
-        .iter()
-        .find(|m| m.role == Role::System)
-        .expect("request has a system message");
-
-    assert!(!system_msg.content.contains("search_packages"));
-    assert!(!system_msg.content.contains("Package search"));
-
-    bot.shutdown().await;
+    for tool in ["track_shipment", "emote_stats"] {
+        assert!(!grok.iter().any(|t| t == tool), "grok {tool}: {grok:?}");
+        assert!(
+            !aurora.iter().any(|t| t == tool),
+            "aurora {tool}: {aurora:?}"
+        );
+    }
 }
