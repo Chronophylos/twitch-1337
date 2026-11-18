@@ -211,7 +211,7 @@ struct ChildTaskRegistry {
     inner: Arc<Mutex<ChildTasksInner>>,
 }
 
-impl TaskCompletion<Result<(), String>> {
+impl TaskCompletion<eyre::Result<()>> {
     fn is_clean(&self) -> bool {
         matches!(&self.result, Ok(Ok(())))
     }
@@ -471,7 +471,7 @@ impl<T> Drop for TaskGroup<T> {
     }
 }
 
-type DirectTaskResult = Result<Result<(), String>, JoinError>;
+type DirectTaskResult = Result<eyre::Result<()>, JoinError>;
 type DirectJoinFuture<'a> = Pin<Box<dyn Future<Output = (usize, DirectTaskResult)> + Send + 'a>>;
 
 /// Direct owner for top-level tasks. Nested application work uses [`TaskGroup`],
@@ -503,34 +503,25 @@ impl LocalTaskGroup {
     fn spawn_result<F, E>(&mut self, name: impl Into<String>, future: F)
     where
         F: Future<Output = Result<(), E>> + Send + 'static,
-        E: std::fmt::Display + Send + 'static,
+        E: Into<eyre::Report> + Send + 'static,
     {
-        let name = self.validate_new_task_name(name);
-        self.tasks.push(NamedDirectTask {
+        self.adopt_result(
             name,
-            task: DirectTask::Result(tokio::spawn(async move {
-                future.await.map_err(|error| error.to_string())
-            })),
-        });
+            tokio::spawn(async move { future.await.map_err(Into::into) }),
+        );
     }
 
     fn adopt(&mut self, name: impl Into<String>, handle: JoinHandle<()>) {
-        let name = name.into();
-        if name.trim().is_empty() {
-            handle.abort();
-            panic!("task name must not be empty");
-        }
-        if self.tasks.iter().any(|task| task.name == name) {
-            handle.abort();
-            panic!("duplicate task name {name:?} in group {:?}", self.name);
-        }
-        self.tasks.push(NamedDirectTask {
-            name,
-            task: DirectTask::Unit(handle),
-        });
+        self.push(name, DirectTask::Unit(handle));
     }
 
-    fn validate_new_task_name(&self, name: impl Into<String>) -> String {
+    fn adopt_result(&mut self, name: impl Into<String>, handle: JoinHandle<eyre::Result<()>>) {
+        self.push(name, DirectTask::Result(handle));
+    }
+
+    /// Register an already spawned task. A rejected name panics, which drops
+    /// `task` and thereby aborts its handle.
+    fn push(&mut self, name: impl Into<String>, task: DirectTask) {
         let name = name.into();
         if name.trim().is_empty() {
             panic!("task name must not be empty");
@@ -538,7 +529,7 @@ impl LocalTaskGroup {
         if self.tasks.iter().any(|task| task.name == name) {
             panic!("duplicate task name {name:?} in group {:?}", self.name);
         }
-        name
+        self.tasks.push(NamedDirectTask { name, task });
     }
 
     fn is_empty(&self) -> bool {
@@ -549,7 +540,7 @@ impl LocalTaskGroup {
         self.cancellation.cancel();
     }
 
-    async fn join_next(&mut self) -> Option<TaskCompletion<Result<(), String>>> {
+    async fn join_next(&mut self) -> Option<TaskCompletion<eyre::Result<()>>> {
         if self.tasks.is_empty() {
             return None;
         }
@@ -578,7 +569,7 @@ impl LocalTaskGroup {
         })
     }
 
-    async fn join_all(&mut self) -> Vec<TaskCompletion<Result<(), String>>> {
+    async fn join_all(&mut self) -> Vec<TaskCompletion<eyre::Result<()>>> {
         let mut completions = Vec::with_capacity(self.tasks.len());
         while let Some(completion) = self.join_next().await {
             completions.push(completion);
@@ -592,7 +583,7 @@ impl LocalTaskGroup {
         }
     }
 
-    async fn abort_and_join(&mut self) -> Vec<TaskCompletion<Result<(), String>>> {
+    async fn abort_and_join(&mut self) -> Vec<TaskCompletion<eyre::Result<()>>> {
         self.abort_all();
         self.join_all().await
     }
@@ -600,7 +591,7 @@ impl LocalTaskGroup {
 
 enum DirectTask {
     Unit(JoinHandle<()>),
-    Result(JoinHandle<Result<(), String>>),
+    Result(JoinHandle<eyre::Result<()>>),
 }
 
 impl DirectTask {
@@ -648,8 +639,12 @@ pub(crate) enum SupervisorError {
         source: JoinError,
     },
 
-    #[error("application task {task:?} returned an error: {error}")]
-    TaskReturnedError { task: String, error: String },
+    #[error("application task {task:?} returned an error")]
+    TaskReturnedError {
+        task: String,
+        #[source]
+        source: eyre::Report,
+    },
 
     #[error("task {task:?} in group {group:?} failed: {source}")]
     GroupTaskFailed {
@@ -665,12 +660,16 @@ pub(crate) enum SupervisorError {
     #[error("task teardown exceeded {timeout:?}; unfinished work was aborted and joined")]
     DrainTimeout { timeout: Duration },
 
-    #[error("one or more lifecycle finalizers failed: {failures}")]
-    FinalizersFailed { failures: String },
+    #[error("lifecycle finalizer {finalizer:?} failed")]
+    FinalizerFailed {
+        finalizer: String,
+        #[source]
+        source: eyre::Report,
+    },
 }
 
 enum OwnedTaskCompletion {
-    Direct(TaskCompletion<Result<(), String>>),
+    Direct(TaskCompletion<eyre::Result<()>>),
     Child(TaskCompletion<()>),
 }
 
@@ -681,7 +680,7 @@ struct OwnedTask {
 
 struct NamedFinalizer {
     name: String,
-    future: Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'static>>,
+    future: Pin<Box<dyn Future<Output = eyre::Result<()>> + Send + 'static>>,
 }
 
 enum ShutdownRequest {
@@ -692,7 +691,7 @@ enum ShutdownRequest {
 enum StopReason {
     Shutdown(ShutdownRequest),
     Lifecycle(LifecycleState),
-    DirectTask(TaskCompletion<Result<(), String>>),
+    DirectTask(TaskCompletion<eyre::Result<()>>),
 }
 
 /// Top-level owner for all long-running application tasks, globally registered
@@ -729,7 +728,7 @@ impl TaskSupervisor {
     pub(crate) fn spawn_result<F, E>(&mut self, name: impl Into<String>, future: F)
     where
         F: Future<Output = Result<(), E>> + Send + 'static,
-        E: std::fmt::Display + Send + 'static,
+        E: Into<eyre::Report> + Send + 'static,
     {
         self.assert_accepting_work();
         self.tasks.spawn_result(name, future);
@@ -742,11 +741,22 @@ impl TaskSupervisor {
         self.tasks.adopt(name, handle);
     }
 
+    /// Adopt a pre-spawned, result-bearing top-level application task. `Err`
+    /// is handled exactly like a [`spawn_result`](Self::spawn_result) error.
+    pub(crate) fn adopt_result(
+        &mut self,
+        name: impl Into<String>,
+        handle: JoinHandle<eyre::Result<()>>,
+    ) {
+        self.assert_accepting_work();
+        self.tasks.adopt_result(name, handle);
+    }
+
     /// Register ordered, application-owned cleanup to run only after all task
     /// producers and globally registered descendants have been joined.
     pub(crate) fn register_finalizer<F>(&mut self, name: impl Into<String>, future: F)
     where
-        F: Future<Output = Result<(), String>> + Send + 'static,
+        F: Future<Output = eyre::Result<()>> + Send + 'static,
     {
         self.assert_accepting_work();
         let name = name.into();
@@ -836,13 +846,15 @@ impl TaskSupervisor {
             }
         }
 
-        let finalizer_failures = self.run_finalizers().await;
-        if !finalizer_failures.is_empty() {
+        // Every finalizer failure Faults the runtime. The first becomes the
+        // returned error when nothing failed earlier; any other would be
+        // dropped, so it is logged here.
+        for (finalizer, source) in self.run_finalizers().await {
             self.lifecycle.request_fault();
             if error.is_none() {
-                error = Some(SupervisorError::FinalizersFailed {
-                    failures: finalizer_failures.join("; "),
-                });
+                error = Some(SupervisorError::FinalizerFailed { finalizer, source });
+            } else {
+                tracing::error!(finalizer, error = ?source, "Lifecycle finalizer failed");
             }
         }
 
@@ -953,35 +965,35 @@ impl TaskSupervisor {
         let _ = self.lifecycle.child_tasks.join_all().await;
     }
 
-    async fn run_finalizers(&mut self) -> Vec<String> {
+    async fn run_finalizers(&mut self) -> Vec<(String, eyre::Report)> {
         let mut failures = Vec::new();
         for finalizer in std::mem::take(&mut self.finalizers) {
             match AssertUnwindSafe(finalizer.future).catch_unwind().await {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => failures.push(format!("{}: {error}", finalizer.name)),
-                Err(_) => failures.push(format!("{}: panicked", finalizer.name)),
+                Ok(Err(error)) => failures.push((finalizer.name, error)),
+                Err(_) => failures.push((finalizer.name, eyre::eyre!("finalizer panicked"))),
             }
         }
         failures
     }
 }
 
-fn direct_stop_error(completion: TaskCompletion<Result<(), String>>) -> SupervisorError {
+fn direct_stop_error(completion: TaskCompletion<eyre::Result<()>>) -> SupervisorError {
     let task = completion.name().to_owned();
     match completion.into_result() {
         Ok(Ok(())) => SupervisorError::TaskExited { task },
-        Ok(Err(error)) => SupervisorError::TaskReturnedError { task, error },
+        Ok(Err(source)) => SupervisorError::TaskReturnedError { task, source },
         Err(source) => SupervisorError::TaskFailed { task, source },
     }
 }
 
 fn direct_completion_error(
-    completion: TaskCompletion<Result<(), String>>,
+    completion: TaskCompletion<eyre::Result<()>>,
 ) -> Option<SupervisorError> {
     let task = completion.name().to_owned();
     match completion.into_result() {
         Ok(Ok(())) => None,
-        Ok(Err(error)) => Some(SupervisorError::TaskReturnedError { task, error }),
+        Ok(Err(source)) => Some(SupervisorError::TaskReturnedError { task, source }),
         Err(source) => Some(SupervisorError::TaskFailed { task, source }),
     }
 }
@@ -1240,19 +1252,30 @@ mod tests {
         ));
     }
 
+    /// Messages of every error below `error` in its `source()` chain.
+    fn source_messages(error: &dyn std::error::Error) -> Vec<String> {
+        std::iter::successors(error.source(), |source| source.source())
+            .map(ToString::to_string)
+            .collect()
+    }
+
     #[tokio::test]
-    async fn result_task_error_before_stop_is_preserved_as_a_fault() {
+    async fn result_task_error_keeps_its_cause_chain() {
         let mut supervisor = TaskSupervisor::new(Lifecycle::new());
-        supervisor.spawn_result("domain-failed", async { Err("domain failure") });
+        supervisor.spawn_result("domain-failed", async {
+            Err(eyre::eyre!("inner").wrap_err("outer"))
+        });
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let error = supervisor.run(shutdown_rx).await.unwrap_err();
 
         assert!(matches!(
             error,
-            SupervisorError::TaskReturnedError { ref task, ref error }
-                if task == "domain-failed" && error == "domain failure"
+            SupervisorError::TaskReturnedError { ref task, .. } if task == "domain-failed"
         ));
+        let chain = source_messages(&error);
+        assert!(chain.iter().any(|message| message == "outer"), "{chain:?}");
+        assert!(chain.iter().any(|message| message == "inner"), "{chain:?}");
     }
 
     #[tokio::test]
@@ -1273,7 +1296,7 @@ mod tests {
                         .is_err_and(|source| source.is_panic())
                 });
                 if child_panicked {
-                    Err("owner observed nested child panic")
+                    Err(eyre::eyre!("owner observed nested child panic"))
                 } else {
                     Ok(())
                 }
@@ -1286,8 +1309,9 @@ mod tests {
 
         assert!(matches!(
             error,
-            SupervisorError::TaskReturnedError { ref task, ref error }
-                if task == "child-owner" && error == "owner observed nested child panic"
+            SupervisorError::TaskReturnedError { ref task, ref source }
+                if task == "child-owner"
+                    && source.to_string() == "owner observed nested child panic"
         ));
     }
 
@@ -1487,7 +1511,7 @@ mod tests {
                     lifecycle.state() == LifecycleState::Stopped,
                     Ordering::SeqCst,
                 );
-                Err("cleanup failed".to_owned())
+                Err(eyre::eyre!("cleanup failed"))
             }
         });
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -1497,7 +1521,8 @@ mod tests {
 
         assert!(matches!(
             error,
-            SupervisorError::FinalizersFailed { ref failures } if failures.contains("failing finalizer")
+            SupervisorError::FinalizerFailed { ref finalizer, ref source }
+                if finalizer == "failing finalizer" && source.to_string() == "cleanup failed"
         ));
         assert!(!observed_stopped.load(Ordering::SeqCst));
         assert_eq!(lifecycle.state(), LifecycleState::Stopped);

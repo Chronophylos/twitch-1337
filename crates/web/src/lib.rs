@@ -86,11 +86,7 @@ pub fn spawn_web_runtime(
     let sessions = deps.state.sessions.clone();
     let app = build_router(deps.state);
     let session_persistence = tokio::spawn(persist_sessions(sessions, lifecycle.clone()));
-    let server = tokio::spawn(async move {
-        if let Err(error) = serve_app(listener, app, lifecycle).await {
-            panic!("web server exited with error: {error:?}");
-        }
-    });
+    let server = tokio::spawn(serve_app(listener, app, lifecycle));
     twitch_1337_core::WebRuntimeTasks {
         server,
         session_persistence,

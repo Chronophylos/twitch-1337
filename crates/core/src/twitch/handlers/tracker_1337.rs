@@ -12,6 +12,7 @@ use std::{
     },
 };
 
+use eyre::WrapErr as _;
 use futures_util::FutureExt;
 use jiff::{SignedDuration, Timestamp, civil};
 use rand::seq::IndexedRandom as _;
@@ -63,6 +64,8 @@ enum MonitorCompletion {
     BroadcastClosed,
     Panicked,
 }
+
+const MONITOR_CHILD_FAILED: &str = "1337 monitor child failed";
 
 #[derive(Debug, Error)]
 enum MonitorChildError {
@@ -557,7 +560,8 @@ async fn monitor_1337_messages(
 /// Handler for the daily 1337 tracking feature.
 ///
 /// Monitors messages during the 13:37 window, tracks unique users, and posts stats at 13:38.
-/// Runs continuously, resetting state daily.
+/// Runs continuously, resetting state daily. Returns `Err` when the monitor
+/// child fails, which Faults the runtime.
 #[expect(
     clippy::too_many_arguments,
     reason = "handler deps are injected individually for testability"
@@ -573,7 +577,8 @@ pub async fn run_1337_handler<T, L>(
     data_dir: std::path::PathBuf,
     echo: Arc<EchoGuard>,
     lifecycle: crate::lifecycle::Lifecycle,
-) where
+) -> eyre::Result<()>
+where
     T: Transport,
     L: LoginCredentials,
 {
@@ -583,7 +588,7 @@ pub async fn run_1337_handler<T, L>(
         // Wait until 13:36 to start monitoring
         tokio::select! {
             biased;
-            _ = lifecycle.wait_for_cancellation() => return,
+            _ = lifecycle.wait_for_cancellation() => return Ok(()),
             () = wait_until_schedule(clock.as_ref(), TARGET_HOUR, TARGET_MINUTE - 1) => {}
         }
 
@@ -637,12 +642,12 @@ pub async fn run_1337_handler<T, L>(
             ),
         )
         .await
-        .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
+        .wrap_err(MONITOR_CHILD_FAILED)?;
         if lifecycle.is_cancelled() {
             stop_monitor(&mut monitor_tasks)
                 .await
-                .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
-            return;
+                .wrap_err(MONITOR_CHILD_FAILED)?;
+            return Ok(());
         }
 
         info!("Posting reminder to channel");
@@ -660,12 +665,12 @@ pub async fn run_1337_handler<T, L>(
             sleep_until_hms(clock.as_ref(), TARGET_HOUR, TARGET_MINUTE + 1, 0, 0),
         )
         .await
-        .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
+        .wrap_err(MONITOR_CHILD_FAILED)?;
         if lifecycle.is_cancelled() {
             stop_monitor(&mut monitor_tasks)
                 .await
-                .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
-            return;
+                .wrap_err(MONITOR_CHILD_FAILED)?;
+            return Ok(());
         }
         wait_for_monitor_stage(
             &mut monitor_completion_rx,
@@ -680,21 +685,21 @@ pub async fn run_1337_handler<T, L>(
             ),
         )
         .await
-        .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
+        .wrap_err(MONITOR_CHILD_FAILED)?;
         if lifecycle.is_cancelled() {
             stop_monitor(&mut monitor_tasks)
                 .await
-                .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
-            return;
+                .wrap_err(MONITOR_CHILD_FAILED)?;
+            return Ok(());
         }
 
         // Stop cooperatively and confirm termination before reading results.
         // An in-flight users mutex operation is allowed to finish.
         stop_monitor(&mut monitor_tasks)
             .await
-            .unwrap_or_else(|error| panic!("1337 monitor child failed: {error}"));
+            .wrap_err(MONITOR_CHILD_FAILED)?;
         if lifecycle.is_cancelled() {
-            return;
+            return Ok(());
         }
 
         // Get user list, count, fastest, and slowest
@@ -749,7 +754,7 @@ pub async fn run_1337_handler<T, L>(
         }
 
         if lifecycle.is_cancelled() {
-            return;
+            return Ok(());
         }
         // Update leaderboard with today's sub-1s times
         let today = to_berlin(clock.now_utc()).date();
@@ -771,7 +776,7 @@ pub async fn run_1337_handler<T, L>(
         }
 
         if lifecycle.is_cancelled() {
-            return;
+            return Ok(());
         }
         {
             let users = total_users.lock().await;
@@ -791,7 +796,7 @@ pub async fn run_1337_handler<T, L>(
         }
 
         if lifecycle.is_cancelled() {
-            return;
+            return Ok(());
         }
         // Post stats message
         info!(count = count, "Posting stats to channel");

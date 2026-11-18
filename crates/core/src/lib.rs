@@ -34,7 +34,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use eyre::Result;
+use eyre::{Result, WrapErr as _};
 use tokio::sync::{mpsc::UnboundedReceiver, oneshot};
 use tracing::info;
 use twitch_irc::{
@@ -213,9 +213,10 @@ pub struct Services {
 /// Pre-spawned web tasks transferred to the lifecycle supervisor.
 ///
 /// The embedded web crate cannot depend on the private supervisor type, so the
-/// composition boundary returns the two actual handles explicitly.
+/// composition boundary returns the two actual handles explicitly. A server
+/// `Err` Faults the runtime with its cause chain intact.
 pub struct WebRuntimeTasks {
-    pub server: tokio::task::JoinHandle<()>,
+    pub server: tokio::task::JoinHandle<Result<()>>,
     pub session_persistence: tokio::task::JoinHandle<()>,
 }
 
@@ -387,7 +388,7 @@ where
     // server and session-writer handles are adopted by the same supervisor.
     if let Some(spawner) = web_spawner {
         let web_tasks = spawner(lifecycle.clone());
-        supervisor.adopt("web server", web_tasks.server);
+        supervisor.adopt_result("web server", web_tasks.server);
         supervisor.adopt("web session persistence", web_tasks.session_persistence);
     }
 
@@ -452,7 +453,7 @@ where
             handle
                 .finalize()
                 .await
-                .map_err(|error| format!("flush/close/join failed: {error}"))
+                .wrap_err("Langfuse flush/close/join failed")
         });
     }
     if let Some(handle) = services.emote_tracker.clone() {
@@ -460,17 +461,14 @@ where
             handle
                 .close_and_join()
                 .await
-                .map_err(|error| error.to_string())
+                .wrap_err("emote SQLite writer close/join failed")
         });
     }
 
-    let supervisor_result = supervisor
-        .run(shutdown)
-        .await
-        .map_err(|error| eyre::eyre!("application lifecycle supervision failed: {error}"));
-    if let Err(error) = &supervisor_result {
+    if let Err(error) = supervisor.run(shutdown).await {
+        let error = eyre::Report::new(error).wrap_err("application lifecycle supervision failed");
         tracing::error!(?error, "Application lifecycle supervision failed");
-        return Err(eyre::eyre!("{error}"));
+        return Err(error);
     }
 
     info!("Bot shutdown complete");

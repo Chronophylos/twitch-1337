@@ -255,6 +255,25 @@ where
         .wrap_err("build built-in command registry")
 }
 
+/// Output of a registered loop. Infallible loops return `()`; loops whose
+/// operational failure must Fault the runtime return `eyre::Result<()>`, and
+/// the supervisor keeps the report as its error source (ADR-0012 rule 8).
+trait LoopOutput: Send + 'static {
+    fn into_task_result(self) -> Result<()>;
+}
+
+impl LoopOutput for () {
+    fn into_task_result(self) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl LoopOutput for Result<()> {
+    fn into_task_result(self) -> Result<()> {
+        self
+    }
+}
+
 /// Register a loop under one stable supervisor name.
 ///
 /// This is the lifecycle bridge for handlers whose domain-specific
@@ -267,15 +286,17 @@ fn register_loop<F>(
     name: &'static str,
     task: F,
 ) where
-    F: Future<Output = ()> + Send + 'static,
+    F: Future + Send + 'static,
+    F::Output: LoopOutput,
 {
-    supervisor.spawn(name, async move {
+    supervisor.spawn_result(name, async move {
         tokio::pin!(task);
-        tokio::select! {
+        let output = tokio::select! {
             biased;
             _ = lifecycle.wait_for_cancellation() => task.await,
-            _ = &mut task => {}
-        }
+            output = &mut task => output,
+        };
+        output.into_task_result()
     });
 }
 
@@ -289,15 +310,17 @@ fn register_lifecycle_loop<F>(
     name: &'static str,
     task: F,
 ) where
-    F: Future<Output = ()> + Send + 'static,
+    F: Future + Send + 'static,
+    F::Output: LoopOutput,
 {
-    supervisor.spawn(name, async move {
+    supervisor.spawn_result(name, async move {
         tokio::pin!(task);
-        tokio::select! {
+        let output = tokio::select! {
             biased;
             _ = lifecycle.wait_for_cancellation() => task.await,
-            _ = &mut task => {}
-        }
+            output = &mut task => output,
+        };
+        output.into_task_result()
     });
 }
 
@@ -313,21 +336,23 @@ fn register_notify_loop<F>(
     shutdown: Arc<Notify>,
     task: F,
 ) where
-    F: Future<Output = ()> + Send + 'static,
+    F: Future + Send + 'static,
+    F::Output: LoopOutput,
 {
-    supervisor.spawn(name, async move {
+    supervisor.spawn_result(name, async move {
         tokio::pin!(task);
-        tokio::select! {
+        let output = tokio::select! {
             biased;
             _ = lifecycle.wait_for_cancellation() => {
                 // `notify_one` stores a permit if the task has not yet created
                 // its receiver, avoiding a start/shutdown race. Each legacy
                 // loop receives its own Notify and therefore has one consumer.
                 shutdown.notify_one();
-                task.await;
+                task.await
             }
-            _ = &mut task => {}
-        }
+            output = &mut task => output,
+        };
+        output.into_task_result()
     });
 }
 
@@ -369,7 +394,7 @@ pub(crate) fn spawn_handlers<T, L>(
                     services.clock.clone(),
                     task_lifecycle,
                 )
-                .await;
+                .await
             },
         );
     }
@@ -502,7 +527,7 @@ pub(crate) fn spawn_handlers<T, L>(
                 echo_usage,
                 task_lifecycle,
             )
-            .await;
+            .await
         });
     }
 
@@ -546,7 +571,7 @@ pub(crate) fn spawn_handlers<T, L>(
                 echo_tracker,
                 task_lifecycle,
             )
-            .await;
+            .await
         });
     }
 
@@ -620,7 +645,7 @@ pub(crate) fn spawn_handlers<T, L>(
         command_task_group
             .abort_and_join()
             .await
-            .map_err(|error| format!("abort/join failed: {error}"))
+            .wrap_err("command task group abort/join failed")
     });
     supervisor.spawn_result(
         "command execution manager",

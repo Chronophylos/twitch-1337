@@ -6,6 +6,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 
+use eyre::WrapErr as _;
 use futures_util::FutureExt;
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc};
@@ -21,6 +22,8 @@ use crate::twitch::clanker::should_flag_usage;
 use crate::twitch::echo::EchoGuard;
 
 pub const CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+const USAGE_WRITER_FAILED: &str = "emote usage writer child failed";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UsageIngestCompletion {
@@ -186,6 +189,8 @@ fn classify_usage_ingest_completion(
     }
 }
 
+/// Returns `Err` when the SQLite usage-writer child fails, which Faults the
+/// runtime.
 pub async fn run_emote_usage_handler(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
     emote_tracker: Arc<EmoteTrackerHandle>,
@@ -194,7 +199,7 @@ pub async fn run_emote_usage_handler(
     bot_username: String,
     echo: Arc<EchoGuard>,
     lifecycle: Lifecycle,
-) {
+) -> eyre::Result<()> {
     let mut active_names = HashMap::new();
     refresh_catalog(&emote_tracker, &mut active_names).await;
 
@@ -213,14 +218,12 @@ pub async fn run_emote_usage_handler(
             _ = lifecycle.wait_for_cancellation() => {
                 stop_usage_writer(&mut usage_tasks)
                     .await
-                    .unwrap_or_else(|error| {
-                        panic!("emote usage writer child failed: {error}")
-                    });
-                return;
+                    .wrap_err(USAGE_WRITER_FAILED)?;
+                return Ok(());
             }
             completion = usage_completion_rx.recv() => {
                 let error = fail_on_usage_writer_completion(&mut usage_tasks, completion).await;
-                panic!("emote usage writer child failed: {error}");
+                return Err(eyre::Report::new(error).wrap_err(USAGE_WRITER_FAILED));
             }
             _ = refresh.tick() => {
                 if lifecycle.is_cancelled() {
@@ -267,7 +270,7 @@ pub async fn run_emote_usage_handler(
                         if usage_tx.send(events).is_err() {
                             let error =
                                 fail_on_usage_writer_completion(&mut usage_tasks, None).await;
-                            panic!("emote usage writer child failed: {error}");
+                            return Err(eyre::Report::new(error).wrap_err(USAGE_WRITER_FAILED));
                         }
                     }
                     Ok(_) => {}
@@ -275,10 +278,8 @@ pub async fn run_emote_usage_handler(
                     Err(_) => {
                         stop_usage_writer(&mut usage_tasks)
                             .await
-                            .unwrap_or_else(|error| {
-                                panic!("emote usage writer child failed: {error}")
-                            });
-                        return;
+                            .wrap_err(USAGE_WRITER_FAILED)?;
+                        return Ok(());
                     }
                 }
             }

@@ -1893,6 +1893,7 @@ async fn tracker_answers_dashboard_commands_while_polling() {
     tokio::time::timeout(Duration::from_secs(3), tracker_task)
         .await
         .expect("tracker should shut down")
+        .unwrap()
         .unwrap();
 }
 
