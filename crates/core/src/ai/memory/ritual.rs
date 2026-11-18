@@ -369,9 +369,13 @@ async fn run_ritual_until(
             session_id: Some(crate::ai::session::new_session_id()),
         },
     };
+    // Offline, owner-scheduled run with its own write cap: no per-round call
+    // cap or whole-run deadline.
     let opts = AgentOpts {
         max_rounds,
         per_round_timeout: Some(Duration::from_secs(timeout_secs)),
+        max_calls_per_round: None,
+        deadline: None,
     };
     let session_id = req.trace.session_id.clone();
     llm::with_optional_turn(
@@ -399,7 +403,9 @@ async fn run_ritual_until(
                     info!(rotated = %dated.display(), "dreamer ritual finished");
                 }
                 Ok(AgentOutcome::MaxRoundsExceeded) => warn!("dreamer max_rounds reached"),
-                Ok(AgentOutcome::Timeout { round }) => warn!(round, "dreamer per-round timeout"),
+                Ok(AgentOutcome::Timeout { round } | AgentOutcome::DeadlineExceeded { round }) => {
+                    warn!(round, "dreamer per-round timeout");
+                }
                 Err(_error) if lifecycle.is_cancelled() => {
                     info!("dreamer ritual cancelled at an operation boundary");
                 }
