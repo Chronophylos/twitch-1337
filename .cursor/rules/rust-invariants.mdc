@@ -23,7 +23,7 @@ alwaysApply: true
 
 ## IRC / handlers
 
-- Handlers are independent; errors in one must not crash others (`bail!` on startup only)
+- Fault is fail-fast (ADR-0012): an unexpected task exit or panic, even one command's, ends the runtime; handle operational failures inside the task (`bail!` on startup only)
 - Broadcast channel capacity 100; lagging handlers continue after `RecvError::Lagged`
 - Request/response on broadcast: subscribe **before** send (PING/PONG race)
 - `twitch_irc::irc!` macro needs standalone `use twitch_irc::irc;`
@@ -36,4 +36,5 @@ alwaysApply: true
 ## Style
 
 - Clippy is strict (`-D warnings`); don't `#[allow]` without a one-line reason
-- Log errors with `?error` not `%error` (includes backtrace)
+- Errors follow ADR-0012: typed when a caller branches, `eyre` otherwise; Surface text via `match`, never `to_string()`
+- Log errors once, where handled, with `?error` not `%error` (includes backtrace)

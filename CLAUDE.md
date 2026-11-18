@@ -263,7 +263,7 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - Bot scheduling / display use `Europe/Berlin` (`util::BERLIN`, `util::to_berlin`). Time is `jiff` throughout; it is built with `tzdb-bundle-always` so the musl `FROM scratch` image carries the full IANA database and Aviationstack airport timezones can reinterpret local wall times stamped as `+00:00`. `chrono`/`chrono-tz`/`humantime` were dropped as unmaintained (#609); schedule `every` still reads humantime's `1day` spelling.
 - 1337 tracker: messages containing "1337" or "DANKIES" at exactly 13:37:xx. Ignore "supibot", "potatbotat". Dedupe via HashSet (max 10k). Leaderboard = fastest sub-1s PB.
 - Broadcast channel capacity 100. Lagging handlers get `RecvError::Lagged`, continue.
-- Handlers independent. Errors in one don't crash others (`bail!` on startup only).
+- Fault is fail-fast (ADR-0012): any unexpected task exit or panic — one command task's included — ends the whole runtime and the bot restarts. Operational failures (I/O, upstream APIs) are handled inside their task and never panic; `bail!` aborts only at startup.
 - Ping templates: reject control chars on create/edit (CR/LF would split PRIVMSG).
 - Aviation client init failure: log + disable `!up`/`!fl`/flight tracker + track commands. Don't abort.
 - DHL tracking: coarse tier only — `recipientPostalCode` is never sent, so DHL
@@ -289,7 +289,8 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - `twitch_irc::irc!` macro needs standalone `use twitch_irc::irc;` — cannot be in braced `use twitch_irc::{...}`.
 - Request/response on broadcast (e.g. PING/PONG): subscribe BEFORE send to avoid race.
 - Clippy strict (`-D warnings`) + extra lints in `Cargo.toml [workspace.lints.clippy]`. Suppress with `#[expect(lint, reason = "...")]` (lint-enforced; stale ones fail). Item only dead outside tests: `#[cfg_attr(not(test), expect(...))]`. Plain `#![allow]` only in test helpers shared across test binaries.
-- Log errors with `?error` not `%error` to include backtrace.
+- Errors follow ADR-0012. Rejection / operational failure / Bug; typed `thiserror` enum when a caller branches on the cause, `eyre` + `wrap_err` otherwise. `Display` is for logs — Chat, Dashboard, and Model words come from per-Surface `match`es, never from `to_string()` or string matching. Keep `#[source]` chains; no `map_err(|_| …)` on operational causes.
+- Log an error once, where it is handled, with `?error` not `%error` (full chain + backtrace). Deliberate ignores match the benign case (`ErrorKind::NotFound`); bare `let _ =` only for sends to a receiver that may have hung up.
 
 ## Adding handler
 
