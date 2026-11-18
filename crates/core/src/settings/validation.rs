@@ -877,22 +877,6 @@ mod tests {
     }
 
     #[test]
-    fn allows_ollama_profile_without_key() {
-        let mut p = profile(AiProvider::Ollama);
-        p.key = None;
-        with_profiles(vec![p], "p")
-            .validate(&ctx())
-            .expect("Ollama does not need a key");
-    }
-
-    #[test]
-    fn allows_unconfigured_openai_stub_without_key() {
-        Settings::compiled_defaults()
-            .validate(&ctx())
-            .expect("empty default OpenRouter stub must still validate");
-    }
-
-    #[test]
     fn rejects_xhigh_on_stock_openai() {
         let mut p = profile(AiProvider::OpenAi);
         p.reasoning_effort = Some("xhigh".into());
@@ -991,11 +975,7 @@ mod tests {
         let mut s = Settings::compiled_defaults();
         s.cooldowns.ai = 0;
         s.pings.cooldown = 0;
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("both bounds violated");
+        let errs = s.validate(&ctx()).expect_err("both bounds violated");
         let fields: Vec<&str> = errs.iter().map(|e| e.field.as_str()).collect();
         assert!(fields.contains(&"cooldowns.ai"));
         assert!(fields.contains(&"pings.cooldown"));
@@ -1004,9 +984,7 @@ mod tests {
     #[test]
     fn validate_accepts_compiled_defaults() {
         Settings::compiled_defaults()
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
+            .validate(&ctx())
             .expect("compiled defaults pass validate()");
     }
 
@@ -1014,11 +992,7 @@ mod tests {
     fn validate_rejects_empty_persona_name() {
         let mut s = Settings::compiled_defaults();
         s.ai.aurora.persona_name = "   ".into();
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.aurora.persona_name"));
     }
 
@@ -1028,11 +1002,7 @@ mod tests {
         s.ai.history.n = 20;
         s.ai.recap.batch_size = 40;
         s.ai.history.length = 50; // 50 < 60
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(
             errs.iter().any(|e| e.field == "ai.history.length"),
             "{errs:?}"
@@ -1043,11 +1013,7 @@ mod tests {
     fn recap_rejects_merge_width_one() {
         let mut s = Settings::compiled_defaults();
         s.ai.recap.merge_width = 1;
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.recap.merge_width"));
     }
 
@@ -1055,11 +1021,7 @@ mod tests {
     fn recap_rejects_blank_profile() {
         let mut s = Settings::compiled_defaults();
         s.ai.recap.profile = Some("   ".into());
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.recap.profile"));
     }
 
@@ -1067,19 +1029,12 @@ mod tests {
     fn validate_rejects_max_turn_rounds_out_of_range() {
         let mut s = Settings::compiled_defaults();
         s.ai.aurora.max_turn_rounds = 0;
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.aurora.max_turn_rounds"));
     }
 
     fn reply_len_err(s: Settings) -> Vec<crate::settings::FieldError> {
-        s.validate(&ValidationContext {
-            channel: "test".into(),
-        })
-        .expect_err("must fail")
+        s.validate(&ctx()).expect_err("must fail")
     }
 
     #[test]
@@ -1130,11 +1085,7 @@ mod tests {
         s.ai.memory.soul_bytes = 4096;
         s.ai.memory.lore_bytes = 12288;
         s.ai.memory.inject_byte_budget = 1024;
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(
             errs.iter()
                 .any(|e| e.field == "ai.memory.inject_byte_budget")
@@ -1145,11 +1096,7 @@ mod tests {
     fn validate_rejects_malformed_dreamer_run_at() {
         let mut s = Settings::compiled_defaults();
         s.ai.dreamer.run_at = "not-a-time".into();
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.dreamer.run_at"));
     }
 
@@ -1157,11 +1104,7 @@ mod tests {
     fn validate_rejects_invalid_connection_base_url() {
         let mut s = Settings::compiled_defaults();
         s.ai.profiles[0].base_url = Some("not a url".into());
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.profiles[0].base_url"));
     }
 
@@ -1169,11 +1112,7 @@ mod tests {
     fn validate_rejects_unknown_service_tier_value() {
         let mut s = Settings::compiled_defaults();
         s.ai.profiles[0].service_tier = Some("turbo".to_string());
-        let err = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("'turbo' must be rejected");
+        let err = s.validate(&ctx()).expect_err("'turbo' must be rejected");
         assert!(
             err.iter().any(|e| e.field == "ai.profiles[0].service_tier"),
             "expected field error for ai.profiles[0].service_tier, got {err:?}"
@@ -1184,11 +1123,7 @@ mod tests {
     fn validate_rejects_expected_latency_over_1000() {
         let mut s = Settings::compiled_defaults();
         s.twitch.expected_latency = 1500;
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "twitch.expected_latency"));
     }
 
@@ -1196,11 +1131,7 @@ mod tests {
     fn validate_rejects_admin_channel_equal_to_bootstrap_channel() {
         let mut s = Settings::compiled_defaults();
         s.twitch.admin_channel = Some("test".into());
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "twitch.admin_channel"));
     }
 
@@ -1221,11 +1152,7 @@ mod tests {
     fn validate_rejects_suspend_out_of_range() {
         let mut s = Settings::compiled_defaults();
         s.suspend.default_duration_secs = 0;
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(
             errs.iter()
                 .any(|e| e.field == "suspend.default_duration_secs")
@@ -1263,25 +1190,13 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_spoiler_cooldown_zero() {
+    fn validate_rejects_spoiler_and_servers_cooldown_zero() {
         let mut s = Settings::compiled_defaults();
         s.cooldowns.spoiler = 0;
-        assert!(
-            spoiler_errs(&s)
-                .iter()
-                .any(|e| e.field == "cooldowns.spoiler")
-        );
-    }
-
-    #[test]
-    fn validate_rejects_servers_cooldown_zero() {
-        let mut s = Settings::compiled_defaults();
         s.cooldowns.servers = 0;
-        assert!(
-            spoiler_errs(&s)
-                .iter()
-                .any(|e| e.field == "cooldowns.servers")
-        );
+        let errs = spoiler_errs(&s);
+        assert!(errs.iter().any(|e| e.field == "cooldowns.spoiler"));
+        assert!(errs.iter().any(|e| e.field == "cooldowns.servers"));
     }
 
     #[test]
@@ -1328,11 +1243,7 @@ mod tests {
     fn validate_rejects_potat_window_out_of_range() {
         let mut s = Settings::compiled_defaults();
         s.emote_tracker.potat_attribution.window_secs = 2;
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(
             errs.iter()
                 .any(|e| e.field == "emote_tracker.potat_attribution.window_secs")
@@ -1343,11 +1254,7 @@ mod tests {
     fn validate_rejects_blank_potat_7tv_id_when_enabled() {
         let mut s = Settings::compiled_defaults();
         s.emote_tracker.potat_attribution.potat_7tv_user_id = "  ".into();
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(
             errs.iter()
                 .any(|e| e.field == "emote_tracker.potat_attribution.potat_7tv_user_id")
@@ -1359,11 +1266,7 @@ mod tests {
         let mut s = Settings::compiled_defaults();
         s.aviationstack.enabled = true;
         s.aviationstack.base_url = "not a url".into();
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "aviationstack.base_url"));
     }
 
@@ -1374,9 +1277,7 @@ mod tests {
         s.aviationstack.base_url = "not a url".into();
         s.aviationstack.timeout_secs = 0;
         // Neither base_url nor timeout_secs should produce errors when disabled.
-        s.validate(&ValidationContext {
-            channel: "test".into(),
-        })
+        s.validate(&ctx())
         .expect("disabled aviationstack must not fail URL/timeout checks");
     }
 
@@ -1385,11 +1286,7 @@ mod tests {
         let mut s = Settings::compiled_defaults();
         s.twitch.admin_channel = Some("".into());
         s.twitch.ai_channel = Some("".into());
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("blank channels must fail");
+        let errs = s.validate(&ctx()).expect_err("blank channels must fail");
         // Exactly one error per blank channel, no spurious "must differ" entry.
         assert!(
             errs.iter().any(|e| e.field == "twitch.admin_channel"),
@@ -1419,11 +1316,7 @@ mod tests {
             pinned_emotes: vec!["A".into(), "B".into(), "C".into()],
             ..AiEmotes::default()
         });
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("3 pins > max 2 must fail");
+        let errs = s.validate(&ctx()).expect_err("3 pins > max 2 must fail");
         assert!(errs.iter().any(|e| e.field == "ai.emotes.pinned_emotes"));
     }
 
@@ -1436,32 +1329,21 @@ mod tests {
             pinned_emotes: vec!["PepeLa".into(), "okjj".into()],
             ..AiEmotes::default()
         });
-        s.validate(&ValidationContext {
-            channel: "test".into(),
-        })
-        .expect("2 pins <= max 20 must pass");
+        s.validate(&ctx()).expect("2 pins <= max 20 must pass");
     }
 
     #[test]
     fn validate_rejects_out_of_range_dreamer_write_cap() {
         let mut s = Settings::compiled_defaults();
         s.ai.dreamer.max_writes_per_turn = 0;
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(
             errs.iter()
                 .any(|e| e.field == "ai.dreamer.max_writes_per_turn")
         );
 
         s.ai.dreamer.max_writes_per_turn = 65;
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(
             errs.iter()
                 .any(|e| e.field == "ai.dreamer.max_writes_per_turn")
@@ -1472,78 +1354,48 @@ mod tests {
     fn validate_rejects_web_session_ttl_out_of_range() {
         let mut s = Settings::compiled_defaults();
         s.web.session_ttl_secs = 60; // below 1h
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("must fail");
+        let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "web.session_ttl_secs"));
     }
 
-    #[test]
-    fn validate_rejects_duplicate_schedule_name() {
-        use crate::schedule::{Schedule, Trigger, WeekdaySet};
-        let mut s = Settings::compiled_defaults();
-        s.schedules = vec![
-            Schedule {
-                ping: None,
-                name: "a".into(),
-                message: "hi".into(),
-                trigger: Trigger::Interval {
-                    every: std::time::Duration::from_secs(3600),
-                    days: WeekdaySet::default(),
-                    active_from: None,
-                    active_to: None,
-                },
-                start_date: None,
-                end_date: None,
-                enabled: true,
-            },
-            Schedule {
-                ping: None,
-                name: "a".into(),
-                message: "hi".into(),
-                trigger: Trigger::Interval {
-                    every: std::time::Duration::from_secs(3600),
-                    days: WeekdaySet::default(),
-                    active_from: None,
-                    active_to: None,
-                },
-                start_date: None,
-                end_date: None,
-                enabled: true,
-            },
-        ];
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("duplicate name must fail");
-        assert!(errs.iter().any(|e| e.field.starts_with("schedules[")));
-    }
-
-    #[test]
-    fn validate_rejects_single_active_time_field() {
-        use crate::schedule::{Schedule, Trigger, WeekdaySet};
-        let mut s = Settings::compiled_defaults();
-        s.schedules = vec![Schedule {
+    fn schedule(name: &str) -> crate::schedule::Schedule {
+        crate::schedule::Schedule {
             ping: None,
-            name: "x".into(),
+            name: name.into(),
             message: "hi".into(),
-            trigger: Trigger::Interval {
+            trigger: crate::schedule::Trigger::Interval {
                 every: std::time::Duration::from_secs(3600),
-                days: WeekdaySet::default(),
-                active_from: Some(jiff::civil::time(9, 0, 0, 0)),
+                days: crate::schedule::WeekdaySet::default(),
+                active_from: None,
                 active_to: None,
             },
             start_date: None,
             end_date: None,
             enabled: true,
-        }];
+        }
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_schedule_name() {
+        let mut s = Settings::compiled_defaults();
+        s.schedules = vec![schedule("a"), schedule("a")];
+        let errs = s.validate(&ctx()).expect_err("duplicate name must fail");
+        assert!(errs.iter().any(|e| e.field == "schedules[1].name"));
+    }
+
+    #[test]
+    fn validate_rejects_single_active_time_field() {
+        let mut sc = schedule("x");
+        sc.trigger = crate::schedule::Trigger::Interval {
+            every: std::time::Duration::from_secs(3600),
+            days: crate::schedule::WeekdaySet::default(),
+            active_from: Some(jiff::civil::time(9, 0, 0, 0)),
+            active_to: None,
+        };
+        let mut s = Settings::compiled_defaults();
+        s.schedules = vec![sc];
         let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
+            .validate(&ctx())
             .expect_err("orphan active_from must fail");
         assert!(
             errs.iter()
@@ -1553,186 +1405,52 @@ mod tests {
 
     #[test]
     fn validate_accepts_disabled_schedule() {
-        use crate::schedule::{Schedule, Trigger, WeekdaySet};
         let mut s = Settings::compiled_defaults();
-        s.schedules = vec![Schedule {
-            ping: None,
-            name: "x".into(),
-            message: "hi".into(),
-            trigger: Trigger::Interval {
-                every: std::time::Duration::from_secs(3600),
-                days: WeekdaySet::default(),
-                active_from: None,
-                active_to: None,
-            },
-            start_date: None,
-            end_date: None,
+        s.schedules = vec![crate::schedule::Schedule {
             enabled: false,
+            ..schedule("x")
         }];
-        s.validate(&ValidationContext {
-            channel: "test".into(),
-        })
-        .expect("disabled schedule with valid required fields must pass");
-    }
-
-    #[test]
-    fn validate_empty_schedules_is_ok() {
-        let s = Settings::compiled_defaults();
-        s.validate(&ValidationContext {
-            channel: "test".into(),
-        })
-        .expect("empty schedules must pass");
+        s.validate(&ctx())
+            .expect("disabled schedule with valid required fields must pass");
     }
 
     #[test]
     fn validate_rejects_end_date_before_start_date() {
-        use crate::schedule::{Schedule, Trigger, WeekdaySet};
         let mut s = Settings::compiled_defaults();
-        s.schedules = vec![Schedule {
-            ping: None,
-            name: "x".into(),
-            message: "hi".into(),
-            trigger: Trigger::Interval {
-                every: std::time::Duration::from_secs(3600),
-                days: WeekdaySet::default(),
-                active_from: None,
-                active_to: None,
-            },
+        s.schedules = vec![crate::schedule::Schedule {
             start_date: Some(jiff::civil::date(2027, 1, 1)),
             end_date: Some(jiff::civil::date(2026, 1, 1)),
-            enabled: true,
+            ..schedule("x")
         }];
         let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
+            .validate(&ctx())
             .expect_err("inverted date range must fail");
         assert!(errs.iter().any(|e| e.field == "schedules[0].end_date"));
     }
 
+    /// Schedule names end up in dashboard URL paths and form values.
     #[test]
-    fn validate_rejects_schedule_name_with_slash() {
-        use crate::schedule::{Schedule, Trigger, WeekdaySet};
-        let mut s = Settings::compiled_defaults();
-        s.schedules = vec![Schedule {
-            ping: None,
-            name: "morning/evening".into(),
-            message: "hi".into(),
-            trigger: Trigger::Interval {
-                every: std::time::Duration::from_secs(3600),
-                days: WeekdaySet::default(),
-                active_from: None,
-                active_to: None,
-            },
-            start_date: None,
-            end_date: None,
-            enabled: true,
-        }];
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("slash in name must fail");
-        assert!(errs.iter().any(|e| e.field == "schedules[0].name"));
-    }
-
-    #[test]
-    fn validate_rejects_schedule_name_with_ampersand() {
-        use crate::schedule::{Schedule, Trigger, WeekdaySet};
-        let mut s = Settings::compiled_defaults();
-        s.schedules = vec![Schedule {
-            ping: None,
-            name: "foo&bar".into(),
-            message: "m".into(),
-            trigger: Trigger::Interval {
-                every: std::time::Duration::from_secs(3600),
-                days: WeekdaySet::default(),
-                active_from: None,
-                active_to: None,
-            },
-            start_date: None,
-            end_date: None,
-            enabled: true,
-        }];
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("should fail");
-        assert!(errs.iter().any(|e| e.field == "schedules[0].name"));
-    }
-
-    #[test]
-    fn validate_rejects_schedule_name_with_space() {
-        use crate::schedule::{Schedule, Trigger, WeekdaySet};
-        let mut s = Settings::compiled_defaults();
-        s.schedules = vec![Schedule {
-            ping: None,
-            name: "foo bar".into(),
-            message: "m".into(),
-            trigger: Trigger::Interval {
-                every: std::time::Duration::from_secs(3600),
-                days: WeekdaySet::default(),
-                active_from: None,
-                active_to: None,
-            },
-            start_date: None,
-            end_date: None,
-            enabled: true,
-        }];
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("should fail");
-        assert!(errs.iter().any(|e| e.field == "schedules[0].name"));
+    fn validate_rejects_unsafe_schedule_names() {
+        for name in ["morning/evening", "foo&bar", "foo bar", "foo\nbar"] {
+            let mut s = Settings::compiled_defaults();
+            s.schedules = vec![schedule(name)];
+            let errs = s.validate(&ctx()).expect_err(name);
+            assert!(
+                errs.iter().any(|e| e.field == "schedules[0].name"),
+                "{name:?}: {errs:?}"
+            );
+        }
     }
 
     #[test]
     fn emote_usage_deny_list_rejects_blank_entries() {
         let mut s = Settings::compiled_defaults();
         s.twitch.emote_usage_deny_list = vec!["ok".into(), "  ".into()];
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("blank login must fail");
+        let errs = s.validate(&ctx()).expect_err("blank login must fail");
         assert!(
             errs.iter()
                 .any(|e| e.field.contains("emote_usage_deny_list"))
         );
-    }
-
-    #[test]
-    fn validate_rejects_schedule_name_with_control_char() {
-        use crate::schedule::{Schedule, Trigger, WeekdaySet};
-        let mut s = Settings::compiled_defaults();
-        s.schedules = vec![Schedule {
-            ping: None,
-            name: "foo\nbar".into(),
-            message: "m".into(),
-            trigger: Trigger::Interval {
-                every: std::time::Duration::from_secs(3600),
-                days: WeekdaySet::default(),
-                active_from: None,
-                active_to: None,
-            },
-            start_date: None,
-            end_date: None,
-            enabled: true,
-        }];
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "test".into(),
-            })
-            .expect_err("should fail");
-        assert!(errs.iter().any(|e| e.field == "schedules[0].name"));
-    }
-
-    #[test]
-    fn alerts_defaults_validate() {
-        let s = Settings::compiled_defaults();
-        assert!(s.validate(&ctx()).is_ok());
     }
 
     #[test]

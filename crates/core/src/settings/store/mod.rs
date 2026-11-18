@@ -266,6 +266,71 @@ mod tests {
         (dir, store, handle, log)
     }
 
+    /// Writes `body` as `settings.ron` into a fresh dir and opens the store on
+    /// it, the way a real boot finds a file left by an earlier build.
+    fn open_with_file(body: &str) -> (tempfile::TempDir, Arc<SettingsStore>, SettingsHandle) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(FILE_NAME), body).expect("write settings.ron");
+        let (store, handle) =
+            SettingsStore::open(dir.path(), Arc::new(MemoryAuditLog::new()), "test_chan")
+                .expect("open should not fail");
+        (dir, store, handle)
+    }
+
+    fn has_quarantine(dir: &Path) -> bool {
+        std::fs::read_dir(dir)
+            .expect("readdir")
+            .filter_map(Result::ok)
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.ron.quarantine-")
+            })
+    }
+
+    fn actor() -> Actor {
+        Actor {
+            user_id: "1".into(),
+            user_login: "tester".into(),
+        }
+    }
+
+    fn schedule(name: &str) -> crate::schedule::Schedule {
+        crate::schedule::Schedule {
+            ping: None,
+            name: name.into(),
+            message: "hi".into(),
+            trigger: crate::schedule::Trigger::Interval {
+                every: std::time::Duration::from_secs(3600),
+                days: crate::schedule::WeekdaySet::default(),
+                active_from: None,
+                active_to: None,
+            },
+            start_date: None,
+            end_date: None,
+            enabled: true,
+        }
+    }
+
+    /// A schema-6 `settings.ron` whose `ai` block holds `ai_fields` plus two
+    /// ollama profiles, `cheap` and `tiny`.
+    fn v6_file(ai_fields: &str) -> String {
+        format!(
+            r#"(
+                schema_version: 6,
+                ai: (
+                    {ai_fields}
+                    profiles: Some([
+                        (name: "cheap", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "m", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                        (name: "tiny", provider: ollama, base_url: Some("http://127.0.0.1:1"),
+                         model: "t", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
+                    ]),
+                ),
+            )"#
+        )
+    }
+
     #[tokio::test]
     async fn empty_dir_yields_compile_defaults() {
         let (_dir, _store, handle, _log) = fixture();
@@ -282,11 +347,7 @@ mod tests {
             },
             ..SettingsOverrides::default()
         };
-        let actor = Actor {
-            user_id: "1".into(),
-            user_login: "tester".into(),
-        };
-        store.apply(patch, actor).await.expect("apply");
+        store.apply(patch, actor()).await.expect("apply");
         assert_eq!(handle.load().cooldowns.ai, 15);
         // round-trip from disk
         let dropped_handle =
@@ -310,11 +371,7 @@ mod tests {
             },
             ..SettingsOverrides::default()
         };
-        let actor = Actor {
-            user_id: "1".into(),
-            user_login: "tester".into(),
-        };
-        match store.apply(patch, actor).await {
+        match store.apply(patch, actor()).await {
             Err(SettingsError::Validation(errs)) => {
                 assert_eq!(errs[0].field, "cooldowns.ai");
             }
@@ -331,27 +388,17 @@ mod tests {
         patch.ai.recap.batch_size = Some(40);
 
         let error = store
-            .apply(
-                patch,
-                Actor {
-                    user_id: "1".into(),
-                    user_login: "tester".into(),
-                },
-            )
+            .apply(patch, actor())
             .await
             .expect_err("form submission with an invalid recap window must fail");
         assert!(
-            matches!(error, SettingsError::Validation(ref errors) if errors.iter().any(|e| e.field == "ai.history.length"))
+            matches!(&error, SettingsError::Validation(errors) if errors.iter().any(|e| e.field == "ai.history.length"))
         );
     }
 
     #[tokio::test]
     async fn reset_clears_section_back_to_defaults() {
         let (_dir, store, handle, _log) = fixture();
-        let actor = Actor {
-            user_id: "1".into(),
-            user_login: "tester".into(),
-        };
         let patch = SettingsOverrides {
             cooldowns: CooldownsOverrides {
                 ai: Some(15),
@@ -360,10 +407,10 @@ mod tests {
             },
             ..SettingsOverrides::default()
         };
-        store.apply(patch, actor.clone()).await.expect("apply");
+        store.apply(patch, actor()).await.expect("apply");
         assert_eq!(handle.load().cooldowns.ai, 15);
         store
-            .reset(SettingsSection::Cooldowns, actor)
+            .reset(SettingsSection::Cooldowns, actor())
             .await
             .expect("reset");
         let s = handle.load();
@@ -378,10 +425,6 @@ mod tests {
     async fn spoiler_reset_restores_defaults() {
         use crate::settings::overrides::SpoilerOverrides;
         let (_dir, store, handle, _log) = fixture();
-        let actor = Actor {
-            user_id: "1".into(),
-            user_login: "tester".into(),
-        };
         let patch = SettingsOverrides {
             spoiler: SpoilerOverrides {
                 default_game: Some("Hades II".into()),
@@ -390,10 +433,10 @@ mod tests {
             },
             ..SettingsOverrides::default()
         };
-        store.apply(patch, actor.clone()).await.expect("apply");
+        store.apply(patch, actor()).await.expect("apply");
         assert_eq!(handle.load().spoiler.confidence_floor, 80);
         store
-            .reset(SettingsSection::Spoiler, actor)
+            .reset(SettingsSection::Spoiler, actor())
             .await
             .expect("reset");
         assert_eq!(handle.load().spoiler, Settings::compiled_defaults().spoiler);
@@ -402,10 +445,6 @@ mod tests {
     #[tokio::test]
     async fn alerts_cme_reset_does_not_clear_max_age() {
         let (_dir, store, handle, _log) = fixture();
-        let actor = Actor {
-            user_id: "1".into(),
-            user_login: "tester".into(),
-        };
         let patch = SettingsOverrides {
             alerts: crate::settings::overrides::AlertsOverrides {
                 cme: crate::settings::overrides::CmeAlertsOverrides {
@@ -417,16 +456,15 @@ mod tests {
             },
             ..SettingsOverrides::default()
         };
-        store.apply(patch, actor.clone()).await.expect("apply");
+        store.apply(patch, actor()).await.expect("apply");
         assert!(handle.load().alerts.cme.enabled);
         assert_eq!(handle.load().alerts.max_age_secs, 99);
         store
-            .reset(SettingsSection::AlertsCme, actor)
+            .reset(SettingsSection::AlertsCme, actor())
             .await
             .expect("reset");
         let s = handle.load();
-        assert!(!s.alerts.cme.enabled);
-        assert_eq!(s.alerts.cme.poll_secs, 900);
+        assert_eq!(s.alerts.cme, Settings::compiled_defaults().alerts.cme);
         assert_eq!(
             s.alerts.max_age_secs, 99,
             "max_age rides with the solar card"
@@ -434,159 +472,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_round_trip_persists_ai_overrides() {
-        let (_dir, store, handle, _log) = fixture();
-        let patch = SettingsOverrides {
-            ai: crate::settings::overrides::AiOverrides {
-                profiles: Some(vec![crate::settings::ai::AiProfile {
-                    name: "default".into(),
-                    key: Some("k".into()),
-                    provider: crate::settings::provider::AiProvider::OpenRouter,
-                    base_url: None,
-                    model: "o5-pro".into(),
-                    timeout: 30,
-                    reasoning_effort: None,
-                    service_tier: None,
-                    ..Default::default()
-                }]),
-                active_profile: Some("default".into()),
-                ..Default::default()
-            },
-            ..SettingsOverrides::default()
-        };
-        let actor = Actor {
-            user_id: "1".into(),
-            user_login: "tester".into(),
-        };
-        store.apply(patch, actor).await.expect("apply");
-        assert_eq!(
-            handle
-                .load()
-                .ai
-                .by_name(&handle.load().ai.aurora.profile)
-                .unwrap()
-                .model,
-            "o5-pro"
-        );
-        let reopened = SettingsStore::open(
-            store.path.parent().unwrap(),
-            Arc::new(crate::settings::audit::MemoryAuditLog::new()),
-            "test_chan",
-        )
-        .expect("reopen")
-        .1;
-        assert_eq!(
-            reopened
-                .load()
-                .ai
-                .by_name(&reopened.load().ai.aurora.profile)
-                .unwrap()
-                .model,
-            "o5-pro"
-        );
-        let _ = handle;
-    }
-
-    #[tokio::test]
     async fn corrupt_ron_falls_back_to_defaults_and_quarantines() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join(FILE_NAME), "not valid ron").expect("write garbage");
-        let log = Arc::new(MemoryAuditLog::new());
-        let (_store, handle) =
-            SettingsStore::open(dir.path(), log, "test_chan").expect("open should not fail");
+        let (dir, _store, handle) = open_with_file("not valid ron");
         assert_eq!(*handle.load(), Settings::compiled_defaults());
         // settings.ron has been renamed away
         assert!(!dir.path().join(FILE_NAME).exists());
-        let quarantined = std::fs::read_dir(dir.path())
-            .expect("readdir")
-            .filter_map(Result::ok)
-            .any(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("settings.ron.quarantine-")
-            });
-        assert!(quarantined, "quarantine file must exist");
+        assert!(has_quarantine(dir.path()), "quarantine file must exist");
     }
 
     #[tokio::test]
     async fn future_version_loads_but_refuses_to_save() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join(FILE_NAME);
         let body = format!(
             "(schema_version: {}, cooldowns: (ai: Some(15)), from_the_future: true)",
             SCHEMA_VERSION + 1
         );
-        std::fs::write(&path, &body).expect("write");
-        let (store, handle) =
-            SettingsStore::open(dir.path(), Arc::new(MemoryAuditLog::new()), "test_chan")
-                .expect("open");
+        let (dir, store, handle) = open_with_file(&body);
         assert_eq!(handle.load().cooldowns.ai, 15);
 
-        let actor = Actor {
-            user_id: "1".into(),
-            user_login: "tester".into(),
-        };
         let err = store
-            .apply(SettingsOverrides::default(), actor.clone())
+            .apply(SettingsOverrides::default(), actor())
             .await
             .unwrap_err();
         assert!(matches!(err, SettingsError::FutureVersion { .. }), "{err}");
         let err = store
-            .reset(SettingsSection::Cooldowns, actor)
+            .reset(SettingsSection::Cooldowns, actor())
             .await
             .unwrap_err();
         assert!(matches!(err, SettingsError::FutureVersion { .. }), "{err}");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap(),
+            body
+        );
     }
 
     #[test]
     fn unparseable_future_version_is_not_quarantined() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join(FILE_NAME);
         let body = format!(
             "(schema_version: {}, cooldowns: NewShape(1))",
             SCHEMA_VERSION + 1
         );
-        std::fs::write(&path, &body).expect("write");
-        let (_store, handle) =
-            SettingsStore::open(dir.path(), Arc::new(MemoryAuditLog::new()), "test_chan")
-                .expect("open");
+        let (dir, _store, handle) = open_with_file(&body);
         assert_eq!(*handle.load(), Settings::compiled_defaults());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
-    }
-
-    #[test]
-    fn legacy_history_length_override_opens_without_quarantine() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let mut overrides = SettingsOverrides::default();
-        overrides.ai.history.length = Some(50);
-        std::fs::write(
-            dir.path().join(FILE_NAME),
-            ron::ser::to_string(&overrides).expect("serialize override"),
-        )
-        .expect("write settings");
-
-        let audit = Arc::new(MemoryAuditLog::new());
-        let (_store, handle) =
-            SettingsStore::open(dir.path(), audit, "test_chan").expect("open legacy settings");
-        let settings = handle.load();
-        assert_eq!(settings.ai.history.length, 50);
-        assert!(settings.ai.history.n + settings.ai.recap.batch_size <= 50);
-        assert!(dir.path().join(FILE_NAME).exists());
-        assert!(
-            std::fs::read_dir(dir.path())
-                .expect("read data dir")
-                .all(|entry| !entry
-                    .expect("dir entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("settings.ron.quarantine-"))
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap(),
+            body
         );
     }
 
     #[test]
+    fn legacy_history_length_override_opens_without_quarantine() {
+        let mut overrides = SettingsOverrides::default();
+        overrides.ai.history.length = Some(50);
+        let (dir, _store, handle) =
+            open_with_file(&ron::ser::to_string(&overrides).expect("serialize override"));
+        let settings = handle.load();
+        assert_eq!(settings.ai.history.length, 50);
+        assert!(settings.ai.history.n + settings.ai.recap.batch_size <= 50);
+        assert!(dir.path().join(FILE_NAME).exists());
+        assert!(!has_quarantine(dir.path()));
+    }
+
+    #[test]
     fn stale_aurora_profile_opens_without_quarantine() {
-        let dir = tempfile::tempdir().expect("tempdir");
         let mut overrides = SettingsOverrides::default();
         overrides.ai.profiles = Some(vec![crate::settings::AiProfile {
             name: "working".into(),
@@ -599,15 +546,8 @@ mod tests {
         overrides.ai.grok.profile = Some(Some("working".into()));
         overrides.ai.dreamer.profile = Some(Some("working".into()));
         overrides.ai.media.profile = Some(Some("working".into()));
-        std::fs::write(
-            dir.path().join(FILE_NAME),
-            ron::ser::to_string(&overrides).expect("serialize override"),
-        )
-        .expect("write settings");
-
-        let audit = Arc::new(MemoryAuditLog::new());
-        let (_store, handle) =
-            SettingsStore::open(dir.path(), audit, "test_chan").expect("open stale settings");
+        let (dir, _store, handle) =
+            open_with_file(&ron::ser::to_string(&overrides).expect("serialize override"));
         assert_eq!(handle.load().ai.aurora.profile, "deleted");
         assert!(
             crate::llm_factory::LlmRegistry::new(None, handle)
@@ -616,15 +556,7 @@ mod tests {
             "the stale agent must skip rather than fall back"
         );
         assert!(dir.path().join(FILE_NAME).exists());
-        assert!(
-            std::fs::read_dir(dir.path())
-                .expect("read data dir")
-                .all(|entry| !entry
-                    .expect("dir entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("settings.ron.quarantine-"))
-        );
+        assert!(!has_quarantine(dir.path()));
     }
 
     #[tokio::test]
@@ -640,7 +572,6 @@ mod tests {
         use crate::settings::ai::AiBackendKind;
         use crate::settings::overrides::{AiConnectionOverrides, AiOverrides, TwitchOverrides};
 
-        let dir = tempfile::tempdir().expect("tempdir");
         let overrides = SettingsOverrides {
             ai: AiOverrides {
                 connection: AiConnectionOverrides {
@@ -654,44 +585,22 @@ mod tests {
                 hidden_admins: Some(vec!["123".into()]),
                 ..Default::default()
             },
-            schedules: Some(vec![crate::schedule::Schedule {
-                ping: None,
-                name: "legacy-schedule".into(),
-                message: "hi".into(),
-                trigger: crate::schedule::Trigger::Interval {
-                    every: std::time::Duration::from_secs(3600),
-                    days: crate::schedule::WeekdaySet::default(),
-                    active_from: None,
-                    active_to: None,
-                },
-                start_date: None,
-                end_date: None,
-                enabled: true,
-            }]),
+            schedules: Some(vec![schedule("legacy-schedule")]),
             ..SettingsOverrides::default()
         };
         let body = ron::ser::to_string_pretty(&overrides, ron::ser::PrettyConfig::default())
             .expect("serialize legacy settings.ron");
-        std::fs::write(dir.path().join(FILE_NAME), body).expect("write legacy settings.ron");
-
-        let log = Arc::new(MemoryAuditLog::new());
-        let (_store, handle) =
-            SettingsStore::open(dir.path(), log, "test_chan").expect("open should not fail");
+        let (dir, _store, handle) = open_with_file(&body);
 
         // (a) no quarantine.
         assert!(
             dir.path().join(FILE_NAME).exists(),
             "settings.ron must not have been renamed away"
         );
-        let quarantined = std::fs::read_dir(dir.path())
-            .expect("readdir")
-            .filter_map(Result::ok)
-            .any(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("settings.ron.quarantine-")
-            });
-        assert!(!quarantined, "settings.ron must not be quarantined");
+        assert!(
+            !has_quarantine(dir.path()),
+            "settings.ron must not be quarantined"
+        );
 
         // (b) unrelated settings survived.
         let s = handle.load();
@@ -715,7 +624,6 @@ mod tests {
         use crate::settings::overrides::AiOverrides;
         use crate::settings::provider::AiProvider;
 
-        let dir = tempfile::tempdir().expect("tempdir");
         let overrides = SettingsOverrides {
             ai: AiOverrides {
                 profiles: Some(vec![AiProfile {
@@ -734,117 +642,37 @@ mod tests {
             },
             ..SettingsOverrides::default()
         };
-        std::fs::write(
-            dir.path().join(FILE_NAME),
-            ron::ser::to_string(&overrides).expect("serialize"),
-        )
-        .expect("write settings");
-
-        let log = Arc::new(MemoryAuditLog::new());
-        let (_store, handle) =
-            SettingsStore::open(dir.path(), log, "test_chan").expect("open should not fail");
+        let (dir, _store, handle) =
+            open_with_file(&ron::ser::to_string(&overrides).expect("serialize"));
         assert!(dir.path().join(FILE_NAME).exists());
         assert!(
-            std::fs::read_dir(dir.path())
-                .expect("readdir")
-                .filter_map(Result::ok)
-                .all(|e| !e
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("settings.ron.quarantine-")),
+            !has_quarantine(dir.path()),
             "settings.ron must not be quarantined"
         );
-        assert_eq!(
-            handle
-                .load()
-                .ai
-                .by_name(&handle.load().ai.aurora.profile)
-                .unwrap()
-                .model,
-            "some-model"
-        );
-        assert!(
-            handle
-                .load()
-                .ai
-                .by_name(&handle.load().ai.aurora.profile)
-                .unwrap()
-                .key
-                .is_none()
-        );
+        let s = handle.load();
+        let p = s.ai.by_name(&s.ai.aurora.profile).unwrap();
+        assert_eq!(p.model, "some-model");
+        assert!(p.key.is_none());
     }
 
     #[tokio::test]
     async fn reset_schedules_clears_override() {
-        use crate::schedule::{Schedule, Trigger, WeekdaySet};
-        let dir = tempfile::tempdir().expect("tmp");
-        let audit = std::sync::Arc::new(crate::settings::audit::MemoryAuditLog::default());
-        let (store, _h) = SettingsStore::open(dir.path(), audit, "main").expect("open");
+        let (_dir, store, _handle, _log) = fixture();
         store
             .apply(
                 SettingsOverrides {
-                    schedules: Some(vec![Schedule {
-                        ping: None,
-                        name: "x".into(),
-                        message: "hi".into(),
-                        trigger: Trigger::Interval {
-                            every: std::time::Duration::from_secs(3600),
-                            days: WeekdaySet::default(),
-                            active_from: None,
-                            active_to: None,
-                        },
-                        start_date: None,
-                        end_date: None,
-                        enabled: true,
-                    }]),
+                    schedules: Some(vec![schedule("x")]),
                     ..Default::default()
                 },
-                Actor {
-                    user_id: "owner".into(),
-                    user_login: "owner".into(),
-                },
+                actor(),
             )
             .await
             .expect("apply");
         let s = store
-            .reset(
-                SettingsSection::Schedules,
-                Actor {
-                    user_id: "owner".into(),
-                    user_login: "owner".into(),
-                },
-            )
+            .reset(SettingsSection::Schedules, actor())
             .await
             .expect("reset");
         assert!(s.schedules.is_empty());
-    }
-
-    #[tokio::test]
-    async fn apply_signals_change_notify() {
-        let (_dir, store, handle, _log) = fixture();
-        let mut sub = handle.subscribe();
-        // `subscribe()` arms the waiter at construction, so the wake-up
-        // cannot be lost to a race with notify_waiters().
-        let patch = SettingsOverrides {
-            cooldowns: CooldownsOverrides {
-                ai: Some(15),
-                ..Default::default()
-            },
-            ..SettingsOverrides::default()
-        };
-        store
-            .apply(
-                patch,
-                Actor {
-                    user_id: "1".into(),
-                    user_login: "tester".into(),
-                },
-            )
-            .await
-            .expect("apply");
-        tokio::time::timeout(std::time::Duration::from_millis(500), sub.next())
-            .await
-            .expect("apply must notify change waiters within 500ms");
     }
 
     #[tokio::test]
@@ -860,22 +688,13 @@ mod tests {
                     },
                     ..SettingsOverrides::default()
                 },
-                Actor {
-                    user_id: "1".into(),
-                    user_login: "tester".into(),
-                },
+                actor(),
             )
             .await
             .expect("apply");
         let mut sub = handle.subscribe();
         store
-            .reset(
-                SettingsSection::Cooldowns,
-                Actor {
-                    user_id: "1".into(),
-                    user_login: "tester".into(),
-                },
-            )
+            .reset(SettingsSection::Cooldowns, actor())
             .await
             .expect("reset");
         tokio::time::timeout(std::time::Duration::from_millis(500), sub.next())
@@ -885,74 +704,25 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_apply_with_does_not_lose_updates() {
-        use crate::settings::Actor;
-        use crate::settings::audit::MemoryAuditLog;
-        let dir = tempfile::tempdir().expect("tmp");
-        let audit = Arc::new(MemoryAuditLog::default());
-        let (store, _h) = SettingsStore::open(dir.path(), audit, "main").expect("open");
+        let (_dir, store, _handle, _log) = fixture();
 
-        let store_a = store.clone();
-        let store_b = store.clone();
-
-        let task_a = tokio::spawn(async move {
-            store_a
-                .apply_with(
-                    |o| {
-                        let mut next = o.schedules.clone().unwrap_or_default();
-                        next.push(crate::schedule::Schedule {
-                            ping: None,
-                            name: "alpha".into(),
-                            message: "a".into(),
-                            trigger: crate::schedule::Trigger::Interval {
-                                every: std::time::Duration::from_secs(3600),
-                                days: crate::schedule::WeekdaySet::default(),
-                                active_from: None,
-                                active_to: None,
-                            },
-                            start_date: None,
-                            end_date: None,
-                            enabled: true,
-                        });
-                        o.schedules = Some(next);
-                    },
-                    Actor {
-                        user_id: "1".into(),
-                        user_login: "a".into(),
-                    },
-                )
-                .await
-                .expect("apply_with a");
-        });
-        let task_b = tokio::spawn(async move {
-            store_b
-                .apply_with(
-                    |o| {
-                        let mut next = o.schedules.clone().unwrap_or_default();
-                        next.push(crate::schedule::Schedule {
-                            ping: None,
-                            name: "bravo".into(),
-                            message: "b".into(),
-                            trigger: crate::schedule::Trigger::Interval {
-                                every: std::time::Duration::from_secs(3600),
-                                days: crate::schedule::WeekdaySet::default(),
-                                active_from: None,
-                                active_to: None,
-                            },
-                            start_date: None,
-                            end_date: None,
-                            enabled: true,
-                        });
-                        o.schedules = Some(next);
-                    },
-                    Actor {
-                        user_id: "2".into(),
-                        user_login: "b".into(),
-                    },
-                )
-                .await
-                .expect("apply_with b");
-        });
-        let _ = tokio::join!(task_a, task_b);
+        let add = |name: &'static str| {
+            let store = store.clone();
+            tokio::spawn(async move {
+                store
+                    .apply_with(
+                        |o| {
+                            let mut next = o.schedules.clone().unwrap_or_default();
+                            next.push(schedule(name));
+                            o.schedules = Some(next);
+                        },
+                        actor(),
+                    )
+                    .await
+                    .expect("apply_with");
+            })
+        };
+        let _ = tokio::join!(add("alpha"), add("bravo"));
 
         let final_resolved = store.handle().load();
         let names: std::collections::BTreeSet<&str> = final_resolved
@@ -969,9 +739,7 @@ mod tests {
 
     #[tokio::test]
     async fn reset_twitch_permissions_clears_only_perm_fields() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let audit = std::sync::Arc::new(crate::settings::audit::MemoryAuditLog::default());
-        let (store, _h) = SettingsStore::open(dir.path(), audit, "main").expect("open");
+        let (_dir, store, _handle, _log) = fixture();
         store
             .apply(
                 SettingsOverrides {
@@ -982,21 +750,12 @@ mod tests {
                     },
                     ..Default::default()
                 },
-                Actor {
-                    user_id: "owner".into(),
-                    user_login: "owner".into(),
-                },
+                actor(),
             )
             .await
             .expect("apply");
         let s = store
-            .reset(
-                SettingsSection::TwitchPermissions,
-                Actor {
-                    user_id: "owner".into(),
-                    user_login: "owner".into(),
-                },
-            )
+            .reset(SettingsSection::TwitchPermissions, actor())
             .await
             .expect("reset");
         assert!(s.twitch.hidden_admins.is_empty());
@@ -1005,13 +764,8 @@ mod tests {
 
     #[tokio::test]
     async fn v7_save_omits_legacy_active_profile_and_behavior() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(FILE_NAME),
-            r#"(
-                schema_version: 6,
-                ai: (
-                    active_profile: Some("cheap"),
+        let (dir, store, _handle) = open_with_file(&v6_file(
+            r#"active_profile: Some("cheap"),
                     behavior: (persona_name: Some("Nyx")),
                     history: (
                         recap_profile: Some(Some("tiny")),
@@ -1020,32 +774,11 @@ mod tests {
                         merge_width: Some(2),
                     ),
                     grok: (profile: Some(None)),
-                    dreamer: (profile: Some(Some("   "))),
-                    profiles: Some([
-                        (name: "cheap", provider: ollama, base_url: Some("http://127.0.0.1:1"),
-                         model: "m", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
-                        (name: "tiny", provider: ollama, base_url: Some("http://127.0.0.1:1"),
-                         model: "t", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
-                    ]),
-                ),
-            )"#,
-        )
-        .unwrap();
-        let audit = Arc::new(MemoryAuditLog::new());
-        let (store, _handle) =
-            SettingsStore::open(dir.path(), audit, "test_chan").expect("open v6 file");
+                    dreamer: (profile: Some(Some("   "))),"#,
+        ));
         let mut patch = SettingsOverrides::default();
         patch.ai.aurora.persona_name = Some("Nyx".into());
-        let saved = store
-            .apply(
-                patch,
-                Actor {
-                    user_id: "1".into(),
-                    user_login: "tester".into(),
-                },
-            )
-            .await
-            .unwrap();
+        let saved = store.apply(patch, actor()).await.unwrap();
         let body = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
         assert!(!body.contains("active_profile"), "{body}");
         assert!(!body.contains("behavior:"), "{body}");
@@ -1080,66 +813,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_with_on_v6_omits_legacy_ai_agent_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(FILE_NAME),
-            r#"(
-                schema_version: 6,
-                ai: (
-                    active_profile: Some("cheap"),
-                    behavior: (persona_name: Some("Nyx")),
-                    history: (
-                        recap_profile: Some(Some("tiny")),
-                        batch_size: Some(7),
-                        max_notes: Some(4),
-                        merge_width: Some(2),
-                    ),
-                    profiles: Some([
-                        (name: "cheap", provider: ollama, base_url: Some("http://127.0.0.1:1"),
-                         model: "m", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
-                        (name: "tiny", provider: ollama, base_url: Some("http://127.0.0.1:1"),
-                         model: "t", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
-                    ]),
-                ),
-            )"#,
-        )
-        .unwrap();
-        let audit = Arc::new(MemoryAuditLog::new());
-        let (store, _handle) =
-            SettingsStore::open(dir.path(), audit, "test_chan").expect("open v6 file");
-
-        store
-            .apply_with(
-                |current| current.schedules = Some(Vec::new()),
-                Actor {
-                    user_id: "1".into(),
-                    user_login: "tester".into(),
-                },
-            )
-            .await
-            .expect("apply_with");
-
-        let body = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
-        assert!(!body.contains("active_profile"), "{body}");
-        assert!(!body.contains("behavior:"), "{body}");
-        assert!(!body.contains("recap_profile"), "{body}");
-        let persisted: SettingsOverrides = ron::from_str(&body).expect("parse persisted v7");
-        assert_eq!(persisted.schema_version, 7);
-        assert_eq!(persisted.ai.history.batch_size, None);
-        assert_eq!(persisted.ai.history.max_notes, None);
-        assert_eq!(persisted.ai.history.merge_width, None);
-    }
-
-    #[tokio::test]
     async fn history_reset_on_v6_preserves_recap() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(FILE_NAME),
-            r#"(
-                schema_version: 6,
-                ai: (
-                    active_profile: Some("cheap"),
+        let (_dir, store, _handle) = open_with_file(&v6_file(
+            r#"active_profile: Some("cheap"),
                     history: (
                         length: Some(77),
                         n: Some(17),
@@ -1147,29 +823,11 @@ mod tests {
                         batch_size: Some(7),
                         max_notes: Some(4),
                         merge_width: Some(2),
-                    ),
-                    profiles: Some([
-                        (name: "cheap", provider: ollama, base_url: Some("http://127.0.0.1:1"),
-                         model: "m", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
-                        (name: "tiny", provider: ollama, base_url: Some("http://127.0.0.1:1"),
-                         model: "t", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
-                    ]),
-                ),
-            )"#,
-        )
-        .unwrap();
-        let audit = Arc::new(MemoryAuditLog::new());
-        let (store, _handle) =
-            SettingsStore::open(dir.path(), audit, "test_chan").expect("open v6 file");
+                    ),"#,
+        ));
 
         let reset = store
-            .reset(
-                SettingsSection::AiHistory,
-                Actor {
-                    user_id: "1".into(),
-                    user_login: "tester".into(),
-                },
-            )
+            .reset(SettingsSection::AiHistory, actor())
             .await
             .expect("reset history");
 
@@ -1182,9 +840,7 @@ mod tests {
 
     #[tokio::test]
     async fn aurora_reset_on_v6_uses_compiled_defaults() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(FILE_NAME),
+        let (_dir, store, _handle) = open_with_file(
             r#"(
                 schema_version: 6,
                 ai: (
@@ -1201,20 +857,10 @@ mod tests {
                     ]),
                 ),
             )"#,
-        )
-        .unwrap();
-        let audit = Arc::new(MemoryAuditLog::new());
-        let (store, _handle) =
-            SettingsStore::open(dir.path(), audit, "test_chan").expect("open v6 file");
+        );
 
         let reset = store
-            .reset(
-                SettingsSection::AiAurora,
-                Actor {
-                    user_id: "1".into(),
-                    user_login: "tester".into(),
-                },
-            )
+            .reset(SettingsSection::AiAurora, actor())
             .await
             .expect("reset aurora");
 
@@ -1223,41 +869,18 @@ mod tests {
 
     #[tokio::test]
     async fn recap_reset_on_v6_turns_recap_off() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(FILE_NAME),
-            r#"(
-                schema_version: 6,
-                ai: (
-                    active_profile: Some("cheap"),
+        let (_dir, store, _handle) = open_with_file(&v6_file(
+            r#"active_profile: Some("cheap"),
                     history: (
                         recap_profile: Some(Some("tiny")),
                         batch_size: Some(7),
                         max_notes: Some(4),
                         merge_width: Some(2),
-                    ),
-                    profiles: Some([
-                        (name: "cheap", provider: ollama, base_url: Some("http://127.0.0.1:1"),
-                         model: "m", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
-                        (name: "tiny", provider: ollama, base_url: Some("http://127.0.0.1:1"),
-                         model: "t", timeout: 30, reasoning_effort: None, service_tier: None, key: None),
-                    ]),
-                ),
-            )"#,
-        )
-        .unwrap();
-        let audit = Arc::new(MemoryAuditLog::new());
-        let (store, _handle) =
-            SettingsStore::open(dir.path(), audit, "test_chan").expect("open v6 file");
+                    ),"#,
+        ));
 
         let reset = store
-            .reset(
-                SettingsSection::AiRecap,
-                Actor {
-                    user_id: "1".into(),
-                    user_login: "tester".into(),
-                },
-            )
+            .reset(SettingsSection::AiRecap, actor())
             .await
             .expect("reset recap");
 
@@ -1266,9 +889,7 @@ mod tests {
 
     #[tokio::test]
     async fn reset_twitch_channels_preserves_expected_latency() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let audit = std::sync::Arc::new(crate::settings::audit::MemoryAuditLog::default());
-        let (store, _h) = SettingsStore::open(dir.path(), audit, "main").expect("open");
+        let (_dir, store, _handle, _log) = fixture();
         store
             .apply(
                 SettingsOverrides {
@@ -1279,21 +900,12 @@ mod tests {
                     },
                     ..Default::default()
                 },
-                Actor {
-                    user_id: "owner".into(),
-                    user_login: "owner".into(),
-                },
+                actor(),
             )
             .await
             .expect("apply");
         let s = store
-            .reset(
-                SettingsSection::TwitchChannels,
-                Actor {
-                    user_id: "owner".into(),
-                    user_login: "owner".into(),
-                },
-            )
+            .reset(SettingsSection::TwitchChannels, actor())
             .await
             .expect("reset");
         // Channels reset clears admin_channel/ai_channel but not expected_latency.

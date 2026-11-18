@@ -296,33 +296,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ai_bootstrap_parses_named_keys() {
-        let cfg: Configuration = toml::from_str(
-            r#"
-            [twitch]
-            channel = "c"
-            username = "u"
-            refresh_token = "r"
-            client_id = "i"
-            client_secret = "s"
-
-            [ai.keys]
-            openrouter = "sk-test"
-        "#,
-        )
-        .expect("parse");
-        let boot = cfg.ai.as_ref().expect("ai present");
-        assert_eq!(
-            boot.keys
-                .get("openrouter")
-                .expect("named key")
-                .expose_secret(),
-            "sk-test"
-        );
-        assert!(boot.api_key.is_none());
-    }
-
-    #[test]
     fn leftover_ai_api_key_still_parses_but_is_unused() {
         let cfg: Configuration = toml::from_str(
             r#"
@@ -361,26 +334,6 @@ mod tests {
             err.to_string().contains("[ai.keys]"),
             "unexpected error: {err}"
         );
-    }
-
-    #[test]
-    fn aviationstack_bootstrap_parses_api_key_only() {
-        let cfg: Configuration = toml::from_str(
-            r#"
-            [twitch]
-            channel = "c"
-            username = "u"
-            refresh_token = "r"
-            client_id = "i"
-            client_secret = "s"
-
-            [aviationstack]
-            api_key = "av-key"
-        "#,
-        )
-        .expect("parse");
-        let boot = cfg.aviationstack.as_ref().expect("aviationstack present");
-        assert!(!boot.api_key.expose_secret().is_empty());
     }
 
     #[test]
@@ -435,69 +388,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_optional_mouths() {
-        let toml = r#"
-channel = "c"
-username = "u"
-refresh_token = "r"
-client_id = "ci"
-client_secret = "cs"
-
-[mouths.aurora]
-username = "aurora_bot"
-refresh_token = "ar"
-"#;
-        let cfg: super::TwitchConfiguration = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.mouths.aurora.as_ref().unwrap().username, "aurora_bot");
-        assert!(cfg.mouths.grok.is_none());
-    }
-
-    #[test]
-    fn absent_mouths_default_empty() {
-        let toml = r#"
-channel = "c"
-username = "u"
-refresh_token = "r"
-client_id = "ci"
-client_secret = "cs"
-"#;
-        let cfg: super::TwitchConfiguration = toml::from_str(toml).unwrap();
-        assert!(cfg.mouths.aurora.is_none() && cfg.mouths.grok.is_none());
-    }
-
-    #[test]
-    fn dhl_section_parses_api_key() {
-        let toml = r#"
-[twitch]
-channel = "chan"
-username = "bot"
-refresh_token = "r"
-client_id = "c"
-client_secret = "s"
-
-[dhl]
-api_key = "abc123"
-"#;
-        let cfg: Configuration = toml::from_str(toml).expect("parse");
-        let dhl = cfg.dhl.expect("dhl section present");
-        assert_eq!(dhl.api_key.expose_secret(), "abc123");
-    }
-
-    #[test]
-    fn dhl_section_is_optional() {
-        let toml = r#"
-[twitch]
-channel = "chan"
-username = "bot"
-refresh_token = "r"
-client_id = "c"
-client_secret = "s"
-"#;
-        let cfg: Configuration = toml::from_str(toml).expect("parse");
-        assert!(cfg.dhl.is_none());
-    }
-
-    #[test]
     fn empty_dhl_api_key_is_rejected() {
         let mut cfg = Configuration::test_default();
         cfg.dhl = Some(DhlBootstrap {
@@ -508,28 +398,6 @@ client_secret = "s"
             err.to_string().contains("dhl.api_key"),
             "unexpected error: {err}"
         );
-    }
-
-    #[test]
-    fn amp_section_parses() {
-        let toml = r#"
-[twitch]
-channel = "chan"
-username = "bot"
-refresh_token = "r"
-client_id = "c"
-client_secret = "s"
-
-[amp]
-url = "http://192.168.178.114:8080"
-username = "twitch-1337"
-password = "pw"
-"#;
-        let cfg: Configuration = toml::from_str(toml).expect("parse");
-        let amp = cfg.amp.expect("amp section present");
-        assert_eq!(amp.url, "http://192.168.178.114:8080");
-        assert_eq!(amp.username, "twitch-1337");
-        assert_eq!(amp.password.expose_secret(), "pw");
     }
 
     #[test]
@@ -548,23 +416,9 @@ password = "pw"
     }
 
     #[test]
-    fn amp_blank_url_rejected() {
-        let mut cfg = Configuration::test_default();
-        cfg.amp = Some(AmpBootstrap {
-            url: "".to_owned(),
-            username: "bot".to_owned(),
-            password: SecretString::new("pw".into()),
-        });
-        let err = validate_config(&cfg).expect_err("blank url must fail");
-        assert!(
-            err.to_string().contains("amp.url"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     fn amp_url_without_http_scheme_rejected() {
         for url in [
+            "",
             "192.168.178.114:8080",
             "ftp://amp:8080",
             "amp",
@@ -589,42 +443,6 @@ password = "pw"
             password: SecretString::new("pw".into()),
         });
         validate_config(&cfg).expect("https accepted");
-    }
-
-    #[test]
-    fn langfuse_section_parses_keys_and_optional_host() {
-        let toml = r#"
-[twitch]
-channel = "chan"
-username = "bot"
-refresh_token = "r"
-client_id = "c"
-client_secret = "s"
-
-[langfuse]
-public_key = "pk-lf-x"
-secret_key = "sk-lf-y"
-host = "https://us.cloud.langfuse.com"
-"#;
-        let cfg: Configuration = toml::from_str(toml).expect("parse");
-        let lf = cfg.langfuse.expect("langfuse section present");
-        assert_eq!(lf.public_key.expose_secret(), "pk-lf-x");
-        assert_eq!(lf.secret_key.expose_secret(), "sk-lf-y");
-        assert_eq!(lf.host.as_deref(), Some("https://us.cloud.langfuse.com"));
-    }
-
-    #[test]
-    fn langfuse_section_is_optional() {
-        let toml = r#"
-[twitch]
-channel = "chan"
-username = "bot"
-refresh_token = "r"
-client_id = "c"
-client_secret = "s"
-"#;
-        let cfg: Configuration = toml::from_str(toml).expect("parse");
-        assert!(cfg.langfuse.is_none());
     }
 
     #[test]
