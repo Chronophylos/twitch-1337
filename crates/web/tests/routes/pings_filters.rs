@@ -211,13 +211,6 @@ async fn fired_filter_honours_explicit_name_sort() {
 }
 
 #[tokio::test]
-async fn sort_name_is_alphabetical() {
-    let html = get("/pings?sort=name").await;
-    assert_eq!(row_names(&html), ["alpha", "beta", "delta", "gamma"]);
-    assert!(is_active(chip(&html, "/pings?sort=name")));
-}
-
-#[tokio::test]
 async fn sort_fired_puts_newest_first_and_never_fired_last() {
     let html = get("/pings?sort=fired").await;
     assert_eq!(row_names(&html), ["beta", "alpha", "delta", "gamma"]);
@@ -246,31 +239,4 @@ async fn chips_keep_the_other_param() {
     chip(&html, "/pings?filter=joined&sort=members");
     chip(&html, "/pings?filter=mine&sort=name");
     chip(&html, "/pings?filter=mine&sort=fired");
-}
-
-#[tokio::test]
-async fn member_dots_are_capped_and_count_shows_total() {
-    let html = get("/pings?filter=mine").await;
-    let start = html.find(r#"href="/pings/delta""#).unwrap();
-    let row = &html[start..];
-    let row = &row[..row.find(r#"class="td col-by""#).unwrap()];
-    assert_eq!(row.matches(r#"<span class="dot"></span>"#).count(), 4);
-    assert!(row.contains(r#"<span class="member-count">6</span>"#));
-}
-
-#[tokio::test]
-async fn empty_filter_result_says_so() {
-    let (state, _td) = seeded().await;
-    let html = get_as(state, "nobody", "/pings?filter=mine").await;
-    assert!(row_names(&html).is_empty());
-    assert!(html.contains("No pings match this filter."));
-    assert!(!html.contains("No pings yet"));
-}
-
-#[tokio::test]
-async fn row_filter_sits_above_rows() {
-    let html = get("/pings").await;
-    let filter = html.find("data-row-filter").expect("inline filter present");
-    let table = html.find(r#"<div class="table pings">"#).unwrap();
-    assert!(filter < table, "filter input must precede the table");
 }

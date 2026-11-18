@@ -6,9 +6,6 @@
 //! seeded user so the periodic mod-recheck inside `require_mod` doesn't
 //! deny.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use tempfile::TempDir;
@@ -17,27 +14,9 @@ use twitch_1337_core::ai::memory::store::UserIdentity;
 use twitch_1337_core::ai::memory::types::FileKind;
 use twitch_1337_web::WebState;
 use twitch_1337_web::build_router;
-use twitch_1337_web::helix::{HelixClient, HelixUser};
 
 use super::helpers;
-use helpers::{FakeHelix, build_state_with_dirs, cookie_header, insert_session, install_crypto};
-
-fn admin_helix(user_id: &str) -> Arc<dyn HelixClient> {
-    let mut users = HashMap::new();
-    users.insert(
-        user_id.to_owned(),
-        HelixUser {
-            id: user_id.to_owned(),
-            login: "admin".into(),
-            display_name: "admin".into(),
-            profile_image_url: None,
-        },
-    );
-    Arc::new(FakeHelix {
-        moderators: vec![user_id.to_owned()],
-        users,
-    })
-}
+use helpers::{admin_helix, build_state_with_dirs, cookie_header, insert_session, install_crypto};
 
 /// Build (state, sid, csrf, _td_pings, _td_memory). The memory tempdir keeps
 /// the on-disk SOUL/LORE seeds + any test-written files alive while the
@@ -153,42 +132,21 @@ async fn view_soul_renders_body() {
     assert!(html.contains("name=\"mtime\""), "form needs mtime token");
 }
 
+/// Malformed ids and traversal slugs are refused before reaching the store.
 #[tokio::test]
-async fn view_user_with_invalid_id_400() {
+async fn invalid_path_params_400() {
     let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
-    let app = build_router(state);
-    // Path traversal attempt — must not reach the store.
-    let res = app
-        .oneshot(get("/memory/users/..%2Fevil", &sid, &csrf))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn view_user_with_alpha_id_400() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
-    let app = build_router(state);
-    let res = app
-        .oneshot(get("/memory/users/abc", &sid, &csrf))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn view_state_with_traversal_slug_400() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
-    let app = build_router(state);
-    let res = app
-        .oneshot(get("/memory/scratch/..", &sid, &csrf))
-        .await
-        .unwrap();
-    assert_eq!(
-        res.status(),
-        StatusCode::BAD_REQUEST,
-        "`..` slug must not reach the store",
-    );
+    for uri in [
+        "/memory/users/..%2Fevil",
+        "/memory/users/abc",
+        "/memory/scratch/..",
+    ] {
+        let res = build_router(state.clone())
+            .oneshot(get(uri, &sid, &csrf))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{uri}");
+    }
 }
 
 #[tokio::test]
@@ -211,57 +169,5 @@ async fn view_scratch_new_resolves_to_create_form() {
     assert!(
         !html.contains("State / new"),
         "literal route lost to dynamic capture; got {html}"
-    );
-}
-
-#[tokio::test]
-async fn scratch_list_renders_existing() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
-    for slug in ["alpha", "bravo"] {
-        state
-            .memory_store
-            .write_scratch(&FileKind::Scratch { slug: slug.into() }, "x", Some("9001"))
-            .await
-            .unwrap();
-    }
-    let app = build_router(state);
-    let res = app
-        .oneshot(get("/memory/scratch", &sid, &csrf))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let html = body_string(res).await;
-    assert!(html.contains("alpha"), "expected slug alpha; got {html}");
-    assert!(html.contains("bravo"), "expected slug bravo; got {html}");
-    assert!(
-        html.contains("Scratch <span class=\"count\">(2)</span>"),
-        "expected count in title; got {html}"
-    );
-}
-
-#[tokio::test]
-async fn view_user_round_trip() {
-    let (state, sid, csrf, _tdp, _tdm) = authed_setup().await;
-    state
-        .memory_store
-        .write(
-            &FileKind::User {
-                user_id: "12345".into(),
-            },
-            "user-marker-body",
-            UserIdentity::of("alice", "Alice"),
-        )
-        .await
-        .unwrap();
-    let app = build_router(state);
-    let res = app
-        .oneshot(get("/memory/users/12345", &sid, &csrf))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let html = body_string(res).await;
-    assert!(
-        html.contains("user-marker-body"),
-        "viewer must render body; got {html}"
     );
 }

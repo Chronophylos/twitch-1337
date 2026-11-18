@@ -5,9 +5,6 @@
 //! `routes::leaderboard::router()` behind a `require_mod` layer. This keeps
 //! the test self-contained and independent of Task 14.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
@@ -19,24 +16,7 @@ use twitch_1337_web::auth::require_mod;
 use twitch_1337_web::routes::leaderboard;
 
 use super::helpers;
-use helpers::{FakeHelix, build_state_with_dirs, cookie_header, insert_session, install_crypto};
-
-fn helix() -> Arc<FakeHelix> {
-    let mut users = HashMap::new();
-    users.insert(
-        "42".to_owned(),
-        twitch_1337_web::helix::HelixUser {
-            id: "42".into(),
-            login: "admin".into(),
-            display_name: "admin".into(),
-            profile_image_url: None,
-        },
-    );
-    Arc::new(FakeHelix {
-        moderators: vec!["42".into()],
-        users,
-    })
-}
+use helpers::{admin_helix, build_state_with_dirs, cookie_header, insert_session, install_crypto};
 
 fn app(state: WebState) -> Router {
     Router::new()
@@ -109,7 +89,7 @@ async fn leaderboard_empty_state_renders_without_rows() {
 #[tokio::test]
 async fn leaderboard_unauthenticated_redirects() {
     install_crypto();
-    let (state, _td_pings, _td_mem) = build_state_with_dirs(helix()).await;
+    let (state, _td_pings, _td_mem) = build_state_with_dirs(admin_helix("42")).await;
 
     let req = Request::builder()
         .uri("/leaderboard")
@@ -128,7 +108,7 @@ async fn leaderboard_unauthenticated_redirects() {
 #[tokio::test]
 async fn leaderboard_rows_sorted_by_ms_asc() {
     install_crypto();
-    let (state, _td_pings, _td_mem) = build_state_with_dirs(helix()).await;
+    let (state, _td_pings, _td_mem) = build_state_with_dirs(admin_helix("42")).await;
 
     {
         let mut lb = state.leaderboard.write().await;
