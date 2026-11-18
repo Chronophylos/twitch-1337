@@ -66,15 +66,6 @@ pub fn resolve_berlin_time(dt: civil::DateTime) -> ZonedDateTime {
     )
 }
 
-/// twitch-irc still stamps messages with chrono; drop this once the fork
-/// moves to jiff (#609).
-pub fn from_chrono(ts: chrono::DateTime<chrono::Utc>) -> Timestamp {
-    Timestamp::from_nanosecond(
-        i128::from(ts.timestamp()) * 1_000_000_000 + i128::from(ts.timestamp_subsec_nanos()),
-    )
-    .expect("chrono and jiff share the timestamp range for twitch messages")
-}
-
 /// Truncates a string to the maximum number of characters at a word boundary.
 pub fn truncate_response(text: &str, max_chars: usize) -> String {
     let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");

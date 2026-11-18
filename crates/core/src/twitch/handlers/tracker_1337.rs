@@ -33,7 +33,7 @@ use twitch_irc::{
 use crate::{
     lifecycle::TaskGroup,
     twitch::{ChatSender, clanker::is_clanker, echo::EchoGuard},
-    util::{clock::Clock, from_chrono, resolve_berlin_time, to_berlin},
+    util::{clock::Clock, resolve_berlin_time, to_berlin},
 };
 
 pub const TARGET_HOUR: u32 = 13;
@@ -516,7 +516,7 @@ async fn monitor_1337_messages(
                     continue;
                 }
 
-                let local = to_berlin(from_chrono(privmsg.server_timestamp));
+                let local = to_berlin(privmsg.server_timestamp);
                 if (
                     u32::try_from(local.hour()).ok(),
                     u32::try_from(local.minute()).ok(),

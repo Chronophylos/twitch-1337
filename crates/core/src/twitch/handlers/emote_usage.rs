@@ -249,7 +249,7 @@ pub async fn run_emote_usage_handler(
                             .collect();
                         let flagged =
                             should_flag_usage(&p.sender.login, &bot_username, &deny_with_mouths);
-                        let at = p.server_timestamp.timestamp_millis();
+                        let at = p.server_timestamp.as_millisecond();
                         let login = Some(p.sender.login.clone());
                         let events: Vec<NewUsageEvent> = emote_ids
                             .into_iter()

@@ -37,7 +37,7 @@ pub async fn run_transcript_tap(
                 }
                 if let Err(e) = writer
                     .append_line(
-                        crate::util::from_chrono(p.server_timestamp),
+                        p.server_timestamp,
                         &p.sender.login,
                         Some(&p.sender.id),
                         &p.message_text,
