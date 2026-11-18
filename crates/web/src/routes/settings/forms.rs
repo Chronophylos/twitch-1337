@@ -4,7 +4,7 @@
 //! `SaveForm` into a single `SettingsOverrides` patch.
 
 use serde::Deserialize;
-use twitch_1337_core::settings::overrides::{
+use twitch_1337_core::settings::{
     AiAuroraOverrides, AiDreamerOverrides, AiEmotesOverrides, AiGrokOverrides, AiHistoryOverrides,
     AiMediaOverrides, AiMemoryOverrides, AiPrefillOverrides, AiRecapOverrides, AiWebOverrides,
     AlertsOverrides, AviationstackOverrides, CmeAlertsOverrides, EmoteTrackerOverrides,

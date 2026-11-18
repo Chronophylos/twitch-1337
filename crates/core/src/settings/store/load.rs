@@ -6,7 +6,7 @@ use std::path::Path;
 
 use tracing::warn;
 
-use crate::settings::overrides::SettingsOverrides;
+use crate::settings::SettingsOverrides;
 use crate::settings::{SCHEMA_VERSION, SettingsError};
 
 pub(super) fn load_or_quarantine(path: &Path) -> Result<SettingsOverrides, SettingsError> {

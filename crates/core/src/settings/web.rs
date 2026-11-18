@@ -4,7 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+use super::knob::Knobs;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = WebRuntimeOverrides)]
 pub struct WebRuntime {
     pub session_ttl_secs: u64,
     pub mod_check_refresh_secs: u64,

@@ -7,7 +7,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use tower::ServiceExt as _;
 use twitch_1337_core::schedule::{Schedule, Trigger, WeekdaySet};
-use twitch_1337_core::settings::{Actor, overrides::SettingsOverrides};
+use twitch_1337_core::settings::{Actor, SettingsOverrides};
 use twitch_1337_web::build_router;
 
 use super::helpers;

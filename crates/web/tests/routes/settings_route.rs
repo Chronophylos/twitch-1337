@@ -12,10 +12,8 @@ use axum::http::{Request, Response, StatusCode, header};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
 use twitch_1337_core::settings::{
-    Actor, AiOverrides, AiProfile, AiProvider, ProfileKind, Settings,
-    overrides::{
-        AiAuroraOverrides, AiDreamerOverrides, AiGrokOverrides, AiMediaOverrides, SettingsOverrides,
-    },
+    Actor, AiAuroraOverrides, AiDreamerOverrides, AiGrokOverrides, AiMediaOverrides, AiOverrides,
+    AiProfile, AiProvider, ProfileKind, Settings, SettingsOverrides,
 };
 use twitch_1337_web::WebState;
 use twitch_1337_web::auth::Role;

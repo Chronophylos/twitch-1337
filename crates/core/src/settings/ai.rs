@@ -7,22 +7,36 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::knob::Knobs;
 use super::provider::AiProvider;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = AiOverrides)]
 pub struct AiSettings {
     /// Named provider configurations. Agent profile changes are dashboard
-    /// actions; no restart, no config.toml edit.
+    /// actions; no restart, no config.toml edit. Whole-list override,
+    /// managed on `/ai-profiles`.
+    #[knob(form = false)]
     pub profiles: Vec<AiProfile>,
+    #[knob(nested)]
     pub aurora: AiAurora,
+    #[knob(nested)]
     pub grok: AiGrok,
+    #[knob(nested)]
     pub recap: AiRecap,
+    #[knob(nested)]
     pub dreamer: AiDreamer,
+    #[knob(nested)]
     pub media: AiMedia,
+    #[knob(nested)]
     pub history: AiHistory,
+    #[knob(nested)]
     pub memory: AiMemory,
+    #[knob(presence, restart)]
     pub prefill: Option<AiPrefill>,
+    #[knob(presence, restart)]
     pub web: Option<AiWeb>,
+    #[knob(presence, restart)]
     pub emotes: Option<AiEmotes>,
 }
 
@@ -110,8 +124,9 @@ impl Default for AiSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiAurora {
+    #[knob(required_profile)]
     pub profile: String,
     pub max_turn_rounds: usize,
     pub max_writes_per_turn: usize,
@@ -154,7 +169,7 @@ fn default_reply_hard_chars() -> usize {
     490
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiHistory {
     pub length: u64,
     pub ai_channel_length: u64,
@@ -164,7 +179,7 @@ pub struct AiHistory {
     pub ai_channel_n: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiRecap {
     /// Profile Recap paraphrases on. `None` / empty = Recap off.
     #[serde(default)]
@@ -174,7 +189,7 @@ pub struct AiRecap {
     pub merge_width: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiMemory {
     pub soul_bytes: usize,
     pub lore_bytes: usize,
@@ -189,10 +204,11 @@ pub struct AiMemory {
     pub max_scratch_files: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiDreamer {
     pub enabled: bool,
     /// Required profile name to run this agent on.
+    #[knob(required_profile)]
     pub profile: String,
     pub run_at: String,
     pub timeout_secs: u64,
@@ -204,9 +220,10 @@ pub struct AiDreamer {
     pub max_writes_per_turn: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiGrok {
     /// Required profile name to run this agent on.
+    #[knob(required_profile)]
     pub profile: String,
     /// Persona name for the `@grok` alias, used in chat-history identity push
     /// and chat-line rendering (mirrors `AiAurora::persona_name` for
@@ -230,8 +247,11 @@ fn default_grok_persona_name() -> String {
 }
 
 /// Prefill config — `threshold` is `f64` compared as bits to allow `Eq`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Knobs)]
+#[knobs(presence)]
 pub struct AiPrefill {
+    /// Read once when the prefill client is built at startup.
+    #[knob(restart)]
     pub base_url: String,
     pub threshold: f64,
 }
@@ -244,7 +264,8 @@ impl PartialEq for AiPrefill {
 
 impl Eq for AiPrefill {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(presence)]
 pub struct AiWeb {
     pub base_url: String,
     pub timeout: u64,
@@ -254,7 +275,8 @@ pub struct AiWeb {
     pub cache_capacity: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(presence)]
 pub struct AiEmotes {
     pub include_global: bool,
     pub refresh_interval_secs: u64,
@@ -276,9 +298,10 @@ fn default_pinned_emotes() -> Vec<String> {
     vec!["PepeLa".to_string(), "okjj".to_string()]
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiMedia {
     /// Required profile name to run this agent on.
+    #[knob(required_profile)]
     pub profile: String,
     pub timeout: u64,
     pub max_image_size: bytesize::ByteSize,

@@ -30,7 +30,7 @@ async fn expected_latency_edit_rebases_shared_cell() {
     );
 
     let patch = SettingsOverrides {
-        twitch: twitch_1337_core::settings::overrides::TwitchOverrides {
+        twitch: twitch_1337_core::settings::TwitchOverrides {
             expected_latency: Some(300),
             ..Default::default()
         },

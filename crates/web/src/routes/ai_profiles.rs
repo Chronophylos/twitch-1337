@@ -500,8 +500,7 @@ async fn delete(
     .await
 }
 
-type Mutator =
-    Box<dyn FnOnce(&mut twitch_1337_core::settings::overrides::SettingsOverrides) + Send>;
+type Mutator = Box<dyn FnOnce(&mut twitch_1337_core::settings::SettingsOverrides) + Send>;
 
 async fn apply_or_rerender(
     state: &WebState,

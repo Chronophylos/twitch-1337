@@ -4,10 +4,16 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+use super::knob::Knobs;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = AlertsOverrides)]
 pub struct AlertsSettings {
+    #[knob(nested)]
     pub quake: QuakeAlerts,
+    #[knob(nested)]
     pub solar: SolarAlerts,
+    #[knob(nested)]
     pub cme: CmeAlerts,
     /// Shared catch-up cutoff. An unseen event older than this is marked
     /// seen without being announced, so a long outage is absorbed quietly.
@@ -25,7 +31,8 @@ impl Default for AlertsSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = QuakeAlertsOverrides)]
 pub struct QuakeAlerts {
     pub enabled: bool,
     pub poll_secs: u64,
@@ -45,7 +52,8 @@ impl Default for QuakeAlerts {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = SolarAlertsOverrides)]
 pub struct SolarAlerts {
     pub enabled: bool,
     pub poll_secs: u64,
@@ -64,7 +72,8 @@ impl Default for SolarAlerts {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = CmeAlertsOverrides)]
 pub struct CmeAlerts {
     pub enabled: bool,
     pub poll_secs: u64,

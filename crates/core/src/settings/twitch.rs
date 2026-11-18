@@ -10,14 +10,19 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+use super::knob::Knobs;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = TwitchOverrides)]
 pub struct TwitchRuntime {
     pub expected_latency: u32,
     pub hidden_admins: Vec<String>,
     pub viewer_allowlist: Vec<String>,
     /// Twitch logins whose emote usage rows are stored with flagged = 1.
     pub emote_usage_deny_list: Vec<String>,
+    #[knob(restart)]
     pub admin_channel: Option<String>,
+    #[knob(restart)]
     pub ai_channel: Option<String>,
 }
 

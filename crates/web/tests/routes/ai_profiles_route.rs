@@ -7,7 +7,7 @@ use std::{fs, sync::Arc};
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use tower::ServiceExt as _;
-use twitch_1337_core::settings::{Actor, AiProfile, AiProvider, overrides::SettingsOverrides};
+use twitch_1337_core::settings::{Actor, AiProfile, AiProvider, SettingsOverrides};
 use twitch_1337_web::build_router;
 
 use super::helpers;
@@ -50,23 +50,23 @@ async fn seed_profiles(state: &twitch_1337_web::WebState, rows: Vec<AiProfile>, 
             SettingsOverrides {
                 ai: twitch_1337_core::settings::AiOverrides {
                     profiles: Some(rows),
-                    aurora: twitch_1337_core::settings::overrides::AiAuroraOverrides {
+                    aurora: twitch_1337_core::settings::AiAuroraOverrides {
                         profile: Some(Some(active.to_owned())),
                         ..Default::default()
                     },
-                    grok: twitch_1337_core::settings::overrides::AiGrokOverrides {
+                    grok: twitch_1337_core::settings::AiGrokOverrides {
                         profile: Some(Some(active.to_owned())),
                         ..Default::default()
                     },
-                    dreamer: twitch_1337_core::settings::overrides::AiDreamerOverrides {
+                    dreamer: twitch_1337_core::settings::AiDreamerOverrides {
                         profile: Some(Some(active.to_owned())),
                         ..Default::default()
                     },
-                    media: twitch_1337_core::settings::overrides::AiMediaOverrides {
+                    media: twitch_1337_core::settings::AiMediaOverrides {
                         profile: Some(Some(active.to_owned())),
                         ..Default::default()
                     },
-                    recap: twitch_1337_core::settings::overrides::AiRecapOverrides {
+                    recap: twitch_1337_core::settings::AiRecapOverrides {
                         profile: Some(None),
                         ..Default::default()
                     },
@@ -287,7 +287,7 @@ async fn edit_renaming_profile_rewrites_all_five_agent_pointers() {
         .apply(
             SettingsOverrides {
                 ai: twitch_1337_core::settings::AiOverrides {
-                    recap: twitch_1337_core::settings::overrides::AiRecapOverrides {
+                    recap: twitch_1337_core::settings::AiRecapOverrides {
                         profile: Some(Some("old".into())),
                         ..Default::default()
                     },

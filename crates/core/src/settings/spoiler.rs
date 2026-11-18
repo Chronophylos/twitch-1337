@@ -2,10 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::knob::Knobs;
+
 /// Longest accepted game name, in characters.
 const MAX_GAME_NAME_CHARS: usize = 40;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = SpoilerOverrides)]
 pub struct SpoilerSettings {
     /// Decision profile name; empty turns the command off.
     pub profile: String,

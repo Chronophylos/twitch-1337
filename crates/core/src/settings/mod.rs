@@ -2,21 +2,24 @@
 //!
 //! `Settings` is the fully-resolved snapshot read by command handlers via
 //! a `SettingsHandle` (snapshot slot plus the store's change signal). Sparse
-//! `SettingsOverrides` (see `overrides.rs`) live on disk at
-//! `$DATA_DIR/settings.ron`; missing fields fall through to
-//! `compiled_defaults()`.
+//! `SettingsOverrides` live on disk at `$DATA_DIR/settings.ron`; missing
+//! fields fall through to `compiled_defaults()`.
+//!
+//! Every knob is declared once, on the effective struct, through
+//! `#[derive(Knobs)]` (see `knob.rs`): that generates the `*Overrides`
+//! mirror, resolve, merge, form parsing, constant range checks, and the
+//! `KnobMeta` table the dashboard renders from.
 //!
 //! Writes go through `SettingsStore::apply` (see `store/mod.rs`) which
 //! validates, atomically persists, swaps the handle, and appends an audit
-//! entry. Override → effective resolution lives in `resolve.rs`; per-field
-//! validation lives in `validation.rs`.
+//! entry. Cross-field and semantic validation lives in `validation.rs`.
 
 pub mod ai;
 pub mod alerts;
 pub mod audit;
 pub mod aviationstack;
 pub mod emote_tracker;
-pub mod overrides;
+pub mod knob;
 pub mod provider;
 mod resolve;
 pub mod schedules;
@@ -29,29 +32,38 @@ mod validation;
 pub mod web;
 
 pub use ai::{
-    AiAurora, AiDreamer, AiEmotes, AiGrok, AiHistory, AiMedia, AiMemory, AiPrefill, AiProfile,
-    AiRecap, AiSettings, AiWeb, ProfileKind,
+    AiAurora, AiAuroraOverrides, AiDreamer, AiDreamerOverrides, AiEmotes, AiEmotesOverrides,
+    AiGrok, AiGrokOverrides, AiHistory, AiHistoryOverrides, AiMedia, AiMediaOverrides, AiMemory,
+    AiMemoryOverrides, AiOverrides, AiPrefill, AiPrefillOverrides, AiProfile, AiRecap,
+    AiRecapOverrides, AiSettings, AiWeb, AiWebOverrides, ProfileKind,
 };
-pub use alerts::{AlertsSettings, CmeAlerts, QuakeAlerts, SolarAlerts};
+pub use alerts::{
+    AlertsOverrides, AlertsSettings, CmeAlerts, CmeAlertsOverrides, QuakeAlerts,
+    QuakeAlertsOverrides, SolarAlerts, SolarAlertsOverrides,
+};
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
 pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
-pub use aviationstack::AviationstackSettings;
-pub use emote_tracker::{EmoteTrackerSettings, PotatAttributionSettings};
-pub use overrides::{AiOverrides, CooldownsOverrides, PingsOverrides, SettingsOverrides};
+pub use aviationstack::{AviationstackOverrides, AviationstackSettings};
+pub use emote_tracker::{
+    EmoteTrackerOverrides, EmoteTrackerSettings, PotatAttributionOverrides,
+    PotatAttributionSettings,
+};
+pub use knob::{KnobMeta, knob, knobs, overrides_from_form, restart_required};
 pub use provider::{AiProvider, Efforts, ProviderCaps};
 pub use schedules::Schedule;
-pub use spoiler::SpoilerSettings;
+pub use spoiler::{SpoilerOverrides, SpoilerSettings};
 pub use store::{Actor, SettingsStore};
-pub use suspend::SuspendSettings;
-pub use twitch::TwitchRuntime;
+pub use suspend::{SuspendOverrides, SuspendSettings};
+pub use twitch::{TwitchOverrides, TwitchRuntime};
 pub use validation::ValidationContext;
-pub use web::WebRuntime;
+pub use web::{WebRuntime, WebRuntimeOverrides};
 
 use std::pin::Pin;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use knob::Knobs;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::Notify;
@@ -144,23 +156,41 @@ impl Subscription {
 
 pub const SCHEMA_VERSION: u32 = 7;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) fn default_schema_version() -> u32 {
+    SCHEMA_VERSION
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct Settings {
+    #[knob(schema_version)]
     pub schema_version: u32,
+    #[knob(nested)]
     pub cooldowns: Cooldowns,
+    #[knob(nested)]
     pub pings: PingsSettings,
+    #[knob(nested)]
     pub ai: AiSettings,
+    #[knob(nested)]
     pub twitch: TwitchRuntime,
+    #[knob(nested)]
     pub aviationstack: AviationstackSettings,
+    #[knob(nested)]
     pub suspend: SuspendSettings,
+    #[knob(nested)]
     pub spoiler: SpoilerSettings,
+    #[knob(nested)]
     pub emote_tracker: EmoteTrackerSettings,
+    #[knob(nested)]
     pub alerts: AlertsSettings,
+    #[knob(nested)]
     pub web: WebRuntime,
+    /// Whole-list override: per-field sparseness makes no sense for rows
+    /// that are added and removed. Managed on `/schedules`.
+    #[knob(form = false)]
     pub schedules: Vec<Schedule>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct Cooldowns {
     pub ai: u64,
     pub news: u64,
@@ -172,7 +202,8 @@ pub struct Cooldowns {
     pub servers: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+#[knobs(overrides = PingsOverrides)]
 pub struct PingsSettings {
     pub cooldown: u64,
     pub public: bool,
@@ -257,7 +288,7 @@ mod tests {
 
     fn latency_patch(ms: u32) -> SettingsOverrides {
         SettingsOverrides {
-            twitch: crate::settings::overrides::TwitchOverrides {
+            twitch: crate::settings::TwitchOverrides {
                 expected_latency: Some(ms),
                 ..Default::default()
             },

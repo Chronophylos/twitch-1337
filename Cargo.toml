@@ -5,6 +5,7 @@ members = [
     "crates/data",
     "crates/llm",
     "crates/random-flight",
+    "crates/settings-derive",
     "crates/twitch-1337",
     "crates/web",
 ]
