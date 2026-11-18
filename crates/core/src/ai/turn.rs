@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -38,6 +39,43 @@ use crate::twitch::seventv::SevenTvEmoteProvider;
 
 /// Sent to the invoking viewer when a round exceeds the profile timeout.
 pub(crate) const TIMEOUT_NOTICE: &str = "hat zu hart gedacht, nochmal probieren Stare";
+
+/// Tool calls executed per agent round; the rest get
+/// [`llm::TOOL_BUDGET_EXHAUSTED`]. Matches the default `max_writes_per_turn`.
+const MAX_TOOL_CALLS_PER_ROUND: usize = 8;
+
+/// `track_shipment` calls per turn. The DHL free tier is 250 calls a day,
+/// shared by every viewer, so one turn must not be able to spend it.
+const MAX_SHIPMENT_LOOKUPS_PER_TURN: usize = 3;
+
+const WEB_BUDGET_EXHAUSTED: &str = "web_budget_exhausted: this turn's web_search/read_url \
+     limit is used up; answer with what you already have";
+const SHIPMENT_BUDGET_EXHAUSTED: &str = "shipment_budget_exhausted: this turn's \
+     track_shipment limit is used up; answer with what you already have";
+
+/// Per-turn call quota for one paid or rate-limited tool family.
+struct CallBudget {
+    used: AtomicUsize,
+    limit: usize,
+}
+
+impl CallBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            used: AtomicUsize::new(0),
+            limit,
+        }
+    }
+
+    /// Consume one call; `false` once the quota is spent.
+    fn try_consume(&self) -> bool {
+        self.used
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                (n < self.limit).then_some(n + 1)
+            })
+            .is_ok()
+    }
+}
 
 /// The preset's name for an agent. `Utility` speaks as Aurora.
 fn agent_key(agent: Agent) -> &'static str {
@@ -505,7 +543,14 @@ impl TurnRunner {
                 if input.cancellation.is_cancelled() {
                     return TurnOutcome::Silent;
                 }
-                let prior_rounds = if grok_alias && let Some(ref w) = self.web {
+                // `ai.web.max_rounds` bounds every web call this turn, Grok's
+                // forced opening search included.
+                let web_budget = CallBudget::new(self.web.as_ref().map_or(0, AiWeb::max_rounds));
+                let shipment_budget = CallBudget::new(MAX_SHIPMENT_LOOKUPS_PER_TURN);
+                let prior_rounds = if grok_alias
+                    && let Some(w) = &self.web
+                    && web_budget.try_consume()
+                {
                     vec![forced_web_search_round(w, &instruction_for_prompt, &trace).await]
                 } else {
                     Vec::new()
@@ -519,9 +564,16 @@ impl TurnRunner {
                     prior_rounds,
                     trace: trace.clone(),
                 };
+                // Every LLM round may use its full timeout, plus one round's
+                // worth for all tool execution in the turn.
+                let rounds_with_tools =
+                    u32::try_from(mem.max_turn_rounds.saturating_add(1)).unwrap_or(u32::MAX);
+                let turn_deadline = turn_timeout.saturating_mul(rounds_with_tools);
                 let opts = AgentOpts {
                     max_rounds: mem.max_turn_rounds,
                     per_round_timeout: Some(turn_timeout),
+                    max_calls_per_round: Some(MAX_TOOL_CALLS_PER_ROUND),
+                    deadline: Some(turn_deadline),
                 };
 
                 let combined_exec = V2Executor {
@@ -531,6 +583,8 @@ impl TurnRunner {
                     doener: self.doener.as_ref(),
                     repology: self.repology.as_ref(),
                     dhl: self.dhl.as_deref(),
+                    web_budget: &web_budget,
+                    shipment_budget: &shipment_budget,
                     command_catalog: &self.command_catalog,
                     emote_tracker: self.emote_tracker.as_ref(),
                     trace: &trace,
@@ -551,6 +605,15 @@ impl TurnRunner {
                             timeout_s = turn_timeout.as_secs(),
                             model = %model,
                             "AI per-round timeout"
+                        );
+                        Err(TIMEOUT_NOTICE)
+                    }
+                    Ok(AgentOutcome::DeadlineExceeded { round }) => {
+                        warn!(
+                            round,
+                            deadline_s = turn_deadline.as_secs(),
+                            model = %model,
+                            "AI turn deadline exceeded"
                         );
                         Err(TIMEOUT_NOTICE)
                     }
@@ -617,6 +680,10 @@ struct V2Executor<'a> {
     doener: &'a crate::doener::DoeneratlasClient,
     repology: &'a crate::repology::RepologyClient,
     dhl: Option<&'a crate::dhl::DhlClient>,
+    /// `web_search` + `read_url` quota (`ai.web.max_rounds`).
+    web_budget: &'a CallBudget,
+    /// `track_shipment` quota ([`MAX_SHIPMENT_LOOKUPS_PER_TURN`]).
+    shipment_budget: &'a CallBudget,
     command_catalog: &'a crate::ai::commands_tool::CatalogCell,
     emote_tracker: Option<&'a Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     trace: &'a TraceIds,
@@ -646,6 +713,9 @@ impl ToolExecutor for V2Executor<'_> {
         }
         if call.name == crate::ai::dhl_tool::TRACK_SHIPMENT_TOOL_NAME {
             return match self.dhl {
+                Some(_) if !self.shipment_budget.try_consume() => {
+                    ToolResultMessage::for_call(call, SHIPMENT_BUDGET_EXHAUSTED.to_string())
+                }
                 Some(c) => crate::ai::dhl_tool::execute_track_shipment(c, call).await,
                 None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
             };
@@ -664,6 +734,9 @@ impl ToolExecutor for V2Executor<'_> {
         }
         if content::is_web_tool(&call.name) {
             match self.web {
+                Some(_) if !self.web_budget.try_consume() => {
+                    ToolResultMessage::for_call(call, WEB_BUDGET_EXHAUSTED.to_string())
+                }
                 Some(w) => w.execute_tool_call(call, self.trace).await,
                 None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
             }
@@ -833,6 +906,8 @@ mod turn_tests {
         /// Sleep past the per-round timeout so `run_agent` gives up.
         Hang,
         Provider(u16),
+        /// First round: `n` distinct `web_search` calls. Later rounds: text.
+        WebSearches(usize),
     }
 
     #[async_trait]
@@ -846,6 +921,7 @@ mod turn_tests {
             &self,
             request: ToolChatCompletionRequest,
         ) -> llm::Result<ToolChatCompletionResponse> {
+            let first_round = request.prior_rounds.is_empty();
             self.calls.lock().unwrap().push(request);
             match &self.answer {
                 Answer::Text(t) => Ok(ToolChatCompletionResponse::Message(t.clone())),
@@ -856,6 +932,20 @@ mod turn_tests {
                 Answer::Provider(status) => Err(LlmError::Provider {
                     status: *status,
                     body: "nope".into(),
+                }),
+                Answer::WebSearches(_) if !first_round => {
+                    Ok(ToolChatCompletionResponse::Message("fertig".into()))
+                }
+                Answer::WebSearches(n) => Ok(ToolChatCompletionResponse::ToolCalls {
+                    calls: (0..*n)
+                        .map(|i| ToolCall {
+                            id: format!("ws{i}"),
+                            name: "web_search".into(),
+                            arguments: serde_json::json!({ "query": format!("frage {i}") }),
+                            arguments_parse_error: None,
+                        })
+                        .collect(),
+                    reasoning_content: None,
                 }),
             }
         }
@@ -868,6 +958,15 @@ mod turn_tests {
     }
 
     async fn fixture(answer: Answer, timeout_secs: u64) -> Fixture {
+        fixture_with_web(answer, timeout_secs, None).await
+    }
+
+    /// `web` = (SearXNG URL, `ai.web.max_rounds`) to register web tools.
+    async fn fixture_with_web(
+        answer: Answer,
+        timeout_secs: u64,
+        web: Option<(String, usize)>,
+    ) -> Fixture {
         crate::install_crypto_provider();
         let dir = TempDir::new().unwrap();
         let mut s = Settings::compiled_defaults();
@@ -877,6 +976,13 @@ mod turn_tests {
         s.ai.profiles[0].provider = AiProvider::OpenAiCompatible;
         s.ai.profiles[0].model = "test-model".into();
         s.ai.profiles[0].timeout = timeout_secs;
+        if let Some((base_url, max_rounds)) = &web {
+            s.ai.web = Some(crate::settings::ai::AiWeb {
+                base_url: base_url.clone(),
+                max_rounds: *max_rounds,
+                ..Default::default()
+            });
+        }
         let settings: SettingsHandle = SettingsHandle::from_settings(s);
 
         let store = MemoryStore::open(dir.path(), settings.clone())
@@ -887,12 +993,28 @@ mod turn_tests {
             calls: Mutex::new(Vec::new()),
             answer,
         });
+        let registry = Arc::new(crate::llm_factory::LlmRegistry::fixed(
+            llm.clone() as Arc<dyn LlmClient>,
+            settings.clone(),
+        ));
+        let web = web.map(|(base_url, _)| AiWeb {
+            executor: Arc::new(content::ContentToolExecutor::new(
+                content::SearchClient::new_with_client(
+                    base_url,
+                    Duration::from_secs(5),
+                    reqwest::Client::new(),
+                ),
+                reqwest::Client::new(),
+                registry.clone(),
+                settings.clone(),
+                Duration::from_secs(300),
+                32,
+            )),
+            settings: settings.clone(),
+        });
 
         let runner = TurnRunner::new(AiCommandDeps {
-            registry: Arc::new(crate::llm_factory::LlmRegistry::fixed(
-                llm.clone() as Arc<dyn LlmClient>,
-                settings.clone(),
-            )),
+            registry,
             settings: settings.clone(),
             chat_ctx: None,
             memory: AiMemoryV2 {
@@ -903,7 +1025,7 @@ mod turn_tests {
                 max_writes_per_turn: 2,
                 min_response_delay: Duration::ZERO,
             },
-            web: None,
+            web,
             emotes: None,
             bot_username: "utilitybot".into(),
             doener: Arc::new(crate::doener::DoeneratlasClient::with_base_url(
@@ -1091,6 +1213,50 @@ mod turn_tests {
                 .await
                 .unwrap(),
             TurnOutcome::Silent,
+        );
+    }
+
+    /// Security audit run-1 §3.1: `ai.web.max_rounds` was never read, so one
+    /// viewer turn ran every web call the model emitted. The cap must hold
+    /// however many calls arrive, and the model must still get one result
+    /// per call id.
+    #[tokio::test]
+    async fn web_calls_past_ai_web_max_rounds_are_not_run() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let searx = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": []
+            })))
+            .mount(&searx)
+            .await;
+        let f = fixture_with_web(
+            Answer::WebSearches(6),
+            30,
+            Some((format!("{}/search", searx.uri()), 2)),
+        )
+        .await;
+
+        let out = f
+            .runner
+            .run_turn(input(Agent::Aurora, "such sechs sachen"))
+            .await
+            .unwrap();
+
+        assert!(matches!(out, TurnOutcome::Reply { .. }), "got {out:?}");
+        assert_eq!(searx.received_requests().await.unwrap().len(), 2);
+        let calls = f.llm.calls.lock().unwrap();
+        let results = &calls[1].prior_rounds[0].results;
+        assert_eq!(results.len(), 6);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|r| r.content == WEB_BUDGET_EXHAUSTED)
+                .count(),
+            4
         );
     }
 }

@@ -3,13 +3,14 @@
 //! Drives a [`LlmClient::chat_completion_with_tools`] loop, dispatching
 //! each tool call through a [`ToolExecutor`] and threading the round
 //! results back into the next request. Returns when the model emits a
-//! plain-text response, when `max_rounds` is reached, or when a per-round
-//! timeout fires.
+//! plain-text response, when `max_rounds` is reached, when a per-round
+//! timeout fires, or when the whole-run deadline passes.
 
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tracing::{debug, instrument};
+use tokio::time::Instant;
+use tracing::{debug, instrument, warn};
 
 use crate::client::LlmClient;
 use crate::error::Result;
@@ -36,7 +37,20 @@ pub struct AgentOpts {
     /// `chat_completion_with_tools` call only — tool execution is not
     /// timed out by the runner.
     pub per_round_timeout: Option<Duration>,
+    /// Optional cap on tool calls executed per round. Calls past the cap are
+    /// not run; each gets a [`TOOL_BUDGET_EXHAUSTED`] result so the model
+    /// still sees one result per call id.
+    pub max_calls_per_round: Option<usize>,
+    /// Optional wall-clock budget for the whole run, tool execution included.
+    /// Soft: no LLM call or tool call starts once it has passed, and each LLM
+    /// call is clamped to the time left, but an in-flight tool is never
+    /// dropped (memory writes must not be cut between backup and rename).
+    pub deadline: Option<Duration>,
 }
+
+/// Tool result for a call skipped by [`AgentOpts::max_calls_per_round`].
+pub const TOOL_BUDGET_EXHAUSTED: &str =
+    "tool_budget_exhausted: too many tool calls in one round; this call was not run";
 
 /// Terminal state of [`run_agent`].
 #[derive(Debug)]
@@ -47,6 +61,8 @@ pub enum AgentOutcome {
     MaxRoundsExceeded,
     /// The per-round timeout fired during round `round` (0-indexed).
     Timeout { round: usize },
+    /// [`AgentOpts::deadline`] passed during round `round` (0-indexed).
+    DeadlineExceeded { round: usize },
 }
 
 /// Drive a tool-calling conversation to completion.
@@ -60,11 +76,25 @@ pub async fn run_agent<E: ToolExecutor + ?Sized>(
     executor: &E,
     opts: AgentOpts,
 ) -> Result<AgentOutcome> {
+    let deadline = opts.deadline.map(|d| Instant::now() + d);
     for round in 0..opts.max_rounds {
-        let response = call_with_optional_timeout(client, &request, opts.per_round_timeout).await;
-
-        let response = match response {
+        let remaining = match deadline {
+            Some(at) => match at.checked_duration_since(Instant::now()) {
+                Some(left) if !left.is_zero() => Some(left),
+                _ => return Ok(AgentOutcome::DeadlineExceeded { round }),
+            },
+            None => None,
+        };
+        // The deadline is the binding limit when it leaves less time than
+        // the per-round timeout; report which one fired.
+        let (timeout, deadline_bound) = match (opts.per_round_timeout, remaining) {
+            (Some(per), Some(left)) if left < per => (Some(left), true),
+            (Some(per), _) => (Some(per), false),
+            (None, left) => (left, left.is_some()),
+        };
+        let response = match call_with_optional_timeout(client, &request, timeout).await {
             Ok(r) => r?,
+            Err(_) if deadline_bound => return Ok(AgentOutcome::DeadlineExceeded { round }),
             Err(_) => return Ok(AgentOutcome::Timeout { round }),
         };
 
@@ -77,9 +107,26 @@ pub async fn run_agent<E: ToolExecutor + ?Sized>(
                 reasoning_content,
             } => {
                 debug!(round, calls = calls.len(), "agent round");
+                let cap = opts.max_calls_per_round.unwrap_or(usize::MAX);
+                if calls.len() > cap {
+                    warn!(
+                        round,
+                        calls = calls.len(),
+                        cap,
+                        "tool calls over per-round cap"
+                    );
+                }
                 let mut results = Vec::with_capacity(calls.len());
-                for call in &calls {
-                    results.push(crate::observe::observe_tool(executor, call).await);
+                for (i, call) in calls.iter().enumerate() {
+                    if deadline.is_some_and(|at| Instant::now() >= at) {
+                        return Ok(AgentOutcome::DeadlineExceeded { round });
+                    }
+                    let result = if i < cap {
+                        crate::observe::observe_tool(executor, call).await
+                    } else {
+                        ToolResultMessage::for_call(call, TOOL_BUDGET_EXHAUSTED.to_string())
+                    };
+                    results.push(result);
                 }
                 request.prior_rounds.push(ToolCallRound {
                     calls,
@@ -185,7 +232,119 @@ mod tests {
         AgentOpts {
             max_rounds,
             per_round_timeout: None,
+            max_calls_per_round: None,
+            deadline: None,
         }
+    }
+
+    /// Counts executions; each one sleeps `delay` first.
+    struct CountingExecutor {
+        delay: Duration,
+        ran: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CountingExecutor {
+        fn new(delay: Duration) -> Self {
+            Self {
+                delay,
+                ran: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn ran(&self) -> usize {
+            self.ran.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl ToolExecutor for CountingExecutor {
+        async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
+            tokio::time::sleep(self.delay).await;
+            self.ran.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ToolResultMessage::for_call(call, "ok".to_string())
+        }
+    }
+
+    fn calls_round(n: usize) -> Scripted {
+        Scripted::Response(ToolChatCompletionResponse::ToolCalls {
+            calls: (0..n)
+                .map(|i| tool_call(&format!("c{i}"), "noop"))
+                .collect(),
+            reasoning_content: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn calls_past_per_round_cap_are_not_run() {
+        let client = ScriptedClient::new(vec![
+            calls_round(5),
+            calls_round(5),
+            Scripted::Response(ToolChatCompletionResponse::Message("done".into())),
+        ]);
+        let exec = CountingExecutor::new(Duration::ZERO);
+        let outcome = run_agent(
+            &client,
+            base_request(),
+            &exec,
+            AgentOpts {
+                max_calls_per_round: Some(2),
+                ..opts(5)
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, AgentOutcome::Text(_)));
+        assert_eq!(exec.ran(), 4, "2 per round over 2 rounds");
+    }
+
+    #[tokio::test]
+    async fn deadline_stops_tool_execution_mid_round() {
+        let client = ScriptedClient::new(vec![
+            calls_round(4),
+            Scripted::Response(ToolChatCompletionResponse::Message("late".into())),
+        ]);
+        // Calls start at ~0 ms and ~100 ms; the third would start at ~200 ms,
+        // past the 150 ms deadline.
+        let exec = CountingExecutor::new(Duration::from_millis(100));
+        let outcome = run_agent(
+            &client,
+            base_request(),
+            &exec,
+            AgentOpts {
+                deadline: Some(Duration::from_millis(150)),
+                ..opts(3)
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            AgentOutcome::DeadlineExceeded { round: 0 }
+        ));
+        assert_eq!(exec.ran(), 2);
+    }
+
+    #[tokio::test]
+    async fn deadline_clamps_llm_call_shorter_than_per_round_timeout() {
+        let client = ScriptedClient::new(vec![Scripted::Sleep(Duration::from_secs(5))]);
+        let started = Instant::now();
+        let outcome = run_agent(
+            &client,
+            base_request(),
+            &EchoExecutor,
+            AgentOpts {
+                per_round_timeout: Some(Duration::from_secs(10)),
+                deadline: Some(Duration::from_millis(50)),
+                ..opts(3)
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            AgentOutcome::DeadlineExceeded { round: 0 }
+        ));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     fn tool_call(id: &str, name: &str) -> ToolCall {
@@ -259,8 +418,8 @@ mod tests {
             base_request(),
             &EchoExecutor,
             AgentOpts {
-                max_rounds: 3,
                 per_round_timeout: Some(Duration::from_millis(10)),
+                ..opts(3)
             },
         )
         .await

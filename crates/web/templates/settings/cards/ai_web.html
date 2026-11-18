@@ -34,7 +34,7 @@
        "Results returned to the model per query.",
        w.cur.max_results, w.def.max_results, "", 1, 50, "ai_web_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_max_rounds", "max_rounds",
-       "Maximum search tool calls per !ai turn.",
+       "Maximum web_search + read_url calls per !ai / @grok turn.",
        w.cur.max_rounds, w.def.max_rounds, "", 1, 16, "ai_web_enabled") %}{% endcall %}
     {% call m::num_row_bounded("ai_web", "ai_web_cache_ttl_secs", "cache_ttl_secs",
        "How long a cached search is reused.",
