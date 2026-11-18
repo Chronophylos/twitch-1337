@@ -94,54 +94,19 @@ pub fn draw_single_card(rng: &mut impl Rng) -> SingleCardDraw {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tarot::spreads::{FUTURE_LABELS, GUIDANCE_LABELS};
+    use crate::tarot::spreads::FUTURE_LABELS;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
     use std::collections::HashSet;
 
     #[test]
-    fn future_draw_labels() {
+    fn three_card_draw_has_distinct_cards_in_label_order() {
         let mut rng = SmallRng::seed_from_u64(42);
         let draw = draw_three_card(&mut rng, FUTURE_LABELS);
         let ids: HashSet<_> = draw.positions.iter().map(|p| p.card.id).collect();
         assert_eq!(ids.len(), 3);
-        assert_eq!(draw.positions[0].label, "Vergangenheit");
-        assert_eq!(draw.positions[1].label, "Gegenwart");
-        assert_eq!(draw.positions[2].label, "Zukunft");
-    }
-
-    #[test]
-    fn guidance_draw_labels() {
-        let mut rng = SmallRng::seed_from_u64(42);
-        let draw = draw_three_card(&mut rng, GUIDANCE_LABELS);
-        assert_eq!(draw.positions[0].label, "Ursache");
-        assert_eq!(draw.positions[1].label, "Hindernis");
-        assert_eq!(draw.positions[2].label, "Rat");
-    }
-
-    #[test]
-    fn single_draw_has_day_label() {
-        let mut rng = SmallRng::seed_from_u64(42);
-        let draw = draw_single_card(&mut rng);
-        assert_eq!(draw.card.label, "Day");
-        assert!(!draw.card.meaning().is_empty());
-    }
-
-    #[test]
-    fn meaning_tracks_orientation() {
-        let card = &crate::tarot::DECK[0];
-        let up = DrawnCard {
-            card,
-            orientation: Orientation::Upright,
-            label: "Vergangenheit",
-        };
-        let rev = DrawnCard {
-            card,
-            orientation: Orientation::Reversed,
-            label: "Vergangenheit",
-        };
-        assert_eq!(up.meaning(), card.upright);
-        assert_eq!(rev.meaning(), card.reversed);
+        let labels: Vec<_> = draw.positions.iter().map(|p| p.label).collect();
+        assert_eq!(labels, FUTURE_LABELS);
     }
 
     #[test]

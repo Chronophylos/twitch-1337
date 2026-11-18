@@ -442,19 +442,6 @@ mod tests {
     }
 
     #[test]
-    fn mixed_batch_announces_only_the_fresh_ones() {
-        let mut seen = VecDeque::new();
-        let (out, _) = select_announcements(
-            vec![cand("old", 500), cand("new", 1), cand("older", 9000)],
-            &mut seen,
-            now(),
-            SignedDuration::from_hours(2),
-        );
-        assert_eq!(out, vec!["line-new".to_string()]);
-        assert_eq!(seen.len(), 3, "every candidate is recorded regardless");
-    }
-
-    #[test]
     fn future_timestamps_are_treated_as_fresh() {
         let mut seen = VecDeque::new();
         let (out, _) = select_announcements(

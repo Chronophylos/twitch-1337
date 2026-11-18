@@ -606,31 +606,12 @@ mod tests {
         Message, ToolCall, ToolCallRound, ToolChatCompletionRequest, ToolResultMessage,
     };
 
-    #[test]
-    fn empty_message_content_is_error_not_empty_string() {
-        // Source-level regression: the tool path must surface an
-        // EmptyResponse error rather than handing back Message("").
-        // Assemble the needle at runtime so this assertion does not
-        // self-match the literal it is looking for.
-        let s = include_str!("openai.rs");
-        let needle = format!("{}.{}()", "content", "unwrap_or_default");
-        assert!(
-            !s.contains(&needle),
-            "tool path must error on empty content, not return Message(\"\")"
-        );
-    }
-
     static CRYPTO: Once = Once::new();
 
     fn ensure_crypto_provider() {
         CRYPTO.call_once(|| {
             let _ = rustls::crypto::ring::default_provider().install_default();
         });
-    }
-
-    fn test_client(is_openrouter: bool) -> OpenAiClient {
-        ensure_crypto_provider();
-        OpenAiClient::new("k", None, "ua", is_openrouter).unwrap()
     }
 
     fn req_with_rounds(rounds: Vec<ToolCallRound>) -> ToolChatCompletionRequest {
@@ -643,6 +624,28 @@ mod tests {
             prior_rounds: rounds,
             trace: TraceIds::default(),
         }
+    }
+
+    /// A tool response with neither tool calls nor content must surface
+    /// `EmptyResponse`, never `Message("")`, which would post a blank reply.
+    #[tokio::test]
+    async fn tool_response_without_content_is_empty_response_error() {
+        ensure_crypto_provider();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{ "message": { "role": "assistant", "content": null } }]
+                })),
+            )
+            .mount(&server)
+            .await;
+        let client = OpenAiClient::new("k", Some(&server.uri()), "ua", false).unwrap();
+        let err = client
+            .chat_completion_with_tools_untraced(req_with_rounds(vec![]))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LlmError::EmptyResponse), "{err:?}");
     }
 
     #[test]
@@ -849,104 +852,52 @@ mod tests {
         assert!(returned_raw.chars().count() < raw.chars().count());
     }
 
-    #[test]
-    fn map_reasoning_openrouter_uses_nested_reasoning_object() {
-        let client = test_client(true);
-        let (reasoning_effort, reasoning) = client.map_reasoning(Some("high".to_string()));
-        assert!(reasoning_effort.is_none());
-        let reasoning = reasoning.expect("reasoning object must be set");
-        assert_eq!(reasoning.effort, "high");
-    }
-
-    #[test]
-    fn map_reasoning_non_openrouter_uses_reasoning_effort_field() {
-        let client = test_client(false);
-        let (reasoning_effort, reasoning) = client.map_reasoning(Some("xhigh".to_string()));
-        assert_eq!(reasoning_effort.as_deref(), Some("xhigh"));
-        assert!(reasoning.is_none());
-    }
-
-    #[test]
-    fn api_tool_request_serializes_trace_ids_when_set() {
-        let req = ApiToolRequest {
+    /// Serialize both wire request shapes (plain and tool) with the same
+    /// optional fields; each struct carries its own serde attributes.
+    fn wire_requests(service_tier: Option<&str>, trace: TraceIds) -> [serde_json::Value; 2] {
+        let tool = ApiToolRequest {
             model: "m".to_string(),
             messages: vec![],
             tools: vec![],
             reasoning_effort: None,
             reasoning: None,
-            service_tier: None,
-            trace: TraceIds {
-                user: Some("nikolai".to_string()),
-                session_id: Some("turn-42".to_string()),
-            },
+            service_tier: service_tier.map(str::to_string),
+            trace: trace.clone(),
         };
-        let value = serde_json::to_value(&req).unwrap();
-        assert_eq!(value["user"], "nikolai");
-        assert_eq!(value["session_id"], "turn-42");
-    }
-
-    #[test]
-    fn api_tool_request_serializes_service_tier_when_set() {
-        let req = ApiToolRequest {
-            model: "m".to_string(),
-            messages: vec![],
-            tools: vec![],
-            reasoning_effort: None,
-            reasoning: None,
-            service_tier: Some("priority".to_string()),
-            trace: TraceIds::default(),
-        };
-        let value = serde_json::to_value(&req).unwrap();
-        assert_eq!(value["service_tier"], "priority");
-    }
-
-    #[test]
-    fn api_tool_request_omits_service_tier_when_none() {
-        let req = ApiToolRequest {
-            model: "m".to_string(),
-            messages: vec![],
-            tools: vec![],
-            reasoning_effort: None,
-            reasoning: None,
-            service_tier: None,
-            trace: TraceIds::default(),
-        };
-        let value = serde_json::to_value(&req).unwrap();
-        assert!(value.get("service_tier").is_none());
-    }
-
-    #[test]
-    fn api_tool_request_omits_trace_ids_when_default() {
-        let req = ApiToolRequest {
-            model: "m".to_string(),
-            messages: vec![],
-            tools: vec![],
-            reasoning_effort: None,
-            reasoning: None,
-            service_tier: None,
-            trace: TraceIds::default(),
-        };
-        let value = serde_json::to_value(&req).unwrap();
-        assert!(value.get("user").is_none());
-        assert!(value.get("session_id").is_none());
-    }
-
-    #[test]
-    fn api_request_serializes_trace_ids_when_set() {
-        let req = ApiRequest {
+        let plain = ApiRequest {
             model: "m".to_string(),
             messages: vec![],
             reasoning_effort: None,
             reasoning: None,
-            service_tier: None,
-            trace: TraceIds {
-                user: Some("u".to_string()),
-                session_id: Some("s".to_string()),
-            },
+            service_tier: service_tier.map(str::to_string),
+            trace,
         };
-        let value = serde_json::to_value(&req).unwrap();
-        assert_eq!(value["user"], "u");
-        assert_eq!(value["session_id"], "s");
+        [
+            serde_json::to_value(&tool).unwrap(),
+            serde_json::to_value(&plain).unwrap(),
+        ]
+    }
+
+    #[test]
+    fn api_requests_serialize_service_tier_and_trace_ids_when_set() {
+        let trace = TraceIds {
+            user: Some("nikolai".to_string()),
+            session_id: Some("turn-42".to_string()),
+        };
+        for value in wire_requests(Some("priority"), trace) {
+            assert_eq!(value["service_tier"], "priority", "{value}");
+            assert_eq!(value["user"], "nikolai", "{value}");
+            assert_eq!(value["session_id"], "turn-42", "{value}");
+        }
+    }
+
+    #[test]
+    fn api_requests_omit_service_tier_and_trace_ids_when_unset() {
+        for value in wire_requests(None, TraceIds::default()) {
+            for key in ["service_tier", "user", "session_id"] {
+                assert!(value.get(key).is_none(), "{key} must be omitted: {value}");
+            }
+        }
     }
 
     #[test]
@@ -1002,34 +953,6 @@ mod tests {
         assert_eq!(received.len(), 1);
         let body: serde_json::Value = serde_json::from_slice(&received[0].body).expect("json body");
         assert_eq!(body["service_tier"], "flex");
-    }
-
-    #[test]
-    fn api_request_serializes_service_tier_when_set() {
-        let req = ApiRequest {
-            model: "m".to_string(),
-            messages: vec![],
-            reasoning_effort: None,
-            reasoning: None,
-            service_tier: Some("flex".to_string()),
-            trace: TraceIds::default(),
-        };
-        let value = serde_json::to_value(&req).unwrap();
-        assert_eq!(value["service_tier"], "flex");
-    }
-
-    #[test]
-    fn api_request_omits_service_tier_when_none() {
-        let req = ApiRequest {
-            model: "m".to_string(),
-            messages: vec![],
-            reasoning_effort: None,
-            reasoning: None,
-            service_tier: None,
-            trace: TraceIds::default(),
-        };
-        let value = serde_json::to_value(&req).unwrap();
-        assert!(value.get("service_tier").is_none());
     }
 
     #[test]

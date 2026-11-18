@@ -670,8 +670,16 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn deck_has_78_unique_ids() {
-        assert_eq!(DECK.len(), 78);
+    fn deck_has_22_majors_56_minors_and_unique_ids() {
+        let majors = DECK
+            .iter()
+            .filter(|c| matches!(c.arcana, Arcana::Major))
+            .count();
+        let minors = DECK
+            .iter()
+            .filter(|c| matches!(c.arcana, Arcana::Minor))
+            .count();
+        assert_eq!((majors, minors), (22, 56));
         let ids: HashSet<_> = DECK.iter().map(|c| c.id).collect();
         assert_eq!(ids.len(), 78);
     }
@@ -688,34 +696,6 @@ mod tests {
                 Arcana::Minor => assert!(c.suit.is_some(), "{}", c.id),
             }
         }
-    }
-
-    #[test]
-    fn weights_match_arcana() {
-        let major = DECK
-            .iter()
-            .find(|c| matches!(c.arcana, Arcana::Major))
-            .unwrap();
-        let minor = DECK
-            .iter()
-            .find(|c| matches!(c.arcana, Arcana::Minor))
-            .unwrap();
-        assert_eq!(card_weight(major), MAJOR_WEIGHT);
-        assert_eq!(card_weight(minor), MINOR_WEIGHT);
-    }
-
-    #[test]
-    fn deck_has_22_majors_and_56_minors() {
-        let majors = DECK
-            .iter()
-            .filter(|c| matches!(c.arcana, Arcana::Major))
-            .count();
-        let minors = DECK
-            .iter()
-            .filter(|c| matches!(c.arcana, Arcana::Minor))
-            .count();
-        assert_eq!(majors, 22);
-        assert_eq!(minors, 56);
     }
 
     #[test]

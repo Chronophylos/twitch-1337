@@ -371,28 +371,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returns_text_after_two_tool_rounds() {
-        let client = ScriptedClient::new(vec![
-            Scripted::Response(ToolChatCompletionResponse::ToolCalls {
-                calls: vec![tool_call("c1", "noop")],
-                reasoning_content: None,
-            }),
-            Scripted::Response(ToolChatCompletionResponse::ToolCalls {
-                calls: vec![tool_call("c2", "noop")],
-                reasoning_content: None,
-            }),
-            Scripted::Response(ToolChatCompletionResponse::Message("done".into())),
-        ]);
-        let outcome = run_agent(&client, base_request(), &EchoExecutor, opts(5))
-            .await
-            .unwrap();
-        match outcome {
-            AgentOutcome::Text(t) => assert_eq!(t, "done"),
-            other => panic!("expected Text, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
     async fn max_rounds_exceeded_when_tool_calls_dont_terminate() {
         let client = ScriptedClient::new(vec![
             Scripted::Response(ToolChatCompletionResponse::ToolCalls {
@@ -472,9 +450,13 @@ mod tests {
             captured: Mutex::new(Vec::new()),
         };
 
-        run_agent(&client, base_request(), &EchoExecutor, opts(3))
+        let outcome = run_agent(&client, base_request(), &EchoExecutor, opts(3))
             .await
             .unwrap();
+        match outcome {
+            AgentOutcome::Text(t) => assert_eq!(t, "done"),
+            other => panic!("expected Text, got {other:?}"),
+        }
 
         let captured = client.captured.lock().unwrap();
         assert_eq!(captured.len(), 2, "two LLM calls expected");

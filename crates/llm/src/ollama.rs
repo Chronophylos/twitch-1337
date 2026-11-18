@@ -321,18 +321,35 @@ mod tests {
         Message, ToolCall, ToolCallRound, ToolChatCompletionRequest, ToolResultMessage,
     };
 
-    #[test]
-    fn empty_message_content_is_error_not_empty_string() {
-        // Source-level regression: the tool path must surface an
-        // EmptyResponse error rather than handing back Message("").
-        // Assemble the needle at runtime so this assertion does not
-        // self-match the literal it is looking for.
-        let s = include_str!("ollama.rs");
-        let needle = format!("{}.{}()", "content", "unwrap_or_default");
-        assert!(
-            !s.contains(&needle),
-            "tool path must error on empty content, not return Message(\"\")"
-        );
+    /// A tool response with neither tool calls nor content must surface
+    /// `EmptyResponse`, never `Message("")`, which would post a blank reply.
+    #[tokio::test]
+    async fn tool_response_without_content_is_empty_response_error() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "message": { "role": "assistant" }
+                })),
+            )
+            .mount(&server)
+            .await;
+        let client = OllamaClient::new(Some(&server.uri()), "ua").unwrap();
+        let request = ToolChatCompletionRequest {
+            model: "test-model".to_string(),
+            messages: vec![Message::user("hi")],
+            tools: vec![],
+            reasoning_effort: None,
+            service_tier: None,
+            prior_rounds: vec![],
+            trace: Default::default(),
+        };
+        let err = client
+            .chat_completion_with_tools_untraced(request)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LlmError::EmptyResponse), "{err:?}");
     }
 
     #[test]
