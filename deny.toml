@@ -9,6 +9,11 @@ ignore = [
     # basic-toml unmaintained: build-time only via askama_derive (reads askama config),
     # never parses user input, no patched version. Drop once askama moves to `toml`.
     { id = "RUSTSEC-2026-0374", reason = "build-time only via askama_derive" },
+    # chrono family declared unmaintained (chronotope/chrono#1768), all versions,
+    # no patched release, no CVE. Stopgap until the jiff migration lands: #609.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, no CVE; jiff migration tracked in #609" },
+    { id = "RUSTSEC-2026-0555", reason = "chrono-tz unmaintained, no CVE; jiff migration tracked in #609" },
+    { id = "RUSTSEC-2026-0542", reason = "humantime (via humantime-serde) unmaintained, no CVE; jiff migration tracked in #609" },
 ]
 
 [bans]
