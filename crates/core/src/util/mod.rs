@@ -142,4 +142,31 @@ mod tests {
             "APP_USER_AGENT must identify the source repo: {APP_USER_AGENT}"
         );
     }
+
+    #[test]
+    fn resolve_berlin_time_dst_edges() {
+        use chrono::{NaiveDate, TimeZone as _, Utc};
+        let local = |m, d, h, mi| {
+            NaiveDate::from_ymd_opt(2026, m, d)
+                .unwrap()
+                .and_hms_opt(h, mi, 0)
+                .unwrap()
+        };
+        let utc = |m, d, h, mi| Utc.with_ymd_and_hms(2026, m, d, h, mi, 0).unwrap();
+        // Ordinary summer time.
+        assert_eq!(
+            super::resolve_berlin_time(local(7, 19, 13, 37)),
+            utc(7, 19, 11, 37)
+        );
+        // Fall-back fold: the later (CET) occurrence.
+        assert_eq!(
+            super::resolve_berlin_time(local(10, 25, 2, 30)),
+            utc(10, 25, 1, 30)
+        );
+        // Spring-forward gap: the naive time is read as UTC.
+        assert_eq!(
+            super::resolve_berlin_time(local(3, 29, 2, 30)),
+            utc(3, 29, 2, 30)
+        );
+    }
 }

@@ -464,6 +464,29 @@ mod tests {
     }
 
     #[test]
+    fn aviationstack_timezone_edges() {
+        let at = |value: &str, tz: Option<&str>| parse_aviationstack_datetime(Some(value), tz);
+        // Berlin fall-back fold: the earlier (CEST) occurrence wins.
+        assert_eq!(
+            at("2026-10-25T02:30:00+00:00", Some("Europe/Berlin")),
+            Some(Utc.with_ymd_and_hms(2026, 10, 25, 0, 30, 0).unwrap())
+        );
+        // Berlin spring-forward gap: the wall time never happened.
+        assert_eq!(at("2026-03-29T02:30:00+00:00", Some("Europe/Berlin")), None);
+        // Unknown or blank zone: keep the stamped offset.
+        assert_eq!(
+            at("2026-07-19T09:15:00+02:00", Some("Mars/Olympus")),
+            Some(Utc.with_ymd_and_hms(2026, 7, 19, 7, 15, 0).unwrap())
+        );
+        assert_eq!(
+            at("2026-07-19T09:15:00+02:00", Some("  ")),
+            Some(Utc.with_ymd_and_hms(2026, 7, 19, 7, 15, 0).unwrap())
+        );
+        assert_eq!(at("not a time", Some("Europe/Berlin")), None);
+        assert_eq!(parse_aviationstack_datetime(Some("  "), None), None);
+    }
+
+    #[test]
     fn effective_status_infers_active_between_corrected_scheduled_times() {
         let metadata = metadata_from_json(serde_json::json!({
             "flight_status": "scheduled",

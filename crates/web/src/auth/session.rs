@@ -367,4 +367,24 @@ mod tests {
         assert!(mk(Role::Mod).is_mod());
         assert!(mk(Role::Owner).is_mod(), "owner is a superset of mod");
     }
+
+    /// `sessions.ron` written by the chrono-era build must keep loading.
+    #[test]
+    fn persisted_session_timestamps_load() {
+        let csrf = vec!["7"; 32].join(",");
+        let fixture = format!(
+            r#"(user_id: "1", user_login: "alice", role: Mod,
+                issued_at: "2026-07-19T12:00:00Z",
+                last_seen: "2026-07-19T12:05:00.250Z",
+                last_role_check: "2026-07-19T12:01:00.123456789Z",
+                csrf_value: ({csrf}), avatar_url: None, is_broadcaster: false)"#
+        );
+        let s: Session = ron::from_str(&fixture).expect("old session must load");
+        let out = ron::to_string(&s).expect("serialize");
+        assert!(out.contains(r#"issued_at:"2026-07-19T12:00:00Z""#), "{out}");
+        assert!(
+            out.contains(r#"last_role_check:"2026-07-19T12:01:00.123456789Z""#),
+            "{out}"
+        );
+    }
 }

@@ -27,6 +27,9 @@ pub mod tarot;
 pub mod twitch;
 pub mod util;
 
+#[cfg(test)]
+mod persisted_time_compat;
+
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
