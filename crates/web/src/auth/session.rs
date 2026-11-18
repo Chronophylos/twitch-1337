@@ -16,8 +16,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use eyre::Result;
+use jiff::{SignedDuration, Timestamp};
 use rand::Rng as _;
 use serde::{Deserialize, Serialize};
 use twitch_1337_core::util::persist::atomic_save_ron_async;
@@ -42,9 +42,9 @@ pub struct Session {
     pub user_id: String,
     pub user_login: String,
     pub role: Role,
-    pub issued_at: DateTime<Utc>,
-    pub last_seen: DateTime<Utc>,
-    pub last_role_check: DateTime<Utc>,
+    pub issued_at: Timestamp,
+    pub last_seen: Timestamp,
+    pub last_role_check: Timestamp,
     pub csrf_value: [u8; 32],
     /// Twitch helix `profile_image_url` captured at login. Static for the
     /// session lifetime; sidebar reads this without per-request helix calls.
@@ -115,7 +115,7 @@ impl SessionTable {
         // elapsed — the pre-persistence restart wiped sessions and re-evaluated
         // roles at the forced re-login, and we must not regress that.
         for s in inner.values_mut() {
-            s.last_role_check = DateTime::<Utc>::MIN_UTC;
+            s.last_role_check = Timestamp::MIN;
         }
         Self {
             inner: RwLock::new(inner),
@@ -199,10 +199,10 @@ impl SessionTable {
     /// take effect on the next request without a restart.
     pub fn get_and_touch(&self, id: &str, ttl: Duration) -> Option<Session> {
         let now = self.clock.now();
-        let ttl = chrono::Duration::from_std(ttl).ok()?;
+        let ttl = SignedDuration::try_from(ttl).ok()?;
         let mut g = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         let session = g.get_mut(id)?;
-        if now.signed_duration_since(session.last_seen) > ttl {
+        if now.duration_since(session.last_seen) > ttl {
             g.remove(id);
             return None;
         }
@@ -238,23 +238,23 @@ mod tests {
 
     /// Manually-advanced clock so TTL behaviour is deterministic.
     struct TestClock {
-        now: Mutex<DateTime<Utc>>,
+        now: Mutex<Timestamp>,
     }
 
     impl TestClock {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                now: Mutex::new(DateTime::<Utc>::UNIX_EPOCH),
+                now: Mutex::new(Timestamp::UNIX_EPOCH),
             })
         }
         fn advance(&self, by: Duration) {
             let mut g = self.now.lock().unwrap();
-            *g += chrono::Duration::from_std(by).unwrap();
+            *g += SignedDuration::try_from(by).unwrap();
         }
     }
 
     impl Clock for TestClock {
-        fn now(&self) -> DateTime<Utc> {
+        fn now(&self) -> Timestamp {
             *self.now.lock().unwrap()
         }
     }
@@ -346,7 +346,7 @@ mod tests {
         let session = table.get_and_touch("sid", TTL).unwrap();
         assert_eq!(
             session.last_role_check,
-            DateTime::<Utc>::UNIX_EPOCH + chrono::Duration::seconds(120)
+            Timestamp::UNIX_EPOCH + SignedDuration::from_secs(120)
         );
     }
 
@@ -356,9 +356,9 @@ mod tests {
             user_id: "u".into(),
             user_login: "l".into(),
             role,
-            issued_at: DateTime::<Utc>::UNIX_EPOCH,
-            last_seen: DateTime::<Utc>::UNIX_EPOCH,
-            last_role_check: DateTime::<Utc>::UNIX_EPOCH,
+            issued_at: Timestamp::UNIX_EPOCH,
+            last_seen: Timestamp::UNIX_EPOCH,
+            last_role_check: Timestamp::UNIX_EPOCH,
             csrf_value: [0u8; 32],
             avatar_url: None,
             is_broadcaster: false,
@@ -368,7 +368,7 @@ mod tests {
         assert!(mk(Role::Owner).is_mod(), "owner is a superset of mod");
     }
 
-    /// `sessions.ron` written by the chrono-era build must keep loading.
+    /// `sessions.ron` written by the pre-jiff (chrono) build must keep loading.
     #[test]
     fn persisted_session_timestamps_load() {
         let csrf = vec!["7"; 32].join(",");

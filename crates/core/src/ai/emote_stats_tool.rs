@@ -2,8 +2,7 @@
 
 use std::sync::Arc;
 
-use chrono::{TimeZone, Utc};
-use chrono_tz::Europe::Berlin;
+use jiff::{Span, Timestamp};
 use llm::{ToolCall, ToolDefinition, ToolResultMessage};
 use serde::Deserialize;
 
@@ -136,14 +135,16 @@ fn window_cutoff(days: u32) -> eyre::Result<Option<i64>> {
         eyre::bail!("window_days exceeds {}", MAX_WINDOW_DAYS);
     }
     // Midnights always exist in EU timezones — DST jumps happen after 01:00.
-    let today = Utc::now().with_timezone(&Berlin);
-    let cutoff_date = today.date_naive() - chrono::Duration::days(i64::from(days - 1));
-    let midnight = cutoff_date.and_hms_opt(0, 0, 0).expect("midnight is valid");
-    let cutoff = Berlin
-        .from_local_datetime(&midnight)
-        .single()
+    let today = crate::util::to_berlin(Timestamp::now());
+    let cutoff_date = today
+        .date()
+        .checked_sub(Span::new().days(i64::from(days - 1)))?;
+    let midnight = cutoff_date.at(0, 0, 0, 0);
+    let cutoff = crate::util::BERLIN
+        .to_ambiguous_timestamp(midnight)
+        .unambiguous()
         .expect("Berlin midnight resolves unambiguously");
-    Ok(Some(cutoff.with_timezone(&Utc).timestamp_millis()))
+    Ok(Some(cutoff.as_millisecond()))
 }
 
 fn removed_marker(active: bool) -> &'static str {
@@ -524,7 +525,7 @@ mod tests {
         h.upsert_emote("e1", "KEKW", true, 10).await.unwrap();
         h.upsert_emote("e2", "Pepe", true, 10).await.unwrap();
         let ev = |emote: &str, uid: &str, login: &str, flagged: bool| {
-            let now = Utc::now().timestamp_millis();
+            let now = Timestamp::now().as_millisecond();
             NewUsageEvent {
                 at: now,
                 emote_id: emote.into(),
@@ -641,7 +642,7 @@ mod tests {
     async fn set_history_surfaces_attribution() {
         let (h, _dir) = tracker().await;
         h.insert_set_event(NewSetEvent {
-            at: Utc::now().timestamp_millis(),
+            at: Timestamp::now().as_millisecond(),
             kind: SetEventKind::Add,
             emote_id: Some("e1".into()),
             old_name: None,
@@ -694,7 +695,7 @@ mod tests {
     #[tokio::test]
     async fn set_history_hides_bootstrap_and_names_changes() {
         let (h, _dir) = tracker().await;
-        let now = Utc::now().timestamp_millis();
+        let now = Timestamp::now().as_millisecond();
         for ev in [
             lifecycle(now - 3, SetEventKind::Bootstrap, None, Some("KEKW")),
             lifecycle(now - 2, SetEventKind::Rename, Some("KEKW"), Some("KEKL")),
@@ -718,7 +719,7 @@ mod tests {
     #[tokio::test]
     async fn set_history_filters_by_change_and_emote() {
         let (h, _dir) = tracker().await;
-        let now = Utc::now().timestamp_millis();
+        let now = Timestamp::now().as_millisecond();
         h.insert_set_event(lifecycle(now - 2, SetEventKind::Add, None, Some("KEKW")))
             .await
             .unwrap();
@@ -753,7 +754,7 @@ mod tests {
     async fn set_history_user_accepts_at_prefix() {
         let (h, _dir) = tracker().await;
         let mut ev = lifecycle(
-            Utc::now().timestamp_millis(),
+            Timestamp::now().as_millisecond(),
             SetEventKind::Add,
             None,
             Some("KEKW"),

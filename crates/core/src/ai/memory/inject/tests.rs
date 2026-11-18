@@ -22,7 +22,7 @@ fn format_entry_line_self_uses_persona_and_self_tag() {
         text: "gemerkt".into(),
         source: ChatHistorySource::Bot,
         agent: Some(Agent::Aurora),
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
     let line = format_entry_line(&entry, Agent::Aurora, &[]);
     assert!(line.ends_with(" Aurora (self): gemerkt"), "got: {line}");
@@ -38,7 +38,7 @@ fn format_entry_line_other_uses_display_name() {
         text: "hi".into(),
         source: ChatHistorySource::User,
         agent: None,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
     let line = format_entry_line(&entry, Agent::Aurora, &[]);
     assert!(line.ends_with(" MagieDisplay: hi"), "got: {line}");
@@ -54,7 +54,7 @@ fn format_entry_line_other_falls_back_to_username_when_no_display() {
         text: "?".into(),
         source: ChatHistorySource::User,
         agent: None,
-        timestamp: chrono::Utc::now(),
+        timestamp: jiff::Timestamp::now(),
     };
     let line = format_entry_line(&entry, Agent::Aurora, &[]);
     assert!(line.ends_with(" lurker42: ?"), "got: {line}");
@@ -63,7 +63,7 @@ fn format_entry_line_other_falls_back_to_username_when_no_display() {
 #[test]
 fn grok_line_on_aurora_turn_is_not_self() {
     use crate::twitch::mouth::Agent;
-    let ts = chrono::Utc::now();
+    let ts = jiff::Timestamp::now();
     let grok_entry = ChatHistoryEntry {
         seq: 1,
         username: "grok_bot".into(),
@@ -90,7 +90,7 @@ fn grok_line_on_aurora_turn_is_not_self() {
 /// as a stranger's for the whole prefill window without the login fallback.
 #[test]
 fn format_entry_line_untagged_bot_login_is_self() {
-    let ts = chrono::Utc::now();
+    let ts = jiff::Timestamp::now();
     let prefilled = ChatHistoryEntry {
         seq: 1,
         username: "GrokBot".into(),
@@ -833,21 +833,21 @@ async fn build_chat_turn_context_omits_empty_history_sections() {
 
 /// Seed a user/<id>.md directly with a hand-rolled frontmatter so the test
 /// can pin `updated_at` precisely. `MemoryStore::write` always stamps
-/// `Utc::now()`, which is not enough control to verify that the newest
+/// `Timestamp::now()`, which is not enough control to verify that the newest
 /// user (`lurker`) is dropped by the scope filter rather than by recency.
 async fn seed_user_file(
     dir: &std::path::Path,
     id: &str,
     login: &str,
     display: &str,
-    updated_at: chrono::DateTime<chrono::Utc>,
+    updated_at: jiff::Timestamp,
     body: &str,
 ) {
     let users_dir = dir.join("memories/users");
     tokio::fs::create_dir_all(&users_dir).await.unwrap();
     let raw = format!(
         "---\nupdated_at: {}\nusername: {login}\ndisplay_name: {display}\n---\n{body}",
-        updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        updated_at.strftime("%Y-%m-%dT%H:%M:%S%.3fZ")
     );
     tokio::fs::write(users_dir.join(format!("{id}.md")), raw)
         .await
@@ -868,7 +868,7 @@ async fn build_chat_turn_context_no_longer_emits_mention_table() {
         "111",
         "alice",
         "Alice",
-        chrono::Utc::now(),
+        jiff::Timestamp::now(),
         "alice body",
     )
     .await;
@@ -921,8 +921,8 @@ async fn build_chat_turn_context_scopes_users_to_chat_window_plus_speaker() {
     // Seed four user files. `lurker` has the newest `updated_at` and
     // would normally win the recency scan; we expect it to be excluded
     // because it's neither the speaker nor present in the chat window.
-    let now = chrono::Utc::now();
-    let backdate = chrono::Duration::days(7);
+    let now = jiff::Timestamp::now();
+    let backdate = jiff::SignedDuration::from_hours(7 * 24);
     for (id, login, display) in [
         ("11", "alice", "Alice"),
         ("22", "bob", "Bob"),
@@ -1008,8 +1008,8 @@ async fn note_only_lurker_loses_to_tail_when_budget_tight() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
 
-    let now = chrono::Utc::now();
-    let backdate = chrono::Duration::days(7);
+    let now = jiff::Timestamp::now();
+    let backdate = jiff::SignedDuration::from_hours(7 * 24);
     seed_user_file(
         dir.path(),
         "11",
@@ -1090,7 +1090,7 @@ async fn recap_only_identity_included_when_budget_allows() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
 
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     seed_user_file(dir.path(), "11", "carol", "Carol", now, "carol body").await;
     seed_user_file(dir.path(), "99", "lurker", "Lurker", now, "lurker body").await;
 

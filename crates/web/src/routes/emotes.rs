@@ -10,15 +10,15 @@ use axum::extract::{Extension, Query, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use chrono::NaiveDateTime;
-use chrono::TimeZone;
-use chrono_tz::Europe::Berlin;
+use jiff::civil::DateTime;
+use jiff::tz::AmbiguousOffset;
 use serde::Deserialize;
 use tower_cookies::Cookies;
 use twitch_1337_core::emote_tracker::{
     SetEventKind, SetEventListFilter, SetEventRow, UsageEventListFilter, format_actor_display,
     format_berlin_millis, format_set_event_attribution,
 };
+use twitch_1337_core::util::BERLIN;
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
@@ -172,9 +172,14 @@ fn parse_berlin_since_local(value: Option<&str>) -> Result<Option<i64>, ()> {
     let Some(raw) = value.filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
-    let naive = NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M").map_err(|_| ())?;
-    let dt = Berlin.from_local_datetime(&naive).single().ok_or(())?;
-    Ok(Some(dt.timestamp_millis()))
+    let civil = DateTime::strptime("%Y-%m-%dT%H:%M", raw).map_err(|_| ())?;
+    // Only an unambiguous wall time is accepted; DST gaps and folds reject.
+    let AmbiguousOffset::Unambiguous { offset } = BERLIN.to_ambiguous_timestamp(civil).offset()
+    else {
+        return Err(());
+    };
+    let ts = offset.to_timestamp(civil).map_err(|_| ())?;
+    Ok(Some(ts.as_millisecond()))
 }
 
 /// Parse `until` (`datetime-local`) as inclusive end-of-minute Berlin local time.

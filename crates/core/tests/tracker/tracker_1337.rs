@@ -2,16 +2,23 @@ use super::common;
 
 use std::time::Duration;
 
-use chrono::{Duration as ChronoDuration, TimeZone};
-use chrono_tz::Europe::Berlin;
 use common::TestBotBuilder;
 use common::irc_line::privmsg_at;
+use jiff::{SignedDuration, Timestamp, civil};
 
 use crate::common::test_bot::TestBot;
 
 /// ms timestamp for 2026-04-18 13:37:00 Berlin (UTC+2 in April).
 /// 2026-04-18 13:37:00 Berlin = 2026-04-18 11:37:00 UTC
 const TMI_TS_13_37_BERLIN: i64 = 1_776_512_220_000;
+
+fn berlin(y: i16, mo: i8, d: i8, h: i8, mi: i8, s: i8) -> Timestamp {
+    civil::date(y, mo, d)
+        .at(h, mi, s, 0)
+        .in_tz("Europe/Berlin")
+        .unwrap()
+        .timestamp()
+}
 
 async fn yield_a_bit() {
     for _ in 0..10 {
@@ -24,11 +31,11 @@ async fn yield_a_bit() {
 /// and return the bot ready for message injection in the 13:36:30–13:38 window.
 async fn advance_to_1337_window(bot: &mut TestBot) {
     // 13:35 → 13:36: handler wakes from wait_until_schedule and spawns monitor.
-    bot.clock.advance(ChronoDuration::seconds(60));
+    bot.clock.advance(SignedDuration::from_secs(60));
     yield_a_bit().await;
 
     // 13:36 → 13:36:30: handler wakes from sleep_until_hms(13:36:30) and says reminder.
-    bot.clock.advance(ChronoDuration::seconds(30));
+    bot.clock.advance(SignedDuration::from_secs(30));
     yield_a_bit().await;
 
     let reminder = bot.expect_say(Duration::from_secs(2)).await;
@@ -41,10 +48,7 @@ async fn advance_to_1337_window(bot: &mut TestBot) {
 #[tokio::test]
 async fn tracker_1337_posts_reminder_and_stats() {
     let mut bot = TestBotBuilder::new()
-        .at(Berlin
-            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
-            .unwrap()
-            .with_timezone(&chrono::Utc))
+        .at(berlin(2026, 4, 18, 13, 35, 0))
         .spawn()
         .await;
 
@@ -66,7 +70,7 @@ async fn tracker_1337_posts_reminder_and_stats() {
     yield_a_bit().await;
 
     // 13:36:30 → 13:38:01: grace window ends, handler aborts monitor, posts stats.
-    bot.clock.advance(ChronoDuration::seconds(91));
+    bot.clock.advance(SignedDuration::from_secs(91));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -82,10 +86,7 @@ async fn tracker_1337_posts_reminder_and_stats() {
 #[tokio::test]
 async fn tracker_1337_updates_leaderboard_with_sub_second_time() {
     let mut bot = TestBotBuilder::new()
-        .at(Berlin
-            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
-            .unwrap()
-            .with_timezone(&chrono::Utc))
+        .at(berlin(2026, 4, 18, 13, 35, 0))
         .spawn()
         .await;
 
@@ -104,7 +105,7 @@ async fn tracker_1337_updates_leaderboard_with_sub_second_time() {
     yield_a_bit().await;
 
     // Advance past the 13:38:01 grace end so the handler computes stats + persists leaderboard.
-    bot.clock.advance(ChronoDuration::seconds(91));
+    bot.clock.advance(SignedDuration::from_secs(91));
     yield_a_bit().await;
 
     let _stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -129,10 +130,7 @@ async fn tracker_1337_updates_leaderboard_with_sub_second_time() {
 #[tokio::test]
 async fn tracker_1337_announces_overall_record_when_no_faster_entry_exists() {
     let mut bot = TestBotBuilder::new()
-        .at(Berlin
-            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
-            .unwrap()
-            .with_timezone(&chrono::Utc))
+        .at(berlin(2026, 4, 18, 13, 35, 0))
         .spawn()
         .await;
 
@@ -147,7 +145,7 @@ async fn tracker_1337_announces_overall_record_when_no_faster_entry_exists() {
         .expect("inject alice");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(91));
+    bot.clock.advance(SignedDuration::from_secs(91));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -165,18 +163,14 @@ async fn tracker_1337_announces_overall_record_when_no_faster_entry_exists() {
 
 #[tokio::test]
 async fn tracker_1337_announces_personal_best_when_record_is_held_by_another() {
-    use chrono::NaiveDate;
     use common::seed_leaderboard;
 
-    let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let date = civil::date(2026, 1, 1);
     // bob holds the all-time record; alice has a slower standing best.
     let seeded = seed_leaderboard(&[("bob", 100, date), ("alice", 400, date)]);
 
     let mut bot = TestBotBuilder::new()
-        .at(Berlin
-            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
-            .unwrap()
-            .with_timezone(&chrono::Utc))
+        .at(berlin(2026, 4, 18, 13, 35, 0))
         .with_seeded_leaderboard(seeded)
         .spawn()
         .await;
@@ -192,7 +186,7 @@ async fn tracker_1337_announces_personal_best_when_record_is_held_by_another() {
         .expect("inject alice");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(91));
+    bot.clock.advance(SignedDuration::from_secs(91));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -211,10 +205,7 @@ async fn tracker_1337_announces_personal_best_when_record_is_held_by_another() {
 #[tokio::test]
 async fn tracker_1337_posts_slowest_only_for_final_ten_seconds() {
     let mut bot = TestBotBuilder::new()
-        .at(Berlin
-            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
-            .unwrap()
-            .with_timezone(&chrono::Utc))
+        .at(berlin(2026, 4, 18, 13, 35, 0))
         .spawn()
         .await;
 
@@ -236,7 +227,7 @@ async fn tracker_1337_posts_slowest_only_for_final_ten_seconds() {
         .expect("inject charlie");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(91));
+    bot.clock.advance(SignedDuration::from_secs(91));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -255,10 +246,7 @@ async fn tracker_1337_posts_slowest_only_for_final_ten_seconds() {
 #[tokio::test]
 async fn tracker_1337_persists_qualifying_personal_worst() {
     let mut bot = TestBotBuilder::new()
-        .at(Berlin
-            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
-            .unwrap()
-            .with_timezone(&chrono::Utc))
+        .at(berlin(2026, 4, 18, 13, 35, 0))
         .spawn()
         .await;
 
@@ -280,7 +268,7 @@ async fn tracker_1337_persists_qualifying_personal_worst() {
         .expect("inject charlie");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(91));
+    bot.clock.advance(SignedDuration::from_secs(91));
     yield_a_bit().await;
 
     let _stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -307,17 +295,13 @@ async fn tracker_1337_persists_qualifying_personal_worst() {
 
 #[tokio::test]
 async fn tracker_1337_personal_worst_updates_only_when_slower() {
-    use chrono::NaiveDate;
     use common::seed_hall_of_shame;
 
-    let date_d1 = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let date_d1 = civil::date(2026, 1, 1);
     let seeded = seed_hall_of_shame(&[("alice", 55_000, date_d1)]);
 
     let mut bot = TestBotBuilder::new()
-        .at(Berlin
-            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
-            .unwrap()
-            .with_timezone(&chrono::Utc))
+        .at(berlin(2026, 4, 18, 13, 35, 0))
         .with_seeded_hall_of_shame(seeded)
         .spawn()
         .await;
@@ -332,7 +316,7 @@ async fn tracker_1337_personal_worst_updates_only_when_slower() {
         .expect("inject alice");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(91));
+    bot.clock.advance(SignedDuration::from_secs(91));
     yield_a_bit().await;
 
     let _stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -354,10 +338,7 @@ async fn tracker_1337_personal_worst_updates_only_when_slower() {
 
     // Second session: alice at 55500 must not beat stored 56000.
     let mut bot = TestBotBuilder::new()
-        .at(Berlin
-            .with_ymd_and_hms(2026, 4, 19, 13, 35, 0)
-            .unwrap()
-            .with_timezone(&chrono::Utc))
+        .at(berlin(2026, 4, 19, 13, 35, 0))
         .with_seeded_hall_of_shame(seed_hall_of_shame(&[("alice", 56_000, date_d1)]))
         .spawn()
         .await;
@@ -372,7 +353,7 @@ async fn tracker_1337_personal_worst_updates_only_when_slower() {
         .expect("inject alice");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(91));
+    bot.clock.advance(SignedDuration::from_secs(91));
     yield_a_bit().await;
 
     let _stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -396,10 +377,7 @@ async fn tracker_1337_personal_worst_updates_only_when_slower() {
 #[tokio::test]
 async fn tracker_1337_does_not_post_slowest_before_final_ten_seconds() {
     let mut bot = TestBotBuilder::new()
-        .at(Berlin
-            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
-            .unwrap()
-            .with_timezone(&chrono::Utc))
+        .at(berlin(2026, 4, 18, 13, 35, 0))
         .spawn()
         .await;
 
@@ -421,7 +399,7 @@ async fn tracker_1337_does_not_post_slowest_before_final_ten_seconds() {
         .expect("inject charlie");
     yield_a_bit().await;
 
-    bot.clock.advance(ChronoDuration::seconds(91));
+    bot.clock.advance(SignedDuration::from_secs(91));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -436,17 +414,14 @@ async fn tracker_1337_does_not_post_slowest_before_final_ten_seconds() {
 #[tokio::test]
 async fn tracker_1337_zero_users_posts_erm_or_fuh() {
     let mut bot = TestBotBuilder::new()
-        .at(Berlin
-            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
-            .unwrap()
-            .with_timezone(&chrono::Utc))
+        .at(berlin(2026, 4, 18, 13, 35, 0))
         .spawn()
         .await;
 
     advance_to_1337_window(&mut bot).await;
 
     // 13:36:30 → 13:38:01 with no messages injected.
-    bot.clock.advance(ChronoDuration::seconds(91));
+    bot.clock.advance(SignedDuration::from_secs(91));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -468,10 +443,7 @@ async fn tracker_1337_zero_users_posts_erm_or_fuh() {
 #[tokio::test]
 async fn tracker_1337_counts_message_after_compensated_wake_before_true_138() {
     let mut bot = TestBotBuilder::new()
-        .at(Berlin
-            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
-            .unwrap()
-            .with_timezone(&chrono::Utc))
+        .at(berlin(2026, 4, 18, 13, 35, 0))
         .with_settings(|o| {
             o.twitch.expected_latency = Some(200);
         })
@@ -481,7 +453,7 @@ async fn tracker_1337_counts_message_after_compensated_wake_before_true_138() {
     advance_to_1337_window(&mut bot).await;
 
     // 13:36:30 → 13:37:59.800 (past compensated 13:38−200ms, before true :00).
-    bot.clock.advance(ChronoDuration::milliseconds(89_800));
+    bot.clock.advance(SignedDuration::from_millis(89_800));
     yield_a_bit().await;
 
     let msg_late = privmsg_at(
@@ -498,7 +470,7 @@ async fn tracker_1337_counts_message_after_compensated_wake_before_true_138() {
     yield_a_bit().await;
 
     // Reach true 13:38:00 + 1s grace — monitor closes, stats post.
-    bot.clock.advance(ChronoDuration::milliseconds(1_200));
+    bot.clock.advance(SignedDuration::from_millis(1_200));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;
@@ -526,10 +498,7 @@ async fn tracker_1337_counts_message_after_compensated_wake_before_true_138() {
 #[tokio::test]
 async fn tracker_1337_scores_message_delivered_after_1338_wall() {
     let mut bot = TestBotBuilder::new()
-        .at(Berlin
-            .with_ymd_and_hms(2026, 4, 18, 13, 35, 0)
-            .unwrap()
-            .with_timezone(&chrono::Utc))
+        .at(berlin(2026, 4, 18, 13, 35, 0))
         .spawn()
         .await;
 
@@ -537,7 +506,7 @@ async fn tracker_1337_scores_message_delivered_after_1338_wall() {
 
     // Past the 13:38:00 wall — under the old logic the monitor is already
     // dead here.
-    bot.clock.advance(ChronoDuration::milliseconds(90_100));
+    bot.clock.advance(SignedDuration::from_millis(90_100));
     yield_a_bit().await;
 
     let msg_late = privmsg_at(
@@ -554,7 +523,7 @@ async fn tracker_1337_scores_message_delivered_after_1338_wall() {
     yield_a_bit().await;
 
     // Past the 13:38:01 grace end — monitor aborts, stats post.
-    bot.clock.advance(ChronoDuration::milliseconds(900));
+    bot.clock.advance(SignedDuration::from_millis(900));
     yield_a_bit().await;
 
     let stats = bot.expect_say(Duration::from_secs(3)).await;

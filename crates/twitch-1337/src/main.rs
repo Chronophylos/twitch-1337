@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use color_eyre::eyre::Result;
 use eyre::{WrapErr as _, eyre};
+use jiff::Timestamp;
 use secrecy::ExposeSecret as _;
 use tokio::sync::oneshot;
 use tracing::info;
@@ -96,11 +96,11 @@ pub async fn main() -> Result<()> {
         &config.twitch.channel,
     )
     .wrap_err("Failed to open settings store")?;
-    let local = Utc::now().with_timezone(&chrono_tz::Europe::Berlin);
+    let local = twitch_1337::util::to_berlin(Timestamp::now());
     let initial_schedule_count = settings_handle.load().schedules.len();
     info!(
         local_time = ?local,
-        utc_time = ?Utc::now(),
+        utc_time = ?Timestamp::now(),
         channel = %config.twitch.channel,
         username = %config.twitch.username,
         schedule_count = initial_schedule_count,

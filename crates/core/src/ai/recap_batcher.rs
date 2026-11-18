@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
+use jiff::Timestamp;
 use llm::{ChatCompletionRequest, LlmClient, LlmError, Message, Result as LlmResult, TraceIds};
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -200,7 +200,7 @@ fn should_flush(
     // a quiet channel still flushes a leftover partial batch.
     if snapshot
         .last()
-        .is_some_and(|e| e.timestamp < Utc::now() - RECAP_FLUSH_AGE)
+        .is_some_and(|e| e.timestamp < Timestamp::now() - RECAP_FLUSH_AGE)
     {
         return true;
     }
@@ -618,7 +618,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use async_trait::async_trait;
-    use chrono::Utc;
+    use jiff::SignedDuration;
     use tokio::sync::Mutex;
 
     use super::*;
@@ -696,7 +696,7 @@ mod tests {
             text: "hello".into(),
             source: ChatHistorySource::Bot,
             agent: Some(Agent::Grok),
-            timestamp: Utc::now() - RECAP_FLUSH_AGE - chrono::Duration::seconds(1),
+            timestamp: Timestamp::now() - RECAP_FLUSH_AGE - SignedDuration::from_secs(1),
         }
     }
 
@@ -902,7 +902,7 @@ mod tests {
     #[test]
     fn non_full_buffer_does_not_flush_for_eviction_backpressure() {
         let mut entries = vec![grok_entry(1)];
-        entries[0].timestamp = Utc::now();
+        entries[0].timestamp = Timestamp::now();
         assert!(!should_flush(&[&entries[0]], 40, &entries, 200));
     }
 
@@ -910,7 +910,7 @@ mod tests {
     fn full_buffer_flushes_oldest_eligible_before_eviction() {
         let mut entries: Vec<_> = (1..=42).map(grok_entry).collect();
         for entry in &mut entries {
-            entry.timestamp = Utc::now();
+            entry.timestamp = Timestamp::now();
         }
         assert!(should_flush(&[&entries[0]], 40, &entries, 42));
     }
@@ -918,8 +918,8 @@ mod tests {
     #[test]
     fn stale_eligible_does_not_flush_while_channel_is_live() {
         let mut entries = vec![grok_entry(1), grok_entry(2)];
-        entries[0].timestamp = Utc::now() - RECAP_FLUSH_AGE - chrono::Duration::seconds(1);
-        entries[1].timestamp = Utc::now();
+        entries[0].timestamp = Timestamp::now() - RECAP_FLUSH_AGE - SignedDuration::from_secs(1);
+        entries[1].timestamp = Timestamp::now();
         assert!(
             !should_flush(&[&entries[0]], 40, &entries, 200),
             "a live tail must accumulate toward batch_size; eligible lines are already N-window old"
@@ -929,7 +929,7 @@ mod tests {
     #[test]
     fn quiet_channel_flushes_partial_batch() {
         let mut entries = vec![grok_entry(1)];
-        entries[0].timestamp = Utc::now() - RECAP_FLUSH_AGE - chrono::Duration::seconds(1);
+        entries[0].timestamp = Timestamp::now() - RECAP_FLUSH_AGE - SignedDuration::from_secs(1);
         assert!(should_flush(&[&entries[0]], 40, &entries, 200));
     }
 

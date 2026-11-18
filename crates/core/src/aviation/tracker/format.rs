@@ -1,13 +1,13 @@
-use chrono::DateTime;
-use chrono::Utc;
+use jiff::tz::TimeZone;
+use jiff::{SignedDuration, Timestamp};
 
 use crate::aviation::AviationstackFlightMetadata;
 
 use super::TrackedFlight;
 
-fn format_duration_hm(d: chrono::TimeDelta) -> String {
-    let hours = d.num_hours();
-    let mins = d.num_minutes() % 60;
+fn format_duration_hm(d: SignedDuration) -> String {
+    let hours = d.as_hours();
+    let mins = d.as_mins() % 60;
     if hours > 0 {
         format!("{hours}h{mins:02}m")
     } else {
@@ -34,14 +34,14 @@ fn present(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-fn format_time(value: Option<DateTime<Utc>>, timezone: Option<&str>) -> Option<String> {
+fn format_time(value: Option<Timestamp>, timezone: Option<&str>) -> Option<String> {
     let dt = value?;
     if let Some(tz_name) = present(timezone)
-        && let Ok(tz) = tz_name.parse::<chrono_tz::Tz>()
+        && let Ok(tz) = TimeZone::get(tz_name)
     {
-        return Some(dt.with_timezone(&tz).format("%H:%M").to_string());
+        return Some(dt.to_zoned_datetime(tz).strftime("%H:%M").to_string());
     }
-    Some(dt.format("%H:%M").to_string())
+    Some(dt.strftime("%H:%M").to_string())
 }
 
 fn first_present<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
@@ -85,7 +85,7 @@ fn delay_part(label: &str, delay: Option<i64>) -> Option<String> {
 
 pub(crate) fn msg_aviationstack_info(
     metadata: &AviationstackFlightMetadata,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> String {
     let flight = first_present([
         metadata.flight_iata.as_deref(),
@@ -226,12 +226,12 @@ pub(crate) fn msg_approach(flight: &TrackedFlight) -> String {
 
 pub(crate) fn msg_landing(
     flight: &TrackedFlight,
-    takeoff_at: Option<DateTime<Utc>>,
+    takeoff_at: Option<Timestamp>,
     elsewhere: Option<&str>,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> String {
     let flight_time = match takeoff_at {
-        Some(takeoff_at) => format_duration_hm(now.signed_duration_since(takeoff_at)),
+        Some(takeoff_at) => format_duration_hm(now.duration_since(takeoff_at)),
         None => "unbekannt (Takeoff nicht beobachtet)".to_string(),
     };
     let prefix = format_flight_prefix(flight);
@@ -284,7 +284,7 @@ pub(crate) fn msg_pending_expired(flight: &TrackedFlight) -> String {
     )
 }
 
-pub(crate) fn msg_flight_status(flight: &TrackedFlight, now: DateTime<Utc>) -> String {
+pub(crate) fn msg_flight_status(flight: &TrackedFlight, now: Timestamp) -> String {
     let adsb_link = format_adsb_link_suffix(flight.hex.as_deref());
     let prefix = format_flight_prefix(flight);
     if flight.target_confirmation == super::TargetConfirmation::AircraftVisible {
@@ -293,7 +293,7 @@ pub(crate) fn msg_flight_status(flight: &TrackedFlight, now: DateTime<Utc>) -> S
             .as_deref()
             .map(|callsign| format!(" | ADS-B aktuell {callsign}"))
             .unwrap_or_default();
-        let elapsed = now.signed_duration_since(flight.tracked_at);
+        let elapsed = now.duration_since(flight.tracked_at);
         return format!(
             "{prefix} | Aircraft sichtbar, Zielflug noch nicht bestätigt{observed} | seit {} getrackt{adsb_link}",
             format_duration_hm(elapsed)
@@ -310,7 +310,7 @@ pub(crate) fn msg_flight_status(flight: &TrackedFlight, now: DateTime<Utc>) -> S
         .as_ref()
         .map(|s| format!(" | Squawk {s}"))
         .unwrap_or_default();
-    let elapsed = now.signed_duration_since(flight.tracked_at);
+    let elapsed = now.duration_since(flight.tracked_at);
     let tracking_time = format!("seit {} getrackt", format_duration_hm(elapsed));
     format!(
         "{prefix} | {} {alt}{speed}{squawk} | {tracking_time}{adsb_link}",
@@ -363,7 +363,6 @@ mod tests {
     #[test]
     fn msg_aviationstack_info_uses_local_times_and_infers_active() {
         use crate::aviation::types::AviationstackFlightMetadata;
-        use chrono::TimeZone as _;
 
         let metadata = AviationstackFlightMetadata {
             flight_iata: Some("TK751".into()),
@@ -372,14 +371,14 @@ mod tests {
             departure_iata: Some("ISB".into()),
             departure_gate: Some("B6".into()),
             departure_timezone: Some("Asia/Karachi".into()),
-            departure_scheduled: Some(Utc.with_ymd_and_hms(2026, 7, 19, 4, 15, 0).unwrap()),
+            departure_scheduled: Some("2026-07-19T04:15:00Z".parse().unwrap()),
             arrival_iata: Some("IST".into()),
             arrival_terminal: Some("I".into()),
             arrival_timezone: Some("Europe/Istanbul".into()),
-            arrival_scheduled: Some(Utc.with_ymd_and_hms(2026, 7, 19, 10, 30, 0).unwrap()),
+            arrival_scheduled: Some("2026-07-19T10:30:00Z".parse().unwrap()),
             ..AviationstackFlightMetadata::default()
         };
-        let now = Utc.with_ymd_and_hms(2026, 7, 19, 7, 13, 0).unwrap();
+        let now: Timestamp = "2026-07-19T07:13:00Z".parse().unwrap();
 
         let msg = msg_aviationstack_info(&metadata, now);
 

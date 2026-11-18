@@ -9,9 +9,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::{DateTime, NaiveDate, Utc};
-use chrono_tz::Europe::Berlin;
 use eyre::{Result, WrapErr as _};
+use jiff::Timestamp;
+use jiff::civil::Date;
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::Mutex;
 
@@ -46,12 +46,12 @@ impl TranscriptWriter {
 
     pub async fn append_line(
         &self,
-        ts: DateTime<Utc>,
+        ts: Timestamp,
         user: &str,
         user_id: Option<&str>,
         text: &str,
     ) -> Result<()> {
-        let local = ts.with_timezone(&Berlin);
+        let local = crate::util::to_berlin(ts);
         let safe_user = user.replace(['\n', '\r'], " ");
         let safe_text = text.replace(['\n', '\r'], " ");
         // Ids come from Twitch tags and are numeric, but a transport that ever
@@ -62,7 +62,7 @@ impl TranscriptWriter {
         };
         let line = format!(
             "{}  {}{}: {}\n",
-            local.format("%H:%M:%S"),
+            local.strftime("%H:%M:%S"),
             safe_user,
             id_suffix,
             safe_text
@@ -79,13 +79,13 @@ impl TranscriptWriter {
     }
 
     /// Close current `today.md`, rename to `<date>.md`, reopen empty `today.md`.
-    pub async fn rotate_to(&self, date: NaiveDate) -> Result<PathBuf> {
+    pub async fn rotate_to(&self, date: Date) -> Result<PathBuf> {
         let mut g = self.inner.lock().await;
         g.handle.flush().await.ok();
         let today = self.transcripts_dir.join("today.md");
         let dated = self
             .transcripts_dir
-            .join(format!("{}.md", date.format("%Y-%m-%d")));
+            .join(format!("{}.md", date.strftime("%Y-%m-%d")));
         tokio::fs::rename(&today, &dated)
             .await
             .wrap_err_with(|| format!("rotate {} -> {}", today.display(), dated.display()))?;
@@ -99,18 +99,15 @@ impl TranscriptWriter {
         Ok(dated)
     }
 
-    pub fn dated_path_for(&self, date: NaiveDate) -> PathBuf {
+    pub fn dated_path_for(&self, date: Date) -> PathBuf {
         self.transcripts_dir
-            .join(format!("{}.md", date.format("%Y-%m-%d")))
+            .join(format!("{}.md", date.strftime("%Y-%m-%d")))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
-    use chrono::TimeZone as _;
-    use chrono_tz::Europe::Berlin;
 
     #[tokio::test]
     async fn append_writes_line() {
@@ -120,9 +117,7 @@ mod tests {
             .await
             .unwrap();
         let w = TranscriptWriter::open(&memories).await.unwrap();
-        let ts = chrono::Utc
-            .with_ymd_and_hms(2026, 4, 28, 10, 42, 11)
-            .unwrap();
+        let ts: Timestamp = "2026-04-28T10:42:11Z".parse().unwrap();
         w.append_line(ts, "alice", Some("12345"), "hi")
             .await
             .unwrap();
@@ -140,14 +135,13 @@ mod tests {
             .await
             .unwrap();
         let w = TranscriptWriter::open(&memories).await.unwrap();
-        w.append_line(chrono::Utc::now(), "a", None, "x")
+        w.append_line(Timestamp::now(), "a", None, "x")
             .await
             .unwrap();
-        let yday = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+        let yday = jiff::civil::date(2026, 4, 27);
         let dest = w.rotate_to(yday).await.unwrap();
         assert_eq!(dest.file_name().unwrap().to_string_lossy(), "2026-04-27.md");
         assert!(dest.exists());
         assert!(memories.join("transcripts/today.md").exists()); // reopened empty
-        let _ = Berlin; // suppress unused
     }
 }

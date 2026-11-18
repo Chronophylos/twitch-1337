@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 /// Speaker / actor role. `Dreamer` is the ritual LLM, never a Twitch user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,7 +53,7 @@ impl FileKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frontmatter {
-    pub updated_at: DateTime<Utc>,
+    pub updated_at: Timestamp,
     /// Twitch login (lowercase username). Set on user files; absent on
     /// SOUL/LORE/scratch.
     pub username: Option<String>,

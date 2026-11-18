@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use chrono::Utc;
 use eyre::Result;
+use jiff::Timestamp;
 use tracing::{debug, error, instrument};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
@@ -374,7 +374,7 @@ where
             tokio::time::sleep(pad).await;
         }
         ctx.cancellation.check()?;
-        let ts = Utc::now();
+        let ts = Timestamp::now();
         let req = crate::twitch::mouth::SpeakRequest {
             broadcaster_id: &ctx.privmsg.channel_id,
             channel_login: &ctx.privmsg.channel_login,

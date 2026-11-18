@@ -3,14 +3,14 @@
 #[cfg(any(test, feature = "testing"))]
 use std::sync::{Mutex, PoisonError};
 
-use chrono::{DateTime, Utc};
+use jiff::ZonedDateTime;
 use serde::Serialize;
 
 use super::{Schedule, Settings};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AuditEntry {
-    pub ts: DateTime<chrono_tz::Tz>,
+    pub ts: ZonedDateTime,
     pub actor_id: String,
     pub actor_login: String,
     pub changes: Vec<AuditChange>,
@@ -107,10 +107,6 @@ impl AuditLog for MemoryAuditLog {
     }
 }
 
-pub fn berlin_now(now_utc: DateTime<Utc>) -> DateTime<chrono_tz::Tz> {
-    now_utc.with_timezone(&chrono_tz::Europe::Berlin)
-}
-
 /// Produce the per-field `AuditChange` list between two resolved snapshots.
 /// Diffs via a generic JSON tree walk (`tree::diff`); `schedules` are handled
 /// by name across the vec instead of as a wholesale array.
@@ -173,7 +169,7 @@ mod tests {
 
     fn sample_entry() -> AuditEntry {
         AuditEntry {
-            ts: berlin_now("2026-05-12T13:37:00Z".parse::<DateTime<Utc>>().unwrap()),
+            ts: crate::util::to_berlin("2026-05-12T13:37:00Z".parse::<jiff::Timestamp>().unwrap()),
             actor_id: "12345678".into(),
             actor_login: "chronophylos".into(),
             changes: vec![AuditChange {

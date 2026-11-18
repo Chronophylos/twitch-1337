@@ -17,9 +17,8 @@ use super::common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{Duration as ChronoDuration, NaiveTime, TimeZone};
-use chrono_tz::Europe::Berlin;
 use common::TestBotBuilder;
+use jiff::SignedDuration;
 use twitch_1337_core::schedule::{Schedule, Trigger, WeekdaySet};
 use twitch_1337_core::settings::{Actor, MemoryAuditLog, SettingsOverrides, SettingsStore};
 use twitch_1337_core::util::clock::Clock;
@@ -50,7 +49,7 @@ async fn settings_save_signals_subscription() {
                     message: "gm everyone!".into(),
                     trigger: Trigger::Calendar {
                         days: WeekdaySet::default(),
-                        at: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                        at: jiff::civil::time(9, 0, 0, 0),
                     },
                     start_date: None,
                     end_date: None,
@@ -90,10 +89,11 @@ async fn settings_save_signals_subscription() {
 async fn schedule_fires_after_clock_advance() {
     // Start at 11:00:00 Berlin so the first interval-aligned fire
     // (anchored to midnight, every 60 s) is ~1 minute away at 11:01:00.
-    let start_utc = Berlin
-        .with_ymd_and_hms(2026, 4, 18, 11, 0, 0)
+    let start_utc = jiff::civil::date(2026, 4, 18)
+        .at(11, 0, 0, 0)
+        .in_tz("Europe/Berlin")
         .unwrap()
-        .with_timezone(&chrono::Utc);
+        .timestamp();
 
     let mut bot = TestBotBuilder::new()
         .at(start_utc)
@@ -124,7 +124,7 @@ async fn schedule_fires_after_clock_advance() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Advance 2 minutes: moves clock past 11:01, waking the sleeper.
-    bot.clock.advance(ChronoDuration::minutes(2));
+    bot.clock.advance(SignedDuration::from_mins(2));
 
     // Give the woken task time to call sender.say() and record telemetry.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -154,10 +154,11 @@ async fn schedule_fires_after_clock_advance() {
 /// the message goes out.
 #[tokio::test]
 async fn schedule_with_ping_sends_message_then_ping_respecting_cooldown() {
-    let start_utc = Berlin
-        .with_ymd_and_hms(2026, 4, 18, 11, 0, 0)
+    let start_utc = jiff::civil::date(2026, 4, 18)
+        .at(11, 0, 0, 0)
+        .in_tz("Europe/Berlin")
         .unwrap()
-        .with_timezone(&chrono::Utc);
+        .timestamp();
 
     let mut bot = TestBotBuilder::new()
         .at(start_utc)
@@ -188,13 +189,13 @@ async fn schedule_with_ping_sends_message_then_ping_respecting_cooldown() {
 
     // Let the child arm its sleep_until first, or it skips to the next slot.
     tokio::time::sleep(Duration::from_millis(50)).await;
-    bot.clock.advance(ChronoDuration::minutes(1));
+    bot.clock.advance(SignedDuration::from_mins(1));
     assert_eq!(bot.expect_reply(Duration::from_secs(2)).await, "raid time");
     assert_eq!(bot.expect_reply(Duration::from_secs(2)).await, "yo @alice");
 
     // Let the child arm its sleep_until first, or it skips to the next slot.
     tokio::time::sleep(Duration::from_millis(50)).await;
-    bot.clock.advance(ChronoDuration::minutes(1));
+    bot.clock.advance(SignedDuration::from_mins(1));
     assert_eq!(bot.expect_reply(Duration::from_secs(2)).await, "raid time");
     bot.expect_silent(Duration::from_millis(300)).await;
 

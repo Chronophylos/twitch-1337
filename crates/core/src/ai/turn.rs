@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use eyre::Result;
 use tracing::{error, warn};
 
@@ -244,9 +243,8 @@ impl TurnRunner {
         let mem = &self.memory;
         let cc = self.chat_ctx.as_ref();
         let role = input.speaker.role;
-        let now_berlin = Utc::now()
-            .with_timezone(&chrono_tz::Europe::Berlin)
-            .format("%Y-%m-%d")
+        let now_berlin = crate::util::to_berlin(jiff::Timestamp::now())
+            .strftime("%Y-%m-%d")
             .to_string();
 
         let sender_display = if input.speaker.display_name.is_empty() {

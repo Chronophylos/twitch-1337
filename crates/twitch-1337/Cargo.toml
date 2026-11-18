@@ -12,6 +12,7 @@ chrono = { workspace = true }
 chrono-tz = { workspace = true }
 color-eyre = { workspace = true }
 eyre = { workspace = true }
+jiff = { workspace = true }
 reqwest = { workspace = true }
 secrecy = { workspace = true }
 tokio = { workspace = true }

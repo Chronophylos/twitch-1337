@@ -353,7 +353,7 @@ where
                         display_name,
                         user_id,
                         privmsg.message_text.clone(),
-                        privmsg.server_timestamp,
+                        crate::util::from_chrono(privmsg.server_timestamp),
                     );
                 }
                 if skip_history {

@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use eyre::Result as EyreResult;
+use jiff::Timestamp;
 use tempfile::TempDir;
 use tokio::sync::{Mutex, Notify, oneshot};
 use tokio::task::JoinHandle;
@@ -113,7 +113,7 @@ pub struct EmoteMeaningSeed {
 
 pub struct TestBotBuilder {
     config: Configuration,
-    now: DateTime<Utc>,
+    now: Timestamp,
     seeded_leaderboard: Option<HashMap<String, PersonalBest>>,
     seeded_hall_of_shame: Option<HashMap<String, PersonalWorst>>,
     whisper_failure: bool,
@@ -197,7 +197,7 @@ impl TestBotBuilder {
         self
     }
 
-    pub fn at(mut self, now: DateTime<Utc>) -> Self {
+    pub fn at(mut self, now: Timestamp) -> Self {
         self.now = now;
         self
     }
@@ -1070,7 +1070,7 @@ impl TestBot {
     /// dreamer ritual for `yesterday`. Uses `self.settings` so that any
     /// `with_settings` overrides applied at build time are visible to the
     /// ritual (e.g. `ai.dreamer.max_writes_per_turn`).
-    pub async fn run_ritual_for(&self, yesterday: chrono::NaiveDate) {
+    pub async fn run_ritual_for(&self, yesterday: jiff::civil::Date) {
         use twitch_1337::ai::memory::{
             run_ritual, store::MemoryStore as StoreV2, transcript::TranscriptWriter,
         };

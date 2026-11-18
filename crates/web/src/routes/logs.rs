@@ -15,10 +15,10 @@ use axum::extract::{Extension, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use chrono_tz::Europe::Berlin;
 use serde::Deserialize;
 use tracing::Level;
 use twitch_1337_core::util::log_ring::LogEntry;
+use twitch_1337_core::util::to_berlin;
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
@@ -117,18 +117,12 @@ impl Row {
 
     /// `HH:MM:SS.mmm`, Berlin local — same clock as stdout.
     fn time(&self) -> String {
-        self.0
-            .at
-            .with_timezone(&Berlin)
-            .format("%H:%M:%S%.3f")
-            .to_string()
+        to_berlin(self.0.at).strftime("%H:%M:%S%.3f").to_string()
     }
 
     fn full_time(&self) -> String {
-        self.0
-            .at
-            .with_timezone(&Berlin)
-            .format("%Y-%m-%d %H:%M:%S%.3f %Z")
+        to_berlin(self.0.at)
+            .strftime("%Y-%m-%d %H:%M:%S%.3f %Z")
             .to_string()
     }
 
@@ -243,14 +237,14 @@ async fn logs(
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use jiff::Timestamp;
 
     use super::*;
 
     fn entry(level: Level, target: &str, message: &str, fields: &[(&str, &str)]) -> LogEntry {
         LogEntry {
             seq: 1,
-            at: Utc::now(),
+            at: Timestamp::now(),
             level,
             target: target.to_owned(),
             message: message.to_owned(),

@@ -26,6 +26,7 @@ hex = { workspace = true }
 humantime-serde = { workspace = true }
 indexmap = { workspace = true }
 infer = { workspace = true }
+jiff = { workspace = true }
 llm = { path = "../llm" }
 minijinja = { version = "3.1.0", default-features = false, features = [
   "builtins",

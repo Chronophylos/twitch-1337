@@ -17,7 +17,7 @@ use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tower_cookies::Cookies;
 use twitch_1337_core::ai::memory::sanitize::parse_links_form;
@@ -25,7 +25,6 @@ use twitch_1337_core::ai::memory::store::{
     FrontmatterOverride, Mtime, WriteOutcome, validate_scratch_slug,
 };
 use twitch_1337_core::ai::memory::types::{FileKind, Frontmatter, MemoryFile};
-use twitch_1337_core::settings::audit::berlin_now;
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
@@ -220,8 +219,8 @@ async fn fetch_avatars(state: &WebState, ids: &[&str]) -> HashMap<String, String
     avatars
 }
 
-fn fmt_ts(t: DateTime<Utc>) -> String {
-    t.format("%Y-%m-%d %H:%M UTC").to_string()
+fn fmt_ts(t: Timestamp) -> String {
+    t.strftime("%Y-%m-%d %H:%M UTC").to_string()
 }
 
 /// Render a `MemoryStore::current_mtime` value (millis since epoch) as a
@@ -233,9 +232,9 @@ fn fmt_mtime_ms(ms: u64) -> String {
         return "new".to_owned();
     }
     let signed = i64::try_from(ms).unwrap_or(i64::MAX);
-    DateTime::<Utc>::from_timestamp_millis(signed)
-        .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| "—".to_owned())
+    Timestamp::from_millisecond(signed)
+        .map(|t| t.strftime("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|_| "—".to_owned())
 }
 
 /// Frontmatter links rendered for the editor textarea: one `platform url`
@@ -723,7 +722,7 @@ struct CsrfOnly {
 /// docs/superpowers/specs/2026-06-19-memory-edit-audit-log-design.md.
 #[derive(Serialize)]
 struct MemoryAuditEntry {
-    ts: chrono::DateTime<chrono_tz::Tz>,
+    ts: jiff::ZonedDateTime,
     actor_id: String,
     actor_login: String,
     op: &'static str, // "write" | "create" | "delete" | "forget"
@@ -773,7 +772,7 @@ fn audit_memory(
     body_bytes: Option<usize>,
 ) {
     let entry = MemoryAuditEntry {
-        ts: berlin_now(state.clock.now()),
+        ts: twitch_1337_core::util::to_berlin(state.clock.now()),
         actor_id: session.user_id.clone(),
         actor_login: session.user_login.clone(),
         op,

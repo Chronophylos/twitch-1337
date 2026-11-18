@@ -7,10 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone as _};
-use chrono_tz::Europe::Berlin;
-use chrono_tz::Tz;
 use eyre::Result;
+use jiff::civil::{Date, DateTime, Time};
+use jiff::{SignedDuration, Timestamp, ZonedDateTime};
 use llm::{
     AgentOpts, AgentOutcome, LlmClient, LlmError, Message, ToolCall, ToolChatCompletionRequest,
     ToolChatCompletionResponse, ToolExecutor, ToolResultMessage, run_agent,
@@ -31,19 +30,25 @@ use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
 
-/// Resolve `run_at` on `date` to a Berlin `DateTime`, bumping forward across the
-/// spring-forward DST gap (02:00–03:00 on the last Sunday in March) when the
-/// requested local time does not exist. Returns `None` only if even the
-/// post-gap candidate fails to resolve, which should not happen for any real
-/// Berlin date.
-fn resolve_berlin_run_at(date: NaiveDate, time: NaiveTime) -> Option<DateTime<Tz>> {
-    let dt = date.and_time(time);
-    if let Some(resolved) = Berlin.from_local_datetime(&dt).single() {
+/// Resolve `run_at` on `date` to a Berlin `ZonedDateTime`, bumping forward an
+/// hour when the requested local time is not unambiguous: across the
+/// spring-forward DST gap (02:00–03:00 on the last Sunday in March) or out of
+/// the autumn fold. Returns `None` only if even the bumped candidate fails to
+/// resolve, which should not happen for any real Berlin date.
+fn resolve_berlin_run_at(date: Date, time: Time) -> Option<ZonedDateTime> {
+    let dt: DateTime = date.to_datetime(time);
+    if let Ok(resolved) = crate::util::BERLIN
+        .to_ambiguous_zoned_datetime(dt)
+        .unambiguous()
+    {
         return Some(resolved);
     }
     // DST gap: bump forward an hour to land past the missing window.
-    let bumped = dt + chrono::Duration::hours(1);
-    Berlin.from_local_datetime(&bumped).single()
+    let bumped = dt + SignedDuration::from_hours(1);
+    crate::util::BERLIN
+        .to_ambiguous_zoned_datetime(bumped)
+        .unambiguous()
+        .ok()
 }
 
 pub fn spawn_ritual(
@@ -78,18 +83,19 @@ pub fn spawn_ritual(
                 }
                 continue;
             }
-            let run_at = chrono::NaiveTime::parse_from_str(&ai.dreamer.run_at, "%H:%M")
+            let run_at = Time::strptime("%H:%M", &ai.dreamer.run_at)
                 .expect("ai.dreamer.run_at validated at settings store");
             drop(snap); // do not hold a Guard across await
 
-            let now = chrono::Utc::now().with_timezone(&Berlin);
-            let target = resolve_berlin_run_at(now.date_naive(), run_at);
+            let now = crate::util::to_berlin(Timestamp::now());
+            let target = resolve_berlin_run_at(now.date(), run_at);
             let next = target.filter(|t| *t > now).unwrap_or_else(|| {
-                let tomorrow = now.date_naive().succ_opt().expect("valid next day");
+                let tomorrow = now.date().tomorrow().expect("valid next day");
                 resolve_berlin_run_at(tomorrow, run_at)
                     .expect("post-gap fallback resolves on the next day")
             });
-            let wait = (next - now).to_std().unwrap_or_default();
+            let wait = std::time::Duration::try_from(next.timestamp() - now.timestamp())
+                .unwrap_or_default();
             tokio::select! {
                 biased;
                 _ = lifecycle.wait_for_cancellation() => return,
@@ -98,7 +104,7 @@ pub fn spawn_ritual(
 
             // A wake-up can race cancellation. Do not enter the file/LLM
             // operation until the operation-boundary check immediately below.
-            let yesterday = next.date_naive().pred_opt().expect("valid prev day");
+            let yesterday = next.date().yesterday().expect("valid prev day");
             if let Err(e) = run_ritual_until(
                 &registry,
                 &store,
@@ -193,7 +199,7 @@ pub async fn run_ritual(
     store: &MemoryStore,
     transcript: &TranscriptWriter,
     settings: &SettingsHandle,
-    rotate_to: NaiveDate,
+    rotate_to: Date,
     langfuse: Option<&Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) -> Result<()> {
     run_ritual_until(
@@ -213,7 +219,7 @@ async fn run_ritual_until(
     store: &MemoryStore,
     transcript: &TranscriptWriter,
     settings: &SettingsHandle,
-    rotate_to: NaiveDate,
+    rotate_to: Date,
     lifecycle: &Lifecycle,
     langfuse: Option<&Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) -> Result<()> {
@@ -293,16 +299,15 @@ async fn run_ritual_until(
     if lifecycle.is_cancelled() {
         return Ok(());
     }
-    let date_str = rotate_to.format("%Y-%m-%d").to_string();
+    let date_str = rotate_to.strftime("%Y-%m-%d").to_string();
     let transcript_block = fence_block(
         FenceLabel::Transcript { date: &date_str },
         &nonce,
         &scrub_for_inject(&transcript_text),
     );
 
-    let now_str = chrono::Utc::now()
-        .with_timezone(&Berlin)
-        .format("%Y-%m-%d")
+    let now_str = crate::util::to_berlin(Timestamp::now())
+        .strftime("%Y-%m-%d")
         .to_string();
     // Prompt template is baked into the binary (#321), not read from disk.
     let head = render_standalone(
@@ -419,8 +424,6 @@ async fn run_ritual_until(
 
 #[cfg(test)]
 mod tests {
-    use chrono::Timelike as _;
-
     use super::*;
 
     #[test]
@@ -443,16 +446,16 @@ not a transcript line
     #[test]
     fn resolve_berlin_run_at_handles_dst_gap() {
         // 2026 spring-forward in Berlin is Sunday 2026-03-29; 02:00–03:00 local does not exist.
-        let date = NaiveDate::from_ymd_opt(2026, 3, 29).unwrap();
-        let in_gap = NaiveTime::from_hms_opt(2, 30, 0).unwrap();
+        let date = jiff::civil::date(2026, 3, 29);
+        let in_gap = jiff::civil::time(2, 30, 0, 0);
         let resolved = resolve_berlin_run_at(date, in_gap).expect("falls through past gap");
         assert_eq!(resolved.hour(), 3, "should bump into the post-DST hour");
     }
 
     #[test]
     fn resolve_berlin_run_at_default_safe() {
-        let date = NaiveDate::from_ymd_opt(2026, 3, 29).unwrap();
-        let four_am = NaiveTime::from_hms_opt(4, 0, 0).unwrap();
+        let date = jiff::civil::date(2026, 3, 29);
+        let four_am = jiff::civil::time(4, 0, 0, 0);
         let resolved = resolve_berlin_run_at(date, four_am).expect("04:00 always resolves");
         assert_eq!(resolved.hour(), 4);
     }
@@ -495,7 +498,7 @@ not a transcript line
         );
         let lifecycle = Lifecycle::new();
         lifecycle.request_graceful_stop();
-        let rotate_to = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
+        let rotate_to = jiff::civil::date(2026, 4, 17);
 
         run_ritual_until(
             &registry,
@@ -585,7 +588,7 @@ not a transcript line
             settings.clone(),
         ));
         let lifecycle = Lifecycle::new();
-        let rotate_to = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
+        let rotate_to = jiff::civil::date(2026, 4, 17);
 
         let task = {
             let registry = registry.clone();
@@ -677,7 +680,7 @@ not a transcript line
         // under `$DATA_DIR/prompts/`.
 
         let recorder = Arc::new(ModelRecorder(Mutex::new(Vec::new())));
-        let yesterday = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
+        let yesterday = jiff::civil::date(2026, 4, 17);
 
         // ── First call: uses the profile's model ──
         // compiled_defaults has an empty profile model; set it explicitly.
@@ -701,7 +704,7 @@ not a transcript line
             settings.store(Arc::new(s));
         }
         // Use a different date so rotate_to doesn't conflict with the already-rotated file.
-        let yesterday2 = NaiveDate::from_ymd_opt(2026, 4, 16).unwrap();
+        let yesterday2 = jiff::civil::date(2026, 4, 16);
         run_ritual(&registry, &store, &transcript, &settings, yesterday2, None)
             .await
             .unwrap();
@@ -784,7 +787,7 @@ not a transcript line
             &store,
             &transcript,
             &settings,
-            NaiveDate::from_ymd_opt(2026, 4, 17).unwrap(),
+            jiff::civil::date(2026, 4, 17),
             None,
         )
         .await
@@ -854,7 +857,7 @@ not a transcript line
             client.clone() as Arc<dyn LlmClient>,
             settings.clone(),
         );
-        let yesterday = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
+        let yesterday = jiff::civil::date(2026, 4, 17);
         run_ritual(&registry, &store, &transcript, &settings, yesterday, None)
             .await
             .unwrap();

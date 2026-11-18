@@ -1,8 +1,7 @@
 //! EMSC seismic feed. Bounding box and magnitude filter server-side, so
 //! there is no client-side geo check.
 
-use chrono::DateTime;
-use chrono_tz::Europe::Berlin;
+use jiff::Timestamp;
 use serde::Deserialize;
 
 use super::Candidate;
@@ -65,9 +64,7 @@ pub(crate) fn parse(body: &str) -> Result<Vec<Candidate>, serde_json::Error> {
         .into_iter()
         .filter_map(|f| {
             let p = f.properties?;
-            let at = DateTime::parse_from_rfc3339(p.time.as_deref()?)
-                .ok()?
-                .to_utc();
+            let at = p.time.as_deref()?.parse::<Timestamp>().ok()?;
             let mag = p.mag?;
             let depth = p.depth?;
             let region = p.flynn_region?;
@@ -77,7 +74,7 @@ pub(crate) fn parse(body: &str) -> Result<Vec<Candidate>, serde_json::Error> {
                 line: format!(
                     "HuggingButTheresAnEarthquake Die Erde hat gewackelt: \
                      M{mag:.1} bei {region}, {depth:.0} km tief, um {} Uhr",
-                    at.with_timezone(&Berlin).format("%H:%M"),
+                    crate::util::to_berlin(at).strftime("%H:%M"),
                 ),
             })
         })

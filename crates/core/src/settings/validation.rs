@@ -383,7 +383,7 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
     if ai.dreamer.timeout_secs == 0 {
         err(errs, "ai.dreamer.timeout_secs", "must be > 0".into());
     }
-    if chrono::NaiveTime::parse_from_str(&ai.dreamer.run_at, "%H:%M").is_err() {
+    if jiff::civil::Time::strptime("%H:%M", &ai.dreamer.run_at).is_err() {
         err(
             errs,
             "ai.dreamer.run_at",
@@ -1533,7 +1533,7 @@ mod tests {
             trigger: Trigger::Interval {
                 every: std::time::Duration::from_secs(3600),
                 days: WeekdaySet::default(),
-                active_from: Some(chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap()),
+                active_from: Some(jiff::civil::time(9, 0, 0, 0)),
                 active_to: None,
             },
             start_date: None,
@@ -1598,8 +1598,8 @@ mod tests {
                 active_from: None,
                 active_to: None,
             },
-            start_date: Some(chrono::NaiveDate::from_ymd_opt(2027, 1, 1).unwrap()),
-            end_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
+            start_date: Some(jiff::civil::date(2027, 1, 1)),
+            end_date: Some(jiff::civil::date(2026, 1, 1)),
             enabled: true,
         }];
         let errs = s

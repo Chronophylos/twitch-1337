@@ -65,7 +65,7 @@ pub(super) fn quarantine(path: &Path) -> Result<(), SettingsError> {
     if !path.exists() {
         return Ok(());
     }
-    let ts = chrono::Utc::now().timestamp();
+    let ts = jiff::Timestamp::now().as_second();
     let target = path.with_extension(format!("ron.quarantine-{ts}"));
     std::fs::rename(path, &target)?;
     warn!(target = ?target, "settings.ron quarantined");

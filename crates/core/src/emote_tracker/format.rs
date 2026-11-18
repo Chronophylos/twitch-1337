@@ -1,6 +1,3 @@
-use chrono::{TimeZone, Utc};
-use chrono_tz::Europe::Berlin;
-
 use super::types::{SetEventKind, SetEventRow};
 
 /// Display rule for set-change actors: display name → username → 7TV id → `unbekannt`.
@@ -63,12 +60,11 @@ pub fn format_set_event_by(event: &SetEventRow) -> String {
 
 /// Format UTC unix milliseconds as `DD.MM.YYYY HH:MM` in Europe/Berlin.
 pub fn format_berlin_millis(at_ms: i64) -> String {
-    match Utc.timestamp_millis_opt(at_ms).single() {
-        Some(dt) => dt
-            .with_timezone(&Berlin)
-            .format("%d.%m.%Y %H:%M")
+    match jiff::Timestamp::from_millisecond(at_ms) {
+        Ok(ts) => crate::util::to_berlin(ts)
+            .strftime("%d.%m.%Y %H:%M")
             .to_string(),
-        None => "ungültige Zeit".to_owned(),
+        Err(_) => "ungültige Zeit".to_owned(),
     }
 }
 

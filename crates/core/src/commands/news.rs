@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use eyre::Result;
+use jiff::{SignedDuration, Timestamp};
 use tracing::{debug, error, instrument, warn};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
@@ -129,7 +129,7 @@ impl NewsCommand {
                     .collect::<Vec<_>>()
             }
             NewsMode::Tldr => {
-                let cutoff = Utc::now() - chrono::Duration::hours(TLDR_WINDOW_HOURS);
+                let cutoff = Timestamp::now() - SignedDuration::from_hours(TLDR_WINDOW_HOURS);
                 snapshot
                     .iter()
                     .filter(|entry| entry.timestamp >= cutoff)

@@ -4,8 +4,8 @@ use twitch_1337_core as twitch_1337;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use chrono::NaiveDate;
 use common::{TestBot, TestBotBuilder};
+use jiff::civil;
 use twitch_1337::PersonalBest;
 
 /// twitch-irc's default rate limiter allows 5 msgs / 150 ms per connection.
@@ -23,7 +23,7 @@ fn seeded_lb_with_alice() -> HashMap<String, PersonalBest> {
         "alice".into(),
         PersonalBest {
             ms: 234,
-            date: NaiveDate::from_ymd_opt(2026, 4, 17).unwrap(),
+            date: civil::date(2026, 4, 17),
         },
     );
     seeded

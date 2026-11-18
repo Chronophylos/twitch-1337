@@ -4,17 +4,17 @@
 //! without dragging in the async `sleep_until` half of `core::util::clock::Clock`
 //! (which exists for time-driven schedulers — not for HTTP request timing).
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 pub trait Clock: Send + Sync {
-    fn now(&self) -> DateTime<Utc>;
+    fn now(&self) -> Timestamp;
 }
 
 #[derive(Debug, Default)]
 pub struct SystemClock;
 
 impl Clock for SystemClock {
-    fn now(&self) -> DateTime<Utc> {
-        Utc::now()
+    fn now(&self) -> Timestamp {
+        Timestamp::now()
     }
 }

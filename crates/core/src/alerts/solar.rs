@@ -1,8 +1,7 @@
 //! NOAA SWPC GOES X-ray flare feed. A flare is a whole-sun event, so the
 //! only filter is class — there is no region.
 
-use chrono::DateTime;
-use chrono_tz::Europe::Berlin;
+use jiff::Timestamp;
 use serde::Deserialize;
 
 use super::Candidate;
@@ -60,16 +59,14 @@ pub(crate) fn parse(body: &str, min: (u8, f64)) -> Result<Vec<Candidate>, serde_
             }
             let begin = f.begin_time?;
             let sat = f.satellite?;
-            let at = DateTime::parse_from_rfc3339(f.max_time.as_deref()?)
-                .ok()?
-                .to_utc();
+            let at = f.max_time.as_deref()?.parse::<Timestamp>().ok()?;
             Some(Candidate {
                 id: format!("{begin}-{sat}"),
                 at,
                 line: format!(
                     "🌞 Die Sonne hat gezündt: {} um {} Uhr, gemessen von GOES-{}",
                     class,
-                    at.with_timezone(&Berlin).format("%H:%M"),
+                    crate::util::to_berlin(at).strftime("%H:%M"),
                     sat
                 ),
             })

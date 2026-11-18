@@ -1,33 +1,33 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, TimeZone, Utc};
+use jiff::{SignedDuration, Timestamp};
 use twitch_1337_web::auth::Role;
 use twitch_1337_web::auth::session::SessionTable;
 use twitch_1337_web::clock::Clock;
 
-struct StubClock(std::sync::Mutex<DateTime<Utc>>);
+struct StubClock(std::sync::Mutex<Timestamp>);
 
 impl Clock for StubClock {
-    fn now(&self) -> DateTime<Utc> {
+    fn now(&self) -> Timestamp {
         *self.0.lock().unwrap()
     }
 }
 
 impl StubClock {
-    fn new(t: DateTime<Utc>) -> Self {
+    fn new(t: Timestamp) -> Self {
         Self(std::sync::Mutex::new(t))
     }
     fn advance(&self, secs: i64) {
         let mut g = self.0.lock().unwrap();
-        *g += chrono::Duration::seconds(secs);
+        *g += SignedDuration::from_secs(secs);
     }
 }
 
 #[test]
 fn session_round_trips() {
     let clock = Arc::new(StubClock::new(
-        Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        "2026-01-01T00:00:00Z".parse::<Timestamp>().unwrap(),
     ));
     let table = SessionTable::new(clock.clone());
     let (id, _csrf) = table
@@ -49,7 +49,7 @@ fn session_round_trips() {
 #[test]
 fn session_expires_after_ttl() {
     let clock = Arc::new(StubClock::new(
-        Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        "2026-01-01T00:00:00Z".parse::<Timestamp>().unwrap(),
     ));
     let table = SessionTable::new(clock.clone());
     let (id, _csrf) = table
@@ -71,7 +71,7 @@ fn session_expires_after_ttl() {
 #[test]
 fn session_sliding_refresh_keeps_alive() {
     let clock = Arc::new(StubClock::new(
-        Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        "2026-01-01T00:00:00Z".parse::<Timestamp>().unwrap(),
     ));
     let table = SessionTable::new(clock.clone());
     let (id, _csrf) = table
@@ -100,7 +100,7 @@ async fn sessions_survive_reload() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("sessions.ron");
     let clock = Arc::new(StubClock::new(
-        Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        "2026-01-01T00:00:00Z".parse::<Timestamp>().unwrap(),
     ));
 
     let table = SessionTable::load(clock.clone(), path.clone());
@@ -129,7 +129,7 @@ async fn sessions_survive_reload() {
     // down must not keep access on stale state).
     assert_eq!(
         got.last_role_check,
-        DateTime::<Utc>::MIN_UTC,
+        Timestamp::MIN,
         "restored session must force a fresh role check"
     );
 }
@@ -140,7 +140,7 @@ fn corrupt_session_file_starts_empty() {
     let path = dir.path().join("sessions.ron");
     std::fs::write(&path, "this is not valid ron {{{").expect("write garbage");
     let clock = Arc::new(StubClock::new(
-        Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        "2026-01-01T00:00:00Z".parse::<Timestamp>().unwrap(),
     ));
     // Must not panic — a corrupt file costs one re-login, never a crash.
     let table = SessionTable::load(clock, path);

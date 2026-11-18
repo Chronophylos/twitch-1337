@@ -3,7 +3,6 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
-use chrono::Utc;
 use tokio::{
     sync::broadcast,
     time::{Duration, sleep},
@@ -78,7 +77,7 @@ pub async fn run_latency_handler<T, L>(
             biased;
             _ = lifecycle.wait_for_cancellation() => return,
             () = sleep(LATENCY_PING_INTERVAL) => {
-                let nonce = Utc::now().timestamp_nanos_opt().unwrap_or(0).to_string();
+                let nonce = jiff::Timestamp::now().as_nanosecond().to_string();
 
                 // Subscribe before sending so we don't miss the PONG on fast connections
                 let mut broadcast_rx = broadcast_tx.subscribe();

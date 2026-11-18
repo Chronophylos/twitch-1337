@@ -63,7 +63,7 @@ fn format_top5(leaderboard: &HashMap<String, PersonalBest>) -> String {
         return "Noch keine Einträge vorhanden".to_string();
     };
 
-    let date = pb.date.format("%d.%m.%Y");
+    let date = pb.date.strftime("%d.%m.%Y");
     let mut response = format!(
         "Der schnellste 1337 ist {username} mit {}ms am {date}",
         pb.ms
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn top5_first_full_rest_abbreviated() {
-        let date = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        let date = jiff::civil::date(2026, 1, 15);
         let board: HashMap<_, _> = [
             ("f", 600),
             ("a", 100),

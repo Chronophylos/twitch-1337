@@ -3,7 +3,6 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use chrono_tz::Europe::Berlin;
 use tokio::sync::Mutex;
 
 use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry};
@@ -165,7 +164,7 @@ pub(crate) fn format_entry_line(
     current_agent: Agent,
     self_logins: &[String],
 ) -> String {
-    let ts = entry.timestamp.with_timezone(&Berlin).format("%H:%M");
+    let ts = crate::util::to_berlin(entry.timestamp).strftime("%H:%M");
     let name = entry
         .display_name
         .as_deref()

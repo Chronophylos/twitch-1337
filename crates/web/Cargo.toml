@@ -19,6 +19,7 @@ chrono = { workspace = true }
 chrono-tz = { workspace = true }
 eyre = { workspace = true }
 hex = { workspace = true }
+jiff = { workspace = true }
 mime_guess = { workspace = true }
 rand = { workspace = true }
 ron = { workspace = true }

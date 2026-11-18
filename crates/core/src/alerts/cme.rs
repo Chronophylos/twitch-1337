@@ -2,8 +2,7 @@
 //! `estimatedShockArrivalTime`. Glancing/minor only change the verb.
 //! `impactList` is spacecraft — do not filter on it.
 
-use chrono::{DateTime, NaiveDateTime, Utc};
-use chrono_tz::Europe::Berlin;
+use jiff::{Timestamp, civil, tz::Offset};
 use serde::Deserialize;
 
 use super::Candidate;
@@ -60,16 +59,16 @@ fn strip_sim_version(id: &str) -> &str {
     }
 }
 
-fn parse_arrival(s: &str) -> Option<DateTime<Utc>> {
+fn parse_arrival(s: &str) -> Option<Timestamp> {
     let s = s.trim();
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Some(dt.to_utc());
+    if let Ok(ts) = s.parse::<Timestamp>() {
+        return Some(ts);
     }
     let stripped = s.strip_suffix('Z').unwrap_or(s);
-    NaiveDateTime::parse_from_str(stripped, "%Y-%m-%dT%H:%M")
-        .or_else(|_| NaiveDateTime::parse_from_str(stripped, "%Y-%m-%dT%H:%M:%S"))
+    civil::DateTime::strptime("%Y-%m-%dT%H:%M", stripped)
+        .or_else(|_| civil::DateTime::strptime("%Y-%m-%dT%H:%M:%S", stripped))
         .ok()
-        .map(|n| n.and_utc())
+        .and_then(|n| Offset::UTC.to_timestamp(n).ok())
 }
 
 fn pick_speed(inputs: &[CmeInput]) -> Option<u64> {
@@ -84,7 +83,7 @@ fn pick_speed(inputs: &[CmeInput]) -> Option<u64> {
     Some(speed.round() as u64)
 }
 
-fn format_line(glancing: bool, minor: bool, at: DateTime<Utc>, speed: Option<u64>) -> String {
+fn format_line(glancing: bool, minor: bool, at: Timestamp, speed: Option<u64>) -> String {
     let verb = if glancing {
         "streift die Erde"
     } else if minor {
@@ -92,7 +91,7 @@ fn format_line(glancing: bool, minor: bool, at: DateTime<Utc>, speed: Option<u64
     } else {
         "trifft die Erde"
     };
-    let when = at.with_timezone(&Berlin).format("%H:%M");
+    let when = crate::util::to_berlin(at).strftime("%H:%M");
     match speed {
         Some(kms) => format!("☄️ Koronaler Massenauswurf {verb} ca. {when} Uhr, {kms} km/s"),
         None => format!("☄️ Koronaler Massenauswurf {verb} ca. {when} Uhr"),

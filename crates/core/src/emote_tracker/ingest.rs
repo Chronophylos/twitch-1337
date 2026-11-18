@@ -3,9 +3,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use eyre::{Result, WrapErr as _, eyre};
 use futures_util::{SinkExt, StreamExt};
+use jiff::Timestamp;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 
@@ -115,7 +115,7 @@ async fn startup_reconcile_once_until(
     if lifecycle.is_cancelled() {
         return Ok(None);
     }
-    let at = Utc::now().timestamp_millis();
+    let at = Timestamp::now().as_millisecond();
 
     let empty = handle.catalog_is_empty().await?;
     if lifecycle.is_cancelled() {
@@ -210,7 +210,7 @@ pub async fn run_set_ingest(
                     Err(error) => {
                         error!(?error, "emote set ingest EventAPI session ended");
                         if gap_started_at.is_none() {
-                            gap_started_at = Some(Utc::now().timestamp_millis());
+                            gap_started_at = Some(Timestamp::now().as_millisecond());
                         }
                     }
                 }
@@ -219,7 +219,7 @@ pub async fn run_set_ingest(
             Err(error) => {
                 error!(?error, "emote set ingest REST reconcile failed");
                 if gap_started_at.is_none() {
-                    gap_started_at = Some(Utc::now().timestamp_millis());
+                    gap_started_at = Some(Timestamp::now().as_millisecond());
                 }
             }
         }
@@ -742,7 +742,7 @@ async fn connect_eventapi(
 }
 
 fn now_ms() -> i64 {
-    Utc::now().timestamp_millis()
+    Timestamp::now().as_millisecond()
 }
 
 #[cfg(test)]

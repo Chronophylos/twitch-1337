@@ -9,8 +9,6 @@ use super::common;
 
 use std::time::Duration;
 
-use chrono::TimeZone;
-use chrono_tz::Europe::Berlin;
 use common::TestBotBuilder;
 
 const AI_CHAN: &str = "ai_chan";
@@ -102,11 +100,12 @@ async fn feedback_is_ignored_in_ai_channel() {
 async fn tracker_1337_ignores_ai_channel_messages() {
     // 13:37 Berlin → UTC instant; format as a `tmi-sent-ts` (ms since epoch)
     // matching what Twitch puts on incoming PRIVMSGs.
-    let at_1337 = Berlin
-        .with_ymd_and_hms(2026, 4, 28, 13, 37, 0)
+    let at_1337 = jiff::civil::date(2026, 4, 28)
+        .at(13, 37, 0, 0)
+        .in_tz("Europe/Berlin")
         .unwrap()
-        .with_timezone(&chrono::Utc);
-    let ts_ms: i64 = at_1337.timestamp_millis();
+        .timestamp();
+    let ts_ms: i64 = at_1337.as_millisecond();
 
     let bot = TestBotBuilder::new()
         .at(at_1337)

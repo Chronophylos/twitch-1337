@@ -42,6 +42,9 @@ hex = "0.4"
 humantime-serde = "1"
 indexmap = { version = "2.14", features = ["serde"] }
 infer = { version = "0.22", default-features = false }
+# Bundled IANA DB: the musl FROM-scratch image has no /usr/share/zoneinfo, and
+# Aviationstack airport timezones must resolve.
+jiff = { version = "1.0.1", default-features = false, features = ["std", "serde", "tzdb-bundle-always"] }
 tokio-util = "0.7"
 rand = "0.10.3"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "stream"] }

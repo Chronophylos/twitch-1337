@@ -11,11 +11,10 @@ mod merge;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::Utc;
 use tokio::sync::{Mutex, Notify};
 use tracing::{error, info, warn};
 
-use super::audit::{AuditEntry, AuditLog, berlin_now, diff_changes};
+use super::audit::{AuditEntry, AuditLog, diff_changes};
 use super::overrides::SettingsOverrides;
 use super::{SCHEMA_VERSION, Settings, SettingsError, SettingsHandle, SettingsSection};
 use load::{is_future_version, load_or_quarantine, load_overrides_async, quarantine};
@@ -135,7 +134,7 @@ impl SettingsStore {
         let changes = diff_changes(prior_resolved, &resolved);
         if !changes.is_empty() {
             let entry = AuditEntry {
-                ts: berlin_now(Utc::now()),
+                ts: crate::util::to_berlin(jiff::Timestamp::now()),
                 actor_id: actor.user_id,
                 actor_login: actor.user_login,
                 changes,

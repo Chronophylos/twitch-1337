@@ -11,7 +11,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
-use chrono::NaiveDate;
+use jiff::civil::date;
 use tower::ServiceExt as _;
 use twitch_1337_core::commands::leaderboard::PersonalBest;
 use twitch_1337_web::WebState;
@@ -66,7 +66,7 @@ async fn leaderboard_renders_seeded_pb() {
             "alice".into(),
             PersonalBest {
                 ms: 123,
-                date: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                date: date(2026, 1, 1),
             },
         );
     }
@@ -136,14 +136,14 @@ async fn leaderboard_rows_sorted_by_ms_asc() {
             "bob".into(),
             PersonalBest {
                 ms: 500,
-                date: NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                date: date(2026, 2, 1),
             },
         );
         lb.insert(
             "alice".into(),
             PersonalBest {
                 ms: 100,
-                date: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                date: date(2026, 1, 1),
             },
         );
     }

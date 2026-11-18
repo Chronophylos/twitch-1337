@@ -121,6 +121,7 @@ fn leaderboard_dates_ron() {
 
 #[test]
 fn flight_info_cache_ron() {
+    // Input is chrono's format (`.500Z`); jiff writes `.5Z` back.
     let fixture = r#"(
         aliases: ["LH400"],
         flight_date: Some("2026-07-19"),
@@ -131,7 +132,7 @@ fn flight_info_cache_ron() {
     )"#;
     assert_eq!(
         reserialize::<CachedFlightInfo>(fixture),
-        r#"(aliases:["LH400"],flight_date:Some("2026-07-19"),metadata:None,cached_at:"2026-07-19T12:00:00Z",expires_at:"2026-07-19T17:30:00.500Z",cache_version:3)"#
+        r#"(aliases:["LH400"],flight_date:Some("2026-07-19"),metadata:None,cached_at:"2026-07-19T12:00:00Z",expires_at:"2026-07-19T17:30:00.5Z",cache_version:3)"#
     );
 }
 

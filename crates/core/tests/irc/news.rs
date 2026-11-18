@@ -3,8 +3,8 @@ use twitch_1337_core as twitch_1337;
 
 use std::time::Duration;
 
-use chrono::{Duration as ChronoDuration, Utc};
 use common::TestBotBuilder;
+use jiff::{SignedDuration, Timestamp};
 use llm::Role;
 use twitch_1337::twitch::whisper::{FIRST_WHISPER_MAX_CHARS, WHISPER_MAX_CHARS};
 
@@ -355,30 +355,30 @@ async fn tldr_command_summarizes_available_last_24_hours() {
         .spawn()
         .await;
 
-    let now = Utc::now();
+    let now = Timestamp::now();
     bot.send_at(
         "bob",
         "older than one day",
-        (now - ChronoDuration::hours(25)).timestamp_millis(),
+        (now - SignedDuration::from_hours(25)).as_millisecond(),
     )
     .await;
     bot.send_at(
         "alice",
         "recent alice context",
-        (now - ChronoDuration::hours(2)).timestamp_millis(),
+        (now - SignedDuration::from_hours(2)).as_millisecond(),
     )
     .await;
     bot.send_at(
         "carol",
         "recent carol context",
-        (now - ChronoDuration::minutes(30)).timestamp_millis(),
+        (now - SignedDuration::from_mins(30)).as_millisecond(),
     )
     .await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     bot.llm.push_chat("24h tldr summary");
-    bot.send_at("alice", "!tldr", now.timestamp_millis()).await;
+    bot.send_at("alice", "!tldr", now.as_millisecond()).await;
     let out = bot.expect_whisper(Duration::from_secs(2)).await;
     assert_eq!(out.message, "In den letzten 24h: 24h tldr summary");
 
@@ -418,8 +418,8 @@ async fn tldr_command_allows_longer_followup_whisper() {
         .spawn()
         .await;
 
-    let now = Utc::now();
-    bot.send_at("bob", "first tldr topic", now.timestamp_millis())
+    let now = Timestamp::now();
+    bot.send_at("bob", "first tldr topic", now.as_millisecond())
         .await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -428,7 +428,7 @@ async fn tldr_command_allows_longer_followup_whisper() {
     let first = bot.expect_whisper(Duration::from_secs(2)).await;
     assert_eq!(first.message, "In den letzten 24h: kurzes tldr");
 
-    bot.send_at("carol", "very long tldr topic", now.timestamp_millis())
+    bot.send_at("carol", "very long tldr topic", now.as_millisecond())
         .await;
     // Wait past the 1s news cooldown so alice's second !tldr isn't rate-limited.
     tokio::time::sleep(Duration::from_millis(1_500)).await;

@@ -4,8 +4,8 @@ use twitch_1337_core as twitch_1337;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use chrono::NaiveDate;
 use common::TestBotBuilder;
+use jiff::civil;
 use twitch_1337::PersonalWorst;
 
 fn seeded_alice() -> HashMap<String, PersonalWorst> {
@@ -14,7 +14,7 @@ fn seeded_alice() -> HashMap<String, PersonalWorst> {
         "alice".into(),
         PersonalWorst {
             ms: 58_791,
-            date: NaiveDate::from_ymd_opt(2026, 4, 17).unwrap(),
+            date: civil::date(2026, 4, 17),
         },
     );
     seeded

@@ -27,7 +27,7 @@ pub const GENEROUS_WAIT: std::time::Duration = std::time::Duration::from_secs(30
 /// [`TestBotBuilder::with_seeded_leaderboard`]. Replaces the per-file
 /// hand-rolled `HashMap<String, PersonalBest>` seeds.
 pub fn seed_leaderboard(
-    entries: &[(&str, u64, chrono::NaiveDate)],
+    entries: &[(&str, u64, jiff::civil::Date)],
 ) -> std::collections::HashMap<String, twitch_1337_core::PersonalBest> {
     entries
         .iter()
@@ -46,7 +46,7 @@ pub fn seed_leaderboard(
 /// Build a hall-of-shame fixture from `(user, ms, date)` tuples for
 /// [`TestBotBuilder::with_seeded_hall_of_shame`].
 pub fn seed_hall_of_shame(
-    entries: &[(&str, u64, chrono::NaiveDate)],
+    entries: &[(&str, u64, jiff::civil::Date)],
 ) -> std::collections::HashMap<String, twitch_1337_core::PersonalWorst> {
     entries
         .iter()

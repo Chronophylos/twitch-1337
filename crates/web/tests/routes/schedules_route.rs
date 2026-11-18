@@ -247,8 +247,14 @@ async fn add_calendar_schedule_with_single_weekday() {
     assert_eq!(v.len(), 1);
     match &v[0].trigger {
         Trigger::Calendar { days, .. } => {
-            assert!(days.contains(chrono::Weekday::Thu), "Thu must be set");
-            assert!(!days.contains(chrono::Weekday::Mon), "only Thu selected");
+            assert!(
+                days.contains(jiff::civil::Weekday::Thursday),
+                "Thu must be set"
+            );
+            assert!(
+                !days.contains(jiff::civil::Weekday::Monday),
+                "only Thu selected"
+            );
         }
         other => panic!("expected calendar trigger, got {other:?}"),
     }

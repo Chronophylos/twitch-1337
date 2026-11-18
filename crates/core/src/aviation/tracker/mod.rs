@@ -13,7 +13,7 @@ pub(crate) mod state;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tokio::time::Duration;
 use twitch_irc::message::PrivmsgMessage;
@@ -187,23 +187,23 @@ pub struct TrackedFlight {
     pub squawk: Option<String>,
 
     pub tracked_by: String,
-    pub tracked_at: DateTime<Utc>,
-    pub last_seen: Option<DateTime<Utc>>,
+    pub tracked_at: Timestamp,
+    pub last_seen: Option<Timestamp>,
     /// Last poll in which the assigned aircraft was visible on ADS-B; drives the
     /// tracking-lost removal timer. Distinct from `last_seen`, which is the last
     /// *target-confirmed* sighting and drives confirmation decay.
     #[serde(default)]
-    pub last_visible_at: Option<DateTime<Utc>>,
-    pub last_phase_change: Option<DateTime<Utc>>,
+    pub last_visible_at: Option<Timestamp>,
+    pub last_phase_change: Option<Timestamp>,
     pub polls_since_change: u32,
     #[serde(default)]
-    pub takeoff_at: Option<DateTime<Utc>>,
+    pub takeoff_at: Option<Timestamp>,
     #[serde(default)]
     pub aviationstack_checked: bool,
     #[serde(default)]
-    pub scheduled_departure_at: Option<DateTime<Utc>>,
+    pub scheduled_departure_at: Option<Timestamp>,
     #[serde(default)]
-    pub last_adsb_poll_at: Option<DateTime<Utc>>,
+    pub last_adsb_poll_at: Option<Timestamp>,
 
     /// Divert Watch state. Not persisted: a restart starts the watch fresh,
     /// so it can never cause an alert.
@@ -230,14 +230,14 @@ pub struct CachedFlightInfo {
     pub aliases: Vec<String>,
     pub flight_date: Option<String>,
     pub metadata: Option<AviationstackFlightMetadata>,
-    pub cached_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
+    pub cached_at: Timestamp,
+    pub expires_at: Timestamp,
     #[serde(default)]
     pub cache_version: u32,
 }
 
 impl CachedFlightInfo {
-    pub(crate) fn is_expired(&self, now: DateTime<Utc>) -> bool {
+    pub(crate) fn is_expired(&self, now: Timestamp) -> bool {
         self.expires_at <= now
     }
 
@@ -275,7 +275,7 @@ pub struct TrackedFlightView {
 }
 
 /// Converts the tracked flights in `state` into a snapshot of [`TrackedFlightView`]s.
-pub fn build_flight_view(state: &FlightTrackerState, now: DateTime<Utc>) -> Vec<TrackedFlightView> {
+pub fn build_flight_view(state: &FlightTrackerState, now: Timestamp) -> Vec<TrackedFlightView> {
     state
         .flights
         .iter()
@@ -296,7 +296,7 @@ pub fn build_flight_view(state: &FlightTrackerState, now: DateTime<Utc>) -> Vec<
             ground_speed_kts: f.ground_speed_kts,
             last_seen_secs_ago: f
                 .last_seen
-                .map(|seen| (now - seen).num_seconds().max(0) as u64),
+                .map(|seen| now.duration_since(seen).as_secs().max(0) as u64),
         })
         .collect()
 }
@@ -502,14 +502,14 @@ mod tests {
         AviationstackFlightMetadata::default()
     }
 
-    fn pending_interval(flight: &TrackedFlight, now: DateTime<Utc>) -> tokio::time::Duration {
+    fn pending_interval(flight: &TrackedFlight, now: Timestamp) -> tokio::time::Duration {
         match pending_poll_schedule(flight, now) {
             PendingPollSchedule::Active { interval, .. } => interval,
             PendingPollSchedule::Expired => panic!("expected active pending schedule"),
         }
     }
 
-    fn assert_pending_expired(flight: &TrackedFlight, now: DateTime<Utc>) {
+    fn assert_pending_expired(flight: &TrackedFlight, now: Timestamp) {
         assert_eq!(
             pending_poll_schedule(flight, now),
             PendingPollSchedule::Expired

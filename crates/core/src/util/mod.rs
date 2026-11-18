@@ -3,10 +3,13 @@ pub mod log_ring;
 pub mod persist;
 pub mod telemetry;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::LazyLock};
 
-use chrono::MappedLocalTime;
 use eyre::Result;
+use jiff::{
+    Timestamp, ZonedDateTime, civil,
+    tz::{AmbiguousOffset, Offset, TimeZone},
+};
 
 /// Application user-agent string used in HTTP requests.
 pub static APP_USER_AGENT: &str = concat!(
@@ -36,16 +39,40 @@ pub async fn ensure_data_dir() -> Result<()> {
     Ok(())
 }
 
-/// Resolves a naive datetime to Berlin local time, handling DST transitions.
+/// Bot timezone for scheduling and local display.
+pub static BERLIN: LazyLock<TimeZone> =
+    LazyLock::new(|| TimeZone::get("Europe/Berlin").expect("bundled tzdb contains Europe/Berlin"));
+
+/// `ts` on the Berlin wall clock.
+pub fn to_berlin(ts: Timestamp) -> ZonedDateTime {
+    ts.to_zoned_datetime(BERLIN.clone())
+}
+
+/// Resolves a Berlin wall-clock datetime, handling DST transitions.
 ///
 /// During spring-forward (gap), interprets as UTC to land just after the gap.
 /// During fall-back (ambiguous), picks the later occurrence.
-pub fn resolve_berlin_time(naive: chrono::NaiveDateTime) -> chrono::DateTime<chrono_tz::Tz> {
-    match naive.and_local_timezone(chrono_tz::Europe::Berlin) {
-        MappedLocalTime::Single(t) => t,
-        MappedLocalTime::Ambiguous(_, latest) => latest,
-        MappedLocalTime::None => naive.and_utc().with_timezone(&chrono_tz::Europe::Berlin),
-    }
+pub fn resolve_berlin_time(dt: civil::DateTime) -> ZonedDateTime {
+    let offset = match BERLIN.to_ambiguous_timestamp(dt).offset() {
+        AmbiguousOffset::Unambiguous { offset } | AmbiguousOffset::Fold { after: offset, .. } => {
+            offset
+        }
+        AmbiguousOffset::Gap { .. } => Offset::UTC,
+    };
+    to_berlin(
+        offset
+            .to_timestamp(dt)
+            .expect("bot wall-clock dates are far inside jiff's timestamp range"),
+    )
+}
+
+/// twitch-irc still stamps messages with chrono; drop this once the fork
+/// moves to jiff (#609).
+pub fn from_chrono(ts: chrono::DateTime<chrono::Utc>) -> Timestamp {
+    Timestamp::from_nanosecond(
+        i128::from(ts.timestamp()) * 1_000_000_000 + i128::from(ts.timestamp_subsec_nanos()),
+    )
+    .expect("chrono and jiff share the timestamp range for twitch messages")
 }
 
 /// Truncates a string to the maximum number of characters at a word boundary.
@@ -145,28 +172,15 @@ mod tests {
 
     #[test]
     fn resolve_berlin_time_dst_edges() {
-        use chrono::{NaiveDate, TimeZone as _, Utc};
-        let local = |m, d, h, mi| {
-            NaiveDate::from_ymd_opt(2026, m, d)
-                .unwrap()
-                .and_hms_opt(h, mi, 0)
-                .unwrap()
-        };
-        let utc = |m, d, h, mi| Utc.with_ymd_and_hms(2026, m, d, h, mi, 0).unwrap();
+        use jiff::{Timestamp, civil::date};
+        let local = |m, d, h, mi| date(2026, m, d).at(h, mi, 0, 0);
+        let utc = |s: &str| s.parse::<Timestamp>().unwrap();
+        let resolve = |dt| super::resolve_berlin_time(dt).timestamp();
         // Ordinary summer time.
-        assert_eq!(
-            super::resolve_berlin_time(local(7, 19, 13, 37)),
-            utc(7, 19, 11, 37)
-        );
+        assert_eq!(resolve(local(7, 19, 13, 37)), utc("2026-07-19T11:37:00Z"));
         // Fall-back fold: the later (CET) occurrence.
-        assert_eq!(
-            super::resolve_berlin_time(local(10, 25, 2, 30)),
-            utc(10, 25, 1, 30)
-        );
+        assert_eq!(resolve(local(10, 25, 2, 30)), utc("2026-10-25T01:30:00Z"));
         // Spring-forward gap: the naive time is read as UTC.
-        assert_eq!(
-            super::resolve_berlin_time(local(3, 29, 2, 30)),
-            utc(3, 29, 2, 30)
-        );
+        assert_eq!(resolve(local(3, 29, 2, 30)), utc("2026-03-29T02:30:00Z"));
     }
 }

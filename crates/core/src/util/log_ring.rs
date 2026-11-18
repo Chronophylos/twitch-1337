@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Write as _};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::Layer;
@@ -35,7 +35,7 @@ const MAX_FIELDS: usize = 32;
 pub struct LogEntry {
     /// Monotonic sequence number, starting at 1. Contiguous within a ring.
     pub seq: u64,
-    pub at: DateTime<Utc>,
+    pub at: Timestamp,
     pub level: Level,
     pub target: String,
     pub message: String,
@@ -84,7 +84,7 @@ impl LogRing {
     /// Append an entry, evicting the oldest when full. Returns its `seq`.
     pub fn push(
         &self,
-        at: DateTime<Utc>,
+        at: Timestamp,
         level: Level,
         target: String,
         message: String,
@@ -152,7 +152,7 @@ impl<S: Subscriber> Layer<S> for LogRingLayer {
             .log_target
             .unwrap_or_else(|| meta.target().to_owned());
         self.ring.push(
-            Utc::now(),
+            Timestamp::now(),
             *meta.level(),
             target,
             visitor.message,
@@ -214,7 +214,7 @@ mod tests {
 
     fn push(ring: &LogRing, msg: &str) -> u64 {
         ring.push(
-            Utc::now(),
+            Timestamp::now(),
             Level::INFO,
             "t".to_owned(),
             msg.to_owned(),

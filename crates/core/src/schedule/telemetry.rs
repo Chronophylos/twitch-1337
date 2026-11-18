@@ -9,13 +9,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, NaiveDate, Utc};
-use chrono_tz::Europe::Berlin;
+use jiff::{Timestamp, civil::Date};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::warn;
 
-use crate::util::persist::atomic_save_ron_async;
+use crate::util::{persist::atomic_save_ron_async, to_berlin};
 
 const FILE_NAME: &str = "schedule_runtime.ron";
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
@@ -23,17 +22,17 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScheduleRuntime {
     #[serde(default)]
-    pub last_fired_at: Option<DateTime<Utc>>,
+    pub last_fired_at: Option<Timestamp>,
     #[serde(default)]
     pub fires_today: u32,
     #[serde(default)]
-    pub day_anchor: Option<NaiveDate>,
+    pub day_anchor: Option<Date>,
 }
 
 impl ScheduleRuntime {
     /// Roll over `fires_today` to 0 if `today` differs from `day_anchor`.
     /// Updates `day_anchor` in place. Returns `true` if a rollover happened.
-    fn maybe_rollover(&mut self, today: NaiveDate) -> bool {
+    fn maybe_rollover(&mut self, today: Date) -> bool {
         match self.day_anchor {
             Some(d) if d == today => false,
             _ => {
@@ -78,8 +77,8 @@ impl TelemetryStore {
 
     /// Snapshot the current map (used by dashboard reads). `fires_today` is
     /// only rolled over by the next fire, so the copy is rolled over to `now`.
-    pub async fn snapshot(&self, now: DateTime<Utc>) -> HashMap<String, ScheduleRuntime> {
-        let today = now.with_timezone(&Berlin).date_naive();
+    pub async fn snapshot(&self, now: Timestamp) -> HashMap<String, ScheduleRuntime> {
+        let today = to_berlin(now).date();
         let mut map = self.data.lock().await.map.clone();
         for runtime in map.values_mut() {
             runtime.maybe_rollover(today);
@@ -88,8 +87,8 @@ impl TelemetryStore {
     }
 
     /// Record a fire for `name` at `at`. Rolls fires_today on day change.
-    pub async fn record_fire(&self, name: &str, at: DateTime<Utc>) {
-        let today = at.with_timezone(&Berlin).date_naive();
+    pub async fn record_fire(&self, name: &str, at: Timestamp) {
+        let today = to_berlin(at).date();
         let mut g = self.data.lock().await;
         let entry = g.map.entry(name.to_owned()).or_default();
         entry.maybe_rollover(today);
@@ -127,15 +126,13 @@ impl TelemetryStore {
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
-
     use super::*;
 
     #[tokio::test]
     async fn record_fire_increments_counter() {
         let dir = tempfile::tempdir().expect("tmp");
         let s = TelemetryStore::open(dir.path());
-        let now = Utc::now();
+        let now = Timestamp::now();
         s.record_fire("a", now).await;
         s.record_fire("a", now).await;
         let snap = s.snapshot(now).await;
@@ -148,20 +145,14 @@ mod tests {
     async fn rollover_resets_fires_today() {
         let dir = tempfile::tempdir().expect("tmp");
         let s = TelemetryStore::open(dir.path());
-        let day1 = Utc
-            .with_ymd_and_hms(2026, 5, 28, 12, 0, 0)
-            .single()
-            .unwrap();
-        let day2 = Utc
-            .with_ymd_and_hms(2026, 5, 29, 12, 0, 0)
-            .single()
-            .unwrap();
+        let day1 = "2026-05-28T12:00:00Z".parse::<Timestamp>().unwrap();
+        let day2 = "2026-05-29T12:00:00Z".parse::<Timestamp>().unwrap();
         s.record_fire("a", day1).await;
         s.record_fire("a", day1).await;
         s.record_fire("a", day2).await;
         let r = s.snapshot(day2).await.get("a").cloned().expect("present");
         assert_eq!(r.fires_today, 1);
-        assert_eq!(r.day_anchor, Some(day2.with_timezone(&Berlin).date_naive()));
+        assert_eq!(r.day_anchor, Some(to_berlin(day2).date()));
     }
 
     #[tokio::test]
@@ -169,14 +160,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmp");
         let s = TelemetryStore::open(dir.path());
         // 23:30 and 00:30 Berlin: the same UTC day, different Berlin days.
-        let before = Utc
-            .with_ymd_and_hms(2026, 5, 28, 21, 30, 0)
-            .single()
-            .unwrap();
-        let after = Utc
-            .with_ymd_and_hms(2026, 5, 28, 22, 30, 0)
-            .single()
-            .unwrap();
+        let before = "2026-05-28T21:30:00Z".parse::<Timestamp>().unwrap();
+        let after = "2026-05-28T22:30:00Z".parse::<Timestamp>().unwrap();
         s.record_fire("a", before).await;
 
         let same_day = s.snapshot(before).await;
@@ -191,7 +176,7 @@ mod tests {
     async fn flush_writes_atomic_file() {
         let dir = tempfile::tempdir().expect("tmp");
         let s = TelemetryStore::open(dir.path());
-        s.record_fire("a", Utc::now()).await;
+        s.record_fire("a", Timestamp::now()).await;
         s.flush().await;
         let path = dir.path().join("schedule_runtime.ron");
         assert!(path.exists());
@@ -205,10 +190,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmp");
         {
             let s = TelemetryStore::open(dir.path());
-            s.record_fire("a", Utc::now()).await;
+            s.record_fire("a", Timestamp::now()).await;
             s.flush().await;
         }
         let s2 = TelemetryStore::open(dir.path());
-        assert!(s2.snapshot(Utc::now()).await.contains_key("a"));
+        assert!(s2.snapshot(Timestamp::now()).await.contains_key("a"));
     }
 }

@@ -47,8 +47,8 @@ pub(crate) fn initial_of(name: &str) -> String {
 
 /// Compact past-relative label (`42s ago`, `5m ago`, `3h ago`, `2d ago`) for
 /// last-fired columns.
-pub(crate) fn humanize_delta(d: chrono::Duration) -> String {
-    let secs = d.num_seconds();
+pub(crate) fn humanize_delta(d: jiff::SignedDuration) -> String {
+    let secs = d.as_secs();
     if secs < 60 {
         format!("{secs}s ago")
     } else if secs < 3600 {
