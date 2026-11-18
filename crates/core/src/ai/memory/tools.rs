@@ -22,6 +22,9 @@ use crate::pronouns::PronounsClient;
 /// Canonical LLM string for Stable Slug charset / length / date failures.
 const INVALID_SLUG_MSG: &str = "invalid_slug: slug must be lowercase a-z, 0-9, and dashes, up to 64 chars, and must not end in a -YYYY-MM-DD date suffix";
 const RESERVED_SLUG_MSG: &str = "reserved_slug: that slug name is reserved";
+/// Operational failures stay in the log (ADR-0012 rule 3): the chain names
+/// data-dir paths, and the model speaks in public chat.
+const IO_ERROR_MSG: &str = "io_error: the memory store could not be accessed, try again later";
 
 fn map_slug_err(err: SlugError) -> String {
     match err {
@@ -43,7 +46,10 @@ fn map_write_err(err: WriteError) -> String {
         }
         WriteError::InvalidSlug => INVALID_SLUG_MSG.into(),
         WriteError::ReservedSlug => RESERVED_SLUG_MSG.into(),
-        WriteError::Io(e) => format!("io_error: {e}"),
+        WriteError::Io(error) => {
+            tracing::error!(?error, "memory tool write failed");
+            IO_ERROR_MSG.into()
+        }
     }
 }
 
@@ -380,7 +386,10 @@ impl ChatTurnExecutor {
         };
         let file = match self.opts.store.read_kind(&kind).await {
             Ok(f) => f,
-            Err(e) => return format!("io_error: {e}"),
+            Err(error) => {
+                tracing::error!(?error, path = %args.path, "read_memory failed");
+                return IO_ERROR_MSG.into();
+            }
         };
         let label = match &kind {
             FileKind::Soul => FenceLabel::Soul,

@@ -4,13 +4,13 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::Mutex;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use llm::{ToolCall, ToolResultMessage, TraceIds};
 
 use super::cache::TtlCache;
-use super::client::{SearchClient, SearchResult};
-use super::media::MediaClient;
+use super::client::{FetchError, SearchClient, SearchError, SearchResult, is_flake};
+use super::media::{MediaClient, MediaError};
 use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 use crate::settings::ai::AiMedia;
@@ -183,21 +183,21 @@ impl ContentToolExecutor {
                 .to_string()
             }
             Err(err) => {
-                let error_code = if err
-                    .chain()
-                    .any(|cause| cause.to_string().to_ascii_lowercase().contains("timed out"))
-                {
-                    warn!(error = ?err, query, "web_search timed out");
-                    "search_timeout"
-                } else {
-                    error!(error = ?err, query, "web_search failed");
-                    "search_failed"
+                let code = match &err {
+                    SearchError::Timeout(_) => {
+                        warn!(error = ?err, query, "web_search timed out");
+                        "search_timeout"
+                    }
+                    SearchError::Upstream(e) if is_flake(e) => {
+                        warn!(error = ?err, query, "web_search upstream flake");
+                        "search_failed"
+                    }
+                    SearchError::Upstream(_) => {
+                        error!(error = ?err, query, "web_search failed");
+                        "search_failed"
+                    }
                 };
-                json!({
-                    "error": error_code,
-                    "details": format!("{err:#}"),
-                })
-                .to_string()
+                json!({ "error": code }).to_string()
             }
         }
     }
@@ -273,45 +273,70 @@ impl ContentToolExecutor {
         .to_string()
     }
 
-    fn map_fetch_err(err: &eyre::Report, url: &str) -> String {
-        let msg = err.to_string().to_ascii_lowercase();
-        let code = if msg.contains("blocked") {
-            warn!(error = ?err, url, "read_url blocked");
-            "fetch_blocked"
-        } else if msg.contains("too large") {
-            warn!(error = ?err, url, "read_url payload too large");
-            "payload_too_large"
-        } else if msg.contains("unsupported") {
-            warn!(error = ?err, url, "read_url unsupported content type");
-            "unsupported_content_type"
-        } else if msg.contains("timed out") {
-            warn!(error = ?err, url, "read_url timed out");
-            "fetch_timeout"
-        } else {
-            error!(error = ?err, url, "read_url fetch failed");
-            "fetch_failed"
-        };
-        json!({
-            "error": code,
-            "details": format!("{err:#}"),
-        })
+    /// Rejections about the model's own URL carry `details`; operational
+    /// failures get only the code (ADR-0012 rule 3). The blocked target,
+    /// often a resolved internal IP, stays in the log.
+    fn map_fetch_err(err: &FetchError, url: &str) -> String {
+        match err {
+            FetchError::InvalidUrl(_) | FetchError::UnsupportedScheme(_) => {
+                debug!(error = ?err, url, "read_url rejected the URL");
+                json!({
+                    "error": "invalid_url",
+                    "details": "url must be an absolute http(s) URL",
+                })
+            }
+            FetchError::Blocked { .. } => {
+                warn!(error = ?err, url, "read_url blocked");
+                json!({ "error": "fetch_blocked" })
+            }
+            FetchError::TooLarge => {
+                debug!(error = ?err, url, "read_url payload too large");
+                json!({ "error": "payload_too_large" })
+            }
+            FetchError::UnsupportedContentType(_) => {
+                debug!(error = ?err, url, "read_url unsupported content type");
+                json!({ "error": "unsupported_content_type" })
+            }
+            FetchError::NoReadableContent => {
+                debug!(error = ?err, url, "read_url found no readable content");
+                json!({ "error": "no_readable_content" })
+            }
+            FetchError::Timeout(_) => {
+                warn!(error = ?err, url, "read_url timed out");
+                json!({ "error": "fetch_timeout" })
+            }
+            FetchError::Status { status, source } => {
+                if is_flake(source) {
+                    warn!(error = ?err, url, "read_url upstream flake");
+                } else {
+                    debug!(error = ?err, url, "read_url target returned an error status");
+                }
+                json!({ "error": "fetch_failed", "status": status.as_u16() })
+            }
+            FetchError::Upstream(_) => {
+                error!(error = ?err, url, "read_url fetch failed");
+                json!({ "error": "fetch_failed" })
+            }
+        }
         .to_string()
     }
 
-    fn map_media_err(err: &eyre::Report, url: &str) -> String {
-        let msg = err.to_string().to_ascii_lowercase();
-        let code = if msg.contains("timed out") {
-            warn!(error = ?err, url, "read_url media timeout");
-            "analysis_timeout"
-        } else {
-            error!(error = ?err, url, "read_url media failed");
-            "analysis_failed"
+    fn map_media_err(err: &MediaError, url: &str) -> String {
+        let code = match err {
+            MediaError::Timeout(_) => {
+                warn!(error = ?err, url, "read_url media timeout");
+                "analysis_timeout"
+            }
+            MediaError::Upstream(e) if is_flake(e) => {
+                warn!(error = ?err, url, "read_url media upstream flake");
+                "analysis_failed"
+            }
+            MediaError::Upstream(_) | MediaError::EmptyAnswer => {
+                error!(error = ?err, url, "read_url media failed");
+                "analysis_failed"
+            }
         };
-        json!({
-            "error": code,
-            "details": format!("{err:#}"),
-        })
-        .to_string()
+        json!({ "error": code }).to_string()
     }
 }
 
@@ -467,23 +492,21 @@ mod tests {
         );
     }
 
+    /// The SSRF guard's target (here an internal IP) stays in the log; the
+    /// model, which speaks in public chat, gets the bare code.
     #[tokio::test]
-    async fn read_url_returns_fetch_failed_for_unreachable_host() {
+    async fn read_url_to_blocked_ip_returns_bare_code() {
+        crate::ai::content::client::ssrf_bypass_for_tests(false);
         let executor = test_executor(test_handle());
         let call = ToolCall {
             id: "c1".into(),
             name: "read_url".into(),
-            arguments: serde_json::json!({ "url": "http://127.0.0.1:1/nope" }),
+            arguments: serde_json::json!({ "url": "http://10.1.2.3:8080/admin" }),
             arguments_parse_error: None,
         };
         let result = executor
             .execute_tool_call(&call, &TraceIds::default())
             .await;
-        assert!(
-            result.content.contains("\"fetch_blocked\"")
-                || result.content.contains("\"fetch_failed\""),
-            "{}",
-            result.content
-        );
+        assert_eq!(result.content, r#"{"error":"fetch_blocked"}"#);
     }
 }

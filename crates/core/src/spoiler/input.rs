@@ -44,7 +44,11 @@ pub enum GatherError {
 /// Rewrite, fetch, extract. Reddit posts go to the archive instead; a share
 /// link gets one fetch to learn its redirect target first.
 pub async fn gather(http: &reqwest::Client, url: &Url) -> Result<Input, GatherError> {
-    gather_with(|u, max, timeout| fetch_raw(http, u, max, timeout), url).await
+    gather_with(
+        |u, max, timeout| async move { Ok(fetch_raw(http, u, max, timeout).await?) },
+        url,
+    )
+    .await
 }
 
 async fn gather_with<F, Fut>(fetch: F, url: &Url) -> Result<Input, GatherError>

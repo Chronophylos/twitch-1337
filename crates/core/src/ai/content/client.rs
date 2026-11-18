@@ -1,10 +1,9 @@
-use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use eyre::{Result, WrapErr as _, bail};
+use eyre::{Result, WrapErr as _};
 use futures_util::StreamExt as _;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::header;
@@ -19,10 +18,96 @@ use crate::util::truncate_response;
 
 static SSRF_BYPASS: AtomicBool = AtomicBool::new(false);
 
-const BLOCKED_TARGET: &str = "blocked target host";
-
 fn ssrf_active() -> bool {
     !SSRF_BYPASS.load(Ordering::Relaxed)
+}
+
+/// The SSRF guard refused a target. Travels through reqwest's source chain
+/// from the resolver and the redirect policy, so it is found by type, not by
+/// message text. The target (often a resolved internal IP) is for logs only.
+#[derive(Debug, thiserror::Error)]
+#[error("blocked target host {target}")]
+struct BlockedTarget {
+    target: String,
+}
+
+/// Why a URL fetch failed. `Display` is for logs; the model sees only the
+/// code its Surface maps each variant to.
+#[derive(Debug, thiserror::Error)]
+pub enum FetchError {
+    #[error("invalid URL")]
+    InvalidUrl(#[source] url::ParseError),
+    #[error("unsupported URL scheme {0:?}")]
+    UnsupportedScheme(String),
+    #[error("blocked target host {target}")]
+    Blocked { target: String },
+    #[error("response too large")]
+    TooLarge,
+    #[error("unsupported content type {0:?}")]
+    UnsupportedContentType(String),
+    #[error("no readable content extracted")]
+    NoReadableContent,
+    #[error("fetch timed out")]
+    Timeout(#[source] reqwest::Error),
+    #[error("URL returned status {status}")]
+    Status {
+        status: reqwest::StatusCode,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("fetch failed")]
+    Upstream(#[source] reqwest::Error),
+}
+
+impl From<reqwest::Error> for FetchError {
+    fn from(error: reqwest::Error) -> Self {
+        let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        while let Some(err) = cause {
+            if let Some(blocked) = err.downcast_ref::<BlockedTarget>() {
+                return Self::Blocked {
+                    target: blocked.target.clone(),
+                };
+            }
+            cause = err.source();
+        }
+        if error.is_timeout() {
+            Self::Timeout(error)
+        } else if let Some(status) = error.status() {
+            Self::Status {
+                status,
+                source: error,
+            }
+        } else {
+            Self::Upstream(error)
+        }
+    }
+}
+
+/// Why a SearXNG query failed.
+#[derive(Debug, thiserror::Error)]
+pub enum SearchError {
+    #[error("SearXNG request timed out")]
+    Timeout(#[source] reqwest::Error),
+    #[error("SearXNG request failed")]
+    Upstream(#[source] reqwest::Error),
+}
+
+impl From<reqwest::Error> for SearchError {
+    fn from(error: reqwest::Error) -> Self {
+        if error.is_timeout() {
+            Self::Timeout(error)
+        } else {
+            Self::Upstream(error)
+        }
+    }
+}
+
+/// Expected upstream flake (ADR-0012: logged at `warn`): timeout, 5xx, 429.
+pub(crate) fn is_flake(error: &reqwest::Error) -> bool {
+    error.is_timeout()
+        || error
+            .status()
+            .is_some_and(|s| s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS)
 }
 
 #[derive(Default, Clone)]
@@ -81,10 +166,9 @@ impl Resolve for SsrfSafeResolver {
                     .iter()
                     .find(|a| is_blocked_ip(a.ip()) && !trusted.matches_ip(a.ip()))
             {
-                return Err(Box::new(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!("{BLOCKED_TARGET}: {}", a.ip()),
-                ))
+                return Err(Box::new(BlockedTarget {
+                    target: a.ip().to_string(),
+                })
                     as Box<dyn std::error::Error + Send + Sync>);
             }
             let iter: Addrs = Box::new(addrs.into_iter());
@@ -96,7 +180,8 @@ impl Resolve for SsrfSafeResolver {
 fn ssrf_safe_redirect_policy(trusted: Arc<TrustedHost>) -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(move |attempt| {
         if ssrf_active() && !redirect_target_trusted(attempt.url(), &trusted) {
-            attempt.error(BLOCKED_TARGET)
+            let target = attempt.url().host_str().unwrap_or_default().to_string();
+            attempt.error(BlockedTarget { target })
         } else if attempt.previous().len() >= 10 {
             attempt.stop()
         } else {
@@ -150,29 +235,35 @@ pub struct RawFetch {
     pub bytes: Vec<u8>,
 }
 
+/// Reject non-HTTP schemes and blocked host literals before any request.
+/// hyper skips the custom resolver for IP literals, so this is their guard.
+fn check_target(url: &reqwest::Url) -> Result<(), FetchError> {
+    match url.scheme() {
+        "http" | "https" => {}
+        other => return Err(FetchError::UnsupportedScheme(other.to_string())),
+    }
+    if ssrf_active() && is_blocked_host_literal(url) {
+        return Err(FetchError::Blocked {
+            target: url.host_str().unwrap_or_default().to_string(),
+        });
+    }
+    Ok(())
+}
+
 pub async fn fetch_raw(
     http: &reqwest::Client,
     url: reqwest::Url,
     max_bytes: u64,
     timeout: Duration,
-) -> Result<RawFetch> {
-    match url.scheme() {
-        "http" | "https" => {}
-        other => bail!("Unsupported URL scheme: {other}"),
-    }
-
-    if ssrf_active() && is_blocked_host_literal(&url) {
-        bail!(BLOCKED_TARGET)
-    }
+) -> Result<RawFetch, FetchError> {
+    check_target(&url)?;
 
     let response = http
         .get(url)
         .timeout(timeout)
         .send()
-        .await
-        .wrap_err("Failed to fetch URL")?
-        .error_for_status()
-        .wrap_err("URL returned error status")?;
+        .await?
+        .error_for_status()?;
 
     let final_url = response.url().clone();
     let content_type = response
@@ -191,11 +282,11 @@ pub async fn fetch_raw(
 }
 
 /// Stream a body, bailing as soon as it would exceed `max_bytes`.
-async fn read_capped(response: reqwest::Response, max_bytes: u64) -> Result<Vec<u8>> {
+async fn read_capped(response: reqwest::Response, max_bytes: u64) -> Result<Vec<u8>, FetchError> {
     if let Some(length) = response.content_length()
         && length > max_bytes
     {
-        bail!("Response too large")
+        return Err(FetchError::TooLarge);
     }
 
     let initial_capacity = response
@@ -206,9 +297,9 @@ async fn read_capped(response: reqwest::Response, max_bytes: u64) -> Result<Vec<
     let mut stream = response.bytes_stream();
     let mut buf: Vec<u8> = Vec::with_capacity(initial_capacity);
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.wrap_err("Failed to read URL response body")?;
+        let chunk = chunk?;
         if (buf.len() as u64).saturating_add(chunk.len() as u64) > max_bytes {
-            bail!("Response too large")
+            return Err(FetchError::TooLarge);
         }
         buf.extend_from_slice(&chunk);
     }
@@ -284,7 +375,11 @@ impl SearchClient {
         }
     }
 
-    pub async fn web_search(&self, query: &str, max_results: usize) -> Result<Vec<SearchResult>> {
+    pub async fn web_search(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<Vec<SearchResult>, SearchError> {
         let effective_max = max_results.min(SEARX_RESPONSE_LIMIT);
 
         let response: SearxSearchResponse = self
@@ -293,13 +388,10 @@ impl SearchClient {
             .query(&[("q", query), ("format", "json")])
             .timeout(self.timeout)
             .send()
-            .await
-            .wrap_err("Failed to call SearXNG search endpoint")?
-            .error_for_status()
-            .wrap_err("SearXNG returned error status")?
+            .await?
+            .error_for_status()?
             .json()
-            .await
-            .wrap_err("Failed to parse SearXNG search response")?;
+            .await?;
 
         let results = response
             .results
@@ -317,27 +409,21 @@ impl SearchClient {
         Ok(results)
     }
 
-    pub async fn fetch_for_read(&self, raw_url: &str, caps: &AiMedia) -> Result<FetchedContent> {
-        let url = reqwest::Url::parse(raw_url).wrap_err("Invalid URL")?;
-
-        match url.scheme() {
-            "http" | "https" => {}
-            other => bail!("Unsupported URL scheme: {other}"),
-        }
-
-        if ssrf_active() && is_blocked_host_literal(&url) {
-            bail!(BLOCKED_TARGET)
-        }
+    pub async fn fetch_for_read(
+        &self,
+        raw_url: &str,
+        caps: &AiMedia,
+    ) -> Result<FetchedContent, FetchError> {
+        let url = reqwest::Url::parse(raw_url).map_err(FetchError::InvalidUrl)?;
+        check_target(&url)?;
 
         let response = self
             .fetch_http
-            .get(url.clone())
+            .get(url)
             .timeout(self.timeout)
             .send()
-            .await
-            .wrap_err("Failed to fetch URL")?
-            .error_for_status()
-            .wrap_err("URL returned error status")?;
+            .await?
+            .error_for_status()?;
 
         let header_ct = response
             .headers()
@@ -350,12 +436,12 @@ impl SearchClient {
 
         let head = &buf[..buf.len().min(16)];
         let Some(bucket) = detect(&header_ct, head) else {
-            bail!("Unsupported content type")
+            return Err(FetchError::UnsupportedContentType(header_ct));
         };
 
         let bucket_cap = caps.cap_for(bucket).as_u64();
         if buf.len() as u64 > bucket_cap {
-            bail!("Response too large")
+            return Err(FetchError::TooLarge);
         }
 
         let content_type = if header_ct.is_empty() {
@@ -383,7 +469,7 @@ impl SearchClient {
                 collapse_ws(&body)
             };
             if text.is_empty() {
-                bail!("No readable content extracted")
+                return Err(FetchError::NoReadableContent);
             }
             Payload::Text(text)
         } else {
@@ -740,7 +826,7 @@ mod tests {
         let err = fetch_raw(&http, big, 16, Duration::from_secs(2))
             .await
             .expect_err("too large");
-        assert!(err.to_string().contains("too large"), "{err}");
+        assert!(matches!(err, FetchError::TooLarge), "{err:?}");
         let gone = reqwest::Url::parse(&format!("{}/gone", server.uri())).expect("url");
         assert!(
             fetch_raw(&http, gone, 16, Duration::from_secs(2))
@@ -871,10 +957,7 @@ mod tests {
             .fetch_for_read(&format!("{}/big.png", server.uri()), &tiny_caps)
             .await
             .expect_err("should reject");
-        assert!(
-            err.to_string().to_lowercase().contains("too large"),
-            "{err}"
-        );
+        assert!(matches!(err, FetchError::TooLarge), "{err:?}");
     }
 
     #[tokio::test]
@@ -897,8 +980,50 @@ mod tests {
             .await
             .expect_err("reject");
         assert!(
-            err.to_string().to_lowercase().contains("unsupported"),
-            "{err}"
+            matches!(err, FetchError::UnsupportedContentType(_)),
+            "{err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn timeouts_are_classified_by_type_not_message() {
+        crate::install_crypto_provider();
+        ssrf_bypass_for_tests(true);
+        let server = MockServer::start().await;
+        Mock::given(wm_method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+            .mount(&server)
+            .await;
+
+        let client = SearchClient::new(
+            &format!("{}/search", server.uri()),
+            Duration::from_millis(100),
+        )
+        .expect("client");
+        let fetch = client
+            .fetch_for_read(&format!("{}/slow", server.uri()), &caps())
+            .await
+            .expect_err("fetch must time out");
+        assert!(matches!(fetch, FetchError::Timeout(_)), "{fetch:?}");
+        let search = client
+            .web_search("q", 5)
+            .await
+            .expect_err("search must time out");
+        assert!(matches!(search, SearchError::Timeout(_)), "{search:?}");
+    }
+
+    /// The resolver's refusal crosses reqwest's error chain and is found by
+    /// type: `localhost.` passes the literal check and is stopped by DNS.
+    #[tokio::test]
+    async fn resolver_block_survives_the_reqwest_chain() {
+        crate::install_crypto_provider();
+        ssrf_bypass_for_tests(false);
+        let http = fetch_client().expect("client");
+        let url = reqwest::Url::parse("http://localhost.:1/").expect("url");
+        assert!(!is_blocked_host_literal(&url));
+        let err = fetch_raw(&http, url, 16, Duration::from_secs(2))
+            .await
+            .expect_err("blocked");
+        assert!(matches!(err, FetchError::Blocked { .. }), "{err:?}");
     }
 }

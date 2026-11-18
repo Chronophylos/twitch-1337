@@ -10,12 +10,32 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use eyre::{Result, WrapErr as _, bail};
 use llm::TraceIds;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde_json::{Value, json};
 
 use crate::ai::content::client::Payload;
+
+/// Why a media analysis call failed. `Display` is for logs only.
+#[derive(Debug, thiserror::Error)]
+pub enum MediaError {
+    #[error("media chat-completions request timed out")]
+    Timeout(#[source] reqwest::Error),
+    #[error("media chat-completions request failed")]
+    Upstream(#[source] reqwest::Error),
+    #[error("media response missing assistant content")]
+    EmptyAnswer,
+}
+
+impl From<reqwest::Error> for MediaError {
+    fn from(error: reqwest::Error) -> Self {
+        if error.is_timeout() {
+            Self::Timeout(error)
+        } else {
+            Self::Upstream(error)
+        }
+    }
+}
 
 // German: the answer is fed straight back into the bot's German turn, so an
 // English one would force a translation round the model does not always make.
@@ -62,7 +82,7 @@ impl MediaClient {
         payload: &Payload,
         instruction: Option<&str>,
         trace: &TraceIds,
-    ) -> Result<String> {
+    ) -> Result<String, MediaError> {
         let body = self.build_request(content_type, payload, instruction, trace);
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
@@ -70,17 +90,9 @@ impl MediaClient {
         if let Some(key) = &self.api_key {
             req = req.bearer_auth(key.expose_secret());
         }
-        let response = req
-            .send()
-            .await
-            .wrap_err("media chat-completions request failed")?
-            .error_for_status()
-            .wrap_err("media chat-completions returned error status")?;
+        let response = req.send().await?.error_for_status()?;
 
-        let value: Value = response
-            .json()
-            .await
-            .wrap_err("media chat-completions response was not JSON")?;
+        let value: Value = response.json().await?;
 
         let answer = value
             .get("choices")
@@ -92,7 +104,7 @@ impl MediaClient {
 
         match answer {
             Some(s) if !s.trim().is_empty() => Ok(s),
-            _ => bail!("media response missing assistant content"),
+            _ => Err(MediaError::EmptyAnswer),
         }
     }
 
