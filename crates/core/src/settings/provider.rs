@@ -144,34 +144,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn openrouter_allows_xhigh_and_tier() {
-        let caps = AiProvider::OpenRouter.caps();
-        assert!(caps.service_tier);
-        assert!(caps.allows_effort("xhigh"));
-        assert_eq!(caps.default_base_url, Some("https://openrouter.ai/api/v1"));
-    }
-
-    #[test]
-    fn openai_rejects_xhigh_and_tier() {
-        let caps = AiProvider::OpenAi.caps();
-        assert!(!caps.service_tier);
-        assert!(caps.allows_effort("high"));
-        assert!(!caps.allows_effort("xhigh"));
-    }
-
-    #[test]
-    fn compatible_takes_any_effort_and_a_tier() {
-        let caps = AiProvider::OpenAiCompatible.caps();
-        assert!(caps.allows_effort("whatever-the-vendor-calls-it"));
-        assert!(caps.service_tier);
-        assert_eq!(caps.default_base_url, None);
-    }
-
-    #[test]
-    fn ollama_takes_no_effort_at_all() {
-        let caps = AiProvider::Ollama.caps();
-        assert!(!caps.allows_effort("medium"));
-        assert!(!caps.service_tier);
+    fn caps_gate_effort_and_tier() {
+        for (provider, effort, effort_ok, tier) in [
+            (AiProvider::OpenRouter, "xhigh", true, true),
+            (AiProvider::OpenAi, "high", true, false),
+            (AiProvider::OpenAi, "xhigh", false, false),
+            (
+                AiProvider::OpenAiCompatible,
+                "whatever-the-vendor-calls-it",
+                true,
+                true,
+            ),
+            (AiProvider::Ollama, "medium", false, false),
+        ] {
+            let caps = provider.caps();
+            assert_eq!(
+                caps.allows_effort(effort),
+                effort_ok,
+                "{provider:?} effort {effort:?}"
+            );
+            assert_eq!(caps.service_tier, tier, "{provider:?} service tier");
+        }
     }
 
     #[test]
@@ -193,20 +186,5 @@ mod tests {
         assert_eq!(compat, Some("http://localhost:11434/v1"));
         assert!(!native.unwrap().ends_with("/v1"));
         assert!(compat.unwrap().ends_with("/v1"));
-    }
-
-    #[test]
-    fn non_ollama_compat_base_url_matches_the_native_default() {
-        for p in AiProvider::ALL {
-            if p == AiProvider::Ollama {
-                continue;
-            }
-            assert_eq!(
-                p.openai_compat_base_url(),
-                p.caps().default_base_url,
-                "{} must not diverge from its native default",
-                p.as_str()
-            );
-        }
     }
 }

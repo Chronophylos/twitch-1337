@@ -38,19 +38,9 @@ Frage zum Inhalt; ohne bekommst du eine vollständige Beschreibung.",
 mod tests {
     use super::*;
 
-    fn tool_names() -> Vec<String> {
-        ai_tools().into_iter().map(|t| t.name).collect()
-    }
-
     #[test]
-    fn ai_tools_surface_contains_search_and_read() {
-        let names = tool_names();
-        assert_eq!(names, vec!["web_search", "read_url"]);
-    }
-
-    #[test]
-    fn read_url_does_not_appear_under_old_name() {
-        let names = tool_names();
-        assert!(!names.iter().any(|n| n == "fetch_url"));
+    fn every_advertised_tool_is_routed_as_web_tool() {
+        let names: Vec<String> = ai_tools().into_iter().map(|t| t.name).collect();
+        assert_eq!(names, WEB_TOOL_NAMES);
     }
 }

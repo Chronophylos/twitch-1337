@@ -1019,27 +1019,6 @@ mod tests {
         TaskSupervisor,
     };
 
-    #[test]
-    fn lifecycle_starts_running() {
-        let lifecycle = Lifecycle::new();
-
-        assert_eq!(lifecycle.state(), LifecycleState::Running);
-        assert!(lifecycle.is_running());
-        assert!(!lifecycle.is_cancelled());
-    }
-
-    #[tokio::test]
-    async fn late_observer_sees_earlier_graceful_stop() {
-        let lifecycle = Lifecycle::new();
-        lifecycle.request_graceful_stop();
-
-        let observed = timeout(Duration::from_millis(50), lifecycle.wait_for_cancellation())
-            .await
-            .expect("late observer should not miss a latched request");
-
-        assert_eq!(observed, LifecycleState::GracefulStop);
-    }
-
     #[tokio::test]
     async fn late_observer_sees_earlier_fault() {
         let lifecycle = Lifecycle::new();

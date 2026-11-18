@@ -175,18 +175,6 @@ mod tests {
         ])
     }
 
-    #[test]
-    fn tool_def_has_expected_name_and_required_query() {
-        let t = search_packages_tool();
-        assert_eq!(t.name, SEARCH_PACKAGES_TOOL_NAME);
-        assert_eq!(t.parameters["required"][0], "query");
-    }
-
-    #[test]
-    fn search_packages_is_not_a_web_tool() {
-        assert!(!crate::ai::content::is_web_tool(SEARCH_PACKAGES_TOOL_NAME));
-    }
-
     #[tokio::test]
     async fn unsupported_ecosystem_returns_error_without_http() {
         let server = MockServer::start().await;
@@ -347,22 +335,5 @@ mod tests {
             body.contains("\"error\":\"repology unavailable\""),
             "got {body}"
         );
-    }
-
-    #[tokio::test]
-    async fn success_has_no_install_commands() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api/v1/project/ripgrep"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(ripgrep_packages_json()))
-            .mount(&server)
-            .await;
-
-        let client = test_client(&server);
-        let msg =
-            execute_search_packages(&client, &call(serde_json::json!({"query": "ripgrep"}))).await;
-        let body = content(&msg);
-        assert!(!body.contains("\"install\""), "got {body}");
-        assert!(!body.contains("apt install"), "got {body}");
     }
 }

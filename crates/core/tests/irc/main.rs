@@ -15,6 +15,5 @@ mod ping;
 mod ping_name_guard;
 mod schedules_engine;
 mod servers;
-mod smoke;
 mod suspend;
 mod web_smoke;

@@ -464,29 +464,17 @@ mod schema_tests {
     use super::*;
 
     #[test]
-    fn chat_turn_tools_has_three_named_tools() {
-        let names: Vec<_> = chat_turn_tools().into_iter().map(|t| t.name).collect();
-        assert_eq!(names, vec!["write_file", "write_scratch", "delete_scratch"]);
-    }
-
-    #[test]
-    fn dreamer_tools_matches_chat_turn_tools() {
-        let names: Vec<_> = dreamer_tools().into_iter().map(|t| t.name).collect();
-        assert_eq!(names, vec!["write_file", "write_scratch", "delete_scratch"]);
+    fn chat_turn_and_dreamer_advertise_the_three_write_tools() {
+        for tools in [chat_turn_tools(), dreamer_tools()] {
+            let names: Vec<_> = tools.into_iter().map(|t| t.name).collect();
+            assert_eq!(names, vec!["write_file", "write_scratch", "delete_scratch"]);
+        }
     }
 
     #[test]
     fn grok_tools_are_read_only() {
         let names: Vec<_> = grok_chat_turn_tools().into_iter().map(|t| t.name).collect();
         assert_eq!(names, vec!["read_memory"]);
-    }
-
-    #[test]
-    fn write_file_args_round_trip() {
-        let v = serde_json::json!({"path": "users/12.md", "body": "hi"});
-        let parsed: WriteFileArgs = serde_json::from_value(v).unwrap();
-        assert_eq!(parsed.path, "users/12.md");
-        assert_eq!(parsed.body, "hi");
     }
 }
 
@@ -689,78 +677,11 @@ mod exec_tests {
     }
 
     #[tokio::test]
-    async fn regular_writes_own_user_file() {
+    async fn regular_cannot_write_lore_soul_or_other_user() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
-        let r = exec
-            .execute(&call(
-                "write_file",
-                serde_json::json!({"path": "users/12345.md", "body": "hi"}),
-            ))
-            .await;
-        assert_eq!(r.content, "ok");
-    }
-
-    #[tokio::test]
-    async fn regular_cannot_write_other_user_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 8).await;
-        let r = exec
-            .execute(&call(
-                "write_file",
-                serde_json::json!({"path": "users/99.md", "body": "hi"}),
-            ))
-            .await;
-        assert!(
-            r.content.starts_with("permission_denied"),
-            "got {}",
-            r.content
-        );
-    }
-
-    #[tokio::test]
-    async fn permission_denials_have_distinct_reasons() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 8).await;
-        let soul = exec
-            .execute(&call(
-                "write_file",
-                serde_json::json!({"path": "SOUL.md", "body": "x"}),
-            ))
-            .await
-            .content;
-        let lore = exec
-            .execute(&call(
-                "write_file",
-                serde_json::json!({"path": "LORE.md", "body": "x"}),
-            ))
-            .await
-            .content;
-        let other = exec
-            .execute(&call(
-                "write_file",
-                serde_json::json!({"path": "users/99.md", "body": "x"}),
-            ))
-            .await
-            .content;
-        for r in [&soul, &lore, &other] {
-            assert!(r.starts_with("permission_denied: "), "missing prefix: {r}");
-        }
-        // Each rule yields its own reason.
-        assert_ne!(soul, lore);
-        assert_ne!(lore, other);
-        assert_ne!(soul, other);
-    }
-
-    #[tokio::test]
-    async fn regular_cannot_write_lore_or_soul() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 8).await;
-        for path in ["LORE.md", "SOUL.md"] {
+        for path in ["LORE.md", "SOUL.md", "users/99.md"] {
             let r = exec
                 .execute(&call(
                     "write_file",
@@ -801,7 +722,7 @@ mod exec_tests {
     }
 
     #[tokio::test]
-    async fn invalid_path_and_invalid_slug_round_trip() {
+    async fn invalid_path_and_slug_map_to_error_codes() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let exec = make_executor(Role::Regular, store.clone(), 8).await;
@@ -819,36 +740,6 @@ mod exec_tests {
             ))
             .await;
         assert!(r.content.starts_with("invalid_slug"), "got {}", r.content);
-    }
-
-    #[tokio::test]
-    async fn dated_slug_is_blocked_on_write_and_delete() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 8).await;
-
-        let r = exec
-            .execute(&call(
-                "write_scratch",
-                serde_json::json!({"slug": "av-depot-2026-05-08", "body": "x"}),
-            ))
-            .await;
-        assert!(r.content.starts_with("invalid_slug"), "got {}", r.content);
-
-        let r = exec
-            .execute(&call(
-                "delete_scratch",
-                serde_json::json!({"slug": "legacy-2026-05-08"}),
-            ))
-            .await;
-        assert!(r.content.starts_with("invalid_slug"), "got {}", r.content);
-    }
-
-    #[tokio::test]
-    async fn reserved_slug_is_blocked() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        let exec = make_executor(Role::Regular, store.clone(), 8).await;
         let r = exec
             .execute(&call(
                 "write_scratch",

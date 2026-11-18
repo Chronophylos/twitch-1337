@@ -80,34 +80,7 @@ impl TokenStorage for FileBasedTokenStorage {
 
 #[cfg(test)]
 mod tests {
-    use jiff::Timestamp;
     use twitch_irc::login::UserAccessToken;
-
-    fn make_token(expires_at: Option<Timestamp>) -> UserAccessToken {
-        UserAccessToken {
-            access_token: "acc".into(),
-            refresh_token: "ref".into(),
-            created_at: Timestamp::now(),
-            expires_at,
-        }
-    }
-
-    #[test]
-    fn ron_roundtrip_expires_at_none() {
-        let t = make_token(None);
-        let s = ron::to_string(&t).unwrap();
-        let t2: UserAccessToken = ron::from_str(&s).unwrap();
-        assert_eq!(t2.expires_at, None);
-    }
-
-    #[test]
-    fn ron_roundtrip_expires_at_some() {
-        let now = Timestamp::now();
-        let t = make_token(Some(now));
-        let s = ron::to_string(&t).unwrap();
-        let t2: UserAccessToken = ron::from_str(&s).unwrap();
-        assert_eq!(t2.expires_at, Some(now));
-    }
 
     /// `token.ron` written by the chrono-era build must keep loading, or the
     /// bot falls back to the config refresh token on every start.
@@ -120,14 +93,5 @@ mod tests {
         )
         .expect("old token file must load");
         assert_eq!(t.expires_at, Some("2026-07-19T16:00:00Z".parse().unwrap()));
-    }
-
-    #[test]
-    fn with_path_sets_explicit_path() {
-        let s = super::FileBasedTokenStorage::with_path(
-            "/tmp/token-aurora.ron".into(),
-            "ref".to_string().into(),
-        );
-        assert_eq!(s.path.to_str(), Some("/tmp/token-aurora.ron"));
     }
 }

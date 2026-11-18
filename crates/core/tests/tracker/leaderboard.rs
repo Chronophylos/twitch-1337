@@ -46,17 +46,3 @@ async fn leaderboard_returns_top_pbs() {
 
     bot.shutdown().await;
 }
-
-#[tokio::test]
-async fn leaderboard_empty_state_message() {
-    let mut bot = TestBotBuilder::new().spawn().await;
-
-    bot.send("alice", "!lb").await;
-    let out = bot.expect_say(Duration::from_secs(2)).await;
-    assert!(
-        out.contains("Noch keine Einträge vorhanden"),
-        "expected empty-state message, got: {out}"
-    );
-
-    bot.shutdown().await;
-}

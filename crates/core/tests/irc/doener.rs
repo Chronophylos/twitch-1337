@@ -2,12 +2,13 @@ use super::common;
 
 use std::time::Duration;
 
-use common::TestBotBuilder;
+use common::{TestBot, TestBotBuilder};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-#[tokio::test]
-async fn dpi_global_returns_summary_from_upstream() {
+/// Mock the Döneratlas national stats endpoint and spawn a bot pointed at it.
+/// The server is returned so it outlives the test body.
+async fn spawn_with_stats() -> (MockServer, TestBot) {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/app-api/public/stats"))
@@ -18,10 +19,16 @@ async fn dpi_global_returns_summary_from_upstream() {
         .mount(&server)
         .await;
 
-    let mut bot = TestBotBuilder::new()
+    let bot = TestBotBuilder::new()
         .with_doener_base_url(server.uri())
         .spawn()
         .await;
+    (server, bot)
+}
+
+#[tokio::test]
+async fn dpi_global_returns_summary_from_upstream() {
+    let (_server, mut bot) = spawn_with_stats().await;
 
     bot.send("alice", "!dpi").await;
     let reply = bot.expect_say(Duration::from_secs(2)).await;
@@ -75,20 +82,7 @@ async fn dpi_unicode_exact_match_prefers_city_details() {
 
 #[tokio::test]
 async fn doener_calc_accepts_ascii_alias_and_formats_reply() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/app-api/public/stats"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            br#"{"national_average":8.36,"total_cities":1072,"total_shops":1897,"total_reports":3514,"change_30d":1.7,"mode_price":7}"#.as_slice(),
-            "application/json",
-        ))
-        .mount(&server)
-        .await;
-
-    let mut bot = TestBotBuilder::new()
-        .with_doener_base_url(server.uri())
-        .spawn()
-        .await;
+    let (_server, mut bot) = spawn_with_stats().await;
 
     bot.send("alice", "!doener 16,72").await;
     let reply = bot.expect_reply(Duration::from_secs(2)).await;
@@ -104,20 +98,7 @@ async fn doener_calc_accepts_ascii_alias_and_formats_reply() {
 
 #[tokio::test]
 async fn doener_calc_accepts_expressions() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/app-api/public/stats"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            br#"{"national_average":8.36,"total_cities":1072,"total_shops":1897,"total_reports":3514,"change_30d":1.7,"mode_price":7}"#.as_slice(),
-            "application/json",
-        ))
-        .mount(&server)
-        .await;
-
-    let mut bot = TestBotBuilder::new()
-        .with_doener_base_url(server.uri())
-        .spawn()
-        .await;
+    let (_server, mut bot) = spawn_with_stats().await;
 
     bot.send("alice", "!doener 5+5").await;
     let reply = bot.expect_reply(Duration::from_secs(2)).await;
@@ -133,20 +114,7 @@ async fn doener_calc_accepts_expressions() {
 
 #[tokio::test]
 async fn doener_calc_shows_zero_for_non_positive_amounts() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/app-api/public/stats"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            br#"{"national_average":8.36,"total_cities":1072,"total_shops":1897,"total_reports":3514,"change_30d":1.7,"mode_price":7}"#.as_slice(),
-            "application/json",
-        ))
-        .mount(&server)
-        .await;
-
-    let mut bot = TestBotBuilder::new()
-        .with_doener_base_url(server.uri())
-        .spawn()
-        .await;
+    let (_server, mut bot) = spawn_with_stats().await;
 
     bot.send("alice", "!doener 0").await;
     let reply = bot.expect_reply(Duration::from_secs(2)).await;
@@ -162,20 +130,7 @@ async fn doener_calc_shows_zero_for_non_positive_amounts() {
 
 #[tokio::test]
 async fn doener_calc_formats_huge_values_without_inf() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/app-api/public/stats"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            br#"{"national_average":8.36,"total_cities":1072,"total_shops":1897,"total_reports":3514,"change_30d":1.7,"mode_price":7}"#.as_slice(),
-            "application/json",
-        ))
-        .mount(&server)
-        .await;
-
-    let mut bot = TestBotBuilder::new()
-        .with_doener_base_url(server.uri())
-        .spawn()
-        .await;
+    let (_server, mut bot) = spawn_with_stats().await;
 
     bot.send("alice", "!doener 1.7976931348623157e+308").await;
     let reply = bot.expect_reply(Duration::from_secs(2)).await;

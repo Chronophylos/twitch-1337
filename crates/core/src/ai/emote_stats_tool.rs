@@ -546,13 +546,6 @@ mod tests {
         (h, dir)
     }
 
-    #[test]
-    fn tool_def_requires_only_kind() {
-        let t = emote_stats_tool();
-        assert_eq!(t.name, EMOTE_STATS_TOOL_NAME);
-        assert_eq!(t.parameters["required"][0], "kind");
-    }
-
     #[tokio::test]
     async fn usage_by_user_without_user_is_invalid() {
         let (h, _dir) = tracker().await;

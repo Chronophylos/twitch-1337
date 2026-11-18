@@ -631,15 +631,6 @@ mod tests {
     }
 
     #[test]
-    fn test_prefill_threshold_validation() {
-        assert!((0.0..=1.0).contains(&0.0));
-        assert!((0.0..=1.0).contains(&0.5));
-        assert!((0.0..=1.0).contains(&1.0));
-        assert!(!(0.0..=1.0).contains(&-0.1));
-        assert!(!(0.0..=1.0).contains(&1.1));
-    }
-
-    #[test]
     fn disabled_aviationstack_still_builds_adsb_client() {
         twitch_1337_core::install_crypto_provider();
         let settings = Settings::compiled_defaults().aviationstack;

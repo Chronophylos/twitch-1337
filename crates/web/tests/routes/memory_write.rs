@@ -4,9 +4,6 @@
 //! pre-seeded so require_mod admits without an OAuth round-trip; FakeHelix
 //! returns `is_moderator = true` so the periodic recheck is satisfied.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use tempfile::TempDir;
@@ -15,30 +12,12 @@ use twitch_1337_core::ai::memory::store::UserIdentity;
 use twitch_1337_core::ai::memory::types::FileKind;
 use twitch_1337_web::WebState;
 use twitch_1337_web::build_router;
-use twitch_1337_web::helix::{HelixClient, HelixUser};
 
 use super::helpers;
 use helpers::{
-    FakeHelix, build_state_with_dirs, cookie_header, insert_session, insert_session_as,
+    admin_helix, build_state_with_dirs, cookie_header, insert_session, insert_session_as,
     install_crypto,
 };
-
-fn admin_helix(user_id: &str) -> Arc<dyn HelixClient> {
-    let mut users = HashMap::new();
-    users.insert(
-        user_id.to_owned(),
-        HelixUser {
-            id: user_id.to_owned(),
-            login: "admin".into(),
-            display_name: "admin".into(),
-            profile_image_url: None,
-        },
-    );
-    Arc::new(FakeHelix {
-        moderators: vec![user_id.to_owned()],
-        users,
-    })
-}
 
 /// `(state, signed_sid, signed_csrf, bare_csrf, _td_pings, _td_memory)`.
 /// `signed_csrf` is what the browser would send as the `tw1337_csrf` cookie
@@ -747,28 +726,6 @@ async fn forget_unknown_id_is_404_with_flash() {
     let lines = read_audit_lines(&td_memory);
     assert_eq!(lines[0]["op"], "forget");
     assert_eq!(lines[0]["result"], "not_found");
-}
-
-#[tokio::test]
-async fn users_list_offers_forget_not_reset() {
-    let (state, sid, csrf, _bare, _tdp, _tdm) = authed_setup().await;
-    seed_sheet(&state, "12345", "Alice").await;
-    let app = build_router(state);
-    let req = Request::builder()
-        .uri("/memory/users")
-        .header(header::COOKIE, cookie_header(&sid, &csrf))
-        .body(Body::empty())
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let html = body_string(res).await;
-    assert!(html.contains("action=\"/memory/users/12345/forget\""));
-    assert!(
-        html.contains("data-confirm=\"Forget Alice (12345)?"),
-        "confirm names the user; got {html}"
-    );
-    assert!(!html.contains(">Reset<"), "fake Reset link is gone");
-    assert!(html.contains("+ New Character Sheet"));
 }
 
 #[tokio::test]

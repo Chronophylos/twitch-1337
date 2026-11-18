@@ -202,25 +202,6 @@ async fn reply_to_grok_mouth_starts_grok_turn() {
 }
 
 #[tokio::test]
-async fn anyone_in_chat_can_follow_up() {
-    let bot = TestBotBuilder::new()
-        .with_ai()
-        .with_fake_mouth(Agent::Aurora, AURORA_LOGIN, AURORA_ID, "spoken-aurora")
-        .spawn()
-        .await;
-    bot.llm.push_tool_message("jo");
-
-    // Original !ai speaker is not in this message — bob replies to Aurora.
-    bot.send_reply_to_mouth("bob", "und dann", AURORA_LOGIN, AURORA_ID, "hallo")
-        .await;
-
-    wait_tool_calls(&bot, 1).await;
-    assert_eq!(bot.llm.tool_calls().len(), 1);
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
 async fn lb_reply_to_mouth_runs_command_only() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
@@ -459,23 +440,6 @@ async fn followup_honors_ai_suspend() {
         .await;
     bot.expect_silent(Duration::from_millis(500)).await;
     assert!(bot.llm.tool_calls().is_empty());
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn aurora_followup_may_stay_silent() {
-    let mut bot = TestBotBuilder::new()
-        .with_ai()
-        .with_fake_mouth(Agent::Aurora, AURORA_LOGIN, AURORA_ID, "spoken-aurora")
-        .spawn()
-        .await;
-    bot.llm.push_tool_message("");
-
-    bot.send_reply_to_mouth("alice", "ok", AURORA_LOGIN, AURORA_ID, "parent")
-        .await;
-    wait_tool_calls(&bot, 1).await;
-    bot.expect_silent(Duration::from_millis(400)).await;
 
     bot.shutdown().await;
 }

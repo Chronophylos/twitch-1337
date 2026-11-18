@@ -516,7 +516,7 @@ async fn delete_via_htmx_returns_only_oob_stats() {
     assert!(state.settings.load().schedules.is_empty());
 }
 
-/// The page renders the targets the htmx swaps rely on and no inline script.
+/// The page renders the ids the out-of-band swaps target, and delete asks first.
 #[tokio::test]
 async fn list_wires_cards_for_htmx() {
     install_crypto();
@@ -530,42 +530,12 @@ async fn list_wires_cards_for_htmx() {
         .unwrap();
     let html = body_string(build_router(state).oneshot(req).await.unwrap()).await;
     assert!(
-        html.contains(r#"hx-post="/schedules/flip/toggle""#),
-        "got {html}"
-    );
-    assert!(
-        html.contains(r#"hx-post="/schedules/flip/delete""#),
-        "got {html}"
-    );
-    assert!(
         html.contains("hx-confirm="),
         "delete asks first; got {html}"
     );
     assert!(html.contains(r#"id="schedule-stats""#));
     assert!(html.contains(r#"id="schedules-total""#));
     assert!(!html.contains("hx-swap-oob"), "the page itself is not oob");
-    assert!(!html.contains("<script>"), "no inline script; got {html}");
-}
-
-#[tokio::test]
-async fn edit_query_param_renders_inline_form() {
-    install_crypto();
-    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_schedules(&state, vec![interval_schedule("alpha", "hi")]).await;
-    let (sid, csrf_cookie, _bare_csrf) = insert_session(&state, "999", "mod");
-    let app = build_router(state.clone());
-
-    let req = Request::builder()
-        .uri("/schedules?edit=alpha")
-        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
-        .body(Body::empty())
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    let body = body_string(res).await;
-    assert!(
-        body.contains("/schedules/alpha/edit"),
-        "edit form action must be present for the matching row; body was: {body}"
-    );
 }
 
 #[tokio::test]

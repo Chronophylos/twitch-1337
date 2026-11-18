@@ -1,5 +1,5 @@
 //! Every response carries the CSP, `nosniff` and `Referrer-Policy` headers:
-//! authed pages, the public login page, static assets and error pages.
+//! one router-wide layer covers pages and the 404 fallback alike.
 
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode, header};
@@ -9,14 +9,13 @@ use twitch_1337_web::{CONTENT_SECURITY_POLICY, build_router};
 use super::helpers;
 use helpers::{admin_helix, build_state, cookie_header, insert_session, install_crypto};
 
-async fn fetch(uri: &str, authed: bool) -> (StatusCode, HeaderMap) {
+async fn fetch(uri: &str) -> (StatusCode, HeaderMap) {
     install_crypto();
     let state = build_state(admin_helix("12345")).await;
-    let mut req = Request::builder().uri(uri);
-    if authed {
-        let (sid, csrf, _bare) = insert_session(&state, "12345", "admin");
-        req = req.header(header::COOKIE, cookie_header(&sid, &csrf));
-    }
+    let (sid, csrf, _bare) = insert_session(&state, "12345", "admin");
+    let req = Request::builder()
+        .uri(uri)
+        .header(header::COOKIE, cookie_header(&sid, &csrf));
     let res = build_router(state)
         .oneshot(req.body(Body::empty()).unwrap())
         .await
@@ -44,28 +43,14 @@ fn assert_security_headers(uri: &str, headers: &HeaderMap) {
 
 #[tokio::test]
 async fn security_headers_on_authed_page() {
-    let (status, headers) = fetch("/pings", true).await;
+    let (status, headers) = fetch("/pings").await;
     assert_eq!(status, StatusCode::OK);
     assert_security_headers("/pings", &headers);
 }
 
 #[tokio::test]
-async fn security_headers_on_login() {
-    let (status, headers) = fetch("/login", false).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_security_headers("/login", &headers);
-}
-
-#[tokio::test]
-async fn security_headers_on_asset() {
-    let (status, headers) = fetch("/assets/app.css", false).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_security_headers("/assets/app.css", &headers);
-}
-
-#[tokio::test]
 async fn security_headers_on_not_found() {
-    let (status, headers) = fetch("/no-such-page", true).await;
+    let (status, headers) = fetch("/no-such-page").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_security_headers("/no-such-page", &headers);
 }

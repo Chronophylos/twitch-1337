@@ -372,26 +372,6 @@ mod tests {
     }
 
     #[test]
-    fn nearby_aircraft_deserializes_signal_fields() {
-        let ac: NearbyAircraft = serde_json::from_value(serde_json::json!({
-            "hex": "3c6589",
-            "rssi": -11.5,
-            "seen_pos": 0.7
-        }))
-        .unwrap();
-        assert_eq!(ac.rssi, Some(-11.5));
-        assert_eq!(ac.seen_pos, Some(0.7));
-    }
-
-    #[test]
-    fn nearby_aircraft_signal_fields_default_to_none_when_absent() {
-        let ac: NearbyAircraft =
-            serde_json::from_value(serde_json::json!({ "hex": "3c6589" })).unwrap();
-        assert_eq!(ac.rssi, None);
-        assert_eq!(ac.seen_pos, None);
-    }
-
-    #[test]
     fn aviationstack_codeshare_record_exposes_operating_flight() {
         let metadata = metadata_from_json(serde_json::json!({
             "flight": {

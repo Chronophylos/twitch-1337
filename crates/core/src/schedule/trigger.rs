@@ -231,18 +231,6 @@ mod ser_de_tests {
         let back: Trigger = ron::from_str(&s).expect("de");
         assert_eq!(t, back);
     }
-
-    #[test]
-    fn calendar_empty_days_serializes_as_empty_set() {
-        let t = Trigger::Calendar {
-            days: WeekdaySet::default(),
-            at: jiff::civil::time(9, 0, 0, 0),
-        };
-        let s = ron::to_string(&t).expect("ser");
-        assert!(s.to_lowercase().contains("calendar"));
-        let back: Trigger = ron::from_str(&s).expect("de");
-        assert_eq!(t, back);
-    }
 }
 
 #[cfg(test)]

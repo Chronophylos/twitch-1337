@@ -2,7 +2,7 @@ use super::common;
 
 use std::time::Duration;
 
-use common::TestBotBuilder;
+use common::{TestBot, TestBotBuilder};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
@@ -14,24 +14,36 @@ fn json(body: &str) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_raw(body.as_bytes().to_vec(), "application/json")
 }
 
-#[tokio::test]
-async fn servers_lists_online_instances() {
+/// Mock AMP (login + `GetInstances`) and a bot pointed at it. The server is
+/// returned so it outlives the test body; `expected_instance_calls` pins how
+/// often `GetInstances` may be hit.
+async fn spawn_with_amp(expected_instance_calls: Option<u64>) -> (MockServer, TestBot) {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/API/Core/Login"))
         .respond_with(json(r#"{"success":true,"sessionID":"s1"}"#))
         .mount(&server)
         .await;
-    Mock::given(method("POST"))
+    let instances = Mock::given(method("POST"))
         .and(path("/API/ADSModule/GetInstances"))
-        .respond_with(json(INSTANCES))
-        .mount(&server)
-        .await;
+        .respond_with(json(INSTANCES));
+    match expected_instance_calls {
+        Some(n) => instances.expect(n),
+        None => instances,
+    }
+    .mount(&server)
+    .await;
 
-    let mut bot = TestBotBuilder::new()
+    let bot = TestBotBuilder::new()
         .with_amp_base_url(server.uri())
         .spawn()
         .await;
+    (server, bot)
+}
+
+#[tokio::test]
+async fn servers_lists_online_instances() {
+    let (_server, mut bot) = spawn_with_amp(None).await;
 
     bot.send("alice", "!servers").await;
     let reply = bot.expect_reply(Duration::from_secs(2)).await;
@@ -42,23 +54,7 @@ async fn servers_lists_online_instances() {
 
 #[tokio::test]
 async fn servers_has_per_user_cooldown() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/API/Core/Login"))
-        .respond_with(json(r#"{"success":true,"sessionID":"s1"}"#))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/API/ADSModule/GetInstances"))
-        .respond_with(json(INSTANCES))
-        .expect(2)
-        .mount(&server)
-        .await;
-
-    let mut bot = TestBotBuilder::new()
-        .with_amp_base_url(server.uri())
-        .spawn()
-        .await;
+    let (_server, mut bot) = spawn_with_amp(Some(2)).await;
 
     bot.send("alice", "!servers").await;
     bot.expect_reply(Duration::from_secs(2)).await;
@@ -75,22 +71,7 @@ async fn servers_has_per_user_cooldown() {
 
 #[tokio::test]
 async fn ambiguous_query_does_not_start_the_cooldown() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/API/Core/Login"))
-        .respond_with(json(r#"{"success":true,"sessionID":"s1"}"#))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/API/ADSModule/GetInstances"))
-        .respond_with(json(INSTANCES))
-        .mount(&server)
-        .await;
-
-    let mut bot = TestBotBuilder::new()
-        .with_amp_base_url(server.uri())
-        .spawn()
-        .await;
+    let (_server, mut bot) = spawn_with_amp(None).await;
 
     bot.send("alice", "!servers vintage").await;
     let reply = bot.expect_reply(Duration::from_secs(2)).await;
@@ -101,16 +82,6 @@ async fn ambiguous_query_does_not_start_the_cooldown() {
         reply.starts_with("Vintage Story ist offline"),
         "got: {reply}"
     );
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn servers_absent_without_amp_config() {
-    let mut bot = TestBotBuilder::new().spawn().await;
-
-    bot.send("alice", "!servers").await;
-    bot.expect_silent(Duration::from_millis(500)).await;
 
     bot.shutdown().await;
 }

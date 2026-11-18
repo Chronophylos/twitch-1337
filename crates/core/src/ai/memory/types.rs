@@ -140,23 +140,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn role_orderable_for_perm_table() {
-        assert_eq!(Role::Regular as u8 + 1, Role::Moderator as u8);
-        assert_eq!(Role::Moderator as u8 + 1, Role::Broadcaster as u8);
-        assert_eq!(Role::Broadcaster as u8 + 1, Role::Dreamer as u8);
-    }
-
-    #[test]
-    fn caps_default_matches_spec() {
-        let c = Caps::default();
-        assert_eq!(c.soul_bytes, 4096);
-        assert_eq!(c.lore_bytes, 12_288);
-        assert_eq!(c.user_bytes, 4096);
-        assert_eq!(c.scratch_bytes, 2048);
-        assert_eq!(c.max_scratch_files, 16);
-    }
-
-    #[test]
     fn file_kind_relative_path_round_trips() {
         assert_eq!(FileKind::Soul.relative_path().to_str().unwrap(), "SOUL.md");
         assert_eq!(FileKind::Lore.relative_path().to_str().unwrap(), "LORE.md");

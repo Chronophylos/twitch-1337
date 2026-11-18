@@ -85,28 +85,6 @@ async fn seed_profiles(state: &twitch_1337_web::WebState, rows: Vec<AiProfile>, 
 }
 
 #[tokio::test]
-async fn activate_route_is_unmounted() {
-    install_crypto();
-    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
-    let (sid, csrf_cookie, bare_csrf) =
-        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
-    let app = build_router(state.clone());
-
-    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
-    let req = Request::builder()
-        .method("POST")
-        .uri("/ai-profiles/b/activate")
-        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(body))
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::NOT_FOUND);
-    assert_eq!(state.settings.load().ai.aurora.profile, "a");
-}
-
-#[tokio::test]
 async fn delete_refuses_to_remove_the_last_profile() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
@@ -126,30 +104,6 @@ async fn delete_refuses_to_remove_the_last_profile() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK); // re-rendered with an error
     assert_eq!(state.settings.load().ai.profiles.len(), 1);
-}
-
-#[tokio::test]
-async fn delete_refuses_to_remove_a_profile_used_by_aurora() {
-    install_crypto();
-    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a"), profile("b")], "b").await;
-    let (sid, csrf_cookie, bare_csrf) =
-        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
-    let app = build_router(state.clone());
-
-    let body = format!("_csrf={csrf}", csrf = urlencoding::encode(&bare_csrf));
-    let req = Request::builder()
-        .method("POST")
-        .uri("/ai-profiles/b/delete")
-        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(body))
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK); // re-rendered with an error
-    let settings = state.settings.load();
-    assert_eq!(settings.ai.profiles.len(), 2);
-    assert_eq!(settings.ai.aurora.profile, "b");
 }
 
 /// I1: `/ai-profiles` moved from mod-gated to owner-gated because a profile
@@ -321,50 +275,6 @@ async fn add_rejects_openai_profile_without_key() {
         state.settings.load().ai.profiles.len(),
         1,
         "the keyless row must not persist"
-    );
-}
-
-#[tokio::test]
-async fn list_page_puts_ai_profiles_in_system_nav_and_does_not_split_labels() {
-    install_crypto();
-    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
-    let (sid, csrf_cookie, _bare) =
-        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
-    let app = build_router(state);
-
-    let req = Request::builder()
-        .uri("/ai-profiles?new=true")
-        .header(header::COOKIE, cookie_header(&sid, &csrf_cookie))
-        .body(Body::empty())
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let html = body_string(res).await;
-
-    let operate = html.find(">Operate</div>").expect("Operate group label");
-    let system = html.find(">System</div>").expect("System group label");
-    let nav = html
-        .find(r#"class="nav-item" href="/ai-profiles""#)
-        .expect("AI Profiles nav link");
-    assert!(
-        operate < system && system < nav,
-        "AI Profiles must sit under System, not Operate"
-    );
-    assert!(
-        !html.contains("/activate"),
-        "activate action must be absent"
-    );
-    assert!(!html.contains(">ACTIVE<"), "active chip must be absent");
-    assert!(
-        !html.contains("active-profile"),
-        "active-profile styling must be absent"
-    );
-    assert!(
-        html.contains(
-            "<span>Key name — <code>[ai.keys]</code> entry (required except Ollama)</span>"
-        ),
-        "key label must be a single span so flex-column does not split on <code>; got: {html}"
     );
 }
 

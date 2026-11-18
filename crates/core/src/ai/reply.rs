@@ -288,22 +288,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_rewrite_clamps_original() {
-        let draft = "z".repeat(ReplyLimits::GROK.hard + 5);
-        let llm = ScriptedClient::new(vec![Scripted::Text(String::new())]);
-        let out = prepare_agent_reply(&llm, &draft, &opts(), &ReplyLimits::GROK).await;
-        assert_eq!(out.chars().count(), ReplyLimits::GROK.hard);
-        assert!(out.starts_with('z'));
-        assert!(out.ends_with('…'));
-    }
-
-    #[tokio::test]
-    async fn whitespace_only_rewrite_clamps_original() {
-        let draft = "w".repeat(ReplyLimits::GROK.hard + 5);
-        let llm = ScriptedClient::new(vec![Scripted::Text("  \n\t  ".into())]);
-        let out = prepare_agent_reply(&llm, &draft, &opts(), &ReplyLimits::GROK).await;
-        assert!(out.starts_with('w'));
-        assert_eq!(out.chars().count(), ReplyLimits::GROK.hard);
+    async fn blank_rewrite_clamps_original() {
+        for rewrite in ["", "  \n\t  "] {
+            let draft = "z".repeat(ReplyLimits::GROK.hard + 5);
+            let llm = ScriptedClient::new(vec![Scripted::Text(rewrite.into())]);
+            let out = prepare_agent_reply(&llm, &draft, &opts(), &ReplyLimits::GROK).await;
+            assert_eq!(out.chars().count(), ReplyLimits::GROK.hard, "{rewrite:?}");
+            assert!(out.starts_with('z'), "{rewrite:?}");
+            assert!(out.ends_with('…'), "{rewrite:?}");
+        }
     }
 
     #[tokio::test]
@@ -375,7 +368,6 @@ mod tests {
         let out = prepare_agent_reply(&llm, &draft, &opts(), &ReplyLimits::GROK).await;
         assert_eq!(out.chars().count(), ReplyLimits::GROK.hard);
         assert!(out.ends_with('…'));
-        assert!(out.is_char_boundary(out.len()));
     }
 
     fn split_limits() -> ReplyLimits {
@@ -383,12 +375,6 @@ mod tests {
             soft: 100,
             hard: 200,
         }
-    }
-
-    #[test]
-    fn grok_limits_stay_at_490() {
-        assert_eq!(ReplyLimits::GROK.soft, 490);
-        assert_eq!(ReplyLimits::GROK.hard, 490);
     }
 
     #[tokio::test]

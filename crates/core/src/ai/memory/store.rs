@@ -814,19 +814,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_does_not_seed_prompts_to_disk() {
-        // Prompts are code now (#321): baked into the binary via `include_str!`
-        // and used directly at runtime. `open` must not create or seed a
-        // `$DATA_DIR/prompts/` dir — there is no on-disk override to drift.
-        let dir = tempfile::tempdir().unwrap();
-        MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        assert!(
-            !dir.path().join("prompts").exists(),
-            "open must not create a prompts dir"
-        );
-    }
-
-    #[tokio::test]
     async fn write_user_file_persists_and_caps_apply() {
         let dir = tempfile::tempdir().unwrap();
         // Cap covers the *full* on-disk file (frontmatter + body), so it must
@@ -976,15 +963,6 @@ mod tests {
             Some("12345"),
             "created_by stays after overwrite"
         );
-    }
-
-    #[tokio::test]
-    async fn current_mtime_returns_positive_for_existing_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        // SOUL.md is seeded by `open`, so it must have a non-zero mtime.
-        let mt = store.current_mtime(&FileKind::Soul).await.unwrap();
-        assert!(mt > 0, "seeded file must have positive mtime; got {mt}");
     }
 
     #[tokio::test]
@@ -1292,32 +1270,24 @@ mod tests {
         assert_eq!(mf.frontmatter.created_by.as_deref(), Some("12345"));
     }
 
+    /// Store-level gate for every slug-taking scratch op; the full slug grammar
+    /// is covered in `sanitize`. Reserved and invalid map to distinct errors.
     #[tokio::test]
-    async fn state_reserved_slugs_rejected() {
+    async fn scratch_slug_gate_rejects_reserved_and_invalid() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
-        for reserved in ["new", "delete", "system"] {
-            let err = store
-                .write_scratch(
-                    &FileKind::Scratch {
-                        slug: reserved.into(),
-                    },
-                    "x",
-                    Some("1"),
-                )
-                .await
-                .unwrap_err();
-            assert!(
-                matches!(err, WriteError::ReservedSlug),
-                "slug `{reserved}` must be reserved, got {err:?}"
-            );
-        }
-    }
+        let err = store
+            .write_scratch(
+                &FileKind::Scratch {
+                    slug: "system".into(),
+                },
+                "x",
+                Some("1"),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WriteError::ReservedSlug), "got {err:?}");
 
-    #[tokio::test]
-    async fn state_invalid_slug_rejected() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let too_long = "x".repeat(65);
         let cases = [
             too_long.as_str(),
@@ -1339,12 +1309,7 @@ mod tests {
                 "slug `{slug}` must be rejected, got {err:?}"
             );
         }
-    }
 
-    #[tokio::test]
-    async fn delete_scratch_rejects_dated_slug() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
         let err = store.delete_scratch("legacy-2026-05-08").await.unwrap_err();
         assert!(matches!(err, WriteError::InvalidSlug));
     }

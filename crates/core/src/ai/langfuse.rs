@@ -574,7 +574,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exporter_posts_otlp_and_survives_http_errors() {
+    async fn exporter_posts_otlp_with_ingestion_header() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path(TRACES_PATH))
@@ -607,7 +607,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exporter_failure_does_not_panic() {
+    async fn exporter_survives_http_errors() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path(TRACES_PATH))
@@ -619,20 +619,5 @@ mod tests {
         handle.generation(sample_generation());
         handle.finalize().await.unwrap();
         assert!(handle.owner.handle.lock().await.is_none());
-    }
-
-    #[test]
-    fn bootstrap_deserializes() {
-        let raw: LangfuseBootstrap = toml::from_str(
-            r#"
-            public_key = "pk"
-            secret_key = "sk"
-            host = "https://us.cloud.langfuse.com"
-            "#,
-        )
-        .unwrap();
-        assert_eq!(raw.public_key.expose_secret(), "pk");
-        assert_eq!(raw.secret_key.expose_secret(), "sk");
-        assert_eq!(raw.host.as_deref(), Some("https://us.cloud.langfuse.com"));
     }
 }

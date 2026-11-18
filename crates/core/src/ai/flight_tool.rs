@@ -360,23 +360,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generates_a_plan() {
-        let v = run(json!({"aircraft": "B738", "duration": "1h"})).await;
-        assert_eq!(v["aircraft"], "B738");
-        assert!(v["simbrief_url"].as_str().unwrap().contains("simbrief"));
-        assert!(v["direction"].is_string(), "got: {v}");
-    }
-
-    #[tokio::test]
-    async fn pinned_departure_is_used() {
+    async fn pinned_aircraft_and_departure_are_used() {
         let v = run(json!({"aircraft": "B738", "duration": "1h", "departure": "EDDF"})).await;
-        assert_eq!(v["departure"], "EDDF");
+        assert_eq!(v["aircraft"], "B738", "got: {v}");
+        assert_eq!(v["departure"], "EDDF", "got: {v}");
+        assert!(v["simbrief_url"].as_str().unwrap().contains("simbrief"));
     }
 
     #[tokio::test]
-    async fn omitted_aircraft_picks_one() {
+    async fn omitted_aircraft_picks_a_known_type() {
         let v = run(json!({"duration": "1h"})).await;
-        assert!(v["aircraft"].is_string(), "got: {v}");
+        let picked = v["aircraft"].as_str().expect("aircraft");
+        assert!(
+            twitch_1337_data::flight::aircraft()
+                .iter()
+                .any(|ac| ac.icao_type == picked),
+            "got: {v}"
+        );
     }
 
     #[tokio::test]

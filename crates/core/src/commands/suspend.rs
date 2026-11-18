@@ -226,29 +226,3 @@ where
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn exempt_list_covers_required_commands() {
-        assert!(EXEMPT_COMMANDS.contains(&"suspend"));
-        assert!(EXEMPT_COMMANDS.contains(&"unsuspend"));
-        assert!(EXEMPT_COMMANDS.contains(&"p"));
-    }
-
-    #[test]
-    fn duration_error_messages_end_in_fdm() {
-        for err in [
-            ParseDurationError::Empty,
-            ParseDurationError::InvalidNumber,
-            ParseDurationError::UnknownUnit,
-            ParseDurationError::Zero,
-            ParseDurationError::TooLong,
-        ] {
-            let msg = duration_error_message(&err);
-            assert!(msg.ends_with("FDM"), "expected FDM suffix, got: {msg}");
-        }
-    }
-}

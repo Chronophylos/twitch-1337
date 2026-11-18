@@ -717,24 +717,6 @@ fn normalize_prompt_field(value: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_global_emote_set_response() {
-        let json = serde_json::json!({
-            "id": "global",
-            "emotes": [
-                {"id": "1", "name": "KEKW", "data": {"name": "ignored"}},
-                {"id": "2", "name": "peepoHappy"}
-            ]
-        });
-
-        let parsed: SevenTvEmoteSet = serde_json::from_value(json).unwrap();
-
-        assert_eq!(parsed.emotes.len(), 2);
-        assert_eq!(parsed.emotes[0].id, "1");
-        assert_eq!(parsed.emotes[0].name, "KEKW");
-        assert_eq!(parsed.emotes[1].name, "peepoHappy");
-    }
-
     fn prompt_emote(name: &str, appearance: &str) -> PromptEmote {
         PromptEmote {
             name: name.into(),
@@ -792,33 +774,26 @@ mod tests {
 
     #[test]
     fn prompt_line_emits_only_non_empty_fields() {
-        let line = format_prompt_emote_line(&prompt_emote_full(
-            "KEKW",
-            "laughing face",
-            Some("lachen"),
-            Some("bei witzen"),
-            Some("ernste themen"),
-        ));
-        assert!(line.contains("- KEKW; appearance=laughing face"));
-        assert!(line.contains("meaning=lachen"));
-        assert!(line.contains("use=bei witzen"));
-        assert!(line.contains("avoid=ernste themen"));
-    }
-
-    #[test]
-    fn prompt_contains_only_catalog_backed_entries() {
-        let emotes = vec![prompt_emote_full(
-            "KEKW",
-            "lachen",
-            None,
-            Some("wenn etwas lustig ist"),
-            Some("ernste Themen"),
-        )];
-        let prompt = build_prompt_block(&emotes, 40, 40, &[], "", "").unwrap();
-
-        assert!(prompt.contains("KEKW"));
-        assert!(prompt.contains("appearance=lachen"));
-        assert!(!prompt.contains("Missing"));
+        let cases = [
+            (
+                prompt_emote_full(
+                    "KEKW",
+                    "laughing face",
+                    Some("lachen"),
+                    Some("bei witzen"),
+                    Some("ernste themen"),
+                ),
+                "- KEKW; appearance=laughing face; meaning=lachen; use=bei witzen; avoid=ernste themen",
+            ),
+            (
+                prompt_emote_full("KEKW", "", None, Some("bei witzen"), None),
+                "- KEKW; use=bei witzen",
+            ),
+            (prompt_emote("KEKW", ""), "- KEKW"),
+        ];
+        for (emote, expected) in &cases {
+            assert_eq!(format_prompt_emote_line(emote), *expected);
+        }
     }
 
     #[test]
@@ -1068,29 +1043,6 @@ mod tests {
             .collect();
         let ranked = select_search_emotes(&emotes, "lachen", SEARCH_EMOTES_LIMIT);
         assert_eq!(ranked.len(), SEARCH_EMOTES_LIMIT, "must cap at the limit");
-    }
-
-    #[test]
-    fn search_block_is_graceful_when_nothing_matches() {
-        let emotes = vec![prompt_emote("KEKW", "lachen")];
-        let block = build_search_block(&emotes, "zzzzqqqq", SEARCH_EMOTES_LIMIT);
-        assert!(block.contains("No emotes matched"), "got: {block}");
-        assert!(block.contains("this turn's context"), "got: {block}");
-    }
-
-    #[test]
-    fn search_block_renders_matches_in_prompt_line_format() {
-        let emotes = vec![prompt_emote_full(
-            "KEKW",
-            "lachen",
-            None,
-            Some("bei witzen"),
-            Some("ernste themen"),
-        )];
-        let block = build_search_block(&emotes, "lachen", SEARCH_EMOTES_LIMIT);
-        assert!(block.contains("- KEKW; appearance=lachen"), "got: {block}");
-        assert!(block.contains("use=bei witzen"), "got: {block}");
-        assert!(block.contains("avoid=ernste themen"), "got: {block}");
     }
 
     fn make_emotes_handle(max_prompt_emotes: usize) -> crate::settings::SettingsHandle {

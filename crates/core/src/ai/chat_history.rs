@@ -431,19 +431,6 @@ mod tests {
         assert_eq!(page.messages[1].source, ChatHistorySource::User);
     }
 
-    #[test]
-    fn push_user_with_identity_round_trips_display_and_id() {
-        let handle = make_handle(10);
-        let mut buf = ChatHistoryBuffer::new(handle, primary_history_capacity);
-        buf.push_user_with_identity("magie_023", Some("magie_023"), Some("141690010"), "hi");
-        let snap = buf.snapshot();
-        let e = &snap[0];
-        assert_eq!(e.username, "magie_023");
-        assert_eq!(e.display_name.as_deref(), Some("magie_023"));
-        assert_eq!(e.user_id.as_deref(), Some("141690010"));
-        assert_eq!(e.source, ChatHistorySource::User);
-    }
-
     /// Demonstrates live capacity rebinding: fill the buffer, halve the capacity
     /// via the settings handle, push one more entry, observe the buffer trimmed
     /// to the new cap.

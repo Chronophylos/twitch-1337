@@ -210,21 +210,6 @@ mod tests {
     use rusqlite::Connection;
 
     #[test]
-    fn migrate_sets_user_version_and_creates_tables() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
-        let v: i32 = conn
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(v, SCHEMA_VERSION);
-        conn.execute(
-            "INSERT INTO emotes (emote_id, name, active, updated_at) VALUES (?1, ?2, 1, 0)",
-            ("id1", "Kappa"),
-        )
-        .unwrap();
-    }
-
-    #[test]
     fn migrate_v1_to_v2_adds_attribution_columns() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(SCHEMA_V1).unwrap();

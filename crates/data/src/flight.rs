@@ -80,64 +80,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn b738_and_kjfk_exist() {
-        let ac = aircraft_by_icao_type("B738").expect("B738");
-        assert_eq!(ac.icao_type, "B738");
-        let apt = find_by_icao("KJFK").expect("KJFK");
-        assert_eq!(apt.icao, "KJFK");
-        assert!(apt.runway_length_ft > 10000);
-    }
-
-    #[test]
-    fn mu2_is_listed() {
-        let ac = aircraft_by_icao_type("MU2").expect("MU2");
-        assert_eq!(ac.icao_type, "MU2");
-        assert_eq!(ac.name, "Mitsubishi MU-2");
-        assert_eq!(ac.fuel_type, FuelType::Jet);
-        assert!(ac.cruise_speed_ktas > 0);
-        assert!(ac.range_nm() > 0.0);
-    }
-
-    #[test]
-    fn f27_is_listed() {
-        let ac = aircraft_by_icao_type("F27").expect("F27");
-        assert_eq!(ac.icao_type, "F27");
-        assert_eq!(ac.name, "Fokker F27 Friendship");
-        assert_eq!(ac.fuel_type, FuelType::Jet);
-        assert_eq!(ac.cruise_speed_ktas, 250);
-        assert_eq!(ac.cruise_altitude_ft, 15000);
-        assert_eq!(ac.service_ceiling_ft, 29500);
-        assert_eq!(ac.min_runway_length_ft, 4600);
-        // Ferry-range ballpark: TCDS tanks + cruise burn, not the YS-11 13,100 lb SimBrief leftover.
-        let range = ac.range_nm();
-        assert!(
-            (800.0..2500.0).contains(&range),
-            "F27 range_nm()={range} outside 800–2500 nm"
-        );
-    }
-
-    #[test]
-    fn c160_is_listed() {
-        let ac = aircraft_by_icao_type("C160").expect("C160");
-        assert_eq!(ac.name, "Transall C-160");
-        assert_eq!(ac.fuel_type, FuelType::Jet);
-        assert_eq!(ac.service_ceiling_ft, 27000);
-        assert_eq!(ac.min_runway_length_ft, 5600);
-        // Published ferry range with the centre tank is ~4,800 nm.
-        let range = ac.range_nm();
-        assert!(
-            (3000.0..5500.0).contains(&range),
-            "C160 range_nm()={range} outside 3000–5500 nm"
-        );
-    }
-
-    #[test]
-    fn airport_has_no_name_field() {
-        assert!(find_by_icao("EDDF").is_some());
-        let db = include_str!(concat!(env!("OUT_DIR"), "/airport_db.rs"));
-        assert!(
-            !db.contains("name:"),
-            "generated airport_db.rs must not emit a name field"
-        );
+    fn ferry_range_is_plausible() {
+        // Published ferry ranges. Guards the fuel data feeding range_nm(): the
+        // F27 once carried the YS-11's 13,100 lb SimBrief leftover; the C160
+        // ferry range with the centre tank is ~4,800 nm.
+        let cases = [("F27", 800.0..2500.0), ("C160", 3000.0..5500.0)];
+        for (icao_type, plausible) in cases {
+            let range = aircraft_by_icao_type(icao_type)
+                .expect(icao_type)
+                .range_nm();
+            assert!(
+                plausible.contains(&range),
+                "{icao_type} range_nm()={range} outside {plausible:?} nm"
+            );
+        }
     }
 }

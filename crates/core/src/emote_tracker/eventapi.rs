@@ -667,12 +667,18 @@ mod tests {
     }
 
     #[test]
-    fn expected_reconnect_codes_do_not_require_gap() {
+    fn expected_reconnect_only_for_reconnect_codes_not_client_errors() {
         // Documented reconnect-yes close codes + observed scheduled rotation (4012).
         for code in [4000, 4006, 4007, 4008, 4012] {
             assert!(
                 is_expected_reconnect(code),
                 "code {code} should be an expected reconnect"
+            );
+        }
+        for code in [4001, 4002, 4003, 4004, 4009, 4010, 4011] {
+            assert!(
+                !is_expected_reconnect(code),
+                "code {code} should not be treated as expected reconnect"
             );
         }
     }
@@ -719,16 +725,6 @@ mod tests {
                 .iter()
                 .all(|e| e.kind != SetEventKind::Rename || e.actor_7tv_id.is_none())
         );
-    }
-
-    #[test]
-    fn client_error_close_codes_are_not_expected_reconnect() {
-        for code in [4001, 4002, 4003, 4004, 4009, 4010, 4011] {
-            assert!(
-                !is_expected_reconnect(code),
-                "code {code} should not be treated as expected reconnect"
-            );
-        }
     }
 
     #[test]

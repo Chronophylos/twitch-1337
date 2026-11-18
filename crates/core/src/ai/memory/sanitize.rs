@@ -401,15 +401,12 @@ mod tests {
             "memories/LORE.md",
             "",
             "scratch/quiz-2026-05-08.md",
+            "scratch/soul.md",
         ] {
             assert!(parse_read_path(bad).is_err(), "{bad} must not parse");
         }
     }
 
-    #[test]
-    fn parse_read_path_rejects_reserved_scratch_slug() {
-        assert!(parse_read_path("scratch/soul.md").is_err());
-    }
     #[test]
     fn parse_links_form_accepts_both_shapes() {
         let m = parse_links_form(

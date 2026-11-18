@@ -294,11 +294,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stats_error_on_500() {
+    async fn stats_error_on_500_even_with_a_parseable_body() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/app-api/public/stats"))
-            .respond_with(ResponseTemplate::new(500))
+            .respond_with(ResponseTemplate::new(500).set_body_raw(
+                br#"{"national_average":8.36,"total_cities":1072,"total_shops":1897,"total_reports":3514,"change_30d":1.7,"mode_price":7}"#.as_slice(),
+                "application/json",
+            ))
             .mount(&server)
             .await;
 

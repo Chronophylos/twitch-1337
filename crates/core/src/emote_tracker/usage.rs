@@ -47,10 +47,4 @@ mod tests {
         map.insert("Kappa".into(), "e1".into());
         assert!(match_usage_tokens("kappa", &map).is_empty());
     }
-
-    #[test]
-    fn inactive_names_absent_from_map_produce_no_rows() {
-        let map = HashMap::new();
-        assert!(match_usage_tokens("Kappa", &map).is_empty());
-    }
 }

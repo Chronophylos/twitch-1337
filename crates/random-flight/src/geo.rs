@@ -43,110 +43,59 @@ pub fn bearing_difference(a: f64, b: f64) -> f64 {
 mod tests {
     use super::*;
 
+    const JFK: (f64, f64) = (40.6413, -73.7781);
+    const LHR: (f64, f64) = (51.4700, -0.4543);
+
     #[test]
-    fn known_distance_jfk_to_lhr() {
-        // JFK (40.6413, -73.7781) to LHR (51.4700, -0.4543)
-        // Known great-circle distance: ~2999 nm
-        let d = haversine_distance_nm(40.6413, -73.7781, 51.4700, -0.4543);
-        assert!(
-            (d - 2999.0).abs() < 10.0,
-            "JFK-LHR distance was {d}, expected ~2999 nm"
-        );
+    fn haversine_matches_known_distances() {
+        // (route, from, to, expected nm, tolerance nm)
+        let cases = [
+            ("JFK-LHR", JFK, LHR, 2999.0, 10.0),
+            // Crosses the antimeridian.
+            (
+                "SFO-NRT",
+                (37.6213, -122.3790),
+                (35.7647, 140.3864),
+                4442.0,
+                10.0,
+            ),
+            (
+                "EDDF-EDDM",
+                (50.0379, 8.5622),
+                (48.3537, 11.7750),
+                162.0,
+                5.0,
+            ),
+            ("same point", LHR, LHR, 0.0, 0.01),
+        ];
+        for (route, (lat1, lon1), (lat2, lon2), expected, tol) in cases {
+            let d = haversine_distance_nm(lat1, lon1, lat2, lon2);
+            assert!(
+                (d - expected).abs() < tol,
+                "{route} distance was {d}, expected ~{expected} nm"
+            );
+        }
     }
 
     #[test]
-    fn known_distance_sfo_to_nrt() {
-        // SFO (37.6213, -122.3790) to NRT (35.7647, 140.3864)
-        // Haversine great-circle distance: ~4442 nm
-        let d = haversine_distance_nm(37.6213, -122.3790, 35.7647, 140.3864);
-        assert!(
-            (d - 4442.0).abs() < 10.0,
-            "SFO-NRT distance was {d}, expected ~4442 nm"
-        );
-    }
-
-    #[test]
-    fn zero_distance_same_point() {
-        let d = haversine_distance_nm(51.4700, -0.4543, 51.4700, -0.4543);
-        assert!(d.abs() < 0.01, "Same point distance should be ~0, was {d}");
-    }
-
-    #[test]
-    fn short_distance_eddf_to_eddm() {
-        // Frankfurt (50.0379, 8.5622) to Munich (48.3537, 11.7750)
-        // Haversine great-circle distance: ~162 nm
-        let d = haversine_distance_nm(50.0379, 8.5622, 48.3537, 11.7750);
-        assert!(
-            (d - 162.0).abs() < 5.0,
-            "EDDF-EDDM distance was {d}, expected ~162 nm"
-        );
-    }
-
-    #[test]
-    fn bearing_jfk_to_lhr() {
-        // JFK to LHR: initial bearing ~51° (northeast)
-        let b = initial_bearing(40.6413, -73.7781, 51.4700, -0.4543);
-        assert!(
-            (b - 51.0).abs() < 2.0,
-            "JFK→LHR bearing was {b}, expected ~51°"
-        );
-    }
-
-    #[test]
-    fn bearing_lhr_to_jfk() {
-        // LHR to JFK: initial bearing ~288° (west-northwest)
-        let b = initial_bearing(51.4700, -0.4543, 40.6413, -73.7781);
-        assert!(
-            (b - 288.0).abs() < 2.0,
-            "LHR→JFK bearing was {b}, expected ~288°"
-        );
-    }
-
-    #[test]
-    fn bearing_due_north() {
-        let b = initial_bearing(0.0, 0.0, 10.0, 0.0);
-        assert!(
-            (b - 0.0).abs() < 0.01,
-            "Due north bearing was {b}, expected 0°"
-        );
-    }
-
-    #[test]
-    fn bearing_due_south() {
-        let b = initial_bearing(10.0, 0.0, 0.0, 0.0);
-        assert!(
-            (b - 180.0).abs() < 0.01,
-            "Due south bearing was {b}, expected 180°"
-        );
-    }
-
-    #[test]
-    fn bearing_due_east() {
-        // Along the equator, due east
-        let b = initial_bearing(0.0, 0.0, 0.0, 10.0);
-        assert!(
-            (b - 90.0).abs() < 0.01,
-            "Due east bearing was {b}, expected 90°"
-        );
-    }
-
-    #[test]
-    fn bearing_due_west() {
-        let b = initial_bearing(0.0, 0.0, 0.0, -10.0);
-        assert!(
-            (b - 270.0).abs() < 0.01,
-            "Due west bearing was {b}, expected 270°"
-        );
-    }
-
-    #[test]
-    fn bearing_same_point() {
-        // Bearing is undefined for same point; just ensure no panic and result is finite
-        let b = initial_bearing(51.4700, -0.4543, 51.4700, -0.4543);
-        assert!(
-            b.is_finite(),
-            "Same-point bearing should be finite, was {b}"
-        );
+    fn initial_bearing_matches_known_values() {
+        // (route, from, to, expected degrees, tolerance degrees)
+        let cases = [
+            ("JFK→LHR", JFK, LHR, 51.0, 2.0),
+            // Westbound result must be normalised into 0..360.
+            ("LHR→JFK", LHR, JFK, 288.0, 2.0),
+            ("due north", (0.0, 0.0), (10.0, 0.0), 0.0, 0.01),
+            ("due south", (10.0, 0.0), (0.0, 0.0), 180.0, 0.01),
+            ("due east", (0.0, 0.0), (0.0, 10.0), 90.0, 0.01),
+            ("due west", (0.0, 0.0), (0.0, -10.0), 270.0, 0.01),
+        ];
+        for (route, (lat1, lon1), (lat2, lon2), expected, tol) in cases {
+            let b = initial_bearing(lat1, lon1, lat2, lon2);
+            assert!(
+                (b - expected).abs() < tol,
+                "{route} bearing was {b}, expected ~{expected}°"
+            );
+        }
     }
 
     #[test]
@@ -162,18 +111,6 @@ mod tests {
         assert_eq!(cardinal_direction(270.0), "W");
         assert_eq!(cardinal_direction(315.0), "NW");
         assert_eq!(cardinal_direction(359.9), "N");
-    }
-
-    #[test]
-    fn cardinal_mid_sectors() {
-        assert_eq!(cardinal_direction(10.0), "N");
-        assert_eq!(cardinal_direction(60.0), "NE");
-        assert_eq!(cardinal_direction(100.0), "E");
-        assert_eq!(cardinal_direction(150.0), "SE");
-        assert_eq!(cardinal_direction(200.0), "S");
-        assert_eq!(cardinal_direction(240.0), "SW");
-        assert_eq!(cardinal_direction(300.0), "NW");
-        assert_eq!(cardinal_direction(340.0), "N");
     }
 
     #[test]

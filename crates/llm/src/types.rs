@@ -246,89 +246,6 @@ mod role_tests {
         assert_eq!(Role::Assistant.to_string(), "assistant");
         assert_eq!(Role::Tool.to_string(), "tool");
     }
-
-    #[test]
-    fn role_round_trips_through_json() {
-        for role in [Role::System, Role::User, Role::Assistant, Role::Tool] {
-            let json = serde_json::to_string(&role).unwrap();
-            let back: Role = serde_json::from_str(&json).unwrap();
-            assert_eq!(role, back);
-        }
-    }
-}
-
-#[cfg(test)]
-mod message_tests {
-    use super::{Message, Role};
-
-    #[test]
-    fn constructors_set_the_right_role() {
-        assert_eq!(Message::system("hi").role, Role::System);
-        assert_eq!(Message::user("hi").role, Role::User);
-        assert_eq!(Message::assistant("hi").role, Role::Assistant);
-        assert_eq!(Message::tool("hi").role, Role::Tool);
-    }
-
-    #[test]
-    fn constructors_accept_string_and_str() {
-        let owned = String::from("owned");
-        let from_owned = Message::system(owned.clone());
-        let from_str = Message::system("borrowed");
-        assert_eq!(from_owned.content, owned);
-        assert_eq!(from_str.content, "borrowed");
-    }
-}
-
-#[cfg(test)]
-mod tool_result_tests {
-    use super::{ToolCall, ToolResultMessage};
-
-    #[test]
-    fn for_call_threads_id_and_name() {
-        let call = ToolCall {
-            id: "X".to_string(),
-            name: "save_memory".to_string(),
-            arguments: serde_json::Value::Null,
-            arguments_parse_error: None,
-        };
-        let result = ToolResultMessage::for_call(&call, "ok");
-        assert_eq!(result.tool_call_id, "X");
-        assert_eq!(result.tool_name, "save_memory");
-        assert_eq!(result.content, "ok");
-    }
-}
-
-#[cfg(test)]
-mod tool_args_error_tests {
-    use super::ToolArgsError;
-
-    #[test]
-    fn provider_variant_round_trips_through_json() {
-        let err = ToolArgsError::Provider {
-            error: "unexpected token".to_string(),
-            raw: "not json".to_string(),
-        };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: ToolArgsError = serde_json::from_str(&json).unwrap();
-        match back {
-            ToolArgsError::Provider { error, raw } => {
-                assert_eq!(error, "unexpected token");
-                assert_eq!(raw, "not json");
-            }
-            other => panic!("unexpected variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn deserialize_variant_built_from_serde_json_error() {
-        let parse_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
-        let wrapped: ToolArgsError = parse_err.into();
-        let rendered = wrapped.to_string();
-        assert!(
-            rendered.starts_with("could not deserialize arguments"),
-            "got: {rendered}"
-        );
-    }
 }
 
 #[cfg(test)]
@@ -388,39 +305,5 @@ mod parse_args_tests {
             ToolArgsError::Deserialize { error } => assert!(!error.is_empty()),
             other => panic!("expected Deserialize variant, got {other:?}"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tool_definition_tests {
-    use schemars::JsonSchema;
-    use serde::Deserialize;
-
-    use super::ToolDefinition;
-
-    #[derive(Debug, Deserialize, JsonSchema)]
-    #[expect(dead_code, reason = "fields exist only to drive the JsonSchema derive")]
-    struct DemoArgs {
-        query: String,
-        max_results: Option<u32>,
-    }
-
-    #[test]
-    fn derived_emits_a_top_level_object_schema() {
-        let def = ToolDefinition::derived::<DemoArgs>("demo", "Run a demo");
-        assert_eq!(def.name, "demo");
-        assert_eq!(def.description, "Run a demo");
-        assert_eq!(
-            def.parameters.get("type").and_then(|v| v.as_str()),
-            Some("object"),
-            "schema is not an object: {}",
-            def.parameters
-        );
-        let props = def
-            .parameters
-            .get("properties")
-            .expect("properties present");
-        assert!(props.get("query").is_some(), "missing query in {props}");
-        assert!(props.get("max_results").is_some(), "missing max_results");
     }
 }

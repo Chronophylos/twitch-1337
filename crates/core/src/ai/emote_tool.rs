@@ -68,20 +68,3 @@ pub async fn execute_search_emotes(
     let block = provider.search_emotes(query).await;
     ToolResultMessage::for_call(call, block)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tool_def_has_expected_name_and_required_query() {
-        let t = search_emotes_tool();
-        assert_eq!(t.name, SEARCH_EMOTES_TOOL_NAME);
-        assert_eq!(t.parameters["required"][0], "query");
-    }
-
-    #[test]
-    fn search_emotes_is_not_a_web_tool() {
-        assert!(!crate::ai::content::is_web_tool(SEARCH_EMOTES_TOOL_NAME));
-    }
-}

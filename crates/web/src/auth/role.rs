@@ -27,26 +27,11 @@ mod tests {
     use super::Role;
 
     #[test]
-    fn viewer_is_lower_than_mod() {
+    fn tiers_are_ordered_viewer_mod_owner() {
         assert!(Role::Viewer < Role::Mod);
         assert!(Role::Mod >= Role::Viewer);
         assert!(Role::Viewer >= Role::Viewer);
-    }
-
-    #[test]
-    fn labels_match_tracing_fields() {
-        assert_eq!(Role::Viewer.label(), "viewer");
-        assert_eq!(Role::Mod.label(), "mod");
-    }
-
-    #[test]
-    fn owner_is_above_mod() {
         assert!(Role::Owner > Role::Mod);
         assert!(Role::Owner > Role::Viewer);
-    }
-
-    #[test]
-    fn owner_label() {
-        assert_eq!(Role::Owner.label(), "owner");
     }
 }

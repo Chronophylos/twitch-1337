@@ -344,24 +344,6 @@ mod tests {
     use crate::types::Role;
 
     #[tokio::test]
-    async fn no_observer_is_a_noop() {
-        let rec = GenerationInProgress::start("m", "in");
-        assert!(rec.is_none());
-        let n = with_optional_turn(
-            None,
-            TurnParams {
-                name: "t".into(),
-                user: None,
-                session_id: None,
-                tags: vec![],
-            },
-            async { 7 },
-        )
-        .await;
-        assert_eq!(n, 7);
-    }
-
-    #[tokio::test]
     async fn with_turn_emits_root_span_and_generation() {
         let obs = RecordingObserver::new();
         let obs_dyn: Arc<dyn LlmObserver> = obs.clone();
@@ -410,12 +392,15 @@ mod tests {
     }
 
     #[test]
-    fn messages_json_includes_roles() {
+    fn messages_json_emits_role_and_content_rows() {
         let json = messages_json(&[Message {
             role: Role::User,
             content: "hi".into(),
         }]);
-        assert!(json.contains("user"));
-        assert!(json.contains("hi"));
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!([{"role": "user", "content": "hi"}])
+        );
     }
 }

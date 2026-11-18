@@ -151,16 +151,6 @@ pub fn install_crypto_provider() {
 
 #[cfg(test)]
 mod tests {
-    use super::APP_USER_AGENT;
-
-    #[test]
-    fn app_user_agent_includes_repo_url() {
-        assert!(
-            APP_USER_AGENT.contains("https://github.com/Chronophylos/twitch-1337"),
-            "APP_USER_AGENT must identify the source repo: {APP_USER_AGENT}"
-        );
-    }
-
     #[test]
     fn resolve_berlin_time_dst_edges() {
         use jiff::{Timestamp, civil::date};

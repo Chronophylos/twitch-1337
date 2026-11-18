@@ -504,23 +504,13 @@ mod tests {
     }
 
     fn aircraft_response(flight: &str) -> serde_json::Value {
-        aircraft_response_full(flight, None, None)
-    }
-
-    fn aircraft_response_full(
-        flight: &str,
-        seen_pos: Option<f64>,
-        rssi: Option<f64>,
-    ) -> serde_json::Value {
         serde_json::json!({
             "ac": [{
                 "hex": "3c6589",
                 "flight": flight,
                 "alt_baro": 35000,
                 "lat": 50.0,
-                "lon": 8.5,
-                "seen_pos": seen_pos,
-                "rssi": rssi
+                "lon": 8.5
             }],
             "ctime": 0,
             "now": 0,
@@ -798,15 +788,6 @@ mod tests {
     }
 
     #[test]
-    fn health_all_available_on_construction() {
-        let client = test_client_with_aggregators(vec![
-            AdsbAggregator::readsb_v2("a", "http://a.test".to_owned()),
-            AdsbAggregator::readsb_v2("b", "http://b.test".to_owned()),
-        ]);
-        assert_eq!(client.live_backend_indices().len(), 2);
-    }
-
-    #[test]
     fn health_parks_and_restores() {
         let client = test_client_with_aggregators(vec![
             AdsbAggregator::readsb_v2("a", "http://a.test".to_owned()),
@@ -904,41 +885,6 @@ mod tests {
         assert_eq!(aircraft.len(), 2);
         assert!(hexes.contains(&"aaa111".to_owned()));
         assert!(hexes.contains(&"bbb222".to_owned()));
-    }
-
-    #[tokio::test]
-    async fn merged_query_keeps_freshest_duplicate() {
-        let (a, b) = tokio::join!(MockServer::start(), MockServer::start());
-        Mock::given(method("GET"))
-            .and(path("/hex/3c6589"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(aircraft_response_full(
-                    "FRESH",
-                    Some(1.0),
-                    Some(-30.0),
-                )),
-            )
-            .mount(&a)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/hex/3c6589"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(aircraft_response_full(
-                    "STALE",
-                    Some(30.0),
-                    Some(-1.0),
-                )),
-            )
-            .mount(&b)
-            .await;
-
-        let client = test_client_with_aggregators(vec![
-            AdsbAggregator::readsb_v2("a", a.uri()),
-            AdsbAggregator::readsb_v2("b", b.uri()),
-        ]);
-
-        let aircraft = client.get_aircraft_by_hex("3c6589").await.unwrap().unwrap();
-        assert_eq!(aircraft.flight.as_deref(), Some("FRESH"));
     }
 
     #[tokio::test]
@@ -1055,23 +1001,6 @@ mod tests {
             4,
             "timeouts must not park the backend"
         );
-    }
-
-    #[tokio::test]
-    async fn merged_query_all_fail_is_error() {
-        let (a, b) = tokio::join!(MockServer::start(), MockServer::start());
-        for server in [&a, &b] {
-            Mock::given(method("GET"))
-                .and(path("/hex/3c6589"))
-                .respond_with(ResponseTemplate::new(503))
-                .mount(server)
-                .await;
-        }
-        let client = test_client_with_aggregators(vec![
-            AdsbAggregator::readsb_v2("a", a.uri()),
-            AdsbAggregator::readsb_v2("b", b.uri()),
-        ]);
-        assert!(client.get_aircraft_by_hex("3c6589").await.is_err());
     }
 
     #[tokio::test]

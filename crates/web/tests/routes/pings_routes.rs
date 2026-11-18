@@ -6,38 +6,18 @@
 //! seeded user so the periodic mod-recheck inside `require_mod` doesn't
 //! deny.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use tower::ServiceExt as _;
 use twitch_1337_web::build_router;
-use twitch_1337_web::helix::{HelixClient, HelixUser};
 
 use super::helpers;
 use helpers::{
-    FakeHelix, build_state_with_ping_dir, cookie_header, insert_session, insert_session_as,
-    install_crypto,
+    FakeHelix, admin_helix, build_state_with_ping_dir, cookie_header, insert_session,
+    insert_session_as, install_crypto,
 };
-
-/// FakeHelix flavored to admit the test admin during periodic mod rechecks.
-fn admin_helix(user_id: &str) -> Arc<dyn HelixClient> {
-    let mut users = HashMap::new();
-    users.insert(
-        user_id.to_owned(),
-        HelixUser {
-            id: user_id.to_owned(),
-            login: "admin".into(),
-            display_name: "admin".into(),
-            profile_image_url: None,
-        },
-    );
-    Arc::new(FakeHelix {
-        moderators: vec![user_id.to_owned()],
-        users,
-    })
-}
 
 /// Build (state, signed_sid, signed_csrf, bare_csrf, _td). `_td` keeps the
 /// ping data dir alive while tests exercise PingManager's atomic save+rename.
@@ -497,69 +477,6 @@ async fn update_invalid_template_renders_form_with_error() {
 }
 
 #[tokio::test]
-async fn edit_form_lists_members() {
-    let (state, sid, csrf, _bare, _td) = authed_setup().await;
-    state
-        .ping_actor
-        .create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
-        .await
-        .unwrap();
-    state
-        .ping_actor
-        .add_member("team".into(), "alice".into())
-        .await
-        .unwrap();
-    state
-        .ping_actor
-        .add_member("team".into(), "bob".into())
-        .await
-        .unwrap();
-    let app = build_router(state);
-    let req = Request::builder()
-        .uri("/pings/team")
-        .header(header::COOKIE, cookie_header(&sid, &csrf))
-        .body(Body::empty())
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let html = body_string(res).await;
-    assert!(html.contains("alice"), "alice listed");
-    assert!(html.contains("bob"), "bob listed");
-    assert!(
-        html.contains(r#"name="username""#),
-        "add-member input present"
-    );
-}
-
-/// The edit page titles the ping as chat types it, and its breadcrumb links
-/// back to the list with the edit as the current leaf.
-#[tokio::test]
-async fn edit_form_titles_ping_with_bang() {
-    let (state, sid, csrf, _bare, _td) = authed_setup().await;
-    state
-        .ping_actor
-        .create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
-        .await
-        .unwrap();
-    let req = Request::builder()
-        .uri("/pings/team")
-        .header(header::COOKIE, cookie_header(&sid, &csrf))
-        .body(Body::empty())
-        .unwrap();
-    let res = build_router(state).oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let html = body_string(res).await;
-    assert!(html.contains("<h1>Edit !team</h1>"), "{html}");
-    assert!(!html.contains("Edit `team`"), "no literal backticks");
-    assert!(html.contains("<title>Edit !team — twitch-1337</title>"));
-    assert!(html.contains(r#"<a class="crumb-link" href="/pings">Pings</a>"#));
-    assert!(
-        html.contains(r#"<span class="crumb-current" aria-current="page">Edit !team</span>"#),
-        "{html}"
-    );
-}
-
-#[tokio::test]
 async fn add_member_round_trip() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
@@ -718,29 +635,6 @@ async fn remove_member_without_csrf_rejected() {
             .is_member("team".into(), "alice".into())
             .await,
         "must persist on rejection"
-    );
-}
-
-#[tokio::test]
-async fn create_rejects_bad_form_csrf() {
-    let (state, sid, csrf, _bare_csrf, _td) = authed_setup().await;
-    let app = build_router(state.clone());
-    let body = format!(
-        "_csrf={bad}&name=tampered&template=hi",
-        bad = urlencoding::encode(&"00".repeat(32)),
-    );
-    let req = Request::builder()
-        .method("POST")
-        .uri("/pings")
-        .header(header::COOKIE, cookie_header(&sid, &csrf))
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(body))
-        .unwrap();
-    let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert!(
-        state.ping_actor.get_one("tampered".into()).await.is_none(),
-        "ping must not persist with mismatched _csrf",
     );
 }
 

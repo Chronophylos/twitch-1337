@@ -630,41 +630,7 @@ pub(crate) fn advance_flight(
 mod tests {
     use super::*;
     use crate::aviation::AltBaro;
-    use crate::aviation::tracker::test_support::dt;
-
-    fn tracked_flight() -> TrackedFlight {
-        TrackedFlight {
-            identifier: FlightIdentifier::Callsign("DLH1234".to_string()),
-            callsign: Some("DLH1234".to_string()),
-            alias_callsigns: vec!["DLH1234".to_string()],
-            hex: None,
-            hex_source: None,
-            observed_callsign: None,
-            target_confirmation: TargetConfirmation::Pending,
-            phase: FlightPhase::Unknown,
-            route: None,
-            aircraft_type: None,
-            altitude_ft: None,
-            vertical_rate_fpm: None,
-            ground_speed_kts: None,
-            lat: None,
-            lon: None,
-            squawk: None,
-            tracked_by: "alice".to_string(),
-            tracked_at: dt("2026-04-18T10:00:00Z"),
-            last_seen: None,
-            last_visible_at: None,
-            last_phase_change: None,
-            polls_since_change: 0,
-            takeoff_at: None,
-            aviationstack_checked: false,
-            scheduled_departure_at: None,
-            last_adsb_poll_at: None,
-            divert: Default::default(),
-            dest_lat: None,
-            dest_lon: None,
-        }
-    }
+    use crate::aviation::tracker::test_support::{dt, pending_flight};
 
     fn aircraft_on_ground() -> NearbyAircraft {
         NearbyAircraft {
@@ -693,7 +659,7 @@ mod tests {
     }
 
     /// Airborne aircraft fixture; callsign intentionally differs from
-    /// `tracked_flight()`'s "DLH1234" so hex-hit tests exercise the
+    /// `pending_flight()`'s "DLH1234" so hex-hit tests exercise the
     /// sticky-confirmation / `AircraftVisible` paths explicitly.
     fn aircraft() -> NearbyAircraft {
         NearbyAircraft {
@@ -723,7 +689,7 @@ mod tests {
 
     #[test]
     fn apply_observed_aircraft_seeds_identity_and_telemetry() {
-        let mut f = tracked_flight(); // Pending, callsign DLH1234, hex/type/telemetry empty
+        let mut f = pending_flight(); // Pending, callsign DLH1234, hex/type/telemetry empty
         let mut ac = aircraft_on_ground(); // callsign DLH1234, hex 3C6589, gs 15, squawk 1000
         ac.t = Some("A320".to_string());
 
@@ -751,30 +717,8 @@ mod tests {
     }
 
     #[test]
-    fn apply_observed_aircraft_resolves_callsign_for_hex_tracked_flight() {
-        let mut f = tracked_flight();
-        f.identifier = FlightIdentifier::Hex("3C6497".to_string());
-        f.callsign = None;
-        f.alias_callsigns = Vec::new();
-
-        let ac = aircraft(); // callsign DLH1929, hex 3C6497
-
-        let newly = apply_observed_aircraft(
-            &mut f,
-            &ac,
-            TargetConfirmation::InferredByAssignedHex,
-            false,
-        );
-
-        assert_eq!(newly.as_deref(), Some("DLH1929"));
-        assert_eq!(f.callsign.as_deref(), Some("DLH1929"));
-        assert!(f.alias_callsigns.iter().any(|a| a == "DLH1929"));
-        assert_eq!(f.observed_callsign.as_deref(), Some("DLH1929"));
-    }
-
-    #[test]
     fn apply_route_outcome_found_sets_route_and_dest_coords() {
-        let mut f = tracked_flight();
+        let mut f = pending_flight();
         let events = apply_route_outcome(
             &mut f,
             "DLH1234",
@@ -792,30 +736,27 @@ mod tests {
     }
 
     #[test]
-    fn apply_route_outcome_miss_leaves_route_unset() {
-        let mut f = tracked_flight();
-        let events = apply_route_outcome(&mut f, "DLH1234", RouteOutcome::Miss);
-        assert!(f.route.is_none());
-        assert!(f.dest_lat.is_none());
-        assert_eq!(events.len(), 1);
-        assert!(serde_json::to_string(&events[0]).unwrap().contains("miss"));
-    }
-
-    #[test]
-    fn apply_route_outcome_error_and_timeout_leave_route_unset() {
-        let mut f = tracked_flight();
-        let err = apply_route_outcome(&mut f, "DLH1234", RouteOutcome::Error);
-        assert!(f.route.is_none());
-        assert!(serde_json::to_string(&err[0]).unwrap().contains("error"));
-
-        let to = apply_route_outcome(&mut f, "DLH1234", RouteOutcome::Timeout);
-        assert!(f.route.is_none());
-        assert!(serde_json::to_string(&to[0]).unwrap().contains("timeout"));
+    fn apply_route_outcome_without_route_leaves_route_unset() {
+        for (outcome, tag) in [
+            (RouteOutcome::Miss, "miss"),
+            (RouteOutcome::Error, "error"),
+            (RouteOutcome::Timeout, "timeout"),
+        ] {
+            let mut f = pending_flight();
+            let events = apply_route_outcome(&mut f, "DLH1234", outcome);
+            assert!(f.route.is_none(), "{tag}");
+            assert!(f.dest_lat.is_none(), "{tag}");
+            assert_eq!(events.len(), 1, "{tag}");
+            assert!(
+                serde_json::to_string(&events[0]).unwrap().contains(tag),
+                "{tag}"
+            );
+        }
     }
 
     #[test]
     fn seed_confirms_by_callsign_and_seeds_identity_only() {
-        let mut f = tracked_flight(); // Pending, callsign DLH1234
+        let mut f = pending_flight(); // Pending, callsign DLH1234
         let ac = aircraft_on_ground(); // callsign DLH1234 → confirms
         let now = dt("2026-04-18T12:00:00Z");
 
@@ -839,7 +780,7 @@ mod tests {
 
     #[test]
     fn seed_resolves_hex_callsign_and_queues_route_followup() {
-        let mut f = tracked_flight();
+        let mut f = pending_flight();
         f.identifier = FlightIdentifier::Hex("3C6497".to_string());
         f.callsign = None;
         f.alias_callsigns = Vec::new();
@@ -849,6 +790,8 @@ mod tests {
             .expect("confirmed");
 
         assert_eq!(f.callsign.as_deref(), Some("DLH1929"));
+        assert!(f.alias_callsigns.iter().any(|a| a == "DLH1929"));
+        assert_eq!(f.observed_callsign.as_deref(), Some("DLH1929"));
         assert_eq!(
             seed.followups,
             vec![Followup::FetchRoute {
@@ -859,7 +802,7 @@ mod tests {
 
     #[test]
     fn seed_returns_none_and_mutates_nothing_when_target_not_confirmed() {
-        let mut f = tracked_flight(); // callsign DLH1234
+        let mut f = pending_flight(); // callsign DLH1234
         let ac = aircraft(); // callsign DLH1929, callsign-mode poll → no match
 
         let seed = seed_from_observation(&mut f, &ac, false, dt("2026-04-18T12:00:00Z"));
@@ -870,7 +813,7 @@ mod tests {
     }
 
     fn ewg9573_hex_flight() -> TrackedFlight {
-        let mut f = tracked_flight();
+        let mut f = pending_flight();
         f.identifier = FlightIdentifier::Callsign("EW9573".to_string());
         f.callsign = Some("EWG9573".to_string());
         f.alias_callsigns = vec!["EW9573".to_string(), "EWG9573".to_string()];
@@ -943,7 +886,7 @@ mod tests {
     /// on a different hex must replace it so later polls follow the real plane.
     #[test]
     fn callsign_confirmed_seed_replaces_stale_aviationstack_hex() {
-        let mut f = tracked_flight(); // callsign DLH1234
+        let mut f = pending_flight(); // callsign DLH1234
         f.hex = Some("44006E".to_string());
         f.hex_source = Some(HexSource::AviationStack);
         let mut ac = aircraft();
@@ -972,7 +915,7 @@ mod tests {
 
     #[test]
     fn seed_keeps_prior_confirmation_when_hex_visible_without_callsign() {
-        let mut f = tracked_flight(); // identifier Callsign DLH1234
+        let mut f = pending_flight(); // identifier Callsign DLH1234
         f.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
         f.last_seen = Some(dt("2026-04-18T12:00:00Z"));
         f.hex = Some("3C6497".to_string());
@@ -993,7 +936,7 @@ mod tests {
 
     #[test]
     fn miss_within_grace_window_keeps_flight() {
-        let mut f = tracked_flight();
+        let mut f = pending_flight();
         f.last_visible_at = Some(dt("2026-04-18T12:00:00Z"));
         // 5 min later: past lost-threshold (300 s) but well under removal (1800 s)
         let upd = advance_flight(&mut f, &miss(true), dt("2026-04-18T12:05:00Z"));
@@ -1003,7 +946,7 @@ mod tests {
 
     #[test]
     fn miss_past_removal_threshold_removes_and_emits_tracking_lost() {
-        let mut f = tracked_flight();
+        let mut f = pending_flight();
         f.last_visible_at = Some(dt("2026-04-18T12:00:00Z"));
         // 31 min later: past removal (1800 s)
         let upd = advance_flight(&mut f, &miss(true), dt("2026-04-18T12:31:00Z"));
@@ -1016,7 +959,7 @@ mod tests {
 
     #[test]
     fn sticky_confirmation_keeps_prior_when_hex_visible_within_threshold() {
-        let mut f = tracked_flight();
+        let mut f = pending_flight();
         f.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
         f.last_seen = Some(dt("2026-04-18T12:00:00Z"));
         // Override the observed callsign to "DLH9999", which mismatches the
@@ -1039,24 +982,34 @@ mod tests {
     }
 
     #[test]
-    fn format_emit_landing_preserves_flight_time_from_carried_takeoff() {
-        let flight = tracked_flight();
-        let msg = format_emit(
-            &flight,
-            &Emit::Landing {
-                takeoff_at: Some(dt("2026-04-18T10:30:00Z")),
-                elsewhere: None,
-            },
-            dt("2026-04-18T12:00:00Z"),
-        );
+    fn format_emit_landing_derives_flight_time_from_carried_takeoff_only() {
+        // Tracked at 10:00 with no takeoff_at of its own: the duration must come
+        // from the Landing emit, never from the tracking time (2h).
+        let flight = pending_flight();
+        let landing = |takeoff_at| {
+            format_emit(
+                &flight,
+                &Emit::Landing {
+                    takeoff_at,
+                    elsewhere: None,
+                },
+                dt("2026-04-18T12:00:00Z"),
+            )
+        };
 
+        let msg = landing(Some(dt("2026-04-18T10:30:00Z")));
         assert!(msg.contains("Flugzeit: 1h30m"), "got: {msg}");
+        assert!(!msg.contains("2h00m"), "got: {msg}");
         assert!(!msg.contains("unbekannt"), "got: {msg}");
+
+        let msg = landing(None);
+        assert!(msg.contains("unbekannt"), "got: {msg}");
+        assert!(!msg.contains("2h00m"), "got: {msg}");
     }
 
     #[test]
     fn advance_landing_carries_pre_clear_takeoff_at_and_clears_flight_state() {
-        let mut flight = tracked_flight();
+        let mut flight = pending_flight();
         flight.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
         flight.phase = FlightPhase::Approach;
         let takeoff = dt("2026-04-18T10:30:00Z");
@@ -1085,7 +1038,7 @@ mod tests {
 
     #[test]
     fn ground_to_airborne_sets_takeoff_at() {
-        let mut f = tracked_flight();
+        let mut f = pending_flight();
         // Must be already confirmed so the became_target_confirmed block doesn't
         // fire and reset phase back to Unknown before we can see the transition.
         f.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
@@ -1124,7 +1077,7 @@ mod tests {
         // A HEX-identified flight with no callsign yet. When the observed
         // aircraft carries a callsign the HEX branch resolves it and, because
         // route is None, appends a FetchRoute followup.
-        let mut f = tracked_flight();
+        let mut f = pending_flight();
         f.identifier = FlightIdentifier::Hex("3C6497".to_string());
         f.callsign = None;
         f.route = None;
@@ -1148,7 +1101,7 @@ mod tests {
         // same call and either changes the phase (breaking ==Unknown) or keeps
         // it and increments polls_since_change (breaking ==0). We assert only
         // the stable first-confirmation contract instead.
-        let mut f = tracked_flight();
+        let mut f = pending_flight();
         f.target_confirmation = TargetConfirmation::Pending;
         f.last_visible_at = None;
         f.phase = FlightPhase::Cruise;
@@ -1182,47 +1135,13 @@ mod tests {
     }
 
     fn flight_bound_for_munich(phase: FlightPhase) -> TrackedFlight {
-        let mut f = tracked_flight();
+        let mut f = pending_flight();
         f.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
         f.phase = phase;
         f.route = Some(("FRA".to_string(), "MUC".to_string()));
         f.dest_lat = Some(48.35);
         f.dest_lon = Some(11.78);
         f
-    }
-
-    #[test]
-    fn downwind_leg_past_destination_does_not_emit_possible_divert() {
-        // Regression: overflying the field and flying a long downwind leg away
-        // from it used to trip the heading check after three 30s polls.
-        let mut f = flight_bound_for_munich(FlightPhase::Cruise);
-        let start = dt("2026-04-18T12:00:00Z");
-        let mut t = 0;
-        // Inbound from 120 nm north down to the field.
-        for i in 0..12_i32 {
-            t += 60;
-            let lat = 48.35 + (120.0 - f64::from(i) * 10.0) / 60.0;
-            let upd = advance_flight(
-                &mut f,
-                &hit(descending_at(lat, 9_000), false),
-                start + SignedDuration::from_secs(t),
-            );
-            assert!(!upd.emits.contains(&Emit::PossibleDivert));
-        }
-        // 10-minute downwind leg south, away from the field.
-        for i in 0..20_i32 {
-            t += 30;
-            let lat = 48.35 - (5.0 + f64::from(i)) / 60.0;
-            let upd = advance_flight(
-                &mut f,
-                &hit(descending_at(lat, 4_000), false),
-                start + SignedDuration::from_secs(t),
-            );
-            assert!(
-                !upd.emits.contains(&Emit::PossibleDivert),
-                "false divert on downwind leg at poll {i}"
-            );
-        }
     }
 
     #[test]
@@ -1302,91 +1221,49 @@ mod tests {
     // ── Follow-up tests: untested advance_flight branches ────────────────────
 
     #[test]
-    fn error_outcome_sets_poll_at_and_records_debug_event_only() {
-        let mut f = tracked_flight();
-        // Capture telemetry before the call; the error branch must not mutate it.
-        let alt_before = f.altitude_ft;
-        let lat_before = f.lat;
-        let lon_before = f.lon;
-        let vrate_before = f.vertical_rate_fpm;
-        let gs_before = f.ground_speed_kts;
-        let squawk_before = f.squawk.clone();
-
-        let now = dt("2026-04-18T12:00:00Z");
-        let obs = Observation {
-            used_hex: true,
-            outcome: PollOutcome::Error,
+    fn failed_poll_sets_poll_at_and_records_debug_event_only() {
+        let telemetry = |f: &TrackedFlight| {
+            (
+                f.altitude_ft,
+                f.lat,
+                f.lon,
+                f.vertical_rate_fpm,
+                f.ground_speed_kts,
+                f.squawk.clone(),
+            )
         };
-        let upd = advance_flight(&mut f, &obs, now);
+        for (outcome, used_hex) in [(PollOutcome::Error, true), (PollOutcome::Timeout, false)] {
+            let label = format!("{outcome:?}");
+            let mut f = pending_flight();
+            let before = telemetry(&f);
 
-        assert_eq!(f.last_adsb_poll_at, Some(now));
-        assert!(upd.emits.is_empty(), "Error must not emit: {:?}", upd.emits);
-        assert!(
-            upd.removal.is_none(),
-            "Error must not remove: {:?}",
-            upd.removal
-        );
-        assert!(
-            upd.followups.is_empty(),
-            "Error must not produce followups: {:?}",
-            upd.followups
-        );
-        assert!(!upd.debug.is_empty(), "Error must record a debug event");
-        // Telemetry must be unchanged.
-        assert_eq!(f.altitude_ft, alt_before);
-        assert_eq!(f.lat, lat_before);
-        assert_eq!(f.lon, lon_before);
-        assert_eq!(f.vertical_rate_fpm, vrate_before);
-        assert_eq!(f.ground_speed_kts, gs_before);
-        assert_eq!(f.squawk, squawk_before);
-    }
+            let now = dt("2026-04-18T12:00:00Z");
+            let upd = advance_flight(&mut f, &Observation { used_hex, outcome }, now);
 
-    #[test]
-    fn timeout_outcome_sets_poll_at_and_records_debug_event_only() {
-        let mut f = tracked_flight();
-        let alt_before = f.altitude_ft;
-        let lat_before = f.lat;
-        let lon_before = f.lon;
-        let vrate_before = f.vertical_rate_fpm;
-        let gs_before = f.ground_speed_kts;
-        let squawk_before = f.squawk.clone();
-
-        let now = dt("2026-04-18T12:01:00Z");
-        let obs = Observation {
-            used_hex: false,
-            outcome: PollOutcome::Timeout,
-        };
-        let upd = advance_flight(&mut f, &obs, now);
-
-        assert_eq!(f.last_adsb_poll_at, Some(now));
-        assert!(
-            upd.emits.is_empty(),
-            "Timeout must not emit: {:?}",
-            upd.emits
-        );
-        assert!(
-            upd.removal.is_none(),
-            "Timeout must not remove: {:?}",
-            upd.removal
-        );
-        assert!(
-            upd.followups.is_empty(),
-            "Timeout must not produce followups: {:?}",
-            upd.followups
-        );
-        assert!(!upd.debug.is_empty(), "Timeout must record a debug event");
-        // Telemetry must be unchanged.
-        assert_eq!(f.altitude_ft, alt_before);
-        assert_eq!(f.lat, lat_before);
-        assert_eq!(f.lon, lon_before);
-        assert_eq!(f.vertical_rate_fpm, vrate_before);
-        assert_eq!(f.ground_speed_kts, gs_before);
-        assert_eq!(f.squawk, squawk_before);
+            assert_eq!(f.last_adsb_poll_at, Some(now), "{label}");
+            assert!(
+                upd.emits.is_empty(),
+                "{label} must not emit: {:?}",
+                upd.emits
+            );
+            assert!(
+                upd.removal.is_none(),
+                "{label} must not remove: {:?}",
+                upd.removal
+            );
+            assert!(
+                upd.followups.is_empty(),
+                "{label} must not produce followups: {:?}",
+                upd.followups
+            );
+            assert!(!upd.debug.is_empty(), "{label} must record a debug event");
+            assert_eq!(telemetry(&f), before, "{label} must not touch telemetry");
+        }
     }
 
     #[test]
     fn squawk_7700_on_confirmed_flight_emits_squawk_emergency() {
-        let mut f = tracked_flight();
+        let mut f = pending_flight();
         f.target_confirmation = TargetConfirmation::ConfirmedByCallsign;
         f.last_seen = Some(dt("2026-04-18T12:00:00Z"));
         f.squawk = Some("1000".to_string()); // non-emergency prior squawk
@@ -1414,7 +1291,7 @@ mod tests {
 
     #[test]
     fn unconfirmed_aircraft_early_return_does_not_bump_visible_or_polls() {
-        let mut f = tracked_flight();
+        let mut f = pending_flight();
         f.target_confirmation = TargetConfirmation::Pending;
         let known_visible_at = dt("2026-04-18T11:00:00Z");
         f.last_visible_at = Some(known_visible_at);

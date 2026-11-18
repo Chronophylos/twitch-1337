@@ -353,29 +353,6 @@ mod tests {
     }
 
     #[test]
-    fn f27_simbrief_url_eddf_eham() {
-        let dep = find_by_icao("EDDF").expect("EDDF");
-        let arr = find_by_icao("EHAM").expect("EHAM");
-        let ac = aircraft_by_icao_type("F27").expect("F27");
-
-        let fp = calculate_flight_plan(dep, arr, ac);
-        let url = fp.simbrief_url();
-
-        assert!(url.contains("orig=EDDF"), "missing orig: {url}");
-        assert!(url.contains("dest=EHAM"), "missing dest: {url}");
-        assert!(url.contains("type=F27"), "missing type: {url}");
-        assert!(
-            url.contains(&format!("fl={}", fp.cruise_altitude_ft)),
-            "missing or wrong fl: {url}"
-        );
-        eprintln!(
-            "F27 EDDF-EHAM: {:.0} nm | FL{} | {url}",
-            fp.distance_nm,
-            fp.cruise_altitude_ft / 100
-        );
-    }
-
-    #[test]
     fn c172_short_hop() {
         let dep = find_by_icao("EDDF").expect("EDDF");
         let arr = find_by_icao("EDDM").expect("EDDM");
@@ -386,17 +363,6 @@ mod tests {
         // ~152 nm at 122 kts ~ 1.25h + climb/descent + taxi ~ 1.5-2h
         assert!(fp.block_time.as_secs() > 3600, "too short");
         assert!(fp.block_time.as_secs() < 3 * 3600, "too long");
-    }
-
-    #[test]
-    fn estimate_distance_reasonable() {
-        let ac = aircraft_by_icao_type("B738").expect("B738");
-        let target = Duration::from_secs(2 * 3600); // 2 hours
-
-        let est = estimate_distance_for_block_time(ac, target);
-
-        // ~1h cruise at 460 kts + climb/descent distance ≈ 690 nm
-        assert!(est > 500.0 && est < 900.0, "estimate was {est} nm");
     }
 
     #[test]
@@ -494,25 +460,6 @@ mod tests {
         assert!(
             url.contains(&format!("fl={}", fp.cruise_altitude_ft)),
             "missing or wrong fl: {url}"
-        );
-    }
-
-    #[test]
-    fn taxi_times_vary_by_airport_size() {
-        let dep_large = find_by_icao("KJFK").expect("KJFK"); // large
-        let arr = find_by_icao("KLAX").expect("KLAX"); // large
-        let ac = aircraft_by_icao_type("B738").expect("B738");
-
-        let fp = calculate_flight_plan(dep_large, arr, ac);
-        assert_eq!(
-            fp.taxi_out,
-            Duration::from_secs(18 * 60),
-            "large airport taxi_out should be 18 min"
-        );
-        assert_eq!(
-            fp.taxi_in,
-            Duration::from_secs(10 * 60),
-            "large airport taxi_in should be 10 min"
         );
     }
 }

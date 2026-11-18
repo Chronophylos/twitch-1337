@@ -172,19 +172,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_input_yields_empty_output() {
-        assert_eq!(sanitize_outbound(""), "");
-    }
-
-    #[test]
-    fn long_ascii_input_clamped_with_ellipsis() {
-        let input: String = std::iter::repeat_n('a', 600).collect();
-        let out = sanitize_outbound(&input);
-        assert!(out.len() <= MAX_OUTBOUND_BYTES);
-        assert!(out.ends_with('…'));
-    }
-
-    #[test]
     fn multibyte_input_clamped_on_char_boundary() {
         // "ä" is 2 bytes UTF-8; 300 of them = 600 bytes. The real check is
         // that slicing inside a multibyte char doesn't panic.

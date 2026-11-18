@@ -84,6 +84,7 @@ async fn ai_fallback_reply_is_tagged_aurora() {
         .expect("bot history entry");
     assert_eq!(entry.agent, Some(Agent::Aurora));
     assert_eq!(entry.display_name.as_deref(), Some("Aurora"));
+    assert_eq!(entry.user_id, None);
 
     bot.shutdown().await;
 }

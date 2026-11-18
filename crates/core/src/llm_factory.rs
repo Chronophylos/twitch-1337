@@ -297,15 +297,6 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_model_disables_the_profile() {
-        let r = LlmRegistry::new(
-            Some(&boot()),
-            handle(vec![p("a", AiProvider::OpenRouter, "")], "a"),
-        );
-        assert!(r.resolve_named("a").is_none());
-    }
-
-    #[test]
     fn no_bootstrap_means_no_client() {
         let r = LlmRegistry::new(None, handle(vec![p("a", AiProvider::OpenRouter, "m")], "a"));
         assert!(r.resolve_named("a").is_none());

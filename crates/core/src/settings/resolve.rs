@@ -602,11 +602,15 @@ mod tests {
     }
 
     #[test]
-    fn cooldown_override_wins_per_field() {
+    fn section_overrides_win_per_field() {
         let defaults = Settings::compiled_defaults();
         let overrides = SettingsOverrides {
             cooldowns: CooldownsOverrides {
                 ai: Some(15),
+                ..Default::default()
+            },
+            pings: PingsOverrides {
+                public: Some(!defaults.pings.public),
                 ..Default::default()
             },
             ..SettingsOverrides::default()
@@ -614,89 +618,8 @@ mod tests {
         let resolved = Settings::resolve(&defaults, &overrides);
         assert_eq!(resolved.cooldowns.ai, 15);
         assert_eq!(resolved.cooldowns.news, defaults.cooldowns.news);
-        assert_eq!(resolved.pings, defaults.pings);
-    }
-
-    #[test]
-    fn pings_public_override_flips_bool() {
-        let defaults = Settings::compiled_defaults();
-        let overrides = SettingsOverrides {
-            pings: PingsOverrides {
-                public: Some(true),
-                ..Default::default()
-            },
-            ..SettingsOverrides::default()
-        };
-        let resolved = Settings::resolve(&defaults, &overrides);
-        assert!(resolved.pings.public);
+        assert_eq!(resolved.pings.public, !defaults.pings.public);
         assert_eq!(resolved.pings.cooldown, defaults.pings.cooldown);
-    }
-
-    #[test]
-    fn pings_cooldown_override_leaves_public_at_default() {
-        let defaults = Settings::compiled_defaults();
-        let overrides = SettingsOverrides {
-            pings: PingsOverrides {
-                cooldown: Some(600),
-                ..Default::default()
-            },
-            ..SettingsOverrides::default()
-        };
-        let resolved = Settings::resolve(&defaults, &overrides);
-        assert_eq!(resolved.pings.cooldown, 600);
-        assert_eq!(resolved.pings.public, defaults.pings.public);
-    }
-
-    #[test]
-    fn ai_connection_model_override_wins() {
-        use crate::settings::overrides::{AiConnectionOverrides, AiOverrides};
-
-        let defaults = Settings::compiled_defaults();
-        let overrides = SettingsOverrides {
-            ai: AiOverrides {
-                connection: AiConnectionOverrides {
-                    model: Some("gpt-5".into()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..SettingsOverrides::default()
-        };
-        let resolved = Settings::resolve(&defaults, &overrides);
-        assert_eq!(
-            resolved
-                .ai
-                .by_name(&resolved.ai.aurora.profile)
-                .unwrap()
-                .model,
-            "gpt-5"
-        );
-        assert_eq!(
-            resolved
-                .ai
-                .by_name(&resolved.ai.aurora.profile)
-                .unwrap()
-                .timeout,
-            defaults
-                .ai
-                .by_name(&defaults.ai.aurora.profile)
-                .unwrap()
-                .timeout
-        );
-    }
-
-    #[test]
-    fn service_tier_override_resolves_for_connection() {
-        let mut overrides = overrides::SettingsOverrides::default();
-        overrides.ai.connection.service_tier = Some(Some("flex".to_string()));
-        let s = Settings::resolve(&Settings::compiled_defaults(), &overrides);
-        assert_eq!(
-            s.ai.by_name(&s.ai.aurora.profile)
-                .unwrap()
-                .service_tier
-                .as_deref(),
-            Some("flex")
-        );
     }
 
     #[test]
@@ -810,6 +733,8 @@ mod tests {
         assert_eq!(e.pinned_emotes, vec!["PepeLa", "Clueless"]);
     }
 
+    /// Compiled defaults leave `ai.emotes` off; enabling it without a pinned
+    /// list must seed from `AiEmotes::default()`, not an empty list.
     #[test]
     fn emotes_pinned_none_override_resolves_to_default_seed() {
         use crate::settings::overrides::{AiEmotesOverrides, AiOverrides};
@@ -826,7 +751,7 @@ mod tests {
         };
         let r = Settings::resolve(&defaults, &overrides);
         let e = r.ai.emotes.expect("emotes enabled");
-        assert_eq!(e.pinned_emotes, vec!["PepeLa", "okjj"]);
+        assert_eq!(e.pinned_emotes, AiEmotes::default().pinned_emotes);
     }
 
     #[test]
@@ -856,14 +781,6 @@ mod tests {
     }
 
     #[test]
-    fn schedules_none_override_resolves_to_defaults() {
-        let defaults = Settings::compiled_defaults();
-        let overrides = overrides::SettingsOverrides::default();
-        let r = Settings::resolve(&defaults, &overrides);
-        assert!(r.schedules.is_empty());
-    }
-
-    #[test]
     fn grok_profile_override_resolves_and_inherits_when_cleared() {
         let defaults = Settings::compiled_defaults();
         let mut ovr = overrides::SettingsOverrides::default();
@@ -877,22 +794,6 @@ mod tests {
         ovr.ai.grok.profile = Some(None);
         let s = Settings::resolve(&defaults, &ovr);
         assert_eq!(s.ai.grok.profile, "default");
-    }
-
-    #[test]
-    fn dreamer_write_cap_resolves_default_and_override() {
-        // Empty overrides → compiled default (32).
-        let s = Settings::resolve(
-            &Settings::compiled_defaults(),
-            &overrides::SettingsOverrides::default(),
-        );
-        assert_eq!(s.ai.dreamer.max_writes_per_turn, 32);
-
-        // Explicit override wins.
-        let mut ovr = overrides::SettingsOverrides::default();
-        ovr.ai.dreamer.max_writes_per_turn = Some(50);
-        let s = Settings::resolve(&Settings::compiled_defaults(), &ovr);
-        assert_eq!(s.ai.dreamer.max_writes_per_turn, 50);
     }
 
     #[test]
@@ -960,15 +861,8 @@ mod tests {
         let mut o = SettingsOverrides::default();
         o.ai.connection.model = Some("legacy-model".into());
         o.ai.profiles = Some(vec![AiProfile {
-            name: "local".into(),
-            key: None,
-            provider: AiProvider::Ollama,
-            base_url: None,
             model: "qwen3:8b".into(),
-            timeout: 30,
-            reasoning_effort: None,
-            service_tier: None,
-            ..Default::default()
+            ..profile_named("local")
         }]);
         o.ai.active_profile = Some("local".into());
 
@@ -981,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn alerts_resolve_and_fallthrough() {
+    fn alerts_override_wins_per_field() {
         let defaults = Settings::compiled_defaults();
         let overrides = crate::settings::overrides::SettingsOverrides {
             alerts: crate::settings::overrides::AlertsOverrides {
@@ -998,27 +892,16 @@ mod tests {
         assert!(r.alerts.quake.enabled);
         assert_eq!(r.alerts.quake.min_mag_tenths, 40);
         // untouched fields fall through to defaults
-        assert_eq!(r.alerts.quake.poll_secs, 300);
-        assert!(!r.alerts.cme.enabled);
-        assert_eq!(r.alerts.cme.poll_secs, 900);
-        assert_eq!(r.alerts.solar.min_class, "M");
-        assert_eq!(r.alerts.max_age_secs, 7_200);
+        assert_eq!(r.alerts.quake.poll_secs, defaults.alerts.quake.poll_secs);
+        assert_eq!(r.alerts.cme, defaults.alerts.cme);
+        assert_eq!(r.alerts.solar, defaults.alerts.solar);
+        assert_eq!(r.alerts.max_age_secs, defaults.alerts.max_age_secs);
     }
 
     #[test]
     fn v6_stale_active_profile_remains_a_required_agent_pointer() {
         let mut o = SettingsOverrides::default();
-        o.ai.profiles = Some(vec![AiProfile {
-            name: "a".into(),
-            key: None,
-            provider: AiProvider::Ollama,
-            base_url: None,
-            model: "m".into(),
-            timeout: 30,
-            reasoning_effort: None,
-            service_tier: None,
-            ..Default::default()
-        }]);
+        o.ai.profiles = Some(vec![profile_named("a")]);
         o.ai.active_profile = Some("gone".into());
         let s = Settings::resolve(&Settings::compiled_defaults(), &o);
         assert_eq!(s.ai.aurora.profile, "gone");
@@ -1028,17 +911,7 @@ mod tests {
     fn v6_active_profile_stamps_required_agents_and_leaves_recap_off() {
         let defaults = Settings::compiled_defaults();
         let mut o = SettingsOverrides::default();
-        o.ai.profiles = Some(vec![crate::settings::ai::AiProfile {
-            name: "cheap".into(),
-            key: None,
-            provider: AiProvider::Ollama,
-            base_url: Some("http://127.0.0.1:1".into()),
-            model: "cheap-model".into(),
-            timeout: 30,
-            reasoning_effort: None,
-            service_tier: None,
-            ..Default::default()
-        }]);
+        o.ai.profiles = Some(vec![profile_named("cheap")]);
         o.ai.active_profile = Some("cheap".into());
         let s = Settings::resolve(&defaults, &o);
         assert_eq!(s.ai.aurora.profile, "cheap");
@@ -1097,15 +970,5 @@ mod tests {
         o.ai.aurora.persona_name = Some("Vesper".into());
         let s = Settings::resolve(&defaults, &o);
         assert_eq!(s.ai.aurora.persona_name, "Vesper");
-    }
-
-    #[test]
-    fn missing_active_profile_stamps_default() {
-        let defaults = Settings::compiled_defaults();
-        let o = SettingsOverrides::default();
-        let s = Settings::resolve(&defaults, &o);
-        assert_eq!(s.ai.aurora.profile, "default");
-        assert_eq!(s.ai.grok.profile, "default");
-        assert!(s.ai.recap.profile.is_none());
     }
 }

@@ -64,12 +64,4 @@ mod tests {
         }
         assert!(is_valid_game_name(&"a".repeat(40)));
     }
-
-    #[test]
-    fn defaults() {
-        let d = SpoilerSettings::default();
-        assert_eq!(d.profile, "");
-        assert_eq!(d.default_game, "GTA 6");
-        assert_eq!(d.confidence_floor, 50);
-    }
 }

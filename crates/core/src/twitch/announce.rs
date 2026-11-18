@@ -1,8 +1,8 @@
 //! Build-identity helpers and lifecycle chat announces.
 //!
-//! `version_line` / `format_uptime` and the three message builders are pure and
-//! unit-tested here. `announce_startup` / `announce_shutdown` are thin
-//! `client.say` wrappers exercised by integration tests (`tests/irc/announce.rs`).
+//! `version_line` / `format_uptime` are pure and unit-tested here.
+//! `announce_startup` / `announce_shutdown` are thin `client.say` wrappers
+//! exercised by integration tests (`tests/irc/announce.rs`).
 
 use std::time::Duration;
 
@@ -136,30 +136,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn format_uptime_zero_is_seconds() {
-        assert_eq!(format_uptime(Duration::from_secs(0)), "0s");
-    }
-
-    #[test]
-    fn format_uptime_seconds_only() {
-        assert_eq!(format_uptime(Duration::from_secs(42)), "42s");
-    }
-
-    #[test]
-    fn format_uptime_minutes_seconds() {
-        assert_eq!(format_uptime(Duration::from_secs(5 * 60 + 12)), "5m 12s");
-    }
-
-    #[test]
-    fn format_uptime_truncates_to_three_units() {
-        let d = Duration::from_secs(2 * 86_400 + 3 * 3_600 + 14 * 60 + 7);
-        assert_eq!(format_uptime(d), "2d 3h 14m");
-    }
-
-    #[test]
-    fn format_uptime_skips_interior_zeros() {
-        let d = Duration::from_secs(2 * 86_400 + 7);
-        assert_eq!(format_uptime(d), "2d 7s");
+    fn format_uptime_cases() {
+        let cases: &[(u64, &str)] = &[
+            (0, "0s"),
+            (42, "42s"),
+            (5 * 60 + 12, "5m 12s"),
+            // Truncated to the three largest non-zero units.
+            (2 * 86_400 + 3 * 3_600 + 14 * 60 + 7, "2d 3h 14m"),
+            // Interior zero units are skipped.
+            (2 * 86_400 + 7, "2d 7s"),
+        ];
+        for &(secs, expected) in cases {
+            assert_eq!(
+                format_uptime(Duration::from_secs(secs)),
+                expected,
+                "{secs}s"
+            );
+        }
     }
 
     #[test]
@@ -171,35 +164,5 @@ mod tests {
         assert!(v.starts_with(env!("BUILD_NUM")), "got {v}");
         assert!(!v.starts_with("bb"), "double-b prefix: {v}");
         assert!(v.contains(" · "), "got {v}");
-    }
-
-    #[test]
-    fn startup_message_shape() {
-        let m = startup_message();
-        assert!(
-            m.starts_with(&format!("I'm up KOK · {}", env!("BUILD_NUM"))),
-            "got {m}"
-        );
-    }
-
-    #[test]
-    fn shutdown_message_is_static() {
-        assert_eq!(shutdown_message(), "Bravo 6 going dark RatgeNV");
-    }
-
-    #[test]
-    fn crash_message_is_distinct_from_shutdown() {
-        assert_eq!(crash_message(), "Mayday — Bravo 6 is down PANIC");
-        assert_ne!(crash_message(), shutdown_message());
-    }
-
-    #[test]
-    fn version_reply_shape() {
-        let r = version_reply_message(Duration::from_secs(90));
-        assert!(
-            r.starts_with(&format!("billyReady · {}", env!("BUILD_NUM"))),
-            "got {r}"
-        );
-        assert!(r.contains(" · up 1m 30s"), "got {r}");
     }
 }

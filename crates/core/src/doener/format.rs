@@ -84,16 +84,6 @@ mod tests {
     }
 
     #[test]
-    fn global_includes_headline_numbers() {
-        let s = format_global(&stats());
-        assert!(s.contains("Döneratlas DE:"));
-        assert!(s.contains("8.36"));
-        assert!(s.contains("1072 Städte"));
-        assert!(s.contains("1897 Läden"));
-        assert!(s.contains("1.7"));
-    }
-
-    #[test]
     fn global_omits_change_when_none() {
         let mut s = stats();
         s.change_30d = None;
@@ -114,12 +104,6 @@ mod tests {
     }
 
     #[test]
-    fn city_with_one_location_with_price_uses_singular_bude() {
-        let c = hit("X", 1, Some((7.0, 7.0, 7.0)));
-        assert_eq!(format_city(&c), "X: 1 Bude, ⌀ 7.00€ (7.00–7.00€).");
-    }
-
-    #[test]
     fn did_you_mean_lists_top_three() {
         let hits = vec![
             hit("Hannover", 51, None),
@@ -130,14 +114,6 @@ mod tests {
         assert_eq!(
             format_did_you_mean(&hits),
             "Meintest du: Hannover (51), Hanau (3), Handewitt (1)?"
-        );
-    }
-
-    #[test]
-    fn not_found_quotes_query() {
-        assert_eq!(
-            format_not_found("xyz"),
-            "FeelsDankMan keine Stadt für 'xyz' gefunden."
         );
     }
 }

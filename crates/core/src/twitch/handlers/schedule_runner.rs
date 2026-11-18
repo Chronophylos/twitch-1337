@@ -689,7 +689,7 @@ mod tests {
         ScheduleChildError, ScheduleCompletion, join_schedule_child, shutdown_is_ready,
         stop_and_join_all,
     };
-    use crate::lifecycle::{Lifecycle, TaskCompletion, TaskGroup};
+    use crate::lifecycle::{Lifecycle, TaskGroup};
 
     async fn completion_task(completion: ScheduleCompletion) -> TaskGroup<ScheduleCompletion> {
         let lifecycle = Lifecycle::new();
@@ -833,19 +833,5 @@ mod tests {
         assert!(!shutdown_is_ready(&mut waiter).await);
         notify.notify_waiters();
         assert!(shutdown_is_ready(&mut waiter).await);
-    }
-
-    #[tokio::test]
-    async fn task_completion_exposes_the_preserved_result() {
-        let lifecycle = Lifecycle::new();
-        let mut group = TaskGroup::new(&lifecycle, "result test");
-        group.spawn("child", async { 7_u8 }).await;
-        let records: Vec<TaskCompletion<u8>> = group.join_all().await;
-
-        assert_eq!(records.len(), 1);
-        assert_eq!(
-            records.into_iter().next().unwrap().into_result().unwrap(),
-            7
-        );
     }
 }

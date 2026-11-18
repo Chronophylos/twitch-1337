@@ -85,10 +85,4 @@ mod tests {
         assert!(parse_spread(Some("celtic_cross")).is_err());
         assert!(parse_spread(Some("")).is_err());
     }
-
-    #[test]
-    fn guidance_and_future_labels() {
-        assert_eq!(GUIDANCE_LABELS, ["Ursache", "Hindernis", "Rat"]);
-        assert_eq!(FUTURE_LABELS, ["Vergangenheit", "Gegenwart", "Zukunft"]);
-    }
 }

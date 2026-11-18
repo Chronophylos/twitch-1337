@@ -146,22 +146,15 @@ mod tests {
         )
     }
 
+    /// The postal code challenge is deliberately not exposed to the model.
     #[test]
-    fn tool_def_has_expected_name_and_required_arg() {
+    fn postal_code_is_not_exposed_to_the_model() {
         let t = track_shipment_tool();
-        assert_eq!(t.name, TRACK_SHIPMENT_TOOL_NAME);
-        assert_eq!(t.parameters["required"][0], "tracking_number");
-        // The postal code challenge is deliberately not exposed.
         assert!(
             t.parameters["properties"]
                 .get("recipientPostalCode")
                 .is_none()
         );
-    }
-
-    #[test]
-    fn track_shipment_is_not_a_web_tool() {
-        assert!(!crate::ai::content::is_web_tool(TRACK_SHIPMENT_TOOL_NAME));
     }
 
     #[test]

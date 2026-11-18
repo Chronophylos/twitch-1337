@@ -27,20 +27,3 @@ async fn startup_announce_posts_to_admin_channel() {
 
     bot.shutdown().await;
 }
-
-#[tokio::test]
-async fn v_command_replies_with_build_and_uptime() {
-    // No admin_channel configured -> no startup announce to race with.
-    let mut bot = TestBotBuilder::new().spawn().await;
-
-    bot.send("someviewer", "!v").await;
-
-    let body = bot.expect_reply(TIMEOUT).await;
-    assert!(
-        body.starts_with("billyReady · "),
-        "unexpected !v body: {body}"
-    );
-    assert!(body.contains(" · up "), "missing uptime in !v body: {body}");
-
-    bot.shutdown().await;
-}

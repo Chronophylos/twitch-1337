@@ -6,7 +6,7 @@ use common::{fake_adsb_provider::FakeAdsbProvider, fake_clock::FakeClock, fake_t
 use jiff::Timestamp;
 use tempfile::TempDir;
 use twitch_1337_core::aviation::tracker::{
-    FlightIdentifier, FlightPhase, FlightTrackerState, TargetConfirmation, TrackedFlight,
+    FlightIdentifier, FlightTrackerState, TargetConfirmation, TrackedFlight,
     poll_all_flights_with_commands,
 };
 use twitch_1337_core::aviation::{AltBaro, NearbyAircraft};
@@ -18,37 +18,14 @@ fn dt(s: &str) -> Timestamp {
     s.parse().unwrap()
 }
 
-fn tracked_flight(now: Timestamp) -> TrackedFlight {
+/// Pending flight tracked by its assigned hex `3C6589`, callsign not yet known.
+fn hex_tracked_flight(now: Timestamp) -> TrackedFlight {
     TrackedFlight {
         identifier: FlightIdentifier::Hex("3C6589".to_string()),
         callsign: None,
         alias_callsigns: Vec::new(),
         hex: Some("3C6589".to_string()),
-        hex_source: None,
-        observed_callsign: None,
-        target_confirmation: TargetConfirmation::Pending,
-        phase: FlightPhase::Unknown,
-        route: None,
-        aircraft_type: None,
-        altitude_ft: None,
-        vertical_rate_fpm: None,
-        ground_speed_kts: None,
-        lat: None,
-        lon: None,
-        squawk: None,
-        tracked_by: "alice".to_string(),
-        tracked_at: now,
-        last_seen: None,
-        last_visible_at: None,
-        last_phase_change: None,
-        polls_since_change: 0,
-        takeoff_at: None,
-        aviationstack_checked: false,
-        scheduled_departure_at: None,
-        last_adsb_poll_at: None,
-        divert: Default::default(),
-        dest_lat: None,
-        dest_lon: None,
+        ..crate::pending_flight(now)
     }
 }
 
@@ -93,7 +70,7 @@ async fn poll_all_flights_applies_position_and_route_from_fake_provider() {
     let data_dir = TempDir::new().unwrap();
 
     let mut state = FlightTrackerState {
-        flights: vec![tracked_flight(now)],
+        flights: vec![hex_tracked_flight(now)],
         flight_info_cache: Vec::new(),
     };
 
@@ -142,17 +119,12 @@ async fn poll_all_retries_hex_when_iata_callsign_misses() {
     let clock = FakeClock::new(now);
     let data_dir = TempDir::new().unwrap();
 
-    let mut flight = tracked_flight(now);
-    flight.identifier = FlightIdentifier::Callsign("DE1513".to_string());
-    flight.callsign = Some("DE1513".to_string());
-    flight.alias_callsigns = vec!["DE1513".to_string()];
-    flight.hex = None;
-    flight.hex_source = None;
-    flight.target_confirmation = TargetConfirmation::Pending;
-    flight.last_seen = None;
-    flight.last_visible_at = None;
-    flight.last_adsb_poll_at = None;
-    flight.phase = FlightPhase::Unknown;
+    let flight = TrackedFlight {
+        identifier: FlightIdentifier::Callsign("DE1513".to_string()),
+        callsign: Some("DE1513".to_string()),
+        alias_callsigns: vec!["DE1513".to_string()],
+        ..crate::pending_flight(now)
+    };
 
     let mut state = FlightTrackerState {
         flights: vec![flight],

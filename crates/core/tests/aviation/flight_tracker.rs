@@ -8,8 +8,8 @@ use jiff::{SignedDuration, Timestamp};
 use secrecy::SecretString;
 use twitch_1337::aviation::AviationClient;
 use twitch_1337::aviation::tracker::{
-    FlightIdentifier, FlightPhase, FlightTrackerState, HexSource, TargetConfirmation,
-    TrackedFlight, TrackerCommand, run_flight_tracker,
+    FlightPhase, FlightTrackerState, HexSource, TargetConfirmation, TrackedFlight, TrackerCommand,
+    run_flight_tracker,
 };
 use twitch_1337::config::AviationstackBootstrap;
 use twitch_1337::lifecycle::Lifecycle;
@@ -88,12 +88,7 @@ async fn track_command_acknowledges_flight() {
     let mut bot = bot;
     bot.send("alice", "!track DLH1234").await;
     let ack = bot.expect_say(Duration::from_secs(5)).await;
-    // Expected ack: "Tracke DLH1234 Okayge" (plus route info if adsbdb responded).
-    // Accept any ack that references the callsign or "track".
-    assert!(
-        ack.contains("DLH1234") || ack.to_lowercase().contains("track"),
-        "expected track ack, got: {ack}"
-    );
+    assert!(ack.contains("DLH1234"), "expected track ack, got: {ack}");
     let aviationstack_requests = bot
         .adsb_mock
         .received_requests()
@@ -1792,35 +1787,13 @@ async fn tracker_answers_dashboard_commands_while_polling() {
     let data_dir = tempfile::TempDir::new().unwrap();
     let state = FlightTrackerState {
         flights: vec![TrackedFlight {
-            identifier: FlightIdentifier::Callsign("DLH1234".to_string()),
-            callsign: Some("DLH1234".to_string()),
-            alias_callsigns: vec!["DLH1234".to_string()],
-            hex: None,
-            hex_source: None,
-            observed_callsign: None,
             target_confirmation: TargetConfirmation::ConfirmedByCallsign,
             phase: FlightPhase::Cruise,
-            route: None,
-            aircraft_type: None,
             altitude_ft: Some(35_000),
-            vertical_rate_fpm: None,
             ground_speed_kts: Some(450.0),
-            lat: None,
-            lon: None,
-            squawk: None,
-            tracked_by: "alice".to_string(),
-            tracked_at: now,
             last_seen: Some(now),
             last_visible_at: Some(now),
-            last_phase_change: None,
-            polls_since_change: 0,
-            takeoff_at: None,
-            aviationstack_checked: false,
-            scheduled_departure_at: None,
-            last_adsb_poll_at: None,
-            divert: Default::default(),
-            dest_lat: None,
-            dest_lon: None,
+            ..crate::pending_flight(now)
         }],
         flight_info_cache: Vec::new(),
     };

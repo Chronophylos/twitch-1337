@@ -305,6 +305,12 @@ mod tests {
         }
     }
 
+    fn fake(login: &str) -> Option<Arc<dyn Mouth>> {
+        Some(Arc::new(FakeMouth {
+            login: login.into(),
+        }))
+    }
+
     fn req() -> SpeakRequest<'static> {
         SpeakRequest {
             broadcaster_id: "1",
@@ -317,12 +323,8 @@ mod tests {
     #[test]
     fn login_for_returns_configured_adapter_login() {
         let router = MouthRouter {
-            aurora: Some(Arc::new(FakeMouth {
-                login: "aurora_bot".into(),
-            })),
-            grok: Some(Arc::new(FakeMouth {
-                login: "grok_bot".into(),
-            })),
+            aurora: fake("aurora_bot"),
+            grok: fake("grok_bot"),
         };
         assert_eq!(router.login_for(Agent::Aurora), Some("aurora_bot"));
         assert_eq!(router.login_for(Agent::Grok), Some("grok_bot"));
@@ -331,9 +333,7 @@ mod tests {
     #[test]
     fn login_for_absent_or_utility_is_none() {
         let router = MouthRouter {
-            aurora: Some(Arc::new(FakeMouth {
-                login: "aurora_bot".into(),
-            })),
+            aurora: fake("aurora_bot"),
             grok: None,
         };
         assert_eq!(router.login_for(Agent::Grok), None);
@@ -343,9 +343,7 @@ mod tests {
     #[tokio::test]
     async fn routes_to_configured_mouth() {
         let router = MouthRouter {
-            aurora: Some(Arc::new(FakeMouth {
-                login: "aurora_bot".into(),
-            })),
+            aurora: fake("aurora_bot"),
             grok: None,
         };
         let out = router.speak(Agent::Aurora, req()).await.unwrap();
@@ -422,12 +420,5 @@ mod tests {
             !sent.contains('\r') && !sent.contains('\n'),
             "control chars must be stripped: {sent:?}",
         );
-    }
-
-    #[test]
-    fn empty_display_is_not_the_variant_name() {
-        // The command logger used to Debug-print this as `Empty`, which is
-        // how production logs showed `error=Empty` with no explanation.
-        assert_eq!(SpeakError::Empty.to_string(), "chat-send message empty");
     }
 }
