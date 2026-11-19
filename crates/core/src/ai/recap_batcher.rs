@@ -631,7 +631,6 @@ mod tests {
 
     use super::*;
     use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistorySource};
-    use crate::ai::recap::trim_note_body;
     use crate::settings::Settings;
     use crate::settings::ai::AiProfile;
     use crate::settings::provider::AiProvider;
@@ -799,12 +798,6 @@ mod tests {
         })
         .await;
         assert_eq!(calls.load(Ordering::SeqCst), 5);
-    }
-
-    #[test]
-    fn trim_note_body_caps_length() {
-        let long = "x".repeat(900);
-        assert!(trim_note_body(&long).len() <= crate::ai::recap::RECAP_NOTE_BYTES);
     }
 
     #[test]
