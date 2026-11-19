@@ -427,7 +427,7 @@ mod tests {
         assert!(gt.running);
         assert_eq!(gt.players, Some((0, 20)));
         assert_eq!(gt.memory_mb, Some((9496, 10240)));
-        assert_eq!(gt.address.as_deref(), Some("192.168.196.166:25566"));
+        assert_eq!(gt.address.as_deref(), Some("192.0.2.10:25566"));
     }
 
     #[test]
@@ -475,7 +475,7 @@ mod tests {
         assert!(!vs.running);
         assert_eq!(vs.players, None);
         assert_eq!(vs.memory_mb, None);
-        assert_eq!(vs.address.as_deref(), Some("192.168.196.166:42420"));
+        assert_eq!(vs.address.as_deref(), Some("192.0.2.10:42420"));
     }
 
     #[test]
@@ -483,9 +483,9 @@ mod tests {
         let arma = [
             endpoint("Application Address", "0.0.0.0:2001"),
             endpoint("SFTP Server", "0.0.0.0:2224"),
-            endpoint("Unknown Endpoint", "192.168.196.166:2001"),
+            endpoint("Unknown Endpoint", "192.0.2.10:2001"),
         ];
-        assert_eq!(pick_address(&arma).as_deref(), Some("192.168.196.166:2001"));
+        assert_eq!(pick_address(&arma).as_deref(), Some("192.0.2.10:2001"));
 
         let only_wildcard = [endpoint("Application Address", "0.0.0.0:2001")];
         assert_eq!(
@@ -493,7 +493,7 @@ mod tests {
             Some("0.0.0.0:2001")
         );
 
-        let only_sftp = [endpoint("SFTP Server", "192.168.196.166:2230")];
+        let only_sftp = [endpoint("SFTP Server", "192.0.2.10:2230")];
         assert_eq!(pick_address(&only_sftp), None);
     }
 

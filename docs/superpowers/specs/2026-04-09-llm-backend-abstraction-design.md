@@ -23,7 +23,7 @@ instruction_template = "{message}"  # optional, has default
 # Ollama backend
 [ai]
 backend = "ollama"
-base_url = "http://docker.homelab:11434"  # optional, defaults to http://localhost:11434
+base_url = "http://ollama-host:11434"  # optional, defaults to http://localhost:11434
 model = "gemma3:4b"
 system_prompt = "..."  # optional, same default
 instruction_template = "{message}"  # optional, same default

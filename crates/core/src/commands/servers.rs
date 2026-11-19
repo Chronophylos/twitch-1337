@@ -261,31 +261,21 @@ mod tests {
                 "GregTech: New Horizon",
                 "GregTechNewHorizon01",
                 true,
-                "192.168.196.166:25566",
+                "192.0.2.10:25566",
             ),
-            server(
-                "Vintage Story",
-                "VintageStory01",
-                false,
-                "192.168.196.166:42422",
-            ),
+            server("Vintage Story", "VintageStory01", false, "192.0.2.10:42422"),
             server(
                 "Vintage Story Forever World",
                 "VintageStoryForeverWorld01",
                 false,
-                "192.168.196.166:42420",
+                "192.0.2.10:42420",
             ),
-            server(
-                "ArmaReforger",
-                "ArmaReforger01",
-                false,
-                "192.168.196.166:2001",
-            ),
+            server("ArmaReforger", "ArmaReforger01", false, "192.0.2.10:2001"),
             server(
                 "Minecraft Vanilla 2025",
                 "MinecraftVanilla202501",
                 false,
-                "192.168.196.166:25565",
+                "192.0.2.10:25565",
             ),
         ]
     }
@@ -385,7 +375,7 @@ mod tests {
         assert_eq!(
             detail_reply(s, Some(&d)),
             "GregTech: New Horizon [Minecraft] online seit 5d 23h 48m · 0/20 Spieler · \
-             RAM 9496/10240 MB · 192.168.196.166:25566 · Spieler: Alex, Steve"
+             RAM 9496/10240 MB · 192.0.2.10:25566 · Spieler: Alex, Steve"
         );
     }
 
@@ -487,7 +477,7 @@ mod tests {
             assert_eq!(
                 reply,
                 "GregTech: New Horizon [Minecraft] online · 0/20 Spieler · RAM 9496/10240 MB · \
-                 192.168.196.166:25566"
+                 192.0.2.10:25566"
             );
         }
     }
