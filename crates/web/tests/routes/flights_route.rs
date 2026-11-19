@@ -95,15 +95,17 @@ fn spawn_tracker(state: &mut twitch_1337_web::WebState, seen_secs: u64) {
     tokio::spawn(async move {
         while let Some(cmd) = rx.recv().await {
             if let TrackerCommand::Snapshot { reply } = cmd {
-                let _ = reply.send(vec![TrackedFlightView {
-                    identifier: "DLH123".into(),
-                    callsign: Some("DLH123".into()),
-                    owner_login: "alice".into(),
-                    phase: "Cruise".into(),
-                    altitude_ft: Some(34000),
-                    ground_speed_kts: Some(450.0),
-                    last_seen_secs_ago: Some(seen_secs),
-                }]);
+                reply
+                    .send(vec![TrackedFlightView {
+                        identifier: "DLH123".into(),
+                        callsign: Some("DLH123".into()),
+                        owner_login: "alice".into(),
+                        phase: "Cruise".into(),
+                        altitude_ft: Some(34000),
+                        ground_speed_kts: Some(450.0),
+                        last_seen_secs_ago: Some(seen_secs),
+                    }])
+                    .ok();
             }
         }
     });

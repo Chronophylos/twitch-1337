@@ -143,8 +143,8 @@ pub enum EmoteTrackerFinalizeError {
     #[error("failed to schedule emote tracker SQLite writer join")]
     JoinTaskFailed(#[source] tokio::task::JoinError),
 
-    #[error("emote tracker SQLite writer thread panicked")]
-    WriterPanicked,
+    #[error("emote tracker SQLite writer thread panicked: {message}")]
+    WriterPanicked { message: String },
 }
 
 struct WriterOwner {
@@ -158,10 +158,23 @@ impl Drop for WriterOwner {
         // synchronously confirm the named thread has terminated.
         if let Ok(mut handle) = self.handle.try_lock()
             && let Some(handle) = handle.take()
+            && let Err(payload) = handle.join()
         {
-            let _ = handle.join();
+            tracing::error!(
+                panic = %panic_message(payload.as_ref()),
+                "emote tracker SQLite writer thread panicked"
+            );
         }
     }
+}
+
+/// Best-effort text of a thread panic payload (`&str` or `String` messages).
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_owned())
 }
 
 #[derive(Clone)]
@@ -202,6 +215,10 @@ impl EmoteTrackerHandle {
         })
     }
 
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "SendError only returns the unsent command and oneshot RecvError only means the reply sender dropped; both just mean the writer exited"
+    )]
     async fn send<R>(
         &self,
         make_cmd: impl FnOnce(oneshot::Sender<Result<R>>) -> StoreCmd,
@@ -445,6 +462,10 @@ impl EmoteTrackerHandle {
 
         let (close_tx, close_rx) = oneshot::channel();
         let command_result = self.tx.send(StoreCmd::Close(close_tx));
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "oneshot RecvError carries nothing beyond the dropped close acknowledgement"
+        )]
         let close_result = match command_result {
             Ok(()) => close_rx
                 .await
@@ -455,13 +476,20 @@ impl EmoteTrackerHandle {
         // Even when command acknowledgement fails, take and join the retained
         // thread handle. Returning must not leave an application-owned writer
         // detached.
+        #[expect(
+            clippy::expect_used,
+            reason = "the is_none early return above runs under the same held lock"
+        )]
         let handle = writer
             .take()
             .expect("writer handle was present before close began");
         let join_result = tokio::task::spawn_blocking(move || handle.join())
             .await
             .map_err(EmoteTrackerFinalizeError::JoinTaskFailed)?;
-        let join_result = join_result.map_err(|_| EmoteTrackerFinalizeError::WriterPanicked);
+        let join_result =
+            join_result.map_err(|payload| EmoteTrackerFinalizeError::WriterPanicked {
+                message: panic_message(payload.as_ref()),
+            });
 
         close_result.and(join_result)
     }
@@ -477,74 +505,82 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
                 updated_at,
                 reply,
             } => {
-                let _ = reply.send(upsert_emote(&conn, &emote_id, &name, active, updated_at));
+                reply
+                    .send(upsert_emote(&conn, &emote_id, &name, active, updated_at))
+                    .ok();
             }
             StoreCmd::DeactivateEmote {
                 emote_id,
                 updated_at,
                 reply,
             } => {
-                let _ = reply.send(deactivate_emote(&conn, &emote_id, updated_at));
+                reply
+                    .send(deactivate_emote(&conn, &emote_id, updated_at))
+                    .ok();
             }
             StoreCmd::InsertSetEvent { event, reply } => {
-                let _ = reply.send(insert_set_event(&conn, &event));
+                reply.send(insert_set_event(&conn, &event)).ok();
             }
             StoreCmd::InsertUsageEvents { events, reply } => {
-                let _ = reply.send(insert_usage_events(&conn, &events));
+                reply.send(insert_usage_events(&conn, &events)).ok();
             }
             StoreCmd::ListActiveEmotes { reply } => {
-                let _ = reply.send(list_active_emotes(&conn));
+                reply.send(list_active_emotes(&conn)).ok();
             }
             StoreCmd::GetEmote { emote_id, reply } => {
-                let _ = reply.send(get_emote(&conn, &emote_id));
+                reply.send(get_emote(&conn, &emote_id)).ok();
             }
             StoreCmd::ResolveActiveName { name, reply } => {
-                let _ = reply.send(resolve_active_name(&conn, &name));
+                reply.send(resolve_active_name(&conn, &name)).ok();
             }
             StoreCmd::ApplySetChanges { batch, reply } => {
-                let _ = reply.send(apply_set_changes(&conn, &batch));
+                reply.send(apply_set_changes(&conn, &batch)).ok();
             }
             StoreCmd::CatalogIsEmpty { reply } => {
-                let _ = reply.send(catalog_is_empty(&conn));
+                reply.send(catalog_is_empty(&conn)).ok();
             }
             StoreCmd::ResolveEmoteQuery { query, reply } => {
-                let _ = reply.send(super::lookup::resolve_emote_query(&conn, &query));
+                reply
+                    .send(super::lookup::resolve_emote_query(&conn, &query))
+                    .ok();
             }
             StoreCmd::LatestLifecycleEvent { emote_id, reply } => {
-                let _ = reply.send(super::db::latest_lifecycle_event(&conn, &emote_id));
+                reply
+                    .send(super::db::latest_lifecycle_event(&conn, &emote_id))
+                    .ok();
             }
             StoreCmd::ListSetEvents { filter, reply } => {
-                let _ = reply.send(list_set_events(&conn, &filter));
+                reply.send(list_set_events(&conn, &filter)).ok();
             }
             StoreCmd::ListUsageEvents { filter, reply } => {
-                let _ = reply.send(list_usage_events(&conn, &filter));
+                reply.send(list_usage_events(&conn, &filter)).ok();
             }
             StoreCmd::CountUsageEvents { filter, reply } => {
-                let _ = reply.send(count_usage_events(&conn, &filter));
+                reply.send(count_usage_events(&conn, &filter)).ok();
             }
             StoreCmd::TopUsageCounts {
                 since_ms,
                 limit,
                 reply,
             } => {
-                let _ = reply.send(top_usage_counts(&conn, since_ms, limit));
+                reply.send(top_usage_counts(&conn, since_ms, limit)).ok();
             }
             StoreCmd::TopUsers {
                 since_ms,
                 limit,
                 reply,
             } => {
-                let _ = reply.send(top_users_by_usage(&conn, since_ms, limit));
+                reply.send(top_users_by_usage(&conn, since_ms, limit)).ok();
             }
             StoreCmd::LeastUsedEmotes {
                 since_ms,
                 limit,
                 reply,
             } => {
-                let _ = reply.send(least_used_emotes(&conn, since_ms, limit));
+                reply.send(least_used_emotes(&conn, since_ms, limit)).ok();
             }
             StoreCmd::ResolveViewerTwitchId { login, reply } => {
-                let _ = reply.send(resolve_viewer_twitch_id(&conn, &login));
+                reply.send(resolve_viewer_twitch_id(&conn, &login)).ok();
             }
             StoreCmd::UsageCountsForUser {
                 twitch_user_id,
@@ -552,12 +588,14 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
                 limit,
                 reply,
             } => {
-                let _ = reply.send(usage_counts_for_user(
-                    &conn,
-                    &twitch_user_id,
-                    since_ms,
-                    limit,
-                ));
+                reply
+                    .send(usage_counts_for_user(
+                        &conn,
+                        &twitch_user_id,
+                        since_ms,
+                        limit,
+                    ))
+                    .ok();
             }
             StoreCmd::UsageCountsOfEmote {
                 emote_id,
@@ -565,7 +603,9 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
                 limit,
                 reply,
             } => {
-                let _ = reply.send(usage_counts_of_emote(&conn, &emote_id, since_ms, limit));
+                reply
+                    .send(usage_counts_of_emote(&conn, &emote_id, since_ms, limit))
+                    .ok();
             }
             StoreCmd::UpsertEmoteMeaning {
                 emote_id,
@@ -576,24 +616,26 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
                 updated_at,
                 reply,
             } => {
-                let _ = reply.send(upsert_emote_meaning(
-                    &conn,
-                    &emote_id,
-                    &appearance,
-                    meaning.as_deref(),
-                    usage.as_deref(),
-                    avoid.as_deref(),
-                    updated_at,
-                ));
+                reply
+                    .send(upsert_emote_meaning(
+                        &conn,
+                        &emote_id,
+                        &appearance,
+                        meaning.as_deref(),
+                        usage.as_deref(),
+                        avoid.as_deref(),
+                        updated_at,
+                    ))
+                    .ok();
             }
             StoreCmd::GetEmoteMeaning { emote_id, reply } => {
-                let _ = reply.send(get_emote_meaning(&conn, &emote_id));
+                reply.send(get_emote_meaning(&conn, &emote_id)).ok();
             }
             StoreCmd::ListEmoteMeaningsForIds { ids, reply } => {
-                let _ = reply.send(list_emote_meanings_for_ids(&conn, &ids));
+                reply.send(list_emote_meanings_for_ids(&conn, &ids)).ok();
             }
             StoreCmd::Close(reply) => {
-                let _ = reply.send(());
+                reply.send(()).ok();
                 return;
             }
         }

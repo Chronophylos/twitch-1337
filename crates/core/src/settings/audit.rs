@@ -1,7 +1,7 @@
 //! Append-only JSON-lines audit log for settings changes.
 
 #[cfg(any(test, feature = "testing"))]
-use std::sync::{Mutex, PoisonError};
+use parking_lot::Mutex;
 
 use jiff::ZonedDateTime;
 use serde::Serialize;
@@ -82,10 +82,7 @@ impl MemoryAuditLog {
     }
 
     pub fn snapshot(&self) -> Vec<AuditEntry> {
-        self.entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.entries.lock().clone()
     }
 }
 
@@ -99,10 +96,7 @@ impl Default for MemoryAuditLog {
 #[cfg(any(test, feature = "testing"))]
 impl AuditLog for MemoryAuditLog {
     fn append(&self, entry: &AuditEntry) -> Result<(), AuditError> {
-        self.entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(entry.clone());
+        self.entries.lock().push(entry.clone());
         Ok(())
     }
 }
@@ -110,6 +104,10 @@ impl AuditLog for MemoryAuditLog {
 /// Produce the per-field `AuditChange` list between two resolved snapshots.
 /// Diffs via a generic JSON tree walk (`tree::diff`); `schedules` are handled
 /// by name across the vec instead of as a wholesale array.
+#[expect(
+    clippy::expect_used,
+    reason = "Settings and Schedule derive Serialize into serde_json::Value, which cannot fail for them"
+)]
 pub(super) fn diff_changes(prior: &Settings, next: &Settings) -> Vec<AuditChange> {
     let mut p = serde_json::to_value(prior).expect("serialize prior settings");
     let mut n = serde_json::to_value(next).expect("serialize next settings");

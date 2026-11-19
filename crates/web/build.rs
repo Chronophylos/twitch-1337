@@ -2,6 +2,11 @@
 //! cache-bust by appending `?v=<hash>` — needed because the asset router
 //! serves `Cache-Control: immutable, max-age=1y`, which would otherwise pin
 //! browsers to a stale CSS/JS bundle for a year after every redeploy.
+#![expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "build script: panicking fails the build on bad committed assets"
+)]
 
 use std::env;
 use std::fs;

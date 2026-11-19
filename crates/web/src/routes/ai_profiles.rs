@@ -198,6 +198,10 @@ impl ProfileForm {
                     message: format!("unknown profile kind {:?}", self.kind),
                 })?
         };
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "integer parse failure is fully described by the echoed input"
+        )]
         let timeout: u64 = self.timeout.trim().parse().map_err(|_| FieldError {
             field: "form.timeout".into(),
             message: format!("must be a whole number of seconds (got {:?})", self.timeout),

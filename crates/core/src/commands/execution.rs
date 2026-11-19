@@ -1,8 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use eyre::Result;
+use parking_lot::Mutex;
 use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::{JoinError, JoinSet};
@@ -678,6 +679,10 @@ where
                 return Err(ExecutionError::InlineCommandAdmitted(invocation.command_id));
             }
             let command = entry.command().clone();
+            #[expect(
+                clippy::expect_used,
+                reason = "front() returned Some above and nothing popped the queue since"
+            )]
             let invocation = self
                 .pending
                 .pop_front()
@@ -795,6 +800,11 @@ where
         self.users.entry(key.clone()).or_default().active += 1;
     }
 
+    #[expect(
+        clippy::expect_used,
+        clippy::panic,
+        reason = "counters are only released for invocations previously counted; underflow is a scheduler bug"
+    )]
     fn decrement_active(&mut self, id: &CommandId, key: &UserKey) {
         self.active = self
             .active
@@ -839,6 +849,11 @@ where
         );
     }
 
+    #[expect(
+        clippy::expect_used,
+        clippy::panic,
+        reason = "pending counters are only released for invocations previously queued; underflow is a scheduler bug"
+    )]
     fn decrement_pending(&mut self, _id: &CommandId, key: &UserKey) {
         let remove_user = if let Some(counts) = self.users.get_mut(key) {
             counts.pending = counts
@@ -987,7 +1002,7 @@ impl CommandTaskGroup {
             }
         };
         let task = CURRENT_COMMAND_TASK_GROUP.scope(self.clone(), task);
-        let mut tasks = lock(&self.inner.tasks);
+        let mut tasks = self.inner.tasks.lock();
         if tasks.closed {
             return Err(TaskGroupError::Closed);
         }
@@ -1007,14 +1022,14 @@ impl CommandTaskGroup {
         R: Send + 'static,
     {
         let (sender, receiver) = oneshot::channel();
-        let mut tasks = lock(&self.inner.tasks);
+        let mut tasks = self.inner.tasks.lock();
         if tasks.closed {
             return Err(TaskGroupError::Closed);
         }
         let completion_signal = CompletionSignal(self.inner.clone());
         tasks.blocking.spawn_blocking(move || {
             let _completion_signal = completion_signal;
-            let _ = sender.send(task());
+            sender.send(task()).ok();
         });
         Ok(receiver)
     }
@@ -1029,14 +1044,14 @@ impl CommandTaskGroup {
         R: Send + 'static,
     {
         let (sender, receiver) = oneshot::channel();
-        let mut tasks = lock(&self.inner.tasks);
+        let mut tasks = self.inner.tasks.lock();
         if tasks.closed {
             return Err(TaskGroupError::Closed);
         }
         let completion_signal = CompletionSignal(self.inner.clone());
         tasks.children.spawn(async move {
             let _completion_signal = completion_signal;
-            let _ = sender.send(task.await);
+            sender.send(task.await).ok();
         });
         Ok(receiver)
     }
@@ -1055,7 +1070,7 @@ impl CommandTaskGroup {
 
     /// Permanently close admission to command and application-owned child work.
     pub fn close(&self) {
-        let mut tasks = lock(&self.inner.tasks);
+        let mut tasks = self.inner.tasks.lock();
         if !tasks.closed {
             tasks.closed = true;
             self.inner.completed.add_permits(1);
@@ -1063,30 +1078,30 @@ impl CommandTaskGroup {
     }
 
     pub fn is_closed(&self) -> bool {
-        lock(&self.inner.tasks).closed
+        self.inner.tasks.lock().closed
     }
 
     pub fn is_empty(&self) -> bool {
-        let tasks = lock(&self.inner.tasks);
+        let tasks = self.inner.tasks.lock();
         tasks.active.is_empty() && tasks.blocking.is_empty() && tasks.children.is_empty()
     }
 
     pub fn active_len(&self) -> usize {
-        lock(&self.inner.tasks).active.len()
+        self.inner.tasks.lock().active.len()
     }
 
     pub fn blocking_len(&self) -> usize {
-        lock(&self.inner.tasks).blocking.len()
+        self.inner.tasks.lock().blocking.len()
     }
 
     pub fn child_len(&self) -> usize {
-        lock(&self.inner.tasks).children.len()
+        self.inner.tasks.lock().children.len()
     }
 
     async fn join_next_event(&self) -> TaskGroupEvent {
         loop {
             let (empty, closed) = {
-                let tasks = lock(&self.inner.tasks);
+                let tasks = self.inner.tasks.lock();
                 (
                     tasks.active.is_empty()
                         && tasks.blocking.is_empty()
@@ -1101,6 +1116,10 @@ impl CommandTaskGroup {
                     std::future::pending().await
                 };
             }
+            #[expect(
+                clippy::expect_used,
+                reason = "the completion semaphore is never closed"
+            )]
             let permit = self
                 .inner
                 .completed
@@ -1108,7 +1127,7 @@ impl CommandTaskGroup {
                 .await
                 .expect("command task semaphore is never closed");
             let event = {
-                let mut tasks = lock(&self.inner.tasks);
+                let mut tasks = self.inner.tasks.lock();
                 if let Some(result) = tasks.active.try_join_next() {
                     Some(TaskGroupEvent::Command(Some(result)))
                 } else if let Some(result) = tasks.blocking.try_join_next() {
@@ -1145,7 +1164,7 @@ impl CommandTaskGroup {
     }
 
     fn close_and_take(&self) -> (JoinSet<TaskCompletion>, JoinSet<()>, JoinSet<()>) {
-        let mut tasks = lock(&self.inner.tasks);
+        let mut tasks = self.inner.tasks.lock();
         tasks.closed = true;
         let sets = (
             std::mem::take(&mut tasks.active),
@@ -1261,12 +1280,6 @@ impl From<TaskGroupError> for ExecutionError {
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -1332,6 +1345,10 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "SendError only returns the unsent item; the cause is the closed receiver"
+        )]
         fn start_send(self: Pin<&mut Self>, item: IRCMessage) -> Result<(), Self::Error> {
             self.output
                 .send(item.as_raw_irc())
@@ -1371,7 +1388,6 @@ mod tests {
         async fn new() -> Result<Self, Self::ConnectError> {
             let capture = CAPTURE_OUTPUTS
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .pop_front()
                 .ok_or(CaptureConnectError)?;
             Ok(Self {
@@ -1402,7 +1418,7 @@ mod tests {
         id: u64,
         sender: Arc<TestChat>,
         _output: mpsc::UnboundedReceiver<String>,
-        _lock: std::sync::MutexGuard<'static, ()>,
+        _lock: parking_lot::MutexGuard<'static, ()>,
     }
 
     fn test_sender() -> TestSender {
@@ -1410,19 +1426,14 @@ mod tests {
     }
 
     fn test_sender_with_flush_gate(flush_gate: Option<Arc<Semaphore>>) -> TestSender {
-        let lock = TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let lock = TEST_LOCK.lock();
         let (output_tx, output) = mpsc::unbounded_channel();
         let id = NEXT_CAPTURE_ID.fetch_add(1, Ordering::Relaxed);
-        CAPTURE_OUTPUTS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(CaptureOutput {
-                id,
-                sender: output_tx,
-                flush_gate,
-            });
+        CAPTURE_OUTPUTS.lock().push_back(CaptureOutput {
+            id,
+            sender: output_tx,
+            flush_gate,
+        });
         let config = ClientConfig::new_simple(StaticLoginCredentials::new(
             "bot".to_owned(),
             Some("token".to_owned()),
@@ -1441,7 +1452,6 @@ mod tests {
         fn drop(&mut self) {
             CAPTURE_OUTPUTS
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .retain(|capture| capture.id != self.id);
         }
     }
@@ -2057,6 +2067,10 @@ mod tests {
         };
         manager.finish(completion).unwrap();
         let duplicate = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "finish panics before returning"
+            )]
             let _ = manager.finish(TaskCompletion {
                 command_id: CommandId::new("ai").unwrap(),
                 user_key: UserKey::TwitchId("id-user".to_owned()),
@@ -2081,6 +2095,10 @@ mod tests {
         let id = CommandId::new("ai").unwrap();
         manager.increment_active(&id, &UserKey::TwitchId("id-actual".to_owned()));
         let mismatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "finish panics before returning"
+            )]
             let _ = manager.finish(TaskCompletion {
                 command_id: id,
                 user_key: UserKey::TwitchId("id-other".to_owned()),

@@ -129,7 +129,7 @@ impl Command<FakeTransport, StaticLoginCredentials> for FakeCommand {
         ctx: CommandContext<FakeTransport, StaticLoginCredentials>,
     ) -> eyre::Result<()> {
         if let Some(started) = &self.action.started {
-            let _ = started.send(ctx.trigger.clone());
+            started.send(ctx.trigger.clone()).ok();
         }
         if let Some(gate) = &self.action.gate {
             tokio::select! {

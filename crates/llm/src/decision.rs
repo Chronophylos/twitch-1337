@@ -166,6 +166,10 @@ mod tests {
     fn http() -> reqwest::Client {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "Err only means a crypto provider is already installed"
+            )]
             let _ = rustls::crypto::ring::default_provider().install_default();
         });
         reqwest::Client::new()

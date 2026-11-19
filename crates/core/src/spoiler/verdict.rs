@@ -60,6 +60,10 @@ struct Template {
     criteria: IndexMap<String, String>,
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "baked asset; a parse failure is a build-time bug caught by tests"
+)]
 fn parse_template() -> Template {
     // Baked asset; a parse failure is a build-time bug caught by tests.
     ron::from_str(SPOILER_QUESTION).expect("spoiler question.ron is valid")

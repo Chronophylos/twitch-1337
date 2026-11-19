@@ -330,9 +330,8 @@ fn overall_cap(caps: &AiMedia) -> u64 {
         caps.max_text_size,
     ]
     .iter()
-    .max()
-    .expect("non-empty")
-    .as_u64()
+    .map(bytesize::ByteSize::as_u64)
+    .fold(0, u64::max)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -570,6 +569,7 @@ fn is_blocked_host_literal(url: &reqwest::Url) -> bool {
     }
 }
 
+#[expect(clippy::expect_used, reason = "const CSS selectors are valid")]
 pub(crate) fn extract_readable_text(html: &str) -> String {
     let doc = Html::parse_document(html);
     let article_sel = Selector::parse("article, main").expect("valid selector");

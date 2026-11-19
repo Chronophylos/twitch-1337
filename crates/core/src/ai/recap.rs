@@ -162,7 +162,7 @@ pub fn eligibility_cut_seq(
         (Some(a), Some(g)) => Some(a.min(g)),
         (Some(a), None) => Some(a),
         (None, Some(g)) => Some(g),
-        (None, None) => Some(entries.last().expect("non-empty").seq + 1),
+        (None, None) => entries.last().map(|e| e.seq + 1),
     }
 }
 

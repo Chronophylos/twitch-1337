@@ -6,9 +6,11 @@
 
 use std::fmt;
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use parking_lot::Mutex;
 
 use crate::types::{Message, ToolCall, ToolResultMessage};
 
@@ -179,7 +181,7 @@ impl GenerationInProgress {
     pub fn start(model: impl Into<String>, input: impl Into<String>) -> Option<Self> {
         let inner = current()?;
         let span_id = new_id_hex(8);
-        let parent_span_id = inner.stack.lock().ok().and_then(|s| s.last().cloned());
+        let parent_span_id = inner.stack.lock().last().cloned();
         Some(Self {
             inner,
             span_id,
@@ -282,19 +284,14 @@ where
     };
     let span_id = new_id_hex(8);
     let parent_span_id = {
-        let mut stack = inner
-            .stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stack = inner.stack.lock();
         let parent = stack.last().cloned();
         stack.push(span_id.clone());
         parent
     };
     let start_unix_nano = unix_nano();
     let result = executor.execute(call).await;
-    if let Ok(mut stack) = inner.stack.lock() {
-        stack.pop();
-    }
+    inner.stack.lock().pop();
     inner.observer.span(SpanEvent {
         name: format!("tool {}", call.name),
         trace_id: inner.trace_id.clone(),
@@ -331,10 +328,10 @@ impl RecordingObserver {
 #[cfg(test)]
 impl LlmObserver for RecordingObserver {
     fn generation(&self, event: GenerationEvent) {
-        self.generations.lock().unwrap().push(event);
+        self.generations.lock().push(event);
     }
     fn span(&self, event: SpanEvent) {
-        self.spans.lock().unwrap().push(event);
+        self.spans.lock().push(event);
     }
 }
 
@@ -369,7 +366,7 @@ mod tests {
         )
         .await;
 
-        let gens = obs.generations.lock().unwrap();
+        let gens = obs.generations.lock();
         assert_eq!(gens.len(), 1);
         assert_eq!(gens[0].model, "model-x");
         assert_eq!(gens[0].output, "hello");
@@ -380,7 +377,7 @@ mod tests {
         assert_eq!(gens[0].session_id.as_deref(), Some("sess"));
         assert!(gens[0].parent_span_id.is_some());
 
-        let spans = obs.spans.lock().unwrap();
+        let spans = obs.spans.lock();
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].name, "aurora-turn");
         assert_eq!(spans[0].parent_span_id, None);

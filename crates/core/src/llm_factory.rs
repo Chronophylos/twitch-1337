@@ -1,9 +1,10 @@
 //! Resolves a profile name to a live [`LlmClient`].
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use llm::{LlmClient, OllamaClient, OpenAiClient};
+use parking_lot::Mutex;
 use secrecy::{ExposeSecret as _, SecretString};
 use tracing::{error, info, warn};
 
@@ -130,7 +131,7 @@ impl LlmRegistry {
             return Some(fixed.clone());
         }
         let key = (prof.provider, prof.base_url.clone(), prof.key.clone());
-        let mut cache = self.cache.lock().expect("llm registry cache poisoned");
+        let mut cache = self.cache.lock();
         if let Some(hit) = cache.get(&key) {
             return Some(hit.clone());
         }

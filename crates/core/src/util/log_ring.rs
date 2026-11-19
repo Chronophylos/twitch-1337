@@ -11,9 +11,10 @@
 
 use std::collections::VecDeque;
 use std::fmt::{self, Write as _};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 
 use jiff::Timestamp;
+use parking_lot::{Mutex, MutexGuard};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::Layer;
@@ -75,10 +76,8 @@ impl LogRing {
         }
     }
 
-    /// A poisoned lock still guards a consistent deque (every mutation is a
-    /// single push/pop), so recover it instead of panicking.
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+        self.inner.lock()
     }
 
     /// Append an entry, evicting the oldest when full. Returns its `seq`.
@@ -192,6 +191,10 @@ impl Visit for EntryVisitor {
         let mut s = String::new();
         // Writing into a String only fails if the Debug impl itself errors;
         // keep whatever was written.
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "fmt::Write into a String only fails if the Debug impl errors; keep the partial output"
+        )]
         let _ = write!(s, "{value:?}");
         self.store(field, s);
     }

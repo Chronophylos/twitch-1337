@@ -124,6 +124,7 @@ impl OAuthCtx {
     }
 
     fn authorize_url(&self, state: &str) -> String {
+        #[expect(clippy::expect_used, reason = "AUTHORIZE_URL is a valid const URL")]
         let mut url = url::Url::parse(AUTHORIZE_URL).expect("const authorize url parses");
         url.query_pairs_mut()
             .append_pair("response_type", "code")

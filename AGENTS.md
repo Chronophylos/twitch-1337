@@ -355,8 +355,9 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - `twitch_irc::irc!` macro needs standalone `use twitch_irc::irc;` — cannot be in braced `use twitch_irc::{...}`.
 - Request/response on broadcast (e.g. PING/PONG): subscribe BEFORE send to avoid race.
 - Clippy strict (`-D warnings`) + extra lints in `Cargo.toml [workspace.lints.clippy]`. Suppress with `#[expect(lint, reason = "...")]` (lint-enforced; stale ones fail). Item only dead outside tests: `#[cfg_attr(not(test), expect(...))]`. Plain `#![allow]` only in test helpers shared across test binaries.
+- Panics are lint-denied outside tests (ADR-0012 rules 9–10): `unwrap_used`, `expect_used`, `panic`, `map_err_ignore`, `let_underscore_must_use`, `let_underscore_future`. A surviving site needs `#[expect(clippy::…, reason = "<invariant>")]`, and only for an invariant the surrounding code proves or baked/compile-time data — never external input, I/O, or settings values. Sends to a receiver that may have hung up use `tx.send(x).ok();`. Sync mutexes are `parking_lot` (no poisoning), so `.lock()` needs no `expect`.
 - Errors follow ADR-0012. Rejection / operational failure / Bug; typed `thiserror` enum when a caller branches on the cause, `eyre` + `wrap_err` otherwise. `Display` is for logs — Chat, Dashboard, and Model words come from per-Surface `match`es, never from `to_string()` or string matching. Keep `#[source]` chains; no `map_err(|_| …)` on operational causes.
-- Log an error once, where it is handled, with `?error` not `%error` (full chain + backtrace). Deliberate ignores match the benign case (`ErrorKind::NotFound`); bare `let _ =` only for sends to a receiver that may have hung up.
+- Log an error once, where it is handled, with `?error` not `%error` (full chain + backtrace). Deliberate ignores match the benign case (`ErrorKind::NotFound`); a bare `.ok()` only on sends to a receiver that may have hung up.
 
 ## Adding handler
 

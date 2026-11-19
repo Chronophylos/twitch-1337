@@ -29,6 +29,10 @@ pub(crate) struct RecapCompletion<'a> {
     service_tier: Option<&'a str>,
 }
 
+#[expect(
+    clippy::map_err_ignore,
+    reason = "tokio Elapsed carries no information beyond the timeout"
+)]
 async fn paraphrase(call: RecapCompletion<'_>, user: String) -> LlmResult<String> {
     let session_id = crate::ai::session::new_session_id();
     let req = ChatCompletionRequest {
@@ -112,6 +116,9 @@ async fn apply_coarsen_fold(
     indices: &[usize],
     call: RecapCompletion<'_>,
 ) -> Result<(), LlmError> {
+    let Some(&insert_at) = indices.first() else {
+        return Ok(());
+    };
     let folded: Vec<RecapNote> = indices.iter().map(|&i| log.notes[i].clone()).collect();
     let user = folded
         .iter()
@@ -119,7 +126,6 @@ async fn apply_coarsen_fold(
         .collect::<Vec<_>>()
         .join("\n\n");
     let body = paraphrase(call, user).await?;
-    let insert_at = *indices.first().expect("non-empty fold");
     let max_through = folded.iter().map(|n| n.through_seq).max().unwrap_or(0);
     let max_gen = folded.iter().map(|n| n.generation).max().unwrap_or(0);
     let merged = RecapNote {
@@ -267,6 +273,9 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
 
     let take = eligible.len().min(input.batch_size);
     let batch: Vec<_> = eligible.into_iter().take(take).collect();
+    let Some(last) = batch.last() else {
+        return FlushAttempt::Idle;
+    };
     let user = batch
         .iter()
         .map(|e| format_batch_line(e, self_logins))
@@ -293,7 +302,6 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
         }
     };
 
-    let last = batch.last().expect("non-empty batch");
     let identities = identities_from_batch(&batch);
     let through = last.seq;
     append_note(&mut input.log, body, identities, through, last);
@@ -942,7 +950,7 @@ mod tests {
             .await;
         assert!(started.elapsed() < Duration::from_millis(100));
         assert!(suffix.contains("live"));
-        let _ = tick.await;
+        tick.await.unwrap();
     }
 
     #[tokio::test]

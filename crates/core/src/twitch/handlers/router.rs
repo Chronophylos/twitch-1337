@@ -36,6 +36,6 @@ pub async fn run_message_router(
         trace!(message = ?message, "Routing IRC message");
 
         // Broadcast to all listeners (ignore errors if no receivers)
-        let _ = broadcast_tx.send(message);
+        broadcast_tx.send(message).ok();
     }
 }

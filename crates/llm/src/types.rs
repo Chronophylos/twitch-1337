@@ -160,6 +160,10 @@ impl ToolDefinition {
         description: impl Into<String>,
     ) -> Self {
         let schema = schemars::schema_for!(T);
+        #[expect(
+            clippy::expect_used,
+            reason = "a schemars Schema is plain JSON; serializing it cannot fail"
+        )]
         let parameters = serde_json::to_value(schema)
             .expect("JSON Schema serialization is infallible for derived types");
         Self {

@@ -305,11 +305,9 @@ impl RepologyClient {
             .wrap_err("decode repology search")
             .map_err(RepologyError::Unavailable)?;
 
-        if map.is_empty() {
+        let Some((name, value)) = map.into_iter().next() else {
             return Ok(ProjectLookup::NotFound);
-        }
-
-        let (name, value) = map.into_iter().next().expect("non-empty map");
+        };
         let packages: Vec<Package> = serde_json::from_value(value)
             .wrap_err("decode repology search packages")
             .map_err(RepologyError::Unavailable)?;
@@ -322,6 +320,10 @@ impl RepologyClient {
 
     fn project_url(&self, query: &str) -> Result<reqwest::Url> {
         let mut url = reqwest::Url::parse(&format!("{}/api/v1/project", self.base_trimmed()))?;
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "path_segments_mut fails with () only for cannot-be-a-base URLs"
+        )]
         url.path_segments_mut()
             .map_err(|_| eyre::eyre!("invalid repology base URL"))?
             .push(query);
@@ -560,7 +562,15 @@ mod tests {
             .await;
         let client = test_client(&server);
         let t0 = std::time::Instant::now();
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "only the request spacing is under test, not the lookup result"
+        )]
         let _ = client.fetch_project("a").await;
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "only the request spacing is under test, not the lookup result"
+        )]
         let _ = client.fetch_project("b").await;
         assert!(
             t0.elapsed() >= std::time::Duration::from_secs(1),

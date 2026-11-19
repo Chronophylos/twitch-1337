@@ -975,7 +975,7 @@ impl TestBot {
 
     pub async fn shutdown(mut self) {
         if let Some(tx) = self.shutdown.take() {
-            let _ = tx.send(());
+            tx.send(()).ok();
         }
         if let Some(handle) = self.bot_task.take() {
             match tokio::time::timeout(super::GENEROUS_WAIT, handle).await {

@@ -70,7 +70,7 @@ mod tests {
                 .content
                 .contains("catalog_unavailable")
         );
-        let _ = cell.set(Arc::new(One));
+        assert!(cell.set(Arc::new(One)).is_ok());
         let out: serde_json::Value =
             serde_json::from_str(&execute_list_commands(&cell, &call()).content).unwrap();
         assert_eq!(out["commands"][0]["name"], "!lb");

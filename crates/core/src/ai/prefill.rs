@@ -124,6 +124,10 @@ pub async fn prefill_chat_history(
 
     let now = crate::util::to_berlin(Timestamp::now());
     let today = now.date();
+    #[expect(
+        clippy::expect_used,
+        reason = "yesterday underflows only at jiff's minimum date"
+    )]
     let yesterday = today.yesterday().expect("valid prev day");
 
     // Fetch today's messages

@@ -86,6 +86,10 @@ pub fn parse_read_path(path: &str) -> Result<FileKind, PathError> {
     if let Some(rest) = path.strip_prefix("scratch/")
         && let Some(slug) = rest.strip_suffix(".md")
     {
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "PathError is deliberately opaque; the slug failure kind is not surfaced for read paths"
+        )]
         validate_scratch_slug(slug).map_err(|_| PathError)?;
         return Ok(FileKind::Scratch {
             slug: slug.to_string(),

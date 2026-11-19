@@ -670,6 +670,10 @@ async fn view_scratch(
     Extension(session): Extension<Session>,
     Path(slug): Path<String>,
 ) -> Result<Response, WebError> {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "slug rejection is a validation error; SLUG_VALIDATION_MSG covers every SlugError"
+    )]
     validate_scratch_slug(&slug).map_err(|_| slug_err())?;
     let save_url = format!("/memory/scratch/{slug}");
     let delete_url = format!("/memory/scratch/{slug}/delete");
@@ -1081,6 +1085,10 @@ async fn save_scratch(
     Path(slug): Path<String>,
     axum::Form(form): axum::Form<SaveForm>,
 ) -> Result<Response, WebError> {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "slug rejection is a validation error; SLUG_VALIDATION_MSG covers every SlugError"
+    )]
     validate_scratch_slug(&slug).map_err(|_| slug_err())?;
     let redirect = format!("/memory/scratch/{slug}");
     let delete_url = format!("/memory/scratch/{slug}/delete");
@@ -1257,6 +1265,10 @@ async fn delete_scratch(
     if !csrf::verify(&form.csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "slug rejection is a validation error; SLUG_VALIDATION_MSG covers every SlugError"
+    )]
     validate_scratch_slug(&slug).map_err(|_| slug_err())?;
     state
         .memory_store

@@ -83,12 +83,29 @@ pub fn spawn_ritual(
                 }
                 continue;
             }
-            let run_at = Time::strptime("%H:%M", &ai.dreamer.run_at)
-                .expect("ai.dreamer.run_at validated at settings store");
+            let run_at = match Time::strptime("%H:%M", &ai.dreamer.run_at) {
+                Ok(t) => t,
+                Err(e) => {
+                    // Validation at the settings store rejects this; if a bad
+                    // value slips through, keep the loop alive and re-check.
+                    error!(error = ?e, run_at = %ai.dreamer.run_at, "invalid ai.dreamer.run_at, dreamer paused");
+                    drop(snap);
+                    tokio::select! {
+                        biased;
+                        _ = lifecycle.wait_for_cancellation() => return,
+                        _ = tokio::time::sleep(Duration::from_secs(300)) => {}
+                    }
+                    continue;
+                }
+            };
             drop(snap); // do not hold a Guard across await
 
             let now = crate::util::to_berlin(Timestamp::now());
             let target = resolve_berlin_run_at(now.date(), run_at);
+            #[expect(
+                clippy::expect_used,
+                reason = "tomorrow overflows only at jiff's year-9999 bound; a DST gap never spans two days"
+            )]
             let next = target.filter(|t| *t > now).unwrap_or_else(|| {
                 let tomorrow = now.date().tomorrow().expect("valid next day");
                 resolve_berlin_run_at(tomorrow, run_at)
@@ -104,6 +121,10 @@ pub fn spawn_ritual(
 
             // A wake-up can race cancellation. Do not enter the file/LLM
             // operation until the operation-boundary check immediately below.
+            #[expect(
+                clippy::expect_used,
+                reason = "yesterday underflows only at jiff's minimum date"
+            )]
             let yesterday = next.date().yesterday().expect("valid prev day");
             if let Err(e) = run_ritual_until(
                 &registry,

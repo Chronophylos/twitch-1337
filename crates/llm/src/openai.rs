@@ -610,6 +610,10 @@ mod tests {
 
     fn ensure_crypto_provider() {
         CRYPTO.call_once(|| {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "Err only means a crypto provider is already installed"
+            )]
             let _ = rustls::crypto::ring::default_provider().install_default();
         });
     }

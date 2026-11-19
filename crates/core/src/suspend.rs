@@ -123,6 +123,10 @@ pub fn parse_duration(input: &str) -> Result<Duration, ParseDurationError> {
         return Err(ParseDurationError::InvalidNumber);
     }
 
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "after the all-digits check ParseIntError can only mean overflow, a plain rejection"
+    )]
     let n: u64 = num_part
         .parse()
         .map_err(|_| ParseDurationError::InvalidNumber)?;

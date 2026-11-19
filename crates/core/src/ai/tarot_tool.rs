@@ -106,15 +106,12 @@ pub async fn execute_draw_tarot(call: &ToolCall) -> ToolResultMessage {
     }
 
     let mut rng = rng();
-    let positions = match spread {
-        SpreadKind::Single => {
+    let positions = match spread.three_card_labels() {
+        None => {
             let draw = draw_single_card(&mut rng);
             vec![position_json(&draw.card)]
         }
-        SpreadKind::Guidance | SpreadKind::Future => {
-            let labels = spread
-                .three_card_labels()
-                .expect("guidance/future always have three-card labels");
+        Some(labels) => {
             let draw = draw_three_card(&mut rng, labels);
             draw.positions.iter().map(position_json).collect()
         }

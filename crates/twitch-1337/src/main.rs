@@ -345,18 +345,12 @@ pub async fn main() -> Result<()> {
         recap: recap_handle,
         log_ring,
     };
-    let web_spawner = if config.web.enabled {
-        Some(
-            build_web_spawner(
-                &config,
-                credentials.clone(),
-                &services,
-                web_listener.expect("web enabled implies listener"),
-            )
-            .await?,
-        )
-    } else {
-        None
+    // `web_listener` is `Some` exactly when the web server is enabled.
+    let web_spawner = match web_listener {
+        Some(listener) => {
+            Some(build_web_spawner(&config, credentials.clone(), &services, listener).await?)
+        }
+        None => None,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -378,7 +372,9 @@ pub async fn main() -> Result<()> {
                 // Signal registration failure is still a process fault, but do
                 // not abort `run_bot`: request its normal drain first, join it,
                 // and only then return the adapter error to the process.
-                let _ = request_shutdown(shutdown_tx);
+                if let Err(shutdown_error) = request_shutdown(shutdown_tx) {
+                    info!(error = ?shutdown_error, "Bot task already stopped before shutdown request");
+                }
                 let bot_result = bot_task.await;
                 return match bot_result {
                     Ok(Err(bot_error)) => Err(bot_error),
@@ -429,6 +425,10 @@ async fn wait_for_shutdown_signal() -> Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::map_err_ignore,
+    reason = "oneshot SendError only returns the unsent unit value"
+)]
 fn request_shutdown(shutdown: oneshot::Sender<()>) -> Result<()> {
     shutdown
         .send(())

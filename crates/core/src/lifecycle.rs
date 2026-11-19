@@ -245,6 +245,10 @@ impl ChildTaskRegistry {
         }
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "registry slots for a group's ids are only cleared by this method under the lock"
+    )]
     async fn join_next_for(&self, ids: &BTreeSet<usize>) -> Option<GlobalTaskCompletion> {
         if ids.is_empty() {
             return None;
@@ -301,6 +305,10 @@ impl ChildTaskRegistry {
         }
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "a group's ids always name occupied registry slots until joined"
+    )]
     #[expect(
         dead_code,
         reason = "TaskGroup::abort_and_join is part of the explicit child-owner contract"
@@ -375,6 +383,10 @@ impl<T: Send + 'static> TaskGroup<T> {
     /// Spawn and register a named child with both its parent group and the
     /// global child registry. The spawned future is the registered task itself;
     /// no inner pre-spawned handle is hidden behind a detachable wrapper.
+    #[expect(
+        clippy::panic,
+        reason = "task names are code constants; a duplicate is a programming error"
+    )]
     pub(crate) async fn spawn<F>(&mut self, name: impl Into<String>, future: F)
     where
         F: Future<Output = T> + Send + 'static,
@@ -416,6 +428,10 @@ impl<T: Send + 'static> TaskGroup<T> {
         self.cancellation.cancel();
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "completions are only produced for this group's ids, and the wrapper publishes output before returning Ok"
+    )]
     async fn join_next(&mut self) -> Option<TaskCompletion<T>> {
         if self.tasks.is_empty() {
             return None;
@@ -521,6 +537,10 @@ impl LocalTaskGroup {
 
     /// Register an already spawned task. A rejected name panics, which drops
     /// `task` and thereby aborts its handle.
+    #[expect(
+        clippy::panic,
+        reason = "task names are code constants; an empty or duplicate name is a programming error"
+    )]
     fn push(&mut self, name: impl Into<String>, task: DirectTask) {
         let name = name.into();
         if name.trim().is_empty() {
@@ -882,6 +902,10 @@ impl TaskSupervisor {
         );
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "the non-empty branch only runs when the task set is non-empty"
+    )]
     async fn wait_for_stop(
         &mut self,
         shutdown: &mut tokio::sync::oneshot::Receiver<()>,

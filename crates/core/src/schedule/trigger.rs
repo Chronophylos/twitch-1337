@@ -45,14 +45,16 @@ pub enum Trigger {
 }
 
 impl Trigger {
-    /// Next instant strictly > `now` when this trigger should fire.
+    /// Next instant strictly > `now` when this trigger should fire, or `None`
+    /// when the next slot falls outside jiff's supported date range (e.g. a
+    /// user-entered `start_date` at the end of time).
     /// All arithmetic is Berlin-local; the returned `ZonedDateTime` is
     /// always in Europe/Berlin.
     ///
     /// DST: a slot in the spring-forward gap moves one hour later. A slot in
     /// the fall-back fold uses the first occurrence; intervals of an hour or
     /// less also fire on the second.
-    pub fn next_fire_after(&self, now: ZonedDateTime) -> ZonedDateTime {
+    pub fn next_fire_after(&self, now: ZonedDateTime) -> Option<ZonedDateTime> {
         let now = to_berlin(now.timestamp());
         match self {
             Trigger::Interval {
@@ -72,15 +74,12 @@ fn next_interval(
     days: &WeekdaySet,
     active_from: Option<Time>,
     active_to: Option<Time>,
-) -> ZonedDateTime {
+) -> Option<ZonedDateTime> {
     // A DST day has 23 or 25 hours, so slots must be counted on the local
     // clock. Adding real seconds to midnight shifts them by the DST offset.
     let repeat_in_fold = every <= FOLD_LENGTH;
     for offset in 0..=7 {
-        let date = now
-            .date()
-            .checked_add(offset.days())
-            .expect("date within a week stays in range");
+        let date = now.date().checked_add(offset.days()).ok()?;
         if !days.allows(date.weekday()) {
             continue;
         }
@@ -94,12 +93,15 @@ fn next_interval(
             .filter(|t| *t > now)
             .min();
         if let Some(next) = next {
-            return next;
+            return Some(next);
         }
     }
     // No slot ever lands in the window (e.g. every 12h, 08:00-10:00). Push it
     // far out rather than fire outside the window.
-    now + SignedDuration::from_secs(every.as_secs() as i64 * 14 * 1440)
+    now.checked_add(SignedDuration::from_secs(
+        every.as_secs() as i64 * 14 * 1440,
+    ))
+    .ok()
 }
 
 /// Real instants for one local slot. In the autumn fold a slot exists twice;
@@ -153,12 +155,10 @@ fn berlin_local(naive: DateTime) -> Local {
     }
 }
 
-fn next_calendar(now: ZonedDateTime, days: &WeekdaySet, at: Time) -> ZonedDateTime {
+fn next_calendar(now: ZonedDateTime, days: &WeekdaySet, at: Time) -> Option<ZonedDateTime> {
     let base_date = now.date();
     for offset in 0..=7 {
-        let date = base_date
-            .checked_add(offset.days())
-            .expect("date within a week stays in range");
+        let date = base_date.checked_add(offset.days()).ok()?;
         let wd = date.weekday();
         if !days.allows(wd) {
             continue;
@@ -174,17 +174,16 @@ fn next_calendar(now: ZonedDateTime, days: &WeekdaySet, at: Time) -> ZonedDateTi
             }
         };
         if candidate > now {
-            return candidate;
+            return Some(candidate);
         }
     }
     // Fallback: 7 days from now at `at`.
-    let date = base_date
-        .checked_add(7.days())
-        .expect("date within a week stays in range");
+    let date = base_date.checked_add(7.days()).ok()?;
     let naive = date.to_datetime(at);
-    berlin_local(naive)
-        .single()
-        .unwrap_or_else(|| &now + SignedDuration::from_hours(7 * 24))
+    match berlin_local(naive).single() {
+        Some(t) => Some(t),
+        None => now.checked_add(SignedDuration::from_hours(7 * 24)).ok(),
+    }
 }
 
 fn in_window(t: Time, from: Option<Time>, to: Option<Time>) -> bool {
@@ -258,7 +257,7 @@ mod interval_basic_tests {
             active_from: None,
             active_to: None,
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.hour(), 9);
         assert_eq!(next.minute(), 30);
     }
@@ -273,7 +272,7 @@ mod interval_basic_tests {
             active_from: None,
             active_to: None,
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.hour(), 10);
         assert_eq!(next.minute(), 0);
     }
@@ -287,7 +286,7 @@ mod interval_basic_tests {
             active_from: None,
             active_to: None,
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.hour(), 10);
         assert_eq!(next.minute(), 0);
     }
@@ -326,7 +325,7 @@ mod interval_filter_tests {
             active_from: Some(jiff::civil::time(8, 0, 0, 0)),
             active_to: Some(jiff::civil::time(18, 0, 0, 0)),
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.hour(), 8);
         assert_eq!(next.minute(), 0);
     }
@@ -341,7 +340,7 @@ mod interval_filter_tests {
             active_from: Some(jiff::civil::time(8, 0, 0, 0)),
             active_to: Some(jiff::civil::time(18, 0, 0, 0)),
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.day(), 29);
         assert_eq!(next.hour(), 8);
         assert_eq!(next.minute(), 0);
@@ -357,7 +356,7 @@ mod interval_filter_tests {
             active_from: Some(jiff::civil::time(22, 0, 0, 0)),
             active_to: Some(jiff::civil::time(2, 0, 0, 0)),
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.day(), 29);
         assert_eq!(next.hour(), 0);
         assert_eq!(next.minute(), 0);
@@ -377,7 +376,7 @@ mod interval_filter_tests {
             active_from: None,
             active_to: None,
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.weekday(), Weekday::Thursday);
         assert_eq!(next.day(), 28);
         assert_eq!(next.hour(), 18);
@@ -396,7 +395,7 @@ mod interval_filter_tests {
             active_from: None,
             active_to: None,
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.weekday(), Weekday::Tuesday);
     }
 
@@ -413,7 +412,7 @@ mod interval_filter_tests {
             active_from: Some(jiff::civil::time(18, 0, 0, 0)),
             active_to: Some(jiff::civil::time(23, 0, 0, 0)),
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.weekday(), Weekday::Tuesday);
         assert_eq!(next.hour(), 18);
         assert_eq!(next.minute(), 0);
@@ -440,7 +439,7 @@ mod calendar_tests {
             days: WeekdaySet::default(),
             at: jiff::civil::time(20, 0, 0, 0),
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.day(), 28);
         assert_eq!(next.hour(), 20);
     }
@@ -453,7 +452,7 @@ mod calendar_tests {
             days: WeekdaySet::default(),
             at: jiff::civil::time(20, 0, 0, 0),
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.day(), 29);
         assert_eq!(next.hour(), 20);
     }
@@ -468,7 +467,7 @@ mod calendar_tests {
             days,
             at: jiff::civil::time(20, 0, 0, 0),
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.weekday(), Weekday::Thursday);
         assert_eq!(next.day(), 28);
     }
@@ -483,7 +482,7 @@ mod calendar_tests {
             days,
             at: jiff::civil::time(20, 0, 0, 0),
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.weekday(), Weekday::Thursday);
         assert_eq!(next.day(), 4);
         assert_eq!(next.month(), 6);
@@ -501,7 +500,7 @@ mod calendar_tests {
             days,
             at: jiff::civil::time(9, 0, 0, 0),
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert_eq!(next.weekday(), Weekday::Wednesday);
     }
 }
@@ -525,7 +524,7 @@ mod dst_tests {
             days: WeekdaySet::default(),
             at: jiff::civil::time(2, 30, 0, 0),
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert!(next > now);
         assert_eq!(next.day(), 29);
     }
@@ -538,7 +537,7 @@ mod dst_tests {
             days: WeekdaySet::default(),
             at: jiff::civil::time(2, 30, 0, 0),
         };
-        let next = trig.next_fire_after(now.clone());
+        let next = trig.next_fire_after(now.clone()).expect("in range");
         assert!(next > now);
         assert_eq!(next.day(), 25);
     }
@@ -558,7 +557,7 @@ mod dst_tests {
     fn fires(trig: &Trigger, mut now: ZonedDateTime, n: usize) -> Vec<String> {
         (0..n)
             .map(|_| {
-                now = trig.next_fire_after(now.clone());
+                now = trig.next_fire_after(now.clone()).expect("in range");
                 now.strftime("%d %H:%M %Z").to_string()
             })
             .collect()
