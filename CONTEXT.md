@@ -56,6 +56,12 @@ yet seen), AircraftVisible (seen but unverified), ConfirmedByCallsign, or
 InferredByAssignedHex.
 _Avoid_: match, verification, status.
 
+**Telemetry**:
+An aircraft's reported position, altitude, velocity, and squawk, as carried by
+an ADS-B Observation. Only aircraft have telemetry.
+_Avoid_: telemetry for the bot's own logs, traces, or metrics (say "signals"),
+or for a schedule's last-fired bookkeeping (say "schedule runtime").
+
 **Flight Phase**:
 The stage of flight inferred from telemetry — Ground, Takeoff, Climb, Cruise,
 Descent, Approach, Landing (or Unknown).
