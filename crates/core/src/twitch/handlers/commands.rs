@@ -232,7 +232,11 @@ where
 
     match entry.execution_policy() {
         ExecutionClass::Inline => {
-            if let Err(e) = command.execute(invocation.context).await {
+            let context = invocation.context;
+            // `execute` consumes the context; keep what the fallback reply needs.
+            let reply_privmsg = context.privmsg.clone();
+            let reply_sender = context.sender.clone();
+            if let Err(e) = command.execute(context).await {
                 if e.downcast_ref::<commands::CommandCancelled>().is_some() {
                     debug!(command = %trigger, "Inline command cancelled");
                 } else {
@@ -242,6 +246,12 @@ where
                         command = %trigger,
                         "Error handling command"
                     );
+                    commands::execution::reply_command_failure(
+                        &reply_sender,
+                        &reply_privmsg,
+                        cancellation,
+                    )
+                    .await;
                 }
             }
         }

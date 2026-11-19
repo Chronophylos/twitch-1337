@@ -28,8 +28,11 @@ pub const MAX_ACTIVE_COMMANDS_PER_COMMAND: usize = 8;
 /// Maximum queued command count for one canonical command ID.
 pub const MAX_PENDING_COMMANDS_PER_COMMAND: usize = 8;
 
-/// The only generic command response emitted by the execution layer.
+/// Generic capacity response emitted by the execution layer.
 pub const CAPACITY_REJECTION_MESSAGE: &str = "zu viel zu tun";
+/// Chat fallback for a command whose `execute` returned a non-cancellation
+/// `Err` (ADR-0012 rule 7).
+pub const COMMAND_FAILURE_MESSAGE: &str = "Da ist was schiefgelaufen FDM";
 /// Upper bound on a capacity reply attempt before the manager resumes scheduling.
 const CAPACITY_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
 /// Maximum number of login/ID pairs retained only for discrepancy tracing.
@@ -194,7 +197,7 @@ pub struct TaskCompletion {
 }
 
 /// Command-local completion state. Errors other than cancellation do not fail
-/// the manager.
+/// the manager; a `Failed` command has already been sent the chat fallback.
 #[derive(Debug)]
 pub enum TaskResult {
     Succeeded,
@@ -250,6 +253,23 @@ where
             "capacity rejection reply did not complete before the scheduling bound"
         );
     }
+}
+
+/// Reply the chat fallback for a failed command. Silent once lifecycle
+/// cancellation has started: no cancelled invocation crosses its reply
+/// boundary.
+pub(crate) async fn reply_command_failure<T, L>(
+    sender: &ChatSender<T, L>,
+    privmsg: &PrivmsgMessage,
+    cancellation: &CommandCancellation,
+) where
+    T: Transport,
+    L: LoginCredentials,
+{
+    if cancellation.is_cancelled() {
+        return;
+    }
+    sender.reply(privmsg, COMMAND_FAILURE_MESSAGE).await;
 }
 
 /// Non-blocking send side of the bounded ingress-to-manager handoff.
@@ -943,12 +963,22 @@ impl CommandTaskGroup {
         let completion_signal = self.inner.clone();
         let task = async move {
             let _completion_signal = CompletionSignal(completion_signal);
-            let result = match command.execute(invocation.context).await {
+            let context = invocation.context;
+            // `execute` consumes the context; keep what the fallback reply needs.
+            let privmsg = context.privmsg.clone();
+            let sender = context.sender.clone();
+            let cancellation = context.cancellation.clone();
+            let result = match command.execute(context).await {
                 Ok(()) => TaskResult::Succeeded,
                 Err(error) if error.downcast_ref::<CommandCancelled>().is_some() => {
                     TaskResult::Cancelled
                 }
-                Err(error) => TaskResult::Failed(error),
+                Err(error) => {
+                    // Replied from the command task so a slow send never
+                    // stalls the manager; `finish` logs the error.
+                    reply_command_failure(&sender, &privmsg, &cancellation).await;
+                    TaskResult::Failed(error)
+                }
             };
             TaskCompletion {
                 command_id,
