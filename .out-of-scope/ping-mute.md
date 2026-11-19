@@ -31,4 +31,4 @@ already cover.
 
 ## Prior requests
 
-- #145 — "Add mute mode for command participation without pings" (requested by `lesh`)
+- #145 — "Add mute mode for command participation without pings"

@@ -78,11 +78,11 @@ Waldhof-Fan, Arma-Dashboards, Chronos Chaospartner.
 - Name: Magnus
 - Verein: Waldhof
 - Spiele: HLL, LoL, Fußballmanager
-- Bits: wannsommer, 13:37 DANKIES, Reminder an Tristen
+- Bits: wannsommer, 13:37 DANKIES
 
 # Beziehungen
 
-Mit Chrono die Technik, mit Maks Tippspiele, mit Lesh lokale KI.
+Mit den Stammgästen Technik, Tippspiele und lokale KI.
 
 # Interessen
 

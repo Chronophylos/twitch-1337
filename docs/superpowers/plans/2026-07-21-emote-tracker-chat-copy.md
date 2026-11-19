@@ -142,7 +142,7 @@ assert_eq!(
 );
 assert_eq!(
     format_emote_chat_reply(&emote, Some(&attributed)),
-    format!("Kappa ({ID}) hinzugefügt von nozzlenols via PotatBotat am {when}")
+    format!("Kappa ({ID}) hinzugefügt von emotefan via PotatBotat am {when}")
 );
 assert_eq!(
     format_emote_chat_reply(&emote, Some(&rename)),

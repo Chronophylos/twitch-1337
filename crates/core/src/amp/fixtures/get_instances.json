@@ -12,7 +12,7 @@
         "ApplicationEndpoints": [
           {
             "DisplayName": "Game Server Address",
-            "Endpoint": "192.168.196.166:12820",
+            "Endpoint": "192.0.2.10:12820",
             "Uri": ""
           },
           {
@@ -43,28 +43,28 @@
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:2001",
-            "Uri": "steam://connect/192.168.196.166:17777"
+            "Endpoint": "192.0.2.10:2001",
+            "Uri": "steam://connect/192.0.2.10:17777"
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:2001",
-            "Uri": "steam://connect/192.168.196.166:17777"
+            "Endpoint": "192.0.2.10:2001",
+            "Uri": "steam://connect/192.0.2.10:17777"
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:2001",
-            "Uri": "steam://connect/192.168.196.166:17777"
+            "Endpoint": "192.0.2.10:2001",
+            "Uri": "steam://connect/192.0.2.10:17777"
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:2001",
-            "Uri": "steam://connect/192.168.196.166:17777"
+            "Endpoint": "192.0.2.10:2001",
+            "Uri": "steam://connect/192.0.2.10:17777"
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:2001",
-            "Uri": "steam://connect/192.168.196.166:17777"
+            "Endpoint": "192.0.2.10:2001",
+            "Uri": "steam://connect/192.0.2.10:17777"
           }
         ]
       },
@@ -110,13 +110,13 @@
         "ApplicationEndpoints": [
           {
             "DisplayName": "Minecraft Server Address",
-            "Endpoint": "192.168.196.166:25566",
+            "Endpoint": "192.0.2.10:25566",
             "Uri": ""
           },
           {
             "DisplayName": "SFTP Server",
-            "Endpoint": "192.168.196.166:2230",
-            "Uri": "sftp://192.168.196.166:2230"
+            "Endpoint": "192.0.2.10:2230",
+            "Uri": "sftp://192.0.2.10:2230"
           }
         ]
       },
@@ -131,13 +131,13 @@
         "ApplicationEndpoints": [
           {
             "DisplayName": "Minecraft Server Address",
-            "Endpoint": "192.168.196.166:25565",
+            "Endpoint": "192.0.2.10:25565",
             "Uri": ""
           },
           {
             "DisplayName": "SFTP Server",
-            "Endpoint": "192.168.196.166:2226",
-            "Uri": "sftp://192.168.196.166:2226"
+            "Endpoint": "192.0.2.10:2226",
+            "Uri": "sftp://192.0.2.10:2226"
           }
         ]
       },
@@ -152,37 +152,37 @@
         "ApplicationEndpoints": [
           {
             "DisplayName": "Application Address",
-            "Endpoint": "192.168.196.166:42422",
+            "Endpoint": "192.0.2.10:42422",
             "Uri": ""
           },
           {
             "DisplayName": "SFTP Server",
-            "Endpoint": "192.168.196.166:2228",
+            "Endpoint": "192.0.2.10:2228",
             "Uri": ""
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:42422",
+            "Endpoint": "192.0.2.10:42422",
             "Uri": ""
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:42422",
+            "Endpoint": "192.0.2.10:42422",
             "Uri": ""
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:42422",
+            "Endpoint": "192.0.2.10:42422",
             "Uri": ""
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:42422",
+            "Endpoint": "192.0.2.10:42422",
             "Uri": ""
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:42422",
+            "Endpoint": "192.0.2.10:42422",
             "Uri": ""
           }
         ]
@@ -229,37 +229,37 @@
         "ApplicationEndpoints": [
           {
             "DisplayName": "Application Address",
-            "Endpoint": "192.168.196.166:42420",
+            "Endpoint": "192.0.2.10:42420",
             "Uri": ""
           },
           {
             "DisplayName": "SFTP Server",
-            "Endpoint": "192.168.196.166:2229",
+            "Endpoint": "192.0.2.10:2229",
             "Uri": ""
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:42420",
+            "Endpoint": "192.0.2.10:42420",
             "Uri": ""
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:42420",
+            "Endpoint": "192.0.2.10:42420",
             "Uri": ""
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:42420",
+            "Endpoint": "192.0.2.10:42420",
             "Uri": ""
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:42420",
+            "Endpoint": "192.0.2.10:42420",
             "Uri": ""
           },
           {
             "DisplayName": "Unknown Endpoint",
-            "Endpoint": "192.168.196.166:42420",
+            "Endpoint": "192.0.2.10:42420",
             "Uri": ""
           }
         ]

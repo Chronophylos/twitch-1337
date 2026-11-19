@@ -58,7 +58,7 @@ client_secret = "your_client_secret"
 # AMP user whose role allows only `Instances.*`. url needs http:// or
 # https://. Per-user cooldown lives at /settings → Cooldowns. Restart to apply.
 # [amp]
-# url = "http://192.168.178.114:8080"
+# url = "http://192.0.2.1:8080"
 # username = "twitch-1337"
 # password = "..."
 

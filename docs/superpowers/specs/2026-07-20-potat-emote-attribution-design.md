@@ -9,7 +9,7 @@ Parent: [2026-07-17-emote-tracker-design.md](./2026-07-17-emote-tracker-design.m
 
 When a 7TV channel-set change is mediated by PotatBotat (e.g. chat `#add faileg`), the set audit page and `!emote` show the initiating chatter and the bot intermediary:
 
-**`added by NozzleNols via PotatBotat`**
+**`added by EmoteFan via PotatBotat`**
 
 instead of bare `"unknown"` or only a 7TV performer that is missing/null.
 
@@ -18,10 +18,10 @@ instead of bare `"unknown"` or only a 7TV performer that is missing/null.
 - PotatBotat mutates 7TV **as its own 7TV user** (`01GNRG2MDG0000DM7N933JH49Y` / `potatbotat`). The chat requester is **not** on EventAPI `body.actor`.
 - Potat’s own history API already splits `user_login` (chatter) vs `actor` (`potatbotat` | `external`), including `#undo` / `#redo` as `type: UNDO|REDO`.
 - Our ingest persists nullable `actor_*` from EventAPI `body.actor` only. Per-emote `value.actor_id` is the original set-adder and must **not** be copied into `actor_7tv_id` (that poisoned Step A in an early draft).
-- Prod channel **euterheissgetraenk** (set `01FZKKA0A8000FP66RDQP75B9A`, ~980 emotes): live `add` rows for `zen` / `HomeAutomation` had **all-null** `actor_*` while REST still had `actor_id` → **D3vistat3r**. Potat history for that channel mixes `external` and `potatbotat` heavily — performer-first gating matters.
+- Prod channel **examplechannel** (set `01FZKKA0A8000FP66RDQP75B9A`, ~980 emotes): live `add` rows for `zen` / `HomeAutomation` had **all-null** `actor_*` while REST still had `actor_id` → **SomeMod**. Potat history for that channel mixes `external` and `potatbotat` heavily — performer-first gating matters.
 - IRC command correlation was considered and **rejected for v1**: fragile for undo/redo (no emote name), prefix/silent races, and same-emote multi-user ambiguity. History is the sole requester source.
 
-Primary Potat sources: [potat.app/help](https://potat.app/help), [api.potat.app/help](https://api.potat.app/help), [api.potat.app/emotes/history/{channel}](https://api.potat.app/emotes/history/euterheissgetraenk).
+Primary Potat sources: [potat.app/help](https://potat.app/help), [api.potat.app/help](https://api.potat.app/help), [api.potat.app/emotes/history/{channel}](https://api.potat.app/emotes/history/examplechannel).
 
 ## Non-goals (v1)
 
@@ -90,7 +90,7 @@ Resolved performer (`actor_7tv_id` from **true EventAPI `body.actor` only**) is 
 
 | Resolved `actor_7tv_id` | Gate |
 |---|---|
-| **Known and ≠ Potat** (e.g. D3vistat3r) | **CLOSED** — ignore Potat history for attribution. Display performer only. |
+| **Known and ≠ Potat** (e.g. SomeMod) | **CLOSED** — ignore Potat history for attribution. Display performer only. |
 | **== Potat** | **OPEN** — proceed to Step B for requester. |
 | **Null / unknown** | **OPEN** only if Potat history (when attribution enabled), fetched per [history matching](#history-matching-list-order-primary-ago-soft), has a qualifying **`STV` + `potatbotat` + emote id** row (same filters as Step B, without requiring action align for the gate — id + actor + provider + not-stale is enough to prove Potat mediation). |
 
@@ -169,7 +169,7 @@ Do **not** treat `ago` as an absolute clock or invert it into `event_t`.
 
 `GET https://api.potat.app/emotes/history/{channel_login}` → `data[0].history[]` (also top-level `pagination` / `duration` — plans should check pagination if >50 rows matter).
 
-Live **euterheissgetraenk** sample (2026-07-20): 50 rows, `actor` mix ~31 `external` / ~19 `potatbotat`, including a fresh `UNDO` by `chronophylos` on `Backseating` seconds after a `STANDARD` `ADD`.
+Live **examplechannel** sample (2026-07-20): 50 rows, `actor` mix ~31 `external` / ~19 `potatbotat`, including a fresh `UNDO` by `chronophylos` on `Backseating` seconds after a `STANDARD` `ADD`.
 
 | Field | Role |
 |---|---|
@@ -246,7 +246,7 @@ Example **REDO**:
 | **Actor** | Raw performer: `format_actor_display(actor_*)` (display → username → id → `unknown`) |
 | **Attribution** (new) | When `requester_login` + `via` set: `{requester_login} via PotatBotat`; else `—` |
 
-Mods can still see D3vistat3r / PotatBotat / unknown on Actor if the gate or history was wrong; Attribution is additive.
+Mods can still see SomeMod / PotatBotat / unknown on Actor if the gate or history was wrong; Attribution is additive.
 
 Bootstrap / gap rows: Actor `—` / unchanged; Attribution `—`.
 

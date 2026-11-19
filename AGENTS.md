@@ -45,7 +45,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace   # `cargo test --workspace` if nextest is missing
 cargo deny check                # optional locally; run when touching deps, CI fails on advisories/bans/sources
 
-# Deploy (Justfile, podman local → docker.homelab SSH)
+# Deploy (Justfile, podman local → $DEPLOY_HOST over SSH, set in .deploy.env)
 just build | just push | just restart | just deploy
 ```
 
@@ -162,7 +162,7 @@ carry a `# zizmor: ignore[unpinned-uses]` comment — follow that pattern.
 4. The dashboard sidebar and the startup log line `Build info` show
    `BUILD_NUM` + `GIT_SHA` — that is the source of truth for "what is
    running right now".
-5. Rollback: `ssh docker.homelab`, edit the compose file to pin
+5. Rollback: `ssh "$DEPLOY_HOST"`, edit the compose file to pin
    `:b<N-1>`, `docker compose up -d`. The previous image is still
    present until the weekly GHCR retention prune (keeps last 30).
 
@@ -270,8 +270,8 @@ absent, the command does not exist. `url` must be `http://` or `https://`
 (validated at startup). The per-user cooldown is `cooldowns.servers` in
 `settings.ron` (default 30s, `/settings → Cooldowns`). Use a dedicated
 AMP user whose role allows only `Instances.*` (all else denied). The bot reads,
-never starts or stops. The bot reaches the controller over the LAN
-(`192.168.178.114:8080`), no ZeroTier needed. Game instances need their own
+never starts or stops. The bot reaches the controller over the LAN,
+no ZeroTier needed. Game instances need their own
 login through the ADS proxy (`ADSModule/Servers/{id}/API/...`); the controller
 session is rejected there. Adding or removing the section needs a bot restart.
 

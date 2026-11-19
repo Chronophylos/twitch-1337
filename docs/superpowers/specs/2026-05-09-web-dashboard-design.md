@@ -6,7 +6,7 @@
 
 ## Problem
 
-The bot exposes ping templates, AI memory (SOUL/LORE/per-user/state notes), leaderboard, flight tracker, and other state purely through chat commands and on-disk files. Editing AI memory or ping templates today means SSHing to `docker.homelab`, finding the right file under `$DATA_DIR/memories/` or `pings.ron`, and editing it by hand — risking corrupted RON, blown byte caps, or torn writes against the dreamer ritual.
+The bot exposes ping templates, AI memory (SOUL/LORE/per-user/state notes), leaderboard, flight tracker, and other state purely through chat commands and on-disk files. Editing AI memory or ping templates today means SSHing to the deploy host, finding the right file under `$DATA_DIR/memories/` or `pings.ron`, and editing it by hand — risking corrupted RON, blown byte caps, or torn writes against the dreamer ritual.
 
 Operating the bot from a browser would be faster, safer, and (with Cloudflare Tunnel + Twitch OAuth) reachable from anywhere.
 

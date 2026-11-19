@@ -4,6 +4,7 @@
 # Environment files (contain secrets)
 .env
 .env.local
+.deploy.env
 
 # Editor files
 *.swp
@@ -55,7 +56,7 @@ emotes.db-shm
 # Caveman compression backups
 *.original.md
 
-# sshfs mount of prod data (root@docker.homelab:/opt/dockhand/stacks/twitch/data)
+# sshfs mount of prod data (`just mount-prod-data`)
 /prod-data/
 
 # Local dev data (just dev)

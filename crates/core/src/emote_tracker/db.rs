@@ -1149,7 +1149,7 @@ mod tests {
                 actor_display_name: Some("PotatBotat".into()),
                 gap_from: None,
                 gap_to: None,
-                requester_login: Some("nozzlenols".into()),
+                requester_login: Some("emotefan".into()),
                 requester_twitch_id: None,
                 via: Some("potatbotat".into()),
                 attribution_method: Some("potat_history".into()),
@@ -1164,7 +1164,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(rows[0].requester_login.as_deref(), Some("nozzlenols"));
+        assert_eq!(rows[0].requester_login.as_deref(), Some("emotefan"));
         assert_eq!(rows[0].via.as_deref(), Some("potatbotat"));
         assert_eq!(rows[0].attribution_method.as_deref(), Some("potat_history"));
         assert_eq!(rows[0].requester_twitch_id, None);

@@ -71,7 +71,7 @@ pub struct DhlBootstrap {
 /// `Instances.*`; the bot never starts or stops anything.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AmpBootstrap {
-    /// Controller origin, e.g. `http://192.168.178.114:8080`.
+    /// Controller origin, e.g. `http://192.0.2.1:8080`.
     pub url: String,
     pub username: String,
     pub password: SecretString,
@@ -419,7 +419,7 @@ mod tests {
     fn amp_url_without_http_scheme_rejected() {
         for url in [
             "",
-            "192.168.178.114:8080",
+            "192.0.2.1:8080",
             "ftp://amp:8080",
             "amp",
             "http://amp:8080 ",

@@ -185,7 +185,7 @@ Replace the "Release flow" section with:
    `latest` and `b<run_number>`.
 3. Homelab webhook fires on GHCR push; server pulls `:latest` and restarts.
 4. Bot sidebar + `/health` show `BUILD_NUM` + `GIT_SHA` for verification.
-5. Rollback: `ssh docker.homelab`, edit compose to pin `:b<N-1>`,
+5. Rollback: `ssh <deploy-host>`, edit compose to pin `:b<N-1>`,
    `docker compose up -d`.
 
 There are no version tags, no GitHub Releases, no CHANGELOG.md. `git log` is the
@@ -257,7 +257,7 @@ User visits /health
 - **CI build fails** — no image pushed, no webhook fires, server stays on previous
   image. Standard CI failure.
 - **Webhook miss** — server keeps running prior image. Manual fix:
-  `ssh docker.homelab; docker compose pull && docker compose up -d`.
+  `ssh <deploy-host>; docker compose pull && docker compose up -d`.
 - **Bad code merged** — rollback by pinning compose to `:b<N-1>`.
 - **GHCR retention prune deletes wrong tag** — `min-versions-to-keep: 30` plus
   `ignore-versions: '^latest$'` guards against deleting `latest`. Worst case: a

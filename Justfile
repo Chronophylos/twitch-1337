@@ -1,5 +1,10 @@
 # Justfile for twitch-1337
 
+# Deploy recipes read DEPLOY_HOST (ssh destination) and PROD_DATA_REMOTE
+# (sshfs source, `user@host:/path`) from the gitignored `.deploy.env`.
+set dotenv-filename := ".deploy.env"
+set dotenv-load
+
 # Default recipe - show available commands
 default:
   @just --list
@@ -21,15 +26,15 @@ build-no-cache:
 
 # Push the image to docker host
 push:
-  podman save localhost/chronophylos/twitch-1337:latest | ssh docker.homelab 'docker load'
+  podman save localhost/chronophylos/twitch-1337:latest | ssh "${DEPLOY_HOST:?set DEPLOY_HOST in .deploy.env}" 'docker load'
 
 # Restart container on docker host
 restart:
-  ssh docker.homelab 'docker compose --ansi always --project-directory twitch up -d'
+  ssh "${DEPLOY_HOST:?set DEPLOY_HOST in .deploy.env}" 'docker compose --ansi always --project-directory twitch up -d'
 
 # Tail logs on docker host
 logs:
-  ssh docker.homelab 'docker compose --ansi always --project-directory twitch logs -f'
+  ssh "${DEPLOY_HOST:?set DEPLOY_HOST in .deploy.env}" 'docker compose --ansi always --project-directory twitch logs -f'
 
 # Deploy image and restart pod
 deploy: build push restart
@@ -37,7 +42,7 @@ deploy: build push restart
 # Mount prod data dir from docker host via sshfs at ./prod-data
 mount-prod-data:
   mkdir -p prod-data
-  sshfs root@docker.homelab:/opt/dockhand/stacks/compute-1/twitch-1337/data prod-data
+  sshfs "${PROD_DATA_REMOTE:?set PROD_DATA_REMOTE in .deploy.env}" prod-data
 
 # Unmount prod data dir
 unmount-prod-data:
