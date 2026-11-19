@@ -18,27 +18,40 @@ use twitch_1337::commands::{
 type TestRegistry = CommandRegistry<FakeTransport, StaticLoginCredentials>;
 type TestCommand = dyn Command<FakeTransport, StaticLoginCredentials>;
 
+/// How a fake command's `execute` returns after its optional reply.
+#[derive(Clone, Copy)]
+enum End {
+    Ok,
+    Fail,
+    Cancel,
+}
+
 #[derive(Clone)]
 struct Action {
     reply: Option<&'static str>,
     started: Option<mpsc::UnboundedSender<String>>,
     gate: Option<Arc<Semaphore>>,
+    end: End,
 }
 
 impl Action {
     fn silent() -> Self {
+        Self::ending(End::Ok)
+    }
+
+    fn ending(end: End) -> Self {
         Self {
             reply: None,
             started: None,
             gate: None,
+            end,
         }
     }
 
     fn reply(text: &'static str) -> Self {
         Self {
             reply: Some(text),
-            started: None,
-            gate: None,
+            ..Self::silent()
         }
     }
 }
@@ -129,7 +142,11 @@ impl Command<FakeTransport, StaticLoginCredentials> for FakeCommand {
         if let Some(reply) = self.action.reply {
             ctx.sender.reply(&ctx.privmsg, reply).await;
         }
-        Ok(())
+        match self.action.end {
+            End::Ok => Ok(()),
+            End::Fail => Err(eyre::eyre!("fake command failed")),
+            End::Cancel => Err(CommandCancelled.into()),
+        }
     }
 }
 
@@ -175,6 +192,7 @@ async fn slow_background_does_not_block_later_inline_or_reorder_history() {
             reply: Some("slow done"),
             started: Some(started_tx),
             gate: Some(slow_gate.clone()),
+            end: End::Ok,
         },
     );
     let fast = FakeCommand::command(
@@ -237,6 +255,7 @@ async fn saturated_background_is_rejected_but_remains_in_history_and_transcript(
             reply: None,
             started: Some(started_tx),
             gate: Some(Arc::new(Semaphore::new(0))),
+            end: End::Ok,
         },
     );
     let mut bot = TestBotBuilder::new()
@@ -346,4 +365,29 @@ async fn registry_order_aliases_and_enabled_checks_remain_at_ingress() {
     bot.send("alice", "!lb").await;
     assert_eq!(bot.expect_reply(Duration::from_secs(2)).await, "fallback");
     bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn failed_command_gets_one_fallback_reply_and_cancelled_stays_silent() {
+    for policy in [ExecutionClass::Inline, ExecutionClass::Background] {
+        let mut bot = TestBotBuilder::new()
+            .with_command_registry(registry([
+                FakeCommand::command("random_flight", "!fl", policy, Action::ending(End::Fail)),
+                FakeCommand::command("leaderboard", "!lb", policy, Action::ending(End::Cancel)),
+            ]))
+            .spawn()
+            .await;
+
+        bot.send("alice", "!fl").await;
+        assert_eq!(
+            bot.expect_reply(Duration::from_secs(2)).await,
+            twitch_1337::commands::COMMAND_FAILURE_MESSAGE
+        );
+        bot.expect_silent(Duration::from_millis(300)).await;
+
+        bot.send("alice", "!lb").await;
+        bot.expect_silent(Duration::from_millis(300)).await;
+
+        bot.shutdown().await;
+    }
 }

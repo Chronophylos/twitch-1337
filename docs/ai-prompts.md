@@ -39,7 +39,7 @@ Bodies are [minijinja](https://docs.rs/minijinja) templates, so `{{ value }}` in
 | `inject.{memory,recap}` | Stable injected context |
 | `inject.{scratch,recent_chat,emote_block}` | Per-turn injected context |
 
-The environment runs with strict undefined, so a typo (`{{ speaker.usernam }}`) is a render error, not silently empty text. A render failure logs and the turn goes silent; it never ships a half-assembled prompt.
+The environment runs with strict undefined, so a typo (`{{ speaker.usernam }}`) is a render error, not silently empty text. A render failure fails the turn: it is logged and chat gets the generic command failure reply; it never ships a half-assembled prompt.
 
 **Cache prefix constraint, enforced.** A `System` block is rendered against a context holding only the stable keys — `agent`, `channel`, `persona`, `limits`, `model`, `tools`, `inject.memory`, `inject.recap`. `speaker`, `message`, `date`, `inject.scratch`, `inject.recent_chat` and `inject.emote_block` are simply absent there, so referencing one from a System block fails the render instead of quietly splitting the cache prefix per speaker or per day.
 

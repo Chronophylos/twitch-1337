@@ -27,10 +27,10 @@ pub mod version;
 
 pub use catalog::{CommandCatalog, CommandInfo, CommandKind, Permission};
 pub use execution::{
-    CAPACITY_REJECTION_MESSAGE, CommandAdmissionError, CommandAdmissionReceiver,
-    CommandAdmissionSender, CommandCancellation, CommandCancelled, CommandContext,
-    CommandExecutionManager, CommandInvocation, CommandTaskGroup, TaskCompletion, TaskGroupError,
-    TaskResult, UserKey, UserKeyError, command_admission_channel,
+    CAPACITY_REJECTION_MESSAGE, COMMAND_FAILURE_MESSAGE, CommandAdmissionError,
+    CommandAdmissionReceiver, CommandAdmissionSender, CommandCancellation, CommandCancelled,
+    CommandContext, CommandExecutionManager, CommandInvocation, CommandTaskGroup, TaskCompletion,
+    TaskGroupError, TaskResult, UserKey, UserKeyError, command_admission_channel,
 };
 pub use registry::{CommandEntry, CommandId, CommandRegistry, ExecutionClass, RegistryBuildError};
 
@@ -220,6 +220,13 @@ where
     }
 
     /// Execute the command with the given owned context.
+    ///
+    /// Error contract (ADR-0012 rule 7): an `Err` other than
+    /// [`CommandCancelled`] is logged by the execution layer, which then
+    /// replies [`COMMAND_FAILURE_MESSAGE`] to the invoking message. Once a
+    /// command has replied it owns its errors: it logs them itself and
+    /// returns `Ok`, otherwise the user gets a second message. A
+    /// `CommandCancelled` stays silent.
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()>;
 }
 
