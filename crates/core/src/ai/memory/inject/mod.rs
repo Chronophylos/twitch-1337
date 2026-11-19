@@ -17,4 +17,8 @@ pub use messages::render_recap_section;
 pub(crate) use recent_chat::format_entry_line;
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixtures seed files directly"
+)]
 mod tests;

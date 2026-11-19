@@ -481,6 +481,10 @@ fn is_sensitive_key(key: &str) -> bool {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixtures seed files directly"
+)]
 mod tests {
     use super::{FlightTrackerDebugEvent, append_debug_event};
     use crate::aviation::tracker::test_support::dt;

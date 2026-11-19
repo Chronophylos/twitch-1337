@@ -284,6 +284,10 @@ fn log_failed_request(url: &str, model: &str, n_messages: usize, n_tools: usize,
     if path.is_empty() {
         return;
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "opt-in debug dump outside DATA_DIR; a torn file is harmless"
+    )]
     match std::fs::write(&path, req_json) {
         Ok(()) => error!(path, "dumped failed LLM request body"),
         Err(error) => error!(path, ?error, "failed to dump LLM request body"),

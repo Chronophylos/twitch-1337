@@ -704,6 +704,10 @@ async fn count_scratch_files(memories_dir: &Path) -> Result<usize, WriteError> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixtures seed files directly"
+)]
 mod tests {
     use std::sync::Arc;
 

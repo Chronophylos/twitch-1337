@@ -1,3 +1,12 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
+
+# Architecture invariants (#582). Each entry's `reason` is shown in the lint message.
+disallowed-methods = [
+    { path = "jiff::ZonedDateTime::now", reason = "host TZ is UTC in the container; use util::BERLIN / util::to_berlin" },
+    { path = "jiff::tz::TimeZone::system", reason = "host TZ is UTC in the container; use util::BERLIN" },
+    { path = "jiff::tz::TimeZone::try_system", reason = "host TZ is UTC in the container; use util::BERLIN" },
+    { path = "std::fs::write", reason = "persist via tmp + rename: util::persist::atomic_write_bytes_async / atomic_save_ron_async" },
+    { path = "tokio::fs::write", reason = "persist via tmp + rename: util::persist::atomic_write_bytes_async / atomic_save_ron_async" },
+]

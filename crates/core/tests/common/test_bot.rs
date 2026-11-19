@@ -358,12 +358,20 @@ impl TestBotBuilder {
             if let Some(entries) = &self.seeded_leaderboard {
                 let path = data_dir.path().join("leaderboard.ron");
                 let contents = ron::ser::to_string(entries).expect("serialize leaderboard");
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "test fixtures seed files directly"
+                )]
                 std::fs::write(&path, contents).expect("write leaderboard.ron");
             }
 
             if let Some(entries) = &self.seeded_hall_of_shame {
                 let path = data_dir.path().join("hall_of_shame.ron");
                 let contents = ron::ser::to_string(entries).expect("serialize hall of shame");
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "test fixtures seed files directly"
+                )]
                 std::fs::write(&path, contents).expect("write hall_of_shame.ron");
             }
 
