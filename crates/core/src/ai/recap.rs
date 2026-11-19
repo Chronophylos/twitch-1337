@@ -97,12 +97,12 @@ pub fn strip_quotes(s: &str) -> String {
     out.chars().filter(|c| !LEFTOVER.contains(c)).collect()
 }
 
+/// Strips quoted spans, then caps the body at [`RECAP_NOTE_BYTES`] bytes,
+/// cutting at the last char boundary that fits.
 pub fn trim_note_body(s: &str) -> String {
-    let stripped = strip_quotes(s);
-    match stripped.char_indices().nth(RECAP_NOTE_BYTES) {
-        None => stripped,
-        Some((i, _)) => stripped[..i].to_string(),
-    }
+    let mut stripped = strip_quotes(s);
+    stripped.truncate(stripped.floor_char_boundary(RECAP_NOTE_BYTES));
+    stripped
 }
 
 /// Newest `max_notes` notes, chronological (oldest of that window first).
@@ -473,6 +473,24 @@ mod tests {
         let mut newer = e(2, "y", None);
         newer.timestamp = ts + SignedDuration::from_mins(1);
         assert_eq!(rebind_through_seq(&log, &[old, newer]), 1);
+    }
+
+    #[test]
+    fn trim_note_body_caps_bytes_on_char_boundary() {
+        // The one-byte prefix makes the 768-byte cut land mid-char for the
+        // multibyte units, so the cap must round down to a boundary.
+        for unit in ["x", "ä", "🦀"] {
+            let body = trim_note_body(&format!("a{}", unit.repeat(900)));
+            assert!(
+                body.len() <= RECAP_NOTE_BYTES,
+                "{unit}: {} bytes",
+                body.len()
+            );
+            // Fills the budget up to the last whole char that fits.
+            assert!(body.len() > RECAP_NOTE_BYTES - unit.len(), "{unit}");
+            let rest = body.strip_prefix('a').expect("prefix kept");
+            assert!(rest.chars().all(|c| unit.starts_with(c)), "{unit}");
+        }
     }
 
     #[test]
