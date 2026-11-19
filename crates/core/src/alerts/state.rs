@@ -80,6 +80,10 @@ pub fn mark(feed: &mut VecDeque<String>, id: String) {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixtures seed files directly"
+)]
 mod tests {
     use super::*;
 

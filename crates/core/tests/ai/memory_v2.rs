@@ -312,6 +312,10 @@ async fn chat_turn_injection() {
 /// call must replace the entire body with `<corrupt: rejected>`. We verify this
 /// by inspecting the system prompt that `FakeLlm` receives.
 #[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixtures seed files directly"
+)]
 async fn ritual_transcript_injection() {
     let bot = TestBotBuilder::new().with_ai().spawn().await;
 
@@ -420,6 +424,10 @@ async fn dreamer_uses_its_own_write_cap_not_chat_cap() {
 /// <yesterday>.md) before running the LLM. The rotate happens before the agent
 /// call, so a failed agent must not prevent rotation.
 #[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixtures seed files directly"
+)]
 async fn ritual_dreamer_failure() {
     let bot = TestBotBuilder::new().with_ai().spawn().await;
 

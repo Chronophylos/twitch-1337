@@ -60,6 +60,10 @@ async fn sessions_survive_reload() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixtures seed files directly"
+)]
 fn corrupt_session_file_starts_empty() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("sessions.ron");

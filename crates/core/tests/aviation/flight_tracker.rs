@@ -1781,6 +1781,10 @@ async fn pending_flight_expires_without_extra_adsb_call() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixtures seed files directly"
+)]
 async fn tracker_answers_dashboard_commands_while_polling() {
     twitch_1337::install_crypto_provider();
     let now: Timestamp = "2026-04-18T11:00:00Z".parse().unwrap();

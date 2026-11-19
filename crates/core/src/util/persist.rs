@@ -53,6 +53,10 @@ pub async fn atomic_write_bytes_async(
     path: &Path,
 ) -> std::result::Result<(), AtomicPersistError> {
     let tmp = path.with_extension("tmp");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "this is the tmp half of tmp + rename"
+    )]
     tokio::fs::write(&tmp, bytes)
         .await
         .map_err(|source| AtomicPersistError::WriteTmp {
@@ -76,6 +80,10 @@ pub async fn atomic_save_ron_async<T: Serialize>(value: &T, path: &Path) -> Resu
     let tmp = path.with_extension("ron.tmp");
     let data = serialize(value)?;
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "this is the tmp half of tmp + rename"
+    )]
     tokio::fs::write(&tmp, data.as_bytes())
         .await
         .map_err(|source| AtomicPersistError::WriteTmp {

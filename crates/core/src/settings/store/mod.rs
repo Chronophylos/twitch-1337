@@ -177,6 +177,10 @@ impl SettingsStore {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixtures seed files directly"
+)]
 mod tests {
     use super::*;
     use crate::settings::CooldownsOverrides;

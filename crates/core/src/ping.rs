@@ -700,6 +700,10 @@ impl PingManager {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixtures seed files directly"
+)]
 mod tests {
     use super::*;
 

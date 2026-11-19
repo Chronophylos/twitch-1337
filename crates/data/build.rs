@@ -501,6 +501,10 @@ fn generate_lookup_airport_db(out_dir: &Path, manifest_dir: &Path) {
     blob.extend_from_slice(&name_blob);
 
     let bin_path = out_dir.join("location_airports.bin");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "build-script output under OUT_DIR, not runtime persistence"
+    )]
     fs::write(&bin_path, &blob).expect("write location_airports.bin");
     println!(
         "cargo:warning=Generated packed lookup airport DB with {} airports ({} bytes)",
@@ -550,6 +554,10 @@ fn generate_plz_db(out_dir: &Path, manifest_dir: &Path) {
     }
 
     let bin_path = out_dir.join("plz.bin");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "build-script output under OUT_DIR, not runtime persistence"
+    )]
     fs::write(&bin_path, &blob).expect("write plz.bin");
     println!(
         "cargo:warning=Generated packed PLZ DB with {} entries ({} bytes)",
