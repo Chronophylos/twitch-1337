@@ -1177,6 +1177,33 @@ async fn unparseable_value_returns_400_and_changes_nothing() {
     assert_eq!(state.settings.load().cooldowns.ai, before);
 }
 
+/// #621: a malformed byte size used to parse as "no override" and silently
+/// reset the knob to its compiled default.
+#[tokio::test]
+async fn malformed_media_size_returns_400_and_keeps_saved_value() {
+    let (state, (_p, _m, settings_dir)) = owner_state().await;
+    let res = post_settings(&state, &[("ai.media.max_image_size", "5 MB")]).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let settings_ron = settings_dir.path().join("settings.ron");
+    let saved = std::fs::read(&settings_ron).expect("settings.ron persisted");
+
+    for bad in ["not-a-size", "5 MBB"] {
+        let res = post_settings(&state, &[("ai.media.max_image_size", bad)]).await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{bad}");
+        let html = body_string(res).await;
+        assert!(
+            html.contains("<code>ai.media.max_image_size</code>: invalid value"),
+            "{bad}: response must surface the invalid field; got: {html}",
+        );
+        assert_eq!(
+            state.settings.load().ai.media.max_image_size.as_u64(),
+            5_000_000,
+            "{bad}"
+        );
+        assert_eq!(std::fs::read(&settings_ron).unwrap(), saved, "{bad}");
+    }
+}
+
 #[tokio::test]
 async fn changing_a_restart_knob_flashes_its_path() {
     let (state, _dirs) = owner_state().await;
