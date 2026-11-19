@@ -59,7 +59,7 @@ Rename the public set-audit chat command from `!emote` to `!e` and replace all c
 
 ```
 Kappa (0123456789abcdef01234567) hinzugefügt von Mod User am 04.01.2025 16:53
-Kappa (0123456789abcdef01234567) hinzugefügt von nozzlenols via PotatBotat am 04.01.2025 16:53
+Kappa (0123456789abcdef01234567) hinzugefügt von emotefan via PotatBotat am 04.01.2025 16:53
 Kappa (0123456789abcdef01234567) war schon da als Tracking anfing (04.01.2025 16:53)
 Kappa (0123456789abcdef01234567) noch keine Set-History
 ```

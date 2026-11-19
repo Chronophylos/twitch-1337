@@ -308,7 +308,7 @@ mod tests {
         let history = load_fixture("alias");
         assert_eq!(
             resolve_requester_login(&history, "e1", SetEventKind::Rename, 17).as_deref(),
-            Some("nozzlenols")
+            Some("emotefan")
         );
         // Wrong EventAPI kind must not pick an ALIAS row.
         assert_eq!(

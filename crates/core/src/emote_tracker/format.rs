@@ -90,8 +90,8 @@ mod tests {
     #[test]
     fn format_set_event_attribution_requires_login_and_via() {
         assert_eq!(
-            format_set_event_attribution(Some("NozzleNols"), Some("potatbotat")).as_deref(),
-            Some("NozzleNols via PotatBotat")
+            format_set_event_attribution(Some("EmoteFan"), Some("potatbotat")).as_deref(),
+            Some("EmoteFan via PotatBotat")
         );
         assert_eq!(format_set_event_attribution(Some("x"), None), None);
         assert_eq!(format_set_event_attribution(None, Some("potatbotat")), None);

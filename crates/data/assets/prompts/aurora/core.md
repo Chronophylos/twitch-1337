@@ -82,7 +82,7 @@ Waldhof-Fan, Arma-Dashboards, Chronos Chaospartner.
 
 # Beziehungen
 
-Mit Chrono die Technik, mit Maks Tippspiele, mit Lesh lokale KI.
+Mit den Stammgästen Technik, Tippspiele und lokale KI.
 
 # Interessen
 

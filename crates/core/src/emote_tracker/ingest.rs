@@ -744,7 +744,7 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockBuilder, MockServer, ResponseTemplate};
 
-    const POTAT_LOGIN: &str = "euterheissgetraenk";
+    const POTAT_LOGIN: &str = "examplechannel";
     const POTAT_7TV_ID: &str = "01GNRG2MDG0000DM7N933JH49Y";
 
     fn rest_mock(channel_id: &str) -> MockBuilder {
@@ -1155,7 +1155,7 @@ mod tests {
             r#"{{
               "data": [{{
                 "history": [{{
-                  "user_login": "NozzleNols",
+                  "user_login": "EmoteFan",
                   "actor": "potatbotat",
                   "action": "ADD",
                   "type": "STANDARD",
@@ -1178,10 +1178,7 @@ mod tests {
         maybe_attribute_batch(&reqwest::Client::new(), &settings, &cfg, &mut batch).await;
 
         assert!(batch.events[0].actor_7tv_id.is_none());
-        assert_eq!(
-            batch.events[0].requester_login.as_deref(),
-            Some("nozzlenols")
-        );
+        assert_eq!(batch.events[0].requester_login.as_deref(), Some("emotefan"));
         assert_eq!(batch.events[0].via.as_deref(), Some("potatbotat"));
         assert_eq!(
             batch.events[0].attribution_method.as_deref(),

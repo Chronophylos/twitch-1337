@@ -491,7 +491,7 @@ async fn tracker_1337_counts_message_after_compensated_wake_before_true_138() {
 /// Regression: a message stamped inside :37 but delivered after the 13:38:00
 /// wall must still be scored.
 ///
-/// Real-world shape (2026-09-08, channel `euterheissgetraenk`): magie_023's
+/// Real-world shape (2026-09-08, prod channel): a viewer's
 /// message carried `tmi-sent-ts=13:37:59.952` but arrived on the wire at
 /// 13:38:00.156 (rm-received-ts). The old handler aborted the monitor exactly
 /// at 13:38:00.000, so the qualifying message was never read. With the grace

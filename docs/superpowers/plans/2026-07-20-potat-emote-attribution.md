@@ -124,7 +124,7 @@ fn insert_and_list_preserves_attribution_fields() {
             actor_display_name: Some("PotatBotat".into()),
             gap_from: None,
             gap_to: None,
-            requester_login: Some("nozzlenols".into()),
+            requester_login: Some("emotefan".into()),
             requester_twitch_id: None,
             via: Some("potatbotat".into()),
             attribution_method: Some("potat_history".into()),
@@ -132,7 +132,7 @@ fn insert_and_list_preserves_attribution_fields() {
     )
     .unwrap();
     let rows = list_set_events(&conn, &SetEventListFilter { limit: 10, ..Default::default() }).unwrap();
-    assert_eq!(rows[0].requester_login.as_deref(), Some("nozzlenols"));
+    assert_eq!(rows[0].requester_login.as_deref(), Some("emotefan"));
     assert_eq!(rows[0].via.as_deref(), Some("potatbotat"));
     assert_eq!(rows[0].attribution_method.as_deref(), Some("potat_history"));
 }
@@ -316,8 +316,8 @@ EOF
 #[test]
 fn format_set_event_attribution_requires_login_and_via() {
     assert_eq!(
-        format_set_event_attribution(Some("NozzleNols"), Some("potatbotat")).as_deref(),
-        Some("NozzleNols via PotatBotat")
+        format_set_event_attribution(Some("EmoteFan"), Some("potatbotat")).as_deref(),
+        Some("EmoteFan via PotatBotat")
     );
     assert_eq!(format_set_event_attribution(Some("x"), None), None);
     assert_eq!(format_set_event_attribution(None, Some("potatbotat")), None);
@@ -326,7 +326,7 @@ fn format_set_event_attribution_requires_login_and_via() {
 #[test]
 fn format_emote_chat_reply_prefers_attribution_clause() {
     // seed NewSetEvent add with requester_login + via; assert reply contains
-    // "added by nozzlenols via PotatBotat on"
+    // "added by emotefan via PotatBotat on"
 }
 ```
 

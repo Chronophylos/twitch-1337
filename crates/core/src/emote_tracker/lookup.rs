@@ -302,14 +302,14 @@ mod tests {
             actor_display_name: Some("PotatBotat".into()),
             actor_username: Some("potatbotat".into()),
             actor_7tv_id: Some("potat".into()),
-            requester_login: Some("nozzlenols".into()),
+            requester_login: Some("emotefan".into()),
             via: Some("potatbotat".into()),
             attribution_method: Some("potat_history".into()),
             ..bootstrap.clone()
         };
         assert_eq!(
             format_emote_chat_reply(&emote, Some(&attributed)),
-            format!("Kappa ({ID}) hinzugefügt von nozzlenols via PotatBotat am {when}")
+            format!("Kappa ({ID}) hinzugefügt von emotefan via PotatBotat am {when}")
         );
         let rename = SetEventRow {
             kind: SetEventKind::Rename,
