@@ -1,6 +1,5 @@
 use std::{
     collections::HashSet,
-    fmt::{self, Display},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -18,42 +17,25 @@ use crate::util::{APP_USER_AGENT, truncate_response};
 pub const FIRST_WHISPER_MAX_CHARS: usize = 500;
 pub const WHISPER_MAX_CHARS: usize = 10_000;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum WhisperError {
+    #[error("missing user access token for whisper API")]
     MissingToken,
-    Credentials(String),
+    #[error("failed to obtain Twitch credentials")]
+    Credentials(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("whisper message is empty")]
     EmptyMessage,
+    #[error("Twitch whisper API returned {status}: {body}")]
     Api { status: StatusCode, body: String },
-    Http(reqwest::Error),
+    #[error("Twitch whisper API request failed")]
+    Http(#[from] reqwest::Error),
+    #[error("whisper unavailable: {0}")]
     Unavailable(String),
 }
 
 impl WhisperError {
     pub fn unavailable(reason: impl Into<String>) -> Self {
         Self::Unavailable(reason.into())
-    }
-}
-
-impl Display for WhisperError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingToken => write!(f, "missing user access token for whisper API"),
-            Self::Credentials(error) => write!(f, "failed to obtain Twitch credentials: {error}"),
-            Self::EmptyMessage => write!(f, "whisper message is empty"),
-            Self::Api { status, body } => {
-                write!(f, "Twitch whisper API returned {status}: {body}")
-            }
-            Self::Http(error) => write!(f, "Twitch whisper API request failed: {error}"),
-            Self::Unavailable(reason) => write!(f, "whisper unavailable: {reason}"),
-        }
-    }
-}
-
-impl std::error::Error for WhisperError {}
-
-impl From<reqwest::Error> for WhisperError {
-    fn from(error: reqwest::Error) -> Self {
-        Self::Http(error)
     }
 }
 
@@ -134,6 +116,7 @@ where
 impl<L> WhisperSender for HelixWhisperSender<L>
 where
     L: LoginCredentials,
+    L::Error: std::error::Error + 'static,
 {
     async fn send_whisper(&self, to_user_id: &str, message: &str) -> Result<String, WhisperError> {
         let known_recipient = self.known_recipients.lock().await.contains(to_user_id);
@@ -146,7 +129,7 @@ where
             .credentials
             .get_credentials()
             .await
-            .map_err(|error| WhisperError::Credentials(error.to_string()))?;
+            .map_err(|error| WhisperError::Credentials(Box::new(error)))?;
         let token = credentials.token.ok_or(WhisperError::MissingToken)?;
 
         let response = self

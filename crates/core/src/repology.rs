@@ -210,10 +210,10 @@ pub enum ProjectLookup {
     NotFound,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum RepologyError {
     #[error("repology unavailable")]
-    Unavailable,
+    Unavailable(#[source] eyre::Report),
 }
 
 impl RepologyClient {
@@ -245,26 +245,31 @@ impl RepologyClient {
 
         let url = self
             .project_url(query)
-            .map_err(|_| RepologyError::Unavailable)?;
+            .map_err(RepologyError::Unavailable)?;
         let resp = self
             .http
             .get(url)
             .send()
             .await
-            .map_err(|_| RepologyError::Unavailable)?;
+            .wrap_err("repology project request")
+            .map_err(RepologyError::Unavailable)?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return self.search_project(query).await;
         }
 
         if !resp.status().is_success() {
-            return Err(RepologyError::Unavailable);
+            return Err(RepologyError::Unavailable(eyre::eyre!(
+                "repology project returned {}",
+                resp.status()
+            )));
         }
 
         let packages = resp
             .json::<Vec<Package>>()
             .await
-            .map_err(|_| RepologyError::Unavailable)?;
+            .wrap_err("decode repology project")
+            .map_err(RepologyError::Unavailable)?;
         Ok(ProjectLookup::Found {
             name: query.to_string(),
             packages,
@@ -274,36 +279,40 @@ impl RepologyClient {
     async fn search_project(&self, query: &str) -> Result<ProjectLookup, RepologyError> {
         self.gate.acquire().await;
 
-        let url = self
-            .search_url(query)
-            .map_err(|_| RepologyError::Unavailable)?;
+        let url = self.search_url(query).map_err(RepologyError::Unavailable)?;
         let resp = self
             .http
             .get(url)
             .send()
             .await
-            .map_err(|_| RepologyError::Unavailable)?;
+            .wrap_err("repology search request")
+            .map_err(RepologyError::Unavailable)?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(ProjectLookup::NotFound);
         }
 
         if !resp.status().is_success() {
-            return Err(RepologyError::Unavailable);
+            return Err(RepologyError::Unavailable(eyre::eyre!(
+                "repology search returned {}",
+                resp.status()
+            )));
         }
 
         let map = resp
             .json::<Map<String, serde_json::Value>>()
             .await
-            .map_err(|_| RepologyError::Unavailable)?;
+            .wrap_err("decode repology search")
+            .map_err(RepologyError::Unavailable)?;
 
         if map.is_empty() {
             return Ok(ProjectLookup::NotFound);
         }
 
         let (name, value) = map.into_iter().next().expect("non-empty map");
-        let packages: Vec<Package> =
-            serde_json::from_value(value).map_err(|_| RepologyError::Unavailable)?;
+        let packages: Vec<Package> = serde_json::from_value(value)
+            .wrap_err("decode repology search packages")
+            .map_err(RepologyError::Unavailable)?;
         Ok(ProjectLookup::Found { name, packages })
     }
 
@@ -510,7 +519,7 @@ mod tests {
         let client = test_client(&server);
         assert!(matches!(
             client.fetch_project("ripgrep").await,
-            Err(RepologyError::Unavailable)
+            Err(RepologyError::Unavailable(_))
         ));
     }
 

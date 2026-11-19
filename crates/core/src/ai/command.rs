@@ -381,12 +381,12 @@ where
             text: line.clone(),
             reply_parent_message_id: Some(ctx.privmsg.message_id.clone()),
         };
-        let (recorded_login, message_id) = match self.turn.mouths.speak(agent, req).await {
+        let recorded_login = match self.turn.mouths.speak(agent, req).await {
             Ok(crate::twitch::mouth::SpeakOutcome::Spoken(spoken)) => {
                 if let Some(id) = spoken.message_id.as_deref() {
                     self.turn.echo.register(id).await;
                 }
-                (spoken.login, spoken.message_id)
+                spoken.login
             }
             Ok(crate::twitch::mouth::SpeakOutcome::NoMouth) => {
                 ctx.cancellation.check()?;
@@ -399,12 +399,10 @@ where
                 {
                     return Ok(());
                 }
-                (self.turn.bot_username.clone(), None)
+                self.turn.bot_username.clone()
             }
             Err(e) => {
-                // Display, not Debug: SpeakError::Empty Debug-prints as
-                // `Empty` with no explanation (`error=Empty` in the log).
-                error!(error = %e, agent = ?agent, "mouth speak failed");
+                error!(error = ?e, agent = ?agent, "mouth speak failed");
                 // Out of v1: no auto-fallback resend (double-speak risk). No history write.
                 // A short notice is not a resend — Err means chat saw nothing — and the
                 // realistic failure (mouth timed out, channel-restricted) is persistent,
@@ -416,7 +414,6 @@ where
                 return Ok(());
             }
         };
-        let _ = message_id; // reserved for future dashboard/debug surfacing
         ctx.cancellation.check()?;
         if let Some(ref chat) = self.turn.chat_ctx {
             chat.buffer_for(&ctx.privmsg.channel_login)

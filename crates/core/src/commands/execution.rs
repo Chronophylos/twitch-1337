@@ -486,7 +486,7 @@ where
                     }
                 }
                 TaskGroupEvent::Command(Some(Err(join_error))) => {
-                    error!(error = %join_error, "command task panicked during shutdown");
+                    error!(error = ?join_error, "command task panicked during shutdown");
                     return self.fail(ExecutionError::CommandPanicked).await;
                 }
                 TaskGroupEvent::Command(None) => {}
@@ -526,29 +526,29 @@ where
         match event {
             TaskGroupEvent::Command(Some(Ok(completion))) => self.finish(completion),
             TaskGroupEvent::Command(Some(Err(join_error))) if join_error.is_panic() => {
-                error!(error = %join_error, "command task panicked");
+                error!(error = ?join_error, "command task panicked");
                 Err(ExecutionError::CommandPanicked)
             }
             TaskGroupEvent::Command(Some(Err(join_error))) => {
-                error!(error = %join_error, "command task was aborted unexpectedly");
+                error!(error = ?join_error, "command task was aborted unexpectedly");
                 Err(ExecutionError::CommandAborted)
             }
             TaskGroupEvent::Command(None) => Ok(()),
             TaskGroupEvent::Blocking(Err(join_error)) if join_error.is_panic() => {
-                error!(error = %join_error, "application-owned blocking command child panicked");
+                error!(error = ?join_error, "application-owned blocking command child panicked");
                 Err(ExecutionError::BlockingChildPanicked)
             }
             TaskGroupEvent::Blocking(Err(join_error)) => {
-                error!(error = %join_error, "application-owned blocking command child failed");
+                error!(error = ?join_error, "application-owned blocking command child failed");
                 Err(ExecutionError::TaskGroupCleanupFailed)
             }
             TaskGroupEvent::Blocking(Ok(())) => Ok(()),
             TaskGroupEvent::Child(Err(join_error)) if join_error.is_panic() => {
-                error!(error = %join_error, "application-owned command child panicked");
+                error!(error = ?join_error, "application-owned command child panicked");
                 Err(ExecutionError::ApplicationChildPanicked)
             }
             TaskGroupEvent::Child(Err(join_error)) => {
-                error!(error = %join_error, "application-owned command child failed");
+                error!(error = ?join_error, "application-owned command child failed");
                 Err(ExecutionError::TaskGroupCleanupFailed)
             }
             TaskGroupEvent::Child(Ok(())) => Ok(()),
@@ -560,11 +560,11 @@ where
     /// task admission is closed, and all command/application-owned children are
     /// aborted and joined before the manager returns an error.
     async fn fail(&mut self, error: ExecutionError) -> Result<()> {
-        error!(error = %error, "command execution manager failed");
+        error!(error = ?error, "command execution manager failed");
         self.task_group.close();
         self.discard_pending();
         if let Err(group_error) = self.task_group.abort_and_join().await {
-            error!(error = %group_error, "command task group cleanup failed");
+            error!(error = ?group_error, "command task group cleanup failed");
             return Err(ExecutionError::TaskGroup(group_error).into());
         }
         Err(error.into())

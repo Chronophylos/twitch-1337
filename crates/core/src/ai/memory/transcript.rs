@@ -81,7 +81,11 @@ impl TranscriptWriter {
     /// Close current `today.md`, rename to `<date>.md`, reopen empty `today.md`.
     pub async fn rotate_to(&self, date: Date) -> Result<PathBuf> {
         let mut g = self.inner.lock().await;
-        g.handle.flush().await.ok();
+        if let Err(error) = g.handle.flush().await
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(?error, "flush transcript before rotate failed");
+        }
         let today = self.transcripts_dir.join("today.md");
         let dated = self
             .transcripts_dir

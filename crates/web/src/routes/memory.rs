@@ -867,7 +867,7 @@ async fn save_kind(
     };
     let outcome = state
         .memory_store
-        .write_with_guard(kind.clone(), &id, &form.body, Some(form.mtime), fm_override)
+        .write_with_guard(kind.clone(), &form.body, Some(form.mtime), fm_override)
         .await;
     let csrf_hex = csrf::encode(&session.csrf_value);
     match outcome {
