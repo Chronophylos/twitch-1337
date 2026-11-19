@@ -225,7 +225,7 @@ where
     ) {
         Ok(invocation) => invocation,
         Err(e) => {
-            error!(error = %e, "Skipping command without a stable user key");
+            error!(error = ?e, "Skipping command without a stable user key");
             return Ok(());
         }
     };

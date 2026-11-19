@@ -216,7 +216,7 @@ pub async fn execute_plan_flight(
     }) {
         Ok(receiver) => receiver,
         Err(error) => {
-            tracing::warn!(error = %error, "plan_flight could not register blocking child");
+            tracing::warn!(error = ?error, "plan_flight could not register blocking child");
             return err(call, json!({"error": "task_group_closed"}));
         }
     };

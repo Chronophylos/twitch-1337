@@ -16,8 +16,8 @@ pub enum FrontmatterError {
     Delimiters,
     #[error("missing required field: {0}")]
     MissingField(&'static str),
-    #[error("invalid timestamp: {0}")]
-    BadTimestamp(String),
+    #[error("invalid timestamp")]
+    BadTimestamp(#[source] jiff::Error),
 }
 
 pub fn parse(raw: &str) -> Result<(Frontmatter, String), FrontmatterError> {
@@ -60,7 +60,7 @@ pub fn parse(raw: &str) -> Result<(Frontmatter, String), FrontmatterError> {
                 // Accepts any RFC 3339 offset; normalised to UTC.
                 let dt = v
                     .parse::<Timestamp>()
-                    .map_err(|e| FrontmatterError::BadTimestamp(e.to_string()))?;
+                    .map_err(FrontmatterError::BadTimestamp)?;
                 updated_at = Some(dt);
             }
             "username" if !v.is_empty() => username = Some(v.to_string()),

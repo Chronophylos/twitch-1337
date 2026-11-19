@@ -7,11 +7,7 @@
 //! control-char strip. Length clamping for agent replies happens before
 //! `speak`, so the router must not apply the 480-byte IRC ceiling.
 
-use std::{
-    fmt::{self, Display},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use eyre::{Result, WrapErr as _};
@@ -50,10 +46,15 @@ pub enum SpeakOutcome {
     NoMouth,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum SpeakError {
+    #[error("chat-send message empty")]
     Empty,
-    Credentials(String),
+    #[error("failed to obtain mouth credentials")]
+    Credentials(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("mouth credentials carry no access token")]
+    MissingToken,
+    #[error("Twitch chat-send API returned {status}: {body}")]
     Api {
         status: reqwest::StatusCode,
         body: String,
@@ -62,36 +63,17 @@ pub enum SpeakError {
     /// `is_sent: false`, typically an AutoMod hold, a channel restriction, or
     /// the mouth account being banned/timed out. Chat never saw it, so this is
     /// a failure — callers must not record history or transcript rows.
+    #[error(
+        "Twitch dropped the chat message: {} ({})",
+        message.as_deref().unwrap_or("no reason given"),
+        code.as_deref().unwrap_or("no code")
+    )]
     Dropped {
         code: Option<String>,
         message: Option<String>,
     },
-    Http(reqwest::Error),
-}
-
-impl Display for SpeakError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Empty => write!(f, "chat-send message empty"),
-            Self::Credentials(e) => write!(f, "failed to obtain mouth credentials: {e}"),
-            Self::Api { status, body } => {
-                write!(f, "Twitch chat-send API returned {status}: {body}")
-            }
-            Self::Dropped { code, message } => write!(
-                f,
-                "Twitch dropped the chat message: {} ({})",
-                message.as_deref().unwrap_or("no reason given"),
-                code.as_deref().unwrap_or("no code")
-            ),
-            Self::Http(e) => write!(f, "Twitch chat-send request failed: {e}"),
-        }
-    }
-}
-impl std::error::Error for SpeakError {}
-impl From<reqwest::Error> for SpeakError {
-    fn from(e: reqwest::Error) -> Self {
-        Self::Http(e)
-    }
+    #[error("Twitch chat-send request failed")]
+    Http(#[from] reqwest::Error),
 }
 
 #[async_trait]
@@ -205,7 +187,11 @@ impl<L: LoginCredentials> HelixMouth<L> {
 }
 
 #[async_trait]
-impl<L: LoginCredentials> Mouth for HelixMouth<L> {
+impl<L> Mouth for HelixMouth<L>
+where
+    L: LoginCredentials,
+    L::Error: std::error::Error + 'static,
+{
     async fn speak(&self, req: SpeakRequest<'_>) -> Result<SpokenMessage, SpeakError> {
         if req.text.trim().is_empty() {
             return Err(SpeakError::Empty);
@@ -215,10 +201,8 @@ impl<L: LoginCredentials> Mouth for HelixMouth<L> {
             .credentials
             .get_credentials()
             .await
-            .map_err(|error| SpeakError::Credentials(error.to_string()))?;
-        let token = creds
-            .token
-            .ok_or_else(|| SpeakError::Credentials("missing access token".into()))?;
+            .map_err(|error| SpeakError::Credentials(Box::new(error)))?;
+        let token = creds.token.ok_or(SpeakError::MissingToken)?;
 
         let mut response = self.post_once(&token, &req).await?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
@@ -227,10 +211,8 @@ impl<L: LoginCredentials> Mouth for HelixMouth<L> {
                 .credentials
                 .get_credentials()
                 .await
-                .map_err(|error| SpeakError::Credentials(error.to_string()))?;
-            let token = creds
-                .token
-                .ok_or_else(|| SpeakError::Credentials("missing access token".into()))?;
+                .map_err(|error| SpeakError::Credentials(Box::new(error)))?;
+            let token = creds.token.ok_or(SpeakError::MissingToken)?;
             response = self.post_once(&token, &req).await?;
         }
 

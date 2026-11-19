@@ -147,8 +147,15 @@ impl MemoryStore {
         if tokio::fs::try_exists(&v1).await.unwrap_or(false) {
             let ts = Timestamp::now().as_second();
             let dest = data_dir.join(format!("ai_memory.ron.discarded-{ts}"));
-            tokio::fs::rename(&v1, &dest).await.ok();
-            info!(target = %dest.display(), "Renamed v1 ai_memory.ron — v2 starts fresh");
+            match tokio::fs::rename(&v1, &dest).await {
+                Ok(()) => {
+                    info!(target = %dest.display(), "Renamed v1 ai_memory.ron — v2 starts fresh");
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    warn!(?error, target = %dest.display(), "Failed to rename v1 ai_memory.ron");
+                }
+            }
         }
 
         // SOUL.md seed.
@@ -235,8 +242,8 @@ impl MemoryStore {
         let abs = self.inner.memories_dir.join(&rel);
         match tokio::fs::read_to_string(&abs).await {
             Ok(raw) => {
-                let (fm, body) =
-                    frontmatter::parse(&raw).map_err(|e| eyre!("parse {}: {e}", rel.display()))?;
+                let (fm, body) = frontmatter::parse(&raw)
+                    .wrap_err_with(|| format!("parse {}", rel.display()))?;
                 Ok(MemoryFile {
                     kind: kind.clone(),
                     frontmatter: fm,
@@ -360,7 +367,12 @@ impl MemoryStore {
         }
         // ponytail: single-slot backup, so one bad dreamer run is recoverable.
         // Rotate to N versions only if one night back turns out to be too little.
-        let _ = tokio::fs::rename(&abs, abs.with_extension("md.bak")).await;
+        let bak = abs.with_extension("md.bak");
+        match tokio::fs::rename(&abs, &bak).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => warn!(?error, path = %bak.display(), "memory .bak rotation failed"),
+        }
         atomic_write_bytes_async(raw.as_bytes(), &abs)
             .await
             .map_err(|e| WriteError::Io(eyre!(e)))?;
@@ -457,7 +469,6 @@ impl MemoryStore {
         atomic_write_bytes_async(raw.as_bytes(), &abs)
             .await
             .map_err(|e| WriteError::Io(eyre!(e)))?;
-        let _ = slug; // slug already encoded in rel path
         Ok(())
     }
 
@@ -495,9 +506,6 @@ impl MemoryStore {
     /// the AI `write_file` tool, which serialise through the same per-path
     /// mutex map and don't carry a token.
     ///
-    /// `id` is informational; the path is encoded in `kind`. Kept on the
-    /// signature so call sites read fluently.
-    ///
     /// TOCTOU note: we drop the outer guard between the mtime check and
     /// the inner `write` / `write_scratch` (which take their own per-path
     /// lock). In that gap an unconditional write (AI tool or dreamer
@@ -509,13 +517,10 @@ impl MemoryStore {
     pub async fn write_with_guard(
         &self,
         kind: FileKind,
-        id: &str,
         body: &str,
         expected: Option<Mtime>,
         fm_override: FrontmatterOverride,
     ) -> Result<WriteOutcome, WriteError> {
-        let _ = id; // already encoded in `kind`; arg kept for ergonomic call sites
-
         let rel = kind.relative_path();
         let lock = self.lock_for(&rel).await;
         let g = lock.lock().await;
@@ -1040,7 +1045,6 @@ mod tests {
         let outcome = store
             .write_with_guard(
                 FileKind::Soul,
-                "",
                 "loser",
                 Some(0),
                 FrontmatterOverride::default(),
@@ -1065,7 +1069,6 @@ mod tests {
         let outcome = store
             .write_with_guard(
                 FileKind::Soul,
-                "",
                 "winner",
                 Some(mt1),
                 FrontmatterOverride::default(),
@@ -1092,7 +1095,6 @@ mod tests {
         let outcome = store
             .write_with_guard(
                 FileKind::Lore,
-                "",
                 "after",
                 None,
                 FrontmatterOverride::default(),
@@ -1147,7 +1149,6 @@ mod tests {
         store
             .write_with_guard(
                 kind.clone(),
-                "42",
                 "body",
                 Some(mt),
                 FrontmatterOverride {
@@ -1173,7 +1174,6 @@ mod tests {
         store
             .write_with_guard(
                 kind.clone(),
-                "42",
                 "body",
                 Some(mt),
                 FrontmatterOverride {
@@ -1213,7 +1213,7 @@ mod tests {
             links: None,
         };
         let outcome = store
-            .write_with_guard(kind.clone(), "42", "body2", Some(mt), fm)
+            .write_with_guard(kind.clone(), "body2", Some(mt), fm)
             .await
             .unwrap();
         assert!(matches!(outcome, WriteOutcome::Written { .. }));
@@ -1239,7 +1239,7 @@ mod tests {
             ..FrontmatterOverride::default()
         };
         store
-            .write_with_guard(kind.clone(), "quiz", "y", Some(mt), fm)
+            .write_with_guard(kind.clone(), "y", Some(mt), fm)
             .await
             .unwrap();
         let mf = store.read_kind(&kind).await.unwrap();
@@ -1263,7 +1263,7 @@ mod tests {
             ..FrontmatterOverride::default()
         };
         store
-            .write_with_guard(kind.clone(), "notes", "y", Some(mt), fm)
+            .write_with_guard(kind.clone(), "y", Some(mt), fm)
             .await
             .unwrap();
         let mf = store.read_kind(&kind).await.unwrap();

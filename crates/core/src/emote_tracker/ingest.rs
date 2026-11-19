@@ -36,11 +36,7 @@ enum SessionEnd {
     /// Lifecycle cancellation won at an operation boundary.
     Cancelled,
     /// Server asked for a reconnect (soft); REST reconcile without a gap stamp.
-    ExpectedReconnect {
-        code: u16,
-        message: String,
-        remembered_set_id: String,
-    },
+    ExpectedReconnect { code: u16, message: String },
 }
 
 /// Runtime configuration for the emote-set ingest task.
@@ -188,15 +184,10 @@ pub async fn run_set_ingest(
                 .await
                 {
                     Ok(SessionEnd::Cancelled) => return,
-                    Ok(SessionEnd::ExpectedReconnect {
-                        code,
-                        message,
-                        remembered_set_id,
-                    }) => {
+                    Ok(SessionEnd::ExpectedReconnect { code, message }) => {
                         // Soft reconnect: keep listening without stamping a gap.
                         // Next loop REST-reconciles (gap=None) to catch anything
                         // missed in the brief window.
-                        let _ = remembered_set_id;
                         info!(
                             code,
                             %message,
@@ -377,11 +368,7 @@ async fn run_eventapi_session(
                     }
                     ParsedEvent::EndOfStream { code, message } => {
                         if is_expected_reconnect(code) {
-                            return Ok(SessionEnd::ExpectedReconnect {
-                                code,
-                                message,
-                                remembered_set_id,
-                            });
+                            return Ok(SessionEnd::ExpectedReconnect { code, message });
                         }
                         *gap_started_at = Some(gap_started_at.unwrap_or_else(now_ms));
                         return Err(eyre!(
@@ -405,7 +392,6 @@ async fn run_eventapi_session(
                         return Ok(SessionEnd::ExpectedReconnect {
                             code,
                             message: close.reason.to_string(),
-                            remembered_set_id,
                         });
                     }
                 }

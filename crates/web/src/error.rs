@@ -53,7 +53,7 @@ pub enum WebError {
 
 impl From<twitch_1337_core::settings::SettingsError> for WebError {
     fn from(e: twitch_1337_core::settings::SettingsError) -> Self {
-        WebError::Internal(eyre::eyre!("settings: {e}"))
+        WebError::Internal(eyre::Report::new(e).wrap_err("settings"))
     }
 }
 

@@ -469,7 +469,7 @@ async fn create(
             action = "ping_create",
             target_name = %name,
             result = "validation",
-            error = %msg,
+            error = ?msg,
         );
         return render_with(
             StatusCode::BAD_REQUEST,
@@ -567,7 +567,7 @@ async fn update(
             action = "ping_update",
             target_name = %name,
             result = "validation",
-            error = %msg,
+            error = ?msg,
         );
         let members = state
             .ping_actor
@@ -681,7 +681,7 @@ async fn add_member(
                 target_name = %name,
                 target_user = %username,
                 result = "error",
-                error = %msg,
+                error = ?msg,
             );
             render_with(
                 StatusCode::BAD_REQUEST,
