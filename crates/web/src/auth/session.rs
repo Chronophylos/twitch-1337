@@ -13,11 +13,12 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::Result;
 use jiff::{SignedDuration, Timestamp};
+use parking_lot::RwLock;
 use rand::Rng as _;
 use serde::{Deserialize, Serialize};
 use twitch_1337_core::util::persist::atomic_save_ron_async;
@@ -138,11 +139,7 @@ impl SessionTable {
             return;
         };
         let _write = self.write_lock.lock().await;
-        let snapshot = self
-            .inner
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
+        let snapshot = self.inner.read().clone();
         if let Err(error) = atomic_save_ron_async(&snapshot, &path).await {
             tracing::warn!(?error, "Failed to persist sessions");
         }
@@ -172,23 +169,20 @@ impl SessionTable {
 
     fn insert_at(&self, id: &str, csrf: [u8; 32], new: NewSession) {
         let now = self.clock.now();
-        self.inner
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(
-                id.to_owned(),
-                Session {
-                    user_id: new.user_id,
-                    user_login: new.user_login,
-                    role: new.role,
-                    issued_at: now,
-                    last_seen: now,
-                    last_role_check: now,
-                    csrf_value: csrf,
-                    avatar_url: new.avatar_url,
-                    is_broadcaster: new.is_broadcaster,
-                },
-            );
+        self.inner.write().insert(
+            id.to_owned(),
+            Session {
+                user_id: new.user_id,
+                user_login: new.user_login,
+                role: new.role,
+                issued_at: now,
+                last_seen: now,
+                last_role_check: now,
+                csrf_value: csrf,
+                avatar_url: new.avatar_url,
+                is_broadcaster: new.is_broadcaster,
+            },
+        );
     }
 
     /// Check whether the session with `id` is still live under `ttl` and, if
@@ -200,7 +194,7 @@ impl SessionTable {
     pub fn get_and_touch(&self, id: &str, ttl: Duration) -> Option<Session> {
         let now = self.clock.now();
         let ttl = SignedDuration::try_from(ttl).ok()?;
-        let mut g = self.inner.write().unwrap_or_else(PoisonError::into_inner);
+        let mut g = self.inner.write();
         let session = g.get_mut(id)?;
         if now.duration_since(session.last_seen) > ttl {
             g.remove(id);
@@ -211,20 +205,12 @@ impl SessionTable {
     }
 
     pub fn drop_session(&self, id: &str) {
-        self.inner
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(id);
+        self.inner.write().remove(id);
     }
 
     pub fn record_role_check(&self, id: &str) {
         let now = self.clock.now();
-        if let Some(s) = self
-            .inner
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get_mut(id)
-        {
+        if let Some(s) = self.inner.write().get_mut(id) {
             s.last_role_check = now;
         }
     }

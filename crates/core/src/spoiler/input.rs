@@ -126,6 +126,7 @@ where
     Fut: Future<Output = Result<RawFetch>>,
 {
     let started = Instant::now();
+    #[expect(clippy::expect_used, reason = "const base URL is a valid URL")]
     let archive = Url::parse_with_params(ARCTIC_SHIFT_POSTS, [("ids", post.id.as_str())])
         .expect("valid archive URL");
     match fetch(archive, PAGE_MAX_BYTES, budget).await {
@@ -145,6 +146,7 @@ where
     if remaining.is_zero() {
         return Err(unreadable(eyre::eyre!("page budget spent before oEmbed")));
     }
+    #[expect(clippy::expect_used, reason = "const base URL is a valid URL")]
     let oembed = Url::parse_with_params(REDDIT_OEMBED, [("url", permalink.as_str())])
         .expect("valid oEmbed URL");
     let raw = fetch(oembed, PAGE_MAX_BYTES, remaining)

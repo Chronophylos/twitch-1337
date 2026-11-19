@@ -450,7 +450,9 @@ mod tests {
                     .expect("apply_with");
             })
         };
-        let _ = tokio::join!(add("alpha"), add("bravo"));
+        let (a, b) = tokio::join!(add("alpha"), add("bravo"));
+        a.unwrap();
+        b.unwrap();
 
         let final_resolved = store.handle().load();
         let names: std::collections::BTreeSet<&str> = final_resolved

@@ -325,6 +325,10 @@ mod tests {
     /// `EmptyResponse`, never `Message("")`, which would post a blank reply.
     #[tokio::test]
     async fn tool_response_without_content_is_empty_response_error() {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "Err only means a crypto provider is already installed"
+        )]
         let _ = rustls::crypto::ring::default_provider().install_default();
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))

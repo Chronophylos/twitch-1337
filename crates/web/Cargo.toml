@@ -19,6 +19,7 @@ eyre = { workspace = true }
 hex = { workspace = true }
 jiff = { workspace = true }
 mime_guess = { workspace = true }
+parking_lot = { workspace = true }
 rand = { workspace = true }
 ron = { workspace = true }
 reqwest = { workspace = true }

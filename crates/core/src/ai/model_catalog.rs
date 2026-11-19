@@ -4,11 +4,11 @@
 //! raw configured model id.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::settings::ai::AiProfile;
 use eyre::{Result, WrapErr as _};
+use parking_lot::Mutex;
 use reqwest::Client;
 use tracing::warn;
 
@@ -94,7 +94,7 @@ impl ModelCatalog {
 
         match self.fetch_openrouter_catalog().await {
             Ok(map) => {
-                let mut guard = self.cache.lock().expect("model catalog cache poisoned");
+                let mut guard = self.cache.lock();
                 guard.fetch_failed_until = None;
                 guard.entry = Some(CachedCatalog {
                     fetched_at: Instant::now(),
@@ -103,7 +103,7 @@ impl ModelCatalog {
                 Ok(map)
             }
             Err(e) => {
-                let mut guard = self.cache.lock().expect("model catalog cache poisoned");
+                let mut guard = self.cache.lock();
                 guard.fetch_failed_until = Some(Instant::now() + FAILURE_BACKOFF);
                 if let Some(stale) = guard.entry.as_ref() {
                     warn!(
@@ -120,7 +120,7 @@ impl ModelCatalog {
     }
 
     fn fresh_catalog(&self) -> Option<HashMap<String, String>> {
-        let guard = self.cache.lock().expect("model catalog cache poisoned");
+        let guard = self.cache.lock();
         let entry = guard.entry.as_ref()?;
         if entry.fetched_at.elapsed() > CACHE_TTL {
             return None;
@@ -129,12 +129,12 @@ impl ModelCatalog {
     }
 
     fn stale_catalog(&self) -> Option<HashMap<String, String>> {
-        let guard = self.cache.lock().expect("model catalog cache poisoned");
+        let guard = self.cache.lock();
         guard.entry.as_ref().map(|entry| entry.by_id.clone())
     }
 
     fn in_fetch_backoff(&self) -> bool {
-        let guard = self.cache.lock().expect("model catalog cache poisoned");
+        let guard = self.cache.lock();
         guard
             .fetch_failed_until
             .is_some_and(|until| Instant::now() < until)
@@ -157,7 +157,7 @@ impl ModelCatalog {
 
     #[cfg(test)]
     fn test_expire_cache(&self) {
-        let mut guard = self.cache.lock().expect("model catalog cache poisoned");
+        let mut guard = self.cache.lock();
         if let Some(entry) = guard.entry.as_mut() {
             entry.fetched_at = Instant::now() - CACHE_TTL - Duration::from_secs(1);
         }

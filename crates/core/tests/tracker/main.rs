@@ -1,4 +1,9 @@
-#![allow(clippy::unwrap_used, reason = "test crate: a panic is a test failure")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test crate: a panic is a test failure"
+)]
 #[path = "../common/mod.rs"]
 mod common;
 

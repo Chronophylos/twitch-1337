@@ -187,7 +187,9 @@ impl E2eSession {
         let server = tokio::spawn({
             let lifecycle = lifecycle.clone();
             async move {
-                let _ = serve_app(listener, app, lifecycle).await;
+                serve_app(listener, app, lifecycle)
+                    .await
+                    .expect("E2E web server failed");
             }
         });
 
@@ -431,6 +433,10 @@ impl E2eSession {
 
     /// Close the browser and stop the server.
     pub async fn close(self) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "teardown: a browser session that already ended is fine"
+        )]
         let _ = self.client.close().await;
         self.lifecycle.request_graceful_stop();
         self.server

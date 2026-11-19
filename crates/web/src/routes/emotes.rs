@@ -168,6 +168,10 @@ fn merge_flash(existing: Option<String>, msg: &str) -> Option<String> {
 }
 
 /// Parse `since` (`datetime-local`) as start-of-minute Berlin local time.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "parse failures become a unit form rejection; the input is the only useful cause"
+)]
 fn parse_berlin_since_local(value: Option<&str>) -> Result<Option<i64>, ()> {
     let Some(raw) = value.filter(|s| !s.is_empty()) else {
         return Ok(None);

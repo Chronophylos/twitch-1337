@@ -180,6 +180,10 @@ fn beats_own_worst(user: &str, ms: u64, map: &HashMap<String, PersonalWorst>) ->
 }
 
 /// Builds the Berlin wall-clock `date hour:minute:second` from `u32` parts.
+#[expect(
+    clippy::expect_used,
+    reason = "every caller passes compile-time constant hour/minute/second values within range"
+)]
 fn berlin_wall_time(date: civil::Date, hour: u32, minute: u32, second: u32) -> civil::DateTime {
     let part = |v: u32| i8::try_from(v).expect("Invalid hour/minute for Berlin time");
     civil::DateTime::new(
@@ -346,6 +350,7 @@ pub(crate) fn generate_stats_message(count: usize, user_list: &[String]) -> Stri
 /// Returns a random element from an array.
 ///
 /// Used for adding variety to bot responses by randomly selecting from predefined options.
+#[expect(clippy::expect_used, reason = "L > 0 is asserted at compile time")]
 pub(crate) fn one_of<const L: usize, T>(array: &[T; L]) -> &T {
     const { assert!(L > 0, "one_of requires a non-empty array") };
     array
@@ -622,7 +627,7 @@ where
                     .catch_unwind()
                     .await
                     .unwrap_or(MonitorCompletion::Panicked);
-                    let _ = monitor_completion_tx.send(completion);
+                    monitor_completion_tx.send(completion).ok();
                     completion
                 }
             })

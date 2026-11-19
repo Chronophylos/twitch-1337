@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use eyre::{Context as _, Result, bail};
 use secrecy::ExposeSecret as _;
 use tokio::{sync::mpsc::UnboundedReceiver, time::Duration};
-use tracing::{debug, debug_span, error, info, trace};
+use tracing::{Instrument as _, debug, debug_span, error, info, trace};
 use twitch_irc::{
     ClientConfig, SecureTCPTransport, TwitchIRCClient,
     login::{LoginCredentials as _, RefreshingLoginCredentials},
@@ -85,7 +85,6 @@ pub async fn setup_and_verify_twitch_client(
     client.set_wanted_channels(channels)?;
 
     let verification = async {
-        let _ = debug_span!("twitch_auth_verification").entered();
         while let Some(message) = incoming_messages.recv().await {
             trace!(message = ?message, "Received IRC message during verification");
             match message {
@@ -121,7 +120,8 @@ pub async fn setup_and_verify_twitch_client(
             }
         }
         bail!("Connection closed during verification")
-    };
+    }
+    .instrument(debug_span!("twitch_auth_verification"));
 
     let bot_user_id = match tokio::time::timeout(Duration::from_secs(30), verification).await {
         Err(_) => {

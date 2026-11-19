@@ -144,6 +144,10 @@ where
         command: Arc<dyn Command<T, L>>,
     ) -> Result<(), RegistryBuildError> {
         let raw_id = command.id();
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "CommandIdError is a unit marker; the variant carries the offending ID"
+        )]
         let id = CommandId::new(raw_id)
             .map_err(|_| RegistryBuildError::InvalidCommandId { id: raw_id })?;
         if entries.contains_key(&id) {
@@ -228,7 +232,8 @@ where
     }
 
     fn ping_trigger_id() -> CommandId {
-        CommandId::new(PING_TRIGGER_ID).expect("built-in ping trigger ID is valid")
+        // `PING_TRIGGER_ID` is a constant that satisfies `CommandId::new`'s rules.
+        CommandId(PING_TRIGGER_ID)
     }
 }
 

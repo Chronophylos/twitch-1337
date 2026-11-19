@@ -41,10 +41,18 @@ static LOOKUP_AIRPORT_BLOB: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/location_airports.bin"));
 static PLZ_BLOB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/plz.bin"));
 
+#[expect(
+    clippy::expect_used,
+    reason = "slice is exactly 4 bytes by construction (off..off + 4)"
+)]
 fn read_u32_le(bytes: &[u8], off: usize) -> u32 {
     u32::from_le_bytes(bytes[off..off + 4].try_into().expect("u32 slice"))
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "slice is exactly 4 bytes by construction (off..off + 4)"
+)]
 fn read_f32_le(bytes: &[u8], off: usize) -> f32 {
     f32::from_le_bytes(bytes[off..off + 4].try_into().expect("f32 slice"))
 }
@@ -97,6 +105,10 @@ fn plz_count() -> usize {
     })
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "build.rs writes ICAO/IATA codes and names into the baked blob as validated UTF-8"
+)]
 fn decode_lookup_airport(index: usize) -> LookupAirport {
     let meta = lookup_meta();
     assert!(index < meta.count, "lookup airport index out of range");
@@ -131,6 +143,10 @@ fn decode_lookup_airport(index: usize) -> LookupAirport {
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "build.rs writes each PLZ row's first 5 bytes as ASCII digits"
+)]
 fn decode_plz_entry(index: usize) -> PlzEntry {
     let count = plz_count();
     assert!(index < count, "plz index out of range");

@@ -108,27 +108,26 @@ impl Schedule {
     /// Next fire instant honoring `start_date` (skip-before) and
     /// `end_date` (returns `None` past it). `start_date` and `end_date`
     /// are Berlin-local full-day inclusive: `end_date` is included
-    /// through 23:59:59 Berlin.
+    /// through 23:59:59 Berlin. Also `None` when a user-entered date or the
+    /// next slot lies outside jiff's supported range (the schedule can never
+    /// fire there); an unrepresentable `end_date` imposes no bound.
     pub fn next_active_fire(&self, now: ZonedDateTime) -> Option<ZonedDateTime> {
         let mut anchor = now;
         if let Some(start) = self.start_date {
             let start_dt = start
                 .to_datetime(Time::MIN)
                 .to_zoned_datetime(BERLIN.clone())
-                .expect("midnight always valid");
+                .ok()?;
             if anchor < start_dt {
                 anchor = start_dt - SignedDuration::from_secs(1);
             }
         }
-        let next = self.trigger.next_fire_after(anchor);
-        if let Some(end) = self.end_date {
-            let end_dt = end
-                .at(23, 59, 59, 0)
-                .to_zoned_datetime(BERLIN.clone())
-                .expect("end of day valid");
-            if next > end_dt {
-                return None;
-            }
+        let next = self.trigger.next_fire_after(anchor)?;
+        if let Some(end) = self.end_date
+            && let Ok(end_dt) = end.at(23, 59, 59, 0).to_zoned_datetime(BERLIN.clone())
+            && next > end_dt
+        {
+            return None;
         }
         Some(next)
     }

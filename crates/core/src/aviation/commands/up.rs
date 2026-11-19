@@ -119,6 +119,10 @@ where
     let result = tokio::time::timeout(UP_COMMAND_TIMEOUT, async {
         cancellation.check()?;
         // Fetch nearby aircraft
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "tokio Elapsed carries nothing beyond the timeout itself"
+        )]
         let aircraft = tokio::time::timeout(
             UP_ADSB_TIMEOUT,
             aviation_client.get_aircraft_nearby(*lat, *lon, UP_SEARCH_RADIUS_NM),
@@ -173,6 +177,10 @@ where
             let icao_type = ac.t.clone();
             let alt = ac.alt_baro.clone();
             let dist = *distance_nm;
+            #[expect(
+                clippy::expect_used,
+                reason = "candidates passed cone_distance_nm, which returns None without lat/lon"
+            )]
             let (ac_lat, ac_lon) = (
                 ac.lat.expect("lat guaranteed by cone_distance_nm"),
                 ac.lon.expect("lon guaranteed by cone_distance_nm"),
@@ -222,6 +230,10 @@ where
 
         let mut results = Vec::with_capacity(receivers.len());
         for receiver in receivers {
+            #[expect(
+                clippy::map_err_ignore,
+                reason = "oneshot RecvError only means the child was dropped before replying"
+            )]
             results.push(
                 receiver
                     .await

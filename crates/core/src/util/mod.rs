@@ -40,6 +40,10 @@ pub async fn ensure_data_dir() -> Result<()> {
 }
 
 /// Bot timezone for scheduling and local display.
+#[expect(
+    clippy::expect_used,
+    reason = "bundled tzdb always contains Europe/Berlin"
+)]
 pub static BERLIN: LazyLock<TimeZone> =
     LazyLock::new(|| TimeZone::get("Europe/Berlin").expect("bundled tzdb contains Europe/Berlin"));
 
@@ -52,6 +56,10 @@ pub fn to_berlin(ts: Timestamp) -> ZonedDateTime {
 ///
 /// During spring-forward (gap), interprets as UTC to land just after the gap.
 /// During fall-back (ambiguous), picks the later occurrence.
+#[expect(
+    clippy::expect_used,
+    reason = "bot wall-clock dates are far inside jiff's timestamp range"
+)]
 pub fn resolve_berlin_time(dt: civil::DateTime) -> ZonedDateTime {
     let offset = match BERLIN.to_ambiguous_timestamp(dt).offset() {
         AmbiguousOffset::Unambiguous { offset } | AmbiguousOffset::Fold { after: offset, .. } => {
@@ -146,6 +154,10 @@ pub fn parse_flight_duration(s: &str) -> Option<std::time::Duration> {
 ///
 /// [`CryptoProvider`]: rustls::crypto::CryptoProvider
 pub fn install_crypto_provider() {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "Err only means a provider is already installed; idempotent by design"
+    )]
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 

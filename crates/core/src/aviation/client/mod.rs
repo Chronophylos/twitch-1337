@@ -17,10 +17,11 @@ mod provider;
 
 pub use provider::AdsbProvider;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eyre::{Result, WrapErr as _};
+use parking_lot::Mutex;
 use secrecy::SecretString;
 
 use crate::util::APP_USER_AGENT;

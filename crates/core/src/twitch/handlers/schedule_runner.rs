@@ -234,14 +234,18 @@ where
                     Ok(ReconcileControl::Continue) => continue,
                     Ok(ReconcileControl::Shutdown) => ReconcileControl::Shutdown,
                     Err(error) => {
-                        let _ = stop_and_join_all(&mut running).await;
+                        if let Err(stop_error) = stop_and_join_all(&mut running).await {
+                            warn!(error = ?stop_error, "Schedules orchestrator: child cleanup failed after reconcile error");
+                        }
                         return Err(error);
                     }
                 }
             }
             event = completion_rx.recv() => {
                 let Some(event) = event else {
-                    let _ = stop_and_join_all(&mut running).await;
+                    if let Err(stop_error) = stop_and_join_all(&mut running).await {
+                        warn!(error = ?stop_error, "Schedules orchestrator: child cleanup failed after completion channel closed");
+                    }
                     return Err(ScheduleChildError::CompletedUnexpectedly {
                         name: "schedule child completion channel".to_owned(),
                         detail: "completion sender closed while the orchestrator was running".to_owned(),
@@ -249,7 +253,9 @@ where
                     .into());
                 };
                 if let Err(error) = observe_completed_child(&mut running, event).await {
-                    let _ = stop_and_join_all(&mut running).await;
+                    if let Err(stop_error) = stop_and_join_all(&mut running).await {
+                        warn!(error = ?stop_error, "Schedules orchestrator: child cleanup failed after child fault");
+                    }
                     return Err(error);
                 }
                 continue;
@@ -279,6 +285,10 @@ async fn observe_completed_child(
         return Ok(());
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "the event's child was checked present above"
+    )]
     let mut child = running
         .remove(&event.name)
         .expect("completion event child was checked above");
@@ -426,9 +436,14 @@ where
         }
 
         let id = *next_child_id;
-        *next_child_id = next_child_id
+        #[expect(
+            clippy::expect_used,
+            reason = "a u64 generation counter cannot be exhausted in practice"
+        )]
+        let next_id = next_child_id
             .checked_add(1)
             .expect("schedule child generation counter exhausted");
+        *next_child_id = next_id;
         let child = spawn_schedule_child(
             id,
             name.clone(),
@@ -500,10 +515,12 @@ where
 
             // This channel is wake-up/classification only. The TaskGroup remains
             // the owner and is joined before the result is acted upon.
-            let _ = completion_tx.send(ScheduleCompletionEvent {
-                id,
-                name: event_name,
-            });
+            completion_tx
+                .send(ScheduleCompletionEvent {
+                    id,
+                    name: event_name,
+                })
+                .ok();
             completion
         })
         .await;
@@ -533,6 +550,10 @@ async fn join_schedule_child(
         });
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "exactly one completion was checked above"
+    )]
     let completion = completions
         .into_iter()
         .next()
@@ -585,6 +606,10 @@ fn classify_schedule_completions(
         });
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "exactly one completion was checked above"
+    )]
     let completion = completions
         .into_iter()
         .next()

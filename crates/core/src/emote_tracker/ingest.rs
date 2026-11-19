@@ -409,7 +409,9 @@ async fn run_eventapi_session(
                 if lifecycle.is_cancelled() {
                     return Ok(SessionEnd::Cancelled);
                 }
-                let _ = conn.sink.send(Message::Pong(payload)).await;
+                if let Err(error) = conn.sink.send(Message::Pong(payload)).await {
+                    warn!(?error, "failed to answer EventAPI ping");
+                }
             }
             _ => {}
         }

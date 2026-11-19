@@ -497,7 +497,7 @@ mod tests {
             },
         )
         .await;
-        let spans = obs.spans.lock().unwrap();
+        let spans = obs.spans.lock();
         assert!(
             spans.iter().any(|s| s.name == "tool noop"),
             "missing tool span in {spans:?}"

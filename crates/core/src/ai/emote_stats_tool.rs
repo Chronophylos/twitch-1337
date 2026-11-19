@@ -142,8 +142,7 @@ fn window_cutoff(days: u32) -> eyre::Result<Option<i64>> {
     let midnight = cutoff_date.at(0, 0, 0, 0);
     let cutoff = crate::util::BERLIN
         .to_ambiguous_timestamp(midnight)
-        .unambiguous()
-        .expect("Berlin midnight resolves unambiguously");
+        .unambiguous()?;
     Ok(Some(cutoff.as_millisecond()))
 }
 

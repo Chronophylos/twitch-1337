@@ -351,6 +351,10 @@ where
     };
     let catalog: Arc<dyn commands::CommandCatalog> = command_registry.clone();
     // ponytail: a second run_bot on the same Services keeps the first catalog.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "OnceLock::set only fails when an earlier run_bot already set the catalog, which is fine"
+    )]
     let _ = services.command_catalog.set(catalog);
 
     let lifecycle = Lifecycle::new();

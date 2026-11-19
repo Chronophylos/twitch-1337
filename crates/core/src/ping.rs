@@ -340,12 +340,12 @@ pub(crate) async fn run_ping_actor_until(
                 let result = manager
                     .create_ping(name, template, created_by, cooldown)
                     .await;
-                let _ = reply.send(result);
+                reply.send(result).ok();
                 publish_names(&manager, &names_tx);
             }
             PingCommand::DeletePing { name, reply } => {
                 let result = manager.delete_ping(&name).await;
-                let _ = reply.send(result);
+                reply.send(result).ok();
                 publish_names(&manager, &names_tx);
             }
             PingCommand::EditTemplate {
@@ -353,21 +353,27 @@ pub(crate) async fn run_ping_actor_until(
                 template,
                 reply,
             } => {
-                let _ = reply.send(manager.edit_template(&name, template).await);
+                reply
+                    .send(manager.edit_template(&name, template).await)
+                    .ok();
             }
             PingCommand::AddMember {
                 ping_name,
                 username,
                 reply,
             } => {
-                let _ = reply.send(manager.add_member(&ping_name, &username).await);
+                reply
+                    .send(manager.add_member(&ping_name, &username).await)
+                    .ok();
             }
             PingCommand::RemoveMember {
                 ping_name,
                 username,
                 reply,
             } => {
-                let _ = reply.send(manager.remove_member(&ping_name, &username).await);
+                reply
+                    .send(manager.remove_member(&ping_name, &username).await)
+                    .ok();
             }
             PingCommand::TryRecordTrigger {
                 ping_name,
@@ -379,7 +385,7 @@ pub(crate) async fn run_ping_actor_until(
                 let decision = manager
                     .try_record_trigger(&ping_name, &sender, default_cooldown, public)
                     .await;
-                let _ = reply.send(decision);
+                reply.send(decision).ok();
             }
             PingCommand::Snapshot { reply } => {
                 let views = manager
@@ -388,7 +394,7 @@ pub(crate) async fn run_ping_actor_until(
                     .iter()
                     .map(|(n, p)| PingView::from_name_ping(n, p))
                     .collect();
-                let _ = reply.send(views);
+                reply.send(views).ok();
             }
             PingCommand::GetOne { name, reply } => {
                 let view = manager
@@ -396,17 +402,19 @@ pub(crate) async fn run_ping_actor_until(
                     .pings
                     .get(&name)
                     .map(|p| PingView::from_name_ping(&name, p));
-                let _ = reply.send(view);
+                reply.send(view).ok();
             }
             PingCommand::ListForUser { username, reply } => {
-                let _ = reply.send(manager.list_pings_for_user_owned(&username));
+                reply
+                    .send(manager.list_pings_for_user_owned(&username))
+                    .ok();
             }
             PingCommand::IsMember {
                 ping_name,
                 username,
                 reply,
             } => {
-                let _ = reply.send(manager.is_member(&ping_name, &username));
+                reply.send(manager.is_member(&ping_name, &username)).ok();
             }
         }
     }
@@ -414,7 +422,7 @@ pub(crate) async fn run_ping_actor_until(
 
 fn publish_names(manager: &PingManager, tx: &watch::Sender<HashSet<String>>) {
     let names: HashSet<String> = manager.store.pings.keys().cloned().collect();
-    let _ = tx.send(names);
+    tx.send(names).ok();
 }
 
 fn validate_template(template: &str) -> Result<(), PingError> {

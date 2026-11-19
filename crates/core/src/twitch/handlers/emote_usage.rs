@@ -123,7 +123,7 @@ async fn spawn_usage_writer(
                 .catch_unwind()
                 .await
                 .unwrap_or(UsageIngestCompletion::Panicked);
-            let _ = completion_tx.send(completion);
+            completion_tx.send(completion).ok();
             completion
         })
         .await;
@@ -172,8 +172,12 @@ async fn fail_on_usage_writer_completion(
             completion: observed,
         };
     }
-    classify_usage_ingest_completion(completion, cancellation_expected)
-        .expect_err("an unsolicited usage-writer completion is a child fault")
+    // An unsolicited usage-writer completion is a child fault even when the
+    // writer reported a clean cancellation.
+    match classify_usage_ingest_completion(completion, cancellation_expected) {
+        Err(error) => error,
+        Ok(()) => UsageIngestError::CompletedUnexpectedly { completion },
+    }
 }
 
 fn classify_usage_ingest_completion(

@@ -379,12 +379,12 @@ async fn process_latency_sensitive_command(
     match cmd {
         TrackerCommand::Snapshot { reply } => {
             let now = clock.now_utc();
-            let _ = reply.send(build_flight_view(state, now));
+            reply.send(build_flight_view(state, now)).ok();
             None
         }
         TrackerCommand::DeleteFromWeb { identifier, reply } => {
             let removed = remove_flight_at(state, &identifier, data_dir, "web", clock).await;
-            let _ = reply.send(removed);
+            reply.send(removed).ok();
             None
         }
         other => Some(other),
@@ -894,6 +894,10 @@ async fn resolve_route_if_needed(
     }
 }
 
+#[expect(
+    clippy::panic,
+    reason = "infallible wrapper for integration tests; production uses try_poll_all_flights_with_commands, which returns the JoinError"
+)]
 pub async fn poll_all_flights_with_commands<T, L, P>(
     state: &mut FlightTrackerState,
     sender: &Arc<ChatSender<T, L>>,

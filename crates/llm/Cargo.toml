@@ -9,6 +9,7 @@ description = "Provider-agnostic LLM client (OpenAI, Ollama) used by twitch-1337
 [dependencies]
 async-trait = { workspace = true }
 indexmap = { workspace = true }
+parking_lot = { workspace = true }
 reqwest = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

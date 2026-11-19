@@ -44,6 +44,10 @@ fn freshness_bucket(seen_pos: Option<f64>) -> u64 {
 /// Pick the most-reliable copy of one aircraft: freshest `seen_pos` bucket,
 /// then highest `rssi`. On a full tie, keeps the first element (callers push
 /// in aggregator priority order, so the highest-priority backend wins).
+#[expect(
+    clippy::expect_used,
+    reason = "merge_aircraft only builds groups by pushing an aircraft"
+)]
 fn pick_winner(group: Vec<NearbyAircraft>) -> NearbyAircraft {
     group
         .into_iter()
@@ -83,6 +87,10 @@ fn merge_aircraft(per_backend: Vec<Vec<NearbyAircraft>>) -> Vec<NearbyAircraft> 
         }
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "every key in order was inserted into groups and is removed once"
+    )]
     let mut merged: Vec<NearbyAircraft> = order
         .into_iter()
         .map(|key| pick_winner(groups.remove(&key).expect("key came from groups")))
@@ -188,7 +196,7 @@ enum AdsbFetchError {
 impl AviationClient {
     fn live_backend_indices(&self) -> Vec<usize> {
         let now = Instant::now();
-        let health = self.health.lock().expect("health mutex poisoned");
+        let health = self.health.lock();
         health
             .iter()
             .enumerate()
@@ -199,7 +207,7 @@ impl AviationClient {
 
     fn park_backend(&self, index: usize, reason: &str) -> bool {
         let until = Instant::now() + self.adsb_cooldown;
-        let mut health = self.health.lock().expect("health mutex poisoned");
+        let mut health = self.health.lock();
         let Some(h) = health.get_mut(index) else {
             return false;
         };
@@ -211,7 +219,7 @@ impl AviationClient {
     }
 
     fn record_success(&self, index: usize) {
-        let mut health = self.health.lock().expect("health mutex poisoned");
+        let mut health = self.health.lock();
         if let Some(h) = health.get_mut(index) {
             h.error_streak = 0;
             h.last_park_reason = None;
@@ -222,7 +230,7 @@ impl AviationClient {
     /// `ERROR_STREAK_PARK`-th consecutive one.
     fn record_retryable_error(&self, index: usize) {
         let until = Instant::now() + self.adsb_cooldown;
-        let mut health = self.health.lock().expect("health mutex poisoned");
+        let mut health = self.health.lock();
         if let Some(h) = health.get_mut(index) {
             h.error_streak = h.error_streak.saturating_add(1);
             if h.error_streak >= ERROR_STREAK_PARK {
@@ -234,7 +242,7 @@ impl AviationClient {
 
     fn parked_backend_count(&self) -> usize {
         let now = Instant::now();
-        let health = self.health.lock().expect("health mutex poisoned");
+        let health = self.health.lock();
         health.iter().filter(|h| h.parked_until > now).count()
     }
 
@@ -245,10 +253,7 @@ impl AviationClient {
         last_provider_outcome: Option<&str>,
     ) {
         let now = Instant::now();
-        let mut last_logged = self
-            .last_adsb_aggregate_outage_log
-            .lock()
-            .expect("outage log mutex poisoned");
+        let mut last_logged = self.last_adsb_aggregate_outage_log.lock();
         if last_logged.is_some_and(|previous| {
             now.duration_since(previous) < ADSB_AGGREGATE_OUTAGE_LOG_COOLDOWN
         }) {
@@ -931,6 +936,10 @@ mod tests {
         // backend that keeps returning it parks after ERROR_STREAK_PARK strikes
         // and is no longer queried.
         for _ in 0..(ERROR_STREAK_PARK + 1) {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "only the error-streak side effect is under test; the 4xx error is expected"
+            )]
             let _ = client.get_aircraft_by_hex("3c6589").await;
         }
 

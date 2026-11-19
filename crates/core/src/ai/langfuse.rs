@@ -148,7 +148,9 @@ impl LangfuseHandle {
         if self.tx.send(ExporterCmd::Flush(done_tx)).await.is_err() {
             return;
         }
-        let _ = tokio::time::timeout(timeout, done_rx).await;
+        if tokio::time::timeout(timeout, done_rx).await.is_err() {
+            warn!(?timeout, "langfuse flush timed out");
+        }
     }
 
     /// Stop the exporter and synchronously confirm its task termination.
@@ -219,6 +221,10 @@ impl LangfuseHandle {
                     handle.abort();
                     // Abort is not completion confirmation. Join the aborted
                     // task before returning the finalization error.
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "the aborted task's JoinError is the expected cancellation; JoinTimeout is reported below"
+                    )]
                     let _ = handle.await;
                     if first_error.is_none() {
                         first_error = Some(LangfuseFinalizeError::JoinTimeout);
@@ -281,13 +287,13 @@ async fn exporter_loop(http: reqwest::Client, url: String, mut rx: mpsc::Receive
             }
             Some(ExporterCmd::Flush(done)) => {
                 post_batch(&http, &url, &mut batch).await;
-                let _ = done.send(());
+                done.send(()).ok();
             }
             Some(ExporterCmd::Close(done)) => {
                 // Finalizer ordering is explicit: flush has already completed,
                 // but drain anything that raced the close before terminating.
                 post_batch(&http, &url, &mut batch).await;
-                let _ = done.send(());
+                done.send(()).ok();
                 return;
             }
             Some(cmd) => {

@@ -1,5 +1,7 @@
-#![allow(
+#![expect(
     clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
     reason = "build script: a panic is a build failure on committed data"
 )]
 use csv::ReaderBuilder;

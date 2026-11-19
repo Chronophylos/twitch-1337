@@ -53,7 +53,7 @@ impl FakeClock {
         let mut pending = Vec::with_capacity(waiters.len());
         for w in waiters.drain(..) {
             if w.target <= now {
-                let _ = w.tx.send(());
+                w.tx.send(()).ok();
             } else {
                 pending.push(w);
             }
@@ -75,6 +75,6 @@ impl Clock for FakeClock {
         }
         let (tx, rx) = oneshot::channel();
         self.waiters.lock().unwrap().push(Waiter { target, tx });
-        let _ = rx.await;
+        rx.await.ok();
     }
 }

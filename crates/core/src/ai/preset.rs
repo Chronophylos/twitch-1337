@@ -64,6 +64,10 @@ pub struct Preset {
 /// The baked preset. Parsing and template compilation happen once; both are
 /// failures in committed data, so they panic — `preset_parses` in the tests
 /// below touches this and turns any such failure into a CI failure instead.
+#[expect(
+    clippy::expect_used,
+    reason = "baked preset is committed data, checked by the preset_parses test"
+)]
 static PRESET: LazyLock<Preset> = LazyLock::new(|| Preset::load().expect("baked preset is valid"));
 
 pub fn preset() -> &'static Preset {
