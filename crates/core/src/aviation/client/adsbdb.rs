@@ -6,6 +6,7 @@ use std::time::Duration;
 use eyre::{Result, WrapErr as _};
 use tracing::{debug, warn};
 
+use crate::aviation::FlightIdentifier;
 use crate::aviation::location::{airline_table, is_iata_flight_number};
 use crate::aviation::types::{AdsbDbAirlineResponse, AdsbDbResponse, FlightRoute};
 
@@ -14,7 +15,13 @@ use super::AviationClient;
 const AIRLINE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl AviationClient {
+    /// Skips the lookup (`Ok(None)`) for a callsign outside the ICAO charset:
+    /// feed values are untrusted and land in the URL path.
     pub async fn get_flight_route(&self, callsign: &str) -> Result<Option<FlightRoute>> {
+        if !FlightIdentifier::is_valid_callsign(callsign) {
+            debug!(callsign = %callsign, "Skipping adsbdb route lookup for invalid callsign");
+            return Ok(None);
+        }
         let url = format!("{}/callsign/{callsign}", self.adsbdb_base_url);
         debug!(callsign = %callsign, "Fetching flight route from adsbdb");
 
@@ -175,5 +182,32 @@ mod tests {
             .await
             .expect("4xx is a sanitized provider outcome");
         assert!(route.is_none());
+    }
+
+    /// A feed callsign outside the ICAO charset never reaches the adsbdb URL.
+    #[tokio::test]
+    async fn invalid_feed_callsign_never_hits_route_url() {
+        crate::install_crypto_provider();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = AviationClient::new_with_adsb_aggregators(
+            Vec::new(),
+            server.uri(),
+            "http://nominatim.test".to_string(),
+            reqwest::Client::new(),
+        );
+
+        for callsign in ["../admin", "DLH1?x=1", "DLH12345X", "DLH 12"] {
+            let route = client
+                .get_flight_route(callsign)
+                .await
+                .expect("invalid callsign is skipped, not an error");
+            assert!(route.is_none());
+        }
     }
 }

@@ -25,11 +25,14 @@ use super::{
     metadata::{
         apply_aviationstack_metadata, metadata_callsign, normalize_flight_code, seed_flight_aliases,
     },
-    schedule::poll_readiness,
+    schedule::{is_pending_unknown, poll_readiness},
     state::save_tracker_state,
 };
 
-use super::{MAX_FLIGHTS_PER_USER, MAX_TRACKED_FLIGHTS};
+use super::{
+    MAX_FLIGHTS_PER_USER, MAX_PENDING_UNKNOWN_FLIGHTS, MAX_PENDING_UNKNOWN_PER_USER,
+    MAX_TRACKED_FLIGHTS,
+};
 
 use super::advance::{
     Emit, FlightUpdate, Observation, PollOutcome, RemovalReason, apply_route_outcome,
@@ -736,6 +739,11 @@ async fn handle_track<T, L>(
         return;
     }
 
+    if let Some(rejection) = pending_unknown_rejection(state, &flight) {
+        sender.reply(reply_to, rejection).await;
+        return;
+    }
+
     resolve_route_if_needed(&mut flight, aviation_client, data_dir, now).await;
 
     let mut response = track_started_response(
@@ -760,6 +768,34 @@ async fn handle_track<T, L>(
 
     info!(identifier = %identifier, requested_by = %requested_by, "Flight tracking started");
     sender.reply(reply_to, response).await;
+}
+
+/// A pending-unknown flight (no ADS-B sighting, no Aviationstack schedule)
+/// holds a slot for up to 24 h, so their total and per-user count is capped
+/// below the slot limits: unknown callsigns cannot fill every slot.
+fn pending_unknown_rejection(state: &FlightTrackerState, flight: &TrackedFlight) -> Option<String> {
+    if !is_pending_unknown(flight) {
+        return None;
+    }
+    let identifier = &flight.identifier;
+    let (mut total, mut by_user) = (0, 0);
+    for f in state.flights.iter().filter(|f| is_pending_unknown(f)) {
+        total += 1;
+        if f.tracked_by == flight.tracked_by {
+            by_user += 1;
+        }
+    }
+    if by_user >= MAX_PENDING_UNKNOWN_PER_USER {
+        return Some(format!(
+            "{identifier} nicht gefunden und du wartest schon auf einen unbekannten Flug FDM"
+        ));
+    }
+    if total >= MAX_PENDING_UNKNOWN_FLIGHTS {
+        return Some(format!(
+            "{identifier} nicht gefunden und schon {MAX_PENDING_UNKNOWN_FLIGHTS} unbekannte Flüge warten auf ADS-B FDM"
+        ));
+    }
+    None
 }
 
 #[expect(

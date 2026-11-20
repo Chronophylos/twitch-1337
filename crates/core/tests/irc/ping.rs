@@ -116,3 +116,27 @@ async fn ping_join_missing_reports_not_found() {
 
     bot.shutdown().await;
 }
+
+/// `!p join` / `!p leave` share a per-user cooldown: a second toggle inside
+/// the window is refused instead of rewriting pings.ron again.
+#[tokio::test]
+async fn ping_join_within_cooldown_gets_cooldown_reply() {
+    let mut bot = TestBotBuilder::new().spawn().await;
+
+    bot.send_as_broadcaster("broadcaster", "!p create hi yo {mentions}")
+        .await;
+    let _ = bot.expect_say(Duration::from_secs(2)).await;
+
+    bot.send("alice", "!p join hi").await;
+    let first = bot.expect_say(Duration::from_secs(2)).await;
+    assert!(first.contains("Hab ich gemacht"), "first join: {first}");
+
+    bot.send("alice", "!p leave hi").await;
+    let second = bot.expect_say(Duration::from_secs(2)).await;
+    assert!(
+        second.contains("Bitte warte noch") && second.contains("Waiting"),
+        "expected cooldown reply, got: {second}"
+    );
+
+    bot.shutdown().await;
+}

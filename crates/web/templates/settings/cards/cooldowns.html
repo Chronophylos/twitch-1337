@@ -21,5 +21,6 @@
     {% call m::num_row("cooldowns", self.knob("cooldowns.doener"), "Per-user cooldown for !dpi and !döner (!doener); both use Döneratlas.", current.cooldowns.doener, defaults.cooldowns.doener, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.spoiler"), "Per-user cooldown for !spoiler.", current.cooldowns.spoiler, defaults.cooldowns.spoiler, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.servers"), "Per-user cooldown for !servers.", current.cooldowns.servers, defaults.cooldowns.servers, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", self.knob("cooldowns.ping_membership"), "Per-user cooldown for !p join and !p leave.", current.cooldowns.ping_membership, defaults.cooldowns.ping_membership, "s") %}{% endcall %}
   </div>
 </section>

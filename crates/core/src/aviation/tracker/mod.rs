@@ -29,6 +29,14 @@ pub const MAX_TRACKED_FLIGHTS: usize = 12;
 /// Maximum number of flights a single user can track.
 pub const MAX_FLIGHTS_PER_USER: usize = 3;
 
+/// Most flights that may sit pending on ADS-B with no Aviationstack schedule
+/// (each holds its slot up to 24 h), so unknown callsigns cannot fill every
+/// slot.
+pub const MAX_PENDING_UNKNOWN_FLIGHTS: usize = MAX_TRACKED_FLIGHTS / 2;
+
+/// Most pending-unknown flights a single user can hold.
+pub const MAX_PENDING_UNKNOWN_PER_USER: usize = 1;
+
 /// No data threshold before declaring tracking lost.
 pub const TRACKING_LOST_THRESHOLD: Duration = Duration::from_secs(300);
 /// Time after tracking lost before auto-removing.
@@ -74,7 +82,7 @@ impl FlightIdentifier {
         if Self::is_valid_icao24_hex(&input) {
             return Ok(FlightIdentifier::Hex(input));
         }
-        if input.len() > 8 || !input.chars().all(|c| c.is_ascii_alphanumeric()) {
+        if !Self::is_valid_callsign(&input) {
             eyre::bail!("Ungültiges callsign/hex");
         }
         Ok(FlightIdentifier::Callsign(input))
@@ -82,6 +90,15 @@ impl FlightIdentifier {
 
     pub(crate) fn is_valid_icao24_hex(value: &str) -> bool {
         value.len() == 6 && value.chars().all(|c| c.is_ascii_hexdigit())
+    }
+
+    /// ICAO callsign charset: ASCII alphanumeric, 1..=8 chars. Anything else
+    /// (path separators, `?`, `#`, `%`) could forge URL segments when the
+    /// value is interpolated into an upstream endpoint, so every callsign
+    /// that reaches an ADS-B or adsbdb URL must pass this check, whether it
+    /// came from chat or from a feed.
+    pub(crate) fn is_valid_callsign(value: &str) -> bool {
+        (1..=8).contains(&value.len()) && value.chars().all(|c| c.is_ascii_alphanumeric())
     }
 
     /// Returns the display string (the callsign or hex value).

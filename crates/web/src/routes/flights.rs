@@ -74,7 +74,9 @@ enum TrackerResult<R> {
 }
 
 /// Round-trips one tracker command and returns the reply, or a status when
-/// aviation is disabled, the channel is closed, or the reply times out.
+/// aviation is disabled, the channel is closed, or the round trip times out.
+/// One deadline covers both the enqueue and the reply, so a saturated tracker
+/// queue yields the busy placeholder instead of parking the handler.
 async fn tracker_request<R>(
     state: &WebState,
     build_cmd: impl FnOnce(oneshot::Sender<R>) -> TrackerCommand,
@@ -83,12 +85,13 @@ async fn tracker_request<R>(
         return TrackerResult::Unavailable;
     };
     let (reply_tx, reply_rx) = oneshot::channel();
-    if tx.send(build_cmd(reply_tx)).await.is_err() {
-        return TrackerResult::Unavailable;
-    }
-    match tokio::time::timeout(TRACKER_TIMEOUT, reply_rx).await {
-        Ok(Ok(value)) => TrackerResult::Ok(value),
-        Ok(Err(_)) => TrackerResult::Unavailable,
+    let round_trip = async {
+        tx.send(build_cmd(reply_tx)).await.ok()?;
+        reply_rx.await.ok()
+    };
+    match tokio::time::timeout(TRACKER_TIMEOUT, round_trip).await {
+        Ok(Some(value)) => TrackerResult::Ok(value),
+        Ok(None) => TrackerResult::Unavailable,
         Err(_) => TrackerResult::Timeout,
     }
 }

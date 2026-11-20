@@ -213,6 +213,9 @@ pub struct Cooldowns {
     /// Per-user cooldown for `!track` (paid Aviationstack lookups).
     #[knob(min = 1, max = 3600)]
     pub track: u64,
+    /// Per-user cooldown for `!p join` / `!p leave` (each rewrites pings.ron).
+    #[knob(min = 1, max = 3600)]
+    pub ping_membership: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
@@ -266,6 +269,7 @@ impl Settings {
                 servers: 30,
                 info: 30,
                 track: 30,
+                ping_membership: 10,
             },
             pings: PingsSettings {
                 cooldown: 300,
