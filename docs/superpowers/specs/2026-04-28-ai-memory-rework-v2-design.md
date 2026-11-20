@@ -375,7 +375,7 @@ Trust escalation chain: regular `!ai` → own user file → auto-injected next t
 - Transcript injected inside the nonce-fenced `<<<FILE path=transcripts/<date>.md nonce=…>>>` block (Prompt Composition).
 - Dreamer system prompt classifies fence content as data, never instructions (Daily Ritual rule).
 - SOUL writes require multi-day cumulative evidence + a justification log line.
-- Inject-time fence rescan: any line in the transcript that matches `<<<FILE ` or `<<<ENDFILE ` is line-corrupted at inject (replaced with `<corrupt: rejected>`).
+- Inject-time fence defusing: sentinels in the transcript are neutralized in place (`<<<` → `<<‹`, `neutralize_sentinels`) so one viewer's line cannot reject the whole day's transcript.
 
 **T2 — State file as cross-user prompt injector.** Regulars can `write_state(slug, body)` with arbitrary prose; injected into every chat turn channel-wide. Mitigations:
 

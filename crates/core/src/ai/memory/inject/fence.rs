@@ -105,3 +105,12 @@ pub fn scrub_for_inject(body: &str) -> String {
     }
     body.to_string()
 }
+
+/// Defuse fence sentinels inside untrusted text (chat transcripts) without
+/// dropping it. Every `<<<` becomes `<<‹`, so no `<<<FILE` / `<<<ENDFILE`
+/// can survive: `str::replace` scans left to right without overlap, so no
+/// three `<` in a row are left behind. Unlike [`scrub_for_inject`], one
+/// viewer's line cannot blank everyone else's.
+pub fn neutralize_sentinels(text: &str) -> String {
+    text.replace("<<<", "<<‹")
+}

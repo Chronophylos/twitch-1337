@@ -11,7 +11,9 @@ mod messages;
 mod recent_chat;
 
 pub use aurora::{BuildOpts, ChatTurnContext, InvocationChannel, build_chat_turn_context};
-pub use fence::{FenceLabel, body_with_links, fence_block, fresh_nonce, scrub_for_inject};
+pub use fence::{
+    FenceLabel, body_with_links, fence_block, fresh_nonce, neutralize_sentinels, scrub_for_inject,
+};
 pub use grok::{GrokTurnContext, ManifestOpts, build_grok_turn_context};
 pub use messages::render_recap_section;
 pub(crate) use recent_chat::format_entry_line;
