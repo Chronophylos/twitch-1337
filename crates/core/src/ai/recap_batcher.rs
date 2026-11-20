@@ -368,7 +368,6 @@ struct TickSnapshot {
     path: std::path::PathBuf,
     file: RecapFile,
     primary_through_seq: u64,
-    ai_through_seq: u64,
 }
 
 pub(crate) struct BatcherTickParams<'a> {
@@ -377,13 +376,12 @@ pub(crate) struct BatcherTickParams<'a> {
     pub llm: &'a dyn LlmClient,
     pub observer: Option<&'a Arc<crate::ai::langfuse::LangfuseHandle>>,
     pub primary: &'a ChatHistory,
-    pub ai: Option<&'a ChatHistory>,
     pub self_logins: &'a [String],
     pub last_seen_profile: &'a mut Option<String>,
     pub backoff: &'a mut BatcherBackoff,
 }
 
-/// One batcher iteration: snapshot settings, optionally flush each channel.
+/// One batcher iteration: snapshot settings, optionally flush the chat log.
 pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
     let BatcherTickParams {
         handle,
@@ -391,7 +389,6 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
         llm,
         observer,
         primary,
-        ai,
         self_logins,
         last_seen_profile,
         backoff,
@@ -434,9 +431,7 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
     let service_tier = prof.service_tier.clone();
 
     let n = snap.ai.history.n;
-    let ai_n = snap.ai.history.ai_channel_n;
     let primary_capacity = snap.ai.history.length as usize;
-    let ai_capacity = snap.ai.history.ai_channel_length as usize;
     let batch_size = snap.ai.recap.batch_size as usize;
     let max_notes = snap.ai.recap.max_notes as usize;
     let merge_width = snap.ai.recap.merge_width as usize;
@@ -446,7 +441,6 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
         path,
         mut file,
         mut primary_through_seq,
-        mut ai_through_seq,
     } = {
         let guard = handle.inner.lock().await;
         if guard.parked {
@@ -456,7 +450,6 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
             path: guard.path.clone(),
             file: guard.file.clone(),
             primary_through_seq: guard.primary_through_seq,
-            ai_through_seq: guard.ai_through_seq,
         }
     };
 
@@ -494,47 +487,9 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
         }
     }
 
-    if let Some(ai_hist) = ai {
-        let ai_entries = ai_hist.lock().await.snapshot();
-        match try_flush_channel(FlushParams {
-            input: FlushInput {
-                log: file.ai_channel.clone(),
-                through_seq: ai_through_seq,
-                entries: ai_entries,
-                capacity: ai_capacity,
-                n: ai_n,
-                batch_size,
-                max_notes,
-                merge_width,
-            },
-            llm,
-            observer,
-            model: &model,
-            timeout,
-            reasoning_effort: reasoning_effort.as_deref(),
-            service_tier: service_tier.as_deref(),
-            self_logins,
-        })
-        .await
-        {
-            FlushAttempt::Idle => {}
-            FlushAttempt::LlmFailed => {
-                let mut guard = handle.inner.lock().await;
-                record_failure(&mut guard, backoff);
-                return;
-            }
-            FlushAttempt::Updated(out) => {
-                file.ai_channel = out.log;
-                ai_through_seq = out.through_seq;
-            }
-        }
-    }
-
     let dirty = {
         let guard = handle.inner.lock().await;
-        guard.file != file
-            || guard.primary_through_seq != primary_through_seq
-            || guard.ai_through_seq != ai_through_seq
+        guard.file != file || guard.primary_through_seq != primary_through_seq
     };
     if !dirty {
         return;
@@ -550,22 +505,16 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
     let mut guard = handle.inner.lock().await;
     guard.file = file;
     guard.primary_through_seq = primary_through_seq;
-    guard.ai_through_seq = ai_through_seq;
     guard.failures = 0;
     backoff.on_success();
 }
 
 /// Background loop: never blocks chat turns.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "services plus optional Langfuse observer"
-)]
 pub async fn run_recap_batcher(
     handle: RecapHandle,
     settings: SettingsHandle,
     registry: Arc<crate::llm_factory::LlmRegistry>,
     primary: ChatHistory,
-    ai: Option<ChatHistory>,
     self_logins: Vec<String>,
     shutdown: Arc<Notify>,
     langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
@@ -609,7 +558,6 @@ pub async fn run_recap_batcher(
                     llm: client.as_ref(),
                     observer: langfuse.as_ref(),
                     primary: &primary,
-                    ai: ai.as_ref(),
                     self_logins: &self_logins,
                     last_seen_profile: &mut last_seen_profile,
                     backoff: &mut backoff,
@@ -709,10 +657,7 @@ mod tests {
 
     /// Primary buffer with three viewers and one flush-eligible Grok line.
     async fn seeded_primary(settings: &SettingsHandle) -> Arc<Mutex<ChatHistoryBuffer>> {
-        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(
-            settings.clone(),
-            crate::ai::chat_history::primary_history_capacity,
-        )));
+        let primary = Arc::new(Mutex::new(ChatHistoryBuffer::new(settings.clone())));
         {
             let mut buf = primary.lock().await;
             buf.push_user("v1", "a");
@@ -774,7 +719,6 @@ mod tests {
                 llm: &llm,
                 observer: None,
                 primary: &primary,
-                ai: None,
                 self_logins: &[],
                 last_seen_profile: &mut last_seen,
                 backoff: &mut backoff,
@@ -791,7 +735,6 @@ mod tests {
             llm: &llm,
             observer: None,
             primary: &primary,
-            ai: None,
             self_logins: &[],
             last_seen_profile: &mut last_seen,
             backoff: &mut backoff,
@@ -901,7 +844,7 @@ mod tests {
 
     #[tokio::test]
     async fn render_suffix_while_batcher_on_llm_does_not_block() {
-        use crate::ai::recap::{RecapChannel, RecapHandle};
+        use crate::ai::recap::RecapHandle;
 
         let dir = tempfile::tempdir().unwrap();
         let handle = RecapHandle::load(dir.path().to_path_buf()).await;
@@ -929,7 +872,6 @@ mod tests {
                 llm: &llm,
                 observer: None,
                 primary: &primary,
-                ai: None,
                 self_logins: &[],
                 last_seen_profile: &mut last_seen,
                 backoff: &mut backoff,
@@ -938,9 +880,7 @@ mod tests {
         });
 
         let started = Instant::now();
-        let suffix = handle
-            .render_suffix(RecapChannel::Primary, "main", "ai", 8)
-            .await;
+        let suffix = handle.render_suffix("main", 8).await;
         assert!(started.elapsed() < Duration::from_millis(100));
         assert!(suffix.contains("live"));
         tick.await.unwrap();
@@ -971,7 +911,6 @@ mod tests {
             llm: &OkLlm,
             observer: None,
             primary: &primary,
-            ai: None,
             self_logins: &[],
             last_seen_profile: &mut last_seen,
             backoff: &mut backoff,

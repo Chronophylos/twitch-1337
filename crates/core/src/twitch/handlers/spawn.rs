@@ -631,7 +631,6 @@ pub(crate) fn spawn_handlers<T, L>(
                     settings,
                     registry,
                     ctx.primary_history.clone(),
-                    ctx.ai_channel_history.clone(),
                     self_logins,
                     shutdown,
                     observer,

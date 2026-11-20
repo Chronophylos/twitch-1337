@@ -11,7 +11,7 @@ use twitch_irc::{login::LoginCredentials, message::ServerMessage, transport::Tra
 
 use crate::{
     ChatHistory, Services,
-    ai::command::{AI_TRIGGER, GROK_ALIAS_TRIGGER, is_ai_trigger},
+    ai::command::{AI_TRIGGER, GROK_ALIAS_TRIGGER},
     commands::{
         self, CommandAdmissionError, CommandAdmissionSender, CommandCancellation, CommandEntry,
         CommandId, CommandInvocation, CommandRegistry, ExecutionClass,
@@ -283,27 +283,13 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    // Channel gating and history buffers are read from `Services` once, up
-    // front. `admin_channel` is a restart-required settings knob. One read:
-    // the buffers' own ai_channel login when they exist; the settings
-    // snapshot only when there are no buffers at all (AI or history off) — a
-    // mid-boot dashboard change can then only flip command gating, never
-    // mis-route history.
+    // Channel gating and the history buffer are read once, up front.
+    // `admin_channel` is a restart-required settings knob.
     let admin_channel = snapshot.twitch.admin_channel.clone();
-    let ai_channel = match &services.chat_ctx {
-        Some(ctx) => ctx.ai_channel_login.clone(),
-        None => snapshot.twitch.ai_channel.clone(),
-    };
-    let (primary_history_for_dispatch, ai_channel_history_for_dispatch) = services
+    let history_for_dispatch: Option<ChatHistory> = services
         .chat_ctx
         .as_ref()
-        .map(|ctx| {
-            (
-                Some(ctx.primary_history.clone()),
-                ctx.ai_channel_history.clone(),
-            )
-        })
-        .unwrap_or((None, None));
+        .map(|ctx| ctx.primary_history.clone());
     let suspension_manager = services.suspension.clone();
     let echo = services.echo.clone();
 
@@ -323,10 +309,6 @@ where
                     continue;
                 };
 
-                let is_ai_channel = ai_channel
-                    .as_ref()
-                    .is_some_and(|ch| privmsg.channel_login == *ch);
-
                 // In the admin channel, only the broadcaster can use commands.
                 if let Some(ref admin_ch) = admin_channel
                     && privmsg.channel_login == *admin_ch
@@ -335,16 +317,15 @@ where
                     continue;
                 }
 
-                // Record message in the appropriate chat history buffer.
+                // Record the message in the chat history buffer (never the
+                // admin channel's).
                 let target_buffer: Option<&ChatHistory> = if admin_channel
                     .as_ref()
                     .is_some_and(|ch| privmsg.channel_login == *ch)
                 {
                     None
-                } else if is_ai_channel {
-                    ai_channel_history_for_dispatch.as_ref()
                 } else {
-                    primary_history_for_dispatch.as_ref()
+                    history_for_dispatch.as_ref()
                 };
                 let is_mouth = echo.is_mouth(&privmsg.sender.id, &privmsg.sender.login);
                 let skip_history = is_mouth
@@ -373,12 +354,6 @@ where
 
                 let words: Vec<&str> = privmsg.message_text.split_whitespace().collect();
                 if let Some((command_id, entry, inv)) = find_enabled_command(&registry, &words) {
-                    // In the ai channel, only `!ai` / `@grok` are reachable as
-                    // commands. Follow-ups are handled below, after no command
-                    // matched, so they still get through.
-                    if is_ai_channel && !is_ai_trigger(inv.trigger) {
-                        continue;
-                    }
                     dispatch_command(CommandDispatch {
                         command_id,
                         entry,
@@ -402,9 +377,6 @@ where
                     && rest.len() != words.len()
                     && let Some((command_id, entry, inv)) = find_enabled_command(&registry, rest)
                 {
-                    if is_ai_channel && !is_ai_trigger(inv.trigger) {
-                        continue;
-                    }
                     dispatch_command(CommandDispatch {
                         command_id,
                         entry,

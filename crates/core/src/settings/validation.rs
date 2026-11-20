@@ -11,7 +11,7 @@ use super::{AiProvider, AiSettings, FieldError, ProfileKind, Settings};
 
 /// Bootstrap-side context required for cross-field validation. `channel`
 /// is the IRC channel from config.toml, used to enforce that
-/// `twitch.admin_channel` and `twitch.ai_channel` differ from it.
+/// `twitch.admin_channel` differs from it.
 #[derive(Debug, Clone)]
 pub struct ValidationContext {
     pub channel: String,
@@ -39,36 +39,19 @@ impl Settings {
         self.check_knob_ranges("", &mut errs);
         validate_ai(&self.ai, validate_agent_profile_targets, &mut errs);
         validate_spoiler(self, validate_agent_profile_targets, &mut errs);
-        for (field, val) in [
-            ("twitch.admin_channel", self.twitch.admin_channel.as_deref()),
-            ("twitch.ai_channel", self.twitch.ai_channel.as_deref()),
-        ] {
-            if let Some(v) = val {
-                let t = v.trim();
-                if t.is_empty() {
-                    errs.push(FieldError {
-                        field: field.into(),
-                        message: "must not be blank when set".into(),
-                    });
-                } else if t == ctx.channel {
-                    errs.push(FieldError {
-                        field: field.into(),
-                        message: format!("must differ from twitch.channel ({:?})", ctx.channel),
-                    });
-                }
+        if let Some(v) = self.twitch.admin_channel.as_deref() {
+            let t = v.trim();
+            if t.is_empty() {
+                errs.push(FieldError {
+                    field: "twitch.admin_channel".into(),
+                    message: "must not be blank when set".into(),
+                });
+            } else if t == ctx.channel {
+                errs.push(FieldError {
+                    field: "twitch.admin_channel".into(),
+                    message: format!("must differ from twitch.channel ({:?})", ctx.channel),
+                });
             }
-        }
-        if let (Some(ad), Some(ai)) = (
-            self.twitch.admin_channel.as_deref(),
-            self.twitch.ai_channel.as_deref(),
-        ) && !ad.trim().is_empty()
-            && !ai.trim().is_empty()
-            && ad.trim() == ai.trim()
-        {
-            errs.push(FieldError {
-                field: "twitch.ai_channel".into(),
-                message: "must differ from twitch.admin_channel".into(),
-            });
         }
         for (idx, id) in self.twitch.hidden_admins.iter().enumerate() {
             if id.trim().is_empty() {
@@ -189,19 +172,6 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
             format!(
                 "must be >= n + batch_size ({} < {} + {})",
                 ai.history.length, ai.history.n, ai.recap.batch_size
-            ),
-        );
-    }
-    if ai.history.ai_channel_length > 0
-        && ai.history.ai_channel_length
-            < ai.history.ai_channel_n.saturating_add(ai.recap.batch_size)
-    {
-        err(
-            errs,
-            "ai.history.ai_channel_length",
-            format!(
-                "must be >= ai_channel_n + batch_size ({} < {} + {})",
-                ai.history.ai_channel_length, ai.history.ai_channel_n, ai.recap.batch_size
             ),
         );
     }
@@ -925,19 +895,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_ai_channel_equal_to_admin_channel() {
-        let mut s = Settings::compiled_defaults();
-        s.twitch.admin_channel = Some("admins".into());
-        s.twitch.ai_channel = Some("admins".into());
-        let errs = s
-            .validate(&ValidationContext {
-                channel: "main".into(),
-            })
-            .expect_err("must fail");
-        assert!(errs.iter().any(|e| e.field == "twitch.ai_channel"));
-    }
-
-    #[test]
     fn validate_rejects_suspend_out_of_range() {
         let mut s = Settings::compiled_defaults();
         s.suspend.default_duration_secs = 0;
@@ -1071,27 +1028,13 @@ mod tests {
     }
 
     #[test]
-    fn validate_both_channels_blank_produces_two_errors_not_three() {
+    fn validate_rejects_blank_admin_channel() {
         let mut s = Settings::compiled_defaults();
         s.twitch.admin_channel = Some("".into());
-        s.twitch.ai_channel = Some("".into());
-        let errs = s.validate(&ctx()).expect_err("blank channels must fail");
-        // Exactly one error per blank channel, no spurious "must differ" entry.
+        let errs = s.validate(&ctx()).expect_err("blank channel must fail");
         assert!(
             errs.iter().any(|e| e.field == "twitch.admin_channel"),
             "expected error for blank admin_channel; got {errs:?}"
-        );
-        assert!(
-            errs.iter().any(|e| e.field == "twitch.ai_channel"),
-            "expected error for blank ai_channel; got {errs:?}"
-        );
-        let differ_errors = errs
-            .iter()
-            .filter(|e| e.message.contains("must differ from twitch.admin_channel"))
-            .count();
-        assert_eq!(
-            differ_errors, 0,
-            "spurious 'must differ' error must not fire when both channels are blank"
         );
     }
 

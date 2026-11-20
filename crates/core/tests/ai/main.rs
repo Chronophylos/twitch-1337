@@ -8,7 +8,6 @@
 mod common;
 
 mod ai;
-mod ai_channel;
 mod ai_followup;
 mod ai_mouth;
 mod ai_profile_switching;

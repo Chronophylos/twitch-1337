@@ -4,9 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use super::*;
-use crate::ai::chat_history::{
-    ChatHistoryBuffer, ChatHistoryEntry, ChatHistorySource, primary_history_capacity,
-};
+use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry, ChatHistorySource};
 use crate::ai::memory::store::{MemoryStore, UserIdentity};
 use crate::ai::memory::types::FileKind;
 use crate::settings::test_handle;
@@ -114,10 +112,7 @@ async fn test_store() -> (MemoryStore, tempfile::TempDir) {
 }
 
 fn history_buffer() -> Arc<Mutex<ChatHistoryBuffer>> {
-    Arc::new(Mutex::new(ChatHistoryBuffer::new(
-        test_handle(),
-        primary_history_capacity,
-    )))
+    Arc::new(Mutex::new(ChatHistoryBuffer::new(test_handle())))
 }
 
 /// Baseline options: no history, no speaker, 16 KiB budget, Recap off.
@@ -128,18 +123,13 @@ fn build_opts() -> BuildOpts {
         nonce: "n00000000000000nn".into(),
         primary_history: None,
         primary_login: "chan".into(),
-        ai_channel_history: None,
-        ai_channel_login: None,
-        invocation_channel: InvocationChannel::Primary,
         current_agent: Agent::Aurora,
         self_logins: Vec::new(),
         speaker_login: String::new(),
         recap_sheet_logins: BTreeSet::new(),
         n: 200,
-        ai_channel_n: 200,
         batch_size: 40,
         recap_through_seq: 0,
-        ai_channel_recap_through_seq: 0,
         recap_enabled: false,
     }
 }
@@ -164,7 +154,6 @@ async fn ctx_with_history(recap_enabled: bool) -> ChatTurnContext {
             self_logins: vec!["aurora".into()],
             speaker_login: "carol".into(),
             n: 2,
-            ai_channel_n: 2,
             recap_enabled,
             ..build_opts()
         },
@@ -205,7 +194,6 @@ async fn grok_tail_keeps_grok_not_aurora() {
             self_logins: vec!["aurora".into(), "grok".into()],
             speaker_login: "carol".into(),
             n: 2,
-            ai_channel_n: 2,
             ..build_opts()
         },
     )
@@ -241,7 +229,6 @@ async fn stretch_caps_at_n_plus_batch_size() {
             primary_history: Some(buf),
             speaker_login: "viewer19".into(),
             n: 2,
-            ai_channel_n: 2,
             batch_size: 3,
             recap_enabled: true,
             ..build_opts()
@@ -278,7 +265,6 @@ async fn recap_off_keeps_only_tail_and_latest_own_line() {
             self_logins: vec!["aurora".into()],
             speaker_login: "bob".into(),
             n: 2,
-            ai_channel_n: 2,
             ..build_opts()
         },
     )
@@ -594,51 +580,11 @@ async fn build_chat_turn_context_drops_oldest_users_when_over_budget() {
 }
 
 #[tokio::test]
-async fn build_chat_turn_context_renders_two_history_sections_invocation_first() {
+async fn build_chat_turn_context_renders_history_into_recent_chat_only() {
     let (store, _tmp) = test_store().await;
 
     let primary = history_buffer();
     primary.lock().await.push_user("alice", "hello primary");
-    let ai = history_buffer();
-    ai.lock().await.push_user("bob", "hello ai");
-
-    let body = build_chat_turn_context(
-        &store,
-        BuildOpts {
-            inject_byte_budget: 24576,
-            primary_history: Some(primary.clone()),
-            primary_login: "main".into(),
-            ai_channel_history: Some(ai.clone()),
-            ai_channel_login: Some("ai_chan".into()),
-            invocation_channel: InvocationChannel::AiChannel,
-            ..build_opts()
-        },
-    )
-    .await
-    .unwrap();
-
-    let pri_idx = body
-        .recent_chat
-        .find("Recent chat (#main)")
-        .expect("primary header");
-    let ai_idx = body
-        .recent_chat
-        .find("Recent chat (#ai_chan)")
-        .expect("ai header");
-    assert!(ai_idx < pri_idx, "invocation channel must come first");
-    assert!(body.recent_chat.contains("alice: hello primary"));
-    assert!(body.recent_chat.contains("bob: hello ai"));
-    assert!(!body.memory.contains("Recent chat"));
-    assert!(!body.scratch.contains("Recent chat"));
-}
-
-#[tokio::test]
-async fn build_chat_turn_context_omits_empty_history_sections() {
-    let (store, _tmp) = test_store().await;
-
-    let primary = history_buffer();
-    primary.lock().await.push_user("alice", "hello");
-    let ai = history_buffer(); // empty
 
     let body = build_chat_turn_context(
         &store,
@@ -646,8 +592,6 @@ async fn build_chat_turn_context_omits_empty_history_sections() {
             inject_byte_budget: 24576,
             primary_history: Some(primary),
             primary_login: "main".into(),
-            ai_channel_history: Some(ai),
-            ai_channel_login: Some("ai_chan".into()),
             ..build_opts()
         },
     )
@@ -655,7 +599,9 @@ async fn build_chat_turn_context_omits_empty_history_sections() {
     .unwrap();
 
     assert!(body.recent_chat.contains("Recent chat (#main)"));
-    assert!(!body.recent_chat.contains("Recent chat (#ai_chan)"));
+    assert!(body.recent_chat.contains("alice: hello primary"));
+    assert!(!body.memory.contains("Recent chat"));
+    assert!(!body.scratch.contains("Recent chat"));
 }
 
 /// Seed a user/<id>.md directly with a hand-rolled frontmatter so the test

@@ -14,20 +14,11 @@ use crate::twitch::mouth::Agent;
 use super::fence::{FenceLabel, body_with_links, fence_block};
 use super::recent_chat::{render_recent_chat, user_pack_tier};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InvocationChannel {
-    Primary,
-    AiChannel,
-}
-
 pub struct BuildOpts {
     pub inject_byte_budget: usize,
     pub nonce: String,
     pub primary_history: Option<Arc<Mutex<ChatHistoryBuffer>>>,
     pub primary_login: String,
-    pub ai_channel_history: Option<Arc<Mutex<ChatHistoryBuffer>>>,
-    pub ai_channel_login: Option<String>,
-    pub invocation_channel: InvocationChannel,
     /// Which agent is speaking this turn. Drives the `(self)` tag in rendered
     /// recent-chat lines: a line is self iff `entry.agent == Some(current_agent)`.
     pub current_agent: Agent,
@@ -45,17 +36,13 @@ pub struct BuildOpts {
     /// Lowercased logins stamped on injected Recap Notes (caller-capped).
     /// Third packing tier after speaker and chat-window logins.
     pub recap_sheet_logins: BTreeSet<String>,
-    /// Verbatim tail for the primary channel: newest N lines that are not this agent's own.
+    /// Verbatim tail: newest N lines that are not this agent's own.
     pub n: usize,
-    /// Verbatim tail for the ai_channel section when configured.
-    pub ai_channel_n: usize,
     /// When Recap is on, eligible lag lines may stretch the tail up to
     /// `n + batch_size` other-people lines (never adds extra own lines).
     pub batch_size: usize,
-    /// Primary-channel Recap watermark seq; `0` when Recap is off.
+    /// Recap watermark seq; `0` when Recap is off.
     pub recap_through_seq: u64,
-    /// Ai-channel Recap watermark seq; `0` when Recap is off or no ai_channel buffer.
-    pub ai_channel_recap_through_seq: u64,
     /// When false, no stretch beyond the N-not-own window.
     pub recap_enabled: bool,
 }
@@ -110,9 +97,7 @@ pub async fn build_chat_turn_context(
     // file in its system prompt. Skipping the filter in that case keeps the
     // dreamer's pre-existing "every memory file in one shot" contract intact.
     let speaker_lc = opts.speaker_login.to_ascii_lowercase();
-    let is_chat_turn = opts.primary_history.is_some()
-        || opts.ai_channel_history.is_some()
-        || !speaker_lc.is_empty();
+    let is_chat_turn = opts.primary_history.is_some() || !speaker_lc.is_empty();
     if is_chat_turn {
         let mut scope: std::collections::BTreeSet<String> = mentioned.clone();
         if !speaker_lc.is_empty() {

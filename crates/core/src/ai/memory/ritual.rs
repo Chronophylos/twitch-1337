@@ -17,8 +17,7 @@ use llm::{
 use tracing::{error, info, warn};
 
 use crate::ai::memory::inject::{
-    BuildOpts, FenceLabel, InvocationChannel, build_chat_turn_context, fence_block, fresh_nonce,
-    neutralize_sentinels,
+    BuildOpts, FenceLabel, build_chat_turn_context, fence_block, fresh_nonce, neutralize_sentinels,
 };
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::{DreamerExecutor, DreamerExecutorOpts, dreamer_tools};
@@ -295,24 +294,19 @@ async fn run_ritual_until(
             nonce: nonce.clone(),
             primary_history: None,
             primary_login: String::new(),
-            ai_channel_history: None,
-            ai_channel_login: None,
-            invocation_channel: InvocationChannel::Primary,
             self_logins: Vec::new(),
-            // Dreamer never renders recent_chat (no history buffers supplied),
+            // Dreamer never renders recent_chat (no history buffer supplied),
             // so this is never read; the value is arbitrary.
             current_agent: Agent::Aurora,
-            // Dreamer has no speaker. Empty string + no history buffers
+            // Dreamer has no speaker. Empty string + no history buffer
             // tells build_chat_turn_context to skip the chat-window scope
             // filter so the dreamer still sees every user file in its
             // system prompt.
             speaker_login: String::new(),
             recap_sheet_logins: BTreeSet::new(),
             n: 200,
-            ai_channel_n: 200,
             batch_size: 40,
             recap_through_seq: 0,
-            ai_channel_recap_through_seq: 0,
             recap_enabled: false,
         },
     )

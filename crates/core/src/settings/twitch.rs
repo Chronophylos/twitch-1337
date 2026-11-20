@@ -2,9 +2,9 @@
 //!
 //! `expected_latency`, `hidden_admins`, `viewer_allowlist`,
 //! `emote_usage_deny_list` apply live.
-//! `admin_channel` and `ai_channel` are read once at startup (IRC join +
-//! message routing); changes require a bot restart and the dashboard surfaces
-//! a "restart required" badge on those fields.
+//! `admin_channel` is read once at startup (IRC join + message routing);
+//! changes require a bot restart and the dashboard surfaces a "restart
+//! required" badge on that field.
 //! `owner` has been moved back to `config.toml` (bootstrap-only) because it
 //! is identity-binding and must not be editable from the page it gates.
 
@@ -23,8 +23,6 @@ pub struct TwitchRuntime {
     pub emote_usage_deny_list: Vec<String>,
     #[knob(restart)]
     pub admin_channel: Option<String>,
-    #[knob(restart)]
-    pub ai_channel: Option<String>,
 }
 
 impl Default for TwitchRuntime {
@@ -35,7 +33,6 @@ impl Default for TwitchRuntime {
             viewer_allowlist: Vec::new(),
             emote_usage_deny_list: Vec::new(),
             admin_channel: None,
-            ai_channel: None,
         }
     }
 }

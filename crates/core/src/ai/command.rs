@@ -8,9 +8,7 @@ use jiff::Timestamp;
 use tracing::{debug, error, instrument};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use crate::ai::chat_history::{
-    ChatHistory, ChatHistoryBuffer, ai_channel_history_capacity, primary_history_capacity,
-};
+use crate::ai::chat_history::{ChatHistory, ChatHistoryBuffer};
 use crate::ai::content;
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::transcript::TranscriptWriter;
@@ -26,40 +24,22 @@ use crate::settings::{Settings, SettingsHandle};
 use crate::twitch::mouth::{Agent, SpeakError};
 use crate::twitch::seventv::SevenTvEmoteProvider;
 
-/// Chat history buffers and channel logins for `!ai`. Both buffers share the
-/// same type; `primary_history` is always present, `ai_channel_history` is
-/// only allocated when `twitch.ai_channel` is configured.
+/// Chat history buffer and channel login for `!ai`.
 #[derive(Clone)]
 pub struct ChatContext {
     pub primary_history: ChatHistory,
     pub primary_login: String,
-    pub ai_channel_history: Option<ChatHistory>,
-    pub ai_channel_login: Option<String>,
 }
 
 impl ChatContext {
-    /// Pick the buffer matching `channel_login`. Falls back to primary when
-    /// no ai_channel buffer is configured or the login does not match.
-    pub fn buffer_for(&self, channel_login: &str) -> &ChatHistory {
-        match (&self.ai_channel_history, &self.ai_channel_login) {
-            (Some(h), Some(login)) if login == channel_login => h,
-            _ => &self.primary_history,
-        }
-    }
-
-    /// `true` iff `channel_login` matches the configured ai_channel.
-    pub fn is_ai_channel(&self, channel_login: &str) -> bool {
-        matches!(&self.ai_channel_login, Some(login) if login == channel_login)
-    }
-
-    /// Build the shared chat-history buffers once at composition (main /
+    /// Build the shared chat-history buffer once at composition (main /
     /// `TestBotBuilder`). Every consumer — `!ai`, `!news`, `!haiku`, the
     /// dispatcher's history recording, and the recap batcher — clones the
-    /// same buffers out of `Services` instead of relaying them through
-    /// handler configs.
+    /// same buffer out of `Services` instead of relaying it through handler
+    /// configs.
     ///
     /// Returns `None` when AI is disabled or chat history is off. Rebinds
-    /// `recap` to the freshly built buffers so a restart resumes the recap
+    /// `recap` to the freshly built buffer so a restart resumes the recap
     /// without a gap.
     pub async fn build(
         settings: &SettingsHandle,
@@ -81,39 +61,20 @@ impl ChatContext {
             tracing::info!("ai.prefill configured; fetching history before startup continues");
             let prefilled =
                 super::prefill::prefill_chat_history(channel, history_length, cfg).await;
-            ChatHistoryBuffer::from_prefill(settings.clone(), primary_history_capacity, prefilled)
+            ChatHistoryBuffer::from_prefill(settings.clone(), prefilled)
         } else {
-            ChatHistoryBuffer::new(settings.clone(), primary_history_capacity)
+            ChatHistoryBuffer::new(settings.clone())
         };
         let primary_history: ChatHistory = Arc::new(tokio::sync::Mutex::new(buffer));
-
-        // ai_channel buffer: allocated only when an ai_channel is configured
-        // AND chat history is enabled. Capacity is read live from the
-        // settings handle.
-        let ai_channel_history: Option<ChatHistory> =
-            if snapshot.twitch.ai_channel.is_some() && snapshot.ai.history.ai_channel_length > 0 {
-                Some(Arc::new(tokio::sync::Mutex::new(ChatHistoryBuffer::new(
-                    settings.clone(),
-                    ai_channel_history_capacity,
-                ))))
-            } else {
-                None
-            };
 
         if let Some(handle) = recap {
             let entries = primary_history.lock().await.snapshot();
             handle.rebind_primary(&entries).await;
-            if let Some(ai_hist) = ai_channel_history.as_ref() {
-                let ai_entries = ai_hist.lock().await.snapshot();
-                handle.rebind_ai_channel(&ai_entries).await;
-            }
         }
 
         Some(ChatContext {
             primary_history,
             primary_login: channel.to_owned(),
-            ai_channel_history,
-            ai_channel_login: snapshot.twitch.ai_channel.clone(),
         })
     }
 }
@@ -216,10 +177,7 @@ fn is_grok_alias(trigger: &str) -> bool {
 
 /// Returns true if `word` resolves to the `!ai` command — either the literal
 /// `!ai` trigger (case-insensitive) or the `@grok` alias (case-insensitive).
-/// Both `AiCommand::matches` and the command-dispatch ai-channel gate must use
-/// this helper, otherwise the gate and the matcher would silently disagree on
-/// non-lowercase invocations.
-pub fn is_ai_trigger(word: &str) -> bool {
+fn is_ai_trigger(word: &str) -> bool {
     word.eq_ignore_ascii_case(AI_TRIGGER) || word.eq_ignore_ascii_case(GROK_ALIAS_TRIGGER)
 }
 
@@ -413,34 +371,24 @@ where
             }
         };
         ctx.cancellation.check()?;
-        if let Some(ref chat) = self.turn.chat_ctx {
-            chat.buffer_for(&ctx.privmsg.channel_login)
-                .lock()
-                .await
-                .push_bot_with_identity_at(
-                    recorded_login.clone(),
-                    Some(&display_name),
-                    agent,
-                    line.clone(),
-                    ts,
-                );
+        if let Some(chat) = &self.turn.chat_ctx {
+            chat.primary_history.lock().await.push_bot_with_identity_at(
+                recorded_login.clone(),
+                Some(&display_name),
+                agent,
+                line.clone(),
+                ts,
+            );
         }
-        let is_primary_source = !self
+        ctx.cancellation.check()?;
+        if let Err(e) = self
             .turn
-            .chat_ctx
-            .as_ref()
-            .is_some_and(|c| c.is_ai_channel(&ctx.privmsg.channel_login));
-        if is_primary_source {
-            ctx.cancellation.check()?;
-            if let Err(e) = self
-                .turn
-                .memory
-                .transcript
-                .append_line(ts, &recorded_login, None, &line)
-                .await
-            {
-                error!(error = ?e, "transcript bot-reply append failed");
-            }
+            .memory
+            .transcript
+            .append_line(ts, &recorded_login, None, &line)
+            .await
+        {
+            error!(error = ?e, "transcript bot-reply append failed");
         }
 
         Ok(())
