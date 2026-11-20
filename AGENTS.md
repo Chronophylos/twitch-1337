@@ -126,10 +126,13 @@ docs. Not a required check.
 keeping the last 30 plus `:latest`. Not a required check.
 `Data refresh` runs Sundays 03:00 UTC; opens a `chore/data-refresh` PR.
 
-**Native GitHub security (repo settings):** repo is private on GitHub Pro without
-GHAS, so secret scanning / push protection are unavailable and SARIF uploads are
-skipped (hadolint/trivy fail the job instead; gitleaks is the secret gate).
-Dependabot alerts + security updates are enabled.
+**Native GitHub security (repo settings):** repo is public. Secret scanning, push
+protection, private vulnerability reporting (see `SECURITY.md`) and Dependabot
+alerts + security updates are enabled. hadolint/trivy/zizmor upload SARIF to the
+Security tab; hadolint and trivy also fail their job on findings, so they still
+block merges. gitleaks is the secret gate in CI; known false positives are listed
+by fingerprint in `.gitleaksignore`. Workflow runs from outside contributors need
+approval.
 
 **Dependabot** (`.github/dependabot.yml`): weekly PRs for `cargo`, `github-actions`,
 `docker`. Cargo minor+patch grouped as `rust-minor-patch`; GitHub Actions minor+patch

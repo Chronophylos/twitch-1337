@@ -1,0 +1,4 @@
+# Dummy oauth_token / client_secret values in the doc examples of the old
+# vendored twitch-irc crate (upstream docs, not real credentials).
+98cf159b5c78988c52bb05c3b7becd992e635a5f:vendor/twitch-irc/src/lib.rs:generic-api-key:120
+98cf159b5c78988c52bb05c3b7becd992e635a5f:vendor/twitch-irc/src/lib.rs:generic-api-key:168
