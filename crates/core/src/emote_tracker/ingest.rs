@@ -29,6 +29,22 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// EventAPI close `4007 Maintenance` — docs ask for ≥5 minutes including jitter.
 const MAINTENANCE_BACKOFF: Duration = Duration::from_secs(300);
+/// Per-request deadline for the ingest HTTP client (7TV REST, Potat history).
+/// 15 s like the alerts feeds: a channel-set response is a few MiB.
+pub const INGEST_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
+/// Fallback heartbeat interval until Hello states one (live Hello frames
+/// announce ~45-48 s).
+const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 45_000;
+/// Missed heartbeats tolerated before the socket is treated as dead.
+const MISSED_HEARTBEATS: u64 = 3;
+
+/// How long the session may go without any inbound frame before the
+/// watchdog drops it: [`MISSED_HEARTBEATS`] times the server's heartbeat
+/// interval, or the fallback interval before Hello states one.
+fn watchdog_grace(heartbeat_interval_ms: Option<u64>) -> Duration {
+    let interval_ms = heartbeat_interval_ms.unwrap_or(DEFAULT_HEARTBEAT_INTERVAL_MS);
+    Duration::from_millis(interval_ms.saturating_mul(MISSED_HEARTBEATS))
+}
 
 /// How an EventAPI websocket session ended.
 #[derive(Debug)]
@@ -258,14 +274,24 @@ async fn run_eventapi_session(
     if lifecycle.is_cancelled() {
         return Ok(SessionEnd::Cancelled);
     }
+    // Any inbound frame proves the socket is alive; silence past the grace
+    // means a half-open socket, so the session ends and the outer loop
+    // reconnects through its usual gap-stamping backoff path.
     let mut heartbeat_interval_ms: Option<u64> = None;
-    let mut heartbeat_deadline: Option<tokio::time::Instant> = None;
+    let mut watchdog_deadline = tokio::time::Instant::now() + watchdog_grace(None);
 
     loop {
         let frame = tokio::select! {
             biased;
             _ = lifecycle.wait_for_cancellation() => return Ok(SessionEnd::Cancelled),
             frame = conn.stream.next() => frame,
+            () = tokio::time::sleep_until(watchdog_deadline) => {
+                *gap_started_at = Some(gap_started_at.unwrap_or_else(now_ms));
+                return Err(eyre!(
+                    "EventAPI heartbeat watchdog expired after {:?} without a frame",
+                    watchdog_grace(heartbeat_interval_ms)
+                ));
+            }
         };
         let Some(frame) = frame else {
             break;
@@ -273,6 +299,7 @@ async fn run_eventapi_session(
         if lifecycle.is_cancelled() {
             return Ok(SessionEnd::Cancelled);
         }
+        watchdog_deadline = tokio::time::Instant::now() + watchdog_grace(heartbeat_interval_ms);
         let msg = match frame {
             Ok(m) => m,
             Err(error) => {
@@ -297,17 +324,11 @@ async fn run_eventapi_session(
                         heartbeat_interval_ms: hello_interval,
                     } => {
                         heartbeat_interval_ms = hello_interval;
-                        if let Some(interval_ms) = hello_interval {
-                            let grace = Duration::from_millis(interval_ms.saturating_mul(3));
-                            heartbeat_deadline = Some(tokio::time::Instant::now() + grace);
-                        }
+                        watchdog_deadline =
+                            tokio::time::Instant::now() + watchdog_grace(heartbeat_interval_ms);
                     }
-                    ParsedEvent::Heartbeat => {
-                        if let Some(interval_ms) = heartbeat_interval_ms {
-                            let grace = Duration::from_millis(interval_ms.saturating_mul(3));
-                            heartbeat_deadline = Some(tokio::time::Instant::now() + grace);
-                        }
-                    }
+                    // Liveness is already recorded: any frame resets the watchdog.
+                    ParsedEvent::Heartbeat => {}
                     ParsedEvent::Dispatch(dispatch) => {
                         if dispatch.set_id != remembered_set_id {
                             // Defense in depth: object_id sub should only deliver the
@@ -376,13 +397,6 @@ async fn run_eventapi_session(
                         ));
                     }
                     ParsedEvent::Ack | ParsedEvent::Other { .. } => {}
-                }
-
-                if let Some(deadline) = heartbeat_deadline
-                    && tokio::time::Instant::now() > deadline
-                {
-                    warn!("EventAPI heartbeat watchdog overdue; continuing ingest");
-                    heartbeat_deadline = None;
                 }
             }
             Message::Close(frame) => {

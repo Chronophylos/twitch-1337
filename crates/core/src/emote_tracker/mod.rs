@@ -16,7 +16,7 @@ pub use format::{
     lifecycle_verb,
 };
 pub use handle::EmoteTrackerHandle;
-pub use ingest::{IngestConfig, run_set_ingest};
+pub use ingest::{INGEST_HTTP_TIMEOUT, IngestConfig, run_set_ingest};
 pub use lookup::{
     EMOTE_CMD_USAGE, EMOTE_NOT_FOUND, EmoteQueryParse, format_emote_chat_reply, parse_emote_query,
 };
