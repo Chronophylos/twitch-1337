@@ -53,8 +53,8 @@ pub async fn setup_twitch_client(
 /// Connect, join channel(s), and verify authentication via `GlobalUserState`.
 ///
 /// `extra_channels` lists any additional IRC channels to join beyond the
-/// primary channel (e.g. `admin_channel` and `ai_channel` from the settings
-/// store). Pass `&[]` when there are no extras.
+/// primary channel (e.g. `admin_channel` from the settings store). Pass `&[]`
+/// when there are no extras.
 ///
 /// Returns `Err` if connection times out (30 s) or authentication fails.
 pub async fn setup_and_verify_twitch_client(

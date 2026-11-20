@@ -29,7 +29,7 @@ use crate::ai::memory::tools::{
 };
 use crate::ai::memory::types::Role;
 use crate::ai::model_catalog::ModelCatalog;
-use crate::ai::recap::{RECAP_SHEET_LOGINS, RecapChannel, RecapHandle};
+use crate::ai::recap::RecapHandle;
 use crate::ai::reply::{ReplyLimits, RewordOpts, prepare_agent_reply};
 use crate::commands::CommandCancellation;
 use crate::settings::SettingsHandle;
@@ -253,15 +253,6 @@ impl TurnRunner {
             input.speaker.display_name.as_str()
         };
         let sender_user_id = input.speaker.user_id.as_str();
-        let invocation_channel = if cc.is_some_and(|c| c.is_ai_channel(&input.channel_login)) {
-            inject::InvocationChannel::AiChannel
-        } else {
-            inject::InvocationChannel::Primary
-        };
-        let recap_channel = match invocation_channel {
-            inject::InvocationChannel::Primary => RecapChannel::Primary,
-            inject::InvocationChannel::AiChannel => RecapChannel::AiChannel,
-        };
         let recap_profile = recap.profile.as_deref();
         let recap_parked = if let Some(ref handle) = self.recap {
             handle.parked().await
@@ -269,17 +260,14 @@ impl TurnRunner {
             true
         };
         let recap_enabled = recap_enabled_for_profile(recap_profile, recap_parked);
-        let (primary_through_seq, ai_through_seq) = if let Some(ref handle) = self.recap {
-            (
-                handle.primary_through_seq().await,
-                handle.ai_through_seq().await,
-            )
+        let recap_through_seq = if let Some(handle) = &self.recap {
+            handle.primary_through_seq().await
         } else {
-            (0, 0)
+            0
         };
         let recap_sheet_logins = if recap_profile_is_set(recap_profile) {
             if let Some(ref handle) = self.recap {
-                union_recap_sheet_logins(handle, recap_channel).await
+                handle.sheet_logins().await
             } else {
                 BTreeSet::new()
             }
@@ -288,19 +276,11 @@ impl TurnRunner {
         };
         let recap_suffix = if recap_profile_is_set(recap_profile) {
             if let Some(ref handle) = self.recap {
-                let primary_login = cc
+                let channel_login = cc
                     .map(|c| c.primary_login.as_str())
                     .unwrap_or(input.channel_login.as_str());
-                let ai_channel_login = cc
-                    .and_then(|c| c.ai_channel_login.as_deref())
-                    .unwrap_or(primary_login);
                 handle
-                    .render_suffix(
-                        recap_channel,
-                        primary_login,
-                        ai_channel_login,
-                        recap.max_notes as usize,
-                    )
+                    .render_suffix(channel_login, recap.max_notes as usize)
                     .await
             } else {
                 String::new()
@@ -321,9 +301,6 @@ impl TurnRunner {
             primary_login: cc
                 .map(|c| c.primary_login.clone())
                 .unwrap_or_else(|| input.channel_login.clone()),
-            ai_channel_history: cc.and_then(|c| c.ai_channel_history.clone()),
-            ai_channel_login: cc.and_then(|c| c.ai_channel_login.clone()),
-            invocation_channel,
             current_agent: agent,
             // Every login the bot speaks under. Only used to rescue `(self)` on
             // prefilled rows, which carry no agent tag.
@@ -333,18 +310,13 @@ impl TurnRunner {
             speaker_login: input.speaker.login.clone(),
             recap_sheet_logins,
             n: history.n as usize,
-            ai_channel_n: history.ai_channel_n as usize,
             batch_size: recap.batch_size as usize,
-            recap_through_seq: primary_through_seq,
-            ai_channel_recap_through_seq: ai_through_seq,
+            recap_through_seq,
             recap_enabled,
         };
 
         let scoring_chat = {
-            let buf = match invocation_channel {
-                inject::InvocationChannel::Primary => build_opts.primary_history.as_ref(),
-                inject::InvocationChannel::AiChannel => build_opts.ai_channel_history.as_ref(),
-            };
+            let buf = build_opts.primary_history.as_ref();
             if let Some(buf) = buf {
                 buf.lock()
                     .await
@@ -457,14 +429,8 @@ impl TurnRunner {
         // Identity for anyone whose sheet the model might write this turn.
         // Last writer wins per id, so a rename lands on the newest casing.
         let mut known_identities: HashMap<String, (String, String)> = HashMap::new();
-        for h in [
-            cc.map(|c| &c.primary_history),
-            cc.and_then(|c| c.ai_channel_history.as_ref()),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            for e in h.lock().await.snapshot() {
+        if let Some(c) = cc {
+            for e in c.primary_history.lock().await.snapshot() {
                 if let Some(id) = e.user_id {
                     let display = e.display_name.unwrap_or_else(|| e.username.clone());
                     known_identities.insert(id, (e.username, display));
@@ -785,30 +751,6 @@ fn recap_enabled_for_profile(recap_profile: Option<&str>, parked: bool) -> bool 
     recap_profile_is_set(recap_profile) && !parked
 }
 
-async fn union_recap_sheet_logins(
-    handle: &RecapHandle,
-    invocation: RecapChannel,
-) -> BTreeSet<String> {
-    let (first, second) = match invocation {
-        RecapChannel::Primary => (RecapChannel::Primary, RecapChannel::AiChannel),
-        RecapChannel::AiChannel => (RecapChannel::AiChannel, RecapChannel::Primary),
-    };
-    let mut out = BTreeSet::new();
-    for login in handle.sheet_logins(first).await {
-        out.insert(login);
-        if out.len() >= RECAP_SHEET_LOGINS {
-            return out;
-        }
-    }
-    for login in handle.sheet_logins(second).await {
-        out.insert(login);
-        if out.len() >= RECAP_SHEET_LOGINS {
-            break;
-        }
-    }
-    out
-}
-
 /// Stable system-message appendix naming both agents' Twitch accounts.
 ///
 /// Logins come from [`crate::twitch::mouth::MouthRouter::login_for`]; when
@@ -853,7 +795,7 @@ mod recap_wiring_tests {
     /// that is where the behaviour lives.
     #[tokio::test]
     async fn parked_recap_still_renders_existing_notes() {
-        use crate::ai::recap::{RecapChannel, RecapHandle, RecapNote};
+        use crate::ai::recap::{RecapHandle, RecapNote};
 
         let dir = tempfile::tempdir().expect("tempdir");
         let handle = RecapHandle::load(dir.path().to_path_buf()).await;
@@ -870,9 +812,7 @@ mod recap_wiring_tests {
 
         assert!(!recap_enabled_for_profile(Some("tiny"), true));
         assert!(recap_profile_is_set(Some("tiny")));
-        let suffix = handle
-            .render_suffix(RecapChannel::Primary, "main", "ai", 3)
-            .await;
+        let suffix = handle.render_suffix("main", 3).await;
         assert!(suffix.contains("## Recap"));
         assert!(suffix.contains("existing recap note"));
     }

@@ -67,7 +67,6 @@ pub struct RecapChannelLog {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecapFile {
     pub primary: RecapChannelLog,
-    pub ai_channel: RecapChannelLog,
 }
 
 pub fn recap_path(data_dir: &Path) -> PathBuf {
@@ -203,19 +202,12 @@ pub fn rebind_through_seq(log: &RecapChannelLog, entries: &[ChatHistoryEntry]) -
         .unwrap_or(0)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecapChannel {
-    Primary,
-    AiChannel,
-}
-
 pub struct RecapState {
     pub file: RecapFile,
     pub path: PathBuf,
     pub parked: bool,
     pub failures: u32,
     pub primary_through_seq: u64,
-    pub ai_through_seq: u64,
 }
 
 pub struct RecapHandle {
@@ -241,7 +233,6 @@ impl RecapHandle {
                 parked: false,
                 failures: 0,
                 primary_through_seq: 0,
-                ai_through_seq: 0,
             })),
         }
     }
@@ -250,15 +241,9 @@ impl RecapHandle {
         self.inner.lock().await.parked
     }
 
-    pub async fn sheet_logins(&self, channel: RecapChannel) -> BTreeSet<String> {
-        let file = {
-            let guard = self.inner.lock().await;
-            guard.file.clone()
-        };
-        let log = match channel {
-            RecapChannel::Primary => &file.primary,
-            RecapChannel::AiChannel => &file.ai_channel,
-        };
+    pub async fn sheet_logins(&self) -> BTreeSet<String> {
+        let guard = self.inner.lock().await;
+        let log = &guard.file.primary;
         let n = log.notes.len();
         let start = n.saturating_sub(RECAP_SHEET_NOTES);
         let mut out = BTreeSet::new();
@@ -277,47 +262,19 @@ impl RecapHandle {
         self.inner.lock().await.primary_through_seq
     }
 
-    pub async fn ai_through_seq(&self) -> u64 {
-        self.inner.lock().await.ai_through_seq
-    }
-
-    /// Invocation channel first, then the other; each section uses that channel's login.
-    pub async fn render_suffix(
-        &self,
-        invocation: RecapChannel,
-        primary_login: &str,
-        ai_channel_login: &str,
-        max_notes: usize,
-    ) -> String {
-        let file = {
-            let guard = self.inner.lock().await;
-            guard.file.clone()
-        };
-        let primary = injected_notes(&file.primary, max_notes);
-        let ai = injected_notes(&file.ai_channel, max_notes);
-        let (first, first_login, second, second_login) = match invocation {
-            RecapChannel::Primary => (primary, primary_login, ai, ai_channel_login),
-            RecapChannel::AiChannel => (ai, ai_channel_login, primary, primary_login),
-        };
-        let mut out = render_recap_section(first_login, first);
-        let other = render_recap_section(second_login, second);
-        if !other.is_empty() {
-            if !out.is_empty() {
-                out.push_str("\n\n");
-            }
-            out.push_str(&other);
-        }
-        out
+    /// Recap section for `channel_login`, built from the newest `max_notes`
+    /// notes.
+    pub async fn render_suffix(&self, channel_login: &str, max_notes: usize) -> String {
+        let guard = self.inner.lock().await;
+        render_recap_section(
+            channel_login,
+            injected_notes(&guard.file.primary, max_notes),
+        )
     }
 
     pub async fn rebind_primary(&self, entries: &[ChatHistoryEntry]) {
         let mut guard = self.inner.lock().await;
         guard.primary_through_seq = rebind_through_seq(&guard.file.primary, entries);
-    }
-
-    pub async fn rebind_ai_channel(&self, entries: &[ChatHistoryEntry]) {
-        let mut guard = self.inner.lock().await;
-        guard.ai_through_seq = rebind_through_seq(&guard.file.ai_channel, entries);
     }
 }
 
@@ -565,7 +522,7 @@ mod tests {
                 },
             ];
         }
-        let logins = handle.sheet_logins(RecapChannel::Primary).await;
+        let logins = handle.sheet_logins().await;
         assert_eq!(logins.len(), RECAP_SHEET_LOGINS);
         assert!(logins.contains("newest"));
         assert!(!logins.contains("older15"));
@@ -640,9 +597,25 @@ mod tests {
                     text: "hi".into(),
                 }),
             },
-            ai_channel: RecapChannelLog::default(),
         };
         atomic_save_ron_async(&file, &path).await.unwrap();
+        let back = load_recap_file(&path).await;
+        assert_eq!(back.primary.notes[0].body, "raid vorbei");
+    }
+
+    #[tokio::test]
+    async fn legacy_file_with_ai_channel_log_keeps_primary_notes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = recap_path(dir.path());
+        crate::util::persist::atomic_write_bytes_async(
+            br#"(
+                primary: (notes: [(body: "raid vorbei", identities: [], through_seq: 9, generation: 0)], through_ts: None, through_fp: None),
+                ai_channel: (notes: [(body: "alt", identities: [], through_seq: 1, generation: 0)], through_ts: None, through_fp: None),
+            )"#,
+            &path,
+        )
+        .await
+        .unwrap();
         let back = load_recap_file(&path).await;
         assert_eq!(back.primary.notes[0].body, "raid vorbei");
     }

@@ -776,7 +776,6 @@ impl TestBot {
     }
 
     /// Inject a PRIVMSG into a specific channel (not necessarily the primary).
-    /// Used by `ai_channel` tests to drive messages from the secondary channel.
     pub async fn send_to(&self, channel: &str, user: &str, text: &str) {
         let line = privmsg(channel, user, text);
         self.transport.inject.send(line).await.expect("inject");
@@ -785,12 +784,6 @@ impl TestBot {
     /// Alias for [`Self::send_to`] matching emote-usage test naming.
     pub async fn send_privmsg_to(&self, channel: &str, user: &str, text: &str) {
         self.send_to(channel, user, text).await;
-    }
-
-    /// Same, but with an explicit `tmi-sent-ts` (used by 1337 tracker tests).
-    pub async fn send_to_at(&self, channel: &str, user: &str, text: &str, tmi_ts_ms: i64) {
-        let line = privmsg_at(channel, user, text, tmi_ts_ms);
-        self.transport.inject.send(line).await.expect("inject");
     }
 
     pub async fn send_reply(&self, user: &str, text: &str, parent_user: &str, parent_text: &str) {
@@ -807,31 +800,11 @@ impl TestBot {
         parent_user_id: &str,
         parent_text: &str,
     ) {
-        self.send_reply_to_mouth_in(
-            &self.channel,
-            user,
-            text,
-            parent_user,
-            parent_user_id,
-            parent_text,
-        )
-        .await;
-    }
-
-    pub async fn send_reply_to_mouth_in(
-        &self,
-        channel: &str,
-        user: &str,
-        text: &str,
-        parent_user: &str,
-        parent_user_id: &str,
-        parent_text: &str,
-    ) {
         // Twitch reply UI prefixes the body with `@parent`. Tests must send
         // that shape or they hide command-vs-follow-up bugs.
         let body = format!("@{parent_user} {text}");
         let line = reply_privmsg_with_parent_id(
-            channel,
+            &self.channel,
             user,
             &body,
             parent_user,

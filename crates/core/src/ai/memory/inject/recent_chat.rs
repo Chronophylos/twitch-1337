@@ -1,15 +1,12 @@
 //! Rolling chat-history rendering for the `## Recent chat (#login)` section.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
-use tokio::sync::Mutex;
-
-use crate::ai::chat_history::{ChatHistoryBuffer, ChatHistoryEntry};
+use crate::ai::chat_history::ChatHistoryEntry;
 use crate::ai::recap::{eligible, is_own, n_not_own};
 use crate::twitch::mouth::Agent;
 
-use super::{BuildOpts, InvocationChannel};
+use super::BuildOpts;
 
 /// Rendered rolling chat for one turn, plus the lowercased logins that survived.
 /// Shared by the Aurora and grok context builders.
@@ -19,48 +16,12 @@ pub(super) struct RecentChat {
 }
 
 pub(super) async fn render_recent_chat(opts: &BuildOpts) -> RecentChat {
-    let primary_rendered = render_recent_section(
-        opts.primary_history.as_ref(),
-        &opts.primary_login,
-        opts.n,
-        opts.recap_through_seq,
-        opts,
-    )
-    .await;
-    let ai_rendered = match (
-        opts.ai_channel_history.as_ref(),
-        opts.ai_channel_login.as_ref(),
-    ) {
-        (Some(buf), Some(login)) => {
-            render_recent_section(
-                Some(buf),
-                login,
-                opts.ai_channel_n,
-                opts.ai_channel_recap_through_seq,
-                opts,
-            )
-            .await
-        }
-        _ => None,
-    };
-
-    let (first, second) = match opts.invocation_channel {
-        InvocationChannel::AiChannel => (ai_rendered, primary_rendered),
-        InvocationChannel::Primary => (primary_rendered, ai_rendered),
-    };
-    let mut mentioned: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut recent_sections: Vec<String> = Vec::with_capacity(2);
-    for section in [first, second].into_iter().flatten() {
-        for u in section.usernames {
-            mentioned.insert(u);
-        }
-        recent_sections.push(section.body);
-    }
-
-    RecentChat {
-        body: recent_sections.join("\n\n"),
-        mentioned,
-    }
+    render_recent_section(opts)
+        .await
+        .unwrap_or_else(|| RecentChat {
+            body: String::new(),
+            mentioned: BTreeSet::new(),
+        })
 }
 
 /// Packing tier for character sheets: speaker (0), chat-window (1), recap-only (2).
@@ -81,23 +42,12 @@ pub(super) fn user_pack_tier(
     }
 }
 
-struct RenderedRecentSection {
-    pub(super) body: String,
-    usernames: Vec<String>,
-}
-
-/// Render one `## Recent chat (#login)` section from the N-not-own window plus
-/// the latest own line, with optional Recap stretch. Returns the lowercased
-/// usernames of every line that survived. Returns `None` for missing or empty
-/// buffers.
-async fn render_recent_section(
-    buf: Option<&Arc<Mutex<ChatHistoryBuffer>>>,
-    login: &str,
-    n: usize,
-    recap_through_seq: u64,
-    opts: &BuildOpts,
-) -> Option<RenderedRecentSection> {
-    let buf = buf?;
+/// Render the `## Recent chat (#login)` section from the N-not-own window plus
+/// the latest own line, with optional Recap stretch. `mentioned` holds the
+/// lowercased usernames of every line that survived. Returns `None` for a
+/// missing or empty buffer.
+async fn render_recent_section(opts: &BuildOpts) -> Option<RecentChat> {
+    let buf = opts.primary_history.as_ref()?;
     let snapshot: Vec<ChatHistoryEntry> = buf.lock().await.snapshot();
     if snapshot.is_empty() {
         return None;
@@ -106,11 +56,12 @@ async fn render_recent_section(
     let current_agent = opts.current_agent;
     let self_logins = &opts.self_logins;
     let batch_size = opts.batch_size;
+    let n = opts.n;
 
     let mut others: Vec<&ChatHistoryEntry> = n_not_own(&snapshot, n, current_agent, self_logins);
 
     if opts.recap_enabled {
-        let stretch = eligible(&snapshot, n, recap_through_seq, self_logins);
+        let stretch = eligible(&snapshot, n, opts.recap_through_seq, self_logins);
         let mut seen: std::collections::BTreeSet<u64> = others.iter().map(|e| e.seq).collect();
         for entry in stretch {
             if is_own(entry, current_agent, self_logins) {
@@ -147,16 +98,16 @@ async fn render_recent_section(
         return None;
     }
 
-    let mut usernames: Vec<String> = Vec::with_capacity(chosen.len());
+    let mut mentioned: BTreeSet<String> = BTreeSet::new();
     let mut lines: Vec<String> = Vec::with_capacity(chosen.len());
     for entry in chosen {
         lines.push(format_entry_line(entry, current_agent, self_logins));
-        usernames.push(entry.username.to_ascii_lowercase());
+        mentioned.insert(entry.username.to_ascii_lowercase());
     }
 
-    let mut body = format!("## Recent chat (#{login})\n");
+    let mut body = format!("## Recent chat (#{})\n", opts.primary_login);
     body.push_str(&lines.join("\n"));
-    Some(RenderedRecentSection { body, usernames })
+    Some(RecentChat { body, mentioned })
 }
 
 pub(crate) fn format_entry_line(

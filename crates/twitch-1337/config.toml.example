@@ -21,8 +21,8 @@ client_secret = "your_client_secret"
 # Absent → no owner exists and the settings page returns 403.
 # owner = "12345678"
 
-# Permissions (hidden_admins, viewer_allowlist), the secondary channels
-# (admin_channel, ai_channel), and expected_latency now live in the
+# Permissions (hidden_admins, viewer_allowlist), the admin channel
+# (admin_channel), and expected_latency now live in the
 # dashboard (`/settings → Twitch · Permissions` and `Twitch · Channels`).
 
 # Optional: distinct Twitch accounts for the AI agents' outbound chat (Helix

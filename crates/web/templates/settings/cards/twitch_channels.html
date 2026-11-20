@@ -20,10 +20,5 @@
     {% call m::text_row("twitch_channels", self.knob("twitch.admin_channel"),
        "Optional separate IRC channel for admin-only commands. Empty to disable.",
        admin_channel_val, admin_channel_default, "#channel") %}{% endcall %}
-    {% let ai_channel_val = current.twitch.ai_channel.as_deref().unwrap_or("") %}
-    {% let ai_channel_default = defaults.twitch.ai_channel.as_deref().unwrap_or("") %}
-    {% call m::text_row("twitch_channels", self.knob("twitch.ai_channel"),
-       "Optional IRC channel where only !ai is available. Empty to disable.",
-       ai_channel_val, ai_channel_default, "#channel") %}{% endcall %}
   </div>
 </section>

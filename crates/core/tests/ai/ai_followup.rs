@@ -14,7 +14,6 @@ const AURORA_LOGIN: &str = "aurora_bot";
 const AURORA_ID: &str = "42";
 const GROK_LOGIN: &str = "grok_bot";
 const GROK_ID: &str = "77";
-const AI_CHAN: &str = "ai_chan";
 
 async fn wait_tool_calls(bot: &common::TestBot, n: usize) {
     let deadline = tokio::time::Instant::now() + common::GENEROUS_WAIT;
@@ -363,32 +362,6 @@ async fn nested_viewer_reply_is_not_a_followup() {
         .await;
     bot.expect_silent(Duration::from_millis(400)).await;
     assert!(bot.llm.tool_calls().is_empty());
-
-    bot.shutdown().await;
-}
-
-#[tokio::test]
-async fn followup_works_in_ai_channel() {
-    let bot = TestBotBuilder::new()
-        .with_ai()
-        .with_settings(|o| o.twitch.ai_channel = Some(Some(AI_CHAN.into())))
-        .with_fake_mouth(Agent::Aurora, AURORA_LOGIN, AURORA_ID, "spoken-aurora")
-        .spawn()
-        .await;
-    bot.llm.push_tool_message("im overflow");
-
-    bot.send_reply_to_mouth_in(
-        AI_CHAN,
-        "alice",
-        "weiter",
-        AURORA_LOGIN,
-        AURORA_ID,
-        "aurora line",
-    )
-    .await;
-
-    wait_tool_calls(&bot, 1).await;
-    assert_eq!(bot.llm.tool_calls().len(), 1);
 
     bot.shutdown().await;
 }

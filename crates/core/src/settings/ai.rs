@@ -179,14 +179,9 @@ fn default_reply_hard_chars() -> usize {
 pub struct AiHistory {
     #[knob(max = crate::ai::chat_history::MAX_HISTORY_LENGTH)]
     pub length: u64,
-    #[knob(max = crate::ai::chat_history::MAX_HISTORY_LENGTH)]
-    pub ai_channel_length: u64,
     #[serde(default)]
     #[knob(min = 1, max = crate::ai::chat_history::MAX_HISTORY_LENGTH)]
     pub n: u64,
-    #[serde(default)]
-    #[knob(min = 1, max = crate::ai::chat_history::MAX_HISTORY_LENGTH)]
-    pub ai_channel_n: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
@@ -350,9 +345,7 @@ impl Default for AiHistory {
     fn default() -> Self {
         Self {
             length: crate::ai::chat_history::DEFAULT_HISTORY_LENGTH,
-            ai_channel_length: 100,
             n: 20,
-            ai_channel_n: 10,
         }
     }
 }

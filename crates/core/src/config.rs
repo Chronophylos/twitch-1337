@@ -12,7 +12,7 @@ use tracing::info;
 
 /// Bootstrap-only Twitch configuration. Only the fields required to connect
 /// to Twitch IRC and authenticate belong here. Runtime knobs (expected_latency,
-/// hidden_admins, viewer_allowlist, admin_channel, ai_channel) live in
+/// hidden_admins, viewer_allowlist, admin_channel) live in
 /// the dashboard settings store.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TwitchConfiguration {

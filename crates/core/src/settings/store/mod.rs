@@ -530,4 +530,27 @@ mod tests {
         let body = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
         assert!(!body.contains("connection"), "{body}");
     }
+
+    #[tokio::test]
+    async fn file_with_removed_ai_channel_knobs_loads_and_drops_them_on_save() {
+        // `twitch.ai_channel` and `ai.history.ai_channel_{length,n}` were
+        // removed; serde ignores the stale keys and the next save drops them.
+        let (dir, store, handle) = open_with_file(
+            r#"(
+                schema_version: 7,
+                cooldowns: (ai: Some(15)),
+                twitch: (ai_channel: Some(Some("ai_chan"))),
+                ai: (history: (ai_channel_length: Some(100), ai_channel_n: Some(10))),
+            )"#,
+        );
+        assert!(!has_quarantine(dir.path()));
+        assert_eq!(handle.load().cooldowns.ai, 15);
+
+        store
+            .apply(SettingsOverrides::default(), actor())
+            .await
+            .expect("apply");
+        let body = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
+        assert!(!body.contains("ai_channel"), "{body}");
+    }
 }

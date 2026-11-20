@@ -21,29 +21,7 @@ fn heal_recap_history(
     history: &mut crate::settings::ai::AiHistory,
     recap: &mut crate::settings::ai::AiRecap,
 ) {
-    heal_history_window(
-        "ai.history.length",
-        &mut history.length,
-        "ai.history.n",
-        &mut history.n,
-        &mut recap.batch_size,
-    );
-    heal_history_window(
-        "ai.history.ai_channel_length",
-        &mut history.ai_channel_length,
-        "ai.history.ai_channel_n",
-        &mut history.ai_channel_n,
-        &mut recap.batch_size,
-    );
-}
-
-fn heal_history_window(
-    length_name: &str,
-    length: &mut u64,
-    n_name: &str,
-    n: &mut u64,
-    batch_size: &mut u64,
-) {
+    let (length, n, batch_size) = (&mut history.length, &mut history.n, &mut recap.batch_size);
     if *length == 0 || *length >= n.saturating_add(*batch_size) {
         return;
     }
@@ -53,7 +31,6 @@ fn heal_history_window(
     if *length < 2 {
         *length = 0;
         tracing::warn!(
-            %length_name,
             original_length = 1,
             "disabled legacy recap history with insufficient capacity"
         );
@@ -62,9 +39,7 @@ fn heal_history_window(
     *batch_size = (*length).saturating_sub(1).min(*batch_size).max(1);
     *n = (*length).saturating_sub(*batch_size).max(1);
     tracing::warn!(
-        %length_name,
         length = *length,
-        %n_name,
         old_n = original_n,
         n = *n,
         old_batch_size = original_batch_size,

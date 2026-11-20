@@ -11,16 +11,10 @@
   </header>
   <div class="settings-rows">
     {% call m::num_row("ai_history", self.knob("ai.history.length"),
-       "Rolling history kept for the primary channel.",
+       "Rolling chat history kept for the channel.",
        current.ai.history.length, defaults.ai.history.length, "msgs") %}{% endcall %}
-    {% call m::num_row("ai_history", self.knob("ai.history.ai_channel_length"),
-       "Rolling history kept for the ai_channel (!ai only, smaller).",
-       current.ai.history.ai_channel_length, defaults.ai.history.ai_channel_length, "msgs") %}{% endcall %}
     {% call m::num_row("ai_history", self.knob("ai.history.n"),
-       "Verbatim lines injected from primary channel history.",
+       "Verbatim lines injected from chat history.",
        current.ai.history.n, defaults.ai.history.n, "lines") %}{% endcall %}
-    {% call m::num_row("ai_history", self.knob("ai.history.ai_channel_n"),
-       "Verbatim lines injected from ai_channel history.",
-       current.ai.history.ai_channel_n, defaults.ai.history.ai_channel_n, "lines") %}{% endcall %}
   </div>
 </section>

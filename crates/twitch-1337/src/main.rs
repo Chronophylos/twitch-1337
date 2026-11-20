@@ -82,8 +82,8 @@ pub async fn main() -> Result<()> {
     ensure_data_dir().await?;
 
     // Dashboard-managed runtime settings. Opened before IRC connect so the
-    // settings-store values (admin_channel, ai_channel) can be passed to the
-    // IRC setup which needs them to join channels at startup.
+    // settings-store value `admin_channel` can be passed to the IRC setup,
+    // which needs it to join channels at startup.
     // The same Arc-backed store is shared with both the IRC handlers (via
     // `Services.settings`) and `WebState`.  The audit log lives at
     // `$DATA_DIR/settings_audit.log`.
@@ -107,15 +107,14 @@ pub async fn main() -> Result<()> {
         "Starting twitch-1337 bot"
     );
 
-    // Collect restart-required channel list for IRC channel joins.
-    let twitch_runtime = settings_handle.load().twitch.clone();
-    let extra_channels: Vec<String> = [
-        twitch_runtime.admin_channel.clone(),
-        twitch_runtime.ai_channel.clone(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    // Restart-required channel list for IRC channel joins.
+    let extra_channels: Vec<String> = settings_handle
+        .load()
+        .twitch
+        .admin_channel
+        .clone()
+        .into_iter()
+        .collect();
 
     let (incoming, client, credentials, bot_user_id) =
         setup_and_verify_twitch_client(&config, &extra_channels).await?;
