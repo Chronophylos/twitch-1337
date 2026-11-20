@@ -17,6 +17,7 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 ///
 /// - `.with_ai()` gates `!ai` `!news` `!tldr` `!haiku`
 /// - `.with_emote_tracker()` gates `!e`
+/// - `.with_finnhub_base_url(..)` gates `!aktien` (alias `!stocks`)
 /// - aviation (`!track` `!untrack` `!flight` `!flights` `!up` `!info`) is
 ///   unconditional in tests
 ///
@@ -34,6 +35,7 @@ async fn fully_loaded_bot_survives_the_reserved_name_guard() {
     let mut bot = TestBotBuilder::new()
         .with_ai()
         .with_emote_tracker()
+        .with_finnhub_base_url("http://127.0.0.1:1")
         .spawn()
         .await;
 

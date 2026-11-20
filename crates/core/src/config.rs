@@ -77,6 +77,13 @@ pub struct AmpBootstrap {
     pub password: SecretString,
 }
 
+/// Bootstrap-only Finnhub configuration. Presence registers `!aktien`;
+/// the free-tier key is the whole surface.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FinnhubBootstrap {
+    pub api_key: SecretString,
+}
+
 /// Bootstrap-only Langfuse configuration. Presence of the section enables
 /// first-party OTLP export. Keys never belong in settings.ron.
 #[derive(Debug, Clone, Deserialize)]
@@ -148,6 +155,8 @@ pub struct Configuration {
     #[serde(default)]
     pub amp: Option<AmpBootstrap>,
     #[serde(default)]
+    pub finnhub: Option<FinnhubBootstrap>,
+    #[serde(default)]
     pub langfuse: Option<LangfuseBootstrap>,
     #[serde(default)]
     pub ai: Option<AiBootstrap>,
@@ -174,6 +183,7 @@ impl Configuration {
             aviationstack: None,
             dhl: None,
             amp: None,
+            finnhub: None,
             langfuse: None,
             ai: None,
             web: WebConfig::default(),
@@ -254,6 +264,14 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         if amp.password.expose_secret().trim().is_empty() {
             bail!("amp.password cannot be empty when amp is configured");
         }
+    }
+
+    if config
+        .finnhub
+        .as_ref()
+        .is_some_and(|f| f.api_key.expose_secret().trim().is_empty())
+    {
+        bail!("finnhub.api_key cannot be empty when finnhub is configured");
     }
 
     if let Some(lf) = config.langfuse.as_ref() {
@@ -396,6 +414,29 @@ mod tests {
         let err = validate_config(&cfg).expect_err("empty key must fail");
         assert!(
             err.to_string().contains("dhl.api_key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn empty_finnhub_api_key_is_rejected() {
+        let cfg: Configuration = toml::from_str(
+            r#"
+            [twitch]
+            channel = "c"
+            username = "u"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+
+            [finnhub]
+            api_key = ""
+        "#,
+        )
+        .expect("parse");
+        let err = validate_config(&cfg).expect_err("empty key must fail");
+        assert!(
+            err.to_string().contains("finnhub.api_key"),
             "unexpected error: {err}"
         );
     }

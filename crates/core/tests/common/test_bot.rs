@@ -120,6 +120,7 @@ pub struct TestBotBuilder {
     doener_base_url: Option<String>,
     dhl_base_url: Option<String>,
     amp_base_url: Option<String>,
+    finnhub_base_url: Option<String>,
     settings_overrides: Option<twitch_1337::settings::SettingsOverrides>,
     open_emote_tracker: bool,
     emote_catalog_seed: Vec<(String, String)>,
@@ -143,6 +144,7 @@ impl TestBotBuilder {
             doener_base_url: None,
             dhl_base_url: None,
             amp_base_url: None,
+            finnhub_base_url: None,
             settings_overrides: None,
             open_emote_tracker: false,
             emote_catalog_seed: Vec::new(),
@@ -260,6 +262,14 @@ impl TestBotBuilder {
     /// Registers `!servers` against a stub AMP controller (user `bot`, password `pw`).
     pub fn with_amp_base_url(mut self, base: impl Into<String>) -> Self {
         self.amp_base_url = Some(base.into());
+        self
+    }
+
+    /// Registers `!aktien` against a stub Finnhub API (key `test`).
+    /// Registration does not perform a request, so an unreachable URL is
+    /// fine for registration-only tests.
+    pub fn with_finnhub_base_url(mut self, base: impl Into<String>) -> Self {
+        self.finnhub_base_url = Some(base.into());
         self
     }
 
@@ -598,6 +608,13 @@ impl TestBotBuilder {
                         base.clone(),
                         "bot".to_owned(),
                         secrecy::SecretString::new("pw".into()),
+                    ))
+                }),
+                finnhub: self.finnhub_base_url.as_ref().map(|base| {
+                    std::sync::Arc::new(twitch_1337::finnhub::FinnhubClient::with_base_url(
+                        reqwest::Client::new(),
+                        base.clone(),
+                        secrecy::SecretString::new("test".into()),
                     ))
                 }),
                 langfuse: None,

@@ -7,6 +7,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod aktien;
 mod announce;
 mod command_execution;
 mod doener;

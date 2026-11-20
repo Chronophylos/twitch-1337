@@ -62,6 +62,13 @@ client_secret = "your_client_secret"
 # username = "twitch-1337"
 # password = "..."
 
+# Optional: Finnhub stock quotes (free tier is enough). Presence enables the
+# joke `!aktien` / `!stocks` command (today's two best and worst performer of
+# a baked ticker pool). Per-user cooldown lives at /settings → Cooldowns.
+# Get a key at https://finnhub.io/register. Restart to apply.
+# [finnhub]
+# api_key = "your_finnhub_api_key_here"
+
 # Optional: first-party LLM traces to Langfuse Cloud. Presence enables
 # export; init/export failures never abort the bot. No dashboard card —
 # keys stay here. Default host is the EU cloud.
