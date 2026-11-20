@@ -77,7 +77,7 @@ where
         data_dir: impl AsRef<Path>,
     ) -> Result<Self> {
         let store_path = data_dir.as_ref().join("whisper_recipients.ron");
-        let known_recipients = load_known_recipients(&store_path).await?;
+        let known_recipients = load_known_recipients(&store_path).await;
         let http = reqwest::Client::builder()
             .user_agent(APP_USER_AGENT)
             .build()
@@ -94,15 +94,13 @@ where
     }
 
     async fn remember_recipient(&self, to_user_id: &str) {
-        let snapshot = {
-            let mut guard = self.known_recipients.lock().await;
-            if !guard.insert(to_user_id.to_owned()) {
-                return;
-            }
-            guard.clone()
-        };
-
-        if let Err(error) = save_known_recipients(&self.store_path, &snapshot).await {
+        // Hold the lock across the save: `atomic_save_ron_async` writes one
+        // shared `.ron.tmp` per destination, so two overlapping saves tear it.
+        let mut guard = self.known_recipients.lock().await;
+        if !guard.insert(to_user_id.to_owned()) {
+            return;
+        }
+        if let Err(error) = save_known_recipients(&self.store_path, &guard).await {
             warn!(
                 error = ?error,
                 path = %self.store_path.display(),
@@ -156,18 +154,87 @@ where
     }
 }
 
-async fn load_known_recipients(path: &Path) -> Result<HashSet<String>> {
-    match fs::read_to_string(path).await {
-        Ok(contents) => {
-            ron::from_str(&contents).wrap_err("failed to parse whisper recipient store")
+/// The store only decides whether a whisper may use the long length limit,
+/// so an unreadable or corrupt file costs a few shorter first whispers, never
+/// startup.
+async fn load_known_recipients(path: &Path) -> HashSet<String> {
+    let contents = match fs::read_to_string(path).await {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return HashSet::new(),
+        Err(error) => {
+            warn!(?error, path = %path.display(), "Failed to read whisper recipients; starting empty");
+            return HashSet::new();
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashSet::new()),
-        Err(error) => Err(error).wrap_err("failed to read whisper recipient store"),
-    }
+    };
+    ron::from_str(&contents).unwrap_or_else(|error| {
+        warn!(?error, path = %path.display(), "Failed to parse whisper recipients; starting empty");
+        HashSet::new()
+    })
 }
 
 async fn save_known_recipients(path: &Path, recipients: &HashSet<String>) -> Result<()> {
     crate::util::persist::atomic_save_ron_async(recipients, path)
         .await
         .wrap_err("Failed to save whisper recipients")
+}
+
+#[cfg(test)]
+mod tests {
+    use twitch_irc::login::StaticLoginCredentials;
+
+    use super::*;
+
+    async fn sender(dir: &Path) -> Arc<HelixWhisperSender<StaticLoginCredentials>> {
+        crate::install_crypto_provider();
+        let creds = StaticLoginCredentials::new("bot".into(), Some("token".into()));
+        Arc::new(
+            HelixWhisperSender::new(creds, "client".into(), "1".into(), dir)
+                .await
+                .expect("sender"),
+        )
+    }
+
+    /// Rounds of overlapping first whispers. After every round the store must
+    /// parse (the old unlocked save tore the shared `.ron.tmp`) and hold every
+    /// recipient so far (a stale snapshot must never win the last rename).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_recipients_never_tear_the_store() {
+        const ROUNDS: usize = 300;
+        const WRITERS: usize = 4;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("whisper_recipients.ron");
+        let sender = sender(dir.path()).await;
+        for round in 0..ROUNDS {
+            let tasks: Vec<_> = (0..WRITERS)
+                .map(|w| {
+                    let sender = sender.clone();
+                    let id = format!("{round}-{w}");
+                    tokio::spawn(async move { sender.remember_recipient(&id).await })
+                })
+                .collect();
+            for task in tasks {
+                task.await.expect("task");
+            }
+            let stored = fs::read_to_string(&path).await.expect("store written");
+            let parsed: HashSet<String> = ron::from_str(&stored)
+                .unwrap_or_else(|error| panic!("round {round}: store torn: {error}"));
+            assert_eq!(parsed.len(), (round + 1) * WRITERS, "round {round}");
+        }
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "test fixture seeds a corrupt file directly"
+    )]
+    async fn corrupt_store_does_not_block_startup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("whisper_recipients.ron"),
+            "[\n]   \"1\",\n]",
+        )
+        .expect("seed");
+        let sender = sender(dir.path()).await;
+        assert!(sender.known_recipients.lock().await.is_empty());
+    }
 }
