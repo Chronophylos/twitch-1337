@@ -30,7 +30,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM base AS cacher
 
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
+RUN cargo chef cook --locked --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 
 # 3. Builder stage - builds the application
 FROM base AS builder
@@ -61,7 +61,7 @@ COPY .cargo .cargo
 COPY crates crates
 
 # Build the application with musl target (produces fully static binary)
-RUN cargo build -p twitch-1337 --release --target x86_64-unknown-linux-musl
+RUN cargo build --locked -p twitch-1337 --release --target x86_64-unknown-linux-musl
 
 # 4. Runtime stage - minimal FROM scratch image
 FROM scratch

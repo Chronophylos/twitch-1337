@@ -206,6 +206,9 @@ fn build_ssrf_safe_client(trusted: TrustedHost) -> Result<reqwest::Client> {
     let trusted = Arc::new(trusted);
     reqwest::Client::builder()
         .user_agent(APP_USER_AGENT)
+        // An env proxy (HTTP_PROXY etc.) would resolve target hosts itself
+        // and bypass SsrfSafeResolver.
+        .no_proxy()
         .dns_resolver(Arc::new(SsrfSafeResolver {
             trusted: Arc::clone(&trusted),
         }))
