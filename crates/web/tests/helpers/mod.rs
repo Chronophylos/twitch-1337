@@ -58,7 +58,6 @@ impl Clock for StepClock {
 }
 
 pub struct FakeHelix {
-    pub moderators: Vec<String>,
     pub users: HashMap<String, HelixUser>,
 }
 
@@ -69,9 +68,6 @@ impl HelixClient for FakeHelix {
     }
     async fn fetch_user_by_login(&self, login: &str) -> eyre::Result<Option<HelixUser>> {
         Ok(self.users.values().find(|u| u.login == login).cloned())
-    }
-    async fn is_moderator(&self, _broadcaster: &str, user_id: &str) -> eyre::Result<bool> {
-        Ok(self.moderators.iter().any(|m| m == user_id))
     }
 }
 
@@ -97,6 +93,24 @@ pub async fn build_state_with_oauth_upstream(
     upstream_base: &str,
 ) -> WebState {
     let mut state = build_state(helix).await;
+    point_oauth_at(&mut state, upstream_base);
+    state
+}
+
+/// Like [`build_state_with_oauth_upstream`] but every request runs the role
+/// recheck (`mod_check_refresh` 0 plus a [`StepClock`]), so Mod rechecks hit
+/// the wiremock token + Helix endpoints.
+pub async fn build_state_rechecking_against(upstream_base: &str) -> (WebState, TempDir, TempDir) {
+    let helix: Arc<dyn HelixClient> = Arc::new(FakeHelix {
+        users: HashMap::new(),
+    });
+    let (mut state, td_pings, td_memory) =
+        build_state_with_overrides(helix, Duration::from_secs(0)).await;
+    point_oauth_at(&mut state, upstream_base);
+    (state, td_pings, td_memory)
+}
+
+fn point_oauth_at(state: &mut WebState, upstream_base: &str) {
     let upstream = upstream_base.trim_end_matches('/');
     state.oauth = Arc::new(
         OAuthCtx::with_endpoints(
@@ -108,7 +122,6 @@ pub async fn build_state_with_oauth_upstream(
         )
         .expect("test oauth"),
     );
-    state
 }
 
 /// Variant that returns the ping data dir so callers can keep it alive while
@@ -239,6 +252,7 @@ pub fn insert_session_as(
             role,
             avatar_url: None,
             is_broadcaster: false,
+            refresh_token: None,
         })
         .expect("insert session");
     let bare_csrf = hex::encode(csrf);
@@ -283,9 +297,8 @@ pub fn set_owner(state: &WebState, owner: Option<&str>) {
         .store(std::sync::Arc::new(owner.map(str::to_owned)));
 }
 
-/// Returns a `FakeHelix` where `user_id` is both a known user and a moderator.
-/// Used by harness / route tests to make the periodic mod-recheck pass without
-/// a real Helix API call.
+/// Returns a `FakeHelix` that knows `user_id` (login `admin`), for route
+/// tests that render the user's name or avatar.
 pub fn admin_helix(user_id: &str) -> Arc<dyn HelixClient> {
     let mut users = HashMap::new();
     users.insert(
@@ -297,8 +310,5 @@ pub fn admin_helix(user_id: &str) -> Arc<dyn HelixClient> {
             profile_image_url: None,
         },
     );
-    Arc::new(FakeHelix {
-        moderators: vec![user_id.to_owned()],
-        users,
-    })
+    Arc::new(FakeHelix { users })
 }

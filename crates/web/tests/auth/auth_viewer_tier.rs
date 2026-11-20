@@ -16,7 +16,6 @@ use twitch_1337_web::auth::Role;
 
 fn empty_helix() -> Arc<FakeHelix> {
     Arc::new(FakeHelix {
-        moderators: vec![],
         users: Default::default(),
     })
 }
@@ -87,7 +86,6 @@ async fn viewer_blocked_from_memory_and_mutations() {
 async fn root_lands_every_tier_on_pings() {
     install_crypto();
     let helix = Arc::new(FakeHelix {
-        moderators: vec!["9".into()],
         users: Default::default(),
     });
     let (state, _td_p, _td_m) = build_state_with_dirs(helix).await;

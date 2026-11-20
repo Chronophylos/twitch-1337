@@ -3,7 +3,7 @@
 //! Module map:
 //! - [`session`]: in-memory session table (TTL + sliding refresh)
 //! - [`csrf`]: hex-encoded double-submit token helpers
-//! - [`role_check`]: hidden_admins → broadcaster → helix moderators
+//! - [`role_check`]: hidden_admins → broadcaster → Twitch moderated channels (user token)
 //! - [`routes`]: login / callback / logout handlers + middleware
 
 pub mod csrf;

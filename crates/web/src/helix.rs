@@ -1,9 +1,9 @@
-//! Minimal Twitch helix client (broadcaster id, moderator list, user lookup).
+//! Minimal Twitch helix client (user lookups, moderated channels).
 //!
 //! Mirrors the AviationClient pattern in core for testability — boxed behind
-//! a trait so route tests can inject fakes. Moderator membership is checked
-//! with the helix `user_id` filter so a single round-trip resolves it
-//! regardless of how many mods the channel has.
+//! a trait so route tests can inject fakes. Moderator status is a free
+//! function ([`user_moderates_channel`]) because it runs with the user's own
+//! token, not the bot token the trait wraps.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,8 +23,6 @@ use crate::clock::Clock;
 pub trait HelixClient: Send + Sync {
     async fn fetch_user_by_id(&self, user_id: &str) -> Result<Option<HelixUser>>;
     async fn fetch_user_by_login(&self, login: &str) -> Result<Option<HelixUser>>;
-    /// Single helix call filtered by `user_id`; returns true iff the user is in the moderator list.
-    async fn is_moderator(&self, broadcaster_id: &str, user_id: &str) -> Result<bool>;
     /// Batched lookup. [`ReqwestHelixClient`] overrides to a single helix
     /// call (up to 100 ids per request).
     async fn fetch_users_by_ids(&self, ids: &[&str]) -> Result<Vec<HelixUser>> {
@@ -294,56 +292,12 @@ impl HelixClient for ReqwestHelixClient {
         }
         Ok(out)
     }
-    async fn is_moderator(&self, broadcaster_id: &str, user_id: &str) -> Result<bool> {
-        let token = self.access_token_provider.current_access_token().await?;
-        helix_moderator_check(
-            &self.http,
-            &self.helix_base,
-            self.client_id.expose_secret(),
-            &token,
-            broadcaster_id,
-            user_id,
-            "helix moderators (bot token)",
-        )
-        .await
-    }
 }
 
-/// Single helix moderator-list call filtered by `user_id`. Returns true iff
-/// `user_id` is a moderator of `broadcaster_id`. Used by
-/// `ReqwestHelixClient::is_moderator` (bot token); the OAuth callback path
-/// uses [`user_moderates_channel`] instead because Twitch requires the
-/// token's user to *be* the broadcaster on this endpoint.
-pub async fn helix_moderator_check(
-    http: &reqwest::Client,
-    helix_base: &str,
-    client_id: &str,
-    bearer_token: &str,
-    broadcaster_id: &str,
-    user_id: &str,
-    context: &'static str,
-) -> Result<bool> {
-    #[derive(Deserialize)]
-    struct ModResp {
-        data: Vec<serde::de::IgnoredAny>,
-    }
-    let resp: ModResp = helix_get(
-        http,
-        helix_base,
-        "/helix/moderation/moderators",
-        &[("broadcaster_id", broadcaster_id), ("user_id", user_id)],
-        bearer_token,
-        client_id,
-        context,
-    )
-    .await?;
-    Ok(!resp.data.is_empty())
-}
-
-/// Used during OAuth callback because `helix/moderation/moderators`
-/// requires the bearer's user id to match `broadcaster_id` (i.e. only
-/// the broadcaster can list their own mods), so a logging-in mod cannot
-/// query their own status that way.
+/// Asks Twitch which channels the token's user moderates and checks
+/// `broadcaster_id` against that list. Called with the user's own token, at
+/// login and on each role recheck. `helix/moderation/moderators` cannot
+/// serve either: it only accepts the broadcaster's own token.
 ///
 /// Pagination: `first=100` (Twitch's max) without follow-up — at that
 /// many moderated channels the user is almost certainly already an

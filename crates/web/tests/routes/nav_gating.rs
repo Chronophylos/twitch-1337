@@ -20,7 +20,6 @@ const OWNER_ID: &str = "999";
 async fn fetch_as(uri: &str, user_id: &str, role: Role) -> String {
     install_crypto();
     let helix = Arc::new(FakeHelix {
-        moderators: vec![],
         users: HashMap::new(),
     });
     let (state, _td_pings, _td_mem) = build_state_with_dirs(helix).await;

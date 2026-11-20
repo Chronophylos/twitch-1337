@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use twitch_1337_web::auth::Role;
-use twitch_1337_web::auth::session::SessionTable;
+use twitch_1337_web::auth::session::{SessionTable, TwitchRefreshToken};
 use twitch_1337_web::clock::Clock;
 
 struct StubClock(std::sync::Mutex<Timestamp>);
@@ -36,6 +36,7 @@ async fn sessions_survive_reload() {
             role: Role::Mod,
             avatar_url: Some("https://example.invalid/a.png".into()),
             is_broadcaster: false,
+            refresh_token: Some(TwitchRefreshToken::new("rt-alice".into())),
         })
         .expect("insert");
     table.persist().await;
@@ -49,9 +50,15 @@ async fn sessions_survive_reload() {
         .expect("session survives reload");
     assert_eq!(got.user_login, "alice");
     assert_eq!(got.role, Role::Mod);
-    // last_role_check is reset on load so the gate re-verifies the helix mod
-    // list on the first post-restart request (a mod demoted while the bot was
-    // down must not keep access on stale state).
+    // The Mod recheck spends this token; losing it on restart would log every
+    // moderator out at their next recheck.
+    assert_eq!(
+        got.refresh_token,
+        Some(TwitchRefreshToken::new("rt-alice".into()))
+    );
+    // last_role_check is reset on load so the gate re-verifies the role on
+    // the first post-restart request (a mod demoted while the bot was down
+    // must not keep access on stale state).
     assert_eq!(
         got.last_role_check,
         Timestamp::MIN,

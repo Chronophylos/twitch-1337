@@ -35,7 +35,6 @@ fn get() -> Request<Body> {
 async fn commands_json_is_public_and_503_until_catalog_is_set() {
     install_crypto();
     let state = build_state(Arc::new(FakeHelix {
-        moderators: vec![],
         users: HashMap::new(),
     }))
     .await;

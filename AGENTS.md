@@ -290,7 +290,12 @@ lives in `settings.ron`, managed via `/settings → Suspend`.
 
 `[web]` bootstrap fields (`enabled`, `bind_addr`, `public_url`, `session_secret`)
 stay in config.toml; `session_ttl` and `mod_check_refresh` live in `settings.ron`,
-managed via `/settings → Web · Sessions`.
+managed via `/settings → Web · Sessions`. Every `mod_check_refresh` a Mod
+session is re-verified with the moderator's own Twitch refresh token (kept in
+`$DATA_DIR/sessions.ron`), never the bot token: Twitch's moderators endpoint
+only answers the broadcaster's token, and the bot is a different account. The
+recheck fails closed: if Twitch errors or the token is rejected, the session is
+dropped and the user logs in again.
 
 Schedules live in `settings.ron`, managed via `/schedules` (mod-gated). Each
 row carries name, message, an interval (hours + minutes inputs), optional ISO 8601 date range, optional

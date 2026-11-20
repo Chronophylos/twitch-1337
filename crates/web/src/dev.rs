@@ -44,6 +44,7 @@ pub fn dev_new_session() -> crate::auth::session::NewSession {
         role: crate::auth::role::Role::Owner,
         avatar_url: None,
         is_broadcaster: false,
+        refresh_token: None,
     }
 }
 
@@ -84,13 +85,8 @@ async fn login(
     Redirect::to(target)
 }
 
-/// Zero-network [`HelixClient`] for the `web-dev` bin.
-///
-/// `is_moderator` returns true only for [`DEV_USER_ID`] so the
-/// require_mod sliding recheck admits the dev session and rejects any
-/// other forged sid (the cookie sig already gates that, this is
-/// defense-in-depth). User lookups echo the input so `/auth/callback`
-/// would round-trip if accidentally exercised.
+/// Zero-network [`HelixClient`] for the `web-dev` bin. User lookups echo
+/// the input so `/auth/callback` would round-trip if accidentally exercised.
 #[derive(Default)]
 pub struct StubHelix;
 
@@ -111,8 +107,5 @@ impl HelixClient for StubHelix {
             display_name: login.to_owned(),
             profile_image_url: None,
         }))
-    }
-    async fn is_moderator(&self, _broadcaster: &str, user_id: &str) -> eyre::Result<bool> {
-        Ok(user_id == DEV_USER_ID)
     }
 }

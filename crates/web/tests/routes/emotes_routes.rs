@@ -18,7 +18,6 @@ use twitch_1337_web::routes::emotes;
 
 fn mod_helix() -> Arc<FakeHelix> {
     Arc::new(FakeHelix {
-        moderators: vec!["42".into()],
         users: Default::default(),
     })
 }

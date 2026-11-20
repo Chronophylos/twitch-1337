@@ -685,7 +685,6 @@ fn viewer_pings_app(state: twitch_1337_web::WebState) -> axum::Router {
 async fn viewer_pings_list_has_no_mutation_controls() {
     install_crypto();
     let helix = Arc::new(FakeHelix {
-        moderators: vec![],
         users: Default::default(),
     });
     let (state, _td) = build_state_with_ping_dir(helix).await;
@@ -731,7 +730,6 @@ async fn mod_pings_list_shows_mutation_controls() {
     install_crypto();
     let user_id = "9002";
     let helix = Arc::new(FakeHelix {
-        moderators: vec![user_id.into()],
         users: Default::default(),
     });
     let (state, _td) = build_state_with_ping_dir(helix).await;

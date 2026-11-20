@@ -9,7 +9,7 @@
 //! Auth tiers:
 //! - **Viewer** (allowlisted Twitch login): `/`, `/pings` (read), `/leaderboard`, `/flights`.
 //!   Read-only — non-GET/HEAD methods are rejected by `viewer_method_guard`.
-//! - **Mod** (broadcaster / hidden admins / helix moderators): pings mutations,
+//! - **Mod** (broadcaster / hidden admins / Twitch moderators): pings mutations,
 //!   `/memory/{soul,lore,users,state}` CRUD, schedules, emotes.
 //! - **Owner** (bootstrap `[twitch].owner`): `/settings`, `/ai-profiles`, `/logs`.
 
