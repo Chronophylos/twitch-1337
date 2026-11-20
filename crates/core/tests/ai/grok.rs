@@ -512,6 +512,7 @@ async fn tools_are_registered_per_persona_when_configured() {
         ("draw_tarot", false, true),
         ("search_packages", false, true),
         ("track_shipment", false, true),
+        ("lookup_network", false, true),
         ("emote_stats", true, true),
     ];
     for (tool, in_grok, in_aurora) in cases {
@@ -541,6 +542,9 @@ async fn backend_tools_are_absent_when_unconfigured() {
             "aurora {tool}: {aurora:?}"
         );
     }
+    // Keyless RDAP: no config section needed, still Aurora-only.
+    assert!(aurora.iter().any(|t| t == "lookup_network"), "{aurora:?}");
+    assert!(!grok.iter().any(|t| t == "lookup_network"), "{grok:?}");
 }
 
 /// Grok is never offered `track_shipment`, so a model that emits it anyway

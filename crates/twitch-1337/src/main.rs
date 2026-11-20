@@ -191,6 +191,22 @@ pub async fn main() -> Result<()> {
         None => None,
     };
 
+    // ipinfo only enriches lookup_network; RDAP keeps the tool working
+    // without it. Same invariant: log and disable, never abort startup.
+    let ipinfo_client = match config.ipinfo.as_ref() {
+        Some(i) => match twitch_1337_core::ipinfo::IpinfoClient::new(i.token.clone()) {
+            Ok(c) => Some(Arc::new(c)),
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    "failed to build ipinfo client, lookup_network runs on RDAP only"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
     let langfuse = match config.langfuse.as_ref() {
         Some(b) => match twitch_1337_core::ai::langfuse::LangfuseHandle::start(b) {
             Ok(h) => {
@@ -323,6 +339,7 @@ pub async fn main() -> Result<()> {
         llm,
         aviation: aviation_client,
         dhl: dhl_client,
+        ipinfo: ipinfo_client,
         amp: amp_client,
         finnhub: finnhub_client,
         langfuse,

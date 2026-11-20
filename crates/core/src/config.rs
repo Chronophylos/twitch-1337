@@ -66,6 +66,14 @@ pub struct DhlBootstrap {
     pub api_key: SecretString,
 }
 
+/// Bootstrap-only ipinfo.io configuration. The token is the whole surface:
+/// its presence adds geo, ASN and hostname to Aurora's `lookup_network` IP
+/// results. Absent, the tool still runs on keyless RDAP.
+#[derive(Debug, Clone, Deserialize)]
+pub struct IpinfoBootstrap {
+    pub token: SecretString,
+}
+
 /// Bootstrap-only AMP (CubeCoders game-server panel) configuration. Presence
 /// enables `!servers`. Use a dedicated AMP user whose role only allows
 /// `Instances.*`; the bot never starts or stops anything.
@@ -153,6 +161,8 @@ pub struct Configuration {
     #[serde(default)]
     pub dhl: Option<DhlBootstrap>,
     #[serde(default)]
+    pub ipinfo: Option<IpinfoBootstrap>,
+    #[serde(default)]
     pub amp: Option<AmpBootstrap>,
     #[serde(default)]
     pub finnhub: Option<FinnhubBootstrap>,
@@ -182,6 +192,7 @@ impl Configuration {
             },
             aviationstack: None,
             dhl: None,
+            ipinfo: None,
             amp: None,
             finnhub: None,
             langfuse: None,
@@ -237,6 +248,14 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         .is_some_and(|d| d.api_key.expose_secret().trim().is_empty())
     {
         bail!("dhl.api_key cannot be empty when dhl is configured");
+    }
+
+    if config
+        .ipinfo
+        .as_ref()
+        .is_some_and(|i| i.token.expose_secret().trim().is_empty())
+    {
+        bail!("ipinfo.token cannot be empty when ipinfo is configured");
     }
 
     if let Some(amp) = config.amp.as_ref() {
@@ -437,6 +456,19 @@ mod tests {
         let err = validate_config(&cfg).expect_err("empty key must fail");
         assert!(
             err.to_string().contains("finnhub.api_key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn empty_ipinfo_token_is_rejected() {
+        let mut cfg = Configuration::test_default();
+        cfg.ipinfo = Some(IpinfoBootstrap {
+            token: SecretString::new(" ".into()),
+        });
+        let err = validate_config(&cfg).expect_err("empty token must fail");
+        assert!(
+            err.to_string().contains("ipinfo.token"),
             "unexpected error: {err}"
         );
     }

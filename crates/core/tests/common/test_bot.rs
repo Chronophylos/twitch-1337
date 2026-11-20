@@ -602,6 +602,7 @@ impl TestBotBuilder {
                         secrecy::SecretString::new("test".into()),
                     ))
                 }),
+                ipinfo: None,
                 amp: self.amp_base_url.as_ref().map(|base| {
                     std::sync::Arc::new(twitch_1337::amp::AmpClient::with_http(
                         reqwest::Client::new(),
