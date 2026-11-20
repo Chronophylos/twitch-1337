@@ -344,8 +344,13 @@ fn normalize_query(query: &str) -> String {
     query.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Cache key for a `read_url` target. Only the scheme and host are case
+/// insensitive (`url::Url` lowercases both while parsing); path and query
+/// stay as given, since the cache is shared across users and `/A` and `/a`
+/// can be different documents. Unparseable input is keyed verbatim.
 fn normalize_url(url: &str) -> String {
-    url.trim().to_ascii_lowercase()
+    let url = url.trim();
+    url::Url::parse(url).map_or_else(|_| url.to_string(), String::from)
 }
 
 #[cfg(test)]
@@ -508,5 +513,17 @@ mod tests {
             .execute_tool_call(&call, &TraceIds::default())
             .await;
         assert_eq!(result.content, r#"{"error":"fetch_blocked"}"#);
+    }
+
+    #[test]
+    fn read_url_cache_key_folds_host_case_but_keeps_path_case() {
+        assert_ne!(
+            normalize_url("https://example.com/Doc?Id=A"),
+            normalize_url("https://example.com/doc?id=a")
+        );
+        assert_eq!(
+            normalize_url(" HTTPS://Example.COM/Doc?Id=A "),
+            normalize_url("https://example.com/Doc?Id=A")
+        );
     }
 }

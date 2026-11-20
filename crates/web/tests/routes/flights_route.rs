@@ -69,6 +69,37 @@ async fn flights_shows_busy_placeholder_when_snapshot_times_out() {
     );
 }
 
+/// A full tracker queue must not park the handler on the enqueue: the same
+/// deadline as the reply applies and the busy placeholder renders.
+#[tokio::test]
+async fn flights_shows_busy_placeholder_when_tracker_queue_is_full() {
+    install_crypto();
+    let (mut state, _td_pings, _td_mem) = build_state_with_dirs(mod_helix()).await;
+    let (tx, _rx) = mpsc::channel::<TrackerCommand>(1);
+    let (filler, _filler_rx) = tokio::sync::oneshot::channel();
+    tx.try_send(TrackerCommand::Snapshot { reply: filler })
+        .expect("fill the only queue slot");
+    state.tracker_tx = Some(Arc::new(tx));
+
+    let (sid, csrf, _bare) = insert_session(&state, "42", "admin");
+    let req = Request::builder()
+        .uri("/flights")
+        .method(Method::GET)
+        .header(header::COOKIE, cookie_header(&sid, &csrf))
+        .body(Body::empty())
+        .unwrap();
+    let res = tokio::time::timeout(std::time::Duration::from_secs(2), app(state).oneshot(req))
+        .await
+        .expect("handler must not park on a full tracker queue")
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(
+        html.contains("busy"),
+        "expected busy placeholder; got {html}"
+    );
+}
+
 #[tokio::test]
 async fn flights_unauthenticated_redirects() {
     install_crypto();
