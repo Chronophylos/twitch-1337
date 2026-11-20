@@ -83,7 +83,9 @@ jobs:
         run: cargo doc --workspace --no-deps --document-private-items
 
       - name: Install cargo-machete
-        uses: taiki-e/install-action@cargo-machete # zizmor: ignore[unpinned-uses]
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-machete
 
       - name: cargo machete (unused deps)
         run: cargo machete
@@ -109,10 +111,14 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov # zizmor: ignore[unpinned-uses]
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-llvm-cov
 
       - name: Install nextest
-        uses: taiki-e/install-action@nextest # zizmor: ignore[unpinned-uses]
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: nextest
 
       - name: cargo llvm-cov nextest
         # --no-clean keeps rust-cache's restored target/; default clean would
@@ -147,7 +153,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Install nextest
-        uses: taiki-e/install-action@nextest # zizmor: ignore[unpinned-uses]
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: nextest
 
       # install-chromedriver: true guarantees the chromedriver matches whatever chrome resolves to
       - id: chrome

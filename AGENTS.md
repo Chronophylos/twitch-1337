@@ -139,12 +139,12 @@ approval.
 grouped as `actions-minor-patch`. Docker ecosystem bumps both tag AND sha256 digest in
 Dockerfile.
 
-**Action pinning:** security-critical actions pinned to **commit SHA** with version
-comment: `EmbarkStudios/cargo-deny-action`, `gitleaks/gitleaks-action`, `zizmorcore/zizmor-action`,
-`actions/delete-package-versions`, `aquasecurity/trivy-action` (Mar 2026 supply-chain
-incident — always SHA-pin trivy). Others pinned to major tags; Dependabot keeps them
-current. Intentionally unpinned uses (`dtolnay/rust-toolchain`, `taiki-e/install-action`)
-carry a `# zizmor: ignore[unpinned-uses]` comment — follow that pattern.
+**Action pinning:** every `uses:` is pinned to a full-length **commit SHA** with a
+version comment (`@<sha> # vX.Y.Z`); the repo setting *Require actions to be pinned
+to a full-length commit SHA* is on, so a tag or branch ref fails the workflow.
+Dependabot bumps SHA pins. Tool installers take the tool as an input rather than a
+ref (`taiki-e/install-action@<sha>` + `with: tool: nextest`). Trivy stays pinned
+for its own reason too (Mar 2026 supply-chain incident).
 
 **Typical PR flow:**
 1. branch → commit → push → `gh pr create`
