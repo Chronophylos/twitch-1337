@@ -1,13 +1,21 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use eyre::Result;
+use tracing::debug;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
+use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::ping::{PingError, PingHandle};
-use crate::settings::SettingsHandle;
+use crate::settings::{Settings, SettingsHandle};
 
 use super::{
     ADMIN_DENIED_MSG, Command, CommandContext, ExecutionClass, is_admin, normalize_username,
 };
+
+fn membership_cooldown_duration(s: &Settings) -> Duration {
+    Duration::from_secs(s.cooldowns.ping_membership)
+}
 
 fn normalize_ping_name(name: &str) -> String {
     name.to_lowercase()
@@ -80,11 +88,19 @@ impl SelfOp {
 pub struct PingAdminCommand {
     ping: PingHandle,
     settings: SettingsHandle,
+    /// Throttles `!p join` / `!p leave`: each toggle rewrites pings.ron.
+    membership_cooldown: PerUserCooldown,
 }
 
 impl PingAdminCommand {
     pub fn new(ping: PingHandle, settings: SettingsHandle) -> Self {
-        Self { ping, settings }
+        let membership_cooldown =
+            PerUserCooldown::live(settings.clone(), membership_cooldown_duration);
+        Self {
+            ping,
+            settings,
+            membership_cooldown,
+        }
     }
 }
 
@@ -292,6 +308,21 @@ impl PingAdminCommand {
                 return Ok(());
             }
         };
+        let user = &ctx.privmsg.sender.login;
+        if let Some(remaining) = self.membership_cooldown.check(user).await {
+            debug!(user = %user, remaining_secs = remaining.as_secs(), "!p {} on cooldown", op.as_str());
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    format!(
+                        "Bitte warte noch {} Waiting",
+                        format_cooldown_remaining(remaining)
+                    ),
+                )
+                .await;
+            return Ok(());
+        }
+        self.membership_cooldown.record(user).await;
         let result = match op {
             SelfOp::Join => {
                 self.ping
