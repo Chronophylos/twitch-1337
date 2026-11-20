@@ -69,6 +69,12 @@ Nothing on the per-message path logs at `info`.
 |OTel logs → Loki|`observability.otel.logs_filter` (settings, live); default `debug` for our crates, `warn` for dependencies|
 |OTel traces → Tempo|`observability.otel.traces_filter` (settings, live); default `info` for our crates|
 
+stdout and the `/logs` ring pass every line through
+`util::redact::redact_secrets`, which blanks the value of credential-named
+`key=value` pairs (`access_key`, `client_secret`, `refresh_token`, `code`, …)
+so a URL in an error never leaks its query secrets. It is a backstop, not a
+licence: secrets still stay in `SecretString` and out of log fields.
+
 ## Metrics
 
 - **RED comes from spans.** Rate, errors, and duration per span name are

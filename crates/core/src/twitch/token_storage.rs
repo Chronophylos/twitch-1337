@@ -72,7 +72,7 @@ impl TokenStorage for FileBasedTokenStorage {
     #[instrument(skip(self, token))]
     async fn update_token(&mut self, token: &UserAccessToken) -> Result<(), Self::UpdateError> {
         debug!(path = %self.path.display(), "Updating token in file");
-        crate::util::persist::atomic_save_ron_async(token, &self.path)
+        crate::util::persist::atomic_save_ron_private_async(token, &self.path)
             .await
             .wrap_err("Failed to save token")
     }
@@ -81,6 +81,36 @@ impl TokenStorage for FileBasedTokenStorage {
 #[cfg(test)]
 mod tests {
     use twitch_irc::login::UserAccessToken;
+
+    /// The token file holds a live access + refresh token, so it must be
+    /// owner-only, also when an older build left it world-readable.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn update_token_writes_an_owner_only_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use jiff::Timestamp;
+        use twitch_irc::login::TokenStorage as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token-aurora.ron");
+        #[expect(clippy::disallowed_methods, reason = "test seeds a 0644 token file")]
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let mut storage = super::FileBasedTokenStorage::with_path(path.clone(), "ref".into());
+        let token = UserAccessToken {
+            access_token: "acc".to_owned(),
+            refresh_token: "ref".to_owned(),
+            created_at: Timestamp::UNIX_EPOCH,
+            expires_at: None,
+        };
+        storage.update_token(&token).await.unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "got {mode:o}");
+        assert_eq!(storage.load_token().await.unwrap().access_token, "acc");
+    }
 
     /// `token.ron` written by the chrono-era build must keep loading, or the
     /// bot falls back to the config refresh token on every start.

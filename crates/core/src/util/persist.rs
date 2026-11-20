@@ -63,14 +63,7 @@ pub async fn atomic_write_bytes_async(
             path: tmp.clone(),
             source,
         })?;
-    tokio::fs::rename(&tmp, path)
-        .await
-        .map_err(|source| AtomicPersistError::Rename {
-            from: tmp.clone(),
-            to: path.to_path_buf(),
-            source,
-        })?;
-    Ok(())
+    rename(&tmp, path).await
 }
 
 /// Async variant — uses `tokio::fs` so it does not block the runtime.
@@ -91,15 +84,57 @@ pub async fn atomic_save_ron_async<T: Serialize>(value: &T, path: &Path) -> Resu
             source,
         })?;
 
-    tokio::fs::rename(&tmp, path)
+    rename(&tmp, path).await
+}
+
+/// [`atomic_save_ron_async`] for files holding credentials (OAuth tokens,
+/// session refresh tokens): on unix the file ends up owner-only (`0600`)
+/// regardless of the process umask.
+///
+/// The mode is set on the tmp file before any data is written, and the
+/// rename carries it onto `path`, so a file left `0644` by an older build is
+/// tightened on its next save.
+pub async fn atomic_save_ron_private_async<T: Serialize>(value: &T, path: &Path) -> Result<()> {
+    let tmp = path.with_extension("ron.tmp");
+    let data = serialize(value)?;
+    write_private(&tmp, data.as_bytes())
         .await
-        .map_err(|source| AtomicPersistError::Rename {
-            from: tmp.clone(),
-            to: path.to_path_buf(),
+        .map_err(|source| AtomicPersistError::WriteTmp {
+            path: tmp.clone(),
             source,
         })?;
+    rename(&tmp, path).await
+}
 
-    Ok(())
+/// Write `bytes` to `tmp`, owner read/write only on unix.
+async fn write_private(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt as _;
+
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(tmp).await?;
+    // `mode` only applies when the file is created; a tmp left behind by a
+    // crashed save keeps its old mode, so set it explicitly as well.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .await?;
+    }
+    file.write_all(bytes).await?;
+    file.flush().await
+}
+
+async fn rename(tmp: &Path, path: &Path) -> Result<()> {
+    tokio::fs::rename(tmp, path)
+        .await
+        .map_err(|source| AtomicPersistError::Rename {
+            from: tmp.to_path_buf(),
+            to: path.to_path_buf(),
+            source,
+        })
 }
 
 #[cfg(test)]
@@ -125,5 +160,32 @@ mod tests {
             ron::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
         assert_eq!(loaded, value);
         assert!(!path.with_extension("ron.tmp").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn private_save_is_owner_only_over_world_readable_leftovers() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token.ron");
+        let tmp = path.with_extension("ron.tmp");
+        // A target written by an older build and a tmp left by a crashed save.
+        for file in [&path, &tmp] {
+            #[expect(clippy::disallowed_methods, reason = "test seeds 0644 files")]
+            std::fs::write(file, "old").unwrap();
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let value = Sample {
+            a: 2,
+            b: "secret".into(),
+        };
+        atomic_save_ron_private_async(&value, &path).await.unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "got {mode:o}");
+        let loaded: Sample = ron::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(loaded, value);
+        assert!(!tmp.exists());
     }
 }
