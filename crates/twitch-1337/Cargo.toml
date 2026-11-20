@@ -17,7 +17,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 twitch-1337-core = { path = "../core" }
 twitch-1337-web = { path = "../web" }
-twitch-irc = { git = "https://github.com/Chronophylos/twitch-irc-rs", rev = "30fc7534c6f47cc95279a5774b1d0d8c5125e752", default-features = false, features = [
+twitch-irc = { git = "https://github.com/Chronophylos/twitch-irc-rs", rev = "2d3d85bbe07c4609985f427680187413aa7732fa", default-features = false, features = [
   "refreshing-token-rustls-webpki-roots",
   "transport-tcp-rustls-webpki-roots",
 ] }
