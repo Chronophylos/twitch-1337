@@ -15,6 +15,8 @@
     {% call m::num_row("cooldowns", self.knob("cooldowns.ai"), "Per-user cooldown for !ai.", current.cooldowns.ai, defaults.cooldowns.ai, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.news"), "Per-user cooldown for !news.", current.cooldowns.news, defaults.cooldowns.news, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.up"), "Per-user cooldown for !up.", current.cooldowns.up, defaults.cooldowns.up, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", self.knob("cooldowns.info"), "Per-user cooldown for !info.", current.cooldowns.info, defaults.cooldowns.info, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", self.knob("cooldowns.track"), "Per-user cooldown for !track.", current.cooldowns.track, defaults.cooldowns.track, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.feedback"), "Per-user cooldown for !fb.", current.cooldowns.feedback, defaults.cooldowns.feedback, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.doener"), "Per-user cooldown for !dpi and !döner (!doener); both use Döneratlas.", current.cooldowns.doener, defaults.cooldowns.doener, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.spoiler"), "Per-user cooldown for !spoiler.", current.cooldowns.spoiler, defaults.cooldowns.spoiler, "s") %}{% endcall %}

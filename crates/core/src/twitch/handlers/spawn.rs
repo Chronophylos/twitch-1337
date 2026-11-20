@@ -112,6 +112,7 @@ where
     {
         command_list.push(Arc::new(aviation::commands::track::TrackCommand::new(
             tx.clone(),
+            services.settings.clone(),
         )));
         command_list.push(Arc::new(aviation::commands::untrack::UntrackCommand::new(
             tx.clone(),
@@ -122,7 +123,10 @@ where
         command_list.push(Arc::new(aviation::commands::flights::FlightCommand::new(
             tx.clone(),
         )));
-        command_list.push(Arc::new(aviation::commands::info::InfoCommand::new(tx)));
+        command_list.push(Arc::new(aviation::commands::info::InfoCommand::new(
+            tx,
+            services.settings.clone(),
+        )));
     }
 
     if let Some(amp) = services.amp.clone() {

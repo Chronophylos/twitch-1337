@@ -1,19 +1,31 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use eyre::Result;
 use tokio::sync::mpsc;
-use tracing::error;
+use tracing::{debug, error};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::{FlightIdentifier, TrackerCommand};
 use crate::commands::{Command, CommandContext, ExecutionClass};
+use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
+use crate::settings::{Settings, SettingsHandle};
+
+fn track_cooldown_duration(s: &Settings) -> Duration {
+    Duration::from_secs(s.cooldowns.track)
+}
 
 pub struct TrackCommand {
     tracker_tx: mpsc::Sender<TrackerCommand>,
+    cooldown: PerUserCooldown,
 }
 
 impl TrackCommand {
-    pub fn new(tracker_tx: mpsc::Sender<TrackerCommand>) -> Self {
-        Self { tracker_tx }
+    pub fn new(tracker_tx: mpsc::Sender<TrackerCommand>, settings: SettingsHandle) -> Self {
+        Self {
+            tracker_tx,
+            cooldown: PerUserCooldown::live(settings, track_cooldown_duration),
+        }
     }
 }
 
@@ -51,6 +63,20 @@ where
                 .await;
             return Ok(());
         }
+        let user = &ctx.privmsg.sender.login;
+        if let Some(remaining) = self.cooldown.check(user).await {
+            debug!(user = %user, remaining_secs = remaining.as_secs(), "!track on cooldown");
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    format!(
+                        "Bitte warte noch {} Waiting",
+                        format_cooldown_remaining(remaining)
+                    ),
+                )
+                .await;
+            return Ok(());
+        }
 
         let identifier = match FlightIdentifier::parse(&input) {
             Ok(id) => id,
@@ -59,6 +85,7 @@ where
                 return Ok(());
             }
         };
+        self.cooldown.record(user).await;
         let cmd = TrackerCommand::Track {
             identifier,
             requested_by: ctx.privmsg.sender.login.clone(),
