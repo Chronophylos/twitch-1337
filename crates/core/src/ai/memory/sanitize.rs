@@ -26,8 +26,11 @@ const RESERVED: &[&str] = &[
     "new",
     "delete",
 ];
-const FENCE_OPEN: &str = "<<<FILE ";
-const FENCE_CLOSE: &str = "<<<ENDFILE ";
+// Same strings `inject::fence::scrub_for_inject` rejects. With a trailing
+// space here, `x<<<FILEx` passed save and was then blanked to
+// `<corrupt: rejected>` on every turn.
+const FENCE_OPEN: &str = "<<<FILE";
+const FENCE_CLOSE: &str = "<<<ENDFILE";
 
 /// Paths the LLM may write to via `write_file`. Excludes `scratch/<slug>.md`
 /// because scratch has its own pair of tools.
@@ -358,6 +361,8 @@ mod tests {
             "intro\n# state/quiz.md\n",
             "leak <<<FILE path=x nonce=y>>> stuff",
             "leak <<<ENDFILE nonce=y>>> stuff",
+            "no space x<<<FILEx",
+            "no space <<<ENDFILE>>>",
             // CRLF variants must not slip past the LF-only checks above.
             "ok\r\n---\r\nfoo: bar\r\n---\r\nmore",
             "lone \r in body",

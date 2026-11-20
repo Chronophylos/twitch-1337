@@ -26,6 +26,9 @@ fn chat_error(e: &PingError) -> String {
         PingError::ControlChars => {
             "Template darf keine Steuerzeichen (z.B. Zeilenumbrüche) enthalten FDM".to_string()
         }
+        PingError::InvalidMember { .. } => {
+            "Mitglieder müssen gültige Twitch-Namen sein (a-z, 0-9, _) FDM".to_string()
+        }
         PingError::AlreadyMember { ping, user } => format!("{user} ist schon in \"{ping}\" FDM"),
         PingError::NotMember { ping, user } => format!("{user} ist nicht in \"{ping}\" FDM"),
         PingError::Unavailable => "Ping-System ist gerade nicht verfügbar FDM".to_string(),

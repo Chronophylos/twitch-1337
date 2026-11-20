@@ -41,6 +41,10 @@ impl UserFacing for PingError {
             PingError::ControlChars => {
                 "template must not contain control characters (e.g. line breaks)".to_owned()
             }
+            PingError::InvalidMember { .. } => {
+                "username must be 1\u{2013}25 chars: lowercase letters, digits, underscore"
+                    .to_owned()
+            }
             PingError::AlreadyMember { user, .. } => format!("`{user}` is already a member"),
             PingError::NotMember { user, .. } => format!("`{user}` is not a member"),
             // Internal failures bubble via [`ping_error_for_form`], not display.
