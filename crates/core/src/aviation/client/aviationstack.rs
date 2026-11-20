@@ -89,6 +89,9 @@ impl AviationClient {
             .timeout(timeout)
             .send()
             .await
+            // The URL carries `access_key`; a reqwest error keeps it and the
+            // caller logs the chain.
+            .map_err(reqwest::Error::without_url)
             .wrap_err("Failed to send request to aviationstack")?;
 
         let status = resp.status();
@@ -120,6 +123,7 @@ impl AviationClient {
         let resp: AviationstackFlightsResponse = resp
             .json()
             .await
+            .map_err(reqwest::Error::without_url)
             .wrap_err("Failed to parse aviationstack response")?;
 
         Ok(resp
@@ -252,5 +256,45 @@ mod tests {
         assert!(!aviationstack_4xx_is_actionable(404));
         assert!(!aviationstack_4xx_is_actionable(400));
         assert!(!aviationstack_4xx_is_actionable(422));
+    }
+
+    const SECRET_KEY: &str = "avs-secret-key-0123";
+
+    async fn failed_lookup_error(response: ResponseTemplate) -> String {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/flights"))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+        let client = aviation_client().with_aviationstack(
+            Some(SecretString::new(SECRET_KEY.into())),
+            server.uri(),
+            1,
+        );
+        let error = client
+            .get_aviationstack_flight_metadata(
+                &FlightIdentifier::Callsign("DLH1234".to_string()),
+                Some("DLH1234"),
+            )
+            .await
+            .expect_err("lookup must fail");
+        // `?error` is how the tracker logs it: the full chain, Debug form.
+        format!("{error:?}")
+    }
+
+    #[tokio::test]
+    async fn undecodable_response_error_omits_api_key() {
+        let logged =
+            failed_lookup_error(ResponseTemplate::new(200).set_body_string("<html>oops")).await;
+        assert!(!logged.contains(SECRET_KEY), "{logged}");
+    }
+
+    #[tokio::test]
+    async fn timed_out_request_error_omits_api_key() {
+        let logged =
+            failed_lookup_error(ResponseTemplate::new(200).set_delay(Duration::from_secs(3))).await;
+        assert!(logged.contains("Failed to send request"), "{logged}");
+        assert!(!logged.contains(SECRET_KEY), "{logged}");
     }
 }
