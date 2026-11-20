@@ -385,18 +385,36 @@ impl MemoryStore {
         body: &str,
         creator_user_id: Option<&str>,
     ) -> Result<(), WriteError> {
-        self.write_scratch_inner(kind, body, creator_user_id, None)
+        self.write_scratch_inner(kind, body, creator_user_id, None, None)
+            .await
+    }
+
+    /// Like [`Self::write_scratch`], but an existing file is overwritten only
+    /// when its `created_by` equals `owner_user_id`; otherwise
+    /// [`WriteError::NotOwner`]. The check runs under the per-path lock, so it
+    /// cannot race the write. A missing file is created with `owner_user_id`
+    /// as creator.
+    pub async fn write_scratch_owned(
+        &self,
+        kind: &FileKind,
+        body: &str,
+        owner_user_id: &str,
+    ) -> Result<(), WriteError> {
+        self.write_scratch_inner(kind, body, Some(owner_user_id), None, Some(owner_user_id))
             .await
     }
 
     /// `created_by_override`: `Some(non_empty)` replaces the on-disk
     /// `created_by`; `Some("")` and `None` both fall back to preserve-or-init.
+    /// `required_owner`: `Some(id)` rejects overwriting an existing file whose
+    /// `created_by` is not `id`.
     async fn write_scratch_inner(
         &self,
         kind: &FileKind,
         body: &str,
         creator_user_id: Option<&str>,
         created_by_override: Option<&str>,
+        required_owner: Option<&str>,
     ) -> Result<(), WriteError> {
         let FileKind::Scratch { slug } = kind else {
             return Err(WriteError::Io(eyre!(
@@ -420,6 +438,12 @@ impl MemoryStore {
             .as_deref()
             .and_then(|raw| frontmatter::parse(raw).ok())
             .and_then(|(fm, _)| fm.created_by);
+        if let Some(owner) = required_owner
+            && !is_new
+            && prior_created_by.as_deref() != Some(owner)
+        {
+            return Err(WriteError::NotOwner);
+        }
         let created_by = match created_by_override {
             Some(s) if !s.is_empty() => Some(s.to_string()),
             _ => prior_created_by.or_else(|| creator_user_id.map(std::string::ToString::to_string)),
@@ -548,6 +572,7 @@ impl MemoryStore {
                     body,
                     None,
                     fm_override.created_by.as_deref(),
+                    None,
                 )
                 .await?;
             }
@@ -679,6 +704,9 @@ pub enum WriteError {
     InvalidSlug,
     #[error("reserved_slug")]
     ReservedSlug,
+    /// The scratch file exists and was created by someone else.
+    #[error("not_owner")]
+    NotOwner,
     #[error("io: {0}")]
     Io(#[from] eyre::Report),
 }
