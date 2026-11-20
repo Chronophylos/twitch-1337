@@ -291,9 +291,9 @@ async fn grok_uses_its_own_profile_model_effort_and_tier() {
     assert_eq!(calls[0].reasoning_effort.as_deref(), Some("high"));
     assert_eq!(calls[0].service_tier.as_deref(), Some("flex"));
 
-    // PROMPT_SYSTEM / ai_instructions.md do not embed {model} or {model_id};
-    // resolved model is carried on the LLM request. grok.md's own head proves
-    // the alias path (its own baked prompt, not Aurora's + an appendix).
+    // The resolved model reaches both the LLM request and grok's System core
+    // prompt (`{{ model.display }}` / `{{ model.id }}`). grok.md's own head
+    // proves the alias path (its own baked prompt, not Aurora's + an appendix).
     let system = calls[0]
         .messages
         .iter()
@@ -302,6 +302,11 @@ async fn grok_uses_its_own_profile_model_effort_and_tier() {
     assert!(
         system.content.contains("You are grok"),
         "expected grok's own system head; got: {}",
+        system.content
+    );
+    assert!(
+        system.content.contains("x-ai/grok-4"),
+        "expected resolved model in grok's system prompt; got: {}",
         system.content
     );
 
