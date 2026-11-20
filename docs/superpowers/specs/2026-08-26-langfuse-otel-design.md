@@ -1,6 +1,6 @@
 # First-party Langfuse traces
 
-Status: approved
+Status: approved; transport superseded by ADR-0013 (OTel SDK pipeline, Langfuse as a filtered exporter)
 Date: 2026-08-26
 Branch: `feature/langfuse`
 
