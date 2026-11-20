@@ -309,7 +309,7 @@ impl PingAdminCommand {
             }
         };
         let user = &ctx.privmsg.sender.login;
-        if let Some(remaining) = self.membership_cooldown.check(user).await {
+        if let Err(remaining) = self.membership_cooldown.try_acquire(user).await {
             debug!(user = %user, remaining_secs = remaining.as_secs(), "!p {} on cooldown", op.as_str());
             ctx.sender
                 .reply(
@@ -322,7 +322,6 @@ impl PingAdminCommand {
                 .await;
             return Ok(());
         }
-        self.membership_cooldown.record(user).await;
         let result = match op {
             SelfOp::Join => {
                 self.ping
