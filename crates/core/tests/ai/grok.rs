@@ -7,7 +7,7 @@ use llm::{Role, ToolCall, ToolChatCompletionResponse};
 use twitch_1337::settings::ai::AiProfile;
 use twitch_1337::settings::provider::AiProvider;
 use twitch_1337_core as twitch_1337;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{any, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn profile(name: &str, model: &str) -> AiProfile {
@@ -536,4 +536,54 @@ async fn backend_tools_are_absent_when_unconfigured() {
             "aurora {tool}: {aurora:?}"
         );
     }
+}
+
+/// Grok is never offered `track_shipment`, so a model that emits it anyway
+/// gets `unknown_tool` back and DHL is never called.
+#[tokio::test]
+async fn grok_cannot_call_an_aurora_only_tool() {
+    let dhl = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&dhl)
+        .await;
+
+    let mut bot = TestBotBuilder::new()
+        .with_dhl_base_url(dhl.uri())
+        .with_ai()
+        .with_settings(|o| {
+            o.ai.history.length = Some(0);
+        })
+        .spawn()
+        .await;
+    bot.llm.push_tool(ToolChatCompletionResponse::ToolCalls {
+        calls: vec![ToolCall {
+            id: "ts1".into(),
+            name: "track_shipment".into(),
+            arguments: serde_json::json!({ "tracking_number": "00340434161094042557" }),
+            arguments_parse_error: None,
+        }],
+        reasoning_content: None,
+    });
+    bot.llm.push_tool_message("kein Paket");
+
+    bot.send("alice", "@grok wo ist mein paket").await;
+    assert_eq!(bot.expect_reply(Duration::from_secs(2)).await, "kein Paket");
+
+    let calls = bot.llm.tool_calls();
+    let result = &calls
+        .last()
+        .expect("a follow-up round")
+        .prior_rounds
+        .last()
+        .expect("the track_shipment round")
+        .results[0];
+    assert_eq!(result.tool_name, "track_shipment");
+    assert_eq!(result.content, "unknown_tool");
+    assert!(
+        dhl.received_requests().await.unwrap_or_default().is_empty(),
+        "DHL must not be called from a grok turn"
+    );
+
+    bot.shutdown().await;
 }
