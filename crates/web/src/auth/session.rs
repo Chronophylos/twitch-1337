@@ -20,7 +20,7 @@ use jiff::{SignedDuration, Timestamp};
 use parking_lot::RwLock;
 use rand::Rng as _;
 use serde::{Deserialize, Serialize};
-use twitch_1337_core::util::persist::atomic_save_ron_async;
+use twitch_1337_core::util::persist::atomic_save_ron_private_async;
 
 use crate::auth::role::Role;
 use crate::clock::Clock;
@@ -103,9 +103,9 @@ pub struct SessionTable {
     path: Option<PathBuf>,
     /// Serializes [`persist`](Self::persist) calls. `persist` is invoked from
     /// three concurrent contexts (login, logout, the periodic snapshot task)
-    /// and `atomic_save_ron_async` always writes the same `.ron.tmp` sibling —
-    /// overlapping writes would tear that temp file. Holding this across the
-    /// whole snapshot+write makes the last writer win cleanly.
+    /// and `atomic_save_ron_private_async` always writes the same `.ron.tmp`
+    /// sibling — overlapping writes would tear that temp file. Holding this
+    /// across the whole snapshot+write makes the last writer win cleanly.
     write_lock: tokio::sync::Mutex<()>,
     /// Serializes role rechecks. A Mod recheck spends the session's refresh
     /// token; two concurrent requests must not both spend it, or a rotated
@@ -164,7 +164,8 @@ impl SessionTable {
     }
 
     /// Snapshot the table and atomically write it to disk. No-op when the
-    /// table has no backing path.
+    /// table has no backing path. The file carries Mod refresh tokens, so it
+    /// is written owner-only (`0600`).
     ///
     /// The whole snapshot+write runs under `write_lock` so concurrent callers
     /// (login, logout, the periodic task) can't tear the shared `.ron.tmp`.
@@ -177,7 +178,7 @@ impl SessionTable {
         };
         let _write = self.write_lock.lock().await;
         let snapshot = self.inner.read().clone();
-        if let Err(error) = atomic_save_ron_async(&snapshot, &path).await {
+        if let Err(error) = atomic_save_ron_private_async(&snapshot, &path).await {
             tracing::warn!(?error, "Failed to persist sessions");
         }
     }
@@ -407,6 +408,29 @@ mod tests {
         assert!(!mk(Role::Viewer).is_mod());
         assert!(mk(Role::Mod).is_mod());
         assert!(mk(Role::Owner).is_mod(), "owner is a superset of mod");
+    }
+
+    /// `sessions.ron` carries Mod refresh tokens, so it must be owner-only,
+    /// also when an older build left it world-readable.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn persist_writes_an_owner_only_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.ron");
+        #[expect(clippy::disallowed_methods, reason = "test seeds a 0644 sessions file")]
+        std::fs::write(&path, "{}").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let table = SessionTable::load(TestClock::new(), path.clone());
+        table.insert_at("sid", [0u8; 32], sample_session());
+        table.persist().await;
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "got {mode:o}");
+        let reloaded = SessionTable::load(TestClock::new(), path);
+        assert_eq!(reloaded.get("sid").unwrap().user_id, "u1");
     }
 
     /// `sessions.ron` written by the pre-jiff (chrono) build must keep loading.

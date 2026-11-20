@@ -8,6 +8,7 @@ use tokio::io::AsyncWriteExt as _;
 use tracing::warn;
 
 use crate::aviation::{AviationstackFlightMetadata, NearbyAircraft};
+use crate::util::redact::redact_secrets;
 
 use super::{FlightIdentifier, TrackedFlight};
 
@@ -431,40 +432,9 @@ fn sanitize_value(value: Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(sanitize_map(map)),
         Value::Array(values) => Value::Array(values.into_iter().map(sanitize_value).collect()),
-        Value::String(value) => Value::String(sanitize_string(&value)),
+        Value::String(value) => Value::String(redact_secrets(&value).into_owned()),
         other => other,
     }
-}
-
-fn sanitize_string(value: &str) -> String {
-    let mut sanitized = value.to_string();
-    for key in ["access_key", "api_key", "token", "authorization"] {
-        sanitized = redact_query_value(&sanitized, key);
-    }
-    sanitized
-}
-
-fn redact_query_value(value: &str, key: &str) -> String {
-    // `key` is lowercase; match the parameter name case-insensitively (e.g.
-    // `Access_Key=`) by searching a lowercased copy. ASCII-lowercasing keeps
-    // byte offsets identical, so the indices still slice the original `value`
-    // and preserve its casing in the output.
-    let needle = format!("{key}=");
-    let haystack = value.to_ascii_lowercase();
-    let mut out = String::new();
-    let mut pos = 0;
-    while let Some(rel) = haystack[pos..].find(&needle) {
-        let key_end = pos + rel + needle.len();
-        out.push_str(&value[pos..key_end]);
-        out.push_str("<redacted>");
-        // Drop the value up to the next '&' (kept) or the end of the string.
-        match value[key_end..].find('&') {
-            Some(amp) => pos = key_end + amp,
-            None => return out,
-        }
-    }
-    out.push_str(&value[pos..]);
-    out
 }
 
 fn is_sensitive_key(key: &str) -> bool {

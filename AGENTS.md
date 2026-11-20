@@ -320,7 +320,7 @@ OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config
 
 All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `token-aurora.ron`, `token-grok.ron` (per-mouth, only when that mouth is configured), `pings.ron`, `leaderboard.ron`, `hall_of_shame.ron`, `flights.ron`, `alerts.ron`, `feedback.txt`, `emotes.db` (+ `-wal`/`-shm` when WAL mode) — emote tracker catalog, set audit, usage events, and sibling `emote_meanings` for AI grounding (see ADR-0008). Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/scratch/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt templates are *not* here — they're baked into the binary from `crates/data/assets/prompts/` (`include_str!` via `twitch-1337-data`, single source of truth). The chat turn is assembled from `preset.ron`: an ordered list of named blocks, each with a slot (System/User/Assistant) and a minijinja body that decides its own inclusion. See `docs/ai-prompts.md`.
 
-Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `flight_tracker.rs`.
+Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `flight_tracker.rs`. Files holding credentials (`token*.ron`, `sessions.ron`) use `util::persist::atomic_save_ron_private_async`, which writes them `0600` on unix.
 
 ## Embedded data
 

@@ -7,8 +7,11 @@
 //! The layer never blocks on I/O and never panics. Field values are formatted
 //! before the lock is taken, so the critical section is an O(1) push/pop.
 //! `SecretString` values only ever reach the ring through their redacting
-//! `Debug` impl.
+//! `Debug` impl, and the message plus every field value pass through
+//! [`redact_secrets`] first, so a credential in a logged URL (a `reqwest`
+//! error's `?access_key=`) never lands on the `/logs` page.
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::{self, Write as _};
 use std::sync::Arc;
@@ -19,6 +22,8 @@ use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
+
+use super::redact::redact_secrets;
 
 /// Default number of events kept in the ring.
 pub const LOG_RING_CAPACITY: usize = 2000;
@@ -169,6 +174,10 @@ struct EntryVisitor {
 
 impl EntryVisitor {
     fn store(&mut self, field: &Field, value: String) {
+        let value = match redact_secrets(&value) {
+            Cow::Owned(redacted) => redacted,
+            Cow::Borrowed(_) => value,
+        };
         let name = field.name();
         if name == "message" {
             self.message = clamp(value);
@@ -299,5 +308,33 @@ mod tests {
         );
         assert_eq!(snap[1].level, Level::ERROR);
         assert_eq!(snap[1].target, "tst::sub");
+    }
+
+    #[test]
+    fn layer_redacts_secret_query_values_in_message_and_fields() {
+        const URL: &str = "https://id.twitch.tv/oauth2/token?access_key=SECRET1&client_secret=SECRET2&refresh_token=SECRET3&grant_type=refresh_token";
+        let ring = Arc::new(LogRing::new(10));
+        let subscriber = tracing_subscriber::registry().with(LogRingLayer::new(ring.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            let error = format!("error sending request for url ({URL}): timed out");
+            tracing::warn!(target: "tst", %error, "token refresh failed for {URL}");
+        });
+        let snap = ring.snapshot();
+        let redacted = "https://id.twitch.tv/oauth2/token?access_key=<redacted>&client_secret=<redacted>&refresh_token=<redacted>&grant_type=refresh_token";
+        assert_eq!(
+            snap[0].message,
+            format!("token refresh failed for {redacted}")
+        );
+        assert_eq!(
+            snap[0].fields,
+            [(
+                "error".to_owned(),
+                format!("error sending request for url ({redacted}): timed out"),
+            )]
+        );
+        let stored = format!("{:?}", snap[0]);
+        for secret in ["SECRET1", "SECRET2", "SECRET3"] {
+            assert!(!stored.contains(secret), "{secret} leaked: {stored}");
+        }
     }
 }
