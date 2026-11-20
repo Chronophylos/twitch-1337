@@ -99,8 +99,8 @@ No `--no-verify`, no secrets, no amend unless explicitly allowed.
 
 ## CI & branch policy
 
-`main` is branch-protected (admin enforced). Direct pushes rejected — use a PR.
-Linear history required, force-push + delete blocked, conversations must resolve.
+`main` is protected by the `main` repository ruleset (no bypass actors, admins included). Direct pushes rejected — use a PR.
+Linear history required, force-push + delete blocked, squash-only, conversations must resolve, no approving review required.
 
 **Branch naming:** `feature/` features, `spec/` specs, `fix/` bug fixes, `refactor/` refactors, `build/` CI / dependencies / Docker. Slug after slash, kebab-case.
 

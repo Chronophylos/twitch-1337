@@ -2,15 +2,17 @@
 
 Thanks for contributing to twitch-1337. This file covers repo conventions that aren't obvious from the code. For build/test/CI details see [AGENTS.md](AGENTS.md).
 
-## PR flow
+## Pull requests
 
-1. Branch from `main`, commit, push.
-2. `gh pr create` — Conventional Commit title in the same brainrot-subject style as commits (squash uses the title), plus summary + test plan.
-3. Wait for the required status checks to go green (see AGENTS.md § CI & branch policy).
-4. Rebase on `main` if the `strict` check blocks merge.
-5. `gh pr merge --squash` once reviews are in.
+PRs are welcome, from forks or otherwise. For larger changes, opening an issue first to agree on the approach saves rework. Bug reports and feature requests go in issues; a PR description is not a substitute for one.
 
-`main` is branch-protected: direct pushes are rejected, linear history is enforced, and all conversations must be resolved before merge.
+1. Fork (or branch from `main`), commit, push.
+2. Open a PR against `main` with a Conventional Commit title (squash merge uses it as the commit subject), a **Summary**, and a **Test plan**.
+3. Workflow runs on PRs from outside contributors wait for maintainer approval before they start. Fork runs get a read-only token and no repository secrets.
+4. All required status checks must pass (see AGENTS.md § CI & branch policy). The `strict` policy means the branch must be up to date with `main`; rebase or use **Update branch** when it falls behind.
+5. The maintainer merges with squash.
+
+`main` is protected by a repository ruleset that applies to everyone, including admins: no direct pushes, no force-push or deletion, linear history, squash-only merges, and all review conversations resolved before merge. No approving review is required.
 
 ## Labels
 
@@ -67,8 +69,14 @@ Applied automatically by Dependabot per `.github/dependabot.yml`.
 
 | Label | Meaning |
 |---|---|
+| `status:needs-triage` | Maintainer needs to evaluate this issue |
+| `status:needs-info` | Waiting on the reporter for more information |
+| `status:ready-for-agent` | Fully specified, ready for an AFK agent |
+| `status:ready-for-human` | Requires human implementation |
 | `status:wontfix` | Intentionally not pursuing |
 | `status:duplicate` | Duplicate of another issue or PR |
+
+Contributors don't need to set labels; the maintainer applies them during triage.
 
 ## Commit messages
 
@@ -80,7 +88,7 @@ fix(schedule): reconcile hot-reload on content changes
 refactor: split main.rs into handler modules
 ```
 
-Subject ≤ 50 chars. Body explains the *why* when it isn't obvious from the diff.
+Body explains the *why* when it isn't obvious from the diff.
 
 ### AI agents (Cursor, Claude Code, etc.)
 
@@ -98,12 +106,12 @@ Human contributors can use plain subjects; the gen-z bit is for agents only.
 
 ## Before committing
 
-Run the pre-commit gate locally (CI will reject anything that fails):
+Run the CI gate locally before pushing (CI rejects anything that fails):
 
 ```bash
 cargo fmt --all
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo nextest run --workspace   # `cargo test --workspace` if nextest is missing
 ```
 
-`cargo audit` runs in CI; optional locally.
+`cargo deny check` runs in CI; run it locally when you touch dependencies.
