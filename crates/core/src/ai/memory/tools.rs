@@ -46,6 +46,9 @@ fn map_write_err(err: WriteError) -> String {
         }
         WriteError::InvalidSlug => INVALID_SLUG_MSG.into(),
         WriteError::ReservedSlug => RESERVED_SLUG_MSG.into(),
+        WriteError::NotOwner => {
+            "permission_denied: regulars may only overwrite scratch files they created".into()
+        }
         WriteError::Io(error) => {
             tracing::error!(?error, "memory tool write failed");
             IO_ERROR_MSG.into()
@@ -311,17 +314,31 @@ impl ChatTurnExecutor {
             return "write_quota_exhausted: the write limit for this turn is used up".into();
         }
 
-        match self
-            .opts
-            .store
-            .write_scratch(
-                &FileKind::Scratch { slug: args.slug },
-                &args.body,
-                Some(self.opts.speaker_user_id.as_str()),
-            )
-            .await
-        {
+        let kind = FileKind::Scratch { slug: args.slug };
+        let speaker = self.opts.speaker_user_id.as_str();
+        // Regulars may only overwrite their own scratch files. The store checks
+        // ownership under the per-path lock so check and write cannot race.
+        let result = match self.role() {
+            Role::Regular => {
+                self.opts
+                    .store
+                    .write_scratch_owned(&kind, &args.body, speaker)
+                    .await
+            }
+            _ => {
+                self.opts
+                    .store
+                    .write_scratch(&kind, &args.body, Some(speaker))
+                    .await
+            }
+        };
+        match result {
             Ok(()) => "ok".into(),
+            Err(WriteError::NotOwner) => {
+                // A denied write is not a write: hand the quota slot back.
+                self.write_count.fetch_sub(1, Ordering::SeqCst);
+                map_write_err(WriteError::NotOwner)
+            }
             Err(e) => map_write_err(e),
         }
     }
@@ -949,6 +966,58 @@ mod exec_tests {
             "got {}",
             r.content
         );
+    }
+
+    #[tokio::test]
+    async fn regular_cannot_overwrite_another_users_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        // Pre-seed scratch file owned by user 99 (e.g. a moderator).
+        store
+            .write_scratch(
+                &FileKind::Scratch { slug: "qz".into() },
+                "mod note",
+                Some("99"),
+            )
+            .await
+            .unwrap();
+
+        // Quota of one: the denied write must not use it up.
+        let exec = make_executor(Role::Regular, store.clone(), 1).await;
+        let r = exec
+            .execute(&call(
+                "write_scratch",
+                serde_json::json!({"slug": "qz", "body": "hijacked"}),
+            ))
+            .await;
+        assert_eq!(
+            r.content,
+            "permission_denied: regulars may only overwrite scratch files they created"
+        );
+        let qz = store.read_scratch("qz").await.unwrap();
+        assert_eq!(qz.body.trim(), "mod note");
+        assert_eq!(qz.frontmatter.created_by.as_deref(), Some("99"));
+
+        let r = exec
+            .execute(&call(
+                "write_scratch",
+                serde_json::json!({"slug": "mine", "body": "v1"}),
+            ))
+            .await;
+        assert_eq!(r.content, "ok");
+
+        // The creator, still a regular, may overwrite their own note.
+        let exec = make_executor(Role::Regular, store.clone(), 1).await;
+        let r = exec
+            .execute(&call(
+                "write_scratch",
+                serde_json::json!({"slug": "mine", "body": "v2"}),
+            ))
+            .await;
+        assert_eq!(r.content, "ok");
+        let mine = store.read_scratch("mine").await.unwrap();
+        assert_eq!(mine.body.trim(), "v2");
+        assert_eq!(mine.frontmatter.created_by.as_deref(), Some("12345"));
     }
 
     #[tokio::test]
