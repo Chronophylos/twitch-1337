@@ -59,7 +59,7 @@ where
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
-        if let Some(remaining) = self.cooldown.check(user).await {
+        if let Err(remaining) = self.cooldown.try_acquire(user).await {
             ctx.cancellation.check()?;
             send(
                 &ctx,
@@ -71,7 +71,6 @@ where
             .await?;
             return Ok(());
         }
-        self.cooldown.record(user).await;
 
         let query = ctx.args.join(" ");
         let query = query.trim();

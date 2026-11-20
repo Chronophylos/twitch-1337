@@ -226,21 +226,6 @@ where
         ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
 
-        if let Some(remaining) = self.cooldown.check(user).await {
-            ctx.cancellation.check()?;
-            debug!(user = %user, remaining_secs = remaining.as_secs(), "News command on cooldown");
-            ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
-                .await;
-            return Ok(());
-        }
-
         ctx.cancellation.check()?;
         let Some(history_lines) = self.relevant_history(user, &ctx.privmsg.message_text).await
         else {
@@ -265,7 +250,20 @@ where
             return Ok(());
         }
 
-        self.cooldown.record(user).await;
+        if let Err(remaining) = self.cooldown.try_acquire(user).await {
+            ctx.cancellation.check()?;
+            debug!(user = %user, remaining_secs = remaining.as_secs(), "News command on cooldown");
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    format!(
+                        "Bitte warte noch {} Waiting",
+                        format_cooldown_remaining(remaining)
+                    ),
+                )
+                .await;
+            return Ok(());
+        }
 
         // News follows Aurora's live profile selection.
         let Some((llm_client, profile)) = self

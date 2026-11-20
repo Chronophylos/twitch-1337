@@ -70,8 +70,7 @@ where
             return Ok(());
         }
 
-        // Check cooldown
-        if let Some(remaining) = self.cooldown.check(user).await {
+        if let Err(remaining) = self.cooldown.try_acquire(user).await {
             ctx.sender
                 .reply(
                     &ctx.privmsg,
@@ -83,8 +82,6 @@ where
                 .await;
             return Ok(());
         }
-
-        self.cooldown.record(user).await;
 
         // Write feedback to file
         let now = crate::util::to_berlin(jiff::Timestamp::now()).strftime("%Y-%m-%dT%H:%M:%S");

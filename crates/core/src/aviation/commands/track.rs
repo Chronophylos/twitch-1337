@@ -63,8 +63,15 @@ where
                 .await;
             return Ok(());
         }
+        let identifier = match FlightIdentifier::parse(&input) {
+            Ok(id) => id,
+            Err(e) => {
+                ctx.sender.reply(&ctx.privmsg, format!("{e} FDM")).await;
+                return Ok(());
+            }
+        };
         let user = &ctx.privmsg.sender.login;
-        if let Some(remaining) = self.cooldown.check(user).await {
+        if let Err(remaining) = self.cooldown.try_acquire(user).await {
             debug!(user = %user, remaining_secs = remaining.as_secs(), "!track on cooldown");
             ctx.sender
                 .reply(
@@ -77,15 +84,6 @@ where
                 .await;
             return Ok(());
         }
-
-        let identifier = match FlightIdentifier::parse(&input) {
-            Ok(id) => id,
-            Err(e) => {
-                ctx.sender.reply(&ctx.privmsg, format!("{e} FDM")).await;
-                return Ok(());
-            }
-        };
-        self.cooldown.record(user).await;
         let cmd = TrackerCommand::Track {
             identifier,
             requested_by: ctx.privmsg.sender.login.clone(),

@@ -301,7 +301,9 @@ where
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
-        if let Some(rem) = self.cooldown.check(user).await {
+        // Charge up front so that bad-input early returns can't be spammed
+        // past the gate.
+        if let Err(rem) = self.cooldown.try_acquire(user).await {
             ctx.cancellation.check()?;
             ctx.sender
                 .reply(
@@ -314,9 +316,6 @@ where
                 .await;
             return Ok(());
         }
-        // Record before any fallible work so that bad-input early returns
-        // can't be spammed past the gate.
-        self.cooldown.record(user).await;
 
         if ctx.args.is_empty() {
             ctx.cancellation.check()?;

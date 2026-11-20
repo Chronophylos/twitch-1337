@@ -61,27 +61,38 @@ impl PerUserCooldown {
 }
 
 impl PerUserCooldown {
-    /// Returns `Some(remaining)` if the user is still on cooldown, `None` if clear.
-    pub async fn check(&self, user: &str) -> Option<Duration> {
-        self.check_with_duration(user, self.source.duration()).await
-    }
-
-    /// Like [`Self::check`], but uses a caller-supplied cooldown duration.
-    pub async fn check_with_duration(&self, user: &str, duration: Duration) -> Option<Duration> {
-        let guard = self.last_use.lock().await;
-        let last = guard.get(user)?;
-        let elapsed = last.elapsed();
-        if elapsed < duration {
-            Some(duration - elapsed)
-        } else {
-            None
-        }
-    }
-
-    /// Records that the user just used the command.
-    pub async fn record(&self, user: &str) {
+    /// Atomically checks the cooldown and, if it has elapsed, charges it.
+    ///
+    /// Check and charge share one lock, so concurrent invocations from one
+    /// user admit exactly one. Returns the charge stamp on success (only
+    /// needed for [`Self::refund`]) or the remaining wait while still on
+    /// cooldown.
+    pub async fn try_acquire(&self, user: &str) -> Result<Instant, Duration> {
+        let duration = self.source.duration();
         let mut guard = self.last_use.lock().await;
-        guard.insert(user.to_string(), Instant::now());
+        let now = Instant::now();
+        match guard.get_mut(user) {
+            Some(last) => {
+                let elapsed = now.saturating_duration_since(*last);
+                if elapsed < duration {
+                    return Err(duration - elapsed);
+                }
+                *last = now;
+            }
+            None => {
+                guard.insert(user.to_owned(), now);
+            }
+        }
+        Ok(now)
+    }
+
+    /// Gives back a charge from [`Self::try_acquire`] for an answer that turned
+    /// out to be free. A no-op once a later charge has replaced `stamp`.
+    pub async fn refund(&self, user: &str, stamp: Instant) {
+        let mut guard = self.last_use.lock().await;
+        if guard.get(user) == Some(&stamp) {
+            guard.remove(user);
+        }
     }
 }
 
@@ -158,5 +169,31 @@ mod tests {
         for &(input, expected) in cases {
             assert_eq!(format_cooldown_remaining(input), expected, "{input:?}");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_acquires_admit_one() {
+        let cooldown = std::sync::Arc::new(PerUserCooldown::live(
+            SettingsHandle::from_settings(Settings::compiled_defaults()),
+            |_| Duration::from_secs(60),
+        ));
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(8));
+        let tasks: Vec<_> = (0..8)
+            .map(|_| {
+                let cooldown = cooldown.clone();
+                let barrier = barrier.clone();
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    cooldown.try_acquire("alice").await.is_ok()
+                })
+            })
+            .collect();
+        let mut admitted = 0;
+        for task in tasks {
+            if task.await.unwrap() {
+                admitted += 1;
+            }
+        }
+        assert_eq!(admitted, 1);
     }
 }

@@ -146,7 +146,15 @@ where
         ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
 
-        if let Some(remaining) = self.cooldown.check(user).await {
+        ctx.cancellation.check()?;
+        let Some(history_lines) = self.relevant_history(user, &ctx.privmsg.message_text).await
+        else {
+            ctx.cancellation.check()?;
+            ctx.sender.reply(&ctx.privmsg, EMPTY_HISTORY_MESSAGE).await;
+            return Ok(());
+        };
+
+        if let Err(remaining) = self.cooldown.try_acquire(user).await {
             ctx.cancellation.check()?;
             debug!(user = %user, remaining_secs = remaining.as_secs(), "Haiku command on cooldown");
             ctx.sender
@@ -160,16 +168,6 @@ where
                 .await;
             return Ok(());
         }
-
-        ctx.cancellation.check()?;
-        let Some(history_lines) = self.relevant_history(user, &ctx.privmsg.message_text).await
-        else {
-            ctx.cancellation.check()?;
-            ctx.sender.reply(&ctx.privmsg, EMPTY_HISTORY_MESSAGE).await;
-            return Ok(());
-        };
-
-        self.cooldown.record(user).await;
 
         let Some((llm_client, profile)) = self
             .registry

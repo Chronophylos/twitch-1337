@@ -99,21 +99,26 @@ where
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
-        if let Some(remaining) = self.cooldown.check(user).await {
-            ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
-                .await;
-            return Ok(());
-        }
+        // Charge before the AMP request so concurrent invocations can't all
+        // slip past; a free answer (ambiguous, not found) refunds it.
+        let stamp = match self.cooldown.try_acquire(user).await {
+            Ok(stamp) => stamp,
+            Err(remaining) => {
+                ctx.sender
+                    .reply(
+                        &ctx.privmsg,
+                        format!(
+                            "Bitte warte noch {} Waiting",
+                            format_cooldown_remaining(remaining)
+                        ),
+                    )
+                    .await;
+                return Ok(());
+            }
+        };
         let (reply, charged) = self.reply_for(ctx.args.join(" ").trim()).await;
-        if charged {
-            self.cooldown.record(user).await;
+        if !charged {
+            self.cooldown.refund(user, stamp).await;
         }
         ctx.cancellation.check()?;
         ctx.sender.reply(&ctx.privmsg, reply).await;
