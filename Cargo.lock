@@ -3303,7 +3303,7 @@ dependencies = [
 [[package]]
 name = "twitch-irc"
 version = "6.1.3"
-source = "git+https://github.com/Chronophylos/twitch-irc-rs?rev=30fc7534c6f47cc95279a5774b1d0d8c5125e752#30fc7534c6f47cc95279a5774b1d0d8c5125e752"
+source = "git+https://github.com/Chronophylos/twitch-irc-rs?rev=2d3d85bbe07c4609985f427680187413aa7732fa#2d3d85bbe07c4609985f427680187413aa7732fa"
 dependencies = [
  "async-trait",
  "bytes",
