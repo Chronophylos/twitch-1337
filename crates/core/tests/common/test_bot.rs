@@ -1257,8 +1257,8 @@ fn flagged_usage_count_sync(path: &std::path::Path) -> EyreResult<usize> {
     Ok(n as usize)
 }
 
-/// Stub `HelixClient` that denies every mod check. No production routes
-/// reach it because the web smoke test only probes the public `/healthz`.
+/// Stub `HelixClient` that knows no users. No production routes reach it
+/// because the web smoke test only probes the public `/healthz`.
 struct DenyHelix;
 
 #[async_trait]
@@ -1275,9 +1275,5 @@ impl twitch_1337_web::helix::HelixClient for DenyHelix {
         _login: &str,
     ) -> eyre::Result<Option<twitch_1337_web::helix::HelixUser>> {
         Ok(None)
-    }
-
-    async fn is_moderator(&self, _b: &str, _u: &str) -> eyre::Result<bool> {
-        Ok(false)
     }
 }

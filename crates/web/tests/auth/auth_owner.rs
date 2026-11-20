@@ -25,7 +25,6 @@ use twitch_1337_web::auth::{Role, require_owner};
 
 fn empty_helix() -> Arc<FakeHelix> {
     Arc::new(FakeHelix {
-        moderators: vec![],
         users: Default::default(),
     })
 }

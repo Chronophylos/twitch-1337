@@ -13,7 +13,6 @@ use helpers::{FakeHelix, build_state, insert_session, install_crypto};
 async fn tampered_sid_redirects_to_login() {
     install_crypto();
     let state = build_state(std::sync::Arc::new(FakeHelix {
-        moderators: vec!["12345".into()],
         users: std::collections::HashMap::new(),
     }))
     .await;
@@ -56,7 +55,6 @@ async fn tampered_sid_redirects_to_login() {
 async fn untampered_sid_passes_through() {
     install_crypto();
     let state = build_state(std::sync::Arc::new(FakeHelix {
-        moderators: vec!["12345".into()],
         users: std::collections::HashMap::new(),
     }))
     .await;
@@ -76,7 +74,6 @@ async fn untampered_sid_passes_through() {
 async fn auth_start_sets_signed_next_cookie() {
     install_crypto();
     let state = build_state(std::sync::Arc::new(FakeHelix {
-        moderators: vec![],
         users: std::collections::HashMap::new(),
     }))
     .await;

@@ -1,12 +1,17 @@
-//! Role-gate decision: hidden_admins → broadcaster → helix moderators.
+//! Role-gate decision: hidden_admins → broadcaster → Twitch moderated channels.
 //!
-//! Hidden admins (configured in `[twitch].hidden_admins`) short-circuit the
+//! Hidden admins (configured in `twitch.hidden_admins`) short-circuit the
 //! helix lookup so a debugging account always retains access. The broadcaster
-//! id is checked next as a fast path. Otherwise we follow the moderator list.
+//! id is checked next as a fast path. Otherwise Twitch is asked, with the
+//! user's own token, which channels they moderate: at login with the fresh
+//! access token, on each recheck with one minted from the session's refresh
+//! token. The bot token cannot answer this: `helix/moderation/moderators`
+//! only accepts the broadcaster's own token.
 
+use eyre::eyre;
 use secrecy::ExposeSecret as _;
 
-use crate::helix::HelixClient;
+use crate::auth::session::{Session, TwitchRefreshToken};
 use crate::state::WebState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,20 +30,39 @@ fn shortcut(user_id: &str, broadcaster_id: &str, hidden_admins: &[String]) -> Op
     }
 }
 
-pub async fn check_is_mod(
-    helix: &dyn HelixClient,
-    user_id: &str,
-    broadcaster_id: &str,
+/// Periodic Mod recheck. Trades the session's refresh token for an access
+/// token, then asks Twitch whether the user still moderates the channel.
+/// Returns the verdict plus the rotated refresh token, if Twitch issued one.
+///
+/// `Err` means no verdict (Twitch unreachable, refresh token rejected or
+/// never stored); the caller must not admit the request.
+pub async fn recheck_mod(
+    state: &WebState,
+    session: &Session,
     hidden_admins: &[String],
-) -> eyre::Result<GateOutcome> {
-    if let Some(o) = shortcut(user_id, broadcaster_id, hidden_admins) {
-        return Ok(o);
+) -> eyre::Result<(GateOutcome, Option<TwitchRefreshToken>)> {
+    if let Some(o) = shortcut(&session.user_id, &state.broadcaster_id, hidden_admins) {
+        return Ok((o, None));
     }
-    if helix.is_moderator(broadcaster_id, user_id).await? {
-        Ok(GateOutcome::Allow)
+    let refresh_token = session
+        .refresh_token
+        .as_ref()
+        .ok_or_else(|| eyre!("session has no refresh token"))?;
+    let tokens = state.oauth.refresh_user_token(refresh_token).await?;
+    let is_mod = is_moderator_with_user_token(
+        &session.user_id,
+        &tokens.access_token,
+        &state.broadcaster_id,
+        state,
+    )
+    .await?;
+    let rotated = tokens.refresh_token.filter(|t| t != refresh_token);
+    let outcome = if is_mod {
+        GateOutcome::Allow
     } else {
-        Ok(GateOutcome::Deny)
-    }
+        GateOutcome::Deny
+    };
+    Ok((outcome, rotated))
 }
 
 /// Variant used during the OAuth callback. Asks Twitch which channels the
@@ -92,10 +116,7 @@ pub fn check_in_allowlist(user_id: &str, allowlist: &[String]) -> GateOutcome {
 
 #[cfg(test)]
 mod tests {
-    use eyre::eyre;
-
     use super::*;
-    use crate::helix::{HelixClient, HelixUser};
 
     fn admins(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|s| (*s).to_owned()).collect()
@@ -141,82 +162,5 @@ mod tests {
             GateOutcome::Deny
         );
         assert_eq!(check_in_allowlist("u1", &admins(&[])), GateOutcome::Deny);
-    }
-
-    // --- check_is_mod (with a fake helix) ---
-
-    /// Records whether `is_moderator` was called and returns a canned result.
-    struct FakeHelix {
-        mod_result: std::sync::Mutex<eyre::Result<bool>>,
-        calls: std::sync::atomic::AtomicUsize,
-    }
-
-    impl FakeHelix {
-        fn ok(value: bool) -> Self {
-            Self {
-                mod_result: std::sync::Mutex::new(Ok(value)),
-                calls: std::sync::atomic::AtomicUsize::new(0),
-            }
-        }
-        fn erroring() -> Self {
-            Self {
-                mod_result: std::sync::Mutex::new(Err(eyre!("helix down"))),
-                calls: std::sync::atomic::AtomicUsize::new(0),
-            }
-        }
-        fn calls(&self) -> usize {
-            self.calls.load(std::sync::atomic::Ordering::SeqCst)
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl HelixClient for FakeHelix {
-        async fn fetch_user_by_id(&self, _user_id: &str) -> eyre::Result<Option<HelixUser>> {
-            unimplemented!("not exercised by role-gate tests")
-        }
-        async fn fetch_user_by_login(&self, _login: &str) -> eyre::Result<Option<HelixUser>> {
-            unimplemented!("not exercised by role-gate tests")
-        }
-        async fn is_moderator(&self, _broadcaster: &str, _user: &str) -> eyre::Result<bool> {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            // Replace with a fresh Err so we don't need Clone on eyre::Report.
-            std::mem::replace(&mut *self.mod_result.lock().unwrap(), Ok(false))
-        }
-    }
-
-    #[tokio::test]
-    async fn check_is_mod_short_circuits_without_helix_call() {
-        let helix = FakeHelix::ok(false); // would Deny if consulted
-        let outcome = check_is_mod(&helix, "u1", "broadcaster", &admins(&["u1"]))
-            .await
-            .unwrap();
-        assert_eq!(outcome, GateOutcome::Allow);
-        assert_eq!(helix.calls(), 0, "shortcut must not hit helix");
-    }
-
-    #[tokio::test]
-    async fn check_is_mod_allows_when_helix_says_moderator() {
-        let helix = FakeHelix::ok(true);
-        let outcome = check_is_mod(&helix, "u2", "broadcaster", &admins(&["u1"]))
-            .await
-            .unwrap();
-        assert_eq!(outcome, GateOutcome::Allow);
-        assert_eq!(helix.calls(), 1);
-    }
-
-    #[tokio::test]
-    async fn check_is_mod_denies_when_helix_says_not_moderator() {
-        let helix = FakeHelix::ok(false);
-        let outcome = check_is_mod(&helix, "u2", "broadcaster", &admins(&["u1"]))
-            .await
-            .unwrap();
-        assert_eq!(outcome, GateOutcome::Deny);
-    }
-
-    #[tokio::test]
-    async fn check_is_mod_propagates_helix_error() {
-        let helix = FakeHelix::erroring();
-        let result = check_is_mod(&helix, "u2", "broadcaster", &admins(&["u1"])).await;
-        assert!(result.is_err(), "helix failure must not silently allow");
     }
 }

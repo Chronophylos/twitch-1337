@@ -22,7 +22,6 @@ const OWNER_ID: &str = "999";
 async fn owner_state() -> (WebState, tempfile::TempDir, tempfile::TempDir) {
     install_crypto();
     let helix = Arc::new(FakeHelix {
-        moderators: vec![],
         users: HashMap::new(),
     });
     let (state, td_pings, td_mem) = build_state_with_dirs(helix).await;

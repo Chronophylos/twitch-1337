@@ -17,7 +17,6 @@ use helpers::{
 
 fn empty_helix() -> Arc<FakeHelix> {
     Arc::new(FakeHelix {
-        moderators: vec!["999".into()],
         users: Default::default(),
     })
 }

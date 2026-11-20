@@ -23,7 +23,8 @@ use serde::Deserialize;
 use tower_cookies::cookie::SameSite;
 use tower_cookies::{Cookie, Cookies, Key};
 
-use crate::auth::role_check::{GateOutcome, check_in_allowlist, check_is_mod};
+use crate::auth::role_check::{GateOutcome, check_in_allowlist, recheck_mod};
+use crate::auth::session::TwitchRefreshToken;
 use crate::error::WebError;
 use crate::state::WebState;
 
@@ -111,6 +112,9 @@ impl OAuthCtx {
         url::Url::parse(&redirect_uri).wrap_err("oauth redirect url")?;
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            // The role recheck awaits these calls inside a request; a hung
+            // Twitch endpoint must not stall the dashboard indefinitely.
+            .timeout(std::time::Duration::from_secs(10))
             .build()
             .wrap_err("oauth http client")?;
         Ok(Self {
@@ -135,14 +139,10 @@ impl OAuthCtx {
         url.into()
     }
 
-    /// Exchange an auth code for a user access token. Twitch reads
-    /// `client_id` / `client_secret` from the form body only (HTTP Basic is
-    /// ignored and yields `missing client id`).
-    async fn exchange_code(&self, code: &str) -> Result<String> {
-        #[derive(Deserialize)]
-        struct TokenBody {
-            access_token: String,
-        }
+    /// Exchange an auth code for user tokens. Twitch reads `client_id` /
+    /// `client_secret` from the form body only (HTTP Basic is ignored and
+    /// yields `missing client id`).
+    async fn exchange_code(&self, code: &str) -> Result<UserTokens> {
         let form = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("client_id", &self.client_id)
             .append_pair("client_secret", self.client_secret.expose_secret())
@@ -150,6 +150,31 @@ impl OAuthCtx {
             .append_pair("grant_type", "authorization_code")
             .append_pair("redirect_uri", &self.redirect_uri)
             .finish();
+        self.token_request(form).await
+    }
+
+    /// Trade a user's refresh token for a fresh access token. Fails when the
+    /// user disconnected the app on Twitch or changed their password.
+    pub(crate) async fn refresh_user_token(
+        &self,
+        refresh_token: &TwitchRefreshToken,
+    ) -> Result<UserTokens> {
+        let form = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("client_id", &self.client_id)
+            .append_pair("client_secret", self.client_secret.expose_secret())
+            .append_pair("grant_type", "refresh_token")
+            .append_pair("refresh_token", refresh_token.expose())
+            .finish();
+        self.token_request(form).await
+    }
+
+    async fn token_request(&self, form: String) -> Result<UserTokens> {
+        #[derive(Deserialize)]
+        struct TokenBody {
+            access_token: String,
+            #[serde(default)]
+            refresh_token: Option<String>,
+        }
         let resp = self
             .http
             .post(&self.token_url)
@@ -169,9 +194,20 @@ impl OAuthCtx {
             return Err(eyre!("status {status}, body: {}", redact_token_body(&body)));
         }
         serde_json::from_slice::<TokenBody>(&body)
-            .map(|t| t.access_token)
+            .map(|t| UserTokens {
+                access_token: t.access_token,
+                refresh_token: t.refresh_token.map(TwitchRefreshToken::new),
+            })
             .map_err(|e| eyre!("{e}, body: {}", redact_token_body(&body)))
     }
+}
+
+/// Result of a Twitch user token grant.
+pub(crate) struct UserTokens {
+    pub access_token: String,
+    /// Twitch returns one on both grants; it may be the same token or a
+    /// rotated one.
+    pub refresh_token: Option<TwitchRefreshToken>,
 }
 
 /// Replace values of known credential-bearing JSON fields with `<redacted>`
@@ -300,12 +336,12 @@ async fn callback(
     }
     cookies.remove(Cookie::build(OAUTH_STATE_COOKIE).path("/").build());
 
-    let user_token = state
+    let user_tokens = state
         .oauth
         .exchange_code(&params.code)
         .await
         .map_err(|e| WebError::OAuthExchange(e.wrap_err("token exchange")))?;
-    let me = fetch_caller_user(&state, &user_token)
+    let me = fetch_caller_user(&state, &user_tokens.access_token)
         .await
         .map_err(|e| WebError::OAuthExchange(e.wrap_err("user lookup")))?;
 
@@ -325,7 +361,7 @@ async fn callback(
         match crate::auth::role_check::check_is_mod_with_token(
             &state,
             &me.id,
-            &user_token,
+            &user_tokens.access_token,
             &state.broadcaster_id,
             &hidden_admins,
         )
@@ -349,6 +385,12 @@ async fn callback(
         }
     };
 
+    // Only a Mod session needs the refresh token: its periodic recheck asks
+    // Twitch as the user. Owner and Viewer rechecks are local lookups.
+    let refresh_token = match role {
+        crate::auth::role::Role::Mod => user_tokens.refresh_token,
+        crate::auth::role::Role::Owner | crate::auth::role::Role::Viewer => None,
+    };
     let (sid, csrf_value) = state
         .sessions
         .insert(crate::auth::session::NewSession {
@@ -357,6 +399,7 @@ async fn callback(
             role,
             avatar_url: me.profile_image_url.clone(),
             is_broadcaster: me.id == *state.broadcaster_id,
+            refresh_token,
         })
         .map_err(WebError::Internal)?;
     state.sessions.persist().await;
@@ -503,73 +546,102 @@ pub async fn require_role(
         return Err(WebError::TierTooLow);
     }
 
-    let now = state.clock.now();
-    let elapsed: std::time::Duration = now
-        .duration_since(session.last_role_check)
-        .try_into()
-        .unwrap_or_default();
-    if elapsed > std::time::Duration::from_secs(mod_check_refresh_secs) {
-        // Load owner (bootstrap-only from config.toml) and settings fields
-        // before any `.await` so the ArcSwap guards are not held across async.
-        let owner = (**state.owner.load()).clone();
-        let (hidden_admins, viewer_allowlist) = {
-            let twitch_cfg = state.settings.load();
-            (
-                twitch_cfg.twitch.hidden_admins.clone(),
-                twitch_cfg.twitch.viewer_allowlist.clone(),
-            )
-        };
-        let outcome: eyre::Result<GateOutcome> = match session.role {
-            crate::auth::role::Role::Owner => {
-                if owner
-                    .as_deref()
-                    .is_some_and(|o| o == session.user_id.as_str())
-                {
-                    Ok(GateOutcome::Allow)
-                } else {
-                    Ok(GateOutcome::Deny)
-                }
-            }
-            crate::auth::role::Role::Mod => {
-                check_is_mod(
-                    state.helix.as_ref(),
-                    &session.user_id,
-                    &state.broadcaster_id,
-                    &hidden_admins,
-                )
-                .await
-            }
-            crate::auth::role::Role::Viewer => {
-                Ok(check_in_allowlist(&session.user_id, &viewer_allowlist))
-            }
-        };
-        match outcome {
-            Ok(GateOutcome::Allow) => state.sessions.record_role_check(sid_cookie.value()),
-            Ok(GateOutcome::Deny) => {
-                state.sessions.drop_session(sid_cookie.value());
-                tracing::info!(
-                    target: "twitch_1337_web",
-                    user_id = %session.user_id,
-                    role = session.role.label(),
-                    action = "role_recheck",
-                    result = "denied",
-                );
-                return Err(WebError::Forbidden {
-                    channel: state.channel.clone(),
-                });
-            }
-            Err(e) => {
-                tracing::warn!(
-                    target: "twitch_1337_web",
-                    error = ?e,
-                    "role refresh failed; admitting on stale check"
-                );
-            }
+    let refresh_window = std::time::Duration::from_secs(mod_check_refresh_secs);
+    let recheck_due = |last_role_check: jiff::Timestamp| {
+        let elapsed: std::time::Duration = state
+            .clock
+            .now()
+            .duration_since(last_role_check)
+            .try_into()
+            .unwrap_or_default();
+        elapsed > refresh_window
+    };
+    if recheck_due(session.last_role_check) {
+        let _recheck = state.sessions.lock_recheck().await;
+        // While this request waited for the lock, another one may have
+        // finished the recheck (re-read `last_role_check`) or denied and
+        // dropped the session.
+        let current = state.sessions.get(sid_cookie.value()).ok_or_else(unauth)?;
+        if recheck_due(current.last_role_check) {
+            recheck_role(&state, sid_cookie.value(), &current, unauth).await?;
         }
     }
 
     req.extensions_mut().insert(session);
     Ok(next.run(req).await)
+}
+
+/// Re-verify the session's role. `Ok` admits the request (and stamps the
+/// check); a revoked role drops the session with `Forbidden`. A Mod recheck
+/// that cannot reach a verdict (Twitch error, refresh token rejected or
+/// missing) drops the session too and sends the user back to login: an
+/// unverifiable moderator is not admitted.
+async fn recheck_role(
+    state: &WebState,
+    sid: &str,
+    session: &crate::auth::session::Session,
+    unauth: impl Fn() -> WebError,
+) -> Result<(), WebError> {
+    // Load owner (bootstrap-only from config.toml) and settings fields
+    // before any `.await` so the ArcSwap guards are not held across async.
+    let owner = (**state.owner.load()).clone();
+    let (hidden_admins, viewer_allowlist) = {
+        let twitch_cfg = state.settings.load();
+        (
+            twitch_cfg.twitch.hidden_admins.clone(),
+            twitch_cfg.twitch.viewer_allowlist.clone(),
+        )
+    };
+    let outcome = match session.role {
+        crate::auth::role::Role::Owner => {
+            if owner
+                .as_deref()
+                .is_some_and(|o| o == session.user_id.as_str())
+            {
+                (GateOutcome::Allow, None)
+            } else {
+                (GateOutcome::Deny, None)
+            }
+        }
+        crate::auth::role::Role::Mod => match recheck_mod(state, session, &hidden_admins).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                state.sessions.drop_session(sid);
+                tracing::warn!(
+                    target: "twitch_1337_web",
+                    ?error,
+                    user_id = %session.user_id,
+                    action = "role_recheck",
+                    result = "unverified",
+                    "mod recheck failed; session dropped, login required"
+                );
+                return Err(unauth());
+            }
+        },
+        crate::auth::role::Role::Viewer => (
+            check_in_allowlist(&session.user_id, &viewer_allowlist),
+            None,
+        ),
+    };
+    match outcome {
+        (GateOutcome::Allow, rotated) => {
+            state.sessions.record_role_check(sid, rotated);
+            Ok(())
+        }
+        (GateOutcome::Deny, _) => {
+            state.sessions.drop_session(sid);
+            tracing::info!(
+                target: "twitch_1337_web",
+                user_id = %session.user_id,
+                role = session.role.label(),
+                action = "role_recheck",
+                result = "denied",
+            );
+            Err(WebError::Forbidden {
+                channel: state.channel.clone(),
+            })
+        }
+    }
 }
 
 pub async fn require_mod(

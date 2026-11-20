@@ -56,7 +56,6 @@ async fn fire(state: &WebState, name: &str) {
 async fn seeded() -> (WebState, tempfile::TempDir) {
     install_crypto();
     let helix = Arc::new(FakeHelix {
-        moderators: vec![USER_ID.into()],
         users: Default::default(),
     });
     let (state, td) = build_state_with_ping_dir(helix).await;

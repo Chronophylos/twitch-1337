@@ -3,8 +3,7 @@
 //! Sessions sit behind a `RwLock<HashMap>` keyed by a 64-hex-char random
 //! id. TTL is sliding: every successful `get_and_touch` bumps `last_seen`,
 //! so an active user stays logged in indefinitely. The role-gate middleware
-//! also stamps `last_role_check` so it knows when to re-verify the helix
-//! moderator list.
+//! also stamps `last_role_check` so it knows when to re-verify the role.
 //!
 //! The TTL is **not** stored in the table — callers pass it on each
 //! `get_and_touch` call. This allows the session TTL to be read live from
@@ -36,6 +35,33 @@ pub struct NewSession {
     pub role: Role,
     pub avatar_url: Option<String>,
     pub is_broadcaster: bool,
+    /// Twitch refresh token from the login. Only Mod sessions keep one: the
+    /// role recheck uses it to ask Twitch, as the user, whether they still
+    /// moderate the channel.
+    pub refresh_token: Option<TwitchRefreshToken>,
+}
+
+/// A user's Twitch OAuth refresh token (scopes `user:read:email`,
+/// `user:read:moderated_channels`). Persisted with the session in
+/// `sessions.ron`; `Debug` is redacted so it never reaches a log line.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TwitchRefreshToken(String);
+
+impl TwitchRefreshToken {
+    pub fn new(token: String) -> Self {
+        Self(token)
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for TwitchRefreshToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TwitchRefreshToken(<redacted>)")
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -54,6 +80,11 @@ pub struct Session {
     /// session creation so role badges and broadcaster-only UI bits don't
     /// need to re-read app state.
     pub is_broadcaster: bool,
+    /// See [`NewSession::refresh_token`]. Absent in sessions persisted before
+    /// it existed; such a Mod session fails its next recheck and must log in
+    /// again.
+    #[serde(default)]
+    pub refresh_token: Option<TwitchRefreshToken>,
 }
 
 impl Session {
@@ -76,6 +107,10 @@ pub struct SessionTable {
     /// overlapping writes would tear that temp file. Holding this across the
     /// whole snapshot+write makes the last writer win cleanly.
     write_lock: tokio::sync::Mutex<()>,
+    /// Serializes role rechecks. A Mod recheck spends the session's refresh
+    /// token; two concurrent requests must not both spend it, or a rotated
+    /// token would fail the second one and drop a valid session.
+    recheck_lock: tokio::sync::Mutex<()>,
 }
 
 impl SessionTable {
@@ -85,6 +120,7 @@ impl SessionTable {
             clock,
             path: None,
             write_lock: tokio::sync::Mutex::new(()),
+            recheck_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -123,6 +159,7 @@ impl SessionTable {
             clock,
             path: Some(path),
             write_lock: tokio::sync::Mutex::new(()),
+            recheck_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -181,6 +218,7 @@ impl SessionTable {
                 csrf_value: csrf,
                 avatar_url: new.avatar_url,
                 is_broadcaster: new.is_broadcaster,
+                refresh_token: new.refresh_token,
             },
         );
     }
@@ -204,15 +242,30 @@ impl SessionTable {
         Some(session.clone())
     }
 
+    /// Clone of the session with `id`, without sliding its TTL.
+    pub fn get(&self, id: &str) -> Option<Session> {
+        self.inner.read().get(id).cloned()
+    }
+
     pub fn drop_session(&self, id: &str) {
         self.inner.write().remove(id);
     }
 
-    pub fn record_role_check(&self, id: &str) {
+    /// Stamp a passed role recheck. `rotated` replaces the stored refresh
+    /// token when Twitch issued a new one during the recheck.
+    pub fn record_role_check(&self, id: &str, rotated: Option<TwitchRefreshToken>) {
         let now = self.clock.now();
         if let Some(s) = self.inner.write().get_mut(id) {
             s.last_role_check = now;
+            if let Some(token) = rotated {
+                s.refresh_token = Some(token);
+            }
         }
+    }
+
+    /// Held across one role recheck; see the `recheck_lock` field.
+    pub async fn lock_recheck(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.recheck_lock.lock().await
     }
 }
 
@@ -252,6 +305,7 @@ mod tests {
             role: Role::Mod,
             avatar_url: None,
             is_broadcaster: false,
+            refresh_token: None,
         }
     }
 
@@ -327,7 +381,7 @@ mod tests {
         table.insert_at("sid", [0u8; 32], sample_session());
 
         clock.advance(Duration::from_secs(120));
-        table.record_role_check("sid");
+        table.record_role_check("sid", None);
 
         let session = table.get_and_touch("sid", TTL).unwrap();
         assert_eq!(
@@ -348,6 +402,7 @@ mod tests {
             csrf_value: [0u8; 32],
             avatar_url: None,
             is_broadcaster: false,
+            refresh_token: None,
         };
         assert!(!mk(Role::Viewer).is_mod());
         assert!(mk(Role::Mod).is_mod());
