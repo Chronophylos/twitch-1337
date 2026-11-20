@@ -282,7 +282,10 @@ pub async fn fetch_raw(
 }
 
 /// Stream a body, bailing as soon as it would exceed `max_bytes`.
-async fn read_capped(response: reqwest::Response, max_bytes: u64) -> Result<Vec<u8>, FetchError> {
+pub(crate) async fn read_capped(
+    response: reqwest::Response,
+    max_bytes: u64,
+) -> Result<Vec<u8>, FetchError> {
     if let Some(length) = response.content_length()
         && length > max_bytes
     {
