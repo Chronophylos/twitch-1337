@@ -4,6 +4,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+use crate::ai::content::client::read_capped;
+
 fn default_base_url() -> String {
     "https://logs.zonian.dev".to_string()
 }
@@ -81,7 +83,14 @@ async fn fetch_messages_for_date(
         return Vec::new();
     }
 
-    let log_response: LogResponse = match response.json().await {
+    let body = match read_capped(response, PREFILL_MAX_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(e) => {
+            warn!(error = ?e, url = %url, "Failed to read chat history response");
+            return Vec::new();
+        }
+    };
+    let log_response: LogResponse = match serde_json::from_slice(&body) {
         Ok(parsed) => parsed,
         Err(e) => {
             warn!(error = ?e, url = %url, "Failed to parse chat history response");
@@ -101,6 +110,9 @@ async fn fetch_messages_for_date(
 }
 
 const PREFILL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// A day page holds at most `history_length` short chat lines; anything near
+/// this is not a rustlog answer.
+const PREFILL_MAX_BODY_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Prefill the chat history buffer by fetching recent messages from a rustlog-compatible API.
 ///
@@ -114,7 +126,14 @@ pub async fn prefill_chat_history(
     history_length: usize,
     config: &HistoryPrefillConfig,
 ) -> VecDeque<(String, String, Timestamp)> {
-    let http = match reqwest::Client::builder().timeout(PREFILL_TIMEOUT).build() {
+    // The log service is third-party: never follow its redirects (rustlog
+    // answers the day URL directly), so it cannot point the bot at an
+    // internal host.
+    let http = match reqwest::Client::builder()
+        .timeout(PREFILL_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
         Ok(client) => client,
         Err(e) => {
             warn!(error = ?e, "Failed to create HTTP client for history prefill");
@@ -163,4 +182,64 @@ pub async fn prefill_chat_history(
     info!(count, "Prefilled chat history buffer");
 
     VecDeque::from(all_messages)
+}
+
+#[cfg(test)]
+mod tests {
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    fn config(base_url: String) -> HistoryPrefillConfig {
+        HistoryPrefillConfig {
+            base_url,
+            threshold: 0.0,
+        }
+    }
+
+    #[tokio::test]
+    async fn redirect_from_log_service_is_not_followed() {
+        crate::install_crypto_provider();
+        let internal = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/internal/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "messages": [{ "displayName": "internal_host", "text": "leaked" }]
+            })))
+            .expect(0)
+            .mount(&internal)
+            .await;
+        let logs = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/channel/"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/internal/status", internal.uri())),
+            )
+            .mount(&logs)
+            .await;
+
+        let rows = prefill_chat_history("somechannel", 10, &config(logs.uri())).await;
+        assert!(rows.is_empty(), "{rows:?}");
+        // `expect(0)` on `internal` is verified when it drops.
+    }
+
+    #[tokio::test]
+    async fn oversized_body_is_rejected() {
+        crate::install_crypto_provider();
+        let logs = MockServer::start().await;
+        let huge = format!(
+            r#"{{"messages":[{{"displayName":"a","text":"{}"}}]}}"#,
+            "x".repeat(PREFILL_MAX_BODY_BYTES as usize)
+        );
+        Mock::given(method("GET"))
+            .and(path_regex("^/channel/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(huge))
+            .mount(&logs)
+            .await;
+
+        let rows = prefill_chat_history("somechannel", 10, &config(logs.uri())).await;
+        assert!(rows.is_empty());
+    }
 }
