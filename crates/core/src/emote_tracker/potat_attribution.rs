@@ -49,7 +49,10 @@ pub fn parse_ago_secs(ago: &str) -> Option<u64> {
         if token.is_empty() {
             return None;
         }
-        let (digits, unit) = token.split_at(token.len().checked_sub(1)?);
+        // Split before the last char, not the last byte: `ago` comes from the
+        // Potat API, and a multi-byte final char would panic `split_at`.
+        let (unit_start, _) = token.char_indices().next_back()?;
+        let (digits, unit) = token.split_at(unit_start);
         if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
             return None;
         }
@@ -251,6 +254,8 @@ mod tests {
         assert_eq!(parse_ago_secs("weird"), None);
         assert_eq!(parse_ago_secs("3m ago"), Some(180));
         assert_eq!(parse_ago_secs("3x ago"), None);
+        assert_eq!(parse_ago_secs("3é ago"), None);
+        assert_eq!(parse_ago_secs("5m and 2秒 ago"), None);
     }
 
     #[test]
