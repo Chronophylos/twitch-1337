@@ -6,6 +6,7 @@ use eyre::{Result, WrapErr, eyre};
 use serde::Deserialize;
 
 use super::types::SetEventKind;
+use crate::util::http::read_capped;
 
 pub const SMALL_SLACK_SECS: u64 = 2;
 pub const HEAD_SCAN_LIMIT: usize = 50;
@@ -17,6 +18,9 @@ const STV_PROVIDER: &str = "STV";
 
 /// Default Potat history API base (without trailing channel login).
 pub const POTAT_HISTORY_BASE_URL: &str = "https://api.potat.app/emotes/history";
+/// Body cap. One history page is a few hundred ~300-byte items, tens of KiB;
+/// only the first [`HEAD_SCAN_LIMIT`] are read. 1 MiB is generous headroom.
+const MAX_BODY_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PotatHistoryItem {
@@ -204,8 +208,10 @@ pub async fn fetch_potat_history(
     if !resp.status().is_success() {
         return Err(eyre!("potat history HTTP {}", resp.status()));
     }
-    let text = resp.text().await.wrap_err("potat history body")?;
-    parse_potat_history_json(&text)
+    let body = read_capped(resp, MAX_BODY_BYTES)
+        .await
+        .wrap_err("potat history body")?;
+    parse_potat_history_json(&String::from_utf8_lossy(&body))
 }
 
 /// Parse a fixture / mock JSON body into history items (test + ingest helpers).

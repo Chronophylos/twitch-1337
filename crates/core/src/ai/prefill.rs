@@ -4,7 +4,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::ai::content::client::read_capped;
+use crate::util::http::read_capped;
 
 fn default_base_url() -> String {
     "https://logs.zonian.dev".to_string()

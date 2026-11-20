@@ -13,9 +13,13 @@ use serde::Deserialize;
 use tokio::sync::OnceCell;
 
 use crate::APP_USER_AGENT;
+use crate::util::http::read_capped;
 
 const DEFAULT_BASE_URL: &str = "https://api.pronouns.alejo.io/v1";
 const TIMEOUT: Duration = Duration::from_secs(3);
+/// Body cap. The id table is ~1 KiB and a user record ~100 bytes; 64 KiB is
+/// far past either.
+const MAX_BODY_BYTES: u64 = 64 * 1024;
 
 /// One entry of the service's pronoun table, e.g.
 /// `heyhim -> {subject: "He", object: "Him", singular: false}`.
@@ -62,13 +66,16 @@ impl PronounsClient {
     async fn table(&self) -> Option<&HashMap<String, PronounDef>> {
         self.table
             .get_or_try_init(|| async {
-                self.http
+                let resp = self
+                    .http
                     .get(format!("{}/pronouns", self.base_url))
                     .send()
                     .await?
-                    .error_for_status()?
-                    .json::<HashMap<String, PronounDef>>()
-                    .await
+                    .error_for_status()?;
+                let body = read_capped(resp, MAX_BODY_BYTES).await?;
+                Ok::<_, eyre::Report>(serde_json::from_slice::<HashMap<String, PronounDef>>(
+                    &body,
+                )?)
             })
             .await
             .inspect_err(|error| tracing::debug!(?error, "pronouns table fetch failed"))
@@ -90,7 +97,12 @@ impl PronounsClient {
             .inspect_err(|error| tracing::debug!(?error, %login, "pronouns lookup failed"))
             .ok()?;
         // 404 is the normal "this user has not set pronouns" answer.
-        let user: UserPronouns = resp.error_for_status().ok()?.json().await.ok()?;
+        let resp = resp.error_for_status().ok()?;
+        let body = read_capped(resp, MAX_BODY_BYTES)
+            .await
+            .inspect_err(|error| tracing::debug!(?error, %login, "pronouns lookup body unreadable"))
+            .ok()?;
+        let user: UserPronouns = serde_json::from_slice(&body).ok()?;
         let def = self.table().await?.get(&user.pronoun_id)?;
         Some(if def.singular {
             def.subject.clone()
@@ -170,5 +182,32 @@ mod tests {
         assert_eq!(c.lookup("").await, None);
         // No mock mounted for this path -> wiremock 404s, still None.
         assert_eq!(c.lookup("missing").await, None);
+    }
+
+    /// A valid user record padded with an ignored field to exactly `len`
+    /// bytes, so only the body cap can make it fail.
+    fn padded_user(len: usize) -> String {
+        let head = r#"{"id":"1","login":"alice","pronoun_id":"heyhim","pad":""#;
+        let tail = r#""}"#;
+        format!("{head}{}{tail}", "x".repeat(len - head.len() - tail.len()))
+    }
+
+    #[tokio::test]
+    async fn body_over_the_cap_is_rejected_before_parsing() {
+        let server = MockServer::start().await;
+        let c = client(&server).await;
+        let cap = usize::try_from(MAX_BODY_BYTES).unwrap();
+        Mock::given(method("GET"))
+            .and(path("/users/atcap"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(padded_user(cap)))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/overcap"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(padded_user(cap + 1)))
+            .mount(&server)
+            .await;
+        assert_eq!(c.lookup("atcap").await.as_deref(), Some("He/Him"));
+        assert_eq!(c.lookup("overcap").await, None);
     }
 }

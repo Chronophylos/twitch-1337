@@ -164,6 +164,7 @@ pub async fn run_alerts_handler<T, L>(
                 &http,
                 "quake",
                 &url,
+                quake::MAX_BODY_BYTES,
                 quake::parse,
                 &mut seen.quake,
                 now,
@@ -192,6 +193,7 @@ pub async fn run_alerts_handler<T, L>(
                 &http,
                 "solar",
                 solar::DEFAULT_URL,
+                solar::MAX_BODY_BYTES,
                 |body| solar::parse(body, min_rank),
                 &mut seen.solar,
                 now,
@@ -219,6 +221,7 @@ pub async fn run_alerts_handler<T, L>(
                 &http,
                 "cme",
                 cme::DEFAULT_URL,
+                cme::MAX_BODY_BYTES,
                 cme::parse,
                 &mut seen.cme,
                 now,
@@ -315,6 +318,7 @@ async fn poll_feed<E: std::fmt::Debug>(
     http: &reqwest::Client,
     feed: &'static str,
     url: &str,
+    max_bytes: u64,
     parse: impl FnOnce(&str) -> Result<Vec<Candidate>, E>,
     seen: &mut VecDeque<String>,
     now: Timestamp,
@@ -324,7 +328,7 @@ async fn poll_feed<E: std::fmt::Debug>(
     if lifecycle.is_cancelled() {
         return PollStep::Cancelled;
     }
-    let Some(body) = fetch(http, url).await else {
+    let Some(body) = fetch(http, url, max_bytes).await else {
         return PollStep::Complete {
             lines: Vec::new(),
             dirty: false,
@@ -343,9 +347,9 @@ async fn poll_feed<E: std::fmt::Debug>(
     PollStep::Complete { lines, dirty }
 }
 
-/// Fetch a feed body. Any failure logs and yields `None`; the caller skips
-/// this tick.
-async fn fetch(http: &reqwest::Client, url: &str) -> Option<String> {
+/// Fetch a feed body of at most `max_bytes`. Any failure, an oversized body
+/// included, logs and yields `None`; the caller skips this tick.
+async fn fetch(http: &reqwest::Client, url: &str, max_bytes: u64) -> Option<String> {
     let resp = match http.get(url).send().await {
         Ok(r) => r,
         Err(error) => {
@@ -359,8 +363,8 @@ async fn fetch(http: &reqwest::Client, url: &str) -> Option<String> {
         tracing::warn!(%status, "alerts feed returned an unexpected status");
         return None;
     }
-    match resp.text().await {
-        Ok(b) => Some(b),
+    match crate::util::http::read_capped(resp, max_bytes).await {
+        Ok(b) => Some(String::from_utf8_lossy(&b).into_owned()),
         Err(error) => {
             let error = error.without_url();
             tracing::warn!(?error, "alerts feed body could not be read");

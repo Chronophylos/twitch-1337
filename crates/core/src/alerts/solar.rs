@@ -9,6 +9,10 @@ use super::Candidate;
 pub const DEFAULT_URL: &str =
     "https://services.swpc.noaa.gov/json/goes/primary/xray-flares-7-day.json";
 
+/// Body cap. The 7-day flare list runs ~30 KiB live and stays well under
+/// 1 MiB even in a storm week; 2 MiB is headroom on top.
+pub(crate) const MAX_BODY_BYTES: u64 = 2 * 1024 * 1024;
+
 #[derive(Debug, Deserialize)]
 struct Flare {
     #[serde(default)]

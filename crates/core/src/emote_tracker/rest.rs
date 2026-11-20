@@ -4,6 +4,12 @@ use eyre::{Result, WrapErr as _, bail};
 use serde::Deserialize;
 
 use super::reconcile::DesiredEmote;
+use crate::util::http::read_capped;
+
+/// Body cap. 7TV inlines each emote's full document and host file list
+/// (~2.4 KiB per emote; a 969-emote set is 2.3 MiB live). 16 MiB covers sets
+/// several times the usual 1000-slot ceiling.
+const MAX_BODY_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelSetSnapshot {
@@ -79,13 +85,17 @@ pub async fn fetch_channel_set(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = read_capped(response, MAX_BODY_BYTES)
+            .await
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
         bail!("7TV request failed with status {status}: {body}");
     }
 
-    let user: SevenTvUserResponse = response
-        .json()
+    let body = read_capped(response, MAX_BODY_BYTES)
         .await
+        .wrap_err_with(|| format!("Failed to read 7TV response from {url}"))?;
+    let user: SevenTvUserResponse = serde_json::from_slice(&body)
         .wrap_err_with(|| format!("Failed to parse 7TV response from {url}"))?;
     ChannelSetSnapshot::from_response(user)
 }
