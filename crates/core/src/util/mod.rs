@@ -126,12 +126,13 @@ pub fn parse_flight_duration(s: &str) -> Option<std::time::Duration> {
             match ch.to_ascii_lowercase() {
                 'h' => {
                     let hours: u64 = current_num.parse().ok()?;
-                    total_secs += hours * 3600;
+                    // Viewer input (`!fl`): overflow is a bad duration, not a panic.
+                    total_secs = total_secs.checked_add(hours.checked_mul(3600)?)?;
                     current_num.clear();
                 }
                 'm' => {
                     let minutes: u64 = current_num.parse().ok()?;
-                    total_secs += minutes * 60;
+                    total_secs = total_secs.checked_add(minutes.checked_mul(60)?)?;
                     current_num.clear();
                 }
                 _ => return None,
@@ -175,5 +176,23 @@ mod tests {
         assert_eq!(resolve(local(10, 25, 2, 30)), utc("2026-10-25T01:30:00Z"));
         // Spring-forward gap: the naive time is read as UTC.
         assert_eq!(resolve(local(3, 29, 2, 30)), utc("2026-03-29T02:30:00Z"));
+    }
+
+    #[test]
+    fn flight_duration_overflow_is_rejected_not_panicking() {
+        use super::parse_flight_duration;
+        assert_eq!(
+            parse_flight_duration("2h30m").map(|d| d.as_secs()),
+            Some(9000)
+        );
+        assert_eq!(
+            parse_flight_duration("45m").map(|d| d.as_secs()),
+            Some(2700)
+        );
+        assert_eq!(parse_flight_duration("18446744073709551615h"), None);
+        assert_eq!(
+            parse_flight_duration("5124095576030431h5124095576030431h"),
+            None
+        );
     }
 }

@@ -103,21 +103,15 @@ pub struct DhlClient {
 
 impl DhlClient {
     pub fn new(api_key: SecretString) -> Result<Self> {
-        let http = reqwest::Client::builder()
-            .user_agent(APP_USER_AGENT)
-            .timeout(TIMEOUT)
-            .build()
-            .wrap_err("build dhl HTTP client")?;
         Ok(Self {
-            http,
+            http: http_client()?,
             base_url: DEFAULT_BASE_URL.to_string(),
             api_key,
         })
     }
 
     /// Test hook: custom base URL (e.g. wiremock). Caller supplies the HTTP
-    /// client (production [`Self::new`] sets [`APP_USER_AGENT`] and a 10s
-    /// timeout).
+    /// client; production [`Self::new`] uses [`http_client`].
     pub fn with_base_url(
         http: reqwest::Client,
         base_url: impl Into<String>,
@@ -184,6 +178,18 @@ impl DhlClient {
     }
 }
 
+/// The key rides in the custom `DHL-API-Key` header, which reqwest does not
+/// strip on a cross-host redirect (it only strips `Authorization` and the
+/// like). DHL answers the tracking URL directly, so redirects are refused.
+fn http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .wrap_err("build dhl HTTP client")
+}
+
 fn project(s: WireShipment) -> TrackedShipment {
     let (status_code, status_description, status_timestamp) = match s.status {
         Some(st) => (st.status_code, st.description, st.timestamp),
@@ -229,7 +235,7 @@ mod tests {
     fn test_client(server: &MockServer) -> DhlClient {
         crate::install_crypto_provider();
         DhlClient::with_base_url(
-            reqwest::Client::new(),
+            http_client().expect("dhl client"),
             server.uri(),
             SecretString::new("test-key".into()),
         )
@@ -391,5 +397,26 @@ mod tests {
             test_client(&server).track("12345678").await,
             Err(DhlError::NotFound)
         );
+    }
+
+    #[tokio::test]
+    async fn redirect_does_not_carry_the_api_key_elsewhere() {
+        let elsewhere = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&elsewhere)
+            .await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/steal", elsewhere.uri())),
+            )
+            .mount(&server)
+            .await;
+
+        assert!(test_client(&server).track("12345678").await.is_err());
+        // `expect(0)` on `elsewhere` is verified when it drops.
     }
 }

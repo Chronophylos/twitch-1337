@@ -74,7 +74,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       # Broken intra-doc links. Private links are fine: docs are internal-only.
       - name: cargo doc
@@ -117,7 +117,7 @@ jobs:
       - name: cargo llvm-cov nextest
         # --no-clean keeps rust-cache's restored target/; default clean would
         # wipe it. This job only ever runs llvm-cov, so artifacts stay consistent.
-        run: cargo llvm-cov nextest --no-clean --workspace --lcov --output-path lcov.info
+        run: cargo llvm-cov nextest --locked --no-clean --workspace --lcov --output-path lcov.info
 
       - name: Coverage summary
         run: cargo llvm-cov report --summary-only
