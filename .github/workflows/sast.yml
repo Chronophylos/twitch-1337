@@ -13,7 +13,8 @@ concurrency:
 # Public repos implied `actions: read` (codeql-action polls the workflow run)
 # and PR-commit listing. A private GITHUB_TOKEN does not — request them.
 # SARIF upload also needs GitHub Advanced Security, which personal private
-# repos do not have; skip the upload there so the scanners stay the check.
+# repos do not have; skip the upload there. Findings fail the job either way:
+# these are required checks, and the Security tab alone would not block a merge.
 jobs:
   hadolint:
     name: hadolint (Dockerfile)
@@ -32,9 +33,8 @@ jobs:
           dockerfile: Dockerfile
           format: sarif
           output-file: hadolint.sarif
-          # Public: findings go to the Security tab. Private (no GHAS, no
-          # upload): fail the job, or findings vanish.
-          no-fail: ${{ !github.event.repository.private }}
+          # Fail on findings; the upload step below still runs (`always()`).
+          no-fail: false
 
       - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always() && !github.event.repository.private
@@ -63,8 +63,8 @@ jobs:
           format: sarif
           output: trivy-config.sarif
           severity: HIGH,CRITICAL
-          # Same rule as hadolint: fail only when there is no SARIF upload.
-          exit-code: ${{ github.event.repository.private && '1' || '0' }}
+          # Same rule as hadolint: fail on findings, upload regardless.
+          exit-code: "1"
 
       - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always() && !github.event.repository.private
