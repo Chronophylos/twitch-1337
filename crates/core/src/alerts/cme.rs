@@ -9,6 +9,11 @@ use super::Candidate;
 
 pub const DEFAULT_URL: &str = "https://ccmc.gsfc.nasa.gov/DONKI-API/get/WSAEnlilSimulations";
 
+/// Body cap. DONKI's default window returns ~20 KiB live; each simulation
+/// carries nested `cmeInputs`/`impactList`, so a busy month can grow it a lot.
+/// 4 MiB leaves room for that without letting a bad upstream run away.
+pub(crate) const MAX_BODY_BYTES: u64 = 4 * 1024 * 1024;
+
 #[derive(Debug, Deserialize)]
 struct Sim {
     #[serde(rename = "simulationID", default)]

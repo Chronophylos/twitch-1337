@@ -1,4 +1,5 @@
 pub mod clock;
+pub mod http;
 pub mod log_ring;
 pub mod persist;
 pub mod redact;

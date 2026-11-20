@@ -407,7 +407,6 @@ pub(crate) fn spawn_handlers<T, L>(
         services.emote_tracker.clone(),
         services.twitch_channel_id.clone(),
     ) {
-        let http = reqwest::Client::new();
         let cfg = crate::emote_tracker::IngestConfig::new(channel_id, services.channel.clone());
         let settings = services.settings.clone();
         let task_lifecycle = lifecycle.clone();
@@ -416,8 +415,16 @@ pub(crate) fn spawn_handlers<T, L>(
             lifecycle.clone(),
             "emote set ingest",
             async move {
+                // 7TV REST and Potat history share this client; the timeout
+                // bounds each call so a stalled upstream cannot wedge ingest.
+                let http = reqwest::Client::builder()
+                    .user_agent(crate::APP_USER_AGENT)
+                    .timeout(crate::emote_tracker::INGEST_HTTP_TIMEOUT)
+                    .build()
+                    .wrap_err("build emote ingest HTTP client")?;
                 crate::emote_tracker::run_set_ingest(handle, cfg, http, settings, task_lifecycle)
                     .await;
+                Ok::<(), eyre::Report>(())
             },
         );
     }

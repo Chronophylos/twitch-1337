@@ -13,8 +13,12 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::APP_USER_AGENT;
+use crate::util::http::read_capped;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// Body cap. `GetInstances` is ~1.4 KiB per instance (the six-instance fixture
+/// is 8 KiB); 1 MiB covers hundreds of instances.
+const MAX_BODY_BYTES: u64 = 1024 * 1024;
 /// Session-map key for the controller itself; instances use their id.
 const CONTROLLER: &str = "";
 
@@ -217,8 +221,12 @@ impl AmpClient {
             tracing::warn!(%status, method, "amp returned an unexpected status");
             return Err(AmpError::Unavailable);
         }
-        resp.json().await.map_err(|error| {
+        let body = read_capped(resp, MAX_BODY_BYTES).await.map_err(|error| {
             let error = error.without_url();
+            tracing::warn!(?error, method, "amp response body could not be read");
+            AmpError::Unavailable
+        })?;
+        serde_json::from_slice(&body).map_err(|error| {
             tracing::warn!(?error, method, "amp response was not JSON");
             AmpError::Unavailable
         })

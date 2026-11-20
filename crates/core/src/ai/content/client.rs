@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use eyre::{Result, WrapErr as _};
-use futures_util::StreamExt as _;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::header;
 use scraper::{Html, Selector};
@@ -14,6 +13,7 @@ use url::Host;
 use crate::APP_USER_AGENT;
 use crate::ai::content::detect::{Bucket, detect};
 use crate::settings::ai::AiMedia;
+use crate::util::http::{BodyError, read_capped};
 use crate::util::truncate_response;
 
 static SSRF_BYPASS: AtomicBool = AtomicBool::new(false);
@@ -79,6 +79,15 @@ impl From<reqwest::Error> for FetchError {
             }
         } else {
             Self::Upstream(error)
+        }
+    }
+}
+
+impl From<BodyError> for FetchError {
+    fn from(error: BodyError) -> Self {
+        match error {
+            BodyError::TooLarge { .. } => Self::TooLarge,
+            BodyError::Read(error) => Self::from(error),
         }
     }
 }
@@ -282,34 +291,6 @@ pub async fn fetch_raw(
         content_type,
         bytes,
     })
-}
-
-/// Stream a body, bailing as soon as it would exceed `max_bytes`.
-pub(crate) async fn read_capped(
-    response: reqwest::Response,
-    max_bytes: u64,
-) -> Result<Vec<u8>, FetchError> {
-    if let Some(length) = response.content_length()
-        && length > max_bytes
-    {
-        return Err(FetchError::TooLarge);
-    }
-
-    let initial_capacity = response
-        .content_length()
-        .map(|len| len.min(max_bytes) as usize)
-        .unwrap_or(0);
-
-    let mut stream = response.bytes_stream();
-    let mut buf: Vec<u8> = Vec::with_capacity(initial_capacity);
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        if (buf.len() as u64).saturating_add(chunk.len() as u64) > max_bytes {
-            return Err(FetchError::TooLarge);
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    Ok(buf)
 }
 
 const SEARX_RESPONSE_LIMIT: usize = 10;

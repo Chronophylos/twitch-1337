@@ -19,6 +19,9 @@ const MAX_LON: f64 = 15.1;
 /// between polls without paginating.
 const LIMIT: u32 = 20;
 
+/// Body cap. `LIMIT` GeoJSON features run ~11 KiB live; 1 MiB is ~100x headroom.
+pub(crate) const MAX_BODY_BYTES: u64 = 1024 * 1024;
+
 #[derive(Debug, Deserialize)]
 struct FeatureCollection {
     features: Vec<Feature>,

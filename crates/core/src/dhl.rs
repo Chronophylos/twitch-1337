@@ -10,9 +10,13 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
 use crate::APP_USER_AGENT;
+use crate::util::http::read_capped;
 
 pub const DEFAULT_BASE_URL: &str = "https://api-eu.dhl.com";
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// Body cap. One shipment with its full event history is tens of KiB and an
+/// Apigee 429 fault is under 1 KiB; 1 MiB is generous headroom for both.
+const MAX_BODY_BYTES: u64 = 1024 * 1024;
 
 /// Events forwarded to the model. A const, not architecture — move it if
 /// transcripts show people asking about older stages.
@@ -149,7 +153,10 @@ impl DhlClient {
             // Apigee emits distinct errorcodes for the two 429s. Substring
             // match on the raw body rather than parsing a shape we have not
             // verified DHL preserves; the generic arm covers a rewrap.
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_capped(resp, MAX_BODY_BYTES)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(if body.contains("SpikeArrestViolation") {
                 DhlError::RateLimitedSpike
             } else if body.contains("QuotaViolation") {
@@ -163,8 +170,12 @@ impl DhlClient {
             return Err(DhlError::Unavailable);
         }
 
-        let parsed: WireResponse = resp.json().await.map_err(|error| {
+        let body = read_capped(resp, MAX_BODY_BYTES).await.map_err(|error| {
             let error = error.without_url();
+            tracing::warn!(?error, "dhl response body could not be read");
+            DhlError::Unavailable
+        })?;
+        let parsed: WireResponse = serde_json::from_slice(&body).map_err(|error| {
             tracing::warn!(?error, "dhl response did not parse");
             DhlError::Unavailable
         })?;
