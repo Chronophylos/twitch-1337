@@ -18,7 +18,7 @@ use tracing::{error, info, warn};
 
 use crate::ai::memory::inject::{
     BuildOpts, FenceLabel, InvocationChannel, build_chat_turn_context, fence_block, fresh_nonce,
-    scrub_for_inject,
+    neutralize_sentinels,
 };
 use crate::ai::memory::store::MemoryStore;
 use crate::ai::memory::tools::{DreamerExecutor, DreamerExecutorOpts, dreamer_tools};
@@ -321,10 +321,12 @@ async fn run_ritual_until(
         return Ok(());
     }
     let date_str = rotate_to.strftime("%Y-%m-%d").to_string();
+    // The transcript is viewer-written chat: defuse sentinels in place so one
+    // line cannot make `fence_block`'s whole-body scrub reject the day.
     let transcript_block = fence_block(
         FenceLabel::Transcript { date: &date_str },
         &nonce,
-        &scrub_for_inject(&transcript_text),
+        &neutralize_sentinels(&transcript_text),
     );
 
     let now_str = crate::util::to_berlin(Timestamp::now())
