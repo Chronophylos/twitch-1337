@@ -546,6 +546,56 @@ async fn info_reuses_aviationstack_cache_seeded_by_track() {
     bot.shutdown().await;
 }
 
+async fn aviationstack_request_count(bot: &TestBot) -> usize {
+    bot.adsb_mock
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.url.path() == "/flights")
+        .count()
+}
+
+#[tokio::test]
+async fn info_and_track_per_user_cooldown_blocks_second_aviationstack_lookup() {
+    let bot = TestBotBuilder::new()
+        .with_config(enable_aviationstack)
+        .with_settings(set_aviationstack_enabled)
+        .spawn()
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/flights"))
+        .and(query_param("access_key", "test-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": [] })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    let mut bot = bot;
+    for (cmd, first, second) in [
+        ("!info", "LH1929", "LH1930"),
+        ("!track", "LH1931", "LH1932"),
+    ] {
+        bot.send("mallory", &format!("{cmd} {first}")).await;
+        bot.expect_say(Duration::from_secs(5)).await;
+        let after_first = aviationstack_request_count(&bot).await;
+        assert!(after_first > 0, "{cmd} {first} should query Aviationstack");
+
+        bot.send("mallory", &format!("{cmd} {second}")).await;
+        let reply = bot.expect_say(Duration::from_secs(5)).await;
+        assert!(reply.contains("Bitte warte noch"), "{cmd} got: {reply}");
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            aviationstack_request_count(&bot).await,
+            after_first,
+            "{cmd} on cooldown must not reach Aviationstack"
+        );
+    }
+
+    bot.shutdown().await;
+}
+
 #[tokio::test]
 async fn aviationstack_mismatched_adsb_callsign_observes_aircraft_without_confirming_target() {
     let bot = TestBotBuilder::new()
