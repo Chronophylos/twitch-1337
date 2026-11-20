@@ -50,6 +50,12 @@ pub(crate) fn is_pending_adsb(flight: &TrackedFlight) -> bool {
             && flight.last_visible_at.is_none())
 }
 
+/// Pending on ADS-B with no Aviationstack schedule: such a flight holds its
+/// slot for the `PENDING_UNKNOWN_EXPIRE_AFTER` window.
+pub(crate) fn is_pending_unknown(flight: &TrackedFlight) -> bool {
+    is_pending_adsb(flight) && flight.scheduled_departure_at.is_none()
+}
+
 pub(crate) fn live_poll_interval(flight: &TrackedFlight) -> Duration {
     if flight.polls_since_change < 5
         || matches!(

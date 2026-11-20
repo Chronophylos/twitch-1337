@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use eyre::Result;
 use tracing::{debug, error, warn};
 
+use crate::aviation::FlightIdentifier;
 use crate::aviation::types::{AdsbAircraftResponse, NearbyAircraft};
 
 use super::AviationClient;
@@ -481,7 +482,13 @@ impl AviationClient {
         Ok(resp.aircraft.into_iter().next())
     }
 
+    /// Skips the lookup (`Ok(None)`) for a callsign outside the ICAO charset:
+    /// feed values are untrusted and land in the URL path.
     pub async fn get_aircraft_by_callsign(&self, callsign: &str) -> Result<Option<NearbyAircraft>> {
+        if !FlightIdentifier::is_valid_callsign(callsign) {
+            debug!(callsign = %callsign, "Skipping ADS-B lookup for invalid callsign");
+            return Ok(None);
+        }
         debug!(callsign = %callsign, "Fetching aircraft by callsign from ADS-B aggregators");
 
         let resp = self

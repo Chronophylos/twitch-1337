@@ -1414,6 +1414,60 @@ async fn aviationstack_miss_falls_back_to_adsb_only_pending_tracking() {
     bot.shutdown().await;
 }
 
+/// A user already holding a pending-unknown flight (Aviationstack miss, not on
+/// ADS-B) cannot park a second one: unknown callsigns would otherwise hold
+/// slots for 24 h each.
+#[tokio::test]
+async fn pending_unknown_cap_rejects_second_unknown_track_per_user() {
+    let bot = TestBotBuilder::new()
+        .with_config(enable_aviationstack)
+        .with_settings(|o| {
+            set_aviationstack_enabled(o);
+            o.cooldowns.track = Some(1);
+        })
+        .spawn()
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/flights"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": []
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex("^/callsign/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ac": [],
+            "ctime": 0,
+            "now": 0,
+            "total": 0
+        })))
+        .mount(&bot.adsb_mock)
+        .await;
+
+    let mut bot = bot;
+    bot.send("alice", "!track DLH1234").await;
+    let ack = bot.expect_say(Duration::from_secs(5)).await;
+    assert!(ack.contains("ADS-B-only"), "got: {ack}");
+
+    // Outlast the 1 s `!track` cooldown so the cap, not the cooldown, answers.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    bot.send("alice", "!track DLH5678").await;
+    let rejection = bot.expect_say(Duration::from_secs(5)).await;
+    assert!(
+        rejection.contains("DLH5678 nicht gefunden") && rejection.contains("unbekannten Flug"),
+        "got: {rejection}"
+    );
+
+    let state_path = bot.data_dir.path().join("flights.ron");
+    let persisted = tokio::fs::read_to_string(state_path).await.unwrap();
+    let state: FlightTrackerState = ron::from_str(&persisted).unwrap();
+    assert_eq!(state.flights.len(), 1, "only the first track is kept");
+
+    bot.shutdown().await;
+}
+
 #[tokio::test]
 async fn track_command_accepts_aviationstack_flight_before_adsb_appears() {
     let bot = TestBotBuilder::new()
