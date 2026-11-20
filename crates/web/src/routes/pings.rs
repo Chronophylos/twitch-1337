@@ -606,16 +606,6 @@ async fn update(
     Ok(Redirect::to("/pings").into_response())
 }
 
-/// Twitch login: lowercase ASCII alphanumeric + underscore, 1–25 chars.
-/// (Twitch enforces ≤25 chars and that exact charset on signup.) Validated
-/// here so a stray space or `@` doesn't end up persisted in the member set.
-fn is_valid_twitch_login(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 25
-        && s.bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-}
-
 #[derive(Deserialize)]
 struct AddMemberForm {
     #[serde(rename = "_csrf")]
@@ -635,19 +625,13 @@ async fn add_member(
     }
     let username = normalize_username(form.username.trim());
     let csrf_hex = csrf::encode(&session.csrf_value);
-    let invalid_login = !is_valid_twitch_login(&username);
-
-    let result = if invalid_login {
-        Err("username must be 1\u{2013}25 chars: lowercase letters, digits, underscore".to_owned())
-    } else {
-        match state
-            .ping_actor
-            .add_member(name.clone(), username.clone())
-            .await
-        {
-            Ok(()) => Ok(()),
-            Err(e) => Err(ping_error_for_form(e)?),
-        }
+    let result = match state
+        .ping_actor
+        .add_member(name.clone(), username.clone())
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(e) => Err(ping_error_for_form(e)?),
     };
 
     let view = state

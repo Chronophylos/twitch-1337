@@ -28,6 +28,10 @@ pub enum PingError {
     InvalidName,
     #[error("ping template contains control characters")]
     ControlChars,
+    /// Not a Twitch login: members end up in chat mentions and in dashboard
+    /// URL paths, so only the login charset is stored.
+    #[error("member {user:?} is not a valid Twitch login")]
+    InvalidMember { user: String },
     #[error("{user} is already a member of ping {ping:?}")]
     AlreadyMember { ping: String, user: String },
     #[error("{user} is not a member of ping {ping:?}")]
@@ -36,6 +40,15 @@ pub enum PingError {
     Unavailable,
     #[error("failed to persist pings")]
     Persist(#[source] eyre::Report),
+}
+
+/// Twitch login: lowercase ASCII alphanumeric + underscore, 1–25 chars
+/// (Twitch enforces that charset and length on signup).
+pub fn is_valid_twitch_login(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 25
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -574,6 +587,11 @@ impl PingManager {
             .get_mut(ping_name)
             .ok_or_else(|| not_found(ping_name))?;
         let username_lower = username.to_lowercase();
+        if !is_valid_twitch_login(&username_lower) {
+            return Err(PingError::InvalidMember {
+                user: username.to_owned(),
+            });
+        }
         if !ping.members.insert(username_lower) {
             return Err(PingError::AlreadyMember {
                 ping: ping_name.to_owned(),
@@ -832,6 +850,27 @@ mod tests {
         assert!(ping.members.contains("alice"));
         assert!(ping.members.contains("bob"));
         assert_eq!(ping.members.len(), 2);
+    }
+
+    /// Members are rendered into dashboard URL paths (`/pings/<p>/members/<m>/delete`);
+    /// a path-shaped member once let a Mod's ✕ click POST somewhere else.
+    #[tokio::test]
+    async fn add_member_rejects_non_login_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut mgr = test_manager(dir.path()).await;
+        for bad in ["../../victim/delete?", "a b", "@alice", "", &"a".repeat(26)] {
+            assert!(
+                matches!(
+                    mgr.add_member("test", bad).await,
+                    Err(PingError::InvalidMember { .. })
+                ),
+                "{bad:?}"
+            );
+        }
+        mgr.add_member("test", "Alice_99").await.unwrap();
+        let ping = mgr.store.pings.get("test").unwrap();
+        assert_eq!(ping.members.len(), 1);
+        assert!(ping.members.contains("alice_99"));
     }
 
     #[tokio::test]

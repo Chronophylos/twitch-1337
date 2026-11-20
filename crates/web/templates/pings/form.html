@@ -60,7 +60,7 @@
         </div>
         <div class="td col-act">
           <button type="button" class="row-act danger" title="Remove"
-                  hx-post="/pings/{{ name }}/members/{{ m }}/delete"
+                  hx-post="/pings/{{ name|urlencode_strict }}/members/{{ m|urlencode_strict }}/delete"
                   hx-confirm="Remove {{ m }} from {{ name }}?"
                   hx-target="closest .tr"
                   hx-swap="outerHTML"
