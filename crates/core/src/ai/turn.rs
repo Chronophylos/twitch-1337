@@ -7,7 +7,7 @@
 //! prompt assembly is testable against a fake [`llm::LlmClient`] without a
 //! Twitch round-trip. `AiCommand` is the Twitch adapter around it.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -478,8 +478,8 @@ impl TurnRunner {
             speaker_login: input.speaker.login.clone(),
             speaker_display_name: input.speaker.display_name.clone(),
             speaker_role: role,
-            // Grok has no write tools registered; a zero quota is the backstop
-            // that denies a hallucinated write_file call too.
+            // Grok has no write tools registered; a zero quota backs up the
+            // dispatch gate against a hallucinated write_file call.
             max_writes_per_turn: if grok_alias {
                 0
             } else {
@@ -520,6 +520,7 @@ impl TurnRunner {
         if self.emote_tracker.is_some() {
             tools.push(crate::ai::emote_stats_tool::emote_stats_tool());
         }
+        let registered_tools: HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
         let trace = TraceIds {
             user: Some(input.speaker.login.clone()),
             session_id: Some(crate::ai::session::new_session_id()),
@@ -576,6 +577,7 @@ impl TurnRunner {
 
                 let combined_exec = V2Executor {
                     chat: &exec,
+                    registered_tools: &registered_tools,
                     web: self.web.as_ref().map(|w| w.executor.as_ref()),
                     emotes: self.emotes.as_deref(),
                     doener: self.doener.as_ref(),
@@ -670,8 +672,11 @@ impl TurnRunner {
 /// (web_search/read_url) when web tools are configured, the on-demand
 /// `search_emotes` tool when the emote provider is active, the always-on
 /// doener_index and list_commands tools, the Aurora-only draw_tarot and plan_flight tools, or the
-/// Aurora-only search_packages tool.
+/// Aurora-only search_packages tool. A name outside `registered_tools` runs
+/// nothing, so a model can't reach a tool this turn never offered it.
 struct V2Executor<'a> {
+    /// Names of the tool definitions sent with this turn's request.
+    registered_tools: &'a HashSet<String>,
     chat: &'a ChatTurnExecutor,
     web: Option<&'a content::ContentToolExecutor>,
     emotes: Option<&'a SevenTvEmoteProvider>,
@@ -693,6 +698,10 @@ impl ToolExecutor for V2Executor<'_> {
     async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
         if self.cancellation.is_cancelled() {
             return ToolResultMessage::for_call(call, "cancelled".to_string());
+        }
+        if !self.registered_tools.contains(&call.name) {
+            warn!(tool = %call.name, "model called a tool not offered this turn");
+            return ToolResultMessage::for_call(call, "unknown_tool".to_string());
         }
         if call.name == crate::ai::doener_tool::DOENER_TOOL_NAME {
             return crate::ai::doener_tool::execute_doener_index(self.doener, call).await;

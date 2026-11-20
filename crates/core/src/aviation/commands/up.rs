@@ -67,8 +67,7 @@ where
         return Ok(());
     }
 
-    // Check cooldown
-    if let Some(remaining) = cooldown.check(user).await {
+    if let Err(remaining) = cooldown.try_acquire(user).await {
         cancellation.check()?;
         debug!(user = %user, remaining_secs = remaining.as_secs(), "!up on cooldown");
         sender
@@ -82,8 +81,6 @@ where
             .await;
         return Ok(());
     }
-
-    cooldown.record(user).await;
     cancellation.check()?;
 
     // Resolve location

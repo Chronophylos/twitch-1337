@@ -294,21 +294,6 @@ where
             Agent::Aurora
         };
 
-        if let Some(remaining) = self.cooldown.check(user).await {
-            ctx.cancellation.check()?;
-            debug!(user = %user, remaining_secs = remaining.as_secs(), "AI command on cooldown");
-            ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
-                .await;
-            return Ok(());
-        }
-
         let mut instruction = ctx.args.join(" ");
         if grok_alias && instruction.trim().is_empty() && ctx.privmsg.reply_parent.is_some() {
             instruction = GROK_REPLY_DEFAULT_INSTRUCTION.to_string();
@@ -325,11 +310,24 @@ where
             return Ok(());
         }
 
-        debug!(user = %user, instruction = %instruction, "Processing AI command");
+        // Usage replies stay free; everything past here costs the cooldown,
+        // charged before any outbound I/O.
+        if let Err(remaining) = self.cooldown.try_acquire(user).await {
+            ctx.cancellation.check()?;
+            debug!(user = %user, remaining_secs = remaining.as_secs(), "AI command on cooldown");
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    format!(
+                        "Bitte warte noch {} Waiting",
+                        format_cooldown_remaining(remaining)
+                    ),
+                )
+                .await;
+            return Ok(());
+        }
 
-        // Record before any outbound I/O so a slow catalog fetch cannot widen
-        // the window between cooldown.check and cooldown.record.
-        self.cooldown.record(user).await;
+        debug!(user = %user, instruction = %instruction, "Processing AI command");
         ctx.cancellation.check()?;
 
         let input = TurnInput {

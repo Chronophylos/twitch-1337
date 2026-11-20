@@ -95,20 +95,6 @@ where
         ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
 
-        if let Some(remaining) = self.cooldown.check(user).await {
-            debug!(user = %user, remaining_secs = remaining.as_secs(), "Spoiler command on cooldown");
-            ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
-                .await;
-            return Ok(());
-        }
-
         let parent = ctx
             .privmsg
             .reply_parent
@@ -136,9 +122,21 @@ where
             return Ok(());
         };
 
-        // Charge before any request goes out: recording after the check
-        // finishes let a burst of concurrent invocations all pass `check`.
-        self.cooldown.record(user).await;
+        // Charge before any request goes out, in the same lock as the check,
+        // so a burst of concurrent invocations admits only one.
+        if let Err(remaining) = self.cooldown.try_acquire(user).await {
+            debug!(user = %user, remaining_secs = remaining.as_secs(), "Spoiler command on cooldown");
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    format!(
+                        "Bitte warte noch {} Waiting",
+                        format_cooldown_remaining(remaining)
+                    ),
+                )
+                .await;
+            return Ok(());
+        }
 
         let budget = prepared.overall_timeout();
         let outcome = match tokio::time::timeout(
