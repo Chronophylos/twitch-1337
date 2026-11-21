@@ -1,5 +1,10 @@
 //! `!help` (`!commands`, `!hilfe`) and the public `/commands` page against the
 //! production registry, so the visibility rules under test are the real ones.
+//!
+//! Each bot is held to four replies: twitch-irc's rate limiter (about five
+//! sends per 150 ms per connection, JOIN included) opens a second connection
+//! past that, which `FakeTransport` cannot serve. See
+//! `RATE_LIMIT_DRAIN_DELAY` in `suspend.rs`.
 
 use super::common;
 
@@ -107,8 +112,6 @@ async fn public_ping_is_found_without_members_or_template() {
     bot.shutdown().await;
 }
 
-// Each bot gets at most four replies: twitch-irc opens a second pool
-// connection after a burst of sends, and the fake transport has only one.
 #[tokio::test]
 async fn bare_commands_and_hilfe_behave_like_help() {
     let mut bot = TestBotBuilder::new().spawn().await;
