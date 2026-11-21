@@ -148,7 +148,7 @@ changelog now.
 Add `.github/workflows/ghcr-retention.yml`. Runs weekly (Sunday) and on `workflow_dispatch`.
 Keeps the last 30 image versions plus any tagged `latest`. Deletes everything older.
 
-Uses `actions/delete-package-versions` (pinned to commit SHA per repo policy):
+Uses `actions/delete-package-versions` (specific version tag, with its exact commit recorded in `actions.lock`):
 
 ```yaml
 name: GHCR retention
@@ -164,7 +164,7 @@ jobs:
     permissions:
       packages: write
     steps:
-      - uses: actions/delete-package-versions@<sha>  # vX.Y.Z
+      - uses: actions/delete-package-versions@vX.Y.Z
         with:
           package-name: twitch-1337
           package-type: container
@@ -195,8 +195,8 @@ release history.
 Drop the table row for `Docker` referencing tags. Drop the "manual version bumps"
 guidance. Drop CHANGELOG-related text.
 
-`Action pinning` paragraph: add `actions/delete-package-versions` to the SHA-pinned
-list.
+`Action dependencies` paragraph: add `actions/delete-package-versions` by
+specific version tag and regenerate `actions.lock` to record its exact commit.
 
 ## Components
 

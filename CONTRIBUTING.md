@@ -104,6 +104,31 @@ field and skip processing when absent.
 
 Human contributors can use plain subjects; the gen-z bit is for agents only.
 
+## GitHub Actions dependencies
+
+Reference actions by a specific version tag, without an inline commit SHA or
+version comment. `.github/workflows/actions.lock` records the exact commits,
+transitive dependencies, and source-repository identities for every workflow.
+
+After adding a workflow or changing any `uses:` reference or action definition,
+regenerate and verify the lockfile from the repository root:
+
+```bash
+gh extension install github/gh-actions-lock --pin v0.5.1
+gh actions-lock
+gh actions-lock --verify
+```
+
+Never edit `actions.lock` by hand. Include its regenerated changes in the same
+PR as the workflow changes. Review changed commits as dependency code changes;
+investigate any changed `owner_id` or `repo_id`, because that means the
+source-repository identity changed. Dependabot updates both action tags and
+their matching lockfile entries.
+
+Pull requests changing workflows, the lockfile, or an `action.yml` /
+`action.yaml` run the read-only `actions lockfile` verification check. It does
+not commit updates automatically.
+
 ## Before committing
 
 Run the CI gate locally before pushing (CI rejects anything that fails):
