@@ -154,6 +154,26 @@ fn save_form_body(bare_csrf: &str, current: &Settings, extra: &[(&str, &str)]) -
             "ai.media.profile".to_owned(),
             current.ai.media.profile.clone(),
         ),
+        (
+            "bash.max_concurrent".to_owned(),
+            current.bash.max_concurrent.to_string(),
+        ),
+        (
+            "bash.timeout_ms".to_owned(),
+            current.bash.timeout_ms.to_string(),
+        ),
+        (
+            "bash.max_stdout_bytes".to_owned(),
+            current.bash.max_stdout_bytes.to_string(),
+        ),
+        (
+            "bash.max_vfs_bytes".to_owned(),
+            current.bash.max_vfs_bytes.to_string(),
+        ),
+        (
+            "cooldowns.bash".to_owned(),
+            current.cooldowns.bash.to_string(),
+        ),
     ];
     for &(key, value) in extra {
         if let Some((_, current_value)) = fields.iter_mut().find(|(name, _)| name == key) {
@@ -1207,6 +1227,49 @@ async fn malformed_media_size_returns_400_and_keeps_saved_value() {
         );
         assert_eq!(std::fs::read(&settings_ron).unwrap(), saved, "{bad}");
     }
+}
+
+/// The four Bash rows and the `!bash` cooldown save and read back, proving the
+/// card is wired to the same knob table the derive generates.
+#[tokio::test]
+async fn bash_card_save_persists() {
+    let (state, _dirs) = owner_state().await;
+    let res = post_settings(
+        &state,
+        &[
+            ("bash.timeout_ms", "2500"),
+            ("bash.max_stdout_bytes", "512"),
+            ("bash.max_vfs_bytes", "8192"),
+            ("cooldowns.bash", "45"),
+        ],
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let saved = state.settings.load();
+    assert_eq!(saved.bash.timeout_ms, 2500);
+    assert_eq!(saved.bash.max_stdout_bytes, 512);
+    assert_eq!(saved.bash.max_vfs_bytes, 8192);
+    assert_eq!(saved.cooldowns.bash, 45);
+    assert_eq!(
+        saved.bash.max_concurrent,
+        Settings::compiled_defaults().bash.max_concurrent,
+        "an untouched row keeps its default",
+    );
+}
+
+/// `bash.max_concurrent` sizes the interpreter slot pool at startup, so the
+/// save must tell the owner a restart is required and name the knob.
+#[tokio::test]
+async fn bash_max_concurrent_flashes_restart() {
+    let (state, _dirs) = owner_state().await;
+    let res = post_settings(&state, &[("bash.max_concurrent", "3")]).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(state.settings.load().bash.max_concurrent, 3);
+    let flash = read_flash(&res).expect("save must emit a flash cookie");
+    assert!(
+        flash.contains("Restart bot to apply: ") && flash.contains("bash.max_concurrent"),
+        "restart flash must list bash.max_concurrent; got {flash:?}",
+    );
 }
 
 #[tokio::test]

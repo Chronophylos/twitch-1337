@@ -16,6 +16,7 @@ testing = []
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
+bashkit = { version = "0.21.1", default-features = false }
 bytesize = { workspace = true }
 color-eyre = { workspace = true }
 eyre = { workspace = true }

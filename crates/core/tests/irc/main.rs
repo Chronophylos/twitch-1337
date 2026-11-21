@@ -9,6 +9,7 @@ mod common;
 
 mod aktien;
 mod announce;
+mod bash;
 mod command_execution;
 mod doener;
 mod emote_lookup;

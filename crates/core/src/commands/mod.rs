@@ -6,6 +6,7 @@ use eyre::Result;
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
 pub mod aktien;
+pub mod bash;
 pub mod catalog;
 pub mod doener;
 pub mod doener_calc;
@@ -55,6 +56,11 @@ pub fn aktien_cooldown_duration(s: &crate::settings::Settings) -> Duration {
     Duration::from_secs(s.cooldowns.aktien)
 }
 
+/// Per-user cooldown duration for `!bash`.
+pub fn bash_cooldown_duration(s: &crate::settings::Settings) -> Duration {
+    Duration::from_secs(s.cooldowns.bash)
+}
+
 /// Per-user cooldown duration for `!news`, `!tldr`, and `!haiku` (shared bucket).
 pub fn news_cooldown_duration(s: &crate::settings::Settings) -> Duration {
     Duration::from_secs(s.cooldowns.news)
@@ -98,6 +104,7 @@ pub fn is_admin(privmsg: &PrivmsgMessage, hidden_admin_ids: &[String]) -> bool {
 pub const RESERVED_PING_NAMES: &[&str] = &[
     "!ai",
     "!aktien",
+    "!bash",
     "!commands",
     "!döner",
     "!dpi",
