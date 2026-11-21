@@ -306,8 +306,8 @@ pub async fn main() -> Result<()> {
         (None, None)
     };
 
-    // Build telemetry once so the IRC orchestrator and WebState share the same Arc.
-    let telemetry = twitch_1337::schedule::TelemetryStore::open(&get_data_dir());
+    // Build the schedule runtime store once so the IRC orchestrator and WebState share the same Arc.
+    let schedule_runtime = twitch_1337::schedule::ScheduleRuntimeStore::open(&get_data_dir());
 
     // Soft-fail: open/migrate error leaves None and disables the tracker only.
     let emote_tracker = twitch_1337::emote_tracker::try_open(&get_data_dir());
@@ -366,7 +366,7 @@ pub async fn main() -> Result<()> {
         hall_of_shame,
         aviation_tracker_tx,
         primary_history_tap: None,
-        telemetry,
+        schedule_runtime,
         emote_tracker,
         twitch_channel_id,
         mouths,

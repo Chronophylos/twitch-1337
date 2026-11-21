@@ -1,6 +1,6 @@
-//! Per-schedule runtime telemetry: last_fired_at, fires_today, day_anchor.
+//! Per-schedule runtime state: last_fired_at, fires_today, day_anchor.
 //!
-//! Lives outside `settings.ron`: telemetry is state, not config. Stored
+//! Lives outside `settings.ron`: runtime state is state, not config. Stored
 //! at `$DATA_DIR/schedule_runtime.ron`. Writes are debounced (flush at
 //! most every 5s) and atomic (tmp + rename).
 
@@ -44,30 +44,30 @@ impl ScheduleRuntime {
     }
 }
 
-pub struct TelemetryStore {
+pub struct ScheduleRuntimeStore {
     path: PathBuf,
-    data: Mutex<TelemetryState>,
+    data: Mutex<RuntimeState>,
 }
 
-struct TelemetryState {
+struct RuntimeState {
     map: HashMap<String, ScheduleRuntime>,
     dirty: bool,
     last_flush: std::time::Instant,
 }
 
-impl TelemetryStore {
+impl ScheduleRuntimeStore {
     pub fn open(data_dir: &std::path::Path) -> Arc<Self> {
         let path = data_dir.join(FILE_NAME);
         let map = match std::fs::read_to_string(&path) {
             Ok(s) => ron::from_str::<HashMap<String, ScheduleRuntime>>(&s).unwrap_or_else(|e| {
-                warn!(?e, "telemetry file unparseable; starting empty");
+                warn!(?e, "schedule runtime file unparseable; starting empty");
                 HashMap::new()
             }),
             Err(_) => HashMap::new(),
         };
         Arc::new(Self {
             path,
-            data: Mutex::new(TelemetryState {
+            data: Mutex::new(RuntimeState {
                 map,
                 dirty: false,
                 last_flush: std::time::Instant::now(),
@@ -96,7 +96,7 @@ impl TelemetryStore {
         entry.fires_today = entry.fires_today.saturating_add(1);
         g.dirty = true;
         if g.last_flush.elapsed() >= FLUSH_INTERVAL {
-            Self::write(&self.path, &mut g, "telemetry flush failed").await;
+            Self::write(&self.path, &mut g, "schedule runtime flush failed").await;
         }
     }
 
@@ -104,7 +104,7 @@ impl TelemetryStore {
     pub async fn flush(&self) {
         let mut g = self.data.lock().await;
         if g.dirty {
-            Self::write(&self.path, &mut g, "telemetry final flush failed").await;
+            Self::write(&self.path, &mut g, "schedule runtime final flush failed").await;
         }
     }
 
@@ -113,7 +113,7 @@ impl TelemetryStore {
     /// snapshot over a newer one.
     // ponytail: dashboard snapshot reads wait on the disk write; it is a
     // small file at most every 5s.
-    async fn write(path: &std::path::Path, g: &mut TelemetryState, what: &'static str) {
+    async fn write(path: &std::path::Path, g: &mut RuntimeState, what: &'static str) {
         match atomic_save_ron_async(&g.map, path).await {
             Ok(()) => {
                 g.dirty = false;
@@ -131,7 +131,7 @@ mod tests {
     #[tokio::test]
     async fn record_fire_increments_counter() {
         let dir = tempfile::tempdir().expect("tmp");
-        let s = TelemetryStore::open(dir.path());
+        let s = ScheduleRuntimeStore::open(dir.path());
         let now = Timestamp::now();
         s.record_fire("a", now).await;
         s.record_fire("a", now).await;
@@ -144,7 +144,7 @@ mod tests {
     #[tokio::test]
     async fn rollover_resets_fires_today() {
         let dir = tempfile::tempdir().expect("tmp");
-        let s = TelemetryStore::open(dir.path());
+        let s = ScheduleRuntimeStore::open(dir.path());
         let day1 = "2026-05-28T12:00:00Z".parse::<Timestamp>().unwrap();
         let day2 = "2026-05-29T12:00:00Z".parse::<Timestamp>().unwrap();
         s.record_fire("a", day1).await;
@@ -158,7 +158,7 @@ mod tests {
     #[tokio::test]
     async fn snapshot_resets_fires_today_at_berlin_midnight() {
         let dir = tempfile::tempdir().expect("tmp");
-        let s = TelemetryStore::open(dir.path());
+        let s = ScheduleRuntimeStore::open(dir.path());
         // 23:30 and 00:30 Berlin: the same UTC day, different Berlin days.
         let before = "2026-05-28T21:30:00Z".parse::<Timestamp>().unwrap();
         let after = "2026-05-28T22:30:00Z".parse::<Timestamp>().unwrap();
@@ -176,13 +176,13 @@ mod tests {
     async fn reopen_restores_state() {
         let dir = tempfile::tempdir().expect("tmp");
         {
-            let s = TelemetryStore::open(dir.path());
+            let s = ScheduleRuntimeStore::open(dir.path());
             s.record_fire("a", Timestamp::now()).await;
             s.flush().await;
         }
         // The on-disk filename is the persistence contract across releases.
         assert!(dir.path().join("schedule_runtime.ron").exists());
-        let s2 = TelemetryStore::open(dir.path());
+        let s2 = ScheduleRuntimeStore::open(dir.path());
         assert!(s2.snapshot(Timestamp::now()).await.contains_key("a"));
     }
 }

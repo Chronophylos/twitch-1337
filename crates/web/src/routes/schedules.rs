@@ -86,7 +86,7 @@ struct StatsView {
 impl StatsView {
     fn new(
         rows: &[Schedule],
-        telemetry: &HashMap<String, ScheduleRuntime>,
+        runtimes: &HashMap<String, ScheduleRuntime>,
         now_berlin: &ZonedDateTime,
     ) -> Self {
         let next_fire = rows
@@ -104,7 +104,7 @@ impl StatsView {
         Self {
             total: rows.len(),
             active_count: rows.iter().filter(|r| r.enabled).count(),
-            fired_today: telemetry.values().map(|r| r.fires_today).sum(),
+            fired_today: runtimes.values().map(|r| r.fires_today).sum(),
             next_fire,
         }
     }
@@ -166,13 +166,13 @@ async fn swap_tpl(state: &WebState, session: &Session, card: Option<&str>) -> Sw
     let rows = state.settings.load().schedules.clone();
     let now_utc = Timestamp::now();
     let now_berlin = to_berlin(now_utc);
-    let telemetry = state.telemetry.snapshot(now_utc).await;
+    let runtimes = state.schedule_runtime.snapshot(now_utc).await;
     SwapTpl {
         card: card
             .and_then(|name| rows.iter().find(|s| s.name == name))
-            .map(|s| card_view(s, telemetry.get(&s.name), now_utc, &now_berlin)),
+            .map(|s| card_view(s, runtimes.get(&s.name), now_utc, &now_berlin)),
         csrf: csrf::encode(&session.csrf_value),
-        stats: StatsView::new(&rows, &telemetry, &now_berlin),
+        stats: StatsView::new(&rows, &runtimes, &now_berlin),
     }
 }
 
@@ -356,9 +356,9 @@ async fn list(
 ) -> Result<Response, WebError> {
     let rows = state.settings.load().schedules.clone();
     let now_utc = Timestamp::now();
-    let telemetry = state.telemetry.snapshot(now_utc).await;
+    let runtimes = state.schedule_runtime.snapshot(now_utc).await;
     let now_berlin = to_berlin(now_utc);
-    let stats = StatsView::new(&rows, &telemetry, &now_berlin);
+    let stats = StatsView::new(&rows, &runtimes, &now_berlin);
     let edit_form = q.edit.as_ref().and_then(|name| {
         rows.iter()
             .find(|r| r.name == *name)
@@ -376,7 +376,7 @@ async fn list(
     };
     let cards: Vec<CardView> = rows
         .iter()
-        .map(|s| card_view(s, telemetry.get(&s.name), now_utc, &now_berlin))
+        .map(|s| card_view(s, runtimes.get(&s.name), now_utc, &now_berlin))
         .collect();
     render(&ListTpl {
         rows: cards,
@@ -398,12 +398,12 @@ async fn list(
 
 fn card_view(
     s: &Schedule,
-    tele: Option<&twitch_1337_core::schedule::ScheduleRuntime>,
+    runtime: Option<&twitch_1337_core::schedule::ScheduleRuntime>,
     now_utc: Timestamp,
     now_berlin: &ZonedDateTime,
 ) -> CardView {
     let (trigger_label, window_label) = trigger_human(&s.trigger);
-    let last_fired_human = tele.and_then(|r| r.last_fired_at).map(|t| {
+    let last_fired_human = runtime.and_then(|r| r.last_fired_at).map(|t| {
         let delta = now_utc.duration_since(t);
         humanize_delta(delta)
     });
@@ -421,7 +421,7 @@ fn card_view(
         trigger_label,
         schedule_window_label: window_label,
         last_fired_human,
-        fires_today: tele.map(|r| r.fires_today).unwrap_or(0),
+        fires_today: runtime.map(|r| r.fires_today).unwrap_or(0),
         next_fire_human,
     }
 }
@@ -782,7 +782,7 @@ fn render_validation(
     // schedules alongside the error.
     let now_utc = Timestamp::now();
     let now_berlin = to_berlin(now_utc);
-    // Telemetry isn't loaded on this path, so "fired today" reads 0.
+    // Schedule runtime state isn't loaded on this path, so "fired today" reads 0.
     let stats = StatsView::new(&rows, &HashMap::new(), &now_berlin);
     let cards: Vec<CardView> = rows
         .iter()

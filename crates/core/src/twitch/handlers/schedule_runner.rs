@@ -24,7 +24,7 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::lifecycle::{Lifecycle, TaskGroup};
 use crate::ping::{PingHandle, TriggerDecision};
-use crate::schedule::{Schedule, TelemetryStore};
+use crate::schedule::{Schedule, ScheduleRuntimeStore};
 use crate::settings::SettingsHandle;
 use crate::twitch::ChatSender;
 use crate::util::clock::Clock;
@@ -128,7 +128,7 @@ enum ReconcileControl {
 pub async fn run_orchestrator<T, L>(
     sender: Arc<ChatSender<T, L>>,
     settings: SettingsHandle,
-    telemetry: Arc<TelemetryStore>,
+    runtime: Arc<ScheduleRuntimeStore>,
     channel: String,
     shutdown: Arc<Notify>,
     clock: Arc<dyn Clock>,
@@ -140,7 +140,7 @@ where
     L: LoginCredentials,
 {
     try_run_orchestrator(
-        sender, settings, telemetry, channel, shutdown, clock, &lifecycle, &ping,
+        sender, settings, runtime, channel, shutdown, clock, &lifecycle, &ping,
     )
     .await
     .wrap_err("scheduled-message child supervision failed")
@@ -155,7 +155,7 @@ where
 pub(crate) async fn try_run_orchestrator<T, L>(
     sender: Arc<ChatSender<T, L>>,
     settings: SettingsHandle,
-    telemetry: Arc<TelemetryStore>,
+    runtime: Arc<ScheduleRuntimeStore>,
     channel: String,
     shutdown: Arc<Notify>,
     clock: Arc<dyn Clock>,
@@ -183,7 +183,7 @@ where
     let initial = reconcile(
         &sender,
         &settings,
-        &telemetry,
+        &runtime,
         &channel,
         &clock,
         &mut running,
@@ -208,7 +208,7 @@ where
         ReconcileControl::Continue => {}
         ReconcileControl::Shutdown => {
             stop_and_join_all(&mut running).await?;
-            telemetry.flush().await;
+            runtime.flush().await;
             return Ok(());
         }
     }
@@ -221,7 +221,7 @@ where
                 match reconcile(
                     &sender,
                     &settings,
-                    &telemetry,
+                    &runtime,
                     &channel,
                     &clock,
                     &mut running,
@@ -265,7 +265,7 @@ where
         if matches!(control, ReconcileControl::Shutdown) {
             info!("Schedules orchestrator: shutdown");
             stop_and_join_all(&mut running).await?;
-            telemetry.flush().await;
+            runtime.flush().await;
             return Ok(());
         }
     }
@@ -353,7 +353,7 @@ async fn stop_and_join_all(
 async fn reconcile<T, L, S>(
     sender: &Arc<ChatSender<T, L>>,
     settings: &SettingsHandle,
-    telemetry: &Arc<TelemetryStore>,
+    runtime: &Arc<ScheduleRuntimeStore>,
     channel: &str,
     clock: &Arc<dyn Clock>,
     running: &mut HashMap<String, RunningSchedule>,
@@ -449,7 +449,7 @@ where
             name.clone(),
             schedule.clone(),
             sender.clone(),
-            telemetry.clone(),
+            runtime.clone(),
             channel.to_owned(),
             clock.clone(),
             completion_tx.clone(),
@@ -482,7 +482,7 @@ async fn spawn_schedule_child<T, L>(
     name: String,
     schedule: Schedule,
     sender: Arc<ChatSender<T, L>>,
-    telemetry: Arc<TelemetryStore>,
+    runtime: Arc<ScheduleRuntimeStore>,
     channel: String,
     clock: Arc<dyn Clock>,
     completion_tx: mpsc::UnboundedSender<ScheduleCompletionEvent>,
@@ -503,7 +503,7 @@ where
             let completion = AssertUnwindSafe(run_schedule_task(
                 child_schedule,
                 sender,
-                telemetry,
+                runtime,
                 channel,
                 clock,
                 child_cancellation,
@@ -646,11 +646,11 @@ fn classify_schedule_completions(
     }
 }
 
-#[instrument(skip(sender, telemetry, channel, clock, cancel, ping), fields(schedule = %schedule.name))]
+#[instrument(skip(sender, runtime, channel, clock, cancel, ping), fields(schedule = %schedule.name))]
 async fn run_schedule_task<T, L>(
     schedule: Schedule,
     sender: Arc<ChatSender<T, L>>,
-    telemetry: Arc<TelemetryStore>,
+    runtime: Arc<ScheduleRuntimeStore>,
     channel: String,
     clock: Arc<dyn Clock>,
     cancel: CancellationToken,
@@ -688,8 +688,8 @@ where
         sender.say(channel.clone(), schedule.message.clone()).await;
         // The send completed, so record the fire before observing cancellation.
         // A cancellation racing this await must not make a successful send
-        // disappear from telemetry.
-        telemetry.record_fire(&schedule.name, clock.now_utc()).await;
+        // disappear from the runtime counters.
+        runtime.record_fire(&schedule.name, clock.now_utc()).await;
         if let Some(ping_name) = &schedule.ping {
             ping.fire(&sender, &channel, ping_name).await;
         }

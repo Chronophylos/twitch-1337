@@ -86,9 +86,9 @@ pub struct TestBot {
     /// Filled by the commands handler when AI + chat history are enabled; lets
     /// tests inspect chat-history entries (display_name / user_id / source).
     primary_history_tap: Arc<Mutex<Option<twitch_1337::ai::chat_history::ChatHistory>>>,
-    /// Shared telemetry store; exposes in-memory schedule fire counts for tests
+    /// Shared schedule runtime store; exposes in-memory schedule fire counts for tests
     /// without requiring on-disk flush.
-    pub telemetry: Arc<twitch_1337::schedule::TelemetryStore>,
+    pub schedule_runtime: Arc<twitch_1337::schedule::ScheduleRuntimeStore>,
     /// Live settings handle. Exposes the overrides applied via `with_settings`
     /// so that helpers such as `run_ritual_for` read the same config the bot uses.
     pub settings: twitch_1337::settings::SettingsHandle,
@@ -489,7 +489,8 @@ impl TestBotBuilder {
             .await
             .expect("build ai memory v2");
 
-            let telemetry_store = twitch_1337::schedule::TelemetryStore::open(data_dir.path());
+            let schedule_runtime =
+                twitch_1337::schedule::ScheduleRuntimeStore::open(data_dir.path());
 
             let recap_handle = if self.config.ai.is_some() {
                 Some(Arc::new(
@@ -658,7 +659,7 @@ impl TestBotBuilder {
                 )),
                 aviation_tracker_tx,
                 primary_history_tap: Some(primary_history_tap.clone()),
-                telemetry: telemetry_store.clone(),
+                schedule_runtime: schedule_runtime.clone(),
                 emote_tracker,
                 twitch_channel_id: None,
                 mouths,
@@ -773,7 +774,7 @@ impl TestBotBuilder {
                 channel,
                 irc_connected,
                 primary_history_tap,
-                telemetry: telemetry_store,
+                schedule_runtime,
                 settings: settings_handle,
                 settings_store: settings_store.clone(),
                 latency_value,

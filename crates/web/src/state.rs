@@ -93,10 +93,10 @@ pub struct WebState {
     /// Owning store for settings — apply/reset go through this. Web handlers
     /// for `/settings` post-back via `store.apply(...)`.
     pub settings_store: Arc<twitch_1337_core::settings::SettingsStore>,
-    /// Per-schedule runtime telemetry (last_fired_at, fires_today, day_anchor).
+    /// Per-schedule runtime state (last_fired_at, fires_today, day_anchor).
     /// Shared with the IRC `schedule_runner` orchestrator so the dashboard
     /// surfaces live fire counters.
-    pub telemetry: Arc<twitch_1337_core::schedule::TelemetryStore>,
+    pub schedule_runtime: Arc<twitch_1337_core::schedule::ScheduleRuntimeStore>,
     /// Shared chat-recap handle (same `Arc` the bot's recap batcher writes
     /// through). `None` when AI / LLM is disabled at startup.
     pub recap: Option<Arc<RecapHandle>>,
@@ -132,7 +132,7 @@ pub struct WebBoot {
 impl WebState {
     /// Build the dashboard state from the bot's `Services` plus the
     /// web-owned inputs. Every bot handle (settings, ping, memory,
-    /// leaderboard, tracker, telemetry, recap, irc_connected, channel) is
+    /// leaderboard, tracker, schedule_runtime, recap, irc_connected, channel) is
     /// cloned from `core`, so the dashboard and the bot share one source
     /// of truth. Typeable without generics: `WebState` stores zero
     /// generic fields.
@@ -159,7 +159,7 @@ impl WebState {
             owner: web.owner,
             settings: core.settings.clone(),
             settings_store: core.settings_store.clone(),
-            telemetry: core.telemetry.clone(),
+            schedule_runtime: core.schedule_runtime.clone(),
             recap: core.recap.clone(),
             log_ring: core.log_ring.clone(),
         }
@@ -216,9 +216,10 @@ impl WebState {
             .await
             .wrap_err("open memory store")?;
         let memory_audit = Arc::new(FileAuditLog::new(cfg.memory_dir.join("memory_audit.log")));
-        // Reuse ping_dir for telemetry: TelemetryStore only writes on flush,
+        // Reuse ping_dir for the schedule runtime store: it only writes on flush,
         // and ping_dir is owned by the caller so it stays alive for the test.
-        let telemetry = twitch_1337_core::schedule::TelemetryStore::open(&cfg.ping_dir);
+        let schedule_runtime =
+            twitch_1337_core::schedule::ScheduleRuntimeStore::open(&cfg.ping_dir);
 
         Ok(WebState {
             sessions,
@@ -244,7 +245,7 @@ impl WebState {
             owner: Arc::new(ArcSwap::from_pointee(cfg.owner)),
             settings,
             settings_store,
-            telemetry,
+            schedule_runtime,
             recap: None,
             log_ring: Arc::default(),
         })
@@ -258,7 +259,7 @@ impl WebState {
 pub struct WebTestConfig {
     pub helix: Arc<dyn HelixClient>,
     pub clock: Arc<dyn Clock>,
-    /// Ping store dir; also hosts the telemetry store.
+    /// Ping store dir; also hosts the schedule runtime store.
     pub ping_dir: std::path::PathBuf,
     /// Memory-tree dir.
     pub memory_dir: std::path::PathBuf,
