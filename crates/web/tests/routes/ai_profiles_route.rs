@@ -825,3 +825,67 @@ async fn test_connection_sends_openrouter_credentials_and_advanced_options() {
     );
     assert_eq!(state.settings.load().ai.profiles.len(), 1);
 }
+
+#[tokio::test]
+async fn cards_show_assignment_links_and_name_delete_blockers() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(
+        &state,
+        vec![profile("active"), profile("unused"), decision("classifier")],
+        "active",
+    )
+    .await;
+    state
+        .settings_store
+        .apply(
+            SettingsOverrides {
+                ai: twitch_1337_core::settings::AiOverrides {
+                    recap: twitch_1337_core::settings::AiRecapOverrides {
+                        profile: Some(Some("active".into())),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            Actor {
+                user_id: "test".into(),
+                user_login: "test".into(),
+            },
+        )
+        .await
+        .expect("assign recap");
+    point_spoiler_at(&state, "classifier").await;
+    let (sid, cc, _csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let req = Request::builder()
+        .uri("/ai-profiles")
+        .header(header::COOKIE, cookie_header(&sid, &cc))
+        .body(Body::empty())
+        .unwrap();
+    let html = body_string(build_router(state).oneshot(req).await.unwrap()).await;
+
+    for (label, anchor) in [
+        ("Aurora", "sec-ai-aurora"),
+        ("Grok", "sec-ai-grok"),
+        ("Dreamer", "sec-ai-dreamer"),
+        ("Media", "sec-ai-media"),
+        ("Recap", "sec-ai-recap"),
+        ("Spoiler check", "sec-spoiler"),
+    ] {
+        assert!(
+            html.contains(&format!("href=\"/settings#{anchor}\"")) && html.contains(label),
+            "missing {label} assignment link: {html}"
+        );
+    }
+    let unused = html
+        .split("<article")
+        .find(|part| part.contains("card-title\">unused</span>"))
+        .unwrap_or_else(|| panic!("unused profile card missing: {html}"));
+    assert!(unused.contains("Not assigned"), "{unused}");
+    assert!(
+        html.contains("Reassign Aurora, Grok, Dreamer, Media, Recap before deleting"),
+        "delete confirmation must name blockers: {html}"
+    );
+}

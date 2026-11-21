@@ -61,6 +61,11 @@ struct ConnectionTestView {
     message: String,
 }
 
+struct AssignmentView {
+    label: &'static str,
+    settings_anchor: &'static str,
+}
+
 struct CardView {
     name: String,
     kind: &'static str,
@@ -71,6 +76,8 @@ struct CardView {
     reasoning_effort: Option<String>,
     service_tier: Option<String>,
     timeout: u64,
+    assignments: Vec<AssignmentView>,
+    assignment_names: String,
 }
 
 /// One `<option>` for the provider `<select>`, plus enough of its
@@ -274,7 +281,7 @@ async fn list(
         None
     };
     let total = rows.len();
-    let cards: Vec<CardView> = rows.iter().map(card_view).collect();
+    let cards: Vec<CardView> = rows.iter().map(|p| card_view(p, &settings)).collect();
     render(&ListTpl {
         rows: cards,
         edit_form,
@@ -297,7 +304,45 @@ async fn list(
     })
 }
 
-fn card_view(p: &AiProfile) -> CardView {
+fn card_view(p: &AiProfile, settings: &Settings) -> CardView {
+    let mut assignments = Vec::new();
+    for (label, settings_anchor, selected) in [
+        (
+            "Aurora",
+            "sec-ai-aurora",
+            settings.ai.aurora.profile.as_str(),
+        ),
+        ("Grok", "sec-ai-grok", settings.ai.grok.profile.as_str()),
+        (
+            "Dreamer",
+            "sec-ai-dreamer",
+            settings.ai.dreamer.profile.as_str(),
+        ),
+        ("Media", "sec-ai-media", settings.ai.media.profile.as_str()),
+        (
+            "Recap",
+            "sec-ai-recap",
+            settings.ai.recap.profile.as_deref().unwrap_or(""),
+        ),
+        (
+            "Spoiler check",
+            "sec-spoiler",
+            settings.spoiler.profile.as_str(),
+        ),
+    ] {
+        if selected == p.name {
+            assignments.push(AssignmentView {
+                label,
+                settings_anchor,
+            });
+        }
+    }
+    let assignment_names = assignments
+        .iter()
+        .map(|assignment| assignment.label)
+        .collect::<Vec<_>>()
+        .join(", ");
+
     CardView {
         name: p.name.clone(),
         kind: p.kind.as_str(),
@@ -308,6 +353,8 @@ fn card_view(p: &AiProfile) -> CardView {
         reasoning_effort: p.reasoning_effort.clone(),
         service_tier: p.service_tier.clone(),
         timeout: p.timeout,
+        assignments,
+        assignment_names,
     }
 }
 
@@ -352,14 +399,7 @@ async fn create(
     let new_profile = match form.to_profile() {
         Ok(p) => p,
         Err(e) => {
-            let settings = state.settings.load();
-            return render_validation(
-                &session,
-                settings.ai.profiles.clone(),
-                vec![e],
-                None,
-                Some(submitted),
-            );
+            return render_validation(&state, &session, vec![e], None, Some(submitted));
         }
     };
     let current_profiles = state.settings.load().ai.profiles.clone();
@@ -395,14 +435,7 @@ async fn test_connection(
     let profile = match form.to_profile() {
         Ok(profile) => profile,
         Err(error) => {
-            let settings = state.settings.load();
-            return render_validation(
-                &session,
-                settings.ai.profiles.clone(),
-                vec![error],
-                edit_target,
-                Some(submitted),
-            );
+            return render_validation(&state, &session, vec![error], edit_target, Some(submitted));
         }
     };
 
@@ -420,8 +453,8 @@ async fn test_connection(
         },
     };
     render_page(
+        &state,
         &session,
-        state.settings.load().ai.profiles.clone(),
         Vec::new(),
         edit_target,
         Some(submitted),
@@ -511,14 +544,7 @@ async fn update(
     let edited = match form.to_profile() {
         Ok(p) => p,
         Err(e) => {
-            let settings = state.settings.load();
-            return render_validation(
-                &session,
-                settings.ai.profiles.clone(),
-                vec![e],
-                Some(name),
-                Some(submitted),
-            );
+            return render_validation(&state, &session, vec![e], Some(name), Some(submitted));
         }
     };
     let target = name.clone();
@@ -585,8 +611,8 @@ async fn delete(
     let profiles = settings.ai.profiles.clone();
     if profiles.len() == 1 {
         return render_validation(
+            &state,
             &session,
-            profiles,
             vec![FieldError {
                 field: "ai.profiles".into(),
                 message: "at least one profile is required".into(),
@@ -607,8 +633,8 @@ async fn delete(
         || settings.ai.recap.profile.as_deref() == Some(name.as_str());
     if in_use {
         return render_validation(
+            &state,
             &session,
-            profiles,
             vec![FieldError {
                 field: "ai.profiles".into(),
                 message: "assign every agent and the spoiler check to another profile before deleting this one".into(),
@@ -655,37 +681,32 @@ async fn apply_or_rerender(
         Err(SettingsError::Validation(errs)) => {
             // Render the *persisted* rows as cards — never the rejected
             // attempt (see the identical note in `routes/schedules.rs`).
-            let settings = state.settings.load();
-            render_validation(
-                session,
-                settings.ai.profiles.clone(),
-                errs,
-                edit_on_error,
-                submitted,
-            )
+            render_validation(state, session, errs, edit_on_error, submitted)
         }
         Err(e) => Err(WebError::Internal(eyre::eyre!("settings apply: {e}"))),
     }
 }
 
 fn render_validation(
+    state: &WebState,
     session: &Session,
-    rows: Vec<AiProfile>,
     errs: Vec<FieldError>,
     edit_on_error: Option<String>,
     submitted: Option<FormState>,
 ) -> Result<Response, WebError> {
-    render_page(session, rows, errs, edit_on_error, submitted, None)
+    render_page(state, session, errs, edit_on_error, submitted, None)
 }
 
 fn render_page(
+    state: &WebState,
     session: &Session,
-    rows: Vec<AiProfile>,
     errs: Vec<FieldError>,
     edit_on_error: Option<String>,
     submitted: Option<FormState>,
     connection_test: Option<ConnectionTestView>,
 ) -> Result<Response, WebError> {
+    let settings = state.settings.load();
+    let rows = settings.ai.profiles.clone();
     let mut row_errors: Vec<RowError> = Vec::new();
     let mut global_errors: Vec<(String, String)> = Vec::new();
     for e in errs {
@@ -715,7 +736,7 @@ fn render_page(
         global_errors.push((e.field, e.message));
     }
     let total = rows.len();
-    let cards: Vec<CardView> = rows.iter().map(card_view).collect();
+    let cards: Vec<CardView> = rows.iter().map(|p| card_view(p, &settings)).collect();
 
     // The edit form's POST target must stay pinned to the row this edit
     // actually opened against, regardless of what name the user typed into

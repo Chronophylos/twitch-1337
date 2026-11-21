@@ -8,6 +8,16 @@
     {% if card.kind == "decision" %}<span class="chip today">decision</span>{% endif %}
     <span class="chip window">{{ card.model }}</span>
   </div>
+  <div class="card-badges" aria-label="Profile assignments">
+    {% if card.assignments.is_empty() %}
+      <span class="chip last">Not assigned</span>
+    {% else %}
+      <span class="chip last">Used by</span>
+      {% for assignment in card.assignments %}
+        <a class="chip edit-link" href="/settings#{{ assignment.settings_anchor }}">{{ assignment.label }}</a>
+      {% endfor %}
+    {% endif %}
+  </div>
   <footer class="card-footer">
     {% if let Some(base_url) = card.base_url.as_ref() %}
       <span class="chip last">{{ base_url }}</span>
@@ -24,7 +34,11 @@
     <span class="chip today">{{ card.timeout }}s</span>
     <a class="chip edit-link" href="/ai-profiles?edit={{ card.name|urlencode_strict }}">edit</a>
     <form method="post" action="/ai-profiles/{{ card.name|urlencode_strict }}/delete"
-          data-confirm="Delete profile “{{ card.name }}”?">
+          {% if card.assignments.is_empty() %}
+            data-confirm="Delete profile “{{ card.name }}”?"
+          {% else %}
+            data-confirm="Profile “{{ card.name }}” is assigned. Reassign {{ card.assignment_names }} before deleting. Submit delete anyway?"
+          {% endif %}>
       <input type="hidden" name="_csrf" value="{{ csrf }}">
       <button class="chip danger" type="submit">delete</button>
     </form>
