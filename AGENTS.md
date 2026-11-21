@@ -4,7 +4,7 @@ Guide for coding agents working in this repo. Claude Code loads it through `CLAU
 
 ## Project
 
-Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), game servers (`!servers [name]`, AMP), feedback (`!fb`), spoiler check (`!spoiler`, decision model), alerts (earthquake + solar flare + Earth-directed CME monitors, passive, configured at `/settings → Alerts`), version (`!v`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`).
+Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), game servers (`!servers [name]`, AMP), joke stock picks (`!aktien`/`!stocks`, Finnhub), feedback (`!fb`), spoiler check (`!spoiler`, decision model), alerts (earthquake + solar flare + Earth-directed CME monitors, passive, configured at `/settings → Alerts`), version (`!v`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`).
 
 Single persistent IRC connection, broadcast channel routes to independent handler tasks.
 
@@ -190,7 +190,7 @@ preserve the `GIT_SHA` / build-number injection (Justfile `build` recipe).
 
 ## Config
 
-`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (`[ai.keys]` named credentials only, optional), `[aviationstack]` (api_key only, optional), `[dhl]` (api_key only, optional), `[amp]` (url/username/password, optional), `[langfuse]` (public/secret keys, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
+`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (`[ai.keys]` named credentials only, optional), `[aviationstack]` (api_key only, optional), `[dhl]` (api_key only, optional), `[amp]` (url/username/password, optional), `[finnhub]` (api_key only, optional), `[langfuse]` (public/secret keys, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
 
 Adding a knob: a secret, or something that must exist before the dashboard, goes in `config.toml.example` + loader; anything runtime-tunable goes in the settings schema + a dashboard card. Never both. Legacy hoisted keys were migrated once via sentinels (`.ai_migrated_v2`, `.config_migrated_v3`, `.schedules_migrated_v3`); edits to migrated legacy keys are ignored.
 
@@ -277,6 +277,15 @@ never starts or stops. The bot reaches the controller over the LAN,
 no ZeroTier needed. Game instances need their own
 login through the ADS proxy (`ADSModule/Servers/{id}/API/...`); the controller
 session is rejected there. Adding or removing the section needs a bot restart.
+
+`[finnhub]` holds only `api_key` (`SecretString`, free tier) and is optional.
+Its presence registers `!aktien` (alias `!stocks`); absent, the command does
+not exist. The command quotes a baked ticker pool in
+`crates/core/src/commands/aktien.rs` (US listings only, since the free tier
+quotes nothing else, so DAX names go through their ADRs) and caches the pick
+for 5 minutes (an error reply for 45 seconds), keeping it far below the 60 calls/min limit. The per-user
+cooldown is `cooldowns.aktien` in `settings.ron` (default 60s,
+`/settings → Cooldowns`). Adding or removing the section needs a bot restart.
 
 `[langfuse]` holds `public_key` + `secret_key` and an optional `host`
 (default `https://cloud.langfuse.com`, EU). Presence enables first-party

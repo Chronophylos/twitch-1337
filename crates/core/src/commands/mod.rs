@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
+pub mod aktien;
 pub mod catalog;
 pub mod doener;
 pub mod doener_calc;
@@ -46,6 +47,11 @@ pub fn spoiler_cooldown_duration(s: &crate::settings::Settings) -> Duration {
 /// Per-user cooldown duration for `!servers`.
 pub fn servers_cooldown_duration(s: &crate::settings::Settings) -> Duration {
     Duration::from_secs(s.cooldowns.servers)
+}
+
+/// Per-user cooldown duration for `!aktien` / `!stocks`.
+pub fn aktien_cooldown_duration(s: &crate::settings::Settings) -> Duration {
+    Duration::from_secs(s.cooldowns.aktien)
 }
 
 /// Per-user cooldown duration for `!news`, `!tldr`, and `!haiku` (shared bucket).
@@ -91,6 +97,7 @@ pub fn is_admin(privmsg: &PrivmsgMessage, hidden_admin_ids: &[String]) -> bool {
 /// must still be kept in `normalize_command_name` by hand.
 pub const RESERVED_PING_NAMES: &[&str] = &[
     "!ai",
+    "!aktien",
     "!döner",
     "!dpi",
     "!e",
@@ -108,6 +115,7 @@ pub const RESERVED_PING_NAMES: &[&str] = &[
     "!servers",
     "!sb",
     "!spoiler",
+    "!stocks",
     "!suspend",
     "!tldr",
     "!track",

@@ -163,6 +163,18 @@ pub async fn main() -> Result<()> {
         None => None,
     };
 
+    // Finnhub: same invariant, log and disable, never abort startup.
+    let finnhub_client = match config.finnhub.as_ref() {
+        Some(f) => match twitch_1337_core::finnhub::FinnhubClient::new(f.api_key.clone()) {
+            Ok(c) => Some(Arc::new(c)),
+            Err(error) => {
+                tracing::error!(?error, "failed to build Finnhub client, !aktien disabled");
+                None
+            }
+        },
+        None => None,
+    };
+
     // DHL needs no settings lookup, only the config key. Match the aviation
     // invariant: log and disable on failure, never abort startup.
     let dhl_client = match config.dhl.as_ref() {
@@ -312,6 +324,7 @@ pub async fn main() -> Result<()> {
         aviation: aviation_client,
         dhl: dhl_client,
         amp: amp_client,
+        finnhub: finnhub_client,
         langfuse,
         doener: doener_client,
         whisper: Some(whisper),

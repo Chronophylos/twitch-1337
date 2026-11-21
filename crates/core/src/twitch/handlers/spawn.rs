@@ -136,6 +136,13 @@ where
         )));
     }
 
+    if let Some(finnhub) = services.finnhub.clone() {
+        command_list.push(Arc::new(commands::aktien::AktienCommand::new(
+            finnhub,
+            services.settings.clone(),
+        )));
+    }
+
     if let Some(tracker) = services.emote_tracker.clone() {
         command_list.push(Arc::new(commands::emote::EmoteCommand::new(tracker)));
     }

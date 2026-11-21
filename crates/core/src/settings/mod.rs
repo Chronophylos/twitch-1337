@@ -207,6 +207,9 @@ pub struct Cooldowns {
     /// Per-user cooldown for `!servers` (AMP calls).
     #[knob(min = 1, max = 3600)]
     pub servers: u64,
+    /// Per-user cooldown for `!aktien` / `!stocks` (Finnhub quotes).
+    #[knob(min = 1, max = 3600)]
+    pub aktien: u64,
     /// Per-user cooldown for `!info` (paid Aviationstack lookups).
     #[knob(min = 1, max = 3600)]
     pub info: u64,
@@ -267,6 +270,7 @@ impl Settings {
                 doener: 30,
                 spoiler: 30,
                 servers: 30,
+                aktien: 60,
                 info: 30,
                 track: 30,
                 ping_membership: 10,
