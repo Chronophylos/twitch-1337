@@ -7,7 +7,7 @@
 use jiff::{SignedDuration, Timestamp};
 use tracing::{debug, info, warn};
 
-use super::debug_journal::{
+use super::decision_event::{
     AdsbPollDebugInput, DebugHttpOutcome, DiversionDebugInput, FlightTrackerDebugEvent,
 };
 use super::divert::{DivertWatch, landed_elsewhere};
@@ -79,7 +79,7 @@ pub(crate) enum Followup {
 }
 
 /// The outcome of a Route Resolution lookup. Only `Found` mutates the flight;
-/// every variant is journalled. See CONTEXT.md "Route Resolution".
+/// every variant is logged. See CONTEXT.md "Route Resolution".
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RouteOutcome {
     Found { origin: String, dest: String },
@@ -132,9 +132,9 @@ pub(crate) fn format_emit(flight: &TrackedFlight, emit: &Emit, now: Timestamp) -
     }
 }
 
-/// Apply a Route Resolution outcome to a flight, returning the journal events
-/// to append. Pure: no I/O. The one owner of the route-apply + per-outcome
-/// journalling that the poll loop and the `!track` initial poll used to
+/// Apply a Route Resolution outcome to a flight, returning the decision events
+/// to emit. Pure: no I/O. The one owner of the route-apply + per-outcome
+/// logging that the poll loop and the `!track` initial poll used to
 /// hand-roll.
 pub(crate) fn apply_route_outcome(
     flight: &mut TrackedFlight,
@@ -417,7 +417,7 @@ pub(super) fn seed_from_observation(
 }
 
 /// The pure per-`Observation` transition. Mutates `flight` in place and
-/// returns the side effects (chat emits, debug-journal events, route
+/// returns the side effects (chat emits, decision events, route
 /// followups, removal) for the poll loop to perform. No I/O.
 pub(crate) fn advance_flight(
     flight: &mut TrackedFlight,
@@ -730,9 +730,9 @@ mod tests {
         assert!(f.route.is_some());
         assert!(f.dest_lat.is_some() && f.dest_lon.is_some());
         assert_eq!(events.len(), 1);
-        let json = serde_json::to_string(&events[0]).unwrap();
-        assert!(json.contains("flight_route_lookup"));
-        assert!(json.contains("success"));
+        let debug = format!("{:?}", events[0]);
+        assert!(debug.contains("flight_route_lookup"));
+        assert!(debug.contains("success"));
     }
 
     #[test]
@@ -747,10 +747,7 @@ mod tests {
             assert!(f.route.is_none(), "{tag}");
             assert!(f.dest_lat.is_none(), "{tag}");
             assert_eq!(events.len(), 1, "{tag}");
-            assert!(
-                serde_json::to_string(&events[0]).unwrap().contains(tag),
-                "{tag}"
-            );
+            assert!(format!("{:?}", events[0]).contains(tag), "{tag}");
         }
     }
 

@@ -52,7 +52,7 @@ pub struct DivertWatch {
     alerted: bool,
 }
 
-/// What one Divert Watch observation decided, for the debug journal.
+/// What one Divert Watch observation decided, for the decision log.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct DivertStep {
     pub distance_nm: f64,

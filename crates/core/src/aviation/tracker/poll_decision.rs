@@ -8,7 +8,7 @@ use tracing::error;
 
 use super::TrackedFlight;
 use super::advance::{Emit, FlightUpdate, Observation, RemovalReason, advance_flight};
-use super::debug_journal::FlightTrackerDebugEvent;
+use super::decision_event::FlightTrackerDebugEvent;
 use super::schedule::PollReadiness;
 
 /// First-pass plan for the poll sweep. Encodes Skip / expire effects / go fetch.

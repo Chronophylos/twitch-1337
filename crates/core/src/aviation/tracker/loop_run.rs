@@ -2,9 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use eyre::WrapErr as _;
-use jiff::tz::TimeZone;
 use tokio::sync::mpsc;
-use tracing::{Instrument as _, info, info_span};
+use tracing::{Instrument as _, Span, info, info_span};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::AviationClient;
@@ -15,7 +14,6 @@ use crate::util::clock::Clock;
 use super::{
     TrackerCommand,
     commands::{process_command, try_poll_all_flights_with_commands},
-    debug_journal::{DEBUG_JOURNAL_KEEP_FILES, prune_debug_journals},
     schedule::next_poll_at,
     state::load_tracker_state,
 };
@@ -45,11 +43,6 @@ where
     if lifecycle.is_cancelled() {
         return Ok(());
     }
-    prune_debug_journals(&data_dir, DEBUG_JOURNAL_KEEP_FILES).await;
-    if lifecycle.is_cancelled() {
-        return Ok(());
-    }
-    let mut last_journal_date = clock.now_utc().to_zoned_datetime(TimeZone::UTC).date();
 
     loop {
         if lifecycle.is_cancelled() {
@@ -73,6 +66,7 @@ where
             if lifecycle.is_cancelled() {
                 return Ok(());
             }
+            let span = command_span(&cmd);
             process_command(
                 cmd,
                 &mut state,
@@ -81,6 +75,7 @@ where
                 &data_dir,
                 &*clock,
             )
+            .instrument(span)
             .await;
         } else {
             loop {
@@ -89,6 +84,7 @@ where
                 }
                 match cmd_rx.try_recv() {
                     Ok(cmd) => {
+                        let span = command_span(&cmd);
                         process_command(
                             cmd,
                             &mut state,
@@ -97,6 +93,7 @@ where
                             &data_dir,
                             &*clock,
                         )
+                        .instrument(span)
                         .await;
                     }
                     Err(mpsc::error::TryRecvError::Empty) => break,
@@ -107,8 +104,8 @@ where
                 }
             }
 
-            // One root trace per tick: the poll, deferred commands, and the
-            // journal roll. The sleep below stays outside it.
+            // One root trace per tick: the poll and deferred commands, with
+            // their decision events. The sleep below stays outside it.
             let cycle_span = info_span!(
                 parent: None,
                 "tracker.poll_cycle",
@@ -150,15 +147,6 @@ where
                     return Ok(None);
                 }
                 let now = clock.now_utc();
-                // Roll the journal forward: once the date changes, drop stale files.
-                let today = now.to_zoned_datetime(TimeZone::UTC).date();
-                if today != last_journal_date {
-                    prune_debug_journals(&data_dir, DEBUG_JOURNAL_KEEP_FILES).await;
-                    if lifecycle.is_cancelled() {
-                        return Ok(None);
-                    }
-                    last_journal_date = today;
-                }
                 let next_at = next_poll_at(&state.flights, now).unwrap_or(now);
                 tracing::debug!(
                     next_poll_at = %next_at,
@@ -188,6 +176,7 @@ where
             if lifecycle.is_cancelled() {
                 return Ok(());
             }
+            let span = command_span(&cmd);
             process_command(
                 cmd,
                 &mut state,
@@ -196,7 +185,23 @@ where
                 &data_dir,
                 &*clock,
             )
+            .instrument(span)
             .await;
         }
     }
+}
+
+/// Root span for a command handled between polls, so its decisions (the
+/// `!track` lookups and initial poll included) land in one trace. Commands
+/// deferred during a poll run inside `tracker.poll_cycle` instead.
+fn command_span(cmd: &TrackerCommand) -> Span {
+    let kind = match cmd {
+        TrackerCommand::Track { .. } => "track",
+        TrackerCommand::Untrack { .. } => "untrack",
+        TrackerCommand::Status { .. } => "status",
+        TrackerCommand::Info { .. } => "info",
+        TrackerCommand::Snapshot { .. } => "snapshot",
+        TrackerCommand::DeleteFromWeb { .. } => "delete_from_web",
+    };
+    info_span!(parent: None, "tracker.command", aviation.tracker.command = kind)
 }

@@ -131,7 +131,7 @@ pub(crate) async fn fetch_observation<P: AdsbProvider>(
 /// After an Observation: Poll Decision (Due) + Route Resolution I/O.
 ///
 /// Followups are resolved inside this module; the returned `FlightUpdate` has
-/// an empty `followups` list and route journal events merged into `debug`.
+/// an empty `followups` list and route decision events merged into `debug`.
 pub(crate) async fn complete_poll_cycle<P: AdsbProvider>(
     flight: &mut TrackedFlight,
     observation: Observation,

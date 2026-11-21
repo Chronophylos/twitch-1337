@@ -8,7 +8,7 @@
 //! replaces the value of every such pair with [`REDACTED`] and leaves
 //! everything else as it was. It backs
 //! the stdout log writer, the dashboard `/logs` ring and the flight tracker's
-//! debug journal.
+//! decision events.
 
 use std::borrow::Cow;
 

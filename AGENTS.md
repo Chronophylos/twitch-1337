@@ -425,8 +425,6 @@ pub async fn run_my_handler<T, L>(
 
 `crates/core/src/aviation/tracker/mod.rs`: `MAX_TRACKED_FLIGHTS=12`, `MAX_FLIGHTS_PER_USER=3`, `MAX_PENDING_UNKNOWN_FLIGHTS=6` / `MAX_PENDING_UNKNOWN_PER_USER=1` (flights pending on ADS-B with no Aviationstack schedule hold a slot up to 24h), `TRACKING_LOST_THRESHOLD=300s`, `TRACKING_LOST_REMOVAL=1800s`, `POLL_FAST/NORMAL/SLOW=30/60/120s`.
 
-`crates/core/src/aviation/tracker/debug_journal.rs`: `DEBUG_JOURNAL_KEEP_FILES=30` (daily JSONL files retained under `$DATA_DIR/flight-tracker-debug/`; older pruned on tracker startup + date-rollover).
-
 `crates/core/src/util/log_ring.rs`: `LOG_RING_CAPACITY=2000` (INFO+ tracing events kept in memory for the owner-only `/logs` page; values clamped to 2048 chars; a restart clears it, stdout stays the record).
 
 ## Binary / Docker
