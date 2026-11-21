@@ -283,7 +283,7 @@ Its presence registers `!aktien` (alias `!stocks`); absent, the command does
 not exist. The command quotes a baked ticker pool in
 `crates/core/src/commands/aktien.rs` (US listings only, since the free tier
 quotes nothing else, so DAX names go through their ADRs) and caches the pick
-for 5 minutes, keeping it far below the 60 calls/min limit. The per-user
+for 5 minutes (an error reply for 45 seconds), keeping it far below the 60 calls/min limit. The per-user
 cooldown is `cooldowns.aktien` in `settings.ron` (default 60s,
 `/settings → Cooldowns`). Adding or removing the section needs a bot restart.
 

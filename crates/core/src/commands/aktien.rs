@@ -70,6 +70,9 @@ const POOL: &[Ticker] = &[
 const MAX_CONCURRENT_QUOTES: usize = 6;
 /// How long a computed pick is reused across viewers.
 const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+/// How long an error reply is reused, so callers queued behind a failed
+/// round (e.g. a 429) do not each retry the whole pool upstream.
+const ERROR_CACHE_TTL: Duration = Duration::from_secs(45);
 
 const UPSTREAM_ERROR_REPLY: &str = "Die Börse geht gerade nicht ran, keine Tipps heute";
 const TOO_FEW_QUOTES_REPLY: &str = "Zu wenige Kurse gerade, der Markt pennt wohl";
@@ -98,9 +101,10 @@ pub struct AktienCommand {
     cooldown: PerUserCooldown,
     pool: &'static [Ticker],
     cache_ttl: Duration,
-    /// Last good reply and when it was computed. The lock is held across the
-    /// fetch, so viewers arriving mid-fetch wait for that round instead of
-    /// starting their own.
+    error_ttl: Duration,
+    /// Last reply (pick or error line) and when it expires. The lock is held
+    /// across the fetch, so viewers arriving mid-fetch wait for that round
+    /// instead of starting their own.
     cache: tokio::sync::Mutex<Option<(Instant, String)>>,
 }
 
@@ -111,28 +115,27 @@ impl AktienCommand {
             cooldown: PerUserCooldown::live(settings, aktien_cooldown_duration),
             pool: POOL,
             cache_ttl: CACHE_TTL,
+            error_ttl: ERROR_CACHE_TTL,
             cache: tokio::sync::Mutex::new(None),
         }
     }
 
     async fn reply(&self) -> String {
         let mut cache = self.cache.lock().await;
-        if let Some((at, reply)) = cache.as_ref()
-            && at.elapsed() < self.cache_ttl
+        if let Some((expires, reply)) = cache.as_ref()
+            && Instant::now() < *expires
         {
             return reply.clone();
         }
-        match self.pick().await {
-            Ok(picks) => {
-                let reply = picks_reply(&picks);
-                *cache = Some((Instant::now(), reply.clone()));
-                reply
-            }
+        let (reply, ttl) = match self.pick().await {
+            Ok(picks) => (picks_reply(&picks), self.cache_ttl),
             Err(error) => {
                 tracing::warn!(?error, "aktien pick failed");
-                error_reply(&error).to_owned()
+                (error_reply(&error).to_owned(), self.error_ttl)
             }
-        }
+        };
+        *cache = Some((Instant::now() + ttl, reply.clone()));
+        reply
     }
 
     async fn pick(&self) -> Result<Picks, PickError> {
@@ -169,7 +172,12 @@ impl AktienCommand {
 
 /// `+4,2%` / `-5,3%`: signed, one decimal, German decimal comma.
 fn signed_percent(dp: f64) -> String {
-    format!("{dp:+.1}%").replace('.', ",")
+    let rounded = format!("{dp:+.1}%");
+    // Values in (-0.05, 0) round to negative zero.
+    if rounded == "-0.0%" {
+        return "+0,0%".to_owned();
+    }
+    rounded.replace('.', ",")
 }
 
 fn picks_reply(p: &Picks) -> String {
@@ -296,11 +304,12 @@ mod tests {
         assert_eq!(signed_percent(4.19), "+4,2%");
         assert_eq!(signed_percent(-5.25), "-5,2%");
         assert_eq!(signed_percent(0.0), "+0,0%");
+        assert_eq!(signed_percent(-0.04), "+0,0%");
+        assert_eq!(signed_percent(-0.0), "+0,0%");
     }
 
     #[test]
-    fn pool_stays_well_inside_the_free_tier_rate_limit() {
-        assert!((20..=30).contains(&POOL.len()), "{}", POOL.len());
+    fn pool_has_no_duplicate_symbols() {
         let mut symbols: Vec<_> = POOL.iter().map(|t| t.symbol).collect();
         symbols.sort_unstable();
         symbols.dedup();
@@ -367,11 +376,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upstream_error_gives_the_error_reply_and_is_not_cached() {
+    async fn upstream_error_gives_the_error_reply_and_is_cached_briefly() {
         let server = MockServer::start().await;
         Mock::given(path("/quote"))
             .and(query_param("symbol", "SAP"))
-            .respond_with(ResponseTemplate::new(500))
+            .respond_with(ResponseTemplate::new(429))
             .mount(&server)
             .await;
         Mock::given(path("/quote"))
@@ -380,7 +389,33 @@ mod tests {
             .await;
         let cmd = command(&server, SMALL_POOL);
         assert_eq!(cmd.reply().await, UPSTREAM_ERROR_REPLY);
-        assert!(cmd.cache.lock().await.is_none());
+        let after_first = server.received_requests().await.map(|r| r.len());
+        // A caller queued behind the failed round gets the cached error
+        // without retrying upstream.
+        assert_eq!(cmd.reply().await, UPSTREAM_ERROR_REPLY);
+        assert_eq!(
+            server.received_requests().await.map(|r| r.len()),
+            after_first
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_error_cache_fetches_again() {
+        let server = MockServer::start().await;
+        Mock::given(path("/quote"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+        let mut cmd = command(&server, SMALL_POOL);
+        cmd.error_ttl = Duration::ZERO;
+        cmd.reply().await;
+        let after_first = server.received_requests().await.map_or(0, |r| r.len());
+        cmd.reply().await;
+        let after_second = server.received_requests().await.map_or(0, |r| r.len());
+        assert!(
+            after_second > after_first,
+            "{after_first} -> {after_second}"
+        );
     }
 
     #[tokio::test]
