@@ -389,13 +389,20 @@ mod tests {
             .await;
         let cmd = command(&server, SMALL_POOL);
         assert_eq!(cmd.reply().await, UPSTREAM_ERROR_REPLY);
-        let after_first = server.received_requests().await.map(|r| r.len());
         // A caller queued behind the failed round gets the cached error
         // without retrying upstream.
         assert_eq!(cmd.reply().await, UPSTREAM_ERROR_REPLY);
-        assert_eq!(
-            server.received_requests().await.map(|r| r.len()),
-            after_first
+        // The pool fits in one concurrency window, so the failed round put
+        // every request in flight at once; quotes still in flight when the
+        // 429 aborted the round may land after it returns. Any retry would
+        // push the count past one request per symbol.
+        assert!(SMALL_POOL.len() <= MAX_CONCURRENT_QUOTES);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let received = server.received_requests().await.map_or(0, |r| r.len());
+        assert!(
+            received <= SMALL_POOL.len(),
+            "{received} requests for {} symbols: the error was not cached",
+            SMALL_POOL.len()
         );
     }
 
