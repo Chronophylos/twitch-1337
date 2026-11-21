@@ -9,8 +9,6 @@
 //! the caps check that already runs inside `SettingsStore::apply_with` via
 //! `settings::validation`.
 
-use std::time::Duration;
-
 use askama::Template;
 use axum::Router;
 use axum::extract::{Extension, Path, Query, State};

@@ -109,6 +109,10 @@ impl LlmRegistry {
     /// resolving or mutating saved settings. Returns the provider round-trip
     /// latency; request construction and response parsing use the same clients
     /// as normal turns, including reasoning effort and service tier.
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "tokio Elapsed carries no information beyond the profile timeout"
+    )]
     pub async fn test_profile(&self, prof: &AiProfile) -> Result<Duration, ProfileTestError> {
         let client = self.build_client(prof)?;
         let request = ChatCompletionRequest {
