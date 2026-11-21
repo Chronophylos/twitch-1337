@@ -9,6 +9,15 @@
    the authority — that script is convenience only. #}
 <form method="post" action="{{ action }}" class="settings-rows profile-form" data-unsaved-guard>
   <input type="hidden" name="_csrf" value="{{ csrf }}">
+  {% if let Some(target) = edit_target %}
+    <input type="hidden" name="_edit_target" value="{{ target }}">
+  {% endif %}
+
+  {% if let Some(result) = connection_test %}
+    <div class="flash{% if !result.success %} error{% endif %}" role="status" data-connection-result>
+      {{ result.message }}
+    </div>
+  {% endif %}
 
   <div class="row">
     <label>Name
@@ -102,6 +111,7 @@
 
   <div class="row form-actions">
     <button type="submit" class="btn primary">Save</button>
+    <button type="submit" class="btn ghost" formaction="/ai-profiles/test">Test connection</button>
     {% if let Some(href) = cancel_href %}
       <a class="btn ghost" href="{{ href }}">Cancel</a>
     {% endif %}

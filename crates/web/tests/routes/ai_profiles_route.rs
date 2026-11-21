@@ -2,13 +2,18 @@
 //! profile carries `base_url`/`key`, the same credential surface that was
 //! owner-only on `main`).
 
-use std::{fs, sync::Arc};
+use std::{collections::HashMap, fs, sync::Arc};
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
+use secrecy::SecretString;
 use tower::ServiceExt as _;
 use twitch_1337_core::settings::{Actor, AiProfile, AiProvider, SettingsOverrides};
 use twitch_1337_web::build_router;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{body_partial_json, header as request_header, method, path},
+};
 
 use super::helpers;
 use helpers::{
@@ -727,4 +732,96 @@ async fn delete_refuses_the_spoiler_profile() {
     .await;
     assert_ne!(res.status(), StatusCode::SEE_OTHER);
     assert_eq!(state.settings.load().ai.profiles.len(), 2);
+}
+
+#[tokio::test]
+async fn test_connection_uses_unsaved_values_without_persisting_the_profile() {
+    install_crypto();
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "message": { "content": "OK" }
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=draft&provider=ollama&base_url={}&model=unsaved-model&timeout=30",
+        urlencoding::encode(&csrf),
+        urlencoding::encode(&upstream.uri()),
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/test",
+        body,
+    )
+    .await;
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(html.contains("Connection successful"), "{html}");
+    assert!(html.contains("value=\"unsaved-model\""), "{html}");
+    assert_eq!(state.settings.load().ai.profiles.len(), 1);
+    assert_eq!(state.settings.load().ai.profiles[0].name, "a");
+}
+
+#[tokio::test]
+async fn test_connection_sends_openrouter_credentials_and_advanced_options() {
+    install_crypto();
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(request_header("authorization", "Bearer test-secret"))
+        .and(body_partial_json(serde_json::json!({
+            "model": "draft-openrouter",
+            "messages": [{ "role": "user", "content": "Reply with OK." }],
+            "reasoning": { "effort": "high" },
+            "service_tier": "priority"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{ "message": { "content": "OK" } }]
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    state.llm = Arc::new(
+        twitch_1337_core::llm_factory::LlmRegistry::new(None, state.settings.clone()).with_keys(
+            HashMap::from([("k".to_owned(), SecretString::from("test-secret"))]),
+        ),
+    );
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=draft&provider=open_router&base_url={}&model=draft-openrouter&timeout=30&key=k&reasoning_effort=high&service_tier=priority",
+        urlencoding::encode(&csrf),
+        urlencoding::encode(&upstream.uri()),
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/test",
+        body,
+    )
+    .await;
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(html.contains("Connection successful"), "{html}");
+    assert!(
+        !html.contains("test-secret"),
+        "API secret must not be rendered"
+    );
+    assert_eq!(state.settings.load().ai.profiles.len(), 1);
 }

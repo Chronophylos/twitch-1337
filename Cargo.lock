@@ -3273,6 +3273,7 @@ dependencies = [
  "hex",
  "hyper-util",
  "jiff",
+ "llm",
  "mime_guess",
  "notify-debouncer-mini",
  "parking_lot",

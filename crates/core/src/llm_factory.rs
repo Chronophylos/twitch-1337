@@ -2,10 +2,14 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use llm::{LlmClient, OllamaClient, OpenAiClient};
+use llm::{
+    ChatCompletionRequest, LlmClient, LlmError, Message, OllamaClient, OpenAiClient, TraceIds,
+};
 use parking_lot::Mutex;
 use secrecy::{ExposeSecret as _, SecretString};
+use thiserror::Error;
 use tracing::{error, info, warn};
 
 use crate::APP_USER_AGENT;
@@ -17,6 +21,18 @@ use crate::settings::provider::AiProvider;
 /// One client per endpoint identity. Model, timeout, effort and tier are
 /// per-request, so two profiles differing only in those share a client.
 type CacheKey = (AiProvider, Option<String>, Option<String>);
+
+/// A failed non-persisting profile check. Key-selection failures stay typed so
+/// each Surface can explain them without inspecting log strings.
+#[derive(Debug, Error)]
+pub enum ProfileTestError {
+    #[error("profile names key {0:?}, but config.toml has no matching [ai.keys] entry")]
+    UnknownKey(String),
+    #[error("provider requires an API key")]
+    MissingKey,
+    #[error("profile request failed")]
+    Llm(#[from] LlmError),
+}
 
 pub struct LlmRegistry {
     keys: HashMap<String, SecretString>,
@@ -89,6 +105,29 @@ impl LlmRegistry {
         Some((client, prof))
     }
 
+    /// Make one minimal completion with `prof` exactly as supplied, without
+    /// resolving or mutating saved settings. Returns the provider round-trip
+    /// latency; request construction and response parsing use the same clients
+    /// as normal turns, including reasoning effort and service tier.
+    pub async fn test_profile(&self, prof: &AiProfile) -> Result<Duration, ProfileTestError> {
+        let client = self.build_client(prof)?;
+        let request = ChatCompletionRequest {
+            model: prof.model.clone(),
+            messages: vec![Message::user("Reply with OK.")],
+            reasoning_effort: prof.reasoning_effort.clone(),
+            service_tier: prof.service_tier.clone(),
+            trace: TraceIds::default(),
+        };
+        let started = tokio::time::Instant::now();
+        tokio::time::timeout(
+            Duration::from_secs(prof.timeout),
+            client.chat_completion(request),
+        )
+        .await
+        .map_err(|_| ProfileTestError::Llm(LlmError::Timeout))??;
+        Ok(started.elapsed())
+    }
+
     /// The API key a profile should use: a named `[ai.keys]` entry.
     /// `Err` means a named key was requested but has no `[ai.keys]` entry
     /// (a hard failure); `Ok(None)` means no key is configured at all, which
@@ -136,33 +175,7 @@ impl LlmRegistry {
             return Some(hit.clone());
         }
 
-        let secret = self.key_for(prof).ok()?;
-
-        let built = if prof.provider.uses_openai_client() {
-            let secret = secret.or_else(|| {
-                error!(profile = %prof.name, "no API key configured");
-                None
-            })?;
-            OpenAiClient::new(
-                secret.expose_secret(),
-                prof.base_url
-                    .as_deref()
-                    .or(prof.provider.openai_compat_base_url()),
-                APP_USER_AGENT,
-                prof.provider.is_openrouter(),
-            )
-            .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
-        } else {
-            OllamaClient::new(
-                prof.base_url
-                    .as_deref()
-                    .or(prof.provider.caps().default_base_url),
-                APP_USER_AGENT,
-            )
-            .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
-        };
-
-        match built {
+        match self.build_client(prof) {
             Ok(client) => {
                 info!(
                     profile = %prof.name,
@@ -177,6 +190,37 @@ impl LlmRegistry {
                 error!(error = ?e, profile = %prof.name, "Failed to initialize LLM client");
                 None
             }
+        }
+    }
+
+    /// Build an uncached client while retaining the reason construction failed.
+    /// Normal named resolution turns this into `None`; the dashboard profile
+    /// test instead presents the typed rejection to its owner.
+    fn build_client(&self, prof: &AiProfile) -> Result<Arc<dyn LlmClient>, ProfileTestError> {
+        if let Some(fixed) = &self.fixed {
+            return Ok(fixed.clone());
+        }
+        let secret = self
+            .key_for(prof)
+            .map_err(|()| ProfileTestError::UnknownKey(prof.key.clone().unwrap_or_default()))?;
+
+        if prof.provider.uses_openai_client() {
+            let secret = secret.ok_or(ProfileTestError::MissingKey)?;
+            Ok(Arc::new(OpenAiClient::new(
+                secret.expose_secret(),
+                prof.base_url
+                    .as_deref()
+                    .or(prof.provider.openai_compat_base_url()),
+                APP_USER_AGENT,
+                prof.provider.is_openrouter(),
+            )?))
+        } else {
+            Ok(Arc::new(OllamaClient::new(
+                prof.base_url
+                    .as_deref()
+                    .or(prof.provider.caps().default_base_url),
+                APP_USER_AGENT,
+            )?))
         }
     }
 }

@@ -9,13 +9,17 @@
 //! the caps check that already runs inside `SettingsStore::apply_with` via
 //! `settings::validation`.
 
+use std::time::Duration;
+
 use askama::Template;
 use axum::Router;
 use axum::extract::{Extension, Path, Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
+use llm::LlmError;
 use serde::Deserialize;
 use tower_cookies::Cookies;
+use twitch_1337_core::llm_factory::ProfileTestError;
 use twitch_1337_core::settings::{
     Actor, AiProfile, AiProvider, Efforts, FieldError, ProfileKind, Settings, SettingsError,
 };
@@ -39,6 +43,7 @@ pub fn router() -> Router<WebState> {
     Router::new()
         .route("/ai-profiles", get(list))
         .route("/ai-profiles/add", post(create))
+        .route("/ai-profiles/test", post(test_connection))
         .route("/ai-profiles/{name}/edit", post(update))
         .route("/ai-profiles/{name}/delete", post(delete))
 }
@@ -49,6 +54,11 @@ struct ListQuery {
     edit: Option<String>,
     /// When `Some(true)`, the "new profile" form is shown.
     new: Option<bool>,
+}
+
+struct ConnectionTestView {
+    success: bool,
+    message: String,
 }
 
 struct CardView {
@@ -143,6 +153,7 @@ struct ListTpl {
     row_errors: Vec<RowError>,
     global_errors: Vec<(String, String)>,
     flash: Option<String>,
+    connection_test: Option<ConnectionTestView>,
     csrf: String,
     user_login: String,
     user_avatar_url: Option<String>,
@@ -158,6 +169,8 @@ struct ListTpl {
 #[derive(Debug, Deserialize)]
 struct ProfileForm {
     _csrf: String,
+    #[serde(default)]
+    _edit_target: Option<String>,
     name: String,
     #[serde(default)]
     kind: String,
@@ -270,6 +283,7 @@ async fn list(
         row_errors: Vec::new(),
         global_errors: Vec::new(),
         flash: flash::take(&cookies),
+        connection_test: None,
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
         user_avatar_url: session.avatar_url.clone(),
@@ -366,6 +380,121 @@ async fn create(
         Some(submitted),
     )
     .await
+}
+
+async fn test_connection(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    axum_extra::extract::Form(form): axum_extra::extract::Form<ProfileForm>,
+) -> Result<Response, WebError> {
+    if !csrf::verify(&form._csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    let edit_target = form._edit_target.clone();
+    let submitted = form_state_from_form(&form);
+    let profile = match form.to_profile() {
+        Ok(profile) => profile,
+        Err(error) => {
+            let settings = state.settings.load();
+            return render_validation(
+                &session,
+                settings.ai.profiles.clone(),
+                vec![error],
+                edit_target,
+                Some(submitted),
+            );
+        }
+    };
+
+    let connection_test = match state.llm.test_profile(&profile).await {
+        Ok(latency) => ConnectionTestView {
+            success: true,
+            message: format!(
+                "Connection successful in {} ms. The model returned a response.",
+                latency.as_millis()
+            ),
+        },
+        Err(error) => ConnectionTestView {
+            success: false,
+            message: connection_failure(error),
+        },
+    };
+    render_page(
+        &session,
+        state.settings.load().ai.profiles.clone(),
+        Vec::new(),
+        edit_target,
+        Some(submitted),
+        Some(connection_test),
+    )
+}
+
+fn connection_failure(error: ProfileTestError) -> String {
+    match error {
+        ProfileTestError::UnknownKey(name) => format!(
+            "Key name {name:?} has no matching [ai.keys] entry in config.toml. Add the entry or choose another key name."
+        ),
+        ProfileTestError::MissingKey => {
+            "This provider requires a key name from [ai.keys].".to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Provider { status, body }) => {
+            let summary = match status {
+                401 | 403 => format!(
+                    "Authentication failed (HTTP {status}). Check the selected [ai.keys] entry and its provider permissions."
+                ),
+                404 => format!(
+                    "Model or endpoint not found (HTTP {status}). Check Model and Base URL."
+                ),
+                400 | 422 => format!(
+                    "Provider rejected the request (HTTP {status}). Check Model, Reasoning effort, and Service tier."
+                ),
+                429 => "Provider rate limited the test (HTTP 429). Try again later.".to_owned(),
+                500..=599 => format!(
+                    "Provider failed the request (HTTP {status}). Check the provider's status and try again."
+                ),
+                _ => format!("Provider rejected the request (HTTP {status})."),
+            };
+            format!("{summary}{}", provider_excerpt(&body))
+        }
+        ProfileTestError::Llm(LlmError::Http(error)) if error.is_timeout() => {
+            "Request timed out. Increase Timeout or check provider load.".to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Http(error)) if error.is_connect() => {
+            "Could not connect to the provider. Check Base URL, DNS, and TLS.".to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Http(error)) if error.is_builder() => {
+            "Could not build the provider request. Check Base URL.".to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Http(_)) => {
+            "Could not send the request to the provider. Check Base URL and network access."
+                .to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Header(_)) => {
+            "The selected API key cannot be used in an HTTP Authorization header. Check [ai.keys]."
+                .to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Decode { stage, .. }) => {
+            format!("Provider returned an unreadable response during {stage}.")
+        }
+        ProfileTestError::Llm(LlmError::EmptyResponse) => {
+            "Provider returned an empty response. Check that the model supports chat completions."
+                .to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Timeout) => {
+            "Request timed out. Increase Timeout or check provider load.".to_owned()
+        }
+    }
+}
+
+fn provider_excerpt(body: &str) -> String {
+    let body = body.trim();
+    if body.is_empty() {
+        return String::new();
+    }
+    let mut chars = body.chars();
+    let excerpt: String = chars.by_ref().take(600).collect();
+    let truncated = if chars.next().is_some() { "…" } else { "" };
+    format!(" Provider response: {excerpt}{truncated}")
 }
 
 async fn update(
@@ -546,6 +675,17 @@ fn render_validation(
     edit_on_error: Option<String>,
     submitted: Option<FormState>,
 ) -> Result<Response, WebError> {
+    render_page(session, rows, errs, edit_on_error, submitted, None)
+}
+
+fn render_page(
+    session: &Session,
+    rows: Vec<AiProfile>,
+    errs: Vec<FieldError>,
+    edit_on_error: Option<String>,
+    submitted: Option<FormState>,
+    connection_test: Option<ConnectionTestView>,
+) -> Result<Response, WebError> {
     let mut row_errors: Vec<RowError> = Vec::new();
     let mut global_errors: Vec<(String, String)> = Vec::new();
     for e in errs {
@@ -602,6 +742,7 @@ fn render_validation(
         row_errors,
         global_errors,
         flash: None,
+        connection_test,
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
         user_avatar_url: session.avatar_url.clone(),
