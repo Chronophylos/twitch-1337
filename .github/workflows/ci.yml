@@ -96,7 +96,10 @@ jobs:
     if: always() && (github.event_name == 'pull_request' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     permissions:
+      checks: write
       contents: read
+    env:
+      NEXTEST_PROFILE: ci
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -125,8 +128,30 @@ jobs:
         # wipe it. This job only ever runs llvm-cov, so artifacts stay consistent.
         run: cargo llvm-cov nextest --locked --no-clean --workspace --lcov --output-path lcov.info
 
+      - name: Test report
+        if: (success() || failure()) && hashFiles('target/nextest/ci/junit.xml') != ''
+        uses: mikepenz/action-junit-report@a16be3a69023e9bd7e748ede768b3282ea7b30ce # v6.7.1
+        with:
+          report_paths: target/nextest/ci/junit.xml
+          job_name: test
+          update_check: true
+          annotate_only: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
+          detailed_summary: true
+          failed_summary_logs: true
+          fail_on_failure: false
+
       - name: Coverage summary
-        run: cargo llvm-cov report --summary-only
+        run: |
+          cargo llvm-cov report --json --summary-only --output-path coverage-summary.json
+          jq -r '
+            "## Coverage\n",
+            "| Metric | Covered | Total | Coverage |",
+            "| --- | ---: | ---: | ---: |",
+            (.data[0].totals
+              | to_entries[]
+              | select(.key == "functions" or .key == "lines" or .key == "regions")
+              | "| \(.key | ascii_upcase) | \(.value.covered) | \(.value.count) | \(.value.percent * 100 | round / 100)% |")
+          ' coverage-summary.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload lcov artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -140,7 +165,10 @@ jobs:
     if: always() && (github.event_name == 'pull_request' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     permissions:
+      checks: write
       contents: read
+    env:
+      NEXTEST_PROFILE: ci
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -186,6 +214,18 @@ jobs:
           # preinstalled Chrome may differ).
           E2E_CHROME_BINARY: ${{ steps.chrome.outputs.chrome-path }}
         run: cargo nextest run -p twitch-1337-web --features e2e
+
+      - name: Test report
+        if: (success() || failure()) && hashFiles('target/nextest/ci/junit.xml') != ''
+        uses: mikepenz/action-junit-report@a16be3a69023e9bd7e748ede768b3282ea7b30ce # v6.7.1
+        with:
+          report_paths: target/nextest/ci/junit.xml
+          job_name: e2e
+          update_check: true
+          annotate_only: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
+          detailed_summary: true
+          failed_summary_logs: true
+          fail_on_failure: false
 
   deny:
     # Advisories (RustSec), bans (aws-lc-sys, ADR-0007) and sources; see deny.toml.
