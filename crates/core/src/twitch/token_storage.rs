@@ -45,7 +45,7 @@ impl TokenStorage for FileBasedTokenStorage {
     type LoadError = eyre::Report;
     type UpdateError = eyre::Report;
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn load_token(&mut self) -> Result<UserAccessToken, Self::LoadError> {
         match fs::read_to_string(&self.path).await {
             Ok(contents) => {
@@ -69,7 +69,7 @@ impl TokenStorage for FileBasedTokenStorage {
         }
     }
 
-    #[instrument(skip(self, token))]
+    #[instrument(skip_all)]
     async fn update_token(&mut self, token: &UserAccessToken) -> Result<(), Self::UpdateError> {
         debug!(path = %self.path.display(), "Updating token in file");
         crate::util::persist::atomic_save_ron_private_async(token, &self.path)

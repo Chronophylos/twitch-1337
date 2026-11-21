@@ -302,6 +302,8 @@ pub struct OpenAiClient {
     http: reqwest::Client,
     base_url: String,
     is_openrouter: bool,
+    /// `gen_ai.provider.name` span attribute.
+    provider_name: &'static str,
 }
 
 const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -319,12 +321,14 @@ impl OpenAiClient {
     /// argument rather than a URL sniff because a self-hosted proxy can
     /// speak OpenRouter's dialect from any hostname, and because the
     /// caller (a settings profile) already knows which provider it picked.
-    #[instrument(skip(api_key))]
+    /// `provider_name` is that profile's provider name, recorded as
+    /// `gen_ai.provider.name` on chat spans.
     pub fn new(
         api_key: &str,
         base_url: Option<&str>,
         user_agent: &str,
         is_openrouter: bool,
+        provider_name: &'static str,
     ) -> Result<Self> {
         let base_url = base_url.unwrap_or(DEFAULT_BASE_URL).trim_end_matches('/');
 
@@ -354,6 +358,7 @@ impl OpenAiClient {
             http,
             base_url: base_url.to_string(),
             is_openrouter,
+            provider_name,
         })
     }
 
@@ -555,7 +560,13 @@ impl OpenAiClient {
 
 #[async_trait]
 impl LlmClient for OpenAiClient {
-    #[instrument(skip(self, request))]
+    #[instrument(
+        skip_all,
+        fields(
+            gen_ai.provider.name = self.provider_name,
+            gen_ai.request.model = %request.model,
+        ),
+    )]
     async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<String> {
         let rec = crate::observe::GenerationInProgress::start(
             request.model.clone(),
@@ -566,7 +577,13 @@ impl LlmClient for OpenAiClient {
         result.map(|(text, _)| text)
     }
 
-    #[instrument(skip(self, request))]
+    #[instrument(
+        skip_all,
+        fields(
+            gen_ai.provider.name = self.provider_name,
+            gen_ai.request.model = %request.model,
+        ),
+    )]
     async fn chat_completion_with_tools(
         &self,
         request: ToolChatCompletionRequest,
@@ -648,7 +665,7 @@ mod tests {
             )
             .mount(&server)
             .await;
-        let client = OpenAiClient::new("k", Some(&server.uri()), "ua", false).unwrap();
+        let client = OpenAiClient::new("k", Some(&server.uri()), "ua", false, "open_ai").unwrap();
         let err = client
             .chat_completion_with_tools_untraced(req_with_rounds(vec![]))
             .await
@@ -913,7 +930,14 @@ mod tests {
         ensure_crypto_provider();
         // A self-hosted OpenRouter-compatible proxy has no "openrouter.ai" in
         // its URL but still speaks the reasoning-object dialect.
-        let c = OpenAiClient::new("k", Some("https://proxy.internal/v1"), "ua", true).unwrap();
+        let c = OpenAiClient::new(
+            "k",
+            Some("https://proxy.internal/v1"),
+            "ua",
+            true,
+            "open_router",
+        )
+        .unwrap();
         let (flat, obj) = c.map_reasoning(Some("high".into()));
         assert!(flat.is_none());
         assert_eq!(obj.map(|r| r.effort), Some("high".to_string()));
@@ -922,7 +946,14 @@ mod tests {
     #[test]
     fn plain_openai_dialect_even_on_an_openrouter_url() {
         ensure_crypto_provider();
-        let c = OpenAiClient::new("k", Some("https://openrouter.ai/api/v1"), "ua", false).unwrap();
+        let c = OpenAiClient::new(
+            "k",
+            Some("https://openrouter.ai/api/v1"),
+            "ua",
+            false,
+            "open_ai",
+        )
+        .unwrap();
         let (flat, obj) = c.map_reasoning(Some("high".into()));
         assert_eq!(flat, Some("high".to_string()));
         assert!(obj.is_none());
@@ -944,8 +975,14 @@ mod tests {
             )
             .mount(&server)
             .await;
-        let client =
-            OpenAiClient::new("k", Some(&format!("{}/v1", server.uri())), "ua", false).unwrap();
+        let client = OpenAiClient::new(
+            "k",
+            Some(&format!("{}/v1", server.uri())),
+            "ua",
+            false,
+            "open_ai",
+        )
+        .unwrap();
         let req = ChatCompletionRequest {
             model: "m".to_string(),
             messages: vec![crate::types::Message::user("hi")],

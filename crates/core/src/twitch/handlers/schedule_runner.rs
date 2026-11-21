@@ -19,7 +19,7 @@ use thiserror::Error;
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinError;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, instrument, warn};
+use tracing::{info, warn};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::lifecycle::{Lifecycle, TaskGroup};
@@ -120,7 +120,6 @@ enum ReconcileControl {
     Shutdown,
 }
 
-#[instrument(skip_all)]
 #[expect(
     clippy::too_many_arguments,
     reason = "orchestrator owns every dependency its schedule children need"
@@ -646,7 +645,6 @@ fn classify_schedule_completions(
     }
 }
 
-#[instrument(skip(sender, runtime, channel, clock, cancel, ping), fields(schedule = %schedule.name))]
 async fn run_schedule_task<T, L>(
     schedule: Schedule,
     sender: Arc<ChatSender<T, L>>,
@@ -663,14 +661,14 @@ where
     loop {
         let now_berlin = crate::util::to_berlin(clock.now_utc());
         let Some(next_berlin) = schedule.next_active_fire(now_berlin) else {
-            info!("past end_date, exiting");
+            info!(bot.schedule.name = %schedule.name, "past end_date, exiting");
             return ScheduleCompletion::Expired;
         };
         let next_utc = next_berlin.timestamp();
         tokio::select! {
             biased;
             () = cancel.cancelled() => {
-                info!("cancelled, exiting");
+                info!(bot.schedule.name = %schedule.name, "cancelled, exiting");
                 return ScheduleCompletion::Cancelled;
             }
             () = clock.sleep_until(next_utc) => {}
@@ -678,7 +676,7 @@ where
         // Re-check cancellation after wakeup: select may choose the sleep
         // branch even if cancellation became ready at the same instant.
         if cancel.is_cancelled() {
-            info!("cancelled after wakeup, exiting");
+            info!(bot.schedule.name = %schedule.name, "cancelled after wakeup, exiting");
             return ScheduleCompletion::Cancelled;
         }
 
@@ -694,7 +692,7 @@ where
             ping.fire(&sender, &channel, ping_name).await;
         }
         if cancel.is_cancelled() {
-            info!("cancelled after send, exiting");
+            info!(bot.schedule.name = %schedule.name, "cancelled after send, exiting");
             return ScheduleCompletion::Cancelled;
         }
     }

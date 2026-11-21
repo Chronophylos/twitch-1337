@@ -67,6 +67,26 @@ jobs:
         with:
           persist-credentials: false
 
+      # docs/observability.md span rule 5: a bare `#[instrument]` Debug-dumps
+      # every argument (payloads, secrets). perl slurps each file so a
+      # multi-line attribute is matched whole; balanced parens (skipping
+      # string literals) find its end, and strings are stripped before
+      # looking for a top-level `skip_all` argument.
+      - name: '#[instrument] uses skip_all'
+        run: |
+          # shellcheck disable=SC2016 # $ belongs to perl, not the shell
+          git ls-files -z '*.rs' | xargs -0 -r perl -0777 -ne '
+            while (/#\[(?:tracing::)?instrument\b\s*(\((?:[^()"]++|"(?:[^"\\]|\\.)*+"|(?1))*\))?/g) {
+              my ($at, $args) = ($-[0], $1 // "");
+              (my $bare = $args) =~ s/"(?:[^"\\]|\\.)*"//g;
+              next if $bare =~ /[(,]\s*skip_all\s*[,)]/;
+              my $line = 1 + (substr($_, 0, $at) =~ tr/\n//);
+              print "$ARGV:$line: #[instrument] without skip_all\n";
+              $bad = 1;
+            }
+            END { exit($bad ? 1 : 0) }
+          '
+
       # rustup installs the channel + components pinned in rust-toolchain.toml.
       - name: Install Rust toolchain
         run: rustup toolchain install

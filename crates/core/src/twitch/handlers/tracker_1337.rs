@@ -24,7 +24,7 @@ use tokio::{
     task::JoinError,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, warn};
 use twitch_irc::{
     login::LoginCredentials,
     message::{PrivmsgMessage, ServerMessage},
@@ -216,7 +216,6 @@ pub(crate) fn calculate_next_occurrence(clock: &dyn Clock, hour: u32, minute: u3
 }
 
 /// Sleeps until the next occurrence of a daily time in Europe/Berlin timezone.
-#[instrument(skip(clock))]
 pub(crate) async fn wait_until_schedule(clock: &dyn Clock, hour: u32, minute: u32) {
     let next_run = calculate_next_occurrence(clock, hour, minute);
     let now = clock.now_utc();
@@ -241,7 +240,6 @@ pub(crate) async fn wait_until_schedule(clock: &dyn Clock, hour: u32, minute: u3
 /// latency compensation must not truncate collection.
 ///
 /// If the target time has already passed, returns immediately.
-#[instrument(skip(clock))]
 pub(crate) async fn sleep_until_hms(
     clock: &dyn Clock,
     hour: u32,
@@ -503,7 +501,6 @@ pub(crate) async fn save_hall_of_shame(
 /// Runs until the owner requests cancellation or the broadcast channel closes.
 /// Only tracks messages sent during the configured TARGET_HOUR:TARGET_MINUTE
 /// from the primary channel.
-#[instrument(skip(broadcast_rx, total_users, channel, echo, cancellation))]
 async fn monitor_1337_messages(
     mut broadcast_rx: broadcast::Receiver<ServerMessage>,
     total_users: Arc<Mutex<HashMap<String, u64>>>,
