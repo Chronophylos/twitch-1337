@@ -1,7 +1,10 @@
 //! Public-vs-special-purpose IP classification, shared by the web fetcher's
-//! SSRF guard and the `lookup_network` tool's input gate.
+//! SSRF guard, the RDAP redirect policy and the `lookup_network` tool's
+//! input gate.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+use url::{Host, Url};
 
 /// True for every address that is not globally routable unicast: private,
 /// loopback, link-local, CGNAT, multicast, broadcast, unspecified,
@@ -66,6 +69,24 @@ fn is_non_public_v6(v6: Ipv6Addr) -> bool {
         || (seg[0] == 0x2001 && seg[1] == 0x0002 && seg[2] == 0)
         // 6to4 2002::/16, v4 in bits 16..48
         || (seg[0] == 0x2002 && embedded(seg[1], seg[2]))
+}
+
+/// True when the URL's host is missing, a non-public IP literal, or
+/// `localhost`/`*.localhost`. Domain names are not resolved.
+///
+/// Matches on the parsed `Host`, not `host_str()`: the latter brackets IPv6
+/// (`"[::1]"`), which never parses as an `IpAddr`, and hyper skips custom
+/// resolvers for IP literals, so this is the only guard they get.
+pub fn is_blocked_host_literal(url: &Url) -> bool {
+    match url.host() {
+        None => true,
+        Some(Host::Ipv4(v4)) => is_non_public_ip(v4.into()),
+        Some(Host::Ipv6(v6)) => is_non_public_ip(v6.into()),
+        Some(Host::Domain(host)) => {
+            let host = host.to_ascii_lowercase();
+            host == "localhost" || host.ends_with(".localhost")
+        }
+    }
 }
 
 /// 100.64.0.0/10: carrier-grade NAT, also Tailscale's tailnet range.

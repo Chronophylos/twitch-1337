@@ -14,7 +14,7 @@ use crate::APP_USER_AGENT;
 use crate::ai::content::detect::{Bucket, detect};
 use crate::settings::ai::AiMedia;
 use crate::util::http::{BodyError, read_capped};
-use crate::util::net::is_non_public_ip;
+use crate::util::net::{is_blocked_host_literal, is_non_public_ip};
 use crate::util::truncate_response;
 
 static SSRF_BYPASS: AtomicBool = AtomicBool::new(false);
@@ -492,21 +492,6 @@ struct SearxResult {
 
 fn collapse_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Matches on the parsed `Host`, not `host_str()`: the latter brackets IPv6
-/// (`"[::1]"`), which never parses as an `IpAddr`, and hyper skips the custom
-/// resolver for IP literals, so this is the only guard they get.
-fn is_blocked_host_literal(url: &reqwest::Url) -> bool {
-    match url.host() {
-        None => true,
-        Some(Host::Ipv4(v4)) => is_non_public_ip(v4.into()),
-        Some(Host::Ipv6(v6)) => is_non_public_ip(v6.into()),
-        Some(Host::Domain(host)) => {
-            let host = host.to_ascii_lowercase();
-            host == "localhost" || host.ends_with(".localhost")
-        }
-    }
 }
 
 #[expect(clippy::expect_used, reason = "const CSS selectors are valid")]

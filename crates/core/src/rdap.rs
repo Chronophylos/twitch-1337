@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::APP_USER_AGENT;
 use crate::util::http::read_capped;
+use crate::util::net::is_blocked_host_literal;
 
 pub const DEFAULT_BASE_URL: &str = "https://rdap.org";
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -198,20 +199,14 @@ pub struct RdapClient {
 
 impl RdapClient {
     pub fn new() -> Result<Self> {
-        let http = reqwest::Client::builder()
-            .user_agent(APP_USER_AGENT)
-            .timeout(TIMEOUT)
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
-            .build()
-            .wrap_err("build RDAP HTTP client")?;
         Ok(Self {
-            http,
+            http: http_client()?,
             base_url: DEFAULT_BASE_URL.to_string(),
         })
     }
 
     /// Test hook: custom base URL (e.g. wiremock). Caller supplies the HTTP
-    /// client; production [`Self::new`] sets the user agent and timeout.
+    /// client; production [`Self::new`] uses [`http_client`].
     pub fn with_base_url(http: reqwest::Client, base_url: impl Into<String>) -> Self {
         Self {
             http,
@@ -262,6 +257,39 @@ impl RdapClient {
             .wrap_err("decode RDAP response")
             .map_err(RdapError::Upstream)
     }
+}
+
+/// A redirect the RDAP policy refused. Travels through reqwest's source
+/// chain; the target is for logs only.
+#[derive(Debug, thiserror::Error)]
+#[error("RDAP redirect refused: {0}")]
+struct RedirectRefused(String);
+
+/// rdap.org and the registries it points at are trusted to redirect, but
+/// only onward to another public HTTPS host: never a downgrade to plain
+/// HTTP, an internal IP literal or `localhost`, and at most
+/// [`MAX_REDIRECTS`] hops.
+fn http_client() -> Result<reqwest::Client> {
+    let policy = reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() > MAX_REDIRECTS {
+            attempt.error(RedirectRefused("too many redirects".into()))
+        } else if !redirect_allowed(attempt.url()) {
+            let target = attempt.url().to_string();
+            attempt.error(RedirectRefused(target))
+        } else {
+            attempt.follow()
+        }
+    });
+    reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(TIMEOUT)
+        .redirect(policy)
+        .build()
+        .wrap_err("build RDAP HTTP client")
+}
+
+fn redirect_allowed(url: &reqwest::Url) -> bool {
+    url.scheme() == "https" && !is_blocked_host_literal(url)
 }
 
 fn project_ip(w: WireIpNetwork) -> IpNetwork {
@@ -473,5 +501,62 @@ mod tests {
         let p = project_domain("example.de", wire);
         assert_eq!(p.domain, "example.de");
         assert_eq!(p.registrant.as_deref(), Some("REDACTED FOR PRIVACY"));
+    }
+
+    #[test]
+    fn redirect_policy_only_follows_public_https() {
+        let url = |s: &str| reqwest::Url::parse(s).expect("url");
+        for allowed in [
+            "https://rdap.arin.net/registry/ip/8.8.8.8",
+            "https://rdap.db.ripe.net/autnum/3320",
+            "https://[2606:4700::1111]/ip/1.1.1.1",
+        ] {
+            assert!(redirect_allowed(&url(allowed)), "{allowed}");
+        }
+        for refused in [
+            "http://rdap.arin.net/registry/ip/8.8.8.8",
+            "https://10.0.0.1/ip/1.1.1.1",
+            "https://127.0.0.1:8080/",
+            "https://169.254.169.254/latest/meta-data",
+            "https://[::1]/",
+            "https://[::ffff:192.168.1.1]/",
+            "https://localhost/",
+            "https://rdap.localhost/",
+            "file:///etc/passwd",
+        ] {
+            assert!(!redirect_allowed(&url(refused)), "{refused}");
+        }
+    }
+
+    /// The production client refuses a redirect to an internal target, so
+    /// the second server never sees a request and the lookup fails upstream.
+    #[tokio::test]
+    async fn redirect_to_an_internal_target_is_not_followed() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        crate::install_crypto_provider();
+        let internal = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&internal)
+            .await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/autnum/3320", internal.uri())),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = RdapClient::with_base_url(http_client().expect("rdap client"), server.uri());
+        assert!(matches!(
+            client.autnum(3320).await,
+            Err(RdapError::Upstream(_))
+        ));
+        // `expect(0)` on `internal` is verified when it drops.
     }
 }

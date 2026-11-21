@@ -93,7 +93,8 @@ fn classify(raw: &str) -> Result<Target, Rejection> {
         return if is_non_public_ip(ip) {
             Err(Rejection::NotPublic)
         } else {
-            Ok(Target::Ip(ip))
+            // `::ffff:1.1.1.1` is 1.1.1.1; RDAP and ipinfo get the v4 form.
+            Ok(Target::Ip(ip.to_canonical()))
         };
     }
 
@@ -615,6 +616,10 @@ mod tests {
         assert_eq!(
             classify("[2606:4700::1111]"),
             Ok(Target::Ip("2606:4700::1111".parse().expect("ip")))
+        );
+        assert_eq!(
+            classify("::ffff:1.1.1.1"),
+            Ok(Target::Ip("1.1.1.1".parse().expect("ip")))
         );
         assert_eq!(classify("AS3320"), Ok(Target::Asn(3320)));
         assert_eq!(classify("as3320"), Ok(Target::Asn(3320)));

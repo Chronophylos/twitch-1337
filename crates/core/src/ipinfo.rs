@@ -174,4 +174,31 @@ mod tests {
         assert_eq!(got.asn.as_deref(), Some("AS13335"));
         assert_eq!(got.as_name.as_deref(), Some("Cloudflare, Inc."));
     }
+
+    #[tokio::test]
+    async fn redirect_does_not_carry_the_token_elsewhere() {
+        crate::install_crypto_provider();
+        let elsewhere = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&elsewhere)
+            .await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/steal", elsewhere.uri())),
+            )
+            .mount(&server)
+            .await;
+
+        let client = IpinfoClient::with_base_url(
+            http_client().expect("client"),
+            server.uri(),
+            SecretString::new("test-token".into()),
+        );
+        assert!(client.lookup("1.1.1.1".parse().expect("ip")).await.is_err());
+        // `expect(0)` on `elsewhere` is verified when it drops.
+    }
 }
