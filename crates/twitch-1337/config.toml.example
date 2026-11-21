@@ -78,9 +78,10 @@ client_secret = "your_client_secret"
 # [finnhub]
 # api_key = "your_finnhub_api_key_here"
 
-# Optional: first-party LLM traces to Langfuse Cloud. Presence enables
-# export; init/export failures never abort the bot. No dashboard card —
-# keys stay here. Default host is the EU cloud.
+# Optional: first-party LLM traces (every Turn, its LLM calls and tools) to
+# Langfuse Cloud over OTLP. Presence enables export, with or without [otel];
+# init/export failures never abort the bot. No dashboard card — keys stay
+# here. Default host is the EU cloud.
 # [langfuse]
 # public_key = "pk-lf-..."
 # secret_key = "sk-lf-..."

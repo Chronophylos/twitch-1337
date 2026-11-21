@@ -12,6 +12,7 @@ use crate::ai::command::ChatContext;
 use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
+use crate::util::observability::{self, metrics};
 
 use super::{Command, CommandContext, ExecutionClass};
 
@@ -28,7 +29,6 @@ pub struct HaikuCommand {
     settings: SettingsHandle,
     cooldown: Arc<PerUserCooldown>,
     chat_ctx: Option<ChatContext>,
-    langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 }
 
 impl HaikuCommand {
@@ -37,14 +37,12 @@ impl HaikuCommand {
         settings: SettingsHandle,
         chat_ctx: Option<ChatContext>,
         cooldown: Arc<PerUserCooldown>,
-        langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
     ) -> Self {
         Self {
             registry,
             settings,
             cooldown,
             chat_ctx,
-            langfuse,
         }
     }
 
@@ -185,6 +183,7 @@ where
             history_lines.join("\n"),
         );
 
+        let session_id = crate::ai::session::new_session_id();
         let request = ChatCompletionRequest {
             model,
             messages: vec![
@@ -195,20 +194,17 @@ where
             service_tier: None,
             trace: TraceIds {
                 user: Some(user.clone()),
-                session_id: Some(crate::ai::session::new_session_id()),
+                session_id: Some(session_id.clone()),
             },
         };
 
         ctx.cancellation.check()?;
-        let result = llm::with_optional_turn(
-            crate::ai::langfuse::LangfuseHandle::observer_from(&self.langfuse),
-            llm::TurnParams {
-                name: "haiku".into(),
-                user: Some(user.clone()),
-                session_id: request.trace.session_id.clone(),
-                tags: vec!["haiku".into()],
-            },
-            crate::util::observability::metrics::with_llm_scope(
+        let result = observability::with_turn(
+            "haiku",
+            &profile.name,
+            &session_id,
+            Some(user.as_str()),
+            metrics::with_llm_scope(
                 "haiku",
                 &profile.name,
                 tokio::time::timeout(timeout, llm_client.chat_completion(request)),

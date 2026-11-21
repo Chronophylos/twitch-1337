@@ -14,11 +14,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use eyre::Result;
-use tracing::{Instrument as _, error, info, warn};
+use tracing::{error, info, warn};
 
 use llm::{
     AgentOpts, AgentOutcome, LlmError, ToolCall, ToolCallRound, ToolChatCompletionRequest,
-    ToolExecutor, ToolResultMessage, TraceIds, execute_tool_span, run_agent,
+    ToolExecutor, ToolResultMessage, TraceIds, execute_tool, run_agent,
 };
 
 use crate::ai::command::{AiCommandDeps, AiMemoryV2, AiWeb, ChatContext};
@@ -35,7 +35,7 @@ use crate::commands::CommandCancellation;
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
 use crate::twitch::seventv::SevenTvEmoteProvider;
-use crate::util::observability::metrics;
+use crate::util::observability::{self, metrics};
 
 /// Sent to the invoking viewer when a round exceeds the profile timeout.
 pub(crate) const TIMEOUT_NOTICE: &str = "hat zu hart gedacht, nochmal probieren Stare";
@@ -160,7 +160,6 @@ pub struct TurnRunner {
     command_catalog: crate::ai::commands_tool::CatalogCell,
     emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     recap: Option<Arc<RecapHandle>>,
-    langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
     /// Per-process nonce stamped into memory fences. Stable across
     /// turns so the memory block is a byte-stable cache prefix; the real
     /// fence-injection guard is `scrub_for_inject`, not nonce freshness.
@@ -189,7 +188,6 @@ impl TurnRunner {
             command_catalog: deps.command_catalog,
             emote_tracker: deps.emote_tracker,
             recap: deps.recap,
-            langfuse: deps.langfuse,
             prompt_nonce: inject::fresh_nonce(),
         }
     }
@@ -500,23 +498,17 @@ impl TurnRunner {
             tools.push(crate::ai::emote_stats_tool::emote_stats_tool());
         }
         let registered_tools: HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
+        let session_id = crate::ai::session::new_session_id();
+        let llm_agent = if grok_alias { "grok" } else { "aurora" };
         let trace = TraceIds {
             user: Some(input.speaker.login.clone()),
-            session_id: Some(crate::ai::session::new_session_id()),
+            session_id: Some(session_id.clone()),
         };
-        let (turn_name, llm_agent) = if grok_alias {
-            ("grok-turn", "grok")
-        } else {
-            ("aurora-turn", "aurora")
-        };
-        let outcome = llm::with_optional_turn(
-            crate::ai::langfuse::LangfuseHandle::observer_from(&self.langfuse),
-            llm::TurnParams {
-                name: turn_name.to_string(),
-                user: trace.user.clone(),
-                session_id: trace.session_id.clone(),
-                tags: vec![turn_name.to_string(), connection.name.clone()],
-            },
+        let outcome = observability::with_turn(
+            llm_agent,
+            &connection.name,
+            &session_id,
+            Some(input.speaker.login.as_str()),
             Box::pin(metrics::with_llm_scope(
                 llm_agent,
                 &connection.name,
@@ -776,11 +768,12 @@ async fn forced_web_search_round(web: &AiWeb, query: &str, trace: &TraceIds) -> 
         }),
         arguments_parse_error: None,
     };
-    let result = web
-        .executor
-        .execute_tool_call(&call, trace)
-        .instrument(execute_tool_span(&call.name))
-        .await;
+    let result = execute_tool(
+        &call.name,
+        &call,
+        web.executor.execute_tool_call(&call, trace),
+    )
+    .await;
     ToolCallRound {
         calls: vec![call],
         results: vec![result],
@@ -1060,7 +1053,6 @@ mod turn_tests {
             command_catalog: Default::default(),
             emote_tracker: None,
             recap: None,
-            langfuse: None,
         });
 
         Fixture {

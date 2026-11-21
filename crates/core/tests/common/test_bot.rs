@@ -622,7 +622,6 @@ impl TestBotBuilder {
                         secrecy::SecretString::new("test".into()),
                     ))
                 }),
-                langfuse: None,
                 doener: Arc::new(twitch_1337::doener::DoeneratlasClient::with_base_url(
                     reqwest::Client::new(),
                     self.doener_base_url
@@ -1108,16 +1107,9 @@ impl TestBot {
             self.llm.clone() as Arc<dyn llm::LlmClient>,
             self.settings.clone(),
         );
-        run_ritual(
-            &registry,
-            &store,
-            &transcript,
-            &self.settings,
-            yesterday,
-            None,
-        )
-        .await
-        .expect("ritual ok");
+        run_ritual(&registry, &store, &transcript, &self.settings, yesterday)
+            .await
+            .expect("ritual ok");
     }
 }
 

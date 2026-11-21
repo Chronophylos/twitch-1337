@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::time::Instant;
-use tracing::{Instrument as _, Span, debug, info_span, instrument, warn};
+use tracing::{Instrument as _, debug, info_span, instrument, warn};
 
 use crate::client::LlmClient;
 use crate::error::Result;
@@ -18,6 +18,7 @@ use crate::types::{
     ToolCall, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse, ToolDefinition,
     ToolResultMessage,
 };
+use crate::util::{record_tool_arguments, record_tool_result};
 
 /// Per-call dispatch hook for the agent loop. Each [`ToolCall`] returned
 /// by the LLM is fed through `execute`; the returned [`ToolResultMessage`]
@@ -52,18 +53,28 @@ pub struct AgentOpts {
 pub const TOOL_BUDGET_EXHAUSTED: &str =
     "tool_budget_exhausted: too many tool calls in one round; this call was not run";
 
-/// The `execute_tool` span for one tool call. [`run_agent`] wraps every call
-/// it runs in one; callers that execute a tool outside the agent loop use it
-/// too, so each tool execution is exactly one span.
+/// Run one tool call inside its `execute_tool` span. [`run_agent`] runs every
+/// call through it; callers that execute a tool outside the agent loop use it
+/// too, so each tool execution is exactly one span. The call's arguments and
+/// the result go on the span as `gen_ai.tool.call.arguments` /
+/// `gen_ai.tool.call.result`, OTel attributes only, when it is exported.
 ///
 /// `tool_name` is a metric label, so it must come from a bounded set: a
 /// name the code chose, or a model's call checked against the tools offered.
-pub fn execute_tool_span(tool_name: &str) -> Span {
-    info_span!(
+pub async fn execute_tool(
+    tool_name: &str,
+    call: &ToolCall,
+    execution: impl Future<Output = ToolResultMessage>,
+) -> ToolResultMessage {
+    let span = info_span!(
         "execute_tool",
         gen_ai.operation.name = "execute_tool",
         gen_ai.tool.name = tool_name,
-    )
+    );
+    record_tool_arguments(&span, call);
+    let result = execution.instrument(span.clone()).await;
+    record_tool_result(&span, &result);
+    result
 }
 
 /// `name` if it is one of `tools`, else `"unknown"`: the model can call any
@@ -144,9 +155,7 @@ pub async fn run_agent<E: ToolExecutor + ?Sized>(
                     }
                     let result = if i < cap {
                         let tool_name = registered_tool_name(&request.tools, &call.name);
-                        crate::observe::observe_tool(executor, call)
-                            .instrument(execute_tool_span(tool_name))
-                            .await
+                        execute_tool(tool_name, call, executor.execute(call)).await
                     } else {
                         ToolResultMessage::for_call(call, TOOL_BUDGET_EXHAUSTED.to_string())
                     };
@@ -491,41 +500,5 @@ mod tests {
         assert_eq!(round.results[0].tool_call_id, "c1");
         assert_eq!(round.results[0].content, "echoed:tool_a");
         assert_eq!(round.reasoning_content.as_deref(), Some("thinking"));
-    }
-
-    #[tokio::test]
-    async fn tool_execute_records_a_span_when_turn_is_in_scope() {
-        use crate::observe::{LlmObserver, RecordingObserver, TurnParams, with_turn};
-
-        let obs = RecordingObserver::new();
-        let obs_dyn: std::sync::Arc<dyn LlmObserver> = obs.clone();
-        let client = ScriptedClient::new(vec![
-            Scripted::Response(ToolChatCompletionResponse::ToolCalls {
-                calls: vec![tool_call("c1", "noop")],
-                reasoning_content: None,
-            }),
-            Scripted::Response(ToolChatCompletionResponse::Message("done".into())),
-        ]);
-        with_turn(
-            obs_dyn,
-            TurnParams {
-                name: "aurora-turn".into(),
-                user: Some("alice".into()),
-                session_id: Some("s".into()),
-                tags: vec![],
-            },
-            async {
-                run_agent(&client, base_request(), &EchoExecutor, opts(3))
-                    .await
-                    .unwrap();
-            },
-        )
-        .await;
-        let spans = obs.spans.lock();
-        assert!(
-            spans.iter().any(|s| s.name == "tool noop"),
-            "missing tool span in {spans:?}"
-        );
-        assert!(spans.iter().any(|s| s.name == "aurora-turn"));
     }
 }

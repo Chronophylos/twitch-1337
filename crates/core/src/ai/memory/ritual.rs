@@ -28,7 +28,7 @@ use crate::lifecycle::Lifecycle;
 use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
-use crate::util::observability::metrics;
+use crate::util::observability::{self, metrics};
 
 /// Resolve `run_at` on `date` to a Berlin `ZonedDateTime`, bumping forward an
 /// hour when the requested local time is not unambiguous: across the
@@ -57,7 +57,6 @@ pub fn spawn_ritual(
     transcript: TranscriptWriter,
     settings: SettingsHandle,
     lifecycle: Lifecycle,
-    langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -135,7 +134,6 @@ pub fn spawn_ritual(
                     &settings,
                     yesterday,
                     &lifecycle,
-                    langfuse.as_ref(),
                 )
                 .await
                 {
@@ -226,7 +224,6 @@ pub async fn run_ritual(
     transcript: &TranscriptWriter,
     settings: &SettingsHandle,
     rotate_to: Date,
-    langfuse: Option<&Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) -> Result<()> {
     run_ritual_until(
         registry,
@@ -235,7 +232,6 @@ pub async fn run_ritual(
         settings,
         rotate_to,
         &Lifecycle::new(),
-        langfuse,
     )
     .await
 }
@@ -247,7 +243,6 @@ async fn run_ritual_until(
     settings: &SettingsHandle,
     rotate_to: Date,
     lifecycle: &Lifecycle,
-    langfuse: Option<&Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) -> Result<()> {
     if lifecycle.is_cancelled() {
         return Ok(());
@@ -385,6 +380,7 @@ async fn run_ritual_until(
         known_user_ids: writable_ids,
     });
 
+    let session_id = crate::ai::session::new_session_id();
     let req = ToolChatCompletionRequest {
         model,
         messages: vec![Message::system(system_prompt), Message::user("revise.")],
@@ -394,7 +390,7 @@ async fn run_ritual_until(
         prior_rounds: Vec::new(),
         trace: llm::TraceIds {
             user: Some("<dreamer>".to_string()),
-            session_id: Some(crate::ai::session::new_session_id()),
+            session_id: Some(session_id.clone()),
         },
     };
     // Offline, owner-scheduled run with its own write cap: no per-round call
@@ -405,15 +401,11 @@ async fn run_ritual_until(
         max_calls_per_round: None,
         deadline: None,
     };
-    let session_id = req.trace.session_id.clone();
-    llm::with_optional_turn(
-        langfuse.map(crate::ai::langfuse::LangfuseHandle::as_observer),
-        llm::TurnParams {
-            name: "dreamer".into(),
-            user: Some("<dreamer>".into()),
-            session_id,
-            tags: vec!["dreamer".into()],
-        },
+    observability::with_turn(
+        "dreamer",
+        &base_profile.name,
+        &session_id,
+        None,
         metrics::with_llm_scope("dreamer", &base_profile.name, async {
             if lifecycle.is_cancelled() {
                 return;
@@ -526,7 +518,6 @@ not a transcript line
             &settings,
             rotate_to,
             &lifecycle,
-            None,
         )
         .await
         .unwrap();
@@ -623,7 +614,6 @@ not a transcript line
                     &settings,
                     rotate_to,
                     &lifecycle,
-                    None,
                 )
                 .await
             })
@@ -712,7 +702,7 @@ not a transcript line
             recorder.clone() as Arc<dyn LlmClient>,
             settings.clone(),
         );
-        run_ritual(&registry, &store, &transcript, &settings, yesterday, None)
+        run_ritual(&registry, &store, &transcript, &settings, yesterday)
             .await
             .unwrap();
 
@@ -724,7 +714,7 @@ not a transcript line
         }
         // Use a different date so rotate_to doesn't conflict with the already-rotated file.
         let yesterday2 = jiff::civil::date(2026, 4, 16);
-        run_ritual(&registry, &store, &transcript, &settings, yesterday2, None)
+        run_ritual(&registry, &store, &transcript, &settings, yesterday2)
             .await
             .unwrap();
 
@@ -807,7 +797,6 @@ not a transcript line
             &transcript,
             &settings,
             jiff::civil::date(2026, 4, 17),
-            None,
         )
         .await
         .unwrap();
@@ -877,7 +866,7 @@ not a transcript line
             settings.clone(),
         );
         let yesterday = jiff::civil::date(2026, 4, 17);
-        run_ritual(&registry, &store, &transcript, &settings, yesterday, None)
+        run_ritual(&registry, &store, &transcript, &settings, yesterday)
             .await
             .unwrap();
 

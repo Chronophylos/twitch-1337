@@ -9,7 +9,8 @@ description = "Provider-agnostic LLM client (OpenAI, Ollama) used by twitch-1337
 [dependencies]
 async-trait = { workspace = true }
 indexmap = { workspace = true }
-parking_lot = { workspace = true }
+# Prompt and completion go on the `chat` span as OTel attributes only.
+opentelemetry = { workspace = true }
 reqwest = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -17,9 +18,13 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 
 [dev-dependencies]
+# In-memory span exporter for the chat span status tests.
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 rustls = { workspace = true }
+tracing-subscriber = { workspace = true }
 wiremock = { workspace = true }
 
 [lints]

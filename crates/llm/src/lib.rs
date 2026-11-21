@@ -3,7 +3,6 @@
 pub mod agent;
 pub mod decision;
 pub mod error;
-pub mod observe;
 pub mod ollama;
 pub mod openai;
 
@@ -13,13 +12,10 @@ mod usage;
 mod util;
 
 pub use agent::{
-    AgentOpts, AgentOutcome, TOOL_BUDGET_EXHAUSTED, ToolExecutor, execute_tool_span, run_agent,
+    AgentOpts, AgentOutcome, TOOL_BUDGET_EXHAUSTED, ToolExecutor, execute_tool, run_agent,
 };
 pub use client::LlmClient;
 pub use error::{LlmError, Result};
-pub use observe::{
-    GenerationEvent, LlmObserver, SpanEvent, TurnParams, with_optional_turn, with_turn,
-};
 pub use ollama::OllamaClient;
 pub use openai::OpenAiClient;
 pub use types::{

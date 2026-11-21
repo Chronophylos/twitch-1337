@@ -14,6 +14,7 @@ use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
 use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 use crate::twitch::whisper::{WHISPER_MAX_CHARS, WhisperSender};
+use crate::util::observability::{self, metrics};
 use crate::util::truncate_response;
 
 use super::{Command, CommandContext, ExecutionClass};
@@ -73,7 +74,6 @@ pub struct NewsCommand {
     cooldown: Arc<PerUserCooldown>,
     chat_ctx: Option<ChatContext>,
     whisper: Option<Arc<dyn WhisperSender>>,
-    langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 }
 
 impl NewsCommand {
@@ -84,7 +84,6 @@ impl NewsCommand {
         chat_ctx: Option<ChatContext>,
         whisper: Option<Arc<dyn WhisperSender>>,
         cooldown: Arc<PerUserCooldown>,
-        langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
     ) -> Self {
         Self {
             registry,
@@ -93,7 +92,6 @@ impl NewsCommand {
             cooldown,
             chat_ctx,
             whisper,
-            langfuse,
         }
     }
 
@@ -289,6 +287,8 @@ where
             history_lines.join("\n"),
         );
 
+        let agent = self.mode.trigger().trim_start_matches('!');
+        let session_id = crate::ai::session::new_session_id();
         let request = ChatCompletionRequest {
             model,
             messages: vec![
@@ -299,21 +299,18 @@ where
             service_tier: None,
             trace: TraceIds {
                 user: Some(user.clone()),
-                session_id: Some(crate::ai::session::new_session_id()),
+                session_id: Some(session_id.clone()),
             },
         };
 
         ctx.cancellation.check()?;
-        let result = llm::with_optional_turn(
-            crate::ai::langfuse::LangfuseHandle::observer_from(&self.langfuse),
-            llm::TurnParams {
-                name: self.mode.trigger().trim_start_matches('!').to_string(),
-                user: Some(user.clone()),
-                session_id: request.trace.session_id.clone(),
-                tags: vec![self.mode.trigger().to_string()],
-            },
-            crate::util::observability::metrics::with_llm_scope(
-                self.mode.trigger().trim_start_matches('!'),
+        let result = observability::with_turn(
+            agent,
+            &profile.name,
+            &session_id,
+            Some(user.as_str()),
+            metrics::with_llm_scope(
+                agent,
                 &profile.name,
                 tokio::time::timeout(timeout, llm_client.chat_completion(request)),
             ),

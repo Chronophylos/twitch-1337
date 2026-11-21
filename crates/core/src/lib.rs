@@ -106,9 +106,6 @@ pub struct Services {
     /// Finnhub quote client backing `!aktien`. `None` when `[finnhub]` is
     /// absent from config.toml, which leaves the command unregistered.
     pub finnhub: Option<Arc<crate::finnhub::FinnhubClient>>,
-    /// First-party Langfuse exporter. `None` when `[langfuse]` is absent or
-    /// init failed; AI still runs, traces are dropped.
-    pub langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
     pub doener: Arc<crate::doener::DoeneratlasClient>,
     pub whisper: Option<Arc<dyn WhisperSender>>,
     pub data_dir: PathBuf,
@@ -435,7 +432,6 @@ where
                 mem.transcript.clone(),
                 services.settings.clone(),
                 lifecycle.clone(),
-                services.langfuse.clone(),
             );
             supervisor.adopt("dreamer ritual", ritual_handle);
             tracing::info!("Daily AI memory dreamer ritual spawned (live settings)");
@@ -488,14 +484,6 @@ where
                 .await;
             }
             Ok(())
-        });
-    }
-    if let Some(handle) = services.langfuse.clone() {
-        supervisor.register_finalizer("Langfuse exporter", async move {
-            handle
-                .finalize()
-                .await
-                .wrap_err("Langfuse flush/close/join failed")
         });
     }
     if let Some(handle) = services.emote_tracker.clone() {

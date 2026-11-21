@@ -16,13 +16,15 @@ use crate::ai::recap::{
     rebind_through_seq,
 };
 use crate::settings::SettingsHandle;
+use crate::util::observability;
 
 const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy)]
 pub(crate) struct RecapCompletion<'a> {
     llm: &'a dyn LlmClient,
-    observer: Option<&'a Arc<crate::ai::langfuse::LangfuseHandle>>,
+    /// Recap profile name, for the Turn span.
+    profile: &'a str,
     model: &'a str,
     timeout: Duration,
     reasoning_effort: Option<&'a str>,
@@ -48,21 +50,11 @@ async fn paraphrase(call: RecapCompletion<'_>, user: String) -> LlmResult<String
             session_id: Some(session_id.clone()),
         },
     };
-    llm::with_optional_turn(
-        call.observer
-            .map(crate::ai::langfuse::LangfuseHandle::as_observer),
-        llm::TurnParams {
-            name: "recap".into(),
-            user: Some("<recap>".into()),
-            session_id: Some(session_id),
-            tags: vec!["recap".into()],
-        },
-        async {
-            tokio::time::timeout(call.timeout, call.llm.chat_completion(req))
-                .await
-                .map_err(|_| LlmError::Timeout)?
-        },
-    )
+    observability::with_turn("recap", call.profile, &session_id, None, async {
+        tokio::time::timeout(call.timeout, call.llm.chat_completion(req))
+            .await
+            .map_err(|_| LlmError::Timeout)?
+    })
     .await
 }
 
@@ -242,7 +234,7 @@ enum FlushAttempt {
 struct FlushParams<'a> {
     input: FlushInput,
     llm: &'a dyn LlmClient,
-    observer: Option<&'a Arc<crate::ai::langfuse::LangfuseHandle>>,
+    profile: &'a str,
     model: &'a str,
     timeout: Duration,
     reasoning_effort: Option<&'a str>,
@@ -254,7 +246,7 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
     let FlushParams {
         mut input,
         llm,
-        observer,
+        profile,
         model,
         timeout,
         reasoning_effort,
@@ -285,7 +277,7 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
     let body = match paraphrase(
         RecapCompletion {
             llm,
-            observer,
+            profile,
             model,
             timeout,
             reasoning_effort,
@@ -311,7 +303,7 @@ async fn try_flush_channel(params: FlushParams<'_>) -> FlushAttempt {
         input.merge_width,
         Some(RecapCompletion {
             llm,
-            observer,
+            profile,
             model,
             timeout,
             reasoning_effort,
@@ -374,7 +366,6 @@ pub(crate) struct BatcherTickParams<'a> {
     pub handle: &'a RecapHandle,
     pub settings: &'a SettingsHandle,
     pub llm: &'a dyn LlmClient,
-    pub observer: Option<&'a Arc<crate::ai::langfuse::LangfuseHandle>>,
     pub primary: &'a ChatHistory,
     pub self_logins: &'a [String],
     pub last_seen_profile: &'a mut Option<String>,
@@ -387,7 +378,6 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
         handle,
         settings,
         llm,
-        observer,
         primary,
         self_logins,
         last_seen_profile,
@@ -466,7 +456,7 @@ pub(crate) async fn recap_batcher_tick(params: BatcherTickParams<'_>) {
             merge_width,
         },
         llm,
-        observer,
+        profile: &profile_name,
         model: &model,
         timeout,
         reasoning_effort: reasoning_effort.as_deref(),
@@ -517,7 +507,6 @@ pub async fn run_recap_batcher(
     primary: ChatHistory,
     self_logins: Vec<String>,
     shutdown: Arc<Notify>,
-    langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 ) {
     let mut last_seen_profile: Option<String> = None;
     let mut backoff = BatcherBackoff {
@@ -556,7 +545,6 @@ pub async fn run_recap_batcher(
                     handle: &handle,
                     settings: &settings,
                     llm: client.as_ref(),
-                    observer: langfuse.as_ref(),
                     primary: &primary,
                     self_logins: &self_logins,
                     last_seen_profile: &mut last_seen_profile,
@@ -687,7 +675,7 @@ mod tests {
     fn completion(llm: &dyn LlmClient) -> RecapCompletion<'_> {
         RecapCompletion {
             llm,
-            observer: None,
+            profile: "recap",
             model: "m",
             timeout: Duration::from_secs(1),
             reasoning_effort: None,
@@ -717,7 +705,6 @@ mod tests {
                 handle: &handle,
                 settings: &settings,
                 llm: &llm,
-                observer: None,
                 primary: &primary,
                 self_logins: &[],
                 last_seen_profile: &mut last_seen,
@@ -733,7 +720,6 @@ mod tests {
             handle: &handle,
             settings: &settings,
             llm: &llm,
-            observer: None,
             primary: &primary,
             self_logins: &[],
             last_seen_profile: &mut last_seen,
@@ -870,7 +856,6 @@ mod tests {
                 handle: &handle_bg,
                 settings: &settings,
                 llm: &llm,
-                observer: None,
                 primary: &primary,
                 self_logins: &[],
                 last_seen_profile: &mut last_seen,
@@ -909,7 +894,6 @@ mod tests {
             handle: &handle,
             settings: &settings,
             llm: &OkLlm,
-            observer: None,
             primary: &primary,
             self_logins: &[],
             last_seen_profile: &mut last_seen,

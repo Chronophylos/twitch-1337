@@ -155,7 +155,6 @@ pub struct AiCommandDeps {
     pub command_catalog: crate::ai::commands_tool::CatalogCell,
     pub emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     pub recap: Option<Arc<RecapHandle>>,
-    pub langfuse: Option<Arc<crate::ai::langfuse::LangfuseHandle>>,
 }
 
 fn ai_cooldown_duration(s: &Settings) -> Duration {

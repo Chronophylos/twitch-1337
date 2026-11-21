@@ -10,7 +10,7 @@ use tracing::{field::Empty, instrument};
 
 use crate::error::{LlmError, Result};
 use crate::usage::TokenUsage;
-use crate::util::{record_chat_outcome, truncate_for_echo};
+use crate::util::{ChatOutcome, truncate_for_echo};
 
 /// Request body for a decision call.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -143,6 +143,7 @@ pub async fn decide(
     req: &DecisionRequest,
     timeout: Duration,
 ) -> Result<DecisionResponse> {
+    let outcome = ChatOutcome::start();
     let result = decide_untraced(http, endpoint, api_key, req, timeout).await;
     let usage = result
         .as_ref()
@@ -153,7 +154,7 @@ pub async fn decide(
             output_tokens: u32::try_from(usage.output_tokens).unwrap_or(u32::MAX),
             cost_usd: usage.cost,
         });
-    record_chat_outcome(&result, usage);
+    outcome.finish(&result, usage);
     result
 }
 
