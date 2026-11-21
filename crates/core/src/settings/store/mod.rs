@@ -184,6 +184,7 @@ impl SettingsStore {
 mod tests {
     use super::*;
     use crate::settings::CooldownsOverrides;
+    use crate::settings::LinkCorrectionOverrides;
     use crate::settings::audit::MemoryAuditLog;
 
     fn fixture() -> (
@@ -273,6 +274,55 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].changes.len(), 1);
         assert_eq!(entries[0].changes[0].key, "cooldowns.ai");
+    }
+
+    #[tokio::test]
+    async fn link_correction_persists_and_caps_bounds() {
+        let (_dir, store, handle, log) = fixture();
+        let patch = SettingsOverrides {
+            link_correction: LinkCorrectionOverrides {
+                mydealz: Some(false),
+                reddit: Some(true),
+                x_twitter: Some(false),
+                max_links: Some(4),
+            },
+            ..SettingsOverrides::default()
+        };
+        store.apply(patch, actor()).await.expect("apply");
+        let live = handle.load();
+        assert!(!live.link_correction.mydealz);
+        assert!(live.link_correction.reddit);
+        assert!(!live.link_correction.x_twitter);
+        assert_eq!(live.link_correction.max_links, 4);
+
+        // round-trip from disk
+        let dropped_handle =
+            SettingsStore::open(store.path.parent().unwrap(), log.clone(), "test_chan")
+                .expect("reopen")
+                .1;
+        assert!(!dropped_handle.load().link_correction.mydealz);
+        assert!(!dropped_handle.load().link_correction.x_twitter);
+        assert_eq!(dropped_handle.load().link_correction.max_links, 4);
+
+        for bad in [0usize, 6] {
+            let bad_patch = SettingsOverrides {
+                link_correction: LinkCorrectionOverrides {
+                    max_links: Some(bad),
+                    ..Default::default()
+                },
+                ..SettingsOverrides::default()
+            };
+            match store.apply(bad_patch, actor()).await {
+                Err(SettingsError::Validation(errs)) => {
+                    assert!(
+                        errs.iter().any(|e| e.field == "link_correction.max_links"),
+                        "{errs:?}"
+                    );
+                }
+                other => panic!("expected Validation error for {bad}, got {other:?}"),
+            }
+        }
+        assert_eq!(handle.load().link_correction.max_links, 4);
     }
 
     #[tokio::test]

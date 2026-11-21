@@ -17,6 +17,7 @@ mod feedback;
 mod haiku;
 mod help;
 mod latency_rebase;
+mod link_corrections;
 mod news;
 mod ping;
 mod ping_name_guard;

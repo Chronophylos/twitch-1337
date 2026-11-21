@@ -20,6 +20,7 @@ pub mod audit;
 pub mod aviationstack;
 pub mod emote_tracker;
 pub mod knob;
+pub mod link_correction;
 pub mod observability;
 pub mod provider;
 mod resolve;
@@ -51,6 +52,7 @@ pub use emote_tracker::{
     PotatAttributionSettings,
 };
 pub use knob::{KnobMeta, knob, knobs, overrides_from_form, restart_required};
+pub use link_correction::{LinkCorrectionOverrides, LinkCorrectionSettings};
 pub use observability::{
     ObservabilityOverrides, ObservabilitySettings, OtelOverrides, OtelSettings,
 };
@@ -171,6 +173,8 @@ pub struct Settings {
     #[knob(nested)]
     pub cooldowns: Cooldowns,
     #[knob(nested)]
+    pub link_correction: LinkCorrectionSettings,
+    #[knob(nested)]
     pub pings: PingsSettings,
     #[knob(nested)]
     pub ai: AiSettings,
@@ -285,6 +289,7 @@ impl Settings {
                 ping_membership: 10,
                 help: 10,
             },
+            link_correction: LinkCorrectionSettings::default(),
             pings: PingsSettings {
                 cooldown: 300,
                 public: false,

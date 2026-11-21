@@ -29,7 +29,7 @@ use crate::{
             commands::{CommandConfig, run_generic_command_handler},
             emote_usage::run_emote_usage_handler,
             latency::run_latency_handler,
-            mydealz::run_mydealz_handler,
+            link_correction::run_link_correction_handler,
             router::run_message_router,
             schedule_runner::{SchedulePing, run_orchestrator},
             tracker_1337::run_1337_handler,
@@ -574,14 +574,23 @@ pub(crate) fn spawn_handlers<T, L>(
         let rx = broadcast_tx.subscribe();
         let sender = chat_sender.clone();
         let channel = services.channel.clone();
-        let echo_mydealz = services.echo.clone();
+        let echo_link_correction = services.echo.clone();
+        let settings = services.settings.clone();
         let task_lifecycle = lifecycle.clone();
         register_lifecycle_loop(
             supervisor,
             lifecycle.clone(),
-            "mydealz handler",
+            "link correction handler",
             async move {
-                run_mydealz_handler(rx, sender, channel, echo_mydealz, task_lifecycle).await;
+                run_link_correction_handler(
+                    rx,
+                    sender,
+                    channel,
+                    echo_link_correction,
+                    settings,
+                    task_lifecycle,
+                )
+                .await;
             },
         );
     }

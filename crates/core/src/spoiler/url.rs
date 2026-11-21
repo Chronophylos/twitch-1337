@@ -12,7 +12,7 @@ const LEADING: &[char] = &['(', '[', '"', '\''];
 /// Reddit hosts. All of them wall logged-out bots (JS proof-of-work page,
 /// login redirect, or a TLS-fingerprint 403), so posts are never fetched
 /// from Reddit itself; see [`reddit_post`].
-const REDDIT_HOSTS: &[&str] = &[
+pub(crate) const REDDIT_HOSTS: &[&str] = &[
     "reddit.com",
     "www.reddit.com",
     "new.reddit.com",

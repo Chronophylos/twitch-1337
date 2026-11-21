@@ -6,7 +6,7 @@
 pub mod commands;
 pub mod emote_usage;
 pub mod latency;
-pub mod mydealz;
+pub mod link_correction;
 pub mod router;
 pub mod schedule_runner;
 pub mod spawn;
