@@ -77,6 +77,16 @@ A Tracked Flight removed because its assigned aircraft never appeared on ADS-B
 within the pending window after tracking began.
 _Avoid_: gave up, abandoned.
 
+## F1 alerts
+
+**Race Week**:
+The Monday–Sunday calendar week containing an official Formula 1 race date.
+_Avoid_: seven days before the race, race weekend
+
+**Race-Week Reminder**:
+An Alert announcing a specific race at 18:00 Europe/Berlin on the Monday of its Race Week. A race moved to another Race Week gets a new reminder.
+_Avoid_: F1 command, schedule
+
 ## AI memory, scratch, transcripts, and recap
 
 **Memory**:
@@ -184,6 +194,12 @@ A Twitch reply whose parent is an agent line. It starts a new Turn for that
 agent without `!ai` or `@grok`.
 _Avoid_: thread, continuation, reply turn.
 
+## AI tools
+
+**Viewer-Facing Tool**:
+A capability a viewer can ask Aurora to use during a Turn, documented separately from chat Commands because it has no chat trigger. Internal Memory/Scratch maintenance and command discovery are not Viewer-Facing Tools.
+_Avoid_: chat command, command, feature
+
 ## AI profiles
 
 **Profile**:
@@ -245,6 +261,12 @@ _Avoid_: outage (reserve for infra), downtime.
 A Twitch user whose usage rows are stored with `flagged = 1` (bot / clankers /
 deny-list) and excluded from default queries.
 _Avoid_: banned, ignored (1337 ignore is separate unless shared via `is_clanker`).
+
+## Link corrections
+
+**Link Correction**:
+A passive chat reply that rewrites a recognized URL into a canonical or login-free HTTPS form. It is not a link preview, embed, or spoiler check.
+_Avoid_: embed, preview, spoiler check
 
 ## Dashboard access
 
