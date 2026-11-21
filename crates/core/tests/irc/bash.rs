@@ -195,6 +195,69 @@ async fn stdout_cap_truncates_the_reply() {
     bot.shutdown().await;
 }
 
+/// A Twitch reply body is `@parent !bash <script>`; the dispatcher skips the
+/// mention, and the command must slice the script at the trigger, not at the
+/// start of the body.
+#[tokio::test]
+async fn reply_prefixed_invocation_runs_the_script() {
+    let mut bot = TestBotBuilder::new().spawn().await;
+
+    bot.send_reply_to_mouth("alice", "!bash printf hi", "bot", "22222", "hello")
+        .await;
+    let reply = bot.expect_reply(TIMEOUT).await;
+    assert_eq!(reply, "hi");
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn empty_input_answers_with_usage_without_charging_cooldown() {
+    let mut bot = TestBotBuilder::new().spawn().await;
+
+    bot.send_privmsg_as("alice", "1001", "!bash").await;
+    let usage = bot.expect_reply(TIMEOUT).await;
+    assert_eq!(usage, "Nutzung: !bash <script>");
+
+    // No cooldown was charged: the next real script runs immediately.
+    assert_eq!(run(&mut bot, "alice", "1001", "printf a").await, "a");
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
+async fn nonempty_stdout_is_not_decorated_even_on_a_nonzero_exit() {
+    let mut bot = TestBotBuilder::new().spawn().await;
+
+    let reply = run(&mut bot, "alice", "1001", "printf out; exit 7").await;
+    assert_eq!(reply, "out");
+
+    bot.shutdown().await;
+}
+
+/// The configured VFS byte ceiling actually rejects writes: the `&&` chain
+/// must not print its success marker.
+#[tokio::test]
+async fn vfs_byte_ceiling_blocks_the_write() {
+    let mut bot = TestBotBuilder::new()
+        .with_settings(|o| o.bash.max_vfs_bytes = Some(32))
+        .spawn()
+        .await;
+
+    let reply = run(
+        &mut bot,
+        "alice",
+        "1001",
+        r"printf '%0128d' 0 > /tmp/x && printf wrote",
+    )
+    .await;
+    assert!(
+        !reply.contains("wrote"),
+        "a 128-byte write must not fit a 32-byte VFS; got: {reply}"
+    );
+
+    bot.shutdown().await;
+}
+
 /// A second script never waits. The running script owns the only slot, so
 /// the same user's retry is answered immediately instead of landing in a
 /// queue, and the viewer who was never charged is served as soon as the run
@@ -205,18 +268,25 @@ async fn stdout_cap_truncates_the_reply() {
 /// probe is held until the running command finishes — by then the slot is
 /// free again (`!bash` releases the permit before it replies), which makes a
 /// cross-user rejection unobservable rather than absent.
+/// The long cooldown is deliberate: Alice is still on it when she retries,
+/// so `zu viel zu tun` (rather than `Bitte warte noch`) proves the admission
+/// guards run *before* the cooldown check — a busy rejection never reaches,
+/// let alone charges, the cooldown.
 #[tokio::test]
 async fn busy_run_rejects_instead_of_queueing() {
     let mut bot = TestBotBuilder::new()
-        .with_settings(|o| o.bash.timeout_ms = Some(1000))
+        .with_settings(|o| {
+            o.bash.timeout_ms = Some(1000);
+            o.cooldowns.bash = Some(60);
+        })
         .spawn()
         .await;
 
     // Long run first: it owns the only slot until its deadline, which is well
-    // inside the 5 s script (`sleep 1` would finish right at the boundary).
+    // inside the 5 s script. No sleep: the manager spawns tasks in admission
+    // order and the runtime runs them FIFO, so the first invocation holds the
+    // permit before the second one is even attempted.
     bot.send_privmsg_as("alice", "2001", "!bash sleep 5").await;
-    // Let the dispatcher admit it before probing the slot.
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
     let same_user = run(&mut bot, "alice", "2001", "printf again").await;
     assert_eq!(same_user, "zu viel zu tun");
@@ -233,13 +303,18 @@ async fn busy_run_rejects_instead_of_queueing() {
 /// token cancels the interpreter and the bot drains at once.
 #[tokio::test]
 async fn shutdown_cancels_a_running_script() {
-    let bot = TestBotBuilder::new()
+    let mut bot = TestBotBuilder::new()
         .with_settings(|o| o.bash.timeout_ms = Some(10_000))
         .spawn()
         .await;
 
     bot.send_privmsg_as("alice", "4001", "!bash sleep 10").await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Prove the interpreter actually started before timing anything: a second
+    // invocation from the same user is rejected only once the long run owns
+    // the slot. Without this, a stalled dispatch would let the test pass
+    // without exercising cancellation at all.
+    let probe = run(&mut bot, "alice", "4001", "printf again").await;
+    assert_eq!(probe, "zu viel zu tun");
 
     let start = std::time::Instant::now();
     bot.shutdown().await;

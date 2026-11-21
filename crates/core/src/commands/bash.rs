@@ -17,8 +17,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use bashkit::{
-    Bash, Error as BashkitError, ExecResult, ExecutionProfile, ExecutionProfileName, FsLimits,
-    LimitExceeded,
+    Bash, Error as BashkitError, ExecResult, ExecutionProfile, ExecutionProfileName, LimitExceeded,
 };
 use eyre::Result;
 use parking_lot::Mutex;
@@ -120,11 +119,14 @@ fn build_interpreter(settings: &crate::settings::BashSettings) -> Bash {
     limits.max_background_jobs = MAX_BACKGROUND_JOBS;
 
     let vfs_bytes = u64::try_from(settings.max_vfs_bytes).unwrap_or(u64::MAX);
-    let fs_limits = FsLimits::new()
-        .max_total_bytes(vfs_bytes)
-        .max_file_size(vfs_bytes)
-        .max_file_count(MAX_VFS_ENTRIES)
-        .max_dir_count(MAX_VFS_ENTRIES);
+    // Start from the hardened profile, not `FsLimits::new()`: the builder
+    // replaces the whole struct, and the generic defaults would relax the
+    // hardened path depth (64) and path length (2048) ceilings.
+    let mut fs_limits = profile.filesystem_limits().clone();
+    fs_limits.max_total_bytes = vfs_bytes;
+    fs_limits.max_file_size = vfs_bytes;
+    fs_limits.max_file_count = MAX_VFS_ENTRIES;
+    fs_limits.max_dir_count = MAX_VFS_ENTRIES;
 
     Bash::builder()
         .profile(profile)
@@ -144,10 +146,36 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    ctx.privmsg
-        .message_text
-        .strip_prefix(ctx.trigger.as_str())
+    // The dispatcher accepts a Twitch reply by skipping its leading
+    // `@parent` mentions; the raw body still contains them, so mirror that
+    // skip before slicing at the trigger.
+    let text = if ctx.privmsg.reply_parent.is_some() {
+        skip_leading_mentions(ctx.privmsg.message_text.as_str())
+    } else {
+        ctx.privmsg.message_text.as_str()
+    };
+    text.strip_prefix(ctx.trigger.as_str())
         .map_or("", str::trim_start)
+}
+
+/// Skip leading `@login` words, matching the dispatcher's mention rule
+/// (`@` plus a non-empty run of ASCII alphanumerics/underscores).
+fn skip_leading_mentions(text: &str) -> &str {
+    let mut rest = text;
+    while let Some(after_at) = rest.strip_prefix('@') {
+        let name_len = after_at
+            .bytes()
+            .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
+            .count();
+        if name_len == 0 {
+            break;
+        }
+        let Some(after_space) = after_at[name_len..].strip_prefix(' ') else {
+            break;
+        };
+        rest = after_space.trim_start();
+    }
+    rest
 }
 
 /// One ordinary chat line for a completed run: stdout when it says anything,

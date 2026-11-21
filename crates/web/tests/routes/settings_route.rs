@@ -1267,7 +1267,7 @@ async fn bash_max_concurrent_flashes_restart() {
     assert_eq!(state.settings.load().bash.max_concurrent, 3);
     let flash = read_flash(&res).expect("save must emit a flash cookie");
     assert!(
-        flash.contains("Restart bot to apply: ") && flash.contains("bash.max_concurrent"),
+        flash.contains("Restart bot to apply: bash.max_concurrent"),
         "restart flash must list bash.max_concurrent; got {flash:?}",
     );
 }
