@@ -724,7 +724,7 @@ impl TestBotBuilder {
             };
 
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
-            let bot_task = if let Some(registry) = self.command_registry.take() {
+            let mut bot_task = if let Some(registry) = self.command_registry.take() {
                 tokio::spawn(twitch_1337::run_bot_with_command_registry(
                     client,
                     incoming,
@@ -759,7 +759,12 @@ impl TestBotBuilder {
                     "bot did not become ready within {:?}",
                     super::GENEROUS_WAIT
                 );
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                tokio::select! {
+                    result = &mut bot_task => {
+                        panic!("bot stopped before becoming ready: {result:?}");
+                    }
+                    () = tokio::time::sleep(Duration::from_millis(1)) => {}
+                }
             }
 
             TestBot {

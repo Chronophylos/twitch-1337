@@ -79,22 +79,21 @@ pub fn is_admin(privmsg: &PrivmsgMessage, hidden_admin_ids: &[String]) -> bool {
 /// trigger never fires — the built-in wins every time. Rejecting the name at
 /// creation is the only place that hazard is visible to the person causing it.
 ///
-/// Rows are copied verbatim from each `Command::name()`, `!` and all, and
-/// normalized at comparison time by [`is_reserved_ping_name`] — adding one is
-/// a copy-paste, with no chance to get the `!`-stripping or the
+/// Rows are copied verbatim from each `Command::name()` and every `!` alias,
+/// then normalized at comparison time by [`is_reserved_ping_name`] — adding one
+/// is a copy-paste, with no chance to get the `!`-stripping or the
 /// `döner`/`doener` collapse wrong by hand.
 ///
-/// Kept by hand because every trigger lives in its own `Command::name()` and
-/// the registered list is built from `Services` at handler start, so there is
-/// nothing to derive this from inside `PingManager`. A missed row means a
+/// Kept by hand because every trigger lives in its own command implementation
+/// and the registered list is built from `Services` at handler start, so there
+/// is nothing to derive this from inside `PingManager`. A missed row means a
 /// ping can shadow that command — the behavior that existed before this list.
 ///
 /// The guard is one-directional: command-registry construction rejects a
-/// registered command with no row (so drift trips in every build and is covered
-/// by the `ping_name_guard` integration test), while a stale row is harmless and
-/// may simply be deleted. Aliases are not covered by the guard:
-/// rows mirror `Command::name()` only, so a command trigger that does not
-/// equal its `name()` (e.g. the `!doener` alias normalizing onto `!döner`)
+/// registered command name or `!` alias with no row (so drift trips in every
+/// build and is covered by the `ping_name_guard` integration test), while a
+/// stale row is harmless and may simply be deleted. A command trigger that does
+/// not equal its `name()` (e.g. the `!doener` alias normalizing onto `!döner`)
 /// must still be kept in `normalize_command_name` by hand.
 pub const RESERVED_PING_NAMES: &[&str] = &[
     "!ai",
@@ -107,6 +106,7 @@ pub const RESERVED_PING_NAMES: &[&str] = &[
     "!fl",
     "!flight",
     "!flights",
+    "!h",
     "!haiku",
     "!help",
     "!hilfe",
@@ -118,11 +118,14 @@ pub const RESERVED_PING_NAMES: &[&str] = &[
     "!pw",
     "!servers",
     "!sb",
+    "!sp",
     "!spoiler",
     "!stocks",
+    "!sus",
     "!suspend",
     "!tldr",
     "!track",
+    "!unsus",
     "!unsuspend",
     "!untrack",
     "!up",

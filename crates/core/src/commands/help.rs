@@ -108,7 +108,7 @@ where
     }
 
     fn aliases(&self) -> &[&'static str] {
-        &["!commands", "!hilfe"]
+        &["!commands", "!hilfe", "!h"]
     }
 
     fn description(&self) -> &str {
