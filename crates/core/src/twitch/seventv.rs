@@ -16,6 +16,7 @@ use crate::{
     emote_tracker::{EmoteMeaningRow, EmoteTrackerHandle},
     settings::SettingsHandle,
     settings::ai::AiEmotes,
+    util::http::SendTraced as _,
 };
 
 const DEFAULT_BASE_URL: &str = "https://7tv.io/v3";
@@ -352,7 +353,7 @@ impl SevenTvEmoteProvider {
         let response = self
             .http
             .get(url)
-            .send()
+            .send_traced()
             .await
             .wrap_err_with(|| format!("Failed to send 7TV request to {url}"))?;
 

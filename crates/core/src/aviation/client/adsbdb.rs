@@ -9,6 +9,7 @@ use tracing::{debug, warn};
 use crate::aviation::FlightIdentifier;
 use crate::aviation::location::{airline_table, is_iata_flight_number};
 use crate::aviation::types::{AdsbDbAirlineResponse, AdsbDbResponse, FlightRoute};
+use crate::util::http::SendTraced as _;
 
 use super::AviationClient;
 
@@ -28,7 +29,7 @@ impl AviationClient {
         let resp = self
             .http
             .get(&url)
-            .send()
+            .send_traced()
             .await
             .wrap_err("Failed to send request to adsbdb")?;
 
@@ -107,7 +108,7 @@ impl AviationClient {
         let resp = self
             .http
             .get(&url)
-            .send()
+            .send_traced()
             .await
             .wrap_err("Failed to send request to adsbdb")?;
 

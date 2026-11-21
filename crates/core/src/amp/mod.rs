@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::APP_USER_AGENT;
-use crate::util::http::read_capped;
+use crate::util::http::{SendTraced as _, read_capped};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// Body cap. `GetInstances` is ~1.4 KiB per instance (the six-instance fixture
@@ -209,7 +209,7 @@ impl AmpClient {
             .post(self.url(target, method))
             .header("Accept", "application/json")
             .json(body)
-            .send()
+            .send_traced()
             .await
             .map_err(|error| {
                 let error = error.without_url();

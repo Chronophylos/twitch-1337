@@ -28,3 +28,17 @@ pub enum LlmError {
     #[error("request timed out")]
     Timeout,
 }
+
+impl LlmError {
+    /// Variant name, recorded as `error.type` on the `chat` span.
+    pub(crate) fn variant_name(&self) -> &'static str {
+        match self {
+            Self::Http(_) => "Http",
+            Self::Header(_) => "Header",
+            Self::Provider { .. } => "Provider",
+            Self::Decode { .. } => "Decode",
+            Self::EmptyResponse => "EmptyResponse",
+            Self::Timeout => "Timeout",
+        }
+    }
+}

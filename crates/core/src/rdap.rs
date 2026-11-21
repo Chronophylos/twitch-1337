@@ -10,7 +10,7 @@ use eyre::{Result, WrapErr, eyre};
 use serde::{Deserialize, Serialize};
 
 use crate::APP_USER_AGENT;
-use crate::util::http::read_capped;
+use crate::util::http::{SendTraced as _, read_capped};
 use crate::util::net::is_blocked_host_literal;
 
 pub const DEFAULT_BASE_URL: &str = "https://rdap.org";
@@ -236,7 +236,7 @@ impl RdapClient {
             .http
             .get(url)
             .header(reqwest::header::ACCEPT, "application/rdap+json")
-            .send()
+            .send_traced()
             .await
             .wrap_err("RDAP request")
             .map_err(RdapError::Upstream)?;

@@ -743,6 +743,7 @@ impl TestBotBuilder {
                     ping_runtime,
                     aviation_tracker_rx,
                     web_spawner,
+                    tracing::Span::none(),
                     shutdown_rx,
                 ))
             };

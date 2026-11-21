@@ -24,7 +24,7 @@ use tokio::{
     task::JoinError,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{Instrument as _, debug, error, info, info_span, warn};
 use twitch_irc::{
     login::LoginCredentials,
     message::{PrivmsgMessage, ServerMessage},
@@ -594,217 +594,228 @@ where
             () = wait_until_schedule(clock.as_ref(), TARGET_HOUR, TARGET_MINUTE - 1) => {}
         }
 
-        info!("Starting daily 1337 monitoring session");
+        // One root trace per daily window: collect, score, persist, announce.
+        // The day-long wait above stays outside it.
+        let keep_running = async {
+            info!("Starting daily 1337 monitoring session");
 
-        // Fresh HashMap for today's users (maps username -> ms_since_minute if sub-second)
-        let total_users = Arc::new(Mutex::new(HashMap::with_capacity(MAX_USERS)));
+            // Fresh HashMap for today's users (maps username -> ms_since_minute if sub-second)
+            let total_users = Arc::new(Mutex::new(HashMap::with_capacity(MAX_USERS)));
 
-        // The completion channel wakes the parent; TaskGroup ownership remains
-        // authoritative and is joined before the child result is propagated.
-        let (monitor_completion_tx, mut monitor_completion_rx) = mpsc::unbounded_channel();
-        let mut monitor_tasks: TaskGroup<MonitorCompletion> =
-            TaskGroup::new(&lifecycle, "1337 daily message monitor");
-        let child_cancellation = monitor_tasks.cancellation_token();
-        monitor_tasks
-            .spawn("message monitor", {
-                let total_users = total_users.clone();
-                // Subscribe fresh when we wake up - only see messages from now on.
-                let broadcast_rx = broadcast_tx.subscribe();
-                let monitor_channel = channel.clone();
-                let echo = echo.clone();
+            // The completion channel wakes the parent; TaskGroup ownership remains
+            // authoritative and is joined before the child result is propagated.
+            let (monitor_completion_tx, mut monitor_completion_rx) = mpsc::unbounded_channel();
+            let mut monitor_tasks: TaskGroup<MonitorCompletion> =
+                TaskGroup::new(&lifecycle, "1337 daily message monitor");
+            let child_cancellation = monitor_tasks.cancellation_token();
+            monitor_tasks
+                .spawn("message monitor", {
+                    let total_users = total_users.clone();
+                    // Subscribe fresh when we wake up - only see messages from now on.
+                    let broadcast_rx = broadcast_tx.subscribe();
+                    let monitor_channel = channel.clone();
+                    let echo = echo.clone();
 
-                async move {
-                    let completion = AssertUnwindSafe(monitor_1337_messages(
-                        broadcast_rx,
-                        total_users,
-                        monitor_channel,
-                        echo,
-                        child_cancellation,
-                    ))
-                    .catch_unwind()
-                    .await
-                    .unwrap_or(MonitorCompletion::Panicked);
-                    monitor_completion_tx.send(completion).ok();
-                    completion
-                }
-            })
-            .await;
+                    async move {
+                        let completion = AssertUnwindSafe(monitor_1337_messages(
+                            broadcast_rx,
+                            total_users,
+                            monitor_channel,
+                            echo,
+                            child_cancellation,
+                        ))
+                        .catch_unwind()
+                        .await
+                        .unwrap_or(MonitorCompletion::Panicked);
+                        monitor_completion_tx.send(completion).ok();
+                        completion
+                    }
+                    .in_current_span()
+                })
+                .await;
 
-        // Wait until 13:36:30 to send reminder.
-        wait_for_monitor_stage(
-            &mut monitor_completion_rx,
-            &mut monitor_tasks,
-            &lifecycle,
-            sleep_until_hms(
-                clock.as_ref(),
-                TARGET_HOUR,
-                TARGET_MINUTE - 1,
-                30,
-                latency.load(Ordering::Relaxed),
-            ),
-        )
-        .await
-        .wrap_err(MONITOR_CHILD_FAILED)?;
-        if lifecycle.is_cancelled() {
-            stop_monitor(&mut monitor_tasks)
-                .await
-                .wrap_err(MONITOR_CHILD_FAILED)?;
-            return Ok(());
-        }
-
-        info!("Posting reminder to channel");
-        sender.say(channel.clone(), "PausersHype").await;
-
-        // Close the scoring wall at exact 13:38:00 — do not subtract latency.
-        // Compensated early wake is only for outbound appearance (reminder
-        // above). Keep collecting for SCORING_GRACE_SECS afterwards: messages
-        // stamped inside :37 can still arrive after the wall, and the minute
-        // guard on server_timestamp rejects anything stamped outside :37.
-        wait_for_monitor_stage(
-            &mut monitor_completion_rx,
-            &mut monitor_tasks,
-            &lifecycle,
-            sleep_until_hms(clock.as_ref(), TARGET_HOUR, TARGET_MINUTE + 1, 0, 0),
-        )
-        .await
-        .wrap_err(MONITOR_CHILD_FAILED)?;
-        if lifecycle.is_cancelled() {
-            stop_monitor(&mut monitor_tasks)
-                .await
-                .wrap_err(MONITOR_CHILD_FAILED)?;
-            return Ok(());
-        }
-        wait_for_monitor_stage(
-            &mut monitor_completion_rx,
-            &mut monitor_tasks,
-            &lifecycle,
-            sleep_until_hms(
-                clock.as_ref(),
-                TARGET_HOUR,
-                TARGET_MINUTE + 1,
-                SCORING_GRACE_SECS,
-                0,
-            ),
-        )
-        .await
-        .wrap_err(MONITOR_CHILD_FAILED)?;
-        if lifecycle.is_cancelled() {
-            stop_monitor(&mut monitor_tasks)
-                .await
-                .wrap_err(MONITOR_CHILD_FAILED)?;
-            return Ok(());
-        }
-
-        // Stop cooperatively and confirm termination before reading results.
-        // An in-flight users mutex operation is allowed to finish.
-        stop_monitor(&mut monitor_tasks)
+            // Wait until 13:36:30 to send reminder.
+            wait_for_monitor_stage(
+                &mut monitor_completion_rx,
+                &mut monitor_tasks,
+                &lifecycle,
+                sleep_until_hms(
+                    clock.as_ref(),
+                    TARGET_HOUR,
+                    TARGET_MINUTE - 1,
+                    30,
+                    latency.load(Ordering::Relaxed),
+                ),
+            )
             .await
             .wrap_err(MONITOR_CHILD_FAILED)?;
-        if lifecycle.is_cancelled() {
-            return Ok(());
-        }
+            if lifecycle.is_cancelled() {
+                stop_monitor(&mut monitor_tasks)
+                    .await
+                    .wrap_err(MONITOR_CHILD_FAILED)?;
+                return Ok(false);
+            }
 
-        // Get user list, count, fastest, and slowest
-        let (count, user_list, fastest, slowest) = {
-            let users = total_users.lock().await;
-            let count = users.len();
-            let mut user_vec: Vec<String> = users.keys().cloned().collect();
-            user_vec.sort();
+            info!("Posting reminder to channel");
+            sender.say(channel.clone(), "PausersHype").await;
 
-            let timed_users = users.iter().map(|(name, ms)| (name.clone(), *ms));
-            let fastest: Option<(String, u64)> = timed_users
-                .clone()
-                .filter(|(_, ms)| *ms < 1000)
-                .min_by_key(|(_, ms)| *ms);
-            let slowest: Option<(String, u64)> = timed_users
-                .filter(|(_, ms)| *ms >= SLOWEST_CHATTER_MIN_MS)
-                .max_by_key(|(_, ms)| *ms);
+            // Close the scoring wall at exact 13:38:00 — do not subtract latency.
+            // Compensated early wake is only for outbound appearance (reminder
+            // above). Keep collecting for SCORING_GRACE_SECS afterwards: messages
+            // stamped inside :37 can still arrive after the wall, and the minute
+            // guard on server_timestamp rejects anything stamped outside :37.
+            wait_for_monitor_stage(
+                &mut monitor_completion_rx,
+                &mut monitor_tasks,
+                &lifecycle,
+                sleep_until_hms(clock.as_ref(), TARGET_HOUR, TARGET_MINUTE + 1, 0, 0),
+            )
+            .await
+            .wrap_err(MONITOR_CHILD_FAILED)?;
+            if lifecycle.is_cancelled() {
+                stop_monitor(&mut monitor_tasks)
+                    .await
+                    .wrap_err(MONITOR_CHILD_FAILED)?;
+                return Ok(false);
+            }
+            wait_for_monitor_stage(
+                &mut monitor_completion_rx,
+                &mut monitor_tasks,
+                &lifecycle,
+                sleep_until_hms(
+                    clock.as_ref(),
+                    TARGET_HOUR,
+                    TARGET_MINUTE + 1,
+                    SCORING_GRACE_SECS,
+                    0,
+                ),
+            )
+            .await
+            .wrap_err(MONITOR_CHILD_FAILED)?;
+            if lifecycle.is_cancelled() {
+                stop_monitor(&mut monitor_tasks)
+                    .await
+                    .wrap_err(MONITOR_CHILD_FAILED)?;
+                return Ok(false);
+            }
 
-            (count, user_vec, fastest, slowest)
-        };
+            // Stop cooperatively and confirm termination before reading results.
+            // An in-flight users mutex operation is allowed to finish.
+            stop_monitor(&mut monitor_tasks)
+                .await
+                .wrap_err(MONITOR_CHILD_FAILED)?;
+            if lifecycle.is_cancelled() {
+                return Ok(false);
+            }
 
-        let mut message = generate_stats_message(count, &user_list);
+            // Get user list, count, fastest, and slowest
+            let (count, user_list, fastest, slowest) = {
+                let users = total_users.lock().await;
+                let count = users.len();
+                let mut user_vec: Vec<String> = users.keys().cloned().collect();
+                user_vec.sort();
 
-        if let Some((ref fastest_user, fastest_ms)) = fastest {
-            message.push_str(&format!(
-                " | {fastest_user} war mass schnellste mit {fastest_ms}ms"
-            ));
+                let timed_users = users.iter().map(|(name, ms)| (name.clone(), *ms));
+                let fastest: Option<(String, u64)> = timed_users
+                    .clone()
+                    .filter(|(_, ms)| *ms < 1000)
+                    .min_by_key(|(_, ms)| *ms);
+                let slowest: Option<(String, u64)> = timed_users
+                    .filter(|(_, ms)| *ms >= SLOWEST_CHATTER_MIN_MS)
+                    .max_by_key(|(_, ms)| *ms);
 
-            if fastest_ms < 1000 {
-                let leaderboard_guard = leaderboard.read().await;
-                let achievement =
-                    classify_achievement(fastest_user, fastest_ms, &leaderboard_guard);
-                drop(leaderboard_guard);
+                (count, user_vec, fastest, slowest)
+            };
 
-                match achievement {
-                    Achievement::OverallRecord => message.push_str(" - neuer Rekord WICKED"),
-                    Achievement::PersonalBest => message.push_str(" - neue PB!"),
-                    Achievement::None => {}
+            let mut message = generate_stats_message(count, &user_list);
+
+            if let Some((ref fastest_user, fastest_ms)) = fastest {
+                message.push_str(&format!(
+                    " | {fastest_user} war mass schnellste mit {fastest_ms}ms"
+                ));
+
+                if fastest_ms < 1000 {
+                    let leaderboard_guard = leaderboard.read().await;
+                    let achievement =
+                        classify_achievement(fastest_user, fastest_ms, &leaderboard_guard);
+                    drop(leaderboard_guard);
+
+                    match achievement {
+                        Achievement::OverallRecord => message.push_str(" - neuer Rekord WICKED"),
+                        Achievement::PersonalBest => message.push_str(" - neue PB!"),
+                        Achievement::None => {}
+                    }
                 }
             }
-        }
 
-        if let Some((slowest_user, slowest_ms)) = slowest
-            && fastest.as_ref().is_none_or(|(fastest_user, fastest_ms)| {
-                slowest_user != *fastest_user || slowest_ms != *fastest_ms
-            })
-        {
-            let remaining = format_remaining(slowest_ms);
-            message.push_str(&format!(
-                " | Am langsamsten war {slowest_user} mit {remaining} übrig"
-            ));
-        }
-
-        if lifecycle.is_cancelled() {
-            return Ok(());
-        }
-        // Update leaderboard with today's sub-1s times
-        let today = to_berlin(clock.now_utc()).date();
-        {
-            let users = total_users.lock().await;
-            let mut leaderboard_guard = leaderboard.write().await;
-            for (username, ms) in users.iter() {
-                if *ms < 1000 && beats_own_best(username, *ms, &leaderboard_guard) {
-                    leaderboard_guard.insert(
-                        username.clone(),
-                        PersonalBest {
-                            ms: *ms,
-                            date: today,
-                        },
-                    );
-                }
+            if let Some((slowest_user, slowest_ms)) = slowest
+                && fastest.as_ref().is_none_or(|(fastest_user, fastest_ms)| {
+                    slowest_user != *fastest_user || slowest_ms != *fastest_ms
+                })
+            {
+                let remaining = format_remaining(slowest_ms);
+                message.push_str(&format!(
+                    " | Am langsamsten war {slowest_user} mit {remaining} übrig"
+                ));
             }
-            save_leaderboard(&leaderboard_guard, &data_dir).await;
-        }
 
-        if lifecycle.is_cancelled() {
-            return Ok(());
-        }
-        {
-            let users = total_users.lock().await;
-            let mut shame = hall_of_shame.write().await;
-            for (username, ms) in users.iter() {
-                if *ms >= SLOWEST_CHATTER_MIN_MS && beats_own_worst(username, *ms, &shame) {
-                    shame.insert(
-                        username.clone(),
-                        PersonalWorst {
-                            ms: *ms,
-                            date: today,
-                        },
-                    );
-                }
+            if lifecycle.is_cancelled() {
+                return Ok(false);
             }
-            save_hall_of_shame(&shame, &data_dir).await;
-        }
+            // Update leaderboard with today's sub-1s times
+            let today = to_berlin(clock.now_utc()).date();
+            {
+                let users = total_users.lock().await;
+                let mut leaderboard_guard = leaderboard.write().await;
+                for (username, ms) in users.iter() {
+                    if *ms < 1000 && beats_own_best(username, *ms, &leaderboard_guard) {
+                        leaderboard_guard.insert(
+                            username.clone(),
+                            PersonalBest {
+                                ms: *ms,
+                                date: today,
+                            },
+                        );
+                    }
+                }
+                save_leaderboard(&leaderboard_guard, &data_dir).await;
+            }
 
-        if lifecycle.is_cancelled() {
+            if lifecycle.is_cancelled() {
+                return Ok(false);
+            }
+            {
+                let users = total_users.lock().await;
+                let mut shame = hall_of_shame.write().await;
+                for (username, ms) in users.iter() {
+                    if *ms >= SLOWEST_CHATTER_MIN_MS && beats_own_worst(username, *ms, &shame) {
+                        shame.insert(
+                            username.clone(),
+                            PersonalWorst {
+                                ms: *ms,
+                                date: today,
+                            },
+                        );
+                    }
+                }
+                save_hall_of_shame(&shame, &data_dir).await;
+            }
+
+            if lifecycle.is_cancelled() {
+                return Ok(false);
+            }
+            // Post stats message
+            info!(count = count, "Posting stats to channel");
+            sender.say(channel.clone(), message).await;
+
+            info!("Daily 1337 session completed, waiting for next day");
+            Ok::<_, eyre::Report>(true)
+        }
+        .instrument(info_span!(parent: None, "tracker_1337.window"))
+        .await?;
+        if !keep_running {
             return Ok(());
         }
-        // Post stats message
-        info!(count = count, "Posting stats to channel");
-        sender.say(channel.clone(), message).await;
-
-        info!("Daily 1337 session completed, waiting for next day");
     }
 }
 

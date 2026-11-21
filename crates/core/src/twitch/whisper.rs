@@ -12,7 +12,7 @@ use tokio::{fs, sync::Mutex};
 use tracing::warn;
 use twitch_irc::login::LoginCredentials;
 
-use crate::util::{APP_USER_AGENT, truncate_response};
+use crate::util::{APP_USER_AGENT, http::SendTraced as _, truncate_response};
 
 pub const FIRST_WHISPER_MAX_CHARS: usize = 500;
 pub const WHISPER_MAX_CHARS: usize = 10_000;
@@ -140,7 +140,7 @@ where
             .header("Client-Id", &self.client_id)
             .bearer_auth(token)
             .json(&json!({ "message": message }))
-            .send()
+            .send_traced()
             .await?;
 
         if response.status() == StatusCode::NO_CONTENT {

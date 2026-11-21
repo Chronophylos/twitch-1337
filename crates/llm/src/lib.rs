@@ -11,7 +11,9 @@ mod client;
 mod types;
 mod util;
 
-pub use agent::{AgentOpts, AgentOutcome, TOOL_BUDGET_EXHAUSTED, ToolExecutor, run_agent};
+pub use agent::{
+    AgentOpts, AgentOutcome, TOOL_BUDGET_EXHAUSTED, ToolExecutor, execute_tool_span, run_agent,
+};
 pub use client::LlmClient;
 pub use error::{LlmError, Result};
 pub use observe::{

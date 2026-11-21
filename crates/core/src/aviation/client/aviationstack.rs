@@ -10,6 +10,7 @@ use tracing::{debug, warn};
 use crate::aviation::location::{is_iata_flight_number, is_icao_flight_number};
 use crate::aviation::tracker::FlightIdentifier;
 use crate::aviation::types::{AviationstackFlightMetadata, AviationstackFlightsResponse};
+use crate::util::http::SendTraced as _;
 
 use super::AviationClient;
 
@@ -87,7 +88,7 @@ impl AviationClient {
                 ("limit", "1"),
             ])
             .timeout(timeout)
-            .send()
+            .send_traced()
             .await
             // The URL carries `access_key`; a reqwest error keeps it and the
             // caller logs the chain.

@@ -10,6 +10,7 @@ use tracing::{debug, error, warn};
 
 use crate::aviation::FlightIdentifier;
 use crate::aviation::types::{AdsbAircraftResponse, NearbyAircraft};
+use crate::util::http::SendTraced as _;
 
 use super::AviationClient;
 
@@ -419,7 +420,7 @@ impl AviationClient {
             .http
             .get(url)
             .timeout(self.adsb_aggregator_timeout)
-            .send()
+            .send_traced()
             .await
             .map_err(|e| {
                 let error = eyre::eyre!("Failed to send request to {}: {e}", aggregator.name);

@@ -39,7 +39,7 @@ use std::sync::Arc;
 
 use eyre::{Result, WrapErr as _};
 use tokio::sync::{mpsc::UnboundedReceiver, oneshot};
-use tracing::info;
+use tracing::{Instrument as _, info};
 use twitch_irc::{
     TwitchIRCClient,
     login::{LoginCredentials, RefreshingLoginCredentials},
@@ -239,7 +239,13 @@ pub type WebSpawner = Box<dyn FnOnce(Lifecycle) -> WebRuntimeTasks + Send + 'sta
 ///
 /// Shared entry point for `main.rs` (production) and integration tests.
 /// Generic over `Transport` and `LoginCredentials` so tests can substitute a
-/// `FakeTransport` without touching production code paths.
+/// `FakeTransport` without touching production code paths. `startup` is the
+/// caller's `startup` root span; it covers handler spawn and is closed once
+/// the bot runs (pass `Span::none()` when there is none).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "composition root hands every runtime part over once"
+)]
 pub async fn run_bot<T, L>(
     client: Arc<TwitchIRCClient<T, L>>,
     incoming: UnboundedReceiver<ServerMessage>,
@@ -247,6 +253,7 @@ pub async fn run_bot<T, L>(
     ping: PingRuntime,
     tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
     web_spawner: Option<WebSpawner>,
+    startup: tracing::Span,
     shutdown: oneshot::Receiver<()>,
 ) -> Result<()>
 where
@@ -260,6 +267,7 @@ where
         ping,
         tracker_rx,
         web_spawner,
+        startup,
         shutdown,
         command_registry: None,
     })
@@ -297,6 +305,7 @@ where
         ping,
         tracker_rx,
         web_spawner,
+        startup: tracing::Span::none(),
         shutdown,
         command_registry: Some(registry),
     })
@@ -314,6 +323,7 @@ where
     ping: PingRuntime,
     tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
     web_spawner: Option<WebSpawner>,
+    startup: tracing::Span,
     shutdown: oneshot::Receiver<()>,
     command_registry: Option<Arc<commands::CommandRegistry<T, L>>>,
 }
@@ -330,120 +340,135 @@ where
         ping,
         tracker_rx,
         web_spawner,
+        startup,
         shutdown,
         command_registry: injected_registry,
     } = runtime;
 
-    // The flight-tracker boot guard ties all three values together —
-    // `Services.aviation`, `Services.aviation_tracker_tx`, and `tracker_rx` —
-    // restoring the invariant the deleted
-    // `expect("tracker_tx must be Some when aviation is Some")` enforced. It
-    // runs before the ping actor spawns so the bail path never orphans the
-    // actor task with no handle.
-    if [
-        services.aviation.is_some(),
-        services.aviation_tracker_tx.is_some(),
-        tracker_rx.is_some(),
-    ]
-    .iter()
-    .any(|has| *has != services.aviation.is_some())
-    {
-        eyre::bail!(
-            "flight-tracker mismatch: Services.aviation, Services.aviation_tracker_tx, and tracker_rx must be Some together"
-        );
-    }
+    // Handler spawn and the startup announce close the `startup` trace; the
+    // supervision below runs outside it.
+    let (services, lifecycle, mut supervisor, client_for_announce, admin_channel) = async {
+        // The flight-tracker boot guard ties all three values together —
+        // `Services.aviation`, `Services.aviation_tracker_tx`, and `tracker_rx` —
+        // restoring the invariant the deleted
+        // `expect("tracker_tx must be Some when aviation is Some")` enforced. It
+        // runs before the ping actor spawns so the bail path never orphans the
+        // actor task with no handle.
+        if [
+            services.aviation.is_some(),
+            services.aviation_tracker_tx.is_some(),
+            tracker_rx.is_some(),
+        ]
+        .iter()
+        .any(|has| *has != services.aviation.is_some())
+        {
+            eyre::bail!(
+                "flight-tracker mismatch: Services.aviation, Services.aviation_tracker_tx, and tracker_rx must be Some together"
+            );
+        }
 
-    let services = Arc::new(services);
+        let services = Arc::new(services);
 
-    // Construct the registry and all command-owned optional clients before any
-    // runtime task is registered. A startup error therefore cannot leave the
-    // ping actor or another task behind.
-    let command_registry = match injected_registry {
-        Some(registry) => registry,
-        None => build_command_registry(&services, &services.settings.load())?,
-    };
-    let catalog: Arc<dyn commands::CommandCatalog> = command_registry.clone();
-    // ponytail: a second run_bot on the same Services keeps the first catalog.
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "OnceLock::set only fails when an earlier run_bot already set the catalog, which is fine"
-    )]
-    let _ = services.command_catalog.set(catalog);
+        // Construct the registry and all command-owned optional clients before any
+        // runtime task is registered. A startup error therefore cannot leave the
+        // ping actor or another task behind.
+        let command_registry = match injected_registry {
+            Some(registry) => registry,
+            None => build_command_registry(&services, &services.settings.load())?,
+        };
+        let catalog: Arc<dyn commands::CommandCatalog> = command_registry.clone();
+        // ponytail: a second run_bot on the same Services keeps the first catalog.
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "OnceLock::set only fails when an earlier run_bot already set the catalog, which is fine"
+        )]
+        let _ = services.command_catalog.set(catalog);
 
-    let lifecycle = Lifecycle::new();
-    let mut supervisor = TaskSupervisor::new(lifecycle.clone());
+        let lifecycle = Lifecycle::new();
+        let mut supervisor = TaskSupervisor::new(lifecycle.clone());
 
-    // The ping actor is single-owner and lifecycle-aware. It is registered
-    // directly, so a clean actor return before shutdown is a runtime fault and
-    // a lifecycle stop is observed without relying on sender-count drain.
-    {
-        let lifecycle = lifecycle.clone();
-        supervisor.spawn("ping actor", async move {
-            crate::ping::run_ping_actor_until(ping.rx, ping.manager, ping.names_tx, lifecycle)
-                .await;
-        });
-    }
+        // The ping actor is single-owner and lifecycle-aware. It is registered
+        // directly, so a clean actor return before shutdown is a runtime fault and
+        // a lifecycle stop is observed without relying on sender-count drain.
+        {
+            let lifecycle = lifecycle.clone();
+            supervisor.spawn("ping actor", async move {
+                crate::ping::run_ping_actor_until(ping.rx, ping.manager, ping.names_tx, lifecycle)
+                    .await;
+            });
+        }
 
-    // Cloned Arc retained for the startup/shutdown announces; `client` itself is
-    // moved into spawn_handlers below.
-    let client_for_announce = client.clone();
+        // Cloned Arc retained for the startup/shutdown announces; `client` itself is
+        // moved into spawn_handlers below.
+        let client_for_announce = client.clone();
 
-    let admin_channel = services.settings.load().twitch.admin_channel.clone();
+        let admin_channel = services.settings.load().twitch.admin_channel.clone();
 
-    spawn_handlers(
-        &mut supervisor,
-        lifecycle.clone(),
-        Arc::clone(&services),
-        client,
-        command_registry,
-        incoming,
-        tracker_rx,
-    );
-
-    // Optional embedded web dashboard. The bin builds and supplies the spawn
-    // closure so this crate stays independent of `twitch_1337_web`; both the
-    // server and session-writer handles are adopted by the same supervisor.
-    if let Some(spawner) = web_spawner {
-        let web_tasks = spawner(lifecycle.clone());
-        supervisor.adopt_result("web server", web_tasks.server);
-        supervisor.adopt("web session persistence", web_tasks.session_persistence);
-    }
-
-    // Daily dreamer ritual. The loop observes the latched lifecycle directly at
-    // sleep and file/provider-operation boundaries; the supervisor owns its
-    // returned handle.
-    if let Some(mem) = &services.ai_memory
-        && services.ai_enabled
-    {
-        let ritual_handle = crate::ai::memory::ritual::spawn_ritual(
-            services.llm.clone(),
-            mem.store.clone(),
-            mem.transcript.clone(),
-            services.settings.clone(),
+        spawn_handlers(
+            &mut supervisor,
             lifecycle.clone(),
-            services.langfuse.clone(),
+            Arc::clone(&services),
+            client,
+            command_registry,
+            incoming,
+            tracker_rx,
         );
-        supervisor.adopt("dreamer ritual", ritual_handle);
-        tracing::info!("Daily AI memory dreamer ritual spawned (live settings)");
-    }
 
-    crate::twitch::announce::announce_startup(&client_for_announce, admin_channel.as_deref()).await;
-    if services.emote_tracker.is_some() {
-        tracing::info!("Emote usage recording enabled");
-    } else {
-        tracing::info!("Emote usage recording disabled (SQLite unavailable)");
-    }
+        // Optional embedded web dashboard. The bin builds and supplies the spawn
+        // closure so this crate stays independent of `twitch_1337_web`; both the
+        // server and session-writer handles are adopted by the same supervisor.
+        if let Some(spawner) = web_spawner {
+            let web_tasks = spawner(lifecycle.clone());
+            supervisor.adopt_result("web server", web_tasks.server);
+            supervisor.adopt("web session persistence", web_tasks.session_persistence);
+        }
 
-    info!(
-        "Bot running with continuous connection. Handlers: 1337 tracker, \
-         Generic commands, Scheduled messages, Latency monitor, Flight tracker, \
-         Emote set ingest, Emote usage"
-    );
-    info!(
-        "1337 tracker scheduled to run daily at {}:{:02} (Europe/Berlin)",
-        TARGET_HOUR,
-        TARGET_MINUTE - 1
-    );
+        // Daily dreamer ritual. The loop observes the latched lifecycle directly at
+        // sleep and file/provider-operation boundaries; the supervisor owns its
+        // returned handle.
+        if let Some(mem) = &services.ai_memory
+            && services.ai_enabled
+        {
+            let ritual_handle = crate::ai::memory::ritual::spawn_ritual(
+                services.llm.clone(),
+                mem.store.clone(),
+                mem.transcript.clone(),
+                services.settings.clone(),
+                lifecycle.clone(),
+                services.langfuse.clone(),
+            );
+            supervisor.adopt("dreamer ritual", ritual_handle);
+            tracing::info!("Daily AI memory dreamer ritual spawned (live settings)");
+        }
+
+        crate::twitch::announce::announce_startup(&client_for_announce, admin_channel.as_deref())
+            .await;
+        if services.emote_tracker.is_some() {
+            tracing::info!("Emote usage recording enabled");
+        } else {
+            tracing::info!("Emote usage recording disabled (SQLite unavailable)");
+        }
+
+        info!(
+            "Bot running with continuous connection. Handlers: 1337 tracker, \
+             Generic commands, Scheduled messages, Latency monitor, Flight tracker, \
+             Emote set ingest, Emote usage"
+        );
+        info!(
+            "1337 tracker scheduled to run daily at {}:{:02} (Europe/Berlin)",
+            TARGET_HOUR,
+            TARGET_MINUTE - 1
+        );
+        Ok::<_, eyre::Report>((
+            services,
+            lifecycle,
+            supervisor,
+            client_for_announce,
+            admin_channel,
+        ))
+    }
+    .instrument(startup)
+    .await?;
     // Finalizers are registered before supervision starts and run in order
     // only after producers and globally registered descendants are joined.
     // The supervisor marks the lifecycle Stopped after all of them return.

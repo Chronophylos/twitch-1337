@@ -8,7 +8,7 @@ use eyre::{WrapErr as _, eyre};
 use jiff::Timestamp;
 use secrecy::ExposeSecret as _;
 use tokio::sync::oneshot;
-use tracing::info;
+use tracing::{Instrument as _, info, info_span};
 use twitch_1337_core::{
     AuthenticatedLoginCredentials, PersonalBest, PersonalWorst, Services,
     ai::command::ChatContext,
@@ -77,6 +77,77 @@ pub async fn main() -> Result<()> {
     color_eyre::install()?;
     let log_ring = install_tracing();
     install_crypto_provider();
+    // `startup` root: opened once tracing is installed, handed to `run_bot`,
+    // which closes it once the handlers are spawned and the bot runs.
+    let startup = info_span!(parent: None, "startup");
+    let Prepared {
+        client,
+        incoming,
+        services,
+        ping_runtime,
+        aviation_tracker_rx,
+        web_spawner,
+    } = prepare(log_ring).instrument(startup.clone()).await?;
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let mut bot_task = tokio::spawn(run_bot(
+        client,
+        incoming,
+        services,
+        ping_runtime,
+        aviation_tracker_rx,
+        web_spawner,
+        startup,
+        shutdown_rx,
+    ));
+
+    tokio::select! {
+        biased;
+        result = &mut bot_task => join_bot_task(result),
+        signal = wait_for_shutdown_signal() => {
+            if let Err(error) = signal {
+                // Signal registration failure is still a process fault, but do
+                // not abort `run_bot`: request its normal drain first, join it,
+                // and only then return the adapter error to the process.
+                if let Err(shutdown_error) = request_shutdown(shutdown_tx) {
+                    info!(error = ?shutdown_error, "Bot task already stopped before shutdown request");
+                }
+                let bot_result = bot_task.await;
+                return match bot_result {
+                    Ok(Err(bot_error)) => Err(bot_error),
+                    Ok(Ok(())) => Err(error),
+                    Err(join_error) => Err(eyre::eyre!("bot task join failed after signal error: {join_error}")),
+                };
+            }
+            match request_shutdown(shutdown_tx) {
+                Ok(()) => join_bot_task(bot_task.await),
+                Err(signal_error) => {
+                    // The bot finished before the signal request was sent. Its
+                    // own result is authoritative when it failed; otherwise
+                    // retain the signal-adapter error.
+                    match bot_task.await {
+                        Ok(Err(bot_error)) => Err(bot_error),
+                        Ok(Ok(())) => Err(signal_error),
+                        Err(join_error) => Err(eyre::eyre!("bot task join failed after signal race: {join_error}")),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Everything `run_bot` needs, built inside the `startup` trace.
+struct Prepared {
+    client: Arc<twitch_1337::AuthenticatedTwitchClient>,
+    incoming: tokio::sync::mpsc::UnboundedReceiver<twitch_irc::message::ServerMessage>,
+    services: Services,
+    ping_runtime: twitch_1337::ping::PingRuntime,
+    aviation_tracker_rx: Option<tokio::sync::mpsc::Receiver<aviation::TrackerCommand>>,
+    web_spawner: Option<twitch_1337::WebSpawner>,
+}
+
+/// Startup up to `run_bot`: config, settings, IRC connect, and client builds.
+async fn prepare(log_ring: Arc<twitch_1337::util::log_ring::LogRing>) -> Result<Prepared> {
     let config = load_configuration().await?;
 
     ensure_data_dir().await?;
@@ -383,50 +454,14 @@ pub async fn main() -> Result<()> {
         None => None,
     };
 
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let mut bot_task = tokio::spawn(run_bot(
+    Ok(Prepared {
         client,
         incoming,
         services,
         ping_runtime,
         aviation_tracker_rx,
         web_spawner,
-        shutdown_rx,
-    ));
-
-    tokio::select! {
-        biased;
-        result = &mut bot_task => join_bot_task(result),
-        signal = wait_for_shutdown_signal() => {
-            if let Err(error) = signal {
-                // Signal registration failure is still a process fault, but do
-                // not abort `run_bot`: request its normal drain first, join it,
-                // and only then return the adapter error to the process.
-                if let Err(shutdown_error) = request_shutdown(shutdown_tx) {
-                    info!(error = ?shutdown_error, "Bot task already stopped before shutdown request");
-                }
-                let bot_result = bot_task.await;
-                return match bot_result {
-                    Ok(Err(bot_error)) => Err(bot_error),
-                    Ok(Ok(())) => Err(error),
-                    Err(join_error) => Err(eyre::eyre!("bot task join failed after signal error: {join_error}")),
-                };
-            }
-            match request_shutdown(shutdown_tx) {
-                Ok(()) => join_bot_task(bot_task.await),
-                Err(signal_error) => {
-                    // The bot finished before the signal request was sent. Its
-                    // own result is authoritative when it failed; otherwise
-                    // retain the signal-adapter error.
-                    match bot_task.await {
-                        Ok(Err(bot_error)) => Err(bot_error),
-                        Ok(Ok(())) => Err(signal_error),
-                        Err(join_error) => Err(eyre::eyre!("bot task join failed after signal race: {join_error}")),
-                    }
-                }
-            }
-        }
-    }
+    })
 }
 
 /// Translate either process signal into the one intentional shutdown request

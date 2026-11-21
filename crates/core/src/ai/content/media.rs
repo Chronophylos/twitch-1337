@@ -13,8 +13,10 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use llm::TraceIds;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde_json::{Value, json};
+use tracing::{Span, field::Empty, instrument};
 
 use crate::ai::content::client::Payload;
+use crate::util::http::SendTraced as _;
 
 /// Why a media analysis call failed. `Display` is for logs only.
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +39,17 @@ impl From<reqwest::Error> for MediaError {
     }
 }
 
+impl MediaError {
+    /// Variant name, recorded as `error.type`.
+    fn variant_name(&self) -> &'static str {
+        match self {
+            Self::Timeout(_) => "Timeout",
+            Self::Upstream(_) => "Upstream",
+            Self::EmptyAnswer => "EmptyAnswer",
+        }
+    }
+}
+
 // German: the answer is fed straight back into the bot's German turn, so an
 // English one would force a translation round the model does not always make.
 const SYSTEM_PROMPT: &str = "Du analysierst URLs für einen Twitch-Chatbot. \
@@ -45,6 +58,8 @@ Ohne Anweisung beschreibst du den Inhalt. Antworte auf Deutsch.";
 
 pub struct MediaClient {
     http: reqwest::Client,
+    /// `AiProvider` name of the profile, recorded as `gen_ai.provider.name`.
+    provider_name: &'static str,
     base_url: String,
     api_key: Option<SecretString>,
     model: String,
@@ -54,6 +69,7 @@ pub struct MediaClient {
 impl MediaClient {
     pub fn new(
         http: reqwest::Client,
+        provider_name: &'static str,
         base_url: String,
         api_key: Option<SecretString>,
         model: String,
@@ -61,6 +77,7 @@ impl MediaClient {
     ) -> Self {
         Self {
             http,
+            provider_name,
             base_url,
             api_key,
             model,
@@ -76,7 +93,38 @@ impl MediaClient {
         &self.base_url
     }
 
+    #[instrument(
+        skip_all,
+        name = "chat",
+        fields(
+            gen_ai.operation.name = "chat",
+            gen_ai.provider.name = self.provider_name,
+            gen_ai.request.model = %self.model,
+            gen_ai.usage.input_tokens = Empty,
+            gen_ai.usage.output_tokens = Empty,
+            error.type = Empty,
+            otel.status_code = Empty,
+        ),
+    )]
     pub async fn analyze(
+        &self,
+        content_type: &str,
+        payload: &Payload,
+        instruction: Option<&str>,
+        trace: &TraceIds,
+    ) -> Result<String, MediaError> {
+        let result = self
+            .request_answer(content_type, payload, instruction, trace)
+            .await;
+        if let Err(error) = &result {
+            let span = Span::current();
+            span.record("error.type", error.variant_name());
+            span.record("otel.status_code", "ERROR");
+        }
+        result
+    }
+
+    async fn request_answer(
         &self,
         content_type: &str,
         payload: &Payload,
@@ -90,9 +138,19 @@ impl MediaClient {
         if let Some(key) = &self.api_key {
             req = req.bearer_auth(key.expose_secret());
         }
-        let response = req.send().await?.error_for_status()?;
+        let response = req.send_traced().await?.error_for_status()?;
 
         let value: Value = response.json().await?;
+
+        if let Some(usage) = value.get("usage") {
+            let span = Span::current();
+            if let Some(n) = usage.get("prompt_tokens").and_then(Value::as_u64) {
+                span.record("gen_ai.usage.input_tokens", n);
+            }
+            if let Some(n) = usage.get("completion_tokens").and_then(Value::as_u64) {
+                span.record("gen_ai.usage.output_tokens", n);
+            }
+        }
 
         let answer = value
             .get("choices")
@@ -167,6 +225,7 @@ mod tests {
         crate::install_crypto_provider();
         MediaClient::new(
             reqwest::Client::new(),
+            "open_ai_compatible",
             "https://example.invalid/v1".to_string(),
             None,
             "test-model".to_string(),
@@ -250,6 +309,7 @@ mod tests {
 
         let c = MediaClient::new(
             reqwest::Client::new(),
+            "open_ai_compatible",
             format!("{}/v1", server.uri()),
             None,
             "x".into(),
@@ -278,6 +338,7 @@ mod tests {
 
         let c = MediaClient::new(
             reqwest::Client::new(),
+            "open_ai_compatible",
             format!("{}/v1", server.uri()),
             None,
             "x".into(),

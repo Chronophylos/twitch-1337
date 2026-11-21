@@ -16,6 +16,10 @@ use crate::ai::memory::types::{Caps, FileKind, Frontmatter, MemoryFile};
 use crate::settings::SettingsHandle;
 use crate::util::persist::atomic_write_bytes_async;
 
+/// `bot.persist.file` label for every memory file write. File names follow
+/// users and scratch slugs, so the label is the kind, not the name.
+const PERSIST_FILE: &str = "memory";
+
 /// On-disk modification time, milliseconds since the UNIX epoch. Used as a
 /// lost-update token by the dashboard memory editor.
 pub type Mtime = u64;
@@ -170,7 +174,7 @@ impl MemoryStore {
                 links: BTreeMap::new(),
             };
             let raw = frontmatter::emit(&fm, SOUL_SEED);
-            atomic_write_bytes_async(raw.as_bytes(), &soul_path)
+            atomic_write_bytes_async(raw.as_bytes(), &soul_path, PERSIST_FILE)
                 .await
                 .wrap_err("seed SOUL.md")?;
         }
@@ -185,9 +189,13 @@ impl MemoryStore {
                 pronouns: None,
                 links: BTreeMap::new(),
             };
-            atomic_write_bytes_async(frontmatter::emit(&fm, "").as_bytes(), &lore_path)
-                .await
-                .wrap_err("seed LORE.md")?;
+            atomic_write_bytes_async(
+                frontmatter::emit(&fm, "").as_bytes(),
+                &lore_path,
+                PERSIST_FILE,
+            )
+            .await
+            .wrap_err("seed LORE.md")?;
         }
         Ok(Self {
             inner: Arc::new(StoreInner {
@@ -373,7 +381,7 @@ impl MemoryStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => warn!(?error, path = %bak.display(), "memory .bak rotation failed"),
         }
-        atomic_write_bytes_async(raw.as_bytes(), &abs)
+        atomic_write_bytes_async(raw.as_bytes(), &abs, PERSIST_FILE)
             .await
             .map_err(|e| WriteError::Io(eyre!(e)))?;
         Ok(())
@@ -490,7 +498,7 @@ impl MemoryStore {
                 .await
                 .map_err(|e| WriteError::Io(eyre!(e)))?;
         }
-        atomic_write_bytes_async(raw.as_bytes(), &abs)
+        atomic_write_bytes_async(raw.as_bytes(), &abs, PERSIST_FILE)
             .await
             .map_err(|e| WriteError::Io(eyre!(e)))?;
         Ok(())

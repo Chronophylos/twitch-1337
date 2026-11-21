@@ -6,9 +6,10 @@ use std::time::Duration;
 use indexmap::IndexMap;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
+use tracing::{field::Empty, instrument};
 
 use crate::error::{LlmError, Result};
-use crate::util::truncate_for_echo;
+use crate::util::{record_chat_outcome, truncate_for_echo};
 
 /// Request body for a decision call.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -121,7 +122,37 @@ pub fn decisions_endpoint(base_url: &str) -> Result<String> {
 }
 
 /// POST a decision request and decode the answers.
+#[instrument(
+    skip_all,
+    name = "chat",
+    fields(
+        gen_ai.operation.name = "chat",
+        gen_ai.provider.name = "open_router",
+        gen_ai.request.model = %req.model,
+        gen_ai.usage.input_tokens = Empty,
+        gen_ai.usage.output_tokens = Empty,
+        error.type = Empty,
+        otel.status_code = Empty,
+    ),
+)]
 pub async fn decide(
+    http: &reqwest::Client,
+    endpoint: &str,
+    api_key: Option<&str>,
+    req: &DecisionRequest,
+    timeout: Duration,
+) -> Result<DecisionResponse> {
+    let result = decide_untraced(http, endpoint, api_key, req, timeout).await;
+    let usage = result
+        .as_ref()
+        .ok()
+        .and_then(|resp| resp.usage.as_ref())
+        .map(|usage| (usage.input_tokens, usage.output_tokens));
+    record_chat_outcome(&result, usage);
+    result
+}
+
+async fn decide_untraced(
     http: &reqwest::Client,
     endpoint: &str,
     api_key: Option<&str>,

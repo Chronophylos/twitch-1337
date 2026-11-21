@@ -18,6 +18,7 @@ use crate::{
     APP_USER_AGENT,
     lifecycle::Lifecycle,
     twitch::{ChatSender, echo::EchoGuard},
+    util::http::SendTraced as _,
 };
 
 /// One viewer message can name many links; only the first few are worth a
@@ -70,7 +71,7 @@ fn strip_tracking(url: &mut Url) {
 /// failed, the response was not a success, the chain left mydealz, or the
 /// result is the URL the user already posted.
 async fn clean(http: &Client, url: &Url) -> Option<Url> {
-    let response = http.head(url.clone()).send().await.ok()?;
+    let response = http.head(url.clone()).send_traced_dynamic().await.ok()?;
     if !response.status().is_success() {
         debug!(%url, status = %response.status(), "mydealz link did not resolve");
         return None;

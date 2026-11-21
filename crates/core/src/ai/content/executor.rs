@@ -88,6 +88,7 @@ impl ContentToolExecutor {
         // shim path. Getting this wrong 404s every media call on an Ollama profile.
         Some(MediaClient::new(
             self.http.clone(),
+            profile.provider.as_str(),
             base_url,
             self.registry.secret_for(&profile),
             profile.model.clone(),

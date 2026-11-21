@@ -22,6 +22,7 @@ use crate::{
         mouth::{Agent, HelixMouth, Mouth, MouthRouter},
         token_storage::FileBasedTokenStorage,
     },
+    util::http::SendTraced as _,
 };
 
 /// Build the mouth router + echo guard from bootstrap config. Never fails:
@@ -149,7 +150,7 @@ async fn resolve_user_id<L: LoginCredentials>(
         .query(&[("login", username)])
         .header("Client-Id", client_id)
         .bearer_auth(token)
-        .send()
+        .send_traced()
         .await
         .wrap_err("Get Users request failed")?;
 
