@@ -104,7 +104,7 @@ Linear history required, force-push + delete blocked, squash-only, conversations
 
 **Branch naming:** `feature/` features, `spec/` specs, `fix/` bug fixes, `refactor/` refactors, `build/` CI / dependencies / Docker. Slug after slash, kebab-case.
 
-**Required status checks (10, must all pass to merge):**
+**Required status checks (11 after lockfile rollout, must all pass to merge):**
 
 | Check | Workflow | Purpose |
 |---|---|---|
@@ -118,6 +118,7 @@ Linear history required, force-push + delete blocked, squash-only, conversations
 | `actionlint (workflows)` | sast.yml | Workflow YAML + shell lint |
 | `zizmor (workflows)` | sast.yml | Workflow security (injection, perms, pinning) |
 | `gitleaks (secrets)` | sast.yml | Full-history secret scan |
+| `actions lockfile` | verify-lockfile.yml | Verify direct and transitive action pins, workflow coverage, and source identities; required after lockfile rollout |
 
 `Docker` (build + push `ghcr.io/chronophylos/twitch-1337:latest` and
 `:b<run_number>`) triggers on push to `main` with paths-ignore for
@@ -139,16 +140,29 @@ approval.
 grouped as `actions-minor-patch`. Docker ecosystem bumps both tag AND sha256 digest in
 Dockerfile.
 
-**Action pinning:** every `uses:` is pinned to a full-length **commit SHA** with a
-version comment (`@<sha> # vX.Y.Z`); the repo setting *Require actions to be pinned
-to a full-length commit SHA* is on, so a tag or branch ref fails the workflow.
-Dependabot bumps SHA pins. Tool installers take the tool as an input rather than a
-ref (`taiki-e/install-action@<sha>` + `with: tool: nextest`). Trivy stays pinned
-for its own reason too (Mar 2026 supply-chain incident).
+**Action dependencies:** every `uses:` references a specific version tag without
+an inline SHA or version comment. `.github/workflows/actions.lock` is generated
+with `gh actions-lock`; never hand-edit it. It records exact commits, direct and
+transitive dependencies, and source-repository identities for every workflow.
+After adding a workflow or changing a `uses:` reference or action definition,
+run `gh actions-lock`, review the workflow and lockfile changes together, and
+run `gh actions-lock --verify`. Review changed commits as dependency code
+changes, and investigate changed `owner_id` or `repo_id` values before merging.
+Dependabot bumps tags and regenerates matching lockfile entries in the same PR.
+The `actions lockfile` check uses a pinned `gh-actions-lock` extension release,
+read-only credentials, and never auto-commits. Tool installers take the tool as
+an input rather than a ref (`taiki-e/install-action@vX.Y.Z` +
+`with: tool: nextest`). Trivy remains locked at v0.36.0 because of the March
+2026 supply-chain incident.
+
+**Lockfile rollout handoff:** after the first green `actions lockfile` run, the
+maintainer must add that check to the `main` ruleset's required checks and enable
+**Require lockfile** for all targeted workflows. Keep the existing **Require
+actions to be pinned to a full-length commit SHA** policy enabled alongside it.
 
 **Typical PR flow:**
 1. branch → commit → push → `gh pr create`
-2. wait for 10 checks green; rebase on main if `strict` blocks merge
+2. wait for all required checks green; rebase on main if `strict` blocks merge
 3. `gh pr merge --squash`
 
 **Release flow (rolling):**

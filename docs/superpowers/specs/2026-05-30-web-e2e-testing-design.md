@@ -238,10 +238,10 @@ Pinning notes:
   (`135`). Prefer an exact build for full reproducibility; the matched
   chromedriver is guaranteed either way by `install-chromedriver: true`.
 - `browser-actions/setup-chrome` downloads + executes browser binaries.
-  It is not in the CLAUDE.md security-critical SHA-pin list, but pinning it
-  to the `v2.1.2` commit SHA (with a version comment) is the safer default
-  for an action that fetches executables. The plan pins the concrete SHA and
-  fills the exact `chrome-version` build current at implementation time.
+  Reference the specific `v2.1.2` tag and record its exact commit in
+  `actions.lock`; the lockfile covers an action that fetches executables
+  without a redundant inline SHA. Fill the exact `chrome-version` build
+  current at implementation time.
 - `chromedriver-path` output feeds the start step; `WEBDRIVER_URL` points
   fantoccini at it.
 
@@ -275,9 +275,9 @@ No production source in `crates/web/src/` changes.
 
 ## Open Questions / Risks
 
-- **Exact pins at implementation time.** Plan fills the concrete
-  `browser-actions/setup-chrome` commit SHA and the exact `chrome-version`
-  build current then.
+- **Exact pins at implementation time.** Regenerate `actions.lock` for the
+  selected `browser-actions/setup-chrome` tag and fill the exact
+  `chrome-version` build current then; review the resulting commit change.
 - **htmx swap timing.** `for_element_gone` after a delete-swap is the
   reliable signal; verify each flow's swap emits a DOM change waitable
   without a fixed delay.
