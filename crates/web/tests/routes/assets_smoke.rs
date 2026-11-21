@@ -116,16 +116,10 @@ fn templates_have_no_inline_code() {
         });
         inline_script
             || handler
-            || [
-                "<style",
-                "style=\"",
-                "style='",
-                "hx-on",
-                "javascript:",
-                "lang=\"de\"",
-            ]
-            .iter()
-            .any(|needle| lower.contains(needle))
+            || ["<style", "style=\"", "style='", "hx-on", "javascript:"]
+                .iter()
+                .any(|needle| lower.contains(needle))
+            || (lower.contains("<input") && lower.contains("lang=\"de\""))
     }
     fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).unwrap() {

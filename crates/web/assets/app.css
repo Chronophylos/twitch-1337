@@ -1046,6 +1046,36 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   margin: 0 0 18px;
 }
 
+/* Public command list (/commands): standalone, no shell */
+.public-page {
+  position: relative;
+  z-index: 1;
+  padding: 28px 28px 40px;
+}
+.table.commands .thead, .table.commands .tr {
+  grid-template-columns: minmax(160px, 260px) minmax(160px, 280px) minmax(0, 1fr);
+}
+.table.commands .td {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
+  overflow-wrap: anywhere;
+}
+.trigger { color: var(--accent); }
+.trigger.alias { color: var(--fg-3); }
+.badge-mod {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--accent-warn-bg);
+  color: var(--accent-warn-fg);
+}
+
 /* ====================== Settings page ====================== */
 .settings-grid {
   display: grid;

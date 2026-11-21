@@ -98,6 +98,9 @@ pub struct TestBot {
     /// Shared EMA latency cell — the same `Arc<AtomicU32>` the latency
     /// handler re-bases and the 1337 handler reads.
     latency_value: Arc<AtomicU32>,
+    /// Address the dashboard listener actually bound (`with_web`), so a test
+    /// can bind port 0 and still reach it.
+    web_addr: Option<std::net::SocketAddr>,
     shutdown: Option<oneshot::Sender<()>>,
     bot_task: Option<JoinHandle<EyreResult<()>>>,
 }
@@ -633,6 +636,11 @@ impl TestBotBuilder {
                 latency_value: latency_value.clone(),
                 channel: channel.clone(),
                 bot_username: self.config.twitch.username.clone(),
+                public_url: self
+                    .config
+                    .web
+                    .enabled
+                    .then(|| self.config.web.public_url.clone()),
                 ai_enabled: self.config.ai.is_some(),
                 started_at,
                 ping: ping_handle,
@@ -659,6 +667,7 @@ impl TestBotBuilder {
                 recap: recap_handle.clone(),
                 log_ring: Default::default(),
             };
+            let mut web_addr = None;
             let web_spawner = if self.config.web.enabled {
                 let bind_addr: std::net::SocketAddr = self
                     .config
@@ -667,6 +676,7 @@ impl TestBotBuilder {
                     .parse()
                     .expect("test web.bind_addr");
                 let listener = twitch_1337_web::bind(bind_addr).await.expect("bind web");
+                web_addr = Some(listener.local_addr().expect("web local addr"));
                 let web_clock = Arc::new(twitch_1337_web::clock::SystemClock);
                 let state = twitch_1337_web::WebState::new(
                     &services,
@@ -767,6 +777,7 @@ impl TestBotBuilder {
                 settings: settings_handle,
                 settings_store: settings_store.clone(),
                 latency_value,
+                web_addr,
                 shutdown: Some(shutdown_tx),
                 bot_task: Some(bot_task),
             }
@@ -786,6 +797,12 @@ impl TestBot {
     /// observe live-apply.
     pub fn latency_value(&self) -> Arc<AtomicU32> {
         Arc::clone(&self.latency_value)
+    }
+
+    /// `http://<bound addr><path>` of the dashboard. Panics without `with_web`.
+    pub fn web_url(&self, path: &str) -> String {
+        let addr = self.web_addr.expect("bot spawned without with_web");
+        format!("http://{addr}{path}")
     }
 
     pub async fn send(&self, user: &str, text: &str) {

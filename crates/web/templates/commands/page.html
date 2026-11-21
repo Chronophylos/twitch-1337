@@ -1,0 +1,58 @@
+{#- Public help page. Standalone on purpose: no sidebar, no auth-only links,
+    no scripts. Rendered from the same catalog snapshot as /commands.json. -#}
+{%- macro list(entries) -%}
+<div class="table commands">
+  <div class="thead">
+    <div class="th">Befehl</div>
+    <div class="th">Nutzung</div>
+    <div class="th">Beschreibung</div>
+  </div>
+  <div class="tbody">
+  {%- for cmd in entries %}
+    <div class="tr">
+      <div class="td" data-label="Befehl">
+        <code class="trigger" data-trigger>{{ cmd.name }}</code>
+        {%- for alias in cmd.aliases %}
+        <code class="trigger alias" data-trigger>{{ alias }}</code>
+        {%- endfor %}
+        {%- if cmd.permission == Permission::Moderator %}
+        <span class="badge-mod" title="Nur Broadcaster und Mods">Mod</span>
+        {%- endif %}
+      </div>
+      <div class="td mono" data-label="Nutzung">{{ cmd.usage }}</div>
+      <div class="td" data-label="Beschreibung">{{ cmd.description }}</div>
+    </div>
+  {%- endfor %}
+  </div>
+</div>
+{%- endmacro -%}
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="darkreader-lock">
+  <title>Befehle — {{ channel }}</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v={{ env!("ASSET_V_FAVICON_SVG") }}">
+  <link rel="stylesheet" href="/assets/app.css?v={{ env!("ASSET_V_APP_CSS") }}">
+</head>
+<body>
+  <main class="public-page page">
+    <div class="page-head">
+      <div>
+        <h1>Befehle <span class="count">({{ commands.len() }})</span></h1>
+        <p class="page-sub">Chat-Befehle des Bots in #{{ channel }}. <code>&lt;x&gt;</code> ist Pflicht, <code>[x]</code> optional. <span class="badge-mod">Mod</span> heißt nur für Broadcaster und Mods. Im Chat hilft <code>!help &lt;befehl&gt;</code>.</p>
+      </div>
+    </div>
+    {% call list(commands) %}{% endcall %}
+
+    {%- if !pings.is_empty() %}
+    <div class="page-head sub-head">
+      <h2 class="sub-title">Pings <span class="count">({{ pings.len() }})</span></h2>
+    </div>
+    {% call list(pings) %}{% endcall %}
+    {%- endif %}
+  </main>
+</body>
+</html>

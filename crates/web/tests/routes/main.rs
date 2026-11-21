@@ -10,6 +10,7 @@ mod helpers;
 mod ai_profiles_route;
 mod assets_smoke;
 mod commands_json;
+mod commands_page;
 mod emotes_routes;
 mod flights_route;
 mod healthz;
