@@ -81,7 +81,7 @@ pub use twitch::{
 };
 pub use util::{
     APP_USER_AGENT, ensure_data_dir, get_config_path, get_data_dir, install_crypto_provider,
-    parse_flight_duration, resolve_berlin_time, telemetry::install_tracing, truncate_response,
+    observability::install_tracing, parse_flight_duration, resolve_berlin_time, truncate_response,
 };
 
 /// Test-overridable services injected into [`run_bot`].
@@ -197,11 +197,11 @@ pub struct Services {
     pub primary_history_tap:
         Option<Arc<tokio::sync::Mutex<Option<crate::ai::chat_history::ChatHistory>>>>,
 
-    /// Per-schedule runtime telemetry. Constructed here and shared with both
+    /// Per-schedule runtime state. Constructed here and shared with both
     /// the IRC `schedule_runner` orchestrator and `WebState` (via the web
     /// spawner closure) so the dashboard reads live fire counters from the
     /// same in-memory map the bot writes.
-    pub telemetry: Arc<crate::schedule::TelemetryStore>,
+    pub schedule_runtime: Arc<crate::schedule::ScheduleRuntimeStore>,
     /// Emote set audit + usage SoR. `None` when SQLite open/migrate failed.
     pub emote_tracker: Option<std::sync::Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     /// Twitch broadcaster user id for 7TV ingest. `None` when Helix resolve failed.

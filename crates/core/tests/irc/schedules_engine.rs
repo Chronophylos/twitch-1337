@@ -10,7 +10,7 @@
 //! 2. `schedule_fires_after_clock_advance` (variant a) — spawns the full bot
 //!    via `TestBotBuilder` with a `FakeClock`, pre-seeds an interval schedule,
 //!    advances the fake clock past the first fire point, and asserts the
-//!    scheduled message appears on the transport + telemetry is recorded.
+//!    scheduled message appears on the transport + the fire is recorded.
 
 use super::common;
 
@@ -83,7 +83,7 @@ async fn settings_save_signals_subscription() {
 /// Spawn a full bot with a 1-minute interval schedule already in settings,
 /// advance the fake clock past the first fire point, and assert:
 ///   - the scheduled message appears on the IRC transport, AND
-///   - telemetry records ≥ 1 fire for that schedule (checked in-memory, no
+///   - the runtime store records ≥ 1 fire for that schedule (checked in-memory, no
 ///     file I/O required so the debounced flush window doesn't matter).
 #[tokio::test]
 async fn schedule_fires_after_clock_advance() {
@@ -126,7 +126,7 @@ async fn schedule_fires_after_clock_advance() {
     // Advance 2 minutes: moves clock past 11:01, waking the sleeper.
     bot.clock.advance(SignedDuration::from_mins(2));
 
-    // Give the woken task time to call sender.say() and record telemetry.
+    // Give the woken task time to call sender.say() and record the fire.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let msg = bot.expect_say(Duration::from_secs(2)).await;
@@ -135,11 +135,11 @@ async fn schedule_fires_after_clock_advance() {
         "expected 'scheduled-hello' in message, got: {msg:?}"
     );
 
-    // Check telemetry in-memory (avoids depending on the debounced disk flush).
-    let snap = bot.telemetry.snapshot(bot.clock.now_utc()).await;
+    // Check the runtime store in-memory (avoids depending on the debounced disk flush).
+    let snap = bot.schedule_runtime.snapshot(bot.clock.now_utc()).await;
     let runtime = snap
         .get("hello-world")
-        .expect("telemetry entry for 'hello-world' must exist");
+        .expect("runtime entry for 'hello-world' must exist");
     assert!(
         runtime.fires_today >= 1,
         "expected at least 1 fire_today, got {}",

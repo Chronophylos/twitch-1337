@@ -479,7 +479,7 @@ pub(crate) fn spawn_handlers<T, L>(
             run_orchestrator(
                 sender,
                 services.settings.clone(),
-                services.telemetry.clone(),
+                services.schedule_runtime.clone(),
                 services.channel.clone(),
                 schedule_shutdown,
                 services.clock.clone(),

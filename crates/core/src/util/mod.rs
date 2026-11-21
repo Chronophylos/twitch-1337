@@ -2,9 +2,9 @@ pub mod clock;
 pub mod http;
 pub mod log_ring;
 pub mod net;
+pub mod observability;
 pub mod persist;
 pub mod redact;
-pub mod telemetry;
 
 use std::{path::PathBuf, sync::LazyLock};
 
