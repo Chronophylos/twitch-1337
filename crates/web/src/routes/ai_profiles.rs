@@ -92,6 +92,10 @@ struct ProviderOption {
     effort_kind: &'static str,
     effort_values: Vec<&'static str>,
     service_tier: bool,
+    requires_key: bool,
+    base_url_required: bool,
+    default_base_url: Option<&'static str>,
+    model_placeholder: &'static str,
 }
 
 fn provider_options() -> Vec<ProviderOption> {
@@ -110,6 +114,15 @@ fn provider_options() -> Vec<ProviderOption> {
                 effort_kind,
                 effort_values,
                 service_tier: caps.service_tier,
+                requires_key: p.uses_openai_client(),
+                base_url_required: caps.default_base_url.is_none(),
+                default_base_url: caps.default_base_url,
+                model_placeholder: match p {
+                    AiProvider::OpenRouter => "provider/model-id",
+                    AiProvider::OpenAi => "gpt-5",
+                    AiProvider::OpenAiCompatible => "vendor/model-id",
+                    AiProvider::Ollama => "qwen3:8b",
+                },
             }
         })
         .collect()
