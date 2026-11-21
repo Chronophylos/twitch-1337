@@ -1243,3 +1243,99 @@ async fn old_flat_field_name_is_rejected_as_unknown() {
     );
     assert_eq!(state.settings.load().cooldowns.ai, before);
 }
+
+#[tokio::test]
+async fn link_correction_card_renders_all_controls() {
+    let (state, _dirs) = owner_state().await;
+    let res = Owner::login(&state).get(&state, "/settings").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(html.contains("sec-link_correction"), "card section present");
+    for name in [
+        "link_correction.__shown",
+        "link_correction.mydealz",
+        "link_correction.reddit",
+        "link_correction.x_twitter",
+        "link_correction.max_links",
+    ] {
+        assert!(
+            html.contains(&format!("name=\"{name}\"")),
+            "{name} rendered"
+        );
+    }
+    let cap = tag_with_name(&html, "link_correction.max_links");
+    assert_eq!(attr(cap, "min"), Some("1"));
+    assert_eq!(attr(cap, "max"), Some("5"));
+}
+
+#[tokio::test]
+async fn link_correction_checkboxes_round_trip_both_directions() {
+    let (state, _dirs) = owner_state().await;
+
+    // Sentinel posted; only reddit ticked; cap 4. The other two checkboxes
+    // are omitted, so they must save as false.
+    let res = post_raw(
+        &state,
+        &[
+            ("link_correction.__shown", "1"),
+            ("link_correction.reddit", "1"),
+            ("link_correction.max_links", "4"),
+        ],
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let lc = &state.settings.load().link_correction;
+    assert!(!lc.mydealz);
+    assert!(lc.reddit);
+    assert!(!lc.x_twitter);
+    assert_eq!(lc.max_links, 4);
+
+    // Second form flips membership: mydealz + x_twitter ticked, reddit
+    // omitted, cap back to 2.
+    let res = post_raw(
+        &state,
+        &[
+            ("link_correction.__shown", "1"),
+            ("link_correction.mydealz", "1"),
+            ("link_correction.x_twitter", "1"),
+            ("link_correction.max_links", "2"),
+        ],
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let lc = &state.settings.load().link_correction;
+    assert!(lc.mydealz);
+    assert!(!lc.reddit);
+    assert!(lc.x_twitter);
+    assert_eq!(lc.max_links, 2);
+
+    // Without the sentinel, an absent checkbox is "no change".
+    let res = post_raw(&state, &[("link_correction.max_links", "3")]).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let lc = &state.settings.load().link_correction;
+    assert!(lc.mydealz && lc.x_twitter && !lc.reddit);
+    assert_eq!(lc.max_links, 3);
+}
+
+#[tokio::test]
+async fn link_correction_cap_bounds_rejected_without_change() {
+    let (state, _dirs) = owner_state().await;
+    for bad in ["0", "6"] {
+        let res = post_raw(
+            &state,
+            &[
+                ("link_correction.__shown", "1"),
+                ("link_correction.reddit", "1"),
+                ("link_correction.max_links", bad),
+            ],
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "cap {bad}");
+        let html = body_string(res).await;
+        assert!(
+            html.contains("link_correction.max_links"),
+            "error must name the field; got: {html}"
+        );
+    }
+    assert_eq!(state.settings.load().link_correction.max_links, 2);
+}
