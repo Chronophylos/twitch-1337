@@ -178,6 +178,34 @@ impl std::fmt::Display for FlightPhase {
     }
 }
 
+impl FlightPhase {
+    /// Every phase, for metrics that must report empty phases as 0.
+    pub(crate) const ALL: [Self; 8] = [
+        Self::Unknown,
+        Self::Ground,
+        Self::Takeoff,
+        Self::Climb,
+        Self::Cruise,
+        Self::Descent,
+        Self::Approach,
+        Self::Landing,
+    ];
+
+    /// `aviation.flight.phase` value.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            FlightPhase::Unknown => "unknown",
+            FlightPhase::Ground => "ground",
+            FlightPhase::Takeoff => "takeoff",
+            FlightPhase::Climb => "climb",
+            FlightPhase::Cruise => "cruise",
+            FlightPhase::Descent => "descent",
+            FlightPhase::Approach => "approach",
+            FlightPhase::Landing => "landing",
+        }
+    }
+}
+
 /// State of a single tracked flight.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackedFlight {

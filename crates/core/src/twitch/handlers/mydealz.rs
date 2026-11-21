@@ -117,7 +117,10 @@ pub async fn run_mydealz_handler<T, L>(
             _ = lifecycle.wait_for_cancellation() => return,
             result = broadcast_rx.recv() => match result {
                 Ok(inbound) => inbound,
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    crate::util::observability::metrics::broadcast_lagged("mydealz", skipped);
+                    continue;
+                }
                 Err(_) => return,
             },
         };

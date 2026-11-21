@@ -22,6 +22,7 @@ use twitch_1337_core::{
     twitch::seventv::build_emote_provider,
     twitch::whisper,
     util::clock::SystemClock,
+    util::observability::metrics,
 };
 use twitch_1337_web::helix::{AccessTokenProvider, HelixClient as _, ReqwestHelixClient};
 use twitch_irc::login::LoginCredentials as _;
@@ -427,6 +428,7 @@ async fn prepare(
     let latency_value = Arc::new(std::sync::atomic::AtomicU32::new(
         settings_handle.load().twitch.expected_latency,
     ));
+    metrics::observe_irc_latency(Arc::clone(&latency_value));
     let services = Services {
         clock: Arc::new(SystemClock),
         llm,

@@ -239,7 +239,10 @@ pub async fn run_emote_usage_handler(
             msg = broadcast_rx.recv() => {
                 let inbound = match msg {
                     Ok(inbound) => inbound,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        crate::util::observability::metrics::broadcast_lagged("emote_usage", skipped);
+                        continue;
+                    }
                     Err(_) => {
                         stop_usage_writer(&mut usage_tasks)
                             .await

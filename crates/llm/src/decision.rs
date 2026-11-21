@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{field::Empty, instrument};
 
 use crate::error::{LlmError, Result};
+use crate::usage::TokenUsage;
 use crate::util::{record_chat_outcome, truncate_for_echo};
 
 /// Request body for a decision call.
@@ -147,7 +148,11 @@ pub async fn decide(
         .as_ref()
         .ok()
         .and_then(|resp| resp.usage.as_ref())
-        .map(|usage| (usage.input_tokens, usage.output_tokens));
+        .map(|usage| TokenUsage {
+            input_tokens: u32::try_from(usage.input_tokens).unwrap_or(u32::MAX),
+            output_tokens: u32::try_from(usage.output_tokens).unwrap_or(u32::MAX),
+            cost_usd: usage.cost,
+        });
     record_chat_outcome(&result, usage);
     result
 }

@@ -8,7 +8,8 @@ use crate::error::{LlmError, Result};
 use crate::types::{
     ChatCompletionRequest, ToolCall, ToolChatCompletionRequest, ToolChatCompletionResponse,
 };
-use crate::util::record_chat_outcome;
+use crate::usage::TokenUsage;
+use crate::util::{record_chat_outcome, reported_usage};
 
 // --- Internal serde types for Ollama native API ---
 
@@ -33,6 +34,28 @@ struct ApiResponseMessage {
 #[derive(Debug, Deserialize)]
 struct ApiResponse {
     message: ApiResponseMessage,
+    #[serde(flatten)]
+    counts: ApiCounts,
+}
+
+/// Token counts on a finished (non-streamed) Ollama response.
+#[derive(Debug, Deserialize)]
+struct ApiCounts {
+    prompt_eval_count: Option<u32>,
+    eval_count: Option<u32>,
+}
+
+impl ApiCounts {
+    fn to_token_usage(&self) -> Option<TokenUsage> {
+        if self.prompt_eval_count.is_none() && self.eval_count.is_none() {
+            return None;
+        }
+        Some(TokenUsage {
+            input_tokens: self.prompt_eval_count.unwrap_or(0),
+            output_tokens: self.eval_count.unwrap_or(0),
+            cost_usd: None,
+        })
+    }
 }
 
 // --- Tool-calling serde types ---
@@ -78,6 +101,8 @@ struct ApiToolResponseMessage {
 #[derive(Debug, Deserialize)]
 struct ApiToolResponse {
     message: ApiToolResponseMessage,
+    #[serde(flatten)]
+    counts: ApiCounts,
 }
 
 // --- Message serialization ---
@@ -157,7 +182,10 @@ impl OllamaClient {
         })
     }
 
-    async fn chat_completion_untraced(&self, request: ChatCompletionRequest) -> Result<String> {
+    async fn chat_completion_untraced(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> Result<(String, Option<TokenUsage>)> {
         let url = format!("{}/api/chat", self.base_url);
 
         let api_request = ApiRequest {
@@ -193,13 +221,14 @@ impl OllamaClient {
                 source,
             })?;
 
-        Ok(api_response.message.content)
+        let usage = api_response.counts.to_token_usage();
+        Ok((api_response.message.content, usage))
     }
 
     async fn chat_completion_with_tools_untraced(
         &self,
         request: ToolChatCompletionRequest,
-    ) -> Result<ToolChatCompletionResponse> {
+    ) -> Result<(ToolChatCompletionResponse, Option<TokenUsage>)> {
         let url = format!("{}/api/chat", self.base_url);
 
         let messages = build_ollama_messages(&request);
@@ -244,6 +273,7 @@ impl OllamaClient {
                 source,
             })?;
 
+        let usage = api_response.counts.to_token_usage();
         if let Some(tool_calls) = api_response.message.tool_calls
             && !tool_calls.is_empty()
         {
@@ -257,17 +287,20 @@ impl OllamaClient {
                     arguments_parse_error: None,
                 })
                 .collect();
-            return Ok(ToolChatCompletionResponse::ToolCalls {
-                calls,
-                reasoning_content: None,
-            });
+            return Ok((
+                ToolChatCompletionResponse::ToolCalls {
+                    calls,
+                    reasoning_content: None,
+                },
+                usage,
+            ));
         }
 
         let content = api_response
             .message
             .content
             .ok_or(LlmError::EmptyResponse)?;
-        Ok(ToolChatCompletionResponse::Message(content))
+        Ok((ToolChatCompletionResponse::Message(content), usage))
     }
 }
 
@@ -280,6 +313,8 @@ impl LlmClient for OllamaClient {
             gen_ai.operation.name = "chat",
             gen_ai.provider.name = PROVIDER_NAME,
             gen_ai.request.model = %request.model,
+            gen_ai.usage.input_tokens = Empty,
+            gen_ai.usage.output_tokens = Empty,
             error.type = Empty,
             otel.status_code = Empty,
         ),
@@ -290,9 +325,9 @@ impl LlmClient for OllamaClient {
             crate::observe::messages_json(&request.messages),
         );
         let result = self.chat_completion_untraced(request).await;
-        crate::observe::finish_generation(rec, &result, |text| (text.clone(), None));
-        record_chat_outcome(&result, None);
-        result
+        crate::observe::finish_generation(rec, &result, |(text, usage)| (text.clone(), *usage));
+        record_chat_outcome(&result, reported_usage(&result));
+        result.map(|(text, _)| text)
     }
 
     #[instrument(
@@ -302,6 +337,8 @@ impl LlmClient for OllamaClient {
             gen_ai.operation.name = "chat",
             gen_ai.provider.name = PROVIDER_NAME,
             gen_ai.request.model = %request.model,
+            gen_ai.usage.input_tokens = Empty,
+            gen_ai.usage.output_tokens = Empty,
             error.type = Empty,
             otel.status_code = Empty,
         ),
@@ -315,9 +352,11 @@ impl LlmClient for OllamaClient {
             crate::observe::messages_json(&request.messages),
         );
         let result = self.chat_completion_with_tools_untraced(request).await;
-        crate::observe::finish_generation(rec, &result, |resp| (format_tool_output(resp), None));
-        record_chat_outcome(&result, None);
-        result
+        crate::observe::finish_generation(rec, &result, |(resp, usage)| {
+            (format_tool_output(resp), *usage)
+        });
+        record_chat_outcome(&result, reported_usage(&result));
+        result.map(|(resp, _)| resp)
     }
 }
 
@@ -379,6 +418,44 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, LlmError::EmptyResponse), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn reported_eval_counts_become_token_usage() {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "Err only means a crypto provider is already installed"
+        )]
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "message": {"role": "assistant", "content": "hi"},
+                    "done": true,
+                    "prompt_eval_count": 12,
+                    "eval_count": 3,
+                })),
+            )
+            .mount(&server)
+            .await;
+        let client = OllamaClient::new(Some(&server.uri()), "ua").unwrap();
+        let request = ChatCompletionRequest {
+            model: "test-model".to_string(),
+            messages: vec![Message::user("hi")],
+            reasoning_effort: None,
+            service_tier: None,
+            trace: Default::default(),
+        };
+        let (_, usage) = client.chat_completion_untraced(request).await.unwrap();
+        assert_eq!(
+            usage,
+            Some(TokenUsage {
+                input_tokens: 12,
+                output_tokens: 3,
+                cost_usd: None,
+            })
+        );
     }
 
     #[test]

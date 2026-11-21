@@ -516,6 +516,19 @@ pub(crate) fn spawn_handlers<T, L>(
         );
     }
 
+    // `memory.bytes` export reads a cache; this loop refreshes it. Absent
+    // without `[otel]`.
+    if let Some(cache) = crate::util::observability::metrics::memory_bytes_gauge(
+        crate::ai::memory::store::MemoryStore::BYTE_KINDS,
+    ) {
+        register_loop(
+            supervisor,
+            lifecycle.clone(),
+            "memory bytes sampler",
+            services.memory_store.clone().sample_bytes(cache),
+        );
+    }
+
     if let Some(t) = services.ai_memory.as_ref().map(|m| m.transcript.clone()) {
         let rx = broadcast_tx.subscribe();
         let w = Arc::new(t);

@@ -4,6 +4,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use eyre::{Result, WrapErr as _, eyre};
 use jiff::Timestamp;
@@ -19,6 +21,9 @@ use crate::util::persist::atomic_write_bytes_async;
 /// `bot.persist.file` label for every memory file write. File names follow
 /// users and scratch slugs, so the label is the kind, not the name.
 const PERSIST_FILE: &str = "memory";
+
+/// How often [`MemoryStore::sample_bytes`] re-measures the tree.
+const BYTES_SAMPLE_INTERVAL: Duration = Duration::from_secs(60);
 
 /// On-disk modification time, milliseconds since the UNIX epoch. Used as a
 /// lost-update token by the dashboard memory editor.
@@ -220,6 +225,57 @@ impl MemoryStore {
 
     pub fn root(&self) -> &Path {
         &self.inner.root
+    }
+
+    /// `memory.kind` values, in [`Self::bytes_by_kind`] order.
+    pub const BYTE_KINDS: [&'static str; 4] = ["soul", "lore", "character_sheet", "scratch"];
+
+    /// Refresh `cache` (from `metrics::memory_bytes_gauge(Self::BYTE_KINDS)`)
+    /// every [`BYTES_SAMPLE_INTERVAL`], walking the tree on a blocking
+    /// thread. Runs until dropped.
+    pub async fn sample_bytes(self, cache: Arc<[AtomicU64; 4]>) {
+        let mut every = tokio::time::interval(BYTES_SAMPLE_INTERVAL);
+        every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            every.tick().await;
+            let store = self.clone();
+            match tokio::task::spawn_blocking(move || store.bytes_by_kind()).await {
+                Ok(sizes) => {
+                    for (slot, bytes) in cache.iter().zip(sizes) {
+                        slot.store(bytes, Ordering::Relaxed);
+                    }
+                }
+                Err(error) => crate::log_handled!(warn, error, "memory.bytes sample failed"),
+            }
+        }
+    }
+
+    /// Bytes on disk per [`Self::BYTE_KINDS`] entry (`*.md` only, `.bak`
+    /// backups excluded). Blocking `std::fs` stats.
+    fn bytes_by_kind(&self) -> [u64; 4] {
+        let dir = &self.inner.memories_dir;
+        let file = |name: &str| std::fs::metadata(dir.join(name)).map_or(0, |m| m.len());
+        let sheets = |sub: &str| {
+            std::fs::read_dir(dir.join(sub)).map_or(0, |entries| {
+                entries
+                    .flatten()
+                    .filter(|e| {
+                        Path::new(&e.file_name())
+                            .extension()
+                            .is_some_and(|ext| ext == "md")
+                    })
+                    .filter_map(|e| e.metadata().ok())
+                    .filter(std::fs::Metadata::is_file)
+                    .map(|m| m.len())
+                    .sum()
+            })
+        };
+        [
+            file("SOUL.md"),
+            file("LORE.md"),
+            sheets("users"),
+            sheets("scratch"),
+        ]
     }
 
     async fn lock_for(&self, rel: &Path) -> Arc<Mutex<()>> {

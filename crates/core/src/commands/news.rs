@@ -312,7 +312,11 @@ where
                 session_id: request.trace.session_id.clone(),
                 tags: vec![self.mode.trigger().to_string()],
             },
-            tokio::time::timeout(timeout, llm_client.chat_completion(request)),
+            crate::util::observability::metrics::with_llm_scope(
+                self.mode.trigger().trim_start_matches('!'),
+                &profile.name,
+                tokio::time::timeout(timeout, llm_client.chat_completion(request)),
+            ),
         )
         .await;
 

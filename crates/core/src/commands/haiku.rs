@@ -208,7 +208,11 @@ where
                 session_id: request.trace.session_id.clone(),
                 tags: vec!["haiku".into()],
             },
-            tokio::time::timeout(timeout, llm_client.chat_completion(request)),
+            crate::util::observability::metrics::with_llm_scope(
+                "haiku",
+                &profile.name,
+                tokio::time::timeout(timeout, llm_client.chat_completion(request)),
+            ),
         )
         .await;
 

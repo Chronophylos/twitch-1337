@@ -462,6 +462,7 @@ where
             }
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
                 error!(skipped, "Command handler lagged, skipped messages");
+                crate::util::observability::metrics::broadcast_lagged("commands", skipped);
             }
             Err(broadcast::error::RecvError::Closed) => {
                 debug!("Broadcast channel closed, command ingress exiting");

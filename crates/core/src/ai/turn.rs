@@ -35,6 +35,7 @@ use crate::commands::CommandCancellation;
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
 use crate::twitch::seventv::SevenTvEmoteProvider;
+use crate::util::observability::metrics;
 
 /// Sent to the invoking viewer when a round exceeds the profile timeout.
 pub(crate) const TIMEOUT_NOTICE: &str = "hat zu hart gedacht, nochmal probieren Stare";
@@ -503,10 +504,10 @@ impl TurnRunner {
             user: Some(input.speaker.login.clone()),
             session_id: Some(crate::ai::session::new_session_id()),
         };
-        let turn_name = if grok_alias {
-            "grok-turn"
+        let (turn_name, llm_agent) = if grok_alias {
+            ("grok-turn", "grok")
         } else {
-            "aurora-turn"
+            ("aurora-turn", "aurora")
         };
         let outcome = llm::with_optional_turn(
             crate::ai::langfuse::LangfuseHandle::observer_from(&self.langfuse),
@@ -516,129 +517,135 @@ impl TurnRunner {
                 session_id: trace.session_id.clone(),
                 tags: vec![turn_name.to_string(), connection.name.clone()],
             },
-            async {
-                if input.cancellation.is_cancelled() {
-                    return TurnOutcome::Silent;
-                }
-                // `ai.web.max_rounds` bounds every web call this turn, Grok's
-                // forced opening search included.
-                let web_budget = CallBudget::new(self.web.as_ref().map_or(0, AiWeb::max_rounds));
-                let shipment_budget = CallBudget::new(MAX_SHIPMENT_LOOKUPS_PER_TURN);
-                let network_budget = CallBudget::new(MAX_NETWORK_LOOKUPS_PER_TURN);
-                let prior_rounds = if grok_alias
-                    && let Some(w) = &self.web
-                    && web_budget.try_consume()
-                {
-                    vec![forced_web_search_round(w, &instruction_for_prompt, &trace).await]
-                } else {
-                    Vec::new()
-                };
-                let req = ToolChatCompletionRequest {
-                    model: model.clone(),
-                    messages: messages.clone(),
-                    tools,
-                    reasoning_effort: reasoning_effort.clone(),
-                    service_tier: service_tier.clone(),
-                    prior_rounds,
-                    trace: trace.clone(),
-                };
-                // Every LLM round may use its full timeout, plus one round's
-                // worth for all tool execution in the turn.
-                let rounds_with_tools =
-                    u32::try_from(mem.max_turn_rounds.saturating_add(1)).unwrap_or(u32::MAX);
-                let turn_deadline = turn_timeout.saturating_mul(rounds_with_tools);
-                let opts = AgentOpts {
-                    max_rounds: mem.max_turn_rounds,
-                    per_round_timeout: Some(turn_timeout),
-                    max_calls_per_round: Some(MAX_TOOL_CALLS_PER_ROUND),
-                    deadline: Some(turn_deadline),
-                };
+            Box::pin(metrics::with_llm_scope(
+                llm_agent,
+                &connection.name,
+                async {
+                    if input.cancellation.is_cancelled() {
+                        return TurnOutcome::Silent;
+                    }
+                    // `ai.web.max_rounds` bounds every web call this turn, Grok's
+                    // forced opening search included.
+                    let web_budget =
+                        CallBudget::new(self.web.as_ref().map_or(0, AiWeb::max_rounds));
+                    let shipment_budget = CallBudget::new(MAX_SHIPMENT_LOOKUPS_PER_TURN);
+                    let network_budget = CallBudget::new(MAX_NETWORK_LOOKUPS_PER_TURN);
+                    let prior_rounds = if grok_alias
+                        && let Some(w) = &self.web
+                        && web_budget.try_consume()
+                    {
+                        vec![forced_web_search_round(w, &instruction_for_prompt, &trace).await]
+                    } else {
+                        Vec::new()
+                    };
+                    let req = ToolChatCompletionRequest {
+                        model: model.clone(),
+                        messages: messages.clone(),
+                        tools,
+                        reasoning_effort: reasoning_effort.clone(),
+                        service_tier: service_tier.clone(),
+                        prior_rounds,
+                        trace: trace.clone(),
+                    };
+                    // Every LLM round may use its full timeout, plus one round's
+                    // worth for all tool execution in the turn.
+                    let rounds_with_tools =
+                        u32::try_from(mem.max_turn_rounds.saturating_add(1)).unwrap_or(u32::MAX);
+                    let turn_deadline = turn_timeout.saturating_mul(rounds_with_tools);
+                    let opts = AgentOpts {
+                        max_rounds: mem.max_turn_rounds,
+                        per_round_timeout: Some(turn_timeout),
+                        max_calls_per_round: Some(MAX_TOOL_CALLS_PER_ROUND),
+                        deadline: Some(turn_deadline),
+                    };
 
-                let combined_exec = V2Executor {
-                    chat: &exec,
-                    registered_tools: &registered_tools,
-                    web: self.web.as_ref().map(|w| w.executor.as_ref()),
-                    emotes: self.emotes.as_deref(),
-                    doener: self.doener.as_ref(),
-                    repology: self.repology.as_ref(),
-                    dhl: self.dhl.as_deref(),
-                    rdap: self.rdap.as_ref(),
-                    ipinfo: self.ipinfo.as_deref(),
-                    web_budget: &web_budget,
-                    shipment_budget: &shipment_budget,
-                    network_budget: &network_budget,
-                    command_catalog: &self.command_catalog,
-                    emote_tracker: self.emote_tracker.as_ref(),
-                    trace: &trace,
-                    cancellation: &input.cancellation,
-                };
-                if input.cancellation.is_cancelled() {
-                    return TurnOutcome::Silent;
-                }
-                let final_text = match run_agent(&*llm_client, req, &combined_exec, opts).await {
-                    Ok(AgentOutcome::Text(text)) => Ok(Some(text)),
-                    Ok(AgentOutcome::MaxRoundsExceeded) => {
-                        warn!("AI max_turn_rounds exceeded");
-                        Ok(None)
+                    let combined_exec = V2Executor {
+                        chat: &exec,
+                        registered_tools: &registered_tools,
+                        web: self.web.as_ref().map(|w| w.executor.as_ref()),
+                        emotes: self.emotes.as_deref(),
+                        doener: self.doener.as_ref(),
+                        repology: self.repology.as_ref(),
+                        dhl: self.dhl.as_deref(),
+                        rdap: self.rdap.as_ref(),
+                        ipinfo: self.ipinfo.as_deref(),
+                        web_budget: &web_budget,
+                        shipment_budget: &shipment_budget,
+                        network_budget: &network_budget,
+                        command_catalog: &self.command_catalog,
+                        emote_tracker: self.emote_tracker.as_ref(),
+                        trace: &trace,
+                        cancellation: &input.cancellation,
+                    };
+                    if input.cancellation.is_cancelled() {
+                        return TurnOutcome::Silent;
                     }
-                    Ok(AgentOutcome::Timeout { round }) => {
-                        warn!(
-                            round,
-                            timeout_s = turn_timeout.as_secs(),
-                            model = %model,
-                            "AI per-round timeout"
-                        );
-                        Err(TIMEOUT_NOTICE)
-                    }
-                    Ok(AgentOutcome::DeadlineExceeded { round }) => {
-                        warn!(
-                            round,
-                            deadline_s = turn_deadline.as_secs(),
-                            model = %model,
-                            "AI turn deadline exceeded"
-                        );
-                        Err(TIMEOUT_NOTICE)
-                    }
-                    Err(e) => {
-                        crate::log_handled!(error, e, "AI llm error");
-                        match user_facing_provider_message(&e) {
-                            Some(reply) => Err(reply),
-                            None => Ok(None),
+                    let final_text = match run_agent(&*llm_client, req, &combined_exec, opts).await
+                    {
+                        Ok(AgentOutcome::Text(text)) => Ok(Some(text)),
+                        Ok(AgentOutcome::MaxRoundsExceeded) => {
+                            warn!("AI max_turn_rounds exceeded");
+                            Ok(None)
                         }
-                    }
-                };
-
-                match final_text {
-                    Ok(Some(text)) => {
-                        if input.cancellation.is_cancelled() {
-                            return TurnOutcome::Silent;
+                        Ok(AgentOutcome::Timeout { round }) => {
+                            warn!(
+                                round,
+                                timeout_s = turn_timeout.as_secs(),
+                                model = %model,
+                                "AI per-round timeout"
+                            );
+                            Err(TIMEOUT_NOTICE)
                         }
-                        let line = prepare_agent_reply(
-                            &*llm_client,
-                            &text,
-                            &RewordOpts {
-                                model: model.clone(),
-                                timeout: turn_timeout,
-                                reasoning_effort: reasoning_effort.clone(),
-                                service_tier: service_tier.clone(),
-                                trace: trace.clone(),
-                            },
-                            &reply_limits,
-                        )
-                        .await;
-                        if line.is_empty() {
-                            TurnOutcome::Silent
-                        } else {
-                            TurnOutcome::Reply {
-                                text: line,
-                                display_name: display_name.clone(),
+                        Ok(AgentOutcome::DeadlineExceeded { round }) => {
+                            warn!(
+                                round,
+                                deadline_s = turn_deadline.as_secs(),
+                                model = %model,
+                                "AI turn deadline exceeded"
+                            );
+                            Err(TIMEOUT_NOTICE)
+                        }
+                        Err(e) => {
+                            crate::log_handled!(error, e, "AI llm error");
+                            match user_facing_provider_message(&e) {
+                                Some(reply) => Err(reply),
+                                None => Ok(None),
                             }
                         }
+                    };
+
+                    match final_text {
+                        Ok(Some(text)) => {
+                            if input.cancellation.is_cancelled() {
+                                return TurnOutcome::Silent;
+                            }
+                            let line = prepare_agent_reply(
+                                &*llm_client,
+                                &text,
+                                &RewordOpts {
+                                    model: model.clone(),
+                                    timeout: turn_timeout,
+                                    reasoning_effort: reasoning_effort.clone(),
+                                    service_tier: service_tier.clone(),
+                                    trace: trace.clone(),
+                                },
+                                &reply_limits,
+                            )
+                            .await;
+                            if line.is_empty() {
+                                TurnOutcome::Silent
+                            } else {
+                                TurnOutcome::Reply {
+                                    text: line,
+                                    display_name: display_name.clone(),
+                                }
+                            }
+                        }
+                        Ok(None) => TurnOutcome::Silent,
+                        Err(notice) => TurnOutcome::Notice(notice),
                     }
-                    Ok(None) => TurnOutcome::Silent,
-                    Err(notice) => TurnOutcome::Notice(notice),
-                }
-            },
+                },
+            )),
         )
         .await;
 

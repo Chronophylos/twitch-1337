@@ -125,7 +125,11 @@ impl LlmRegistry {
         let started = tokio::time::Instant::now();
         tokio::time::timeout(
             Duration::from_secs(prof.timeout),
-            client.chat_completion(request),
+            crate::util::observability::metrics::with_llm_scope(
+                "profile_test",
+                &prof.name,
+                client.chat_completion(request),
+            ),
         )
         .await
         .map_err(|_| ProfileTestError::Llm(LlmError::Timeout))??;

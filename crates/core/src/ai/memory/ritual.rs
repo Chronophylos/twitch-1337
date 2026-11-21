@@ -28,6 +28,7 @@ use crate::lifecycle::Lifecycle;
 use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
+use crate::util::observability::metrics;
 
 /// Resolve `run_at` on `date` to a Berlin `ZonedDateTime`, bumping forward an
 /// hour when the requested local time is not unambiguous: across the
@@ -413,7 +414,7 @@ async fn run_ritual_until(
             session_id,
             tags: vec!["dreamer".into()],
         },
-        async {
+        metrics::with_llm_scope("dreamer", &base_profile.name, async {
             if lifecycle.is_cancelled() {
                 return;
             }
@@ -438,7 +439,7 @@ async fn run_ritual_until(
                 }
                 Err(error) => crate::log_handled!(error, error, "dreamer llm error"),
             }
-        },
+        }),
     )
     .await;
     Ok(())

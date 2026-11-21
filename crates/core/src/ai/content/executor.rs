@@ -89,6 +89,7 @@ impl ContentToolExecutor {
         Some(MediaClient::new(
             self.http.clone(),
             profile.provider.as_str(),
+            profile.name.clone(),
             base_url,
             self.registry.secret_for(&profile),
             profile.model.clone(),
