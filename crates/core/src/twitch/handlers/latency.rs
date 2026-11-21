@@ -85,7 +85,7 @@ pub async fn run_latency_handler<T, L>(
 
                 let send_time = tokio::time::Instant::now();
                 if let Err(e) = client.send_message(irc!["PING", nonce.clone()]).await {
-                    warn!(error = ?e, "Failed to send PING");
+                    crate::log_handled!(warn, e, "Failed to send PING");
                     continue;
                 }
                 let pong_result = tokio::time::timeout(LATENCY_PING_TIMEOUT, async {

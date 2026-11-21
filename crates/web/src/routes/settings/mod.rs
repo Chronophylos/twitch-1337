@@ -52,7 +52,7 @@ async fn save(
     let before = (*state.settings.load()).clone();
     let (patch, parse_errors) = settings::overrides_from_form(&pairs);
     if !parse_errors.is_empty() {
-        tracing::info!(
+        tracing::debug!(
             target: "twitch_1337_web",
             user_id = %session.user_id,
             action = "settings_apply",
@@ -89,7 +89,7 @@ async fn save(
             Ok(Redirect::to("/settings").into_response())
         }
         Err(SettingsError::Validation(errors)) => {
-            tracing::info!(
+            tracing::debug!(
                 target: "twitch_1337_web",
                 user_id = %session.user_id,
                 action = "settings_apply",

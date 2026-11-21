@@ -155,11 +155,8 @@ impl NewsCommand {
             match whisper.send_whisper(&ctx.privmsg.sender.id, response).await {
                 Ok(sent) => return Ok(sent),
                 Err(error) => {
-                    warn!(
-                        error = ?error,
-                        user = %ctx.privmsg.sender.login,
-                        "News whisper is not authenticated or unavailable; falling back to chat"
-                    );
+                    crate::log_handled!(warn, error, user = %ctx.privmsg.sender.login,
+                    "News whisper is not authenticated or unavailable; falling back to chat");
                 }
             }
         } else {
@@ -325,7 +322,7 @@ where
                 true,
             ),
             Ok(Err(e)) => {
-                error!(error = ?e, "News AI execution failed");
+                crate::log_handled!(error, e, "News AI execution failed");
                 ("Da ist was schiefgelaufen FDM".to_string(), false)
             }
             Err(_) => {

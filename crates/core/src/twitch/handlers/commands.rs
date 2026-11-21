@@ -244,7 +244,7 @@ where
     ) {
         Ok(invocation) => invocation,
         Err(e) => {
-            error!(error = ?e, "Skipping command without a stable user key");
+            crate::log_handled!(error, e, "Skipping command without a stable user key");
             return Ok(());
         }
     };
@@ -260,8 +260,9 @@ where
                     if e.downcast_ref::<commands::CommandCancelled>().is_some() {
                         debug!(command = %trigger, "Inline command cancelled");
                     } else {
-                        error!(
-                            error = ?e,
+                        crate::log_handled!(
+                            error,
+                            e,
                             user = %user,
                             command = %trigger,
                             "Error handling command"

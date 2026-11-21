@@ -102,6 +102,9 @@ pub async fn run_message_router(
         if lifecycle.is_cancelled() {
             return;
         }
+        if matches!(message, ServerMessage::GlobalUserState(_)) {
+            info!("IRC connection (re)authenticated");
+        }
         let inbound = Inbound::new(message);
         inbound
             .span

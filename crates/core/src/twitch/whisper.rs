@@ -101,11 +101,8 @@ where
             return;
         }
         if let Err(error) = save_known_recipients(&self.store_path, &guard).await {
-            warn!(
-                error = ?error,
-                path = %self.store_path.display(),
-                "Failed to persist successful whisper recipient"
-            );
+            crate::log_handled!(warn, error, path = %self.store_path.display(),
+            "Failed to persist successful whisper recipient");
         }
     }
 }

@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use eyre::Result;
 use tokio::sync::mpsc;
-use tracing::error;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::TrackerCommand;
@@ -50,7 +49,7 @@ where
         };
 
         if let Err(e) = self.tracker_tx.send(cmd).await {
-            error!(error = ?e, "Failed to send flights command to flight tracker");
+            crate::log_handled!(error, e, "Failed to send flights command to flight tracker");
         }
 
         Ok(())
@@ -108,7 +107,7 @@ where
         };
 
         if let Err(e) = self.tracker_tx.send(cmd).await {
-            error!(error = ?e, "Failed to send flight command to flight tracker");
+            crate::log_handled!(error, e, "Failed to send flight command to flight tracker");
         }
 
         Ok(())

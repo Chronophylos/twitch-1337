@@ -11,7 +11,6 @@ use crate::util::http::SendTraced as _;
 use eyre::{Result, WrapErr as _};
 use parking_lot::Mutex;
 use reqwest::Client;
-use tracing::warn;
 
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 const CACHE_TTL: Duration = Duration::from_secs(300);
@@ -107,14 +106,15 @@ impl ModelCatalog {
                 let mut guard = self.cache.lock();
                 guard.fetch_failed_until = Some(Instant::now() + FAILURE_BACKOFF);
                 if let Some(stale) = guard.entry.as_ref() {
-                    warn!(
-                        error = ?e,
+                    crate::log_handled!(
+                        warn,
+                        e,
                         stale_age_secs = stale.fetched_at.elapsed().as_secs(),
                         "OpenRouter catalog refresh failed; using stale cache"
                     );
                     return Ok(stale.by_id.clone());
                 }
-                warn!(error = ?e, "OpenRouter catalog fetch failed");
+                crate::log_handled!(warn, e, "OpenRouter catalog fetch failed");
                 Err(e)
             }
         }

@@ -90,7 +90,7 @@ pub async fn execute_search_packages(
     let lookup = match client.fetch_project(query).await {
         Ok(l) => l,
         Err(e) => {
-            tracing::warn!(error = ?e, query, "search_packages repology lookup failed");
+            crate::log_handled!(warn, e, query, "search_packages repology lookup failed");
             return ToolResultMessage::for_call(
                 call,
                 json!({"error": "repology unavailable"}).to_string(),

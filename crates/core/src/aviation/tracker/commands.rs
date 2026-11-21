@@ -335,7 +335,7 @@ async fn lookup_aviationstack_metadata(
             }
         }
         Err(e) => {
-            warn!(error = ?e, identifier = %identifier, "Aviationstack metadata lookup failed");
+            crate::log_handled!(warn, e, identifier = %identifier, "Aviationstack metadata lookup failed");
             AviationstackLookup {
                 checked: true,
                 metadata: None,

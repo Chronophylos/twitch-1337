@@ -346,7 +346,7 @@ where
                     "Konnte den Deutschland-Ø auf Döneratlas nicht lesen FDM".to_string()
                 }
                 Err(e) => {
-                    warn!(error = ?e, "doeneratlas stats fetch failed");
+                    crate::log_handled!(warn, e, "doeneratlas stats fetch failed");
                     "Döneratlas gerade nicht erreichbar FDM".to_string()
                 }
             },

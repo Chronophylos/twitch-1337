@@ -41,7 +41,7 @@ fn chat_error(e: &PingError) -> String {
         PingError::NotMember { ping, user } => format!("{user} ist nicht in \"{ping}\" FDM"),
         PingError::Unavailable => "Ping-System ist gerade nicht verfügbar FDM".to_string(),
         PingError::Persist(_) => {
-            tracing::error!(error = ?e, "Failed to persist ping change");
+            crate::log_handled!(error, e, "Failed to persist ping change");
             "Konnte Pings nicht speichern FDM".to_string()
         }
     }

@@ -258,6 +258,7 @@ where
     };
     save_then_announce(seen, dirty, data_dir, lines, lifecycle, |line| {
         let channel = channel.to_owned();
+        tracing::info!(alert = %line, "Alert announced");
         async move { sender.say(channel, line).await }
     })
     .await
@@ -286,14 +287,19 @@ where
 
 /// Parse a feed body. Any failure logs and yields `None`; the caller skips
 /// this tick so a 200 with HTML (or a shape change) never looks like "no events."
-fn parsed_or_skip<E: std::fmt::Debug>(
+fn parsed_or_skip<E: std::fmt::Display + std::fmt::Debug>(
     feed: &'static str,
     parsed: Result<Vec<Candidate>, E>,
 ) -> Option<Vec<Candidate>> {
     match parsed {
         Ok(v) => Some(v),
         Err(error) => {
-            tracing::warn!(?error, feed, "alerts feed body could not be parsed");
+            crate::log_handled!(
+                warn,
+                error,
+                alerts.feed = feed,
+                "alerts feed body could not be parsed"
+            );
             None
         }
     }
@@ -321,7 +327,7 @@ where
     clippy::too_many_arguments,
     reason = "one-shot poll: fetch, parse, dedupe"
 )]
-async fn poll_feed<E: std::fmt::Debug>(
+async fn poll_feed<E: std::fmt::Display + std::fmt::Debug>(
     http: &reqwest::Client,
     feed: &'static str,
     url: &str,
@@ -335,7 +341,7 @@ async fn poll_feed<E: std::fmt::Debug>(
     if lifecycle.is_cancelled() {
         return PollStep::Cancelled;
     }
-    let Some(body) = fetch(http, url, max_bytes).await else {
+    let Some(body) = fetch(http, feed, url, max_bytes).await else {
         return PollStep::Complete {
             lines: Vec::new(),
             dirty: false,
@@ -356,25 +362,41 @@ async fn poll_feed<E: std::fmt::Debug>(
 
 /// Fetch a feed body of at most `max_bytes`. Any failure, an oversized body
 /// included, logs and yields `None`; the caller skips this tick.
-async fn fetch(http: &reqwest::Client, url: &str, max_bytes: u64) -> Option<String> {
+async fn fetch(
+    http: &reqwest::Client,
+    feed: &'static str,
+    url: &str,
+    max_bytes: u64,
+) -> Option<String> {
     let resp = match http.get(url).send_traced().await {
         Ok(r) => r,
         Err(error) => {
             let error = error.without_url();
-            tracing::warn!(?error, "alerts feed request failed");
+            crate::log_handled!(
+                warn,
+                error,
+                alerts.feed = feed,
+                "alerts feed request failed"
+            );
             return None;
         }
     };
     let status = resp.status();
     if !status.is_success() {
-        tracing::warn!(%status, "alerts feed returned an unexpected status");
+        crate::util::observability::mark_span_error(&status);
+        tracing::warn!(%status, alerts.feed = feed, "alerts feed returned an unexpected status");
         return None;
     }
     match crate::util::http::read_capped(resp, max_bytes).await {
         Ok(b) => Some(String::from_utf8_lossy(&b).into_owned()),
         Err(error) => {
             let error = error.without_url();
-            tracing::warn!(?error, "alerts feed body could not be read");
+            crate::log_handled!(
+                warn,
+                error,
+                alerts.feed = feed,
+                "alerts feed body could not be read"
+            );
             None
         }
     }

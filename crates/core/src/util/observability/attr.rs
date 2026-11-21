@@ -54,6 +54,8 @@ pub const AI_AGENT: &str = "ai.agent";
 pub const AI_PROFILE: &str = "ai.profile";
 /// Turn session nonce (the Langfuse session). Never a label.
 pub const AI_TURN_SESSION_ID: &str = "ai.turn.session_id";
+/// How a Turn ended: `reply`, `notice`, `silent`. Label.
+pub const AI_TURN_OUTCOME: &str = "ai.turn.outcome";
 
 /// Tracked Flight callsign. Never a label.
 pub const AVIATION_FLIGHT_CALLSIGN: &str = "aviation.flight.callsign";

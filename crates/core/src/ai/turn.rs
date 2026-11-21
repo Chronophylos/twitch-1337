@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use eyre::Result;
-use tracing::{Instrument as _, error, warn};
+use tracing::{Instrument as _, error, info, warn};
 
 use llm::{
     AgentOpts, AgentOutcome, LlmError, ToolCall, ToolCallRound, ToolChatCompletionRequest,
@@ -600,7 +600,7 @@ impl TurnRunner {
                         Err(TIMEOUT_NOTICE)
                     }
                     Err(e) => {
-                        error!(error = ?e, "AI llm error");
+                        crate::log_handled!(error, e, "AI llm error");
                         match user_facing_provider_message(&e) {
                             Some(reply) => Err(reply),
                             None => Ok(None),
@@ -645,6 +645,18 @@ impl TurnRunner {
         if input.cancellation.is_cancelled() {
             return Err(crate::commands::CommandCancelled.into());
         }
+        let outcome_kind = match &outcome {
+            TurnOutcome::Reply { .. } => "reply",
+            TurnOutcome::Notice(_) => "notice",
+            TurnOutcome::Silent => "silent",
+        };
+        info!(
+            ai.agent = if grok_alias { "grok" } else { "aurora" },
+            ai.profile = %connection.name,
+            gen_ai.request.model = %model,
+            ai.turn.outcome = outcome_kind,
+            "Turn completed"
+        );
         Ok(outcome)
     }
 }

@@ -24,7 +24,7 @@ use tokio::{
     task::JoinError,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument as _, debug, error, info, info_span, warn};
+use tracing::{Instrument as _, debug, error, info, info_span};
 use twitch_irc::{
     login::LoginCredentials,
     message::{PrivmsgMessage, ServerMessage},
@@ -221,7 +221,7 @@ pub(crate) async fn wait_until_schedule(clock: &dyn Clock, hour: u32, minute: u3
     let now = clock.now_utc();
 
     if next_run > now {
-        info!(
+        debug!(
             next_run_utc = ?next_run,
             next_run_berlin = ?to_berlin(next_run),
             wait_seconds = (next_run - now).as_secs(),
@@ -254,7 +254,7 @@ pub(crate) async fn sleep_until_hms(
 
     let now_utc = clock.now_utc();
     if target > now_utc {
-        info!(
+        debug!(
             hour,
             minute,
             second,
@@ -414,7 +414,7 @@ pub async fn load_leaderboard(data_dir: &std::path::Path) -> HashMap<String, Per
                 leaderboard
             }
             Err(e) => {
-                warn!(error = ?e, "Failed to parse leaderboard file, starting fresh");
+                crate::log_handled!(warn, e, "Failed to parse leaderboard file, starting fresh");
                 HashMap::new()
             }
         },
@@ -423,7 +423,7 @@ pub async fn load_leaderboard(data_dir: &std::path::Path) -> HashMap<String, Per
             HashMap::new()
         }
         Err(e) => {
-            warn!(error = ?e, "Failed to read leaderboard file, starting fresh");
+            crate::log_handled!(warn, e, "Failed to read leaderboard file, starting fresh");
             HashMap::new()
         }
     }
@@ -443,7 +443,7 @@ pub(crate) async fn save_leaderboard(
             "Saved leaderboard to {}",
             path.display()
         ),
-        Err(e) => error!(error = ?e, "Failed to save leaderboard"),
+        Err(e) => crate::log_handled!(error, e, "Failed to save leaderboard"),
     }
 }
 
@@ -463,7 +463,11 @@ pub async fn load_hall_of_shame(data_dir: &std::path::Path) -> HashMap<String, P
                 hall_of_shame
             }
             Err(e) => {
-                warn!(error = ?e, "Failed to parse hall of shame file, starting fresh");
+                crate::log_handled!(
+                    warn,
+                    e,
+                    "Failed to parse hall of shame file, starting fresh"
+                );
                 HashMap::new()
             }
         },
@@ -472,7 +476,7 @@ pub async fn load_hall_of_shame(data_dir: &std::path::Path) -> HashMap<String, P
             HashMap::new()
         }
         Err(e) => {
-            warn!(error = ?e, "Failed to read hall of shame file, starting fresh");
+            crate::log_handled!(warn, e, "Failed to read hall of shame file, starting fresh");
             HashMap::new()
         }
     }
@@ -492,7 +496,7 @@ pub(crate) async fn save_hall_of_shame(
             "Saved hall of shame to {}",
             path.display()
         ),
-        Err(e) => error!(error = ?e, "Failed to save hall of shame"),
+        Err(e) => crate::log_handled!(error, e, "Failed to save hall of shame"),
     }
 }
 

@@ -874,7 +874,7 @@ impl TaskSupervisor {
             if error.is_none() {
                 error = Some(SupervisorError::FinalizerFailed { finalizer, source });
             } else {
-                tracing::error!(finalizer, error = ?source, "Lifecycle finalizer failed");
+                crate::log_handled!(error, source, finalizer, "Lifecycle finalizer failed");
             }
         }
 

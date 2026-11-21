@@ -69,7 +69,7 @@ async fn fetch_messages_for_date(
     let response = match http.get(&url).send_traced().await {
         Ok(resp) => resp,
         Err(e) => {
-            warn!(error = ?e, url = %url, "Failed to fetch chat history");
+            crate::log_handled!(warn, e, url = %url, "Failed to fetch chat history");
             return Vec::new();
         }
     };
@@ -86,14 +86,14 @@ async fn fetch_messages_for_date(
     let body = match read_capped(response, PREFILL_MAX_BODY_BYTES).await {
         Ok(body) => body,
         Err(e) => {
-            warn!(error = ?e, url = %url, "Failed to read chat history response");
+            crate::log_handled!(warn, e, url = %url, "Failed to read chat history response");
             return Vec::new();
         }
     };
     let log_response: LogResponse = match serde_json::from_slice(&body) {
         Ok(parsed) => parsed,
         Err(e) => {
-            warn!(error = ?e, url = %url, "Failed to parse chat history response");
+            crate::log_handled!(warn, e, url = %url, "Failed to parse chat history response");
             return Vec::new();
         }
     };
@@ -136,7 +136,7 @@ pub async fn prefill_chat_history(
     {
         Ok(client) => client,
         Err(e) => {
-            warn!(error = ?e, "Failed to create HTTP client for history prefill");
+            crate::log_handled!(warn, e, "Failed to create HTTP client for history prefill");
             return VecDeque::with_capacity(history_length);
         }
     };

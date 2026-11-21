@@ -191,7 +191,7 @@ impl LlmRegistry {
                 Some(client)
             }
             Err(e) => {
-                error!(error = ?e, profile = %prof.name, "Failed to initialize LLM client");
+                crate::log_handled!(error, e, profile = %prof.name, "Failed to initialize LLM client");
                 None
             }
         }

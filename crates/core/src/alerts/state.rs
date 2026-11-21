@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::info;
 
 pub const FILENAME: &str = "alerts.ron";
 
@@ -47,11 +47,11 @@ impl SeenState {
                 state
             }
             Ok(Err(error)) => {
-                warn!(?error, "alerts.ron did not parse, starting empty");
+                crate::log_handled!(warn, error, "alerts.ron did not parse, starting empty");
                 Self::default()
             }
             Err(error) => {
-                warn!(?error, "alerts.ron could not be read, starting empty");
+                crate::log_handled!(warn, error, "alerts.ron could not be read, starting empty");
                 Self::default()
             }
         }
@@ -63,7 +63,7 @@ impl SeenState {
     pub async fn save(&self, data_dir: &Path) {
         let path = data_dir.join(FILENAME);
         if let Err(error) = crate::util::persist::atomic_save_ron_async(self, &path).await {
-            warn!(?error, "Failed to save alerts.ron");
+            crate::log_handled!(warn, error, "Failed to save alerts.ron");
         }
     }
 }

@@ -483,7 +483,7 @@ impl PingManager {
         store.pings.retain(|name, ping| match validate_template(&ping.template) {
             Ok(()) => true,
             Err(e) => {
-                tracing::warn!(ping = %name, error = ?e, "Dropping ping with invalid template on load");
+                crate::log_handled!(warn, e, ping = %name, "Dropping ping with invalid template on load");
                 false
             }
         });
@@ -691,7 +691,7 @@ impl PingManager {
             return TriggerDecision::Skip;
         };
         if let Err(e) = self.record_trigger(ping_name).await {
-            tracing::warn!(ping = %ping_name, error = ?e, "Failed to persist fire stats");
+            crate::log_handled!(warn, e, ping = %ping_name, "Failed to persist fire stats");
         }
         TriggerDecision::Fire(rendered)
     }

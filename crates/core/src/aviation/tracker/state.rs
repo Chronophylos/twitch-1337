@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use tokio::fs;
-use tracing::{info, warn};
+use tracing::info;
 
 use super::{FlightIdentifier, FlightTrackerState, HexSource, TargetConfirmation};
 use crate::aviation::tracker::metadata::seed_flight_aliases;
@@ -86,7 +86,11 @@ pub(crate) async fn load_tracker_state(data_dir: &Path) -> FlightTrackerState {
                 state
             }
             Err(e) => {
-                warn!(error = ?e, "Failed to parse flight tracker state, starting fresh");
+                crate::log_handled!(
+                    warn,
+                    e,
+                    "Failed to parse flight tracker state, starting fresh"
+                );
                 FlightTrackerState::default()
             }
         },
@@ -95,7 +99,11 @@ pub(crate) async fn load_tracker_state(data_dir: &Path) -> FlightTrackerState {
             FlightTrackerState::default()
         }
         Err(e) => {
-            warn!(error = ?e, "Failed to read flight tracker state, starting fresh");
+            crate::log_handled!(
+                warn,
+                e,
+                "Failed to read flight tracker state, starting fresh"
+            );
             FlightTrackerState::default()
         }
     }
@@ -109,7 +117,7 @@ pub(crate) async fn save_tracker_state(data_dir: &Path, state: &FlightTrackerSta
             "Saved flight tracker state to {}",
             path.display()
         ),
-        Err(e) => tracing::error!(error = ?e, "Failed to save flight tracker state"),
+        Err(e) => crate::log_handled!(error, e, "Failed to save flight tracker state"),
     }
 }
 

@@ -295,6 +295,7 @@ impl IntoResponse for WebError {
                 },
             ),
             WebError::OAuthExchange(err) => {
+                twitch_1337_core::util::observability::mark_span_error(&err);
                 tracing::error!(
                     target: "twitch_1337_web",
                     error = ?err,
@@ -307,6 +308,7 @@ impl IntoResponse for WebError {
                 (StatusCode::METHOD_NOT_ALLOWED, "method not allowed").into_response()
             }
             WebError::Internal(err) => {
+                twitch_1337_core::util::observability::mark_span_error(&err);
                 tracing::error!(
                     target: "twitch_1337_web",
                     error = ?err,

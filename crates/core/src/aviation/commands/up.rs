@@ -98,7 +98,7 @@ where
         }
         Err(e) => {
             cancellation.check()?;
-            error!(error = ?e, input = %input, "Location resolution failed");
+            crate::log_handled!(error, e, input = %input, "Location resolution failed");
             sender.reply(privmsg, "Da ist was schiefgelaufen FDM").await;
             return Ok(());
         }
@@ -209,7 +209,7 @@ where
                         match res {
                             Ok(Ok(r)) => r,
                             Ok(Err(e)) => {
-                                warn!(callsign = %cs, error = ?e, "adsbdb lookup failed");
+                                crate::log_handled!(warn, e, callsign = %cs, "adsbdb lookup failed");
                                 None
                             }
                             Err(_) => {
@@ -271,7 +271,7 @@ where
             format!("✈ {total} Flieger über {display_name}: {joined}")
         }
         Ok(Err(e)) => {
-            error!(error = ?e, input = %input, "!up command failed");
+            crate::log_handled!(error, e, input = %input, "!up command failed");
             "Da ist was schiefgelaufen FDM".to_string()
         }
         Err(_) => {

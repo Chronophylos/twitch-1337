@@ -4,7 +4,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::Mutex;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use llm::{ToolCall, ToolResultMessage, TraceIds};
 
@@ -186,15 +186,15 @@ impl ContentToolExecutor {
             Err(err) => {
                 let code = match &err {
                     SearchError::Timeout(_) => {
-                        warn!(error = ?err, query, "web_search timed out");
+                        crate::log_handled!(warn, err, query, "web_search timed out");
                         "search_timeout"
                     }
                     SearchError::Upstream(e) if is_flake(e) => {
-                        warn!(error = ?err, query, "web_search upstream flake");
+                        crate::log_handled!(warn, err, query, "web_search upstream flake");
                         "search_failed"
                     }
                     SearchError::Upstream(_) => {
-                        error!(error = ?err, query, "web_search failed");
+                        crate::log_handled!(error, err, query, "web_search failed");
                         "search_failed"
                     }
                 };
@@ -287,7 +287,7 @@ impl ContentToolExecutor {
                 })
             }
             FetchError::Blocked { .. } => {
-                warn!(error = ?err, url, "read_url blocked");
+                debug!(error = ?err, url, "read_url blocked");
                 json!({ "error": "fetch_blocked" })
             }
             FetchError::TooLarge => {
@@ -303,19 +303,19 @@ impl ContentToolExecutor {
                 json!({ "error": "no_readable_content" })
             }
             FetchError::Timeout(_) => {
-                warn!(error = ?err, url, "read_url timed out");
+                crate::log_handled!(warn, err, url, "read_url timed out");
                 json!({ "error": "fetch_timeout" })
             }
             FetchError::Status { status, source } => {
                 if is_flake(source) {
-                    warn!(error = ?err, url, "read_url upstream flake");
+                    crate::log_handled!(warn, err, url, "read_url upstream flake");
                 } else {
                     debug!(error = ?err, url, "read_url target returned an error status");
                 }
                 json!({ "error": "fetch_failed", "status": status.as_u16() })
             }
             FetchError::Upstream(_) => {
-                error!(error = ?err, url, "read_url fetch failed");
+                crate::log_handled!(error, err, url, "read_url fetch failed");
                 json!({ "error": "fetch_failed" })
             }
         }
@@ -325,15 +325,15 @@ impl ContentToolExecutor {
     fn map_media_err(err: &MediaError, url: &str) -> String {
         let code = match err {
             MediaError::Timeout(_) => {
-                warn!(error = ?err, url, "read_url media timeout");
+                crate::log_handled!(warn, err, url, "read_url media timeout");
                 "analysis_timeout"
             }
             MediaError::Upstream(e) if is_flake(e) => {
-                warn!(error = ?err, url, "read_url media upstream flake");
+                crate::log_handled!(warn, err, url, "read_url media upstream flake");
                 "analysis_failed"
             }
             MediaError::Upstream(_) | MediaError::EmptyAnswer => {
-                error!(error = ?err, url, "read_url media failed");
+                crate::log_handled!(error, err, url, "read_url media failed");
                 "analysis_failed"
             }
         };

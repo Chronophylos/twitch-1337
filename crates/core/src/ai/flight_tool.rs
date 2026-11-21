@@ -216,7 +216,7 @@ pub async fn execute_plan_flight(
     }) {
         Ok(receiver) => receiver,
         Err(error) => {
-            tracing::warn!(error = ?error, "plan_flight could not register blocking child");
+            crate::log_handled!(warn, error, "plan_flight could not register blocking child");
             return err(call, json!({"error": "task_group_closed"}));
         }
     };
@@ -225,11 +225,11 @@ pub async fn execute_plan_flight(
     let fp = match result {
         Ok(Ok(fp)) => fp,
         Ok(Err(e)) => {
-            tracing::warn!(error = ?e, "plan_flight: no route found");
+            tracing::debug!(error = ?e, "plan_flight: no route found");
             return route_error(call, &e);
         }
         Err(e) => {
-            tracing::warn!(error = ?e, "plan_flight: generation task panicked");
+            crate::log_handled!(warn, e, "plan_flight: generation task panicked");
             return err(call, json!({"error": "generation_failed"}));
         }
     };

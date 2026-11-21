@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use eyre::Result;
 use jiff::Timestamp;
-use tracing::{debug, error};
+use tracing::debug;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::ai::chat_history::{ChatHistory, ChatHistoryBuffer};
@@ -359,7 +359,7 @@ where
                 self.turn.bot_username.clone()
             }
             Err(e) => {
-                error!(error = ?e, agent = ?agent, "mouth speak failed");
+                crate::log_handled!(error, e, agent = ?agent, "mouth speak failed");
                 // Out of v1: no auto-fallback resend (double-speak risk). No history write.
                 // A short notice is not a resend — Err means chat saw nothing — and the
                 // realistic failure (mouth timed out, channel-restricted) is persistent,
@@ -389,7 +389,7 @@ where
             .append_line(ts, &recorded_login, None, &line)
             .await
         {
-            error!(error = ?e, "transcript bot-reply append failed");
+            crate::log_handled!(error, e, "transcript bot-reply append failed");
         }
 
         Ok(())

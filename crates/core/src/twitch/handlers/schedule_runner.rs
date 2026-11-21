@@ -19,7 +19,7 @@ use thiserror::Error;
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinError;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument as _, info, info_span, warn};
+use tracing::{Instrument as _, debug, info, info_span, warn};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::lifecycle::{Lifecycle, TaskGroup};
@@ -53,7 +53,7 @@ impl SchedulePing {
         {
             TriggerDecision::Fire(rendered) => sender.say(channel.to_owned(), rendered).await,
             TriggerDecision::OnCooldown(remaining) => {
-                info!(ping = %ping_name, ?remaining, "scheduled ping on cooldown, skipped");
+                debug!(ping = %ping_name, ?remaining, "scheduled ping on cooldown, skipped");
             }
             TriggerDecision::Skip => {
                 warn!(ping = %ping_name, "scheduled ping missing or has no members, skipped");
@@ -234,7 +234,7 @@ where
                     Ok(ReconcileControl::Shutdown) => ReconcileControl::Shutdown,
                     Err(error) => {
                         if let Err(stop_error) = stop_and_join_all(&mut running).await {
-                            warn!(error = ?stop_error, "Schedules orchestrator: child cleanup failed after reconcile error");
+                            crate::log_handled!(warn, stop_error, "Schedules orchestrator: child cleanup failed after reconcile error");
                         }
                         return Err(error);
                     }
@@ -243,7 +243,7 @@ where
             event = completion_rx.recv() => {
                 let Some(event) = event else {
                     if let Err(stop_error) = stop_and_join_all(&mut running).await {
-                        warn!(error = ?stop_error, "Schedules orchestrator: child cleanup failed after completion channel closed");
+                        crate::log_handled!(warn, stop_error, "Schedules orchestrator: child cleanup failed after completion channel closed");
                     }
                     return Err(ScheduleChildError::CompletedUnexpectedly {
                         name: "schedule child completion channel".to_owned(),
@@ -253,7 +253,7 @@ where
                 };
                 if let Err(error) = observe_completed_child(&mut running, event).await {
                     if let Err(stop_error) = stop_and_join_all(&mut running).await {
-                        warn!(error = ?stop_error, "Schedules orchestrator: child cleanup failed after child fault");
+                        crate::log_handled!(warn, stop_error, "Schedules orchestrator: child cleanup failed after child fault");
                     }
                     return Err(error);
                 }
