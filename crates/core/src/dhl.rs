@@ -10,7 +10,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
 use crate::APP_USER_AGENT;
-use crate::util::http::read_capped;
+use crate::util::http::{SendTraced as _, read_capped};
 
 pub const DEFAULT_BASE_URL: &str = "https://api-eu.dhl.com";
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -137,7 +137,7 @@ impl DhlClient {
             .get(url)
             .header("DHL-API-Key", self.api_key.expose_secret())
             .query(&[("trackingNumber", tracking_number), ("language", "de")])
-            .send()
+            .send_traced()
             .await
             .map_err(|error| {
                 let error = error.without_url();

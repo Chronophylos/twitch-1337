@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use thiserror::Error;
+use tracing::{Instrument as _, field::Empty, info_span};
 
 /// Errors that can occur during atomic persistence operations.
 #[derive(Debug, Error)]
@@ -39,6 +40,17 @@ pub enum AtomicPersistError {
     },
 }
 
+impl AtomicPersistError {
+    /// Variant name, recorded as `error.type`.
+    fn variant_name(&self) -> &'static str {
+        match self {
+            Self::Serialization(_) => "Serialization",
+            Self::WriteTmp { .. } => "WriteTmp",
+            Self::Rename { .. } => "Rename",
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, AtomicPersistError>;
 
 fn serialize<T: Serialize>(value: &T) -> Result<String> {
@@ -48,10 +60,61 @@ fn serialize<T: Serialize>(value: &T) -> Result<String> {
 
 /// Async byte-level atomic write — does not require `Serialize`.
 /// Writes `bytes` to a `.tmp` sibling then renames onto `path`.
+///
+/// `file` is the `bot.persist.file` span label. Unlike the RON helpers, which
+/// label with the file name, byte callers write files named after open-ended
+/// input (memory files per user), so they pass a fixed kind instead.
 pub async fn atomic_write_bytes_async(
     bytes: &[u8],
     path: &Path,
+    file: &'static str,
 ) -> std::result::Result<(), AtomicPersistError> {
+    traced(file, write_bytes(bytes, path)).await
+}
+
+/// Async variant — uses `tokio::fs` so it does not block the runtime.
+/// Serializes with `ron::to_string` (compact) to match the existing tracker
+/// behaviour; switch to pretty if a call-site needs human inspection.
+pub async fn atomic_save_ron_async<T: Serialize>(value: &T, path: &Path) -> Result<()> {
+    traced(file_label(path), save_ron(value, path)).await
+}
+
+/// [`atomic_save_ron_async`] for files holding credentials (OAuth tokens,
+/// session refresh tokens): on unix the file ends up owner-only (`0600`)
+/// regardless of the process umask.
+///
+/// The mode is set on the tmp file before any data is written, and the
+/// rename carries it onto `path`, so a file left `0644` by an older build is
+/// tightened on its next save.
+pub async fn atomic_save_ron_private_async<T: Serialize>(value: &T, path: &Path) -> Result<()> {
+    traced(file_label(path), save_ron_private(value, path)).await
+}
+
+/// Run one write inside a `persist.write` span labelled with `file`.
+async fn traced(file: &str, write: impl Future<Output = Result<()>>) -> Result<()> {
+    let span = info_span!(
+        "persist.write",
+        bot.persist.file = file,
+        error.type = Empty,
+        otel.status_code = Empty,
+    );
+    let result = write.instrument(span.clone()).await;
+    if let Err(error) = &result {
+        span.record("error.type", error.variant_name());
+        span.record("otel.status_code", "ERROR");
+    }
+    result
+}
+
+/// `bot.persist.file` for a RON state file: its file name. Every RON file
+/// has a fixed name, so this stays a bounded set; never the full path.
+fn file_label(path: &Path) -> &str {
+    path.file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default()
+}
+
+async fn write_bytes(bytes: &[u8], path: &Path) -> Result<()> {
     let tmp = path.with_extension("tmp");
     #[expect(
         clippy::disallowed_methods,
@@ -66,10 +129,7 @@ pub async fn atomic_write_bytes_async(
     rename(&tmp, path).await
 }
 
-/// Async variant — uses `tokio::fs` so it does not block the runtime.
-/// Serializes with `ron::to_string` (compact) to match the existing tracker
-/// behaviour; switch to pretty if a call-site needs human inspection.
-pub async fn atomic_save_ron_async<T: Serialize>(value: &T, path: &Path) -> Result<()> {
+async fn save_ron<T: Serialize>(value: &T, path: &Path) -> Result<()> {
     let tmp = path.with_extension("ron.tmp");
     let data = serialize(value)?;
 
@@ -87,14 +147,7 @@ pub async fn atomic_save_ron_async<T: Serialize>(value: &T, path: &Path) -> Resu
     rename(&tmp, path).await
 }
 
-/// [`atomic_save_ron_async`] for files holding credentials (OAuth tokens,
-/// session refresh tokens): on unix the file ends up owner-only (`0600`)
-/// regardless of the process umask.
-///
-/// The mode is set on the tmp file before any data is written, and the
-/// rename carries it onto `path`, so a file left `0644` by an older build is
-/// tightened on its next save.
-pub async fn atomic_save_ron_private_async<T: Serialize>(value: &T, path: &Path) -> Result<()> {
+async fn save_ron_private<T: Serialize>(value: &T, path: &Path) -> Result<()> {
     let tmp = path.with_extension("ron.tmp");
     let data = serialize(value)?;
     write_private(&tmp, data.as_bytes())

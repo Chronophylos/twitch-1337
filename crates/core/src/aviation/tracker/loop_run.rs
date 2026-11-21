@@ -4,7 +4,7 @@ use std::sync::Arc;
 use eyre::WrapErr as _;
 use jiff::tz::TimeZone;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{Instrument as _, info, info_span};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::AviationClient;
@@ -107,56 +107,71 @@ where
                 }
             }
 
-            let deferred_commands = try_poll_all_flights_with_commands(
-                &mut state,
-                &sender,
-                &channel,
-                &aviation_client,
-                &data_dir,
-                &*clock,
-                Some(&mut cmd_rx),
-                &lifecycle,
-            )
-            .await
-            .wrap_err("nested flight-poll child failed")?;
-            let Some(deferred_commands) = deferred_commands else {
-                info!("Flight tracker lifecycle cancelled during poll, shutting down");
-                return Ok(());
-            };
-            for cmd in deferred_commands {
-                if lifecycle.is_cancelled() {
-                    return Ok(());
-                }
-                process_command(
-                    cmd,
+            // One root trace per tick: the poll, deferred commands, and the
+            // journal roll. The sleep below stays outside it.
+            let cycle_span = info_span!(
+                parent: None,
+                "tracker.poll_cycle",
+                aviation.tracker.flights = state.flights.len(),
+            );
+            let next_at = async {
+                let deferred_commands = try_poll_all_flights_with_commands(
                     &mut state,
                     &sender,
+                    &channel,
                     &aviation_client,
                     &data_dir,
                     &*clock,
+                    Some(&mut cmd_rx),
+                    &lifecycle,
                 )
-                .await;
-            }
-
-            if lifecycle.is_cancelled() {
-                return Ok(());
-            }
-            let now = clock.now_utc();
-            // Roll the journal forward: once the date changes, drop stale files.
-            let today = now.to_zoned_datetime(TimeZone::UTC).date();
-            if today != last_journal_date {
-                prune_debug_journals(&data_dir, DEBUG_JOURNAL_KEEP_FILES).await;
-                if lifecycle.is_cancelled() {
-                    return Ok(());
+                .await
+                .wrap_err("nested flight-poll child failed")?;
+                let Some(deferred_commands) = deferred_commands else {
+                    info!("Flight tracker lifecycle cancelled during poll, shutting down");
+                    return Ok(None);
+                };
+                for cmd in deferred_commands {
+                    if lifecycle.is_cancelled() {
+                        return Ok(None);
+                    }
+                    process_command(
+                        cmd,
+                        &mut state,
+                        &sender,
+                        &aviation_client,
+                        &data_dir,
+                        &*clock,
+                    )
+                    .await;
                 }
-                last_journal_date = today;
+
+                if lifecycle.is_cancelled() {
+                    return Ok(None);
+                }
+                let now = clock.now_utc();
+                // Roll the journal forward: once the date changes, drop stale files.
+                let today = now.to_zoned_datetime(TimeZone::UTC).date();
+                if today != last_journal_date {
+                    prune_debug_journals(&data_dir, DEBUG_JOURNAL_KEEP_FILES).await;
+                    if lifecycle.is_cancelled() {
+                        return Ok(None);
+                    }
+                    last_journal_date = today;
+                }
+                let next_at = next_poll_at(&state.flights, now).unwrap_or(now);
+                tracing::debug!(
+                    next_poll_at = %next_at,
+                    flights = state.flights.len(),
+                    "Sleeping until next flight poll"
+                );
+                Ok::<_, eyre::Report>(Some(next_at))
             }
-            let next_at = next_poll_at(&state.flights, now).unwrap_or(now);
-            tracing::debug!(
-                next_poll_at = %next_at,
-                flights = state.flights.len(),
-                "Sleeping until next flight poll"
-            );
+            .instrument(cycle_span)
+            .await?;
+            let Some(next_at) = next_at else {
+                return Ok(());
+            };
 
             let cmd = tokio::select! {
                 biased;

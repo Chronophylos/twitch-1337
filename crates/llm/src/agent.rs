@@ -10,12 +10,12 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::time::Instant;
-use tracing::{debug, instrument, warn};
+use tracing::{Instrument as _, Span, debug, info_span, instrument, warn};
 
 use crate::client::LlmClient;
 use crate::error::Result;
 use crate::types::{
-    ToolCall, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse,
+    ToolCall, ToolCallRound, ToolChatCompletionRequest, ToolChatCompletionResponse, ToolDefinition,
     ToolResultMessage,
 };
 
@@ -51,6 +51,30 @@ pub struct AgentOpts {
 /// Tool result for a call skipped by [`AgentOpts::max_calls_per_round`].
 pub const TOOL_BUDGET_EXHAUSTED: &str =
     "tool_budget_exhausted: too many tool calls in one round; this call was not run";
+
+/// The `execute_tool` span for one tool call. [`run_agent`] wraps every call
+/// it runs in one; callers that execute a tool outside the agent loop use it
+/// too, so each tool execution is exactly one span.
+///
+/// `tool_name` is a metric label, so it must come from a bounded set: a
+/// name the code chose, or a model's call checked against the tools offered.
+pub fn execute_tool_span(tool_name: &str) -> Span {
+    info_span!(
+        "execute_tool",
+        gen_ai.operation.name = "execute_tool",
+        gen_ai.tool.name = tool_name,
+    )
+}
+
+/// `name` if it is one of `tools`, else `"unknown"`: the model can call any
+/// name it likes, and a hallucinated one must not become a new label.
+fn registered_tool_name<'a>(tools: &[ToolDefinition], name: &'a str) -> &'a str {
+    if tools.iter().any(|tool| tool.name == name) {
+        name
+    } else {
+        "unknown"
+    }
+}
 
 /// Terminal state of [`run_agent`].
 #[derive(Debug)]
@@ -119,7 +143,10 @@ pub async fn run_agent<E: ToolExecutor + ?Sized>(
                         return Ok(AgentOutcome::DeadlineExceeded { round });
                     }
                     let result = if i < cap {
-                        crate::observe::observe_tool(executor, call).await
+                        let tool_name = registered_tool_name(&request.tools, &call.name);
+                        crate::observe::observe_tool(executor, call)
+                            .instrument(execute_tool_span(tool_name))
+                            .await
                     } else {
                         ToolResultMessage::for_call(call, TOOL_BUDGET_EXHAUSTED.to_string())
                     };

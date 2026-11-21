@@ -19,7 +19,7 @@ use thiserror::Error;
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinError;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{Instrument as _, info, info_span, warn};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::lifecycle::{Lifecycle, TaskGroup};
@@ -680,17 +680,28 @@ where
             return ScheduleCompletion::Cancelled;
         }
 
-        // Operation-boundary policy: cancellation is checked immediately
-        // before the externally visible send. If cancellation races after this
-        // check, the atomic `say()` is allowed to finish before joining.
-        sender.say(channel.clone(), schedule.message.clone()).await;
-        // The send completed, so record the fire before observing cancellation.
-        // A cancellation racing this await must not make a successful send
-        // disappear from the runtime counters.
-        runtime.record_fire(&schedule.name, clock.now_utc()).await;
-        if let Some(ping_name) = &schedule.ping {
-            ping.fire(&sender, &channel, ping_name).await;
+        // One root trace per fire; the sleep above stays outside it.
+        let fire_span = info_span!(
+            parent: None,
+            "schedule.fire",
+            bot.schedule.name = %schedule.name,
+            ping.name = schedule.ping.as_deref(),
+        );
+        async {
+            // Operation-boundary policy: cancellation is checked immediately
+            // before the externally visible send. If cancellation races after this
+            // check, the atomic `say()` is allowed to finish before joining.
+            sender.say(channel.clone(), schedule.message.clone()).await;
+            // The send completed, so record the fire before observing cancellation.
+            // A cancellation racing this await must not make a successful send
+            // disappear from the runtime counters.
+            runtime.record_fire(&schedule.name, clock.now_utc()).await;
+            if let Some(ping_name) = &schedule.ping {
+                ping.fire(&sender, &channel, ping_name).await;
+            }
         }
+        .instrument(fire_span)
+        .await;
         if cancel.is_cancelled() {
             info!(bot.schedule.name = %schedule.name, "cancelled after send, exiting");
             return ScheduleCompletion::Cancelled;

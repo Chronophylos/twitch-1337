@@ -16,6 +16,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
+use twitch_1337_core::util::http::SendTraced as _;
 
 use crate::clock::Clock;
 
@@ -246,7 +247,7 @@ async fn helix_get<T: DeserializeOwned>(
         .get(url)
         .bearer_auth(bearer_token)
         .header("Client-Id", client_id)
-        .send()
+        .send_traced()
         .await?
         .error_for_status()
         .wrap_err(context)?

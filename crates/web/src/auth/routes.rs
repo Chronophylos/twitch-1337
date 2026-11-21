@@ -22,6 +22,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
 use tower_cookies::cookie::SameSite;
 use tower_cookies::{Cookie, Cookies, Key};
+use twitch_1337_core::util::http::SendTraced as _;
 
 use crate::auth::role_check::{GateOutcome, check_in_allowlist, recheck_mod};
 use crate::auth::session::TwitchRefreshToken;
@@ -183,22 +184,25 @@ impl OAuthCtx {
                 "application/x-www-form-urlencoded",
             )
             .body(form)
-            .send()
+            .send_traced()
             .await
             .wrap_err("token request")?;
         let status = resp.status();
-        let body = resp.bytes().await.wrap_err("token response body")?;
+        let body = resp.text().await.wrap_err("token response body")?;
         // Surface the (token-redacted) raw body so logs show Twitch's message
         // without leaking tokens on success-shaped bodies.
         if !status.is_success() {
-            return Err(eyre!("status {status}, body: {}", redact_token_body(&body)));
+            return Err(eyre!(
+                "status {status}, body: {}",
+                redact_token_body(body.as_bytes())
+            ));
         }
-        serde_json::from_slice::<TokenBody>(&body)
+        serde_json::from_str::<TokenBody>(&body)
             .map(|t| UserTokens {
                 access_token: t.access_token,
                 refresh_token: t.refresh_token.map(TwitchRefreshToken::new),
             })
-            .map_err(|e| eyre!("{e}, body: {}", redact_token_body(&body)))
+            .map_err(|e| eyre!("{e}, body: {}", redact_token_body(body.as_bytes())))
     }
 }
 
@@ -477,7 +481,7 @@ async fn fetch_caller_user(
         .get(users_url)
         .bearer_auth(access_token)
         .header("Client-Id", state.client_id.expose_secret())
-        .send()
+        .send_traced()
         .await
         .wrap_err("helix /users request send")?;
     let status = resp.status();

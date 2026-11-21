@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::Map;
 
 use crate::APP_USER_AGENT;
+use crate::util::http::SendTraced as _;
 
 pub const FILTERED_SUITE_CAP: usize = 3;
 
@@ -249,7 +250,7 @@ impl RepologyClient {
         let resp = self
             .http
             .get(url)
-            .send()
+            .send_traced()
             .await
             .wrap_err("repology project request")
             .map_err(RepologyError::Unavailable)?;
@@ -283,7 +284,7 @@ impl RepologyClient {
         let resp = self
             .http
             .get(url)
-            .send()
+            .send_traced()
             .await
             .wrap_err("repology search request")
             .map_err(RepologyError::Unavailable)?;

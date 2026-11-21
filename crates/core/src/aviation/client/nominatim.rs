@@ -5,6 +5,7 @@ use serde::Deserialize;
 use tracing::debug;
 
 use crate::aviation::location::ResolvedLocation;
+use crate::util::http::SendTraced as _;
 
 use super::AviationClient;
 
@@ -27,7 +28,7 @@ impl AviationClient {
             .http
             .get(&url)
             .query(&[("q", query), ("format", "json"), ("limit", "1")])
-            .send()
+            .send_traced()
             .await
             .wrap_err("Failed to send request to Nominatim")?
             .error_for_status()

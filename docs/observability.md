@@ -24,10 +24,28 @@ A trace is one unit of work started by one stimulus.
 |Inbound IRC message|`irc.message` (router, carried on the `Inbound` envelope)|
 |Schedule due|`schedule.fire`|
 |Flight tracker tick|`tracker.poll_cycle`|
-|Alert feed tick|`alerts.poll`|
+|Alert feed tick|`alerts.poll`, one per feed polled|
 |Dreamer run|`dreamer.ritual`|
+|Daily 13:37 window|`tracker_1337.window`, from the 13:36 wake through the stats post|
 |Dashboard request|`TraceLayer` request span|
 |Startup|`startup`, closed once the bot runs|
+
+Child spans: `http.client` (outbound HTTP, `otel.kind = client`),
+`persist.write` (file persistence), `chat` (LLM call), `execute_tool` (tool
+execution).
+
+Outbound HTTP goes through `util::http::SendTraced` (`send_traced`, or
+`send_traced_dynamic` for a URL a viewer or the model supplied), never
+`RequestBuilder::send`. The `http.client` span stays open until the body is
+read (`TracedResponse::json`/`text`, `read_capped`) or the response is
+dropped, so a failed body read lands on it. An HTTP client span is failed on
+a transport error, a 5xx, a failed body read, or a status the caller rejects
+through `error_for_status`. A 4xx alone is not a failure: several upstreams
+answer 404 for "no such thing". (OTel semconv says client 4xx SHOULD be
+Error; we deviate on purpose.)
+
+A failed child span carries `error.type` and span status Error
+(`otel.status_code = "ERROR"`); `error.type` is never set without it.
 
 Rules:
 
@@ -102,11 +120,11 @@ field syntax needs literals, so spans and logs rely on this table).
 |`gen_ai.provider.name`|AI provider; values are `AiProvider` names (`open_router`, `open_ai`, `open_ai_compatible`, `ollama`)|yes|
 |`gen_ai.request.model`|upstream model id|yes|
 |`gen_ai.operation.name`|`chat`, `execute_tool`, …|yes|
-|`gen_ai.tool.name`|tool called by the model|yes|
+|`gen_ai.tool.name`|tool called by the model; `unknown` when it names a tool the request did not offer|yes|
 |`gen_ai.usage.input_tokens` / `output_tokens`|token counts|no (value)|
 |`http.request.method`, `http.response.status_code`, `http.route`|HTTP, client and server|yes (`url.full` no)|
-|`server.address`|upstream host|yes|
-|`error.type`|error variant name|yes|
+|`server.address`|upstream host; `dynamic` for a URL a viewer or the model supplied (`read_url`, link resolution)|yes|
+|`error.type`|error variant name; for HTTP the status code (`503`) or the failure class (`timeout`, `connect`, `decode`, `body`, `TooLarge`, …)|yes|
 |`twitch.channel`|channel login|yes|
 |`twitch.user.id` / `twitch.user.login`|chatter|**no**|
 |`twitch.message.id`|IRC message id|**no**|
@@ -120,6 +138,8 @@ field syntax needs literals, so spans and logs rely on this table).
 |`aviation.flight.callsign`|Tracked Flight callsign|**no**|
 |`aviation.flight.phase`|Flight Phase|yes|
 |`aviation.provider`|ADS-B / Aviationstack source|yes|
+|`aviation.tracker.flights`|Tracked Flights at the start of a poll cycle|no (value)|
+|`bot.persist.file`|file written by `util::persist`: RON file name (`pings.ron`, …) or a fixed kind (`memory`); never a path|yes|
 |`alerts.feed`|`quake`, `solar`, `cme`|yes|
 
 A new attribute gets a row here in the same change.

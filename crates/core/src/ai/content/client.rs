@@ -13,7 +13,7 @@ use url::Host;
 use crate::APP_USER_AGENT;
 use crate::ai::content::detect::{Bucket, detect};
 use crate::settings::ai::AiMedia;
-use crate::util::http::{BodyError, read_capped};
+use crate::util::http::{BodyError, SendTraced as _, read_capped};
 use crate::util::net::{is_blocked_host_literal, is_non_public_ip};
 use crate::util::truncate_response;
 
@@ -274,7 +274,7 @@ pub async fn fetch_raw(
     let response = http
         .get(url)
         .timeout(timeout)
-        .send()
+        .send_traced_dynamic()
         .await?
         .error_for_status()?;
 
@@ -374,7 +374,7 @@ impl SearchClient {
             .get(&self.base_url)
             .query(&[("q", query), ("format", "json")])
             .timeout(self.timeout)
-            .send()
+            .send_traced()
             .await?
             .error_for_status()?
             .json()
@@ -408,7 +408,7 @@ impl SearchClient {
             .fetch_http
             .get(url)
             .timeout(self.timeout)
-            .send()
+            .send_traced_dynamic()
             .await?
             .error_for_status()?;
 

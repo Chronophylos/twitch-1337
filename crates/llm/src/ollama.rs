@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tracing::field::Empty;
 use tracing::{debug, instrument};
 
 use crate::client::LlmClient;
@@ -7,6 +8,7 @@ use crate::error::{LlmError, Result};
 use crate::types::{
     ChatCompletionRequest, ToolCall, ToolChatCompletionRequest, ToolChatCompletionResponse,
 };
+use crate::util::record_chat_outcome;
 
 // --- Internal serde types for Ollama native API ---
 
@@ -273,7 +275,14 @@ impl OllamaClient {
 impl LlmClient for OllamaClient {
     #[instrument(
         skip_all,
-        fields(gen_ai.provider.name = PROVIDER_NAME, gen_ai.request.model = %request.model),
+        name = "chat",
+        fields(
+            gen_ai.operation.name = "chat",
+            gen_ai.provider.name = PROVIDER_NAME,
+            gen_ai.request.model = %request.model,
+            error.type = Empty,
+            otel.status_code = Empty,
+        ),
     )]
     async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<String> {
         let rec = crate::observe::GenerationInProgress::start(
@@ -282,12 +291,20 @@ impl LlmClient for OllamaClient {
         );
         let result = self.chat_completion_untraced(request).await;
         crate::observe::finish_generation(rec, &result, |text| (text.clone(), None));
+        record_chat_outcome(&result, None);
         result
     }
 
     #[instrument(
         skip_all,
-        fields(gen_ai.provider.name = PROVIDER_NAME, gen_ai.request.model = %request.model),
+        name = "chat",
+        fields(
+            gen_ai.operation.name = "chat",
+            gen_ai.provider.name = PROVIDER_NAME,
+            gen_ai.request.model = %request.model,
+            error.type = Empty,
+            otel.status_code = Empty,
+        ),
     )]
     async fn chat_completion_with_tools(
         &self,
@@ -299,6 +316,7 @@ impl LlmClient for OllamaClient {
         );
         let result = self.chat_completion_with_tools_untraced(request).await;
         crate::observe::finish_generation(rec, &result, |resp| (format_tool_output(resp), None));
+        record_chat_outcome(&result, None);
         result
     }
 }

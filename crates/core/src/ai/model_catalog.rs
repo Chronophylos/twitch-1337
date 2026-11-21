@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::settings::ai::AiProfile;
+use crate::util::http::SendTraced as _;
 use eyre::{Result, WrapErr as _};
 use parking_lot::Mutex;
 use reqwest::Client;
@@ -144,7 +145,7 @@ impl ModelCatalog {
         let resp: serde_json::Value = self
             .http
             .get(&self.models_url)
-            .send()
+            .send_traced()
             .await
             .wrap_err("openrouter models request failed")?
             .error_for_status()

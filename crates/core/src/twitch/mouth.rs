@@ -15,6 +15,7 @@ use serde::Serialize;
 use twitch_irc::login::LoginCredentials;
 
 use crate::util::APP_USER_AGENT;
+use crate::util::http::{SendTraced as _, TracedResponse};
 
 /// Ceiling on any single Helix call made by a mouth. Without it a hung
 /// connection blocks the caller forever.
@@ -165,7 +166,7 @@ impl<L: LoginCredentials> HelixMouth<L> {
         &self,
         token: &str,
         req: &SpeakRequest<'_>,
-    ) -> Result<reqwest::Response, SpeakError> {
+    ) -> Result<TracedResponse, SpeakError> {
         let mut body = serde_json::json!({
             "broadcaster_id": req.broadcaster_id,
             "sender_id": self.user_id,
@@ -181,7 +182,7 @@ impl<L: LoginCredentials> HelixMouth<L> {
             .header("Client-Id", &self.client_id)
             .bearer_auth(token)
             .json(&body)
-            .send()
+            .send_traced()
             .await?)
     }
 }

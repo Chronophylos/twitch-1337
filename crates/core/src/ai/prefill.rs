@@ -4,7 +4,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::util::http::read_capped;
+use crate::util::http::{SendTraced as _, read_capped};
 
 fn default_base_url() -> String {
     "https://logs.zonian.dev".to_string()
@@ -66,7 +66,7 @@ async fn fetch_messages_for_date(
 
     debug!(url = %url, "Fetching chat history");
 
-    let response = match http.get(&url).send().await {
+    let response = match http.get(&url).send_traced().await {
         Ok(resp) => resp,
         Err(e) => {
             warn!(error = ?e, url = %url, "Failed to fetch chat history");

@@ -613,6 +613,7 @@ mod tests {
                 ai_channel: (notes: [(body: "alt", identities: [], through_seq: 1, generation: 0)], through_ts: None, through_fp: None),
             )"#,
             &path,
+            "chat-recap.ron",
         )
         .await
         .unwrap();

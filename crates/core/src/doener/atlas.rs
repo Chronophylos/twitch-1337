@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 use crate::APP_USER_AGENT;
 use crate::doener::types::CityHit;
+use crate::util::http::SendTraced as _;
 
 const DEFAULT_BASE_URL: &str = "https://doeneratlas.de";
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -111,7 +112,7 @@ impl DoeneratlasClient {
         let resp = self
             .http
             .get(&url)
-            .send()
+            .send_traced()
             .await
             .wrap_err("doeneratlas stats: request failed")?
             .error_for_status()
@@ -133,7 +134,7 @@ impl DoeneratlasClient {
             .http
             .get(&url)
             .query(&[("q", q)])
-            .send()
+            .send_traced()
             .await
             .wrap_err("doeneratlas search: request failed")?
             .error_for_status()
@@ -157,7 +158,7 @@ impl DoeneratlasClient {
             .http
             .get(&url)
             .query(&[("slug", slug)])
-            .send()
+            .send_traced()
             .await
             .wrap_err("doeneratlas cities: request failed")?
             .error_for_status()

@@ -13,7 +13,7 @@ use serde::Deserialize;
 use tokio::sync::OnceCell;
 
 use crate::APP_USER_AGENT;
-use crate::util::http::read_capped;
+use crate::util::http::{SendTraced as _, read_capped};
 
 const DEFAULT_BASE_URL: &str = "https://api.pronouns.alejo.io/v1";
 const TIMEOUT: Duration = Duration::from_secs(3);
@@ -69,7 +69,7 @@ impl PronounsClient {
                 let resp = self
                     .http
                     .get(format!("{}/pronouns", self.base_url))
-                    .send()
+                    .send_traced()
                     .await?
                     .error_for_status()?;
                 let body = read_capped(resp, MAX_BODY_BYTES).await?;
@@ -92,7 +92,7 @@ impl PronounsClient {
         let resp = self
             .http
             .get(format!("{}/users/{login}", self.base_url))
-            .send()
+            .send_traced()
             .await
             .inspect_err(|error| tracing::debug!(?error, %login, "pronouns lookup failed"))
             .ok()?;

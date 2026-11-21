@@ -4,7 +4,7 @@ use eyre::{Result, WrapErr as _, bail};
 use serde::Deserialize;
 
 use super::reconcile::DesiredEmote;
-use crate::util::http::read_capped;
+use crate::util::http::{SendTraced as _, read_capped};
 
 /// Body cap. 7TV inlines each emote's full document and host file list
 /// (~2.4 KiB per emote; a 969-emote set is 2.3 MiB live). 16 MiB covers sets
@@ -79,7 +79,7 @@ pub async fn fetch_channel_set(
     let url = format!("{base}/users/twitch/{twitch_channel_id}");
     let response = http
         .get(&url)
-        .send()
+        .send_traced()
         .await
         .wrap_err_with(|| format!("Failed to send 7TV request to {url}"))?;
 

@@ -9,7 +9,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
 use crate::APP_USER_AGENT;
-use crate::util::http::{BodyError, read_capped};
+use crate::util::http::{BodyError, SendTraced as _, read_capped};
 
 pub const DEFAULT_BASE_URL: &str = "https://finnhub.io/api/v1";
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -91,7 +91,7 @@ impl FinnhubClient {
             .get(url)
             .header("X-Finnhub-Token", self.api_key.expose_secret())
             .query(&[("symbol", symbol)])
-            .send()
+            .send_traced()
             .await
             .map_err(FinnhubError::Request)?;
 

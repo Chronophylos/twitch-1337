@@ -5,7 +5,7 @@ use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use tokio::sync::mpsc;
 use tokio::task::JoinError;
-use tracing::{info, warn};
+use tracing::{Instrument as _, info, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
 #[cfg(test)]
@@ -1047,16 +1047,22 @@ where
         let plan = plan_adsb_lookup(flight);
         let cancellation = poll_tasks.cancellation_token();
         poll_tasks
-            .spawn(format!("poll-{child_index}"), async move {
-                if cancellation.is_cancelled() {
-                    return None;
+            .spawn(
+                format!("poll-{child_index}"),
+                async move {
+                    if cancellation.is_cancelled() {
+                        return None;
+                    }
+                    // This provider request is the atomic operation. Once started it is
+                    // allowed to finish (and is bounded by POLL_TIMEOUT); cancellation
+                    // prevents queued children and all later state/chat effects.
+                    let observation = fetch_observation(plan, &ac).await;
+                    Some((id, observation))
                 }
-                // This provider request is the atomic operation. Once started it is
-                // allowed to finish (and is bounded by POLL_TIMEOUT); cancellation
-                // prevents queued children and all later state/chat effects.
-                let observation = fetch_observation(plan, &ac).await;
-                Some((id, observation))
-            })
+                // Spawned tasks start detached; keep their HTTP spans under
+                // the caller's `tracker.poll_cycle`.
+                .in_current_span(),
+            )
             .await;
     }
 

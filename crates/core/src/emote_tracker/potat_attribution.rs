@@ -6,7 +6,7 @@ use eyre::{Result, WrapErr, eyre};
 use serde::Deserialize;
 
 use super::types::SetEventKind;
-use crate::util::http::read_capped;
+use crate::util::http::{SendTraced as _, read_capped};
 
 pub const SMALL_SLACK_SECS: u64 = 2;
 pub const HEAD_SCAN_LIMIT: usize = 50;
@@ -202,7 +202,7 @@ pub async fn fetch_potat_history(
     );
     let resp = http
         .get(&url)
-        .send()
+        .send_traced()
         .await
         .wrap_err("potat history request")?;
     if !resp.status().is_success() {

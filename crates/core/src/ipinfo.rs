@@ -9,7 +9,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::APP_USER_AGENT;
-use crate::util::http::read_capped;
+use crate::util::http::{SendTraced as _, read_capped};
 
 pub const DEFAULT_BASE_URL: &str = "https://ipinfo.io";
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -83,7 +83,7 @@ impl IpinfoClient {
             .http
             .get(url)
             .bearer_auth(self.token.expose_secret())
-            .send()
+            .send_traced()
             .await
             .wrap_err("ipinfo request")?;
         let status = resp.status();

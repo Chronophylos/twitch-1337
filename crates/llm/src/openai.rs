@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use reqwest::header::{self, HeaderValue};
 use serde::{Deserialize, Serialize};
+use tracing::field::Empty;
 use tracing::{debug, error, instrument, trace, warn};
 
 use crate::client::LlmClient;
@@ -10,7 +11,7 @@ use crate::types::{
     ChatCompletionRequest, ToolArgsError, ToolCall, ToolChatCompletionRequest,
     ToolChatCompletionResponse, TraceIds,
 };
-use crate::util::truncate_for_echo;
+use crate::util::{record_chat_outcome, truncate_for_echo};
 
 // --- Internal serde types for OpenAI-compatible API ---
 
@@ -562,9 +563,15 @@ impl OpenAiClient {
 impl LlmClient for OpenAiClient {
     #[instrument(
         skip_all,
+        name = "chat",
         fields(
+            gen_ai.operation.name = "chat",
             gen_ai.provider.name = self.provider_name,
             gen_ai.request.model = %request.model,
+            gen_ai.usage.input_tokens = Empty,
+            gen_ai.usage.output_tokens = Empty,
+            error.type = Empty,
+            otel.status_code = Empty,
         ),
     )]
     async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<String> {
@@ -574,14 +581,21 @@ impl LlmClient for OpenAiClient {
         );
         let result = self.chat_completion_untraced(request).await;
         crate::observe::finish_generation(rec, &result, |(text, usage)| (text.clone(), *usage));
+        record_chat_outcome(&result, token_counts(&result));
         result.map(|(text, _)| text)
     }
 
     #[instrument(
         skip_all,
+        name = "chat",
         fields(
+            gen_ai.operation.name = "chat",
             gen_ai.provider.name = self.provider_name,
             gen_ai.request.model = %request.model,
+            gen_ai.usage.input_tokens = Empty,
+            gen_ai.usage.output_tokens = Empty,
+            error.type = Empty,
+            otel.status_code = Empty,
         ),
     )]
     async fn chat_completion_with_tools(
@@ -596,8 +610,15 @@ impl LlmClient for OpenAiClient {
         crate::observe::finish_generation(rec, &result, |(resp, usage)| {
             (format_tool_output(resp), *usage)
         });
+        record_chat_outcome(&result, token_counts(&result));
         result.map(|(resp, _)| resp)
     }
+}
+
+/// Input/output token counts of a finished completion, if reported.
+fn token_counts<T>(result: &Result<(T, Option<TokenUsage>)>) -> Option<(u64, u64)> {
+    let usage = result.as_ref().ok()?.1?;
+    Some((usage.input_tokens.into(), usage.output_tokens.into()))
 }
 
 fn format_tool_output(resp: &ToolChatCompletionResponse) -> String {

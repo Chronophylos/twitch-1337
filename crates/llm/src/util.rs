@@ -1,5 +1,22 @@
 //! Internal helpers shared across providers.
 
+use crate::error::Result;
+
+/// Record a finished completion on the current `chat` span: token counts
+/// when the provider reported them, `error.type` and status Error when it
+/// failed.
+pub(crate) fn record_chat_outcome<T>(result: &Result<T>, usage: Option<(u64, u64)>) {
+    let span = tracing::Span::current();
+    if let Some((input_tokens, output_tokens)) = usage {
+        span.record("gen_ai.usage.input_tokens", input_tokens);
+        span.record("gen_ai.usage.output_tokens", output_tokens);
+    }
+    if let Err(error) = result {
+        span.record("error.type", error.variant_name());
+        span.record("otel.status_code", "ERROR");
+    }
+}
+
 /// Truncate `s` at a char boundary to at most `max_chars` characters, appending
 /// a suffix describing how much was dropped. Used before echoing provider
 /// payloads back into the model context.

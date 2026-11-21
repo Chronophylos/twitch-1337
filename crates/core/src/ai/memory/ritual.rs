@@ -14,7 +14,7 @@ use llm::{
     AgentOpts, AgentOutcome, LlmClient, LlmError, Message, ToolCall, ToolChatCompletionRequest,
     ToolChatCompletionResponse, ToolExecutor, ToolResultMessage, run_agent,
 };
-use tracing::{error, info, warn};
+use tracing::{Instrument as _, error, info, info_span, warn};
 
 use crate::ai::memory::inject::{
     BuildOpts, FenceLabel, build_chat_turn_context, fence_block, fresh_nonce, neutralize_sentinels,
@@ -125,19 +125,24 @@ pub fn spawn_ritual(
                 reason = "yesterday underflows only at jiff's minimum date"
             )]
             let yesterday = next.date().yesterday().expect("valid prev day");
-            if let Err(e) = run_ritual_until(
-                &registry,
-                &store,
-                &transcript,
-                &settings,
-                yesterday,
-                &lifecycle,
-                langfuse.as_ref(),
-            )
-            .await
-            {
-                warn!(error = ?e, "dreamer ritual failed");
+            // One root trace per run; the day-long sleep above stays outside it.
+            async {
+                if let Err(e) = run_ritual_until(
+                    &registry,
+                    &store,
+                    &transcript,
+                    &settings,
+                    yesterday,
+                    &lifecycle,
+                    langfuse.as_ref(),
+                )
+                .await
+                {
+                    warn!(error = ?e, "dreamer ritual failed");
+                }
             }
+            .instrument(info_span!(parent: None, "dreamer.ritual", ai.agent = "dreamer"))
+            .await;
         }
     })
 }

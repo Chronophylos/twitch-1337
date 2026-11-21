@@ -14,11 +14,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use eyre::Result;
-use tracing::{error, warn};
+use tracing::{Instrument as _, error, warn};
 
 use llm::{
     AgentOpts, AgentOutcome, LlmError, ToolCall, ToolCallRound, ToolChatCompletionRequest,
-    ToolExecutor, ToolResultMessage, TraceIds, run_agent,
+    ToolExecutor, ToolResultMessage, TraceIds, execute_tool_span, run_agent,
 };
 
 use crate::ai::command::{AiCommandDeps, AiMemoryV2, AiWeb, ChatContext};
@@ -757,7 +757,11 @@ async fn forced_web_search_round(web: &AiWeb, query: &str, trace: &TraceIds) -> 
         }),
         arguments_parse_error: None,
     };
-    let result = web.executor.execute_tool_call(&call, trace).await;
+    let result = web
+        .executor
+        .execute_tool_call(&call, trace)
+        .instrument(execute_tool_span(&call.name))
+        .await;
     ToolCallRound {
         calls: vec![call],
         results: vec![result],
