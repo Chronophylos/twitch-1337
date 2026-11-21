@@ -931,6 +931,7 @@ async fn spoiler_card_save_persists() {
             ("cooldowns.spoiler", "45"),
             ("cooldowns.servers", "50"),
             ("cooldowns.aktien", "90"),
+            ("cooldowns.help", "20"),
         ],
     )
     .await;
@@ -942,6 +943,7 @@ async fn spoiler_card_save_persists() {
     assert_eq!(s.cooldowns.spoiler, 45);
     assert_eq!(s.cooldowns.servers, 50);
     assert_eq!(s.cooldowns.aktien, 90);
+    assert_eq!(s.cooldowns.help, 20);
 }
 
 #[tokio::test]
@@ -1008,6 +1010,7 @@ async fn profile_pickers_list_only_eligible_profiles() {
     assert!(html.contains("name=\"cooldowns.spoiler\""));
     assert!(html.contains("name=\"cooldowns.servers\""));
     assert!(html.contains("name=\"cooldowns.aktien\""));
+    assert!(html.contains("name=\"cooldowns.help\""));
     let inner = select_inner(&html, "spoiler.profile");
     assert!(
         inner.contains("value=\"\""),

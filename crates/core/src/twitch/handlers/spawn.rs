@@ -62,6 +62,11 @@ where
 
     let mut command_list: Vec<Arc<dyn commands::Command<T, L>>> = vec![
         Arc::new(commands::version::VersionCommand::new(services.started_at)),
+        Arc::new(commands::help::HelpCommand::new(
+            services.command_catalog.clone(),
+            services.public_url.as_deref(),
+            services.settings.clone(),
+        )),
         Arc::new(commands::ping_admin::PingAdminCommand::new(
             services.ping.clone(),
             services.settings.clone(),

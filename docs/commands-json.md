@@ -59,3 +59,20 @@ so it always matches what the bot answers to.
 - `Cache-Control: public, max-age=300`. A `503` means the bot is still
   starting.
 - No CORS headers. Native apps don't need them; a browser client would.
+
+## `/commands` and `!help`
+
+`<public_url>/commands` is the same list as a public HTML page for viewers,
+German like the descriptions: built-in commands first, then pings, each with
+its trigger, aliases, usage, description and a Mod marker for
+`permission = moderator`. It reads the same catalog as `/commands.json`, so
+it hides exactly what the JSON hides, and it answers with the same `503`
+while the bot starts and the same `Cache-Control`. No session needed.
+
+In chat, `!help <befehl>` (also `!commands`, `!hilfe`) answers with one
+entry from that catalog. The `!` is optional, case is ignored, and aliases
+resolve, so `!help grok` and `!help @grok` both find `!ai`. A hidden command
+gets the same "kenn ich nicht" reply as an unknown one. A bare `!help`
+links to `/commands` when the dashboard is enabled, otherwise it explains
+`!help <befehl>`. Per-user cooldown: `cooldowns.help` (`/settings →
+Cooldowns`).

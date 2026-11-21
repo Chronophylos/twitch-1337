@@ -352,6 +352,7 @@ pub async fn main() -> Result<()> {
         latency_value,
         channel: config.twitch.channel.clone(),
         bot_username: config.twitch.username.clone(),
+        public_url: config.web.enabled.then(|| config.web.public_url.clone()),
         ai_enabled: config.ai.is_some(),
         started_at,
         ping: ping_handle,

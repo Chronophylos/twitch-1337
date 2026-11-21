@@ -133,6 +133,9 @@ pub struct Services {
     pub channel: String,
     /// The utility bot's own login (config `[twitch].username`).
     pub bot_username: String,
+    /// Dashboard base URL (`[web].public_url`) while the dashboard is
+    /// enabled, `None` otherwise. `!help` links to its `/commands` page.
+    pub public_url: Option<String>,
     /// Whether `[ai]` is configured in config.toml. Gates AI command
     /// registration and the dreamer ritual; the named keys back the
     /// `LlmRegistry` and are not carried here.

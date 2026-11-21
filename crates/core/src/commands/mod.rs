@@ -14,6 +14,7 @@ pub mod execution;
 pub mod feedback;
 pub mod haiku;
 pub mod hall_of_shame;
+pub mod help;
 pub mod leaderboard;
 pub mod news;
 pub mod pb;
@@ -98,6 +99,7 @@ pub fn is_admin(privmsg: &PrivmsgMessage, hidden_admin_ids: &[String]) -> bool {
 pub const RESERVED_PING_NAMES: &[&str] = &[
     "!ai",
     "!aktien",
+    "!commands",
     "!döner",
     "!dpi",
     "!e",
@@ -106,6 +108,8 @@ pub const RESERVED_PING_NAMES: &[&str] = &[
     "!flight",
     "!flights",
     "!haiku",
+    "!help",
+    "!hilfe",
     "!info",
     "!lb",
     "!news",

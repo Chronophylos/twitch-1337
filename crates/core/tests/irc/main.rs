@@ -15,6 +15,7 @@ mod emote_lookup;
 mod emote_usage;
 mod feedback;
 mod haiku;
+mod help;
 mod latency_rebase;
 mod news;
 mod ping;

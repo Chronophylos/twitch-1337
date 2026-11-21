@@ -3,6 +3,7 @@
 //! Public surfaces:
 //! - `/healthz` (always public)
 //! - `/commands.json` (always public, chat-client autocomplete)
+//! - `/commands` (always public, German help page from the same catalog)
 //! - `/login`, `/auth/callback`, `/logout` (OAuth + post-login `?next=` deep-link)
 //! - `/assets/*` (embedded htmx + pico bundles, immutable cache)
 //!
