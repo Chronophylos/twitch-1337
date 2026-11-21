@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use eyre::Result;
 use jiff::Timestamp;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::ai::chat_history::{ChatHistory, ChatHistoryBuffer};
@@ -242,10 +242,6 @@ where
     /// Twitch adapter around [`TurnRunner::run_turn`]: cooldown and trigger
     /// on the way in, mouth / EchoGuard / history / transcript on the way
     /// out. Everything between is the Turn's business.
-    #[instrument(
-        skip_all,
-        fields(bot.command.name = "!ai", twitch.user.login = %ctx.privmsg.sender.login),
-    )]
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         ctx.cancellation.check()?;
         let turn_started = Instant::now();

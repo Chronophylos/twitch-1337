@@ -7,7 +7,7 @@ use tokio::{
     sync::broadcast,
     time::{Duration, sleep},
 };
-use tracing::{debug, info, warn};
+use tracing::{Span, debug, info, warn};
 use twitch_irc::{
     TwitchIRCClient, irc,
     login::LoginCredentials,
@@ -15,6 +15,7 @@ use twitch_irc::{
     transport::Transport,
 };
 
+use super::Inbound;
 use crate::lifecycle::Lifecycle;
 use crate::settings::SettingsHandle;
 
@@ -47,7 +48,7 @@ pub(crate) const LATENCY_LOG_THRESHOLD: u32 = 10;
 /// but never crash the handler or affect the EMA.
 pub async fn run_latency_handler<T, L>(
     client: Arc<TwitchIRCClient<T, L>>,
-    broadcast_tx: broadcast::Sender<ServerMessage>,
+    broadcast_tx: broadcast::Sender<Inbound>,
     settings: SettingsHandle,
     latency: Arc<AtomicU32>,
     irc_connected: Arc<AtomicBool>,
@@ -92,14 +93,12 @@ pub async fn run_latency_handler<T, L>(
                         match broadcast_rx.recv().await {
                             // Pongs with mismatched nonces (library keepalives) fall
                             // through the guard to the wildcard arm and keep waiting.
-                            Ok(ServerMessage::Pong(PongMessage { source, .. }))
-                                if source.params.get(1).map(String::as_str) == Some(nonce.as_str()) =>
-                            {
-                                return send_time.elapsed();
+                            Ok(inbound) if is_our_pong(&inbound.msg, &nonce) => {
+                                return (send_time.elapsed(), inbound.handler_span("latency"));
                             }
                             Err(broadcast::error::RecvError::Closed) => {
                                 warn!("Broadcast channel closed during PONG wait");
-                                return send_time.elapsed();
+                                return (send_time.elapsed(), Span::none());
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {
                                 warn!(skipped = n, "Latency handler lagged during PONG wait");
@@ -110,11 +109,11 @@ pub async fn run_latency_handler<T, L>(
                 })
                 .await;
 
-                let rtt = match pong_result {
-                    Ok(elapsed) => {
+                let (rtt, span) = match pong_result {
+                    Ok(measured) => {
                         consecutive_misses = 0;
                         irc_connected.store(true, Ordering::Relaxed);
-                        elapsed
+                        measured
                     }
                     Err(_) => {
                         warn!("PONG timeout after {:?}", LATENCY_PING_TIMEOUT);
@@ -127,28 +126,30 @@ pub async fn run_latency_handler<T, L>(
                     }
                 };
 
-                let one_way_ms = rtt.as_millis() as f64 / 2.0;
-                ema = LATENCY_EMA_ALPHA * one_way_ms + (1.0 - LATENCY_EMA_ALPHA) * ema;
-                let ema_rounded = ema.round() as u32;
+                span.in_scope(|| {
+                    let one_way_ms = rtt.as_millis() as f64 / 2.0;
+                    ema = LATENCY_EMA_ALPHA * one_way_ms + (1.0 - LATENCY_EMA_ALPHA) * ema;
+                    let ema_rounded = ema.round() as u32;
 
-                latency.store(ema_rounded, Ordering::Relaxed);
+                    latency.store(ema_rounded, Ordering::Relaxed);
 
-                debug!(
-                    rtt_ms = rtt.as_millis() as u64,
-                    one_way_ms = one_way_ms as u64,
-                    ema_ms = ema_rounded,
-                    "Latency measurement"
-                );
-
-                // Log at info level only when EMA shifts significantly
-                if ema_rounded.abs_diff(last_logged_ema) >= LATENCY_LOG_THRESHOLD {
-                    info!(
-                        previous_ms = last_logged_ema,
-                        current_ms = ema_rounded,
-                        "Latency EMA changed"
+                    debug!(
+                        rtt_ms = rtt.as_millis() as u64,
+                        one_way_ms = one_way_ms as u64,
+                        ema_ms = ema_rounded,
+                        "Latency measurement"
                     );
-                    last_logged_ema = ema_rounded;
-                }
+
+                    // Log at info level only when EMA shifts significantly
+                    if ema_rounded.abs_diff(last_logged_ema) >= LATENCY_LOG_THRESHOLD {
+                        info!(
+                            previous_ms = last_logged_ema,
+                            current_ms = ema_rounded,
+                            "Latency EMA changed"
+                        );
+                        last_logged_ema = ema_rounded;
+                    }
+                });
             }
             () = sub.next() => {
                 if lifecycle.is_cancelled() {
@@ -175,4 +176,13 @@ pub async fn run_latency_handler<T, L>(
             }
         }
     }
+}
+
+/// The PONG answering our PING carries the nonce as its second parameter.
+fn is_our_pong(msg: &ServerMessage, nonce: &str) -> bool {
+    matches!(
+        msg,
+        ServerMessage::Pong(PongMessage { source, .. })
+            if source.params.get(1).map(String::as_str) == Some(nonce)
+    )
 }

@@ -378,6 +378,7 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - Bot scheduling / display use `Europe/Berlin` (`util::BERLIN`, `util::to_berlin`). Time is `jiff` throughout; it is built with `tzdb-bundle-always` so the musl `FROM scratch` image carries the full IANA database and Aviationstack airport timezones can reinterpret local wall times stamped as `+00:00`. `chrono`/`chrono-tz`/`humantime` were dropped as unmaintained (#609); schedule `every` still reads humantime's `1day` spelling.
 - 1337 tracker: messages containing "1337" or "DANKIES" at exactly 13:37:xx. Ignore "supibot", "potatbotat". Dedupe via HashSet (max 10k). Leaderboard = fastest sub-1s PB.
 - Broadcast channel capacity 100. Lagging handlers get `RecvError::Lagged`, continue.
+- Broadcast items are `Inbound { msg, span }` (`twitch::handlers::Inbound`); the router opens the `irc.message` root. A handler opens `inbound.handler_span("<name>")` only after its filter matches and instruments its work with it. Keep `msg`, never the `Inbound`, in anything that outlives one handler run: the root ends when the last clone drops.
 - Fault is fail-fast (ADR-0012): any unexpected task exit or panic — one command task's included — ends the whole runtime and the bot restarts. Operational failures (I/O, upstream APIs) are handled inside their task and never panic; `bail!` aborts only at startup.
 - Ping templates: reject control chars on create/edit (CR/LF would split PRIVMSG).
 - Aviation client init failure: log + disable `!up`/`!fl`/flight tracker + track commands. Don't abort.
@@ -418,10 +419,10 @@ Handlers live in `crates/core/src/twitch/handlers/`. `run_bot` (`crates/core/src
 pub async fn run_my_handler<T, L>(
     services: Arc<Services>,
     client: Arc<TwitchIRCClient<T, L>>,
-    broadcast_tx: broadcast::Sender<ServerMessage>,
+    broadcast_tx: broadcast::Sender<Inbound>,
 ) where T: Transport, L: LoginCredentials {
     let settings = services.settings.clone();
-    /* subscribe, filter, act */
+    /* subscribe, filter, then act inside inbound.handler_span("my_handler") */
 }
 
 // crates/core/src/twitch/handlers/spawn.rs: tokio::spawn(run_my_handler(

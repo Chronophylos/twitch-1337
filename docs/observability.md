@@ -31,9 +31,16 @@ A trace is one unit of work started by one stimulus.
 |Dashboard request|`TraceLayer` request span|
 |Startup|`startup`, closed once the bot runs|
 
-Child spans: `http.client` (outbound HTTP, `otel.kind = client`),
-`persist.write` (file persistence), `chat` (LLM call), `execute_tool` (tool
-execution).
+Child spans: `handler` (a broadcast consumer acting on an `irc.message`,
+`bot.handler`), `command` (one command run under the `commands` handler,
+`bot.command.name`; a background command keeps it after the handoff),
+`http.client` (outbound HTTP, `otel.kind = client`), `persist.write` (file
+persistence), `chat` (LLM call), `execute_tool` (tool execution).
+
+An `!ai` message is one tree: `irc.message` → `handler` → `command` → the
+Turn's spans. The root ends when the last handler and command holding it
+finish, so anything that outlives one handler run keeps `Inbound::msg`, never
+the `Inbound`.
 
 Outbound HTTP goes through `util::http::SendTraced` (`send_traced`, or
 `send_traced_dynamic` for a URL a viewer or the model supplied), never
@@ -145,8 +152,8 @@ field syntax needs literals, so spans and logs rely on this table).
 |`twitch.channel`|channel login|yes|
 |`twitch.user.id` / `twitch.user.login`|chatter|**no**|
 |`twitch.message.id`|IRC message id|**no**|
-|`bot.handler`|broadcast consumer|yes|
-|`bot.command.name`|canonical command name, not the alias typed|yes|
+|`bot.handler`|broadcast consumer: `commands`, `emote_usage`, `latency`, `mydealz`, `tracker_1337`, `transcript`|yes|
+|`bot.command.name`|canonical command ID (`ai`, `news`, `ping_trigger`), the same for every alias and ping|yes|
 |`bot.schedule.name`|schedule|yes|
 |`ping.name`|Ping|yes|
 |`ai.agent`|`aurora`, `grok`, `dreamer`, …|yes|

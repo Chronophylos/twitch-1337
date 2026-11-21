@@ -20,6 +20,7 @@ use crate::lifecycle::{Lifecycle, TaskGroup};
 use crate::settings::SettingsHandle;
 use crate::twitch::clanker::should_flag_usage;
 use crate::twitch::echo::EchoGuard;
+use crate::twitch::handlers::Inbound;
 
 pub const CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -196,7 +197,7 @@ fn classify_usage_ingest_completion(
 /// Returns `Err` when the SQLite usage-writer child fails, which Faults the
 /// runtime.
 pub async fn run_emote_usage_handler(
-    mut broadcast_rx: broadcast::Receiver<ServerMessage>,
+    mut broadcast_rx: broadcast::Receiver<Inbound>,
     emote_tracker: Arc<EmoteTrackerHandle>,
     settings: SettingsHandle,
     channel: String,
@@ -236,55 +237,58 @@ pub async fn run_emote_usage_handler(
                 refresh_catalog(&emote_tracker, &mut active_names).await;
             }
             msg = broadcast_rx.recv() => {
-                match msg {
-                    Ok(ServerMessage::Privmsg(p)) if p.channel_login == channel => {
-                        let user_id = p.sender.id.as_str();
-                        if user_id.is_empty() {
-                            continue;
-                        }
-                        let emote_ids = match_usage_tokens(&p.message_text, &active_names);
-                        if emote_ids.is_empty() {
-                            continue;
-                        }
-                        let snapshot = settings.load();
-                        let deny_with_mouths: Vec<String> = snapshot
-                            .twitch
-                            .emote_usage_deny_list
-                            .iter()
-                            .cloned()
-                            .chain(mouth_logins.iter().cloned())
-                            .collect();
-                        let flagged =
-                            should_flag_usage(&p.sender.login, &bot_username, &deny_with_mouths);
-                        let at = p.server_timestamp.as_millisecond();
-                        let login = Some(p.sender.login.clone());
-                        let events: Vec<NewUsageEvent> = emote_ids
-                            .into_iter()
-                            .map(|emote_id| NewUsageEvent {
-                                at,
-                                emote_id,
-                                twitch_user_id: user_id.to_owned(),
-                                login: login.clone(),
-                                flagged,
-                            })
-                            .collect();
-                        if lifecycle.is_cancelled() {
-                            continue;
-                        }
-                        if usage_tx.send(events).is_err() {
-                            let error =
-                                fail_on_usage_writer_completion(&mut usage_tasks, None).await;
-                            return Err(eyre::Report::new(error).wrap_err(USAGE_WRITER_FAILED));
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                let inbound = match msg {
+                    Ok(inbound) => inbound,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(_) => {
                         stop_usage_writer(&mut usage_tasks)
                             .await
                             .wrap_err(USAGE_WRITER_FAILED)?;
                         return Ok(());
                     }
+                };
+                let ServerMessage::Privmsg(p) = &inbound.msg else {
+                    continue;
+                };
+                if p.channel_login != channel {
+                    continue;
+                }
+                let user_id = p.sender.id.as_str();
+                if user_id.is_empty() {
+                    continue;
+                }
+                let emote_ids = match_usage_tokens(&p.message_text, &active_names);
+                if emote_ids.is_empty() || lifecycle.is_cancelled() {
+                    continue;
+                }
+                let sent = inbound.handler_span("emote_usage").in_scope(|| {
+                    let snapshot = settings.load();
+                    let deny_with_mouths: Vec<String> = snapshot
+                        .twitch
+                        .emote_usage_deny_list
+                        .iter()
+                        .cloned()
+                        .chain(mouth_logins.iter().cloned())
+                        .collect();
+                    let flagged =
+                        should_flag_usage(&p.sender.login, &bot_username, &deny_with_mouths);
+                    let at = p.server_timestamp.as_millisecond();
+                    let login = Some(p.sender.login.clone());
+                    let events: Vec<NewUsageEvent> = emote_ids
+                        .into_iter()
+                        .map(|emote_id| NewUsageEvent {
+                            at,
+                            emote_id,
+                            twitch_user_id: user_id.to_owned(),
+                            login: login.clone(),
+                            flagged,
+                        })
+                        .collect();
+                    usage_tx.send(events).is_ok()
+                });
+                if !sent {
+                    let error = fail_on_usage_writer_completion(&mut usage_tasks, None).await;
+                    return Err(eyre::Report::new(error).wrap_err(USAGE_WRITER_FAILED));
                 }
             }
         }
