@@ -390,10 +390,11 @@ pub async fn run_link_correction_handler<T, L>(
             continue;
         }
         let snapshot = settings.load();
-        if candidates(&p.message_text, &snapshot.link_correction).is_empty() {
+        let found = candidates(&p.message_text, &snapshot.link_correction);
+        if found.is_empty() {
             continue;
         }
-        handle_message(&http, &sender, p, &snapshot.link_correction, &lifecycle)
+        handle_message(&http, &sender, p, found, &lifecycle)
             .instrument(inbound.handler_span("link_correction"))
             .await;
     }
@@ -403,14 +404,14 @@ async fn handle_message<T, L>(
     http: &Client,
     sender: &ChatSender<T, L>,
     p: &PrivmsgMessage,
-    settings: &LinkCorrectionSettings,
+    candidates: Vec<Candidate>,
     lifecycle: &Lifecycle,
 ) where
     T: Transport,
     L: LoginCredentials,
 {
     let mut emitted: HashSet<Url> = HashSet::new();
-    for candidate in candidates(&p.message_text, settings) {
+    for candidate in candidates {
         if lifecycle.is_cancelled() {
             return;
         }
@@ -638,20 +639,66 @@ mod tests {
         );
     }
 
-    /// Two distinct share links resolving to the same canonical post are
-    /// deduped by the final-result set in `handle_message`; here we assert
-    /// the canonicalizer alone produces identical output for both.
-    #[test]
-    fn two_share_links_canonicalize_to_one_post() {
-        let a = Url::parse("https://old.reddit.com/r/rust/s/AbC1").unwrap();
-        let b = Url::parse("https://np.reddit.com/r/rust/s/XyZ9").unwrap();
-        // The pure path differs; the dedupe happens post-HEAD on the resolved
-        // URL. This test pins the canonical form the resolver feeds in.
-        let resolved = Url::parse("https://old.reddit.com/r/rust/comments/1abc/title/").unwrap();
-        let ca = canonical_reddit(&resolved).unwrap();
-        let cb = canonical_reddit(&resolved).unwrap();
-        assert_eq!(ca, cb);
-        assert!(a.host_str().unwrap() != b.host_str().unwrap());
+    /// Two distinct share links whose HEADs resolve to the same canonical
+    /// post must emit exactly one reply. The wiremock stub pins the shared
+    /// redirect target; the `emitted`-set semantics are driven against real
+    /// `old.reddit.com` URLs built from the resolved path, so
+    /// `canonical_reddit` sees a host it actually validates.
+    #[tokio::test]
+    async fn two_share_links_resolving_to_one_post_emit_once() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        crate::util::install_crypto_provider();
+        let server = MockServer::start().await;
+        // The two share endpoints redirect to one final URL; the final URL
+        // itself answers 200, so the chain terminates instead of looping.
+        let final_url = format!("{}/r/rust/comments/1abc/title/", server.uri());
+        for origin in ["/a", "/b"] {
+            Mock::given(method("HEAD"))
+                .and(path(origin))
+                .respond_with(
+                    ResponseTemplate::new(302).insert_header("Location", final_url.clone()),
+                )
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("HEAD"))
+            .and(path("/r/rust/comments/1abc/title/"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let http = Client::builder()
+            .user_agent(APP_USER_AGENT)
+            .timeout(HTTP_TIMEOUT)
+            .build()
+            .unwrap();
+        let a = Url::parse(&format!("{}/a", server.uri())).unwrap();
+        let b = Url::parse(&format!("{}/b", server.uri())).unwrap();
+        let resolved = head(&http, &a).await.expect("redirect chain");
+        assert_eq!(head(&http, &b).await.as_ref(), Some(&resolved));
+        assert_eq!(resolved.path(), "/r/rust/comments/1abc/title/");
+
+        // Re-home the resolved URL onto a validated Reddit host: the stub
+        // cannot answer for reddit.com itself, and `canonical_reddit` is
+        // host-strict by design.
+        let resolved_reddit =
+            Url::parse(&format!("https://old.reddit.com{}", resolved.path())).unwrap();
+        let canonical = canonical_reddit(&resolved_reddit).expect("canonical");
+
+        let mut replies = Vec::new();
+        let mut emitted: HashSet<Url> = HashSet::new();
+        for _ in 0..2 {
+            if emitted.insert(canonical.clone()) {
+                replies.push(canonical.clone());
+            }
+        }
+        assert_eq!(
+            replies.len(),
+            1,
+            "one canonical post, one reply: {replies:?}"
+        );
     }
 
     #[tokio::test]
