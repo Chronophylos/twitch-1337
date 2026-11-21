@@ -109,6 +109,7 @@ where
             services.llm.clone(),
             services.settings.clone(),
         )?),
+        Arc::new(commands::bash::BashCommand::new(services.settings.clone())),
     ];
 
     if let Some(tx) = services

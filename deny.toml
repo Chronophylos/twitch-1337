@@ -9,6 +9,11 @@ ignore = [
     # basic-toml unmaintained: build-time only via askama_derive (reads askama config),
     # never parses user input, no patched version. Drop once askama moves to `toml`.
     { id = "RUSTSEC-2026-0374", reason = "build-time only via askama_derive" },
+    # bashkit — the `!bash` sandbox interpreter — depends on chrono
+    # unconditionally and offers no jiff/time build; the advisory is
+    # unmaintained-only (no CVE) and no upgrade path exists. The bot's own time
+    # handling stays on jiff. Drop once bashkit stops pulling chrono.
+    { id = "RUSTSEC-2026-0543", reason = "mandatory transitive dep of bashkit" },
 ]
 
 [bans]

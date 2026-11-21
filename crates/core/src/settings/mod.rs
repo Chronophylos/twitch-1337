@@ -18,6 +18,7 @@ pub mod ai;
 pub mod alerts;
 pub mod audit;
 pub mod aviationstack;
+pub mod bash;
 pub mod emote_tracker;
 pub mod knob;
 pub mod link_correction;
@@ -47,6 +48,7 @@ pub use alerts::{
 pub use audit::MemoryAuditLog;
 pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
 pub use aviationstack::{AviationstackOverrides, AviationstackSettings};
+pub use bash::{BashOverrides, BashSettings};
 pub use emote_tracker::{
     EmoteTrackerOverrides, EmoteTrackerSettings, PotatAttributionOverrides,
     PotatAttributionSettings,
@@ -160,7 +162,7 @@ impl Subscription {
     }
 }
 
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 
 pub(crate) fn default_schema_version() -> u32 {
     SCHEMA_VERSION
@@ -182,6 +184,8 @@ pub struct Settings {
     pub twitch: TwitchRuntime,
     #[knob(nested)]
     pub aviationstack: AviationstackSettings,
+    #[knob(nested)]
+    pub bash: BashSettings,
     #[knob(nested)]
     pub suspend: SuspendSettings,
     #[knob(nested)]
@@ -232,6 +236,9 @@ pub struct Cooldowns {
     /// Per-user cooldown for `!help` (`!commands`, `!hilfe`).
     #[knob(min = 1, max = 3600)]
     pub help: u64,
+    /// Per-user cooldown for `!bash` (`!bash` starts a sandboxed interpreter).
+    #[knob(min = 1, max = 3600)]
+    pub bash: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
@@ -288,6 +295,7 @@ impl Settings {
                 track: 30,
                 ping_membership: 10,
                 help: 10,
+                bash: 20,
             },
             link_correction: LinkCorrectionSettings::default(),
             pings: PingsSettings {
@@ -297,6 +305,7 @@ impl Settings {
             ai: AiSettings::default(),
             twitch: TwitchRuntime::default(),
             aviationstack: AviationstackSettings::default(),
+            bash: BashSettings::default(),
             suspend: SuspendSettings::default(),
             spoiler: SpoilerSettings::default(),
             emote_tracker: EmoteTrackerSettings::default(),

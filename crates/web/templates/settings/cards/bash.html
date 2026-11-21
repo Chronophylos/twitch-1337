@@ -1,0 +1,30 @@
+{# crates/web/templates/settings/cards/bash.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-bash" class="settings-card" data-section="bash">
+  <header class="settings-card-head">
+    <div>
+      <h2>Bash</h2>
+      <p>Limits for <code>!bash</code>, which runs viewer scripts in a throwaway
+        in-memory sandbox. Nothing persists between runs: no files, no
+        environment, no process, no network.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    {% call m::num_row("bash", self.knob("bash.max_concurrent"),
+       "Scripts allowed to run at once. Sizing the slot pool happens at startup, so a change needs a restart.",
+       current.bash.max_concurrent, defaults.bash.max_concurrent, "") %}{% endcall %}
+    {% call m::num_row("bash", self.knob("bash.timeout_ms"),
+       "Wall-clock ceiling per script, applied to execution and parsing.",
+       current.bash.timeout_ms, defaults.bash.timeout_ms, "ms") %}{% endcall %}
+    {% call m::num_row("bash", self.knob("bash.max_stdout_bytes"),
+       "Bytes of stdout the interpreter captures and may send back to chat.",
+       current.bash.max_stdout_bytes, defaults.bash.max_stdout_bytes, "B") %}{% endcall %}
+    {% call m::num_row("bash", self.knob("bash.max_vfs_bytes"),
+       "Total size of the throwaway in-memory filesystem; also the per-file ceiling.",
+       current.bash.max_vfs_bytes, defaults.bash.max_vfs_bytes, "B") %}{% endcall %}
+  </div>
+</section>
