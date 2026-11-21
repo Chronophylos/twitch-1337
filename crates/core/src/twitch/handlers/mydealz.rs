@@ -8,7 +8,7 @@ use std::{sync::Arc, time::Duration};
 
 use reqwest::Client;
 use tokio::sync::broadcast;
-use tracing::{debug, error};
+use tracing::{Instrument as _, debug, error};
 use twitch_irc::{
     login::LoginCredentials, message::PrivmsgMessage, message::ServerMessage, transport::Transport,
 };
@@ -17,7 +17,7 @@ use url::Url;
 use crate::{
     APP_USER_AGENT,
     lifecycle::Lifecycle,
-    twitch::{ChatSender, echo::EchoGuard},
+    twitch::{ChatSender, echo::EchoGuard, handlers::Inbound},
     util::http::SendTraced as _,
 };
 
@@ -88,7 +88,7 @@ async fn clean(http: &Client, url: &Url) -> Option<Url> {
 }
 
 pub async fn run_mydealz_handler<T, L>(
-    mut broadcast_rx: broadcast::Receiver<ServerMessage>,
+    mut broadcast_rx: broadcast::Receiver<Inbound>,
     sender: Arc<ChatSender<T, L>>,
     channel: String,
     echo: Arc<EchoGuard>,
@@ -112,11 +112,11 @@ pub async fn run_mydealz_handler<T, L>(
         }
     };
     loop {
-        let msg = tokio::select! {
+        let inbound = tokio::select! {
             biased;
             _ = lifecycle.wait_for_cancellation() => return,
             result = broadcast_rx.recv() => match result {
-                Ok(message) => message,
+                Ok(inbound) => inbound,
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(_) => return,
             },
@@ -124,13 +124,19 @@ pub async fn run_mydealz_handler<T, L>(
         if lifecycle.is_cancelled() {
             return;
         }
-        let ServerMessage::Privmsg(p) = msg else {
+        let ServerMessage::Privmsg(p) = &inbound.msg else {
             continue;
         };
         if p.channel_login != channel || echo.is_mouth(p.sender.id.as_str(), &p.sender.login) {
             continue;
         }
-        handle_message(&http, &sender, &p, &lifecycle).await;
+        let urls = mydealz_urls(&p.message_text);
+        if urls.is_empty() {
+            continue;
+        }
+        handle_message(&http, &sender, p, urls, &lifecycle)
+            .instrument(inbound.handler_span("mydealz"))
+            .await;
     }
 }
 
@@ -138,12 +144,13 @@ async fn handle_message<T, L>(
     http: &Client,
     sender: &ChatSender<T, L>,
     p: &PrivmsgMessage,
+    urls: Vec<Url>,
     lifecycle: &Lifecycle,
 ) where
     T: Transport,
     L: LoginCredentials,
 {
-    for url in mydealz_urls(&p.message_text) {
+    for url in urls {
         if lifecycle.is_cancelled() {
             return;
         }

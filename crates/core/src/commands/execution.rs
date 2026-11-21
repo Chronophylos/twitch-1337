@@ -8,7 +8,7 @@ use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::{JoinError, JoinSet};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{Instrument as _, Span, debug, error, info, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
 use super::{Command, CommandId, CommandRegistry, ExecutionClass, normalize_username};
@@ -154,6 +154,9 @@ where
 {
     pub command_id: CommandId,
     pub context: CommandContext<T, L>,
+    /// The `command` span of this invocation. Execution runs inside it,
+    /// including after the handoff to the background manager.
+    pub span: Span,
 }
 
 impl<T, L> CommandInvocation<T, L>
@@ -169,6 +172,7 @@ where
         trigger: String,
         args: Vec<String>,
         cancellation: CommandCancellation,
+        span: Span,
     ) -> std::result::Result<Self, UserKeyError> {
         let user_key = UserKey::from_privmsg(&privmsg)?;
         Ok(Self {
@@ -181,6 +185,7 @@ where
                 cancellation,
                 user_key,
             },
+            span,
         })
     }
 
@@ -230,30 +235,34 @@ where
     T: Transport,
     L: LoginCredentials,
 {
-    warn!(
-        command_id = %invocation.command_id,
-        execution_class = ?ExecutionClass::Background,
-        trigger = %invocation.context.trigger,
-        user_key = %invocation.context.user_key,
-        reason = reason.as_str(),
-        CAPACITY_REJECTION_MESSAGE,
-        "command invocation rejected for capacity"
-    );
-    if tokio::time::timeout(
-        CAPACITY_REPLY_TIMEOUT,
-        invocation
-            .context
-            .sender
-            .reply(&invocation.context.privmsg, CAPACITY_REJECTION_MESSAGE),
-    )
-    .await
-    .is_err()
-    {
+    async {
         warn!(
-            timeout_ms = CAPACITY_REPLY_TIMEOUT.as_millis(),
-            "capacity rejection reply did not complete before the scheduling bound"
+            command_id = %invocation.command_id,
+            execution_class = ?ExecutionClass::Background,
+            trigger = %invocation.context.trigger,
+            user_key = %invocation.context.user_key,
+            reason = reason.as_str(),
+            CAPACITY_REJECTION_MESSAGE,
+            "command invocation rejected for capacity"
         );
+        if tokio::time::timeout(
+            CAPACITY_REPLY_TIMEOUT,
+            invocation
+                .context
+                .sender
+                .reply(&invocation.context.privmsg, CAPACITY_REJECTION_MESSAGE),
+        )
+        .await
+        .is_err()
+        {
+            warn!(
+                timeout_ms = CAPACITY_REPLY_TIMEOUT.as_millis(),
+                "capacity rejection reply did not complete before the scheduling bound"
+            );
+        }
     }
+    .instrument(invocation.span.clone())
+    .await;
 }
 
 /// Reply the chat fallback for a failed command. Silent once lifecycle
@@ -973,12 +982,15 @@ impl CommandTaskGroup {
         T: Transport + Send + Sync + 'static,
         L: LoginCredentials + Send + Sync + 'static,
     {
-        let command_id = invocation.command_id;
-        let user_key = invocation.context.user_key.clone();
+        let CommandInvocation {
+            command_id,
+            context,
+            span,
+        } = invocation;
+        let user_key = context.user_key.clone();
         let completion_signal = self.inner.clone();
         let task = async move {
             let _completion_signal = CompletionSignal(completion_signal);
-            let context = invocation.context;
             // `execute` consumes the context; keep what the fallback reply needs.
             let privmsg = context.privmsg.clone();
             let sender = context.sender.clone();
@@ -1000,7 +1012,8 @@ impl CommandTaskGroup {
                 user_key,
                 result,
             }
-        };
+        }
+        .instrument(span);
         let task = CURRENT_COMMAND_TASK_GROUP.scope(self.clone(), task);
         let mut tasks = self.inner.tasks.lock();
         if tasks.closed {
@@ -1027,9 +1040,11 @@ impl CommandTaskGroup {
             return Err(TaskGroupError::Closed);
         }
         let completion_signal = CompletionSignal(self.inner.clone());
+        // The blocking child is the command's work, so it stays in its span.
+        let span = Span::current();
         tasks.blocking.spawn_blocking(move || {
             let _completion_signal = completion_signal;
-            sender.send(task()).ok();
+            span.in_scope(|| sender.send(task()).ok());
         });
         Ok(receiver)
     }
@@ -1049,10 +1064,13 @@ impl CommandTaskGroup {
             return Err(TaskGroupError::Closed);
         }
         let completion_signal = CompletionSignal(self.inner.clone());
-        tasks.children.spawn(async move {
-            let _completion_signal = completion_signal;
-            sender.send(task.await).ok();
-        });
+        tasks.children.spawn(
+            async move {
+                let _completion_signal = completion_signal;
+                sender.send(task.await).ok();
+            }
+            .in_current_span(),
+        );
         Ok(receiver)
     }
 
@@ -1673,6 +1691,7 @@ mod tests {
             trigger.to_owned(),
             vec![trigger.to_owned()],
             CommandCancellation::new(),
+            Span::none(),
         )
         .unwrap()
     }

@@ -33,7 +33,7 @@ use twitch_irc::{
 
 use crate::{
     lifecycle::TaskGroup,
-    twitch::{ChatSender, clanker::is_clanker, echo::EchoGuard},
+    twitch::{ChatSender, clanker::is_clanker, echo::EchoGuard, handlers::Inbound},
     util::{clock::Clock, resolve_berlin_time, to_berlin},
 };
 
@@ -502,7 +502,7 @@ pub(crate) async fn save_hall_of_shame(
 /// Only tracks messages sent during the configured TARGET_HOUR:TARGET_MINUTE
 /// from the primary channel.
 async fn monitor_1337_messages(
-    mut broadcast_rx: broadcast::Receiver<ServerMessage>,
+    mut broadcast_rx: broadcast::Receiver<Inbound>,
     total_users: Arc<Mutex<HashMap<String, u64>>>,
     channel: String,
     echo: Arc<EchoGuard>,
@@ -516,7 +516,10 @@ async fn monitor_1337_messages(
         };
 
         match message {
-            Ok(ServerMessage::Privmsg(privmsg)) => {
+            Ok(inbound) => {
+                let ServerMessage::Privmsg(privmsg) = &inbound.msg else {
+                    continue;
+                };
                 if privmsg.channel_login != channel {
                     continue;
                 }
@@ -530,7 +533,10 @@ async fn monitor_1337_messages(
                     continue;
                 }
 
-                if is_valid_1337_message(&privmsg, &echo) {
+                if !is_valid_1337_message(privmsg, &echo) {
+                    continue;
+                }
+                async {
                     let mut users = total_users.lock().await;
                     if users.len() >= MAX_USERS {
                         error!(max = MAX_USERS, "User limit reached");
@@ -546,8 +552,9 @@ async fn monitor_1337_messages(
                         users.insert(username, ms_since_minute);
                     }
                 }
+                .instrument(inbound.handler_span("tracker_1337"))
+                .await;
             }
-            Ok(_) => {}
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
                 error!(skipped, "1337 handler lagged, skipped messages");
             }
@@ -569,7 +576,7 @@ async fn monitor_1337_messages(
     reason = "handler deps are injected individually for testability"
 )]
 pub async fn run_1337_handler<T, L>(
-    broadcast_tx: broadcast::Sender<ServerMessage>,
+    broadcast_tx: broadcast::Sender<Inbound>,
     sender: Arc<ChatSender<T, L>>,
     channel: String,
     latency: Arc<AtomicU32>,
@@ -1002,7 +1009,7 @@ mod tests {
 
     #[tokio::test]
     async fn monitor_child_is_cancelled_and_joined() {
-        let (broadcast_tx, broadcast_rx) = broadcast::channel::<ServerMessage>(1);
+        let (broadcast_tx, broadcast_rx) = broadcast::channel::<Inbound>(1);
         let users = Arc::new(Mutex::new(HashMap::new()));
         let lifecycle = crate::lifecycle::Lifecycle::new();
         let mut tasks = TaskGroup::new(&lifecycle, "test 1337 monitor");

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use eyre::Result;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use llm::{ChatCompletionRequest, Message, TraceIds};
@@ -141,10 +141,6 @@ where
         ExecutionClass::Background
     }
 
-    #[instrument(
-        skip_all,
-        fields(bot.command.name = "!haiku", twitch.user.login = %ctx.privmsg.sender.login),
-    )]
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;

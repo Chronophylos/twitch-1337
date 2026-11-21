@@ -25,6 +25,7 @@ use crate::{
     twitch::{
         ChatSender,
         handlers::{
+            Inbound,
             commands::{CommandConfig, run_generic_command_handler},
             emote_usage::run_emote_usage_handler,
             latency::run_latency_handler,
@@ -447,7 +448,7 @@ pub(crate) fn spawn_handlers<T, L>(
         );
     }
 
-    let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(100);
+    let (broadcast_tx, _) = broadcast::channel::<Inbound>(100);
 
     // Subscribe the command handler before any task (router included) is
     // spawned: broadcast receivers only see messages sent after subscription,

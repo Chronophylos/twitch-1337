@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use eyre::{Result, WrapErr as _};
 use reqwest::Url;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::ai::content::client::fetch_client;
@@ -94,10 +94,6 @@ where
         !self.settings.load().spoiler.profile.trim().is_empty()
     }
 
-    #[instrument(
-        skip_all,
-        fields(bot.command.name = "!spoiler", twitch.user.login = %ctx.privmsg.sender.login),
-    )]
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
