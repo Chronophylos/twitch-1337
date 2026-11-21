@@ -126,7 +126,10 @@ const NAV: &[NavGroup] = &[
     NavGroup {
         id: "system",
         label: "System",
-        items: &[item("web_runtime", "web_runtime", "Dashboard")],
+        items: &[
+            item("web_runtime", "web_runtime", "Dashboard"),
+            item("observability", "observability", "Observability"),
+        ],
     },
 ];
 

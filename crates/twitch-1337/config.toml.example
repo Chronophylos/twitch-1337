@@ -86,6 +86,18 @@ client_secret = "your_client_secret"
 # secret_key = "sk-lf-..."
 # # host = "https://cloud.langfuse.com"  # EU default; US = https://us.cloud.langfuse.com
 
+# Optional: export logs, traces and metrics over OTLP/HTTP (protobuf) to a
+# collector such as Grafana Alloy. Presence enables export; absent, nothing
+# leaves the process. `endpoint` is the collector's base URL (http:// on the
+# LAN; `/v1/traces`, `/v1/logs`, `/v1/metrics` are appended), no credentials
+# in it. `auth_header`, if set, is sent verbatim as `Authorization`.
+# Init or export failures log a warning and drop signals; the bot keeps
+# running and stdout is the record. What gets exported is filtered at
+# /settings → Observability (live). Restart to add or remove this section.
+# [otel]
+# endpoint = "http://alloy:4318"
+# # auth_header = "Basic dXNlcjpwYXNz"
+
 # Suspend defaults now live in the dashboard (`/settings → Suspend`).
 
 # Optional: AI configuration for the !ai command

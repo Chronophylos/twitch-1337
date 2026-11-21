@@ -44,7 +44,7 @@ use twitch_1337_web::{CONTENT_SECURITY_POLICY, bind, build_router, serve_app};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let log_ring = install_tracing();
+    let log_ring = install_tracing().log_ring();
     install_crypto_provider();
 
     let bind_addr: SocketAddr = env::var("BIND_ADDR")

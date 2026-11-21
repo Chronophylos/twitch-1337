@@ -1,8 +1,9 @@
 //! In-memory tail of recent tracing events, read by the dashboard `/logs` page.
 //!
-//! [`LogRingLayer`] copies every INFO-and-above event that passes the global
-//! `EnvFilter` into a bounded [`LogRing`]. Nothing is persisted: a restart
-//! clears the ring, and stdout stays the record.
+//! [`LogRingLayer`] copies every INFO-and-above event into a bounded
+//! [`LogRing`]. Its sink filter is fixed at `info`, independent of `RUST_LOG`
+//! (docs/observability.md § Sinks and filters). Nothing is persisted: a
+//! restart clears the ring, and stdout stays the record.
 //!
 //! The layer never blocks on I/O and never panics. Field values are formatted
 //! before the lock is taken, so the critical section is an O(1) push/pop.

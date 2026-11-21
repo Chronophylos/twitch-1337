@@ -103,6 +103,19 @@ pub struct LangfuseBootstrap {
     pub host: Option<String>,
 }
 
+/// Bootstrap-only OTLP export configuration (ADR-0013). Presence enables
+/// export of logs, traces and metrics to an OTLP/HTTP collector; the per-sink
+/// filters live in `settings.ron` under `observability.otel`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OtelBootstrap {
+    /// Collector base URL, e.g. `http://alloy:4318`. The exporters append
+    /// `/v1/traces`, `/v1/logs` and `/v1/metrics`.
+    pub endpoint: String,
+    /// Sent verbatim as the `Authorization` header (`Basic …`, `Bearer …`).
+    #[serde(default)]
+    pub auth_header: Option<SecretString>,
+}
+
 /// Bootstrap-only AI configuration. Secrets only — every other AI knob
 /// lives in the dashboard settings store and is read from the
 /// SettingsHandle at runtime.
@@ -169,6 +182,8 @@ pub struct Configuration {
     #[serde(default)]
     pub langfuse: Option<LangfuseBootstrap>,
     #[serde(default)]
+    pub otel: Option<OtelBootstrap>,
+    #[serde(default)]
     pub ai: Option<AiBootstrap>,
     #[serde(default)]
     pub web: WebConfig,
@@ -196,6 +211,7 @@ impl Configuration {
             amp: None,
             finnhub: None,
             langfuse: None,
+            otel: None,
             ai: None,
             web: WebConfig::default(),
         }
@@ -299,6 +315,34 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         }
         if lf.secret_key.expose_secret().trim().is_empty() {
             bail!("langfuse.secret_key cannot be empty when langfuse is configured");
+        }
+    }
+
+    if let Some(otel) = config.otel.as_ref() {
+        // Joined with `/v1/<signal>` by the exporter, so it must be a bare
+        // base URL. Credentials belong in `auth_header`, not the URL, which is
+        // logged at startup.
+        let endpoint_ok = otel.endpoint.trim() == otel.endpoint
+            && reqwest::Url::parse(&otel.endpoint).is_ok_and(|u| {
+                matches!(u.scheme(), "http" | "https")
+                    && u.has_host()
+                    && u.username().is_empty()
+                    && u.password().is_none()
+                    && u.query().is_none()
+                    && u.fragment().is_none()
+            });
+        if !endpoint_ok {
+            // Not echoed: a rejected URL may carry a password in its userinfo.
+            bail!(
+                "otel.endpoint must be an http:// or https:// base URL without \
+                 surrounding whitespace, credentials, query or fragment"
+            );
+        }
+        if let Some(auth) = otel.auth_header.as_ref() {
+            let value = auth.expose_secret();
+            if value.trim().is_empty() || reqwest::header::HeaderValue::from_str(value).is_err() {
+                bail!("otel.auth_header must be a non-empty, valid HTTP header value when set");
+            }
         }
     }
 
@@ -531,5 +575,36 @@ mod tests {
             err.to_string().contains("langfuse.public_key"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn otel_endpoint_must_be_bare_http_base_url() {
+        let otel = |endpoint: &str| OtelBootstrap {
+            endpoint: endpoint.to_owned(),
+            auth_header: None,
+        };
+        for bad in [
+            "",
+            "alloy:4318",
+            "grpc://alloy:4317",
+            " http://alloy:4318",
+            "http://user:pw@alloy:4318",
+            "http://alloy:4318/?token=x",
+        ] {
+            let mut cfg = Configuration::test_default();
+            cfg.otel = Some(otel(bad));
+            let err = validate_config(&cfg).expect_err(bad);
+            assert!(err.to_string().contains("otel.endpoint"), "{bad}: {err}");
+            assert!(!err.to_string().contains("user:pw"), "{bad}: {err}");
+        }
+        let mut cfg = Configuration::test_default();
+        cfg.otel = Some(OtelBootstrap {
+            auth_header: Some(SecretString::new("Basic\nx".into())),
+            ..otel("http://alloy:4318")
+        });
+        let err = validate_config(&cfg).expect_err("newline in header");
+        assert!(err.to_string().contains("otel.auth_header"), "{err}");
+        cfg.otel = Some(otel("http://alloy:4318"));
+        validate_config(&cfg).expect("plain LAN collector accepted");
     }
 }

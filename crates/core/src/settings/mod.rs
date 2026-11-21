@@ -20,6 +20,7 @@ pub mod audit;
 pub mod aviationstack;
 pub mod emote_tracker;
 pub mod knob;
+pub mod observability;
 pub mod provider;
 mod resolve;
 pub mod schedules;
@@ -50,6 +51,9 @@ pub use emote_tracker::{
     PotatAttributionSettings,
 };
 pub use knob::{KnobMeta, knob, knobs, overrides_from_form, restart_required};
+pub use observability::{
+    ObservabilityOverrides, ObservabilitySettings, OtelOverrides, OtelSettings,
+};
 pub use provider::{AiProvider, Efforts, ProviderCaps};
 pub use schedules::Schedule;
 pub use spoiler::{SpoilerOverrides, SpoilerSettings};
@@ -184,6 +188,8 @@ pub struct Settings {
     pub alerts: AlertsSettings,
     #[knob(nested)]
     pub web: WebRuntime,
+    #[knob(nested)]
+    pub observability: ObservabilitySettings,
     /// Whole-list override: per-field sparseness makes no sense for rows
     /// that are added and removed. Managed on `/schedules`.
     #[knob(form = false)]
@@ -291,6 +297,7 @@ impl Settings {
             emote_tracker: EmoteTrackerSettings::default(),
             alerts: AlertsSettings::default(),
             web: WebRuntime::default(),
+            observability: ObservabilitySettings::default(),
             schedules: Vec::new(),
         }
     }

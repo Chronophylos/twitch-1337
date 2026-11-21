@@ -116,6 +116,7 @@ impl Settings {
             }
         }
         validate_alerts(&self.alerts, &mut errs);
+        validate_observability(&self.observability, &mut errs);
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
 }
@@ -456,6 +457,25 @@ fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldErro
     }
 }
 
+/// The OTel filters are parsed by the same function the live reload uses, so
+/// a saved string can never fail to apply.
+fn validate_observability(o: &crate::settings::ObservabilitySettings, errs: &mut Vec<FieldError>) {
+    for (field, directives) in [
+        ("observability.otel.logs_filter", &o.otel.logs_filter),
+        ("observability.otel.traces_filter", &o.otel.traces_filter),
+    ] {
+        if let Err(error) = crate::util::observability::parse_otel_filter(directives) {
+            errs.push(FieldError {
+                field: field.into(),
+                message: format!(
+                    "{error} (got {directives:?}; expected comma-separated \
+                     `target=level` directives like `warn,twitch_1337=debug`)"
+                ),
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,6 +518,29 @@ mod tests {
             }),
             "{errs:?}"
         );
+    }
+
+    #[test]
+    fn otel_filters_reject_bad_directives_and_blank() {
+        let mut s = Settings::compiled_defaults();
+        s.observability.otel.logs_filter = "warn,twitch_1337=loud".into();
+        s.observability.otel.traces_filter = "  ".into();
+        let errs = s.validate(&ctx()).expect_err("bad filters must fail");
+        let fields: Vec<&str> = errs.iter().map(|e| e.field.as_str()).collect();
+        assert_eq!(
+            fields,
+            [
+                "observability.otel.logs_filter",
+                "observability.otel.traces_filter"
+            ],
+            "{errs:?}"
+        );
+        assert!(errs[0].message.contains("twitch_1337=loud"), "{errs:?}");
+        assert!(errs[1].message.contains("off"), "{errs:?}");
+
+        s.observability.otel.logs_filter = "off".into();
+        s.observability.otel.traces_filter = "info,hyper=debug".into();
+        s.validate(&ctx()).expect("well-formed directives pass");
     }
 
     fn decision_profile() -> AiProfile {

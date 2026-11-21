@@ -1,0 +1,22 @@
+{# crates/web/templates/settings/cards/observability.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-observability" class="settings-card" data-section="observability">
+  <header class="settings-card-head">
+    <div>
+      <h2>Observability</h2>
+      <p>What gets exported to the OTLP collector set in <code>[otel]</code> in config.toml. Comma-separated <code>target=level</code> directives, as in <code>RUST_LOG</code>; <code>off</code> exports nothing. Applies live. stdout and <code>/logs</code> are not affected.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    {% call m::text_row("observability", self.knob("observability.otel.logs_filter"),
+       "Log events sent to Loki.",
+       current.observability.otel.logs_filter, defaults.observability.otel.logs_filter, defaults.observability.otel.logs_filter) %}{% endcall %}
+    {% call m::text_row("observability", self.knob("observability.otel.traces_filter"),
+       "Spans sent to Tempo.",
+       current.observability.otel.traces_filter, defaults.observability.otel.traces_filter, defaults.observability.otel.traces_filter) %}{% endcall %}
+  </div>
+</section>
