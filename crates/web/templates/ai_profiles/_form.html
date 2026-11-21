@@ -19,6 +19,8 @@
     </div>
   {% endif %}
 
+  <fieldset class="profile-section">
+    <legend>Profile</legend>
   <div class="row">
     <label>Name
       <input type="text" name="name" value="{{ form.name }}" required>
@@ -39,6 +41,10 @@
     </label>
   </div>
 
+  </fieldset>
+
+  <fieldset class="profile-section">
+    <legend>Connection</legend>
   <div class="row">
     <label>Provider
       <select name="provider" class="provider-select">
@@ -79,6 +85,12 @@
     </label>
   </div>
 
+  </fieldset>
+
+  <details class="profile-advanced"
+    {% if edit_target.is_some() || !form.reasoning_effort.is_empty() || !form.service_tier.is_empty() || form.timeout != "30" %}open{% endif %}>
+    <summary>Advanced <span class="muted">Timeout, reasoning, and service tier</span></summary>
+    <div class="profile-advanced-body">
   <div class="row">
     <label>Timeout (seconds)
       <input type="number" name="timeout" min="1" max="600" value="{{ form.timeout }}" required>
@@ -127,6 +139,8 @@
       {% endif %}
     </fieldset>
   {% endfor %}
+    </div>
+  </details>
 
   <div class="row form-actions">
     <button type="submit" class="btn primary">Save</button>

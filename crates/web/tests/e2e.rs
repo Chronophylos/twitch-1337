@@ -919,6 +919,12 @@ async fn ai_profile_delete_confirms_and_provider_picker_toggles() {
 
     s.goto("/ai-profiles?new=true").await;
     s.wait_for("form.profile-form").await;
+    assert_eq!(
+        s.eval("return document.querySelector('details.profile-advanced')?.open ?? 'missing';")
+            .await,
+        false,
+        "advanced settings must start collapsed on new profiles"
+    );
     let enabled = "return [...document.querySelectorAll('form.profile-form fieldset[data-provider]')] \
                    .filter((el) => !el.hidden && !el.disabled) \
                    .map((el) => el.dataset.provider).join();";
@@ -1003,6 +1009,20 @@ async fn ai_profile_delete_confirms_and_provider_picker_toggles() {
         .await
         .expect("pick chat");
     assert_eq!(s.eval(enabled).await, "open_router");
+
+    s.goto("/ai-profiles?edit=alpha").await;
+    s.wait_for("details.profile-advanced").await;
+    assert_eq!(
+        s.eval("return document.querySelector('details.profile-advanced').open;")
+            .await,
+        true,
+        "advanced settings must be visible when editing"
+    );
+    assert_eq!(
+        s.eval("return [...document.querySelectorAll('form.profile-form > fieldset.profile-section > legend')].map(el => el.textContent).join(',');")
+            .await,
+        "Profile,Connection"
+    );
 
     let problems = s.problems().await;
     assert!(problems.is_empty(), "{problems:#?}");
