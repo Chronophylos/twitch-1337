@@ -2,13 +2,18 @@
 //! profile carries `base_url`/`key`, the same credential surface that was
 //! owner-only on `main`).
 
-use std::{fs, sync::Arc};
+use std::{collections::HashMap, fs, sync::Arc};
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
+use secrecy::SecretString;
 use tower::ServiceExt as _;
 use twitch_1337_core::settings::{Actor, AiProfile, AiProvider, SettingsOverrides};
 use twitch_1337_web::build_router;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{body_partial_json, header as request_header, method, path},
+};
 
 use super::helpers;
 use helpers::{
@@ -727,4 +732,160 @@ async fn delete_refuses_the_spoiler_profile() {
     .await;
     assert_ne!(res.status(), StatusCode::SEE_OTHER);
     assert_eq!(state.settings.load().ai.profiles.len(), 2);
+}
+
+#[tokio::test]
+async fn test_connection_uses_unsaved_values_without_persisting_the_profile() {
+    install_crypto();
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "message": { "content": "OK" }
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=draft&provider=ollama&base_url={}&model=unsaved-model&timeout=30",
+        urlencoding::encode(&csrf),
+        urlencoding::encode(&upstream.uri()),
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/test",
+        body,
+    )
+    .await;
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(html.contains("Connection successful"), "{html}");
+    assert!(html.contains("value=\"unsaved-model\""), "{html}");
+    assert_eq!(state.settings.load().ai.profiles.len(), 1);
+    assert_eq!(state.settings.load().ai.profiles[0].name, "a");
+}
+
+#[tokio::test]
+async fn test_connection_sends_openrouter_credentials_and_advanced_options() {
+    install_crypto();
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(request_header("authorization", "Bearer test-secret"))
+        .and(body_partial_json(serde_json::json!({
+            "model": "draft-openrouter",
+            "messages": [{ "role": "user", "content": "Reply with OK." }],
+            "reasoning": { "effort": "high" },
+            "service_tier": "priority"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{ "message": { "content": "OK" } }]
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    state.llm = Arc::new(
+        twitch_1337_core::llm_factory::LlmRegistry::new(None, state.settings.clone()).with_keys(
+            HashMap::from([("k".to_owned(), SecretString::from("test-secret"))]),
+        ),
+    );
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=draft&provider=open_router&base_url={}&model=draft-openrouter&timeout=30&key=k&reasoning_effort=high&service_tier=priority",
+        urlencoding::encode(&csrf),
+        urlencoding::encode(&upstream.uri()),
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/test",
+        body,
+    )
+    .await;
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(html.contains("Connection successful"), "{html}");
+    assert!(
+        !html.contains("test-secret"),
+        "API secret must not be rendered"
+    );
+    assert_eq!(state.settings.load().ai.profiles.len(), 1);
+}
+
+#[tokio::test]
+async fn cards_show_assignment_links_and_name_delete_blockers() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(
+        &state,
+        vec![profile("active"), profile("unused"), decision("classifier")],
+        "active",
+    )
+    .await;
+    state
+        .settings_store
+        .apply(
+            SettingsOverrides {
+                ai: twitch_1337_core::settings::AiOverrides {
+                    recap: twitch_1337_core::settings::AiRecapOverrides {
+                        profile: Some(Some("active".into())),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            Actor {
+                user_id: "test".into(),
+                user_login: "test".into(),
+            },
+        )
+        .await
+        .expect("assign recap");
+    point_spoiler_at(&state, "classifier").await;
+    let (sid, cc, _csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let req = Request::builder()
+        .uri("/ai-profiles")
+        .header(header::COOKIE, cookie_header(&sid, &cc))
+        .body(Body::empty())
+        .unwrap();
+    let html = body_string(build_router(state).oneshot(req).await.unwrap()).await;
+
+    for (label, anchor) in [
+        ("Aurora", "sec-ai-aurora"),
+        ("Grok", "sec-ai-grok"),
+        ("Dreamer", "sec-ai-dreamer"),
+        ("Media", "sec-ai-media"),
+        ("Recap", "sec-ai-recap"),
+        ("Spoiler check", "sec-spoiler"),
+    ] {
+        assert!(
+            html.contains(&format!("href=\"/settings#{anchor}\"")) && html.contains(label),
+            "missing {label} assignment link: {html}"
+        );
+    }
+    let unused = html
+        .split("<article")
+        .find(|part| part.contains("card-title\">unused</span>"))
+        .unwrap_or_else(|| panic!("unused profile card missing: {html}"));
+    assert!(unused.contains("Not assigned"), "{unused}");
+    assert!(
+        html.contains("Reassign Aurora, Grok, Dreamer, Media, Recap before deleting"),
+        "delete confirmation must name blockers: {html}"
+    );
 }

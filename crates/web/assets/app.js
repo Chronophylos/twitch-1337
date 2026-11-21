@@ -723,6 +723,11 @@ for (const form of document.querySelectorAll('form.schedule-form')) {
 for (const form of document.querySelectorAll('form.profile-form')) {
   const select = form.querySelector('select[name="provider"]');
   const kind = form.querySelector('select[name="kind"]');
+  const keyRow = form.querySelector('[data-key-row]');
+  const key = form.querySelector('input[name="key"]');
+  const baseUrl = form.querySelector('input[name="base_url"]');
+  const baseUrlHelp = form.querySelector('[data-base-url-help]');
+  const model = form.querySelector('input[name="model"]');
   if (!select) continue;
   const refresh = () => {
     const decision = kind?.value === 'decision';
@@ -737,6 +742,29 @@ for (const form of document.querySelectorAll('form.profile-form')) {
       el.hidden = !match;
       el.disabled = !match;
     }
+    for (const help of form.querySelectorAll('[data-kind-help]')) {
+      help.hidden = help.dataset.kindHelp !== (decision ? 'decision' : 'chat');
+    }
+
+    const selected = select.selectedOptions[0];
+    if (!selected) return;
+    const requiresKey = selected.dataset.requiresKey === '1';
+    if (keyRow) keyRow.hidden = !requiresKey;
+    if (key) {
+      key.disabled = !requiresKey;
+      key.required = requiresKey;
+    }
+    if (baseUrl) {
+      const defaultBaseUrl = selected.dataset.defaultBaseUrl || '';
+      baseUrl.required = selected.dataset.baseUrlRequired === '1';
+      baseUrl.placeholder = defaultBaseUrl || 'https://llm.example.com/v1';
+      if (baseUrlHelp) {
+        baseUrlHelp.textContent = baseUrl.required
+          ? 'Required for an OpenAI-compatible endpoint.'
+          : `Optional. Leave blank to use ${defaultBaseUrl}.`;
+      }
+    }
+    if (model) model.placeholder = selected.dataset.modelPlaceholder || '';
   };
   select.addEventListener('change', refresh);
   kind?.addEventListener('change', refresh);

@@ -919,18 +919,75 @@ async fn ai_profile_delete_confirms_and_provider_picker_toggles() {
 
     s.goto("/ai-profiles?new=true").await;
     s.wait_for("form.profile-form").await;
+    assert_eq!(
+        s.eval("return document.querySelector('details.profile-advanced')?.open ?? 'missing';")
+            .await,
+        false,
+        "advanced settings must start collapsed on new profiles"
+    );
     let enabled = "return [...document.querySelectorAll('form.profile-form fieldset[data-provider]')] \
                    .filter((el) => !el.hidden && !el.disabled) \
                    .map((el) => el.dataset.provider).join();";
     let provider = "form.profile-form select[name=\"provider\"]";
     let kind = "form.profile-form select[name=\"kind\"]";
     assert_eq!(s.eval(enabled).await, "open_router");
+    let key_state = "const el = document.querySelector('form.profile-form input[name=\"key\"]'); \
+                     return [el.closest('.row').hidden, el.disabled, el.required].join(',');";
+    assert_eq!(s.eval(key_state).await, "false,false,true");
+    let base_state = "const el = document.querySelector('form.profile-form input[name=\"base_url\"]'); \
+                      return [el.required, el.placeholder, el.closest('.row').querySelector('small').textContent].join('|');";
+    assert_eq!(
+        s.eval(base_state).await,
+        "false|https://openrouter.ai/api/v1|Optional. Leave blank to use https://openrouter.ai/api/v1."
+    );
+    assert_eq!(
+        s.eval(
+            "return document.querySelector('form.profile-form input[name=\"model\"]').placeholder;"
+        )
+        .await,
+        "provider/model-id"
+    );
+    assert_eq!(
+        s.eval("return document.querySelector('form.profile-form select[name=\"kind\"]').selectedOptions[0].textContent;")
+            .await,
+        "Chat agent"
+    );
     s.find(provider)
         .await
         .select_by_value("open_ai")
         .await
         .expect("pick open_ai");
     assert_eq!(s.eval(enabled).await, "open_ai");
+    assert_eq!(
+        s.eval(base_state).await,
+        "false|https://api.openai.com/v1|Optional. Leave blank to use https://api.openai.com/v1."
+    );
+    s.find(provider)
+        .await
+        .select_by_value("open_ai_compatible")
+        .await
+        .expect("pick open_ai_compatible");
+    assert_eq!(s.eval(enabled).await, "open_ai_compatible");
+    assert_eq!(
+        s.eval(base_state).await,
+        "true|https://llm.example.com/v1|Required for an OpenAI-compatible endpoint."
+    );
+    assert_eq!(
+        s.eval("const el = document.querySelector('fieldset[data-provider=\"open_ai_compatible\"] select[name=\"service_tier\"]'); return el ? [...el.options].map(o => o.value).join(',') : 'missing';")
+            .await,
+        ",flex,priority"
+    );
+    s.find(provider)
+        .await
+        .select_by_value("ollama")
+        .await
+        .expect("pick ollama");
+    assert_eq!(s.eval(enabled).await, "ollama");
+    assert_eq!(s.eval(key_state).await, "true,true,false");
+    assert_eq!(
+        s.eval(base_state).await,
+        "false|http://localhost:11434|Optional. Leave blank to use http://localhost:11434."
+    );
     // Decision profiles are OpenRouter-only and carry no effort/tier.
     s.find(kind)
         .await
@@ -952,6 +1009,20 @@ async fn ai_profile_delete_confirms_and_provider_picker_toggles() {
         .await
         .expect("pick chat");
     assert_eq!(s.eval(enabled).await, "open_router");
+
+    s.goto("/ai-profiles?edit=alpha").await;
+    s.wait_for("details.profile-advanced").await;
+    assert_eq!(
+        s.eval("return document.querySelector('details.profile-advanced').open;")
+            .await,
+        true,
+        "advanced settings must be visible when editing"
+    );
+    assert_eq!(
+        s.eval("return [...document.querySelectorAll('form.profile-form > fieldset.profile-section > legend')].map(el => el.textContent).join(',');")
+            .await,
+        "Profile,Connection"
+    );
 
     let problems = s.problems().await;
     assert!(problems.is_empty(), "{problems:#?}");

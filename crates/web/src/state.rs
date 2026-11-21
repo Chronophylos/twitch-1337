@@ -87,6 +87,9 @@ pub struct WebState {
     /// page returns 403. Stored behind `Arc<ArcSwap<…>>` so tests can mutate
     /// it after construction without cloning the whole state.
     pub owner: Arc<ArcSwap<Option<String>>>,
+    /// Shared provider registry, including the bootstrap `[ai.keys]` needed
+    /// when the owner tests an unsaved profile.
+    pub llm: Arc<twitch_1337_core::llm_factory::LlmRegistry>,
     /// Live settings handle (arc-swap snapshot of resolved `Settings`). Cloned
     /// into handlers that need the current effective config.
     pub settings: twitch_1337_core::settings::SettingsHandle,
@@ -157,6 +160,7 @@ impl WebState {
             emote_tracker: core.emote_tracker.clone(),
             avatar_cache: web.avatar_cache,
             owner: web.owner,
+            llm: core.llm.clone(),
             settings: core.settings.clone(),
             settings_store: core.settings_store.clone(),
             schedule_runtime: core.schedule_runtime.clone(),
@@ -243,6 +247,10 @@ impl WebState {
                 std::time::Duration::from_secs(3600),
             )),
             owner: Arc::new(ArcSwap::from_pointee(cfg.owner)),
+            llm: Arc::new(twitch_1337_core::llm_factory::LlmRegistry::new(
+                None,
+                settings.clone(),
+            )),
             settings,
             settings_store,
             schedule_runtime,

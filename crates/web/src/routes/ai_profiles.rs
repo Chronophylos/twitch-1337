@@ -14,8 +14,10 @@ use axum::Router;
 use axum::extract::{Extension, Path, Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
+use llm::LlmError;
 use serde::Deserialize;
 use tower_cookies::Cookies;
+use twitch_1337_core::llm_factory::ProfileTestError;
 use twitch_1337_core::settings::{
     Actor, AiProfile, AiProvider, Efforts, FieldError, ProfileKind, Settings, SettingsError,
 };
@@ -39,6 +41,7 @@ pub fn router() -> Router<WebState> {
     Router::new()
         .route("/ai-profiles", get(list))
         .route("/ai-profiles/add", post(create))
+        .route("/ai-profiles/test", post(test_connection))
         .route("/ai-profiles/{name}/edit", post(update))
         .route("/ai-profiles/{name}/delete", post(delete))
 }
@@ -51,6 +54,16 @@ struct ListQuery {
     new: Option<bool>,
 }
 
+struct ConnectionTestView {
+    success: bool,
+    message: String,
+}
+
+struct AssignmentView {
+    label: &'static str,
+    settings_anchor: &'static str,
+}
+
 struct CardView {
     name: String,
     kind: &'static str,
@@ -61,6 +74,8 @@ struct CardView {
     reasoning_effort: Option<String>,
     service_tier: Option<String>,
     timeout: u64,
+    assignments: Vec<AssignmentView>,
+    assignment_names: String,
 }
 
 /// One `<option>` for the provider `<select>`, plus enough of its
@@ -75,6 +90,10 @@ struct ProviderOption {
     effort_kind: &'static str,
     effort_values: Vec<&'static str>,
     service_tier: bool,
+    requires_key: bool,
+    base_url_required: bool,
+    default_base_url: Option<&'static str>,
+    model_placeholder: &'static str,
 }
 
 fn provider_options() -> Vec<ProviderOption> {
@@ -93,6 +112,15 @@ fn provider_options() -> Vec<ProviderOption> {
                 effort_kind,
                 effort_values,
                 service_tier: caps.service_tier,
+                requires_key: p.uses_openai_client(),
+                base_url_required: caps.default_base_url.is_none(),
+                default_base_url: caps.default_base_url,
+                model_placeholder: match p {
+                    AiProvider::OpenRouter => "provider/model-id",
+                    AiProvider::OpenAi => "gpt-5",
+                    AiProvider::OpenAiCompatible => "vendor/model-id",
+                    AiProvider::Ollama => "qwen3:8b",
+                },
             }
         })
         .collect()
@@ -143,6 +171,7 @@ struct ListTpl {
     row_errors: Vec<RowError>,
     global_errors: Vec<(String, String)>,
     flash: Option<String>,
+    connection_test: Option<ConnectionTestView>,
     csrf: String,
     user_login: String,
     user_avatar_url: Option<String>,
@@ -158,6 +187,8 @@ struct ListTpl {
 #[derive(Debug, Deserialize)]
 struct ProfileForm {
     _csrf: String,
+    #[serde(default)]
+    _edit_target: Option<String>,
     name: String,
     #[serde(default)]
     kind: String,
@@ -261,7 +292,7 @@ async fn list(
         None
     };
     let total = rows.len();
-    let cards: Vec<CardView> = rows.iter().map(card_view).collect();
+    let cards: Vec<CardView> = rows.iter().map(|p| card_view(p, &settings)).collect();
     render(&ListTpl {
         rows: cards,
         edit_form,
@@ -270,6 +301,7 @@ async fn list(
         row_errors: Vec::new(),
         global_errors: Vec::new(),
         flash: flash::take(&cookies),
+        connection_test: None,
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
         user_avatar_url: session.avatar_url.clone(),
@@ -283,7 +315,45 @@ async fn list(
     })
 }
 
-fn card_view(p: &AiProfile) -> CardView {
+fn card_view(p: &AiProfile, settings: &Settings) -> CardView {
+    let mut assignments = Vec::new();
+    for (label, settings_anchor, selected) in [
+        (
+            "Aurora",
+            "sec-ai-aurora",
+            settings.ai.aurora.profile.as_str(),
+        ),
+        ("Grok", "sec-ai-grok", settings.ai.grok.profile.as_str()),
+        (
+            "Dreamer",
+            "sec-ai-dreamer",
+            settings.ai.dreamer.profile.as_str(),
+        ),
+        ("Media", "sec-ai-media", settings.ai.media.profile.as_str()),
+        (
+            "Recap",
+            "sec-ai-recap",
+            settings.ai.recap.profile.as_deref().unwrap_or(""),
+        ),
+        (
+            "Spoiler check",
+            "sec-spoiler",
+            settings.spoiler.profile.as_str(),
+        ),
+    ] {
+        if selected == p.name {
+            assignments.push(AssignmentView {
+                label,
+                settings_anchor,
+            });
+        }
+    }
+    let assignment_names = assignments
+        .iter()
+        .map(|assignment| assignment.label)
+        .collect::<Vec<_>>()
+        .join(", ");
+
     CardView {
         name: p.name.clone(),
         kind: p.kind.as_str(),
@@ -294,6 +364,8 @@ fn card_view(p: &AiProfile) -> CardView {
         reasoning_effort: p.reasoning_effort.clone(),
         service_tier: p.service_tier.clone(),
         timeout: p.timeout,
+        assignments,
+        assignment_names,
     }
 }
 
@@ -338,14 +410,7 @@ async fn create(
     let new_profile = match form.to_profile() {
         Ok(p) => p,
         Err(e) => {
-            let settings = state.settings.load();
-            return render_validation(
-                &session,
-                settings.ai.profiles.clone(),
-                vec![e],
-                None,
-                Some(submitted),
-            );
+            return render_validation(&state, &session, vec![e], None, Some(submitted));
         }
     };
     let current_profiles = state.settings.load().ai.profiles.clone();
@@ -368,6 +433,114 @@ async fn create(
     .await
 }
 
+async fn test_connection(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    axum_extra::extract::Form(form): axum_extra::extract::Form<ProfileForm>,
+) -> Result<Response, WebError> {
+    if !csrf::verify(&form._csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    let edit_target = form._edit_target.clone();
+    let submitted = form_state_from_form(&form);
+    let profile = match form.to_profile() {
+        Ok(profile) => profile,
+        Err(error) => {
+            return render_validation(&state, &session, vec![error], edit_target, Some(submitted));
+        }
+    };
+
+    let connection_test = match state.llm.test_profile(&profile).await {
+        Ok(latency) => ConnectionTestView {
+            success: true,
+            message: format!(
+                "Connection successful in {} ms. The model returned a response.",
+                latency.as_millis()
+            ),
+        },
+        Err(error) => ConnectionTestView {
+            success: false,
+            message: connection_failure(error),
+        },
+    };
+    render_page(
+        &state,
+        &session,
+        Vec::new(),
+        edit_target,
+        Some(submitted),
+        Some(connection_test),
+    )
+}
+
+fn connection_failure(error: ProfileTestError) -> String {
+    match error {
+        ProfileTestError::UnknownKey(name) => format!(
+            "Key name {name:?} has no matching [ai.keys] entry in config.toml. Add the entry or choose another key name."
+        ),
+        ProfileTestError::MissingKey => {
+            "This provider requires a key name from [ai.keys].".to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Provider { status, body }) => {
+            let summary = match status {
+                401 | 403 => format!(
+                    "Authentication failed (HTTP {status}). Check the selected [ai.keys] entry and its provider permissions."
+                ),
+                404 => format!(
+                    "Model or endpoint not found (HTTP {status}). Check Model and Base URL."
+                ),
+                400 | 422 => format!(
+                    "Provider rejected the request (HTTP {status}). Check Model, Reasoning effort, and Service tier."
+                ),
+                429 => "Provider rate limited the test (HTTP 429). Try again later.".to_owned(),
+                500..=599 => format!(
+                    "Provider failed the request (HTTP {status}). Check the provider's status and try again."
+                ),
+                _ => format!("Provider rejected the request (HTTP {status})."),
+            };
+            format!("{summary}{}", provider_excerpt(&body))
+        }
+        ProfileTestError::Llm(LlmError::Http(error)) if error.is_timeout() => {
+            "Request timed out. Increase Timeout or check provider load.".to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Http(error)) if error.is_connect() => {
+            "Could not connect to the provider. Check Base URL, DNS, and TLS.".to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Http(error)) if error.is_builder() => {
+            "Could not build the provider request. Check Base URL.".to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Http(_)) => {
+            "Could not send the request to the provider. Check Base URL and network access."
+                .to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Header(_)) => {
+            "The selected API key cannot be used in an HTTP Authorization header. Check [ai.keys]."
+                .to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Decode { stage, .. }) => {
+            format!("Provider returned an unreadable response during {stage}.")
+        }
+        ProfileTestError::Llm(LlmError::EmptyResponse) => {
+            "Provider returned an empty response. Check that the model supports chat completions."
+                .to_owned()
+        }
+        ProfileTestError::Llm(LlmError::Timeout) => {
+            "Request timed out. Increase Timeout or check provider load.".to_owned()
+        }
+    }
+}
+
+fn provider_excerpt(body: &str) -> String {
+    let body = body.trim();
+    if body.is_empty() {
+        return String::new();
+    }
+    let mut chars = body.chars();
+    let excerpt: String = chars.by_ref().take(600).collect();
+    let truncated = if chars.next().is_some() { "…" } else { "" };
+    format!(" Provider response: {excerpt}{truncated}")
+}
+
 async fn update(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
@@ -382,14 +555,7 @@ async fn update(
     let edited = match form.to_profile() {
         Ok(p) => p,
         Err(e) => {
-            let settings = state.settings.load();
-            return render_validation(
-                &session,
-                settings.ai.profiles.clone(),
-                vec![e],
-                Some(name),
-                Some(submitted),
-            );
+            return render_validation(&state, &session, vec![e], Some(name), Some(submitted));
         }
     };
     let target = name.clone();
@@ -456,8 +622,8 @@ async fn delete(
     let profiles = settings.ai.profiles.clone();
     if profiles.len() == 1 {
         return render_validation(
+            &state,
             &session,
-            profiles,
             vec![FieldError {
                 field: "ai.profiles".into(),
                 message: "at least one profile is required".into(),
@@ -478,8 +644,8 @@ async fn delete(
         || settings.ai.recap.profile.as_deref() == Some(name.as_str());
     if in_use {
         return render_validation(
+            &state,
             &session,
-            profiles,
             vec![FieldError {
                 field: "ai.profiles".into(),
                 message: "assign every agent and the spoiler check to another profile before deleting this one".into(),
@@ -526,26 +692,32 @@ async fn apply_or_rerender(
         Err(SettingsError::Validation(errs)) => {
             // Render the *persisted* rows as cards — never the rejected
             // attempt (see the identical note in `routes/schedules.rs`).
-            let settings = state.settings.load();
-            render_validation(
-                session,
-                settings.ai.profiles.clone(),
-                errs,
-                edit_on_error,
-                submitted,
-            )
+            render_validation(state, session, errs, edit_on_error, submitted)
         }
         Err(e) => Err(WebError::Internal(eyre::eyre!("settings apply: {e}"))),
     }
 }
 
 fn render_validation(
+    state: &WebState,
     session: &Session,
-    rows: Vec<AiProfile>,
     errs: Vec<FieldError>,
     edit_on_error: Option<String>,
     submitted: Option<FormState>,
 ) -> Result<Response, WebError> {
+    render_page(state, session, errs, edit_on_error, submitted, None)
+}
+
+fn render_page(
+    state: &WebState,
+    session: &Session,
+    errs: Vec<FieldError>,
+    edit_on_error: Option<String>,
+    submitted: Option<FormState>,
+    connection_test: Option<ConnectionTestView>,
+) -> Result<Response, WebError> {
+    let settings = state.settings.load();
+    let rows = settings.ai.profiles.clone();
     let mut row_errors: Vec<RowError> = Vec::new();
     let mut global_errors: Vec<(String, String)> = Vec::new();
     for e in errs {
@@ -575,7 +747,7 @@ fn render_validation(
         global_errors.push((e.field, e.message));
     }
     let total = rows.len();
-    let cards: Vec<CardView> = rows.iter().map(card_view).collect();
+    let cards: Vec<CardView> = rows.iter().map(|p| card_view(p, &settings)).collect();
 
     // The edit form's POST target must stay pinned to the row this edit
     // actually opened against, regardless of what name the user typed into
@@ -602,6 +774,7 @@ fn render_validation(
         row_errors,
         global_errors,
         flash: None,
+        connection_test,
         csrf: csrf::encode(&session.csrf_value),
         user_login: session.user_login.clone(),
         user_avatar_url: session.avatar_url.clone(),

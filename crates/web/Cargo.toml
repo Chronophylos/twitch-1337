@@ -18,6 +18,7 @@ axum-extra = { workspace = true }
 eyre = { workspace = true }
 hex = { workspace = true }
 jiff = { workspace = true }
+llm = { path = "../llm" }
 mime_guess = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }

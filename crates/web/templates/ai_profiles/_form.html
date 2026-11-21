@@ -9,7 +9,18 @@
    the authority — that script is convenience only. #}
 <form method="post" action="{{ action }}" class="settings-rows profile-form" data-unsaved-guard>
   <input type="hidden" name="_csrf" value="{{ csrf }}">
+  {% if let Some(target) = edit_target %}
+    <input type="hidden" name="_edit_target" value="{{ target }}">
+  {% endif %}
 
+  {% if let Some(result) = connection_test %}
+    <div class="flash{% if !result.success %} error{% endif %}" role="status" data-connection-result>
+      {{ result.message }}
+    </div>
+  {% endif %}
+
+  <fieldset class="profile-section">
+    <legend>Profile</legend>
   <div class="row">
     <label>Name
       <input type="text" name="name" value="{{ form.name }}" required>
@@ -20,42 +31,66 @@
     <label>Kind
       <select name="kind" class="kind-select">
         {% for k in kinds %}
-          <option value="{{ k.as_str() }}" {% if form.kind == k.as_str() || (form.kind.is_empty() && k.as_str() == "chat") %}selected{% endif %}>{{ k.as_str() }}</option>
+          <option value="{{ k.as_str() }}" {% if form.kind == k.as_str() || (form.kind.is_empty() && k.as_str() == "chat") %}selected{% endif %}>
+            {%- if k.as_str() == "chat" %}Chat agent{% else %}Decision / structured choice{% endif -%}
+          </option>
         {% endfor %}
       </select>
-      <small class="muted">decision = single-shot structured choice (OpenRouter only, no effort/tier); cannot be assigned to chat agents.</small>
+      <small class="muted" data-kind-help="chat" {% if form.kind == "decision" %}hidden{% endif %}>For Aurora, Grok, Dreamer, Media, and Recap.</small>
+      <small class="muted" data-kind-help="decision" {% if form.kind != "decision" %}hidden{% endif %}>For the spoiler check. OpenRouter only; no reasoning effort or service tier.</small>
     </label>
   </div>
 
+  </fieldset>
+
+  <fieldset class="profile-section">
+    <legend>Connection</legend>
   <div class="row">
     <label>Provider
       <select name="provider" class="provider-select">
         {% for p in providers %}
-          <option value="{{ p.value }}" data-decision-ok="{% if p.value == "open_router" %}1{% else %}0{% endif %}" {% if form.provider == p.value %}selected{% endif %}>{{ p.label }}</option>
+          <option value="{{ p.value }}"
+            data-decision-ok="{% if p.value == "open_router" %}1{% else %}0{% endif %}"
+            data-requires-key="{% if p.requires_key %}1{% else %}0{% endif %}"
+            data-base-url-required="{% if p.base_url_required %}1{% else %}0{% endif %}"
+            data-default-base-url="{% if let Some(url) = p.default_base_url %}{{ url }}{% endif %}"
+            data-model-placeholder="{{ p.model_placeholder }}"
+            {% if form.provider == p.value %}selected{% endif %}>{{ p.label }}</option>
         {% endfor %}
       </select>
     </label>
   </div>
 
-  <div class="row">
+  <div class="row" data-key-row {% if form.provider == "ollama" %}hidden{% endif %}>
     <label>
-      <span>Key name — <code>[ai.keys]</code> entry (required except Ollama)</span>
-      <input type="text" name="key" value="{{ form.key }}" placeholder="openrouter">
+      <span>Key name (required)</span>
+      <input type="text" name="key" value="{{ form.key }}" placeholder="openrouter"
+        {% if form.provider == "ollama" %}disabled{% else %}required{% endif %}>
+      <small class="muted">Name of the credential in <code>[ai.keys]</code>, not the API key itself.</small>
     </label>
   </div>
 
   <div class="row">
-    <label>Base URL (optional — provider default if blank)
-      <input type="text" name="base_url" value="{{ form.base_url }}">
+    <label>Base URL
+      <input type="text" name="base_url" value="{{ form.base_url }}"
+        {% if form.provider == "open_ai_compatible" %}required{% endif %}>
+      <small class="muted" data-base-url-help>Optional. Leave blank to use the provider default.</small>
     </label>
   </div>
 
   <div class="row">
     <label>Model
-      <input type="text" name="model" value="{{ form.model }}" required>
+      <input type="text" name="model" value="{{ form.model }}" placeholder="provider/model-id" required>
+      <small class="muted">Use the exact upstream model ID.</small>
     </label>
   </div>
 
+  </fieldset>
+
+  <details class="profile-advanced"
+    {% if edit_target.is_some() || !form.reasoning_effort.is_empty() || !form.service_tier.is_empty() || form.timeout != "30" %}open{% endif %}>
+    <summary>Advanced <span class="muted">Timeout, reasoning, and service tier</span></summary>
+    <div class="profile-advanced-body">
   <div class="row">
     <label>Timeout (seconds)
       <input type="number" name="timeout" min="1" max="600" value="{{ form.timeout }}" required>
@@ -92,16 +127,24 @@
       {% endif %}
       {% if p.service_tier %}
         <div class="row">
-          <label>Service tier (optional)
-            <input type="text" name="service_tier" value="{{ form.service_tier }}">
+          <label>Service tier
+            <select name="service_tier">
+              <option value="" {% if form.service_tier.is_empty() %}selected{% endif %}>Default</option>
+              <option value="flex" {% if form.service_tier == "flex" %}selected{% endif %}>Flex</option>
+              <option value="priority" {% if form.service_tier == "priority" %}selected{% endif %}>Priority</option>
+            </select>
+            <small class="muted">Optional. Availability depends on the provider and model.</small>
           </label>
         </div>
       {% endif %}
     </fieldset>
   {% endfor %}
+    </div>
+  </details>
 
   <div class="row form-actions">
     <button type="submit" class="btn primary">Save</button>
+    <button type="submit" class="btn ghost" formaction="/ai-profiles/test">Test connection</button>
     {% if let Some(href) = cancel_href %}
       <a class="btn ghost" href="{{ href }}">Cancel</a>
     {% endif %}
