@@ -209,7 +209,7 @@ where
 
 /// Targets on the export path itself: their events, exported by the very
 /// request that carries them, would emit more on the way out. The SDK
-/// suppresses its own telemetry but not the HTTP stack's, so these are forced
+/// suppresses its own signals but not the HTTP stack's, so these are forced
 /// `off` after whatever the settings say.
 const EXPORT_PATH_OFF: &str = "hyper=off,reqwest=off,h2=off,opentelemetry=off";
 
