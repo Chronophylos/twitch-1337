@@ -463,7 +463,7 @@ async fn create(
         .await
     {
         let msg = ping_error_for_form(e)?;
-        tracing::info!(
+        tracing::debug!(
             target: "twitch_1337_web",
             user_id = %session.user_id,
             action = "ping_create",
@@ -561,7 +561,7 @@ async fn update(
         .await
     {
         let msg = ping_error_for_form(e)?;
-        tracing::info!(
+        tracing::debug!(
             target: "twitch_1337_web",
             user_id = %session.user_id,
             action = "ping_update",
@@ -658,7 +658,7 @@ async fn add_member(
             Ok(Redirect::to(&format!("/pings/{name}")).into_response())
         }
         Err(msg) => {
-            tracing::info!(
+            tracing::debug!(
                 target: "twitch_1337_web",
                 user_id = %session.user_id,
                 action = "ping_member_add",

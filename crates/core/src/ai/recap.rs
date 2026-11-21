@@ -335,12 +335,12 @@ pub fn append_note(
 pub async fn load_recap_file(path: &Path) -> RecapFile {
     match tokio::fs::read_to_string(path).await {
         Ok(raw) => ron::from_str(&raw).unwrap_or_else(|e| {
-            tracing::error!(error = ?e, path = %path.display(), "chat-recap.ron unreadable, starting empty");
+            crate::log_handled!(error, e, path = %path.display(), "chat-recap.ron unreadable, starting empty");
             RecapFile::default()
         }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => RecapFile::default(),
         Err(e) => {
-            tracing::error!(error = ?e, path = %path.display(), "chat-recap.ron read failed, starting empty");
+            crate::log_handled!(error, e, path = %path.display(), "chat-recap.ron read failed, starting empty");
             RecapFile::default()
         }
     }

@@ -195,6 +195,14 @@ enum AdsbFetchError {
     Fatal(eyre::Report),
 }
 
+/// Which per-backend failure to log once the merge outcome is known.
+#[derive(Debug, Clone, Copy)]
+enum BackendFailure {
+    Timeout,
+    Retryable,
+    Fatal,
+}
+
 impl AviationClient {
     fn live_backend_indices(&self) -> Vec<usize> {
         let now = Instant::now();
@@ -314,6 +322,8 @@ impl AviationClient {
         let mut per_backend: Vec<Vec<NearbyAircraft>> = Vec::new();
         let mut last_error: Option<eyre::Report> = None;
         let mut last_provider_outcome: Option<String> = None;
+        // Backend failures whose log waits on the outcome (see below).
+        let mut failures: Vec<(_, BackendFailure, eyre::Report)> = Vec::new();
 
         for (idx, name, result) in results {
             match result {
@@ -370,25 +380,28 @@ impl AviationClient {
                     last_error = Some(eyre::eyre!("{name} returned {status}"));
                 }
                 Err(AdsbFetchError::Timeout(error)) => {
-                    warn!(provider = name, error = ?error, "ADS-B aggregator timed out");
                     last_provider_outcome = Some(format!("{name}:timeout"));
-                    last_error = Some(error);
+                    last_error = None;
+                    failures.push((name, BackendFailure::Timeout, error));
                 }
                 Err(AdsbFetchError::Retryable(error)) => {
-                    warn!(provider = name, error = ?error, "ADS-B aggregator failed");
                     self.record_retryable_error(idx);
                     last_provider_outcome = Some(format!("{name}:retryable_error"));
-                    last_error = Some(error);
+                    last_error = None;
+                    failures.push((name, BackendFailure::Retryable, error));
                 }
                 Err(AdsbFetchError::Fatal(error)) => {
-                    warn!(provider = name, error = ?error, "ADS-B aggregator fatal; continuing");
                     last_provider_outcome = Some(format!("{name}:fatal_error"));
-                    last_error = Some(error);
+                    last_error = None;
+                    failures.push((name, BackendFailure::Fatal, error));
                 }
             }
         }
 
         if per_backend.is_empty() {
+            // Total outage: the returned error is logged once by the poll
+            // that handles it, so the per-backend failures stay unlogged.
+            let last_error = last_error.or_else(|| failures.pop().map(|(_, _, error)| error));
             let parked_backends = self.parked_backend_count();
             self.log_aggregate_adsb_outage(
                 endpoint.kind(),
@@ -404,6 +417,26 @@ impl AviationClient {
                     parked_backends,
                     last_provider_outcome.as_deref().unwrap_or("unknown")
                 )));
+        }
+        // Partial outage: the merge still succeeds, so each failed backend is
+        // handled (and logged) here.
+        for (name, failure, error) in failures {
+            match failure {
+                BackendFailure::Timeout => {
+                    crate::log_handled!(warn, error, provider = name, "ADS-B aggregator timed out");
+                }
+                BackendFailure::Retryable => {
+                    crate::log_handled!(warn, error, provider = name, "ADS-B aggregator failed");
+                }
+                BackendFailure::Fatal => {
+                    crate::log_handled!(
+                        warn,
+                        error,
+                        provider = name,
+                        "ADS-B aggregator fatal; continuing"
+                    );
+                }
+            }
         }
 
         Ok(AdsbAircraftResponse {

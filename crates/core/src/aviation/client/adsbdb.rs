@@ -90,7 +90,7 @@ impl AviationClient {
                 input.to_string()
             }
             Ok(Err(e)) => {
-                warn!(error = ?e, iata = %airline_iata, "adsbdb airline lookup failed");
+                crate::log_handled!(warn, e, iata = %airline_iata, "adsbdb airline lookup failed");
                 input.to_string()
             }
             Err(_) => {

@@ -221,7 +221,7 @@ where
                 }
             },
             Ok(Err(e)) => {
-                error!(error = ?e, "Haiku AI execution failed");
+                crate::log_handled!(error, e, "Haiku AI execution failed");
                 LLM_ERROR_MESSAGE.to_string()
             }
             Err(_) => {

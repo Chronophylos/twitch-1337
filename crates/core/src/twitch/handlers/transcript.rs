@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
-use tracing::{Instrument as _, error};
+use tracing::Instrument as _;
 use twitch_irc::message::ServerMessage;
 
 use super::Inbound;
@@ -53,7 +53,7 @@ pub async fn run_transcript_tap(
                 )
                 .await
             {
-                error!(error = ?e, "transcript append failed");
+                crate::log_handled!(error, e, "transcript append failed");
             }
         }
         .instrument(inbound.handler_span("transcript"))

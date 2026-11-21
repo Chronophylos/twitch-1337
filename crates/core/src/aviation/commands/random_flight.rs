@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use eyre::{Result, WrapErr};
-use tracing::{instrument, warn};
+use tracing::{debug, instrument};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
 use crate::commands::{
@@ -120,7 +120,7 @@ where
             return Ok(());
         }
         Err(e) => {
-            warn!(error = ?e, "Flight plan generation failed");
+            debug!(error = ?e, "Flight plan generation failed");
             sender
                 .reply(
                     privmsg,

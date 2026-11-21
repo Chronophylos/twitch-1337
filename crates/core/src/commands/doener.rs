@@ -3,7 +3,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use eyre::Result;
 use tokio::time::Duration;
-use tracing::error;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use super::{Command, CommandCancellation, CommandContext, ExecutionClass};
@@ -80,7 +79,7 @@ where
             match self.client.stats().await {
                 Ok(s) => format_global(&s),
                 Err(e) => {
-                    error!(error = ?e, "doeneratlas stats lookup failed");
+                    crate::log_handled!(error, e, "doeneratlas stats lookup failed");
                     api_down_message().to_string()
                 }
             }
@@ -90,7 +89,7 @@ where
                     resolve_city_reply(self.client.as_ref(), query, hits, &ctx.cancellation).await?
                 }
                 Err(e) => {
-                    error!(error = ?e, query, "doeneratlas city search failed");
+                    crate::log_handled!(error, e, query, "doeneratlas city search failed");
                     api_down_message().to_string()
                 }
             }

@@ -57,7 +57,7 @@ pub async fn execute_doener_index(
         None => match client.stats().await {
             Ok(stats) => json!({"scope": "global", "stats": stats}),
             Err(e) => {
-                tracing::warn!(error = ?e, "doener_index global lookup failed");
+                crate::log_handled!(warn, e, "doener_index global lookup failed");
                 json!({"error": "doeneratlas API unavailable"})
             }
         },
@@ -68,7 +68,7 @@ pub async fn execute_doener_index(
                 json!({"scope": "city", "query": q, "hits": enriched})
             }
             Err(e) => {
-                tracing::warn!(error = ?e, query = q, "doener_index city lookup failed");
+                crate::log_handled!(warn, e, query = q, "doener_index city lookup failed");
                 json!({"error": "doeneratlas API unavailable"})
             }
         },

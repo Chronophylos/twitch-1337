@@ -509,7 +509,9 @@ where
 
     if let Err(error) = supervisor.run(shutdown).await {
         let error = eyre::Report::new(error).wrap_err("application lifecycle supervision failed");
-        tracing::error!(?error, "Application lifecycle supervision failed");
+        // The one log for every process fault, command execution manager
+        // failures included (`fail` only marks its span).
+        crate::log_handled!(error, error, "Application lifecycle supervision failed");
         return Err(error);
     }
 

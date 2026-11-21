@@ -3,7 +3,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use eyre::Result;
 use tokio::sync::mpsc;
-use tracing::{debug, error};
+use tracing::debug;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::{FlightIdentifier, TrackerCommand};
@@ -91,7 +91,7 @@ where
         };
 
         if let Err(e) = self.tracker_tx.send(cmd).await {
-            error!(error = ?e, "Failed to send track command to flight tracker");
+            crate::log_handled!(error, e, "Failed to send track command to flight tracker");
         }
 
         Ok(())

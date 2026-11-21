@@ -15,11 +15,15 @@ pub(super) fn load_or_quarantine(path: &Path) -> Result<SettingsOverrides, Setti
         Ok(None) => Ok(SettingsOverrides::default()),
         Err(e) if is_future_version(path) => {
             // A newer build wrote this file; keep it for the roll-forward.
-            warn!(error = ?e, "settings.ron from a newer build does not parse; using defaults, leaving the file alone");
+            crate::log_handled!(
+                warn,
+                e,
+                "settings.ron from a newer build does not parse; using defaults, leaving the file alone"
+            );
             Ok(SettingsOverrides::default())
         }
         Err(e) => {
-            warn!(error = ?e, "settings.ron is corrupt; quarantining");
+            crate::log_handled!(warn, e, "settings.ron is corrupt; quarantining");
             quarantine(path)?;
             Ok(SettingsOverrides::default())
         }

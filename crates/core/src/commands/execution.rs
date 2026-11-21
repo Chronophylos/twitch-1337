@@ -8,7 +8,7 @@ use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::{JoinError, JoinSet};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument as _, Span, debug, error, info, warn};
+use tracing::{Instrument as _, Span, debug, info, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
 use super::{Command, CommandId, CommandRegistry, ExecutionClass, normalize_username};
@@ -486,7 +486,6 @@ where
                 incoming = self.admission.recv() => {
                     let Some(invocation) = incoming else {
                         if !cancellation.is_cancelled() {
-                            error!("command admission channel closed while running");
                             return self.fail(ExecutionError::AdmissionClosedWhileRunning).await;
                         }
                         break;
@@ -516,8 +515,11 @@ where
                     }
                 }
                 TaskGroupEvent::Command(Some(Err(join_error))) => {
-                    error!(error = ?join_error, "command task panicked during shutdown");
-                    return self.fail(ExecutionError::CommandPanicked).await;
+                    return self
+                        .fail(
+                            eyre::Report::new(join_error).wrap_err(ExecutionError::CommandPanicked),
+                        )
+                        .await;
                 }
                 TaskGroupEvent::Command(None) => {}
                 TaskGroupEvent::Blocking(result) => {
@@ -527,7 +529,9 @@ where
                         } else {
                             ExecutionError::TaskGroupCleanupFailed
                         };
-                        return self.fail(error).await;
+                        return self
+                            .fail(eyre::Report::new(join_error).wrap_err(error))
+                            .await;
                     }
                 }
                 TaskGroupEvent::Child(result) => {
@@ -537,7 +541,9 @@ where
                         } else {
                             ExecutionError::TaskGroupCleanupFailed
                         };
-                        return self.fail(error).await;
+                        return self
+                            .fail(eyre::Report::new(join_error).wrap_err(error))
+                            .await;
                     }
                 }
                 TaskGroupEvent::Closed => {
@@ -546,58 +552,62 @@ where
             }
         }
         if let Err(group_error) = self.task_group.join_all().await {
-            return self.fail(group_error.into()).await;
+            return self.fail(ExecutionError::from(group_error)).await;
         }
         info!("command execution manager drained");
         Ok(())
     }
 
-    fn handle_task_group_event(&mut self, event: TaskGroupEvent) -> Result<(), ExecutionError> {
+    /// Classify one task-group event. Failures carry the join error as their
+    /// source and are not logged here: [`Self::fail`] owns the one report.
+    fn handle_task_group_event(&mut self, event: TaskGroupEvent) -> Result<()> {
+        let joined = |join_error: JoinError, error: ExecutionError| -> Result<()> {
+            Err(eyre::Report::new(join_error).wrap_err(error))
+        };
         match event {
-            TaskGroupEvent::Command(Some(Ok(completion))) => self.finish(completion),
+            TaskGroupEvent::Command(Some(Ok(completion))) => Ok(self.finish(completion)?),
             TaskGroupEvent::Command(Some(Err(join_error))) if join_error.is_panic() => {
-                error!(error = ?join_error, "command task panicked");
-                Err(ExecutionError::CommandPanicked)
+                joined(join_error, ExecutionError::CommandPanicked)
             }
             TaskGroupEvent::Command(Some(Err(join_error))) => {
-                error!(error = ?join_error, "command task was aborted unexpectedly");
-                Err(ExecutionError::CommandAborted)
+                joined(join_error, ExecutionError::CommandAborted)
             }
             TaskGroupEvent::Command(None) => Ok(()),
             TaskGroupEvent::Blocking(Err(join_error)) if join_error.is_panic() => {
-                error!(error = ?join_error, "application-owned blocking command child panicked");
-                Err(ExecutionError::BlockingChildPanicked)
+                joined(join_error, ExecutionError::BlockingChildPanicked)
             }
             TaskGroupEvent::Blocking(Err(join_error)) => {
-                error!(error = ?join_error, "application-owned blocking command child failed");
-                Err(ExecutionError::TaskGroupCleanupFailed)
+                joined(join_error, ExecutionError::TaskGroupCleanupFailed)
             }
             TaskGroupEvent::Blocking(Ok(())) => Ok(()),
             TaskGroupEvent::Child(Err(join_error)) if join_error.is_panic() => {
-                error!(error = ?join_error, "application-owned command child panicked");
-                Err(ExecutionError::ApplicationChildPanicked)
+                joined(join_error, ExecutionError::ApplicationChildPanicked)
             }
             TaskGroupEvent::Child(Err(join_error)) => {
-                error!(error = ?join_error, "application-owned command child failed");
-                Err(ExecutionError::TaskGroupCleanupFailed)
+                joined(join_error, ExecutionError::TaskGroupCleanupFailed)
             }
             TaskGroupEvent::Child(Ok(())) => Ok(()),
-            TaskGroupEvent::Closed => Err(ExecutionError::TaskGroupClosed),
+            TaskGroupEvent::Closed => Err(ExecutionError::TaskGroupClosed.into()),
         }
     }
 
     /// The single invariant/teardown cleanup path. Pending work is discarded,
     /// task admission is closed, and all command/application-owned children are
     /// aborted and joined before the manager returns an error.
-    async fn fail(&mut self, error: ExecutionError) -> Result<()> {
-        error!(error = ?error, "command execution manager failed");
+    ///
+    /// The returned error is a process fault: the lifecycle supervisor logs it
+    /// once (ADR-0012 rule 5), so this only marks the span. When cleanup fails,
+    /// the cleanup error replaces it, so the original is logged here instead.
+    async fn fail(&mut self, error: impl Into<eyre::Report>) -> Result<()> {
+        let error = error.into();
+        crate::util::observability::mark_span_error(&error);
         self.task_group.close();
         self.discard_pending();
         if let Err(group_error) = self.task_group.abort_and_join().await {
-            error!(error = ?group_error, "command task group cleanup failed");
+            crate::log_handled!(error, error, "command execution manager failed");
             return Err(ExecutionError::TaskGroup(group_error).into());
         }
-        Err(error.into())
+        Err(error)
     }
 
     async fn admit(&mut self, invocation: CommandInvocation<T, L>) -> Result<(), ExecutionError> {
@@ -656,7 +666,7 @@ where
     }
 
     fn trace_accepted(&self, invocation: &CommandInvocation<T, L>) {
-        info!(
+        debug!(
             command_id = %invocation.command_id,
             execution_class = ?ExecutionClass::Background,
             trigger = %invocation.context.trigger,
@@ -741,7 +751,7 @@ where
 
         match result {
             TaskResult::Succeeded => {
-                info!(
+                debug!(
                     command_id = %command_id,
                     user_key = %user_key,
                     active = self.active,
@@ -750,17 +760,18 @@ where
                 );
             }
             TaskResult::Failed(error) => {
-                error!(
+                crate::log_handled!(
+                    error,
+                    error,
                     command_id = %command_id,
                     user_key = %user_key,
-                    error = ?error,
                     active = self.active,
                     pending = self.pending.len(),
                     "command invocation failed"
                 );
             }
             TaskResult::Cancelled => {
-                info!(
+                debug!(
                     command_id = %command_id,
                     user_key = %user_key,
                     active = self.active,

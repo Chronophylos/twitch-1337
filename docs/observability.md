@@ -159,6 +159,7 @@ field syntax needs literals, so spans and logs rely on this table).
 |`ai.agent`|`aurora`, `grok`, `dreamer`, …|yes|
 |`ai.profile`|profile name|yes|
 |`ai.turn.session_id`|Turn session nonce (Langfuse session)|**no**|
+|`ai.turn.outcome`|how a Turn ended: `reply`, `notice`, `silent`|yes|
 |`aviation.flight.callsign`|Tracked Flight callsign|**no**|
 |`aviation.flight.phase`|Flight Phase|yes|
 |`aviation.provider`|ADS-B / Aviationstack source|yes|

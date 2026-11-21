@@ -227,7 +227,7 @@ fn poll_result_to_outcome(
         Ok(Ok(Some(ac))) => PollOutcome::Hit(Box::new(ac)),
         Ok(Ok(None)) => PollOutcome::Miss,
         Ok(Err(e)) => {
-            warn!(error = ?e, lookup_mode, "ADS-B poll failed");
+            crate::log_handled!(warn, e, lookup_mode, "ADS-B poll failed");
             PollOutcome::Error
         }
         Err(_) => {

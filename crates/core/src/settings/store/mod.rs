@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, Notify};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use super::audit::{AuditEntry, AuditLog, diff_changes};
 use super::knob::Knobs;
@@ -139,7 +139,7 @@ impl SettingsStore {
                 changes,
             };
             if let Err(e) = self.audit.append(&entry) {
-                error!(error = ?e, "audit append failed");
+                crate::log_handled!(error, e, "audit append failed");
             }
         }
         // Notify unconditionally even on a no-op write: idempotent reload is

@@ -14,7 +14,7 @@ use llm::{
     AgentOpts, AgentOutcome, LlmClient, LlmError, Message, ToolCall, ToolChatCompletionRequest,
     ToolChatCompletionResponse, ToolExecutor, ToolResultMessage, run_agent,
 };
-use tracing::{Instrument as _, error, info, info_span, warn};
+use tracing::{Instrument as _, info, info_span, warn};
 
 use crate::ai::memory::inject::{
     BuildOpts, FenceLabel, build_chat_turn_context, fence_block, fresh_nonce, neutralize_sentinels,
@@ -87,7 +87,7 @@ pub fn spawn_ritual(
                 Err(e) => {
                     // Validation at the settings store rejects this; if a bad
                     // value slips through, keep the loop alive and re-check.
-                    error!(error = ?e, run_at = %ai.dreamer.run_at, "invalid ai.dreamer.run_at, dreamer paused");
+                    crate::log_handled!(error, e, run_at = %ai.dreamer.run_at, "invalid ai.dreamer.run_at, dreamer paused");
                     drop(snap);
                     tokio::select! {
                         biased;
@@ -138,7 +138,7 @@ pub fn spawn_ritual(
                 )
                 .await
                 {
-                    warn!(error = ?e, "dreamer ritual failed");
+                    crate::log_handled!(warn, e, "dreamer ritual failed");
                 }
             }
             .instrument(info_span!(parent: None, "dreamer.ritual", ai.agent = "dreamer"))
@@ -436,7 +436,7 @@ async fn run_ritual_until(
                 Err(_error) if lifecycle.is_cancelled() => {
                     info!("dreamer ritual cancelled at an operation boundary");
                 }
-                Err(error) => error!(error = ?error, "dreamer llm error"),
+                Err(error) => crate::log_handled!(error, error, "dreamer llm error"),
             }
         },
     )

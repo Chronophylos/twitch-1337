@@ -209,6 +209,7 @@ async fn fetch_avatars(state: &WebState, ids: &[&str]) -> HashMap<String, String
             }
         }
         Err(e) => {
+            twitch_1337_core::util::observability::mark_span_error(&e);
             tracing::warn!(
                 target: "twitch_1337_web",
                 error = ?e,
@@ -945,15 +946,19 @@ async fn save_kind(
             })))
         }
         Err(err) => {
-            tracing::warn!(
-                target: "twitch_1337_web",
-                user_id = %session.user_id,
-                action = "memory_write",
-                target_label = %label,
-                target_id = %id,
-                result = "error",
-                error = ?err,
-            );
+            // Rejections re-render inline (debug only); `Io` bubbles to
+            // `WebError::Internal`, which logs and marks the span once.
+            if !matches!(err, twitch_1337_core::ai::memory::store::WriteError::Io(_)) {
+                tracing::debug!(
+                    target: "twitch_1337_web",
+                    user_id = %session.user_id,
+                    action = "memory_write",
+                    target_label = %label,
+                    target_id = %id,
+                    result = "error",
+                    error = ?err,
+                );
+            }
             audit_memory(
                 state,
                 session,
@@ -1168,15 +1173,17 @@ async fn create_scratch(
             Ok(Redirect::to(&format!("/memory/scratch/{slug}")).into_response())
         }
         Err(err) => {
-            tracing::warn!(
-                target: "twitch_1337_web",
-                user_id = %session.user_id,
-                action = "memory_create",
-                target_label = "scratch",
-                target_id = %slug,
-                result = "error",
-                error = ?err,
-            );
+            if !matches!(err, twitch_1337_core::ai::memory::store::WriteError::Io(_)) {
+                tracing::debug!(
+                    target: "twitch_1337_web",
+                    user_id = %session.user_id,
+                    action = "memory_create",
+                    target_label = "scratch",
+                    target_id = %slug,
+                    result = "error",
+                    error = ?err,
+                );
+            }
             audit_memory(
                 &state,
                 &session,

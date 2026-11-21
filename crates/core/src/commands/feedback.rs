@@ -5,7 +5,7 @@ use eyre::Result;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::time::Duration;
-use tracing::{error, info};
+use tracing::info;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use super::{Command, CommandContext, ExecutionClass};
@@ -96,7 +96,7 @@ where
         {
             Ok(mut file) => {
                 if let Err(e) = file.write_all(line.as_bytes()).await {
-                    error!(error = ?e, "Failed to write feedback to file");
+                    crate::log_handled!(error, e, "Failed to write feedback to file");
                     ctx.sender
                         .reply(&ctx.privmsg, "Da ist was schiefgelaufen FDM")
                         .await;
@@ -104,7 +104,7 @@ where
                 }
             }
             Err(e) => {
-                error!(error = ?e, "Failed to open feedback file");
+                crate::log_handled!(error, e, "Failed to open feedback file");
                 ctx.sender
                     .reply(&ctx.privmsg, "Da ist was schiefgelaufen FDM")
                     .await;

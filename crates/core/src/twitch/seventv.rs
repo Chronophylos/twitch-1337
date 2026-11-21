@@ -235,8 +235,9 @@ impl SevenTvEmoteProvider {
             }
             Err(e) => {
                 cache.last_refresh = Some(now);
-                warn!(
-                    error = ?e,
+                crate::log_handled!(
+                    warn,
+                    e,
                     "Failed to refresh 7TV emote meanings; using cached entries if available"
                 );
             }
@@ -253,7 +254,7 @@ impl SevenTvEmoteProvider {
         let mut emotes = match self.fetch_channel_prompt_emotes().await {
             Ok(channel) => channel,
             Err(e) => {
-                warn!(error = ?e, "Failed to read channel emote catalog from tracker");
+                crate::log_handled!(warn, e, "Failed to read channel emote catalog from tracker");
                 had_error = true;
                 Vec::new()
             }
@@ -263,7 +264,7 @@ impl SevenTvEmoteProvider {
             match self.fetch_global_prompt_emotes().await {
                 Ok(global) => merge_prompt_emotes(&mut emotes, global),
                 Err(e) => {
-                    warn!(error = ?e, "Failed to fetch global 7TV emotes");
+                    crate::log_handled!(warn, e, "Failed to fetch global 7TV emotes");
                     had_error = true;
                 }
             }
