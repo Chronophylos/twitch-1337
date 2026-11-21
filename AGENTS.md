@@ -190,7 +190,7 @@ preserve the `GIT_SHA` / build-number injection (Justfile `build` recipe).
 
 ## Config
 
-`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (`[ai.keys]` named credentials only, optional), `[aviationstack]` (api_key only, optional), `[dhl]` (api_key only, optional), `[ipinfo]` (token only, optional), `[amp]` (url/username/password, optional), `[finnhub]` (api_key only, optional), `[langfuse]` (public/secret keys, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
+`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (`[ai.keys]` named credentials only, optional), `[aviationstack]` (api_key only, optional), `[dhl]` (api_key only, optional), `[ipinfo]` (token only, optional), `[amp]` (url/username/password, optional), `[finnhub]` (api_key only, optional), `[langfuse]` (public/secret keys, optional), `[otel]` (collector endpoint + optional auth header, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
 
 Adding a knob: a secret, or something that must exist before the dashboard, goes in `config.toml.example` + loader; anything runtime-tunable goes in the settings schema + a dashboard card. Never both. Legacy hoisted keys were migrated once via sentinels (`.ai_migrated_v2`, `.config_migrated_v3`, `.schedules_migrated_v3`); edits to migrated legacy keys are ignored.
 
@@ -305,6 +305,26 @@ OTLP export of LLM Turns (all backends, nested tool spans). Init or export
 failure logs and disables tracing; the bot stays up. No dashboard card.
 Turn off OpenRouter's Langfuse broadcast for the same project to avoid
 duplicate traces. Adding or removing keys needs a bot restart.
+
+`[otel]` holds `endpoint` (OTLP/HTTP collector base URL, e.g.
+`http://alloy:4318`; `http://`/`https://`, no credentials, query or fragment,
+validated at startup) and an optional `auth_header` (`SecretString`, sent
+verbatim as `Authorization`). Presence enables export of logs, traces and
+metrics (protobuf, async batch exporters on the tokio runtime, ring-only TLS
+per ADR-0007); absent, the OTel layers stay off and do no export work. Init failure
+logs a `warn` and leaves export off; an export failure logs one `warn` per
+outage and signal, drops batches until the collector answers, and logs
+`info` on recovery. The bot stays up and stdout gains nothing beyond those
+lines and one `OTLP export enabled` at startup. All three
+providers flush on shutdown (5 s cap). Adding or removing the section needs a
+bot restart. What is exported is filtered by `observability.otel.logs_filter`
+(default: our crates `debug`, deps `warn`) and
+`observability.otel.traces_filter` (default: our crates `info`) in
+`settings.ron`, `EnvFilter` directive strings validated on save and applied
+live through `tracing_subscriber::reload` on the settings change `Notify`,
+managed via `/settings → System · Observability`. stdout keeps `RUST_LOG`
+and the `/logs` ring stays fixed at `info`. Pipeline code:
+`crates/core/src/util/observability/` (rules in `docs/observability.md`).
 
 `[suspend]` is removed from config.toml entirely. `default_duration_secs`
 lives in `settings.ron`, managed via `/settings → Suspend`.

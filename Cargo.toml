@@ -43,6 +43,27 @@ infer = { version = "0.22", default-features = false }
 # Aviationstack airport timezones must resolve.
 jiff = { version = "1.0.1", default-features = false, features = ["std", "serde", "tzdb-bundle-always"] }
 tokio-util = "0.7"
+# OTLP/HTTP export of logs, traces and metrics (ADR-0013). Defaults off: no
+# `internal-logs` (the SDK would print export errors to stdout on every failed
+# batch), no blocking/hyper/tonic clients, no TLS stack of its own (ADR-0007).
+# The async-runtime processors run the exporters on the bot's tokio runtime.
+opentelemetry = { version = "0.33", default-features = false, features = ["logs", "metrics", "trace"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = [
+  "experimental_logs_batch_log_processor_with_async_runtime",
+  "experimental_metrics_periodicreader_with_async_runtime",
+  "experimental_trace_batch_span_processor_with_async_runtime",
+  "logs",
+  "metrics",
+  "rt-tokio",
+  "trace",
+] }
+opentelemetry-appender-tracing = { version = "0.33", default-features = false }
+# `reqwest-client` only for the async reqwest `HttpClient` impl and tokio-aware
+# retry sleeps; the client itself is built by us and handed in.
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "logs", "metrics", "reqwest-client", "trace"] }
+# Experimental names (`vcs.*`, `otel.sdk.*` metrics) are plain consts; no runtime cost.
+opentelemetry-semantic-conventions = { version = "0.33", features = ["semconv_experimental"] }
+tracing-opentelemetry = { version = "0.34", default-features = false }
 # Sync mutexes: no lock poisoning, so lock sites need no `expect` (ADR-0012).
 parking_lot = "0.12"
 rand = "0.10.3"

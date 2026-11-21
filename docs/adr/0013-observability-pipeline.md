@@ -1,6 +1,7 @@
 # ADR-0013: Observability pipeline — all-OTLP, one trace per inbound message
 
-**Status:** Accepted (2026-11-19)
+**Status:** Accepted (2026-11-19). Amended 2026-11-21 (#645): decision 2,
+export failures drop and retry instead of disabling export.
 
 ## Context
 
@@ -20,8 +21,10 @@ such as Alloy), so that rejection is revisited.
    stack; ADR-0007 stays intact. stdout (human fmt) and the `/logs` ring stay
    as local sinks; stdout is the record when the collector is down.
 2. **`[otel]` in config.toml** holds the collector endpoint (and auth header,
-   if any). Absent: nothing is exported. Init or export failure logs and
-   disables export; the bot stays up. Adding or removing it needs a restart.
+   if any). Absent: nothing is exported. Init failure logs and disables
+   export. An export failure drops the batch, logs one `warn` per outage per
+   signal and an `info` on recovery; export resumes automatically. The bot
+   stays up either way. Adding or removing it needs a restart.
 3. **One trace per inbound message.** The router opens an `irc.message` root
    span where it publishes to the broadcast channel, which carries an
    envelope `Inbound { msg, span }`. A handler opens a child span only after

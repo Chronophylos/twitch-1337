@@ -1,20 +1,21 @@
 //! Bake build-identity env vars into the `core` crate so chat-facing surfaces
 //! (startup/shutdown announce, `!v`) report the same BUILD_NUM + GIT_SHA the
-//! web dashboard shows. Mirrors `crates/web/build.rs`.
+//! web dashboard shows. Mirrors `crates/web/build.rs`. The full SHA
+//! (`GIT_SHA_FULL`) is the OTel `vcs.ref.head.revision` resource attribute.
 
 use std::env;
 use std::process::Command;
 
-/// Commit SHA: Docker supplies `GIT_SHA` (the `.dockerignore` strips `.git/`);
-/// local cargo runs fall back to `git rev-parse`, then `"unknown"`.
+/// Full commit SHA: Docker supplies `GIT_SHA` (the `.dockerignore` strips
+/// `.git/`); local cargo runs fall back to `git rev-parse`, then `"unknown"`.
 fn git_sha() -> String {
     if let Ok(sha) = env::var("GIT_SHA")
         && !sha.is_empty()
     {
-        return sha.chars().take(7).collect();
+        return sha;
     }
     Command::new("git")
-        .args(["rev-parse", "--short=7", "HEAD"])
+        .args(["rev-parse", "HEAD"])
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -33,7 +34,12 @@ fn build_num() -> String {
 }
 
 fn main() {
-    println!("cargo:rustc-env=GIT_SHA_SHORT={}", git_sha());
+    let sha = git_sha();
+    println!(
+        "cargo:rustc-env=GIT_SHA_SHORT={}",
+        sha.chars().take(7).collect::<String>()
+    );
+    println!("cargo:rustc-env=GIT_SHA_FULL={sha}");
     println!("cargo:rerun-if-env-changed=GIT_SHA");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../.git/refs/heads");

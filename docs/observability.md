@@ -62,7 +62,11 @@ Rules:
    opted out; a bare `#[instrument]` `Debug`-dumps every argument (payloads,
    secrets). CI greps for `#[instrument` without `skip_all`.
 6. **A handled error marks the span.** Where ADR-0012 rule 5 logs, the same
-   helper sets the span status to `Error`.
+   helper sets the span status to `Error`: `log_handled!(warn, e, "…")` /
+   `log_handled!(error, e, field = %x, "…")` logs `error = ?e` once and marks
+   the current span with the redacted `{e:#}` chain
+   (`util::observability::mark_span_error` where the line is logged
+   elsewhere).
 
 ## Levels
 
@@ -88,7 +92,17 @@ Nothing on the per-message path logs at `info`.
 |OTel logs → Loki|`observability.otel.logs_filter` (settings, live); default `debug` for our crates, `warn` for dependencies|
 |OTel traces → Tempo|`observability.otel.traces_filter` (settings, live); default `info` for our crates|
 
-stdout and the `/logs` ring pass every line through
+The OTel sinks exist only with `[otel]` in config.toml (endpoint, optional
+`auth_header`; restart to add or remove). Until then, and without it, their
+filters are `off` and the layers do no export work. Both OTel filters always end
+with `hyper=off,reqwest=off,h2=off,opentelemetry=off`: those targets sit on
+the export path, and exporting their events would feed back into itself.
+Resource attributes on every signal: `service.name = twitch-1337`,
+`service.version` = BUILD_NUM, `vcs.ref.head.revision` = GIT_SHA.
+
+Every sink redacts: stdout and the `/logs` ring pass every line, and the OTel
+processors every log body, string attribute, span attribute, span event and
+span status, through
 `util::redact::redact_secrets`, which blanks the value of credential-named
 `key=value` pairs (`access_key`, `client_secret`, `refresh_token`, `code`, …)
 so a URL in an error never leaks its query secrets. It is a backstop, not a
@@ -103,7 +117,9 @@ licence: secrets still stay in `SecretString` and out of log fields.
 - **Instruments only for state** spans cannot express: `irc.latency` (gauge),
   `tracker.flights.tracked` (gauge, by phase), `broadcast.lagged` (counter, by
   handler), `llm.tokens` / `llm.cost` (counter, by agent and profile),
-  `memory.bytes` (gauge, by file kind), dropped-export counters.
+  `memory.bytes` (gauge, by file kind), dropped-export counters
+  (`otel.sdk.exporter.span.exported` / `otel.sdk.exporter.log.exported`,
+  failures labelled `error.type`).
 - **Labels are bounded sets.** Never a user id, login, message text, callsign,
   or other open-ended value as a metric label — those belong on spans and logs.
 

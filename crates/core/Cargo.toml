@@ -29,6 +29,11 @@ minijinja = { version = "3.1.0", default-features = false, features = [
   "builtins",
   "serde",
 ] }
+opentelemetry = { workspace = true }
+opentelemetry-appender-tracing = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry-semantic-conventions = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 parking_lot = { workspace = true }
 random-flight = { path = "../random-flight" }
 rand = { workspace = true }
@@ -48,6 +53,7 @@ tokio-util = { workspace = true }
 toml = { workspace = true }
 twitch-1337-data = { path = "../data" }
 twitch-1337-settings-derive = { path = "../settings-derive" }
+tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
 tracing-error = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -63,6 +69,8 @@ twitch-1337-web = { path = "../web" }
 async-trait = "0.1"
 bytes = "1"
 either = "1"
+# In-memory span exporter for the span-status tests.
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 reqwest = { workspace = true }
 tempfile = "3"
 tokio = { version = "1.54.1", features = ["test-util"] }
