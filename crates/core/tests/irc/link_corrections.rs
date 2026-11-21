@@ -65,24 +65,38 @@ async fn bare_and_absolute_x_links_rewrite() {
     bot.shutdown().await;
 }
 
-/// A live cap of 1 suppresses the second distinct X link; after disabling
-/// `x_twitter` through the store, another X link is silent.
+/// The default cap admits two links; after lowering it to 1 through the
+/// store, only the first of two distinct X links is corrected, and after
+/// disabling `x_twitter` another X link is silent.
 #[tokio::test]
 async fn cap_and_toggle_apply_live() {
-    let mut bot = TestBotBuilder::new()
-        .with_settings(|o| {
-            o.link_correction = LinkCorrectionOverrides {
-                max_links: Some(1),
-                ..Default::default()
-            }
-        })
-        .spawn()
-        .await;
-    bot.send_privmsg_as("viewer", "7", "x.com/Alice x.com/Bob")
+    let mut bot = TestBotBuilder::new().spawn().await;
+    bot.send_privmsg_as("viewer", "6", "x.com/Alice x.com/Bob")
         .await;
     assert_eq!(
         bot.expect_reply(TIMEOUT).await,
         "🐦 https://xnotme.com/Alice"
+    );
+    assert_eq!(bot.expect_reply(TIMEOUT).await, "🐦 https://xnotme.com/Bob");
+
+    bot.settings_store
+        .apply(
+            SettingsOverrides {
+                link_correction: LinkCorrectionOverrides {
+                    max_links: Some(1),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            actor(),
+        )
+        .await
+        .expect("apply cap");
+    bot.send_privmsg_as("viewer", "7", "x.com/Carol x.com/Dave")
+        .await;
+    assert_eq!(
+        bot.expect_reply(TIMEOUT).await,
+        "🐦 https://xnotme.com/Carol"
     );
     bot.expect_silent(SILENCE).await;
 
@@ -99,7 +113,7 @@ async fn cap_and_toggle_apply_live() {
         )
         .await
         .expect("apply");
-    bot.send_privmsg_as("viewer", "8", "x.com/Carol").await;
+    bot.send_privmsg_as("viewer", "8", "x.com/Eve").await;
     bot.expect_silent(SILENCE).await;
     bot.shutdown().await;
 }

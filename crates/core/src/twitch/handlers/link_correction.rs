@@ -91,10 +91,12 @@ enum CorrectionKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Candidate {
     kind: CorrectionKind,
-    /// Normalized source URL. For X this is the already rewritten XNotMe
-    /// target; for Reddit the canonicalized `www.reddit.com` share URL
-    /// without query/fragment; for Mydealz the source minus fragment with
-    /// tracking parameters stripped and host forced to `www.mydealz.de`.
+    /// For X this is the already rewritten XNotMe target; for Reddit the
+    /// canonicalized `www.reddit.com` share URL without query/fragment; for
+    /// Mydealz the source minus fragment with the original query retained
+    /// (so `clean_mydealz` can detect tracking-only changes on
+    /// non-redirecting links). Mydealz dedupe keys are normalized separately
+    /// by `mydealz_key`.
     url: Url,
 }
 
@@ -132,6 +134,16 @@ fn mydealz_key(url: &Url) -> Url {
     key
 }
 
+/// Path segments with trailing slashes trimmed. Empty interior segments are
+/// invalid: `x.com//Alice` and `/r//rust/s/AbC1` are not canonical links.
+fn path_segments(url: &Url) -> Option<Vec<&str>> {
+    let mut segments: Vec<&str> = url.path_segments()?.collect();
+    while segments.last() == Some(&"") {
+        segments.pop();
+    }
+    (!segments.iter().any(|segment| segment.is_empty())).then_some(segments)
+}
+
 /// The X username rule: 1–15 ASCII alphanumerics/underscores, and never a
 /// reserved route.
 fn is_x_username(segment: &str) -> bool {
@@ -144,13 +156,14 @@ fn is_x_username(segment: &str) -> bool {
 }
 
 /// X path whitelist: `/<user>`, `/<user>/status/<id>`, and either status form
-/// plus `/photo/1..4` or `/video/1`. Returns the accepted path with trailing
-/// slashes trimmed, or `None`.
+/// plus `/photo/<n>` or `/video/<n>` with any positive decimal index (X
+/// raised the photo cap from 4 to 20, and video has the same numbered
+/// subpath). Returns the accepted path with trailing slashes trimmed, or
+/// `None`.
 fn x_path(url: &Url) -> Option<String> {
-    let segments: Vec<&str> = url
-        .path_segments()
-        .map(|s| s.filter(|seg| !seg.is_empty()).collect())
-        .unwrap_or_default();
+    let segments = path_segments(url)?;
+    let positive_index =
+        |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && s != "0";
     let path = match segments.as_slice() {
         [user] if is_x_username(user) => format!("/{user}"),
         [user, "status", id]
@@ -162,14 +175,17 @@ fn x_path(url: &Url) -> Option<String> {
             if is_x_username(user)
                 && !id.is_empty()
                 && id.bytes().all(|b| b.is_ascii_digit())
-                && matches!(*n, "1" | "2" | "3" | "4") =>
+                && positive_index(n) =>
         {
             format!("/{user}/status/{id}/photo/{n}")
         }
-        [user, "status", id, "video"]
-            if is_x_username(user) && !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) =>
+        [user, "status", id, "video", n]
+            if is_x_username(user)
+                && !id.is_empty()
+                && id.bytes().all(|b| b.is_ascii_digit())
+                && positive_index(n) =>
         {
-            format!("/{user}/status/{id}/video/1")
+            format!("/{user}/status/{id}/video/{n}")
         }
         _ => return None,
     };
@@ -184,10 +200,7 @@ fn reddit_share(url: &Url) -> Option<Url> {
     if !REDDIT_HOSTS.contains(&host) {
         return None;
     }
-    let segments: Vec<&str> = url
-        .path_segments()
-        .map(|s| s.filter(|seg| !seg.is_empty()).collect())
-        .unwrap_or_default();
+    let segments = path_segments(url)?;
     let [r, sub, s, id] = segments.as_slice() else {
         return None;
     };
@@ -254,7 +267,7 @@ fn candidates(text: &str, settings: &LinkCorrectionSettings) -> Vec<Candidate> {
             continue;
         };
         // userinfo on a source host is never a viewer link we correct.
-        if !url.username().is_empty() || url.port().is_some() {
+        if !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
             continue;
         }
         if MYDEALZ_HOSTS.contains(&host) {
@@ -328,8 +341,7 @@ fn clean_mydealz(source: &Url, resolved: &Url) -> Option<Url> {
     let mut cleaned = resolved.clone();
     cleaned.set_fragment(None);
     strip_tracking(&mut cleaned);
-    let source_key = mydealz_key(source);
-    (cleaned != source_key).then_some(cleaned)
+    (mydealz_key(&cleaned) != mydealz_key(source)).then_some(cleaned)
 }
 
 /// Reddit post-resolution: only a canonical post permalink survives. Uses the
@@ -400,6 +412,28 @@ pub async fn run_link_correction_handler<T, L>(
     }
 }
 
+/// First-occurrence decision for a resolved result. Two different candidates
+/// that resolve to the same final URL (two Reddit share links onto one post,
+/// equivalent Mydealz redirects) produce exactly one reply. The key matches
+/// the candidate-key normalization for Mydealz so a redirect to the source
+/// host's canonical form collapses with the source itself.
+fn new_result(
+    emitted: &mut HashSet<Url>,
+    kind: CorrectionKind,
+    result: Url,
+) -> Option<(&'static str, Url)> {
+    let key = match kind {
+        CorrectionKind::Mydealz => mydealz_key(&result),
+        _ => result.clone(),
+    };
+    let prefix = match kind {
+        CorrectionKind::Mydealz => "🔗",
+        CorrectionKind::Reddit => "BRUH 👉",
+        CorrectionKind::XTwitter => "🐦",
+    };
+    emitted.insert(key).then_some((prefix, result))
+}
+
 async fn handle_message<T, L>(
     http: &Client,
     sender: &ChatSender<T, L>,
@@ -432,16 +466,7 @@ async fn handle_message<T, L>(
         }
         match result {
             Some(url) => {
-                let key = match candidate.kind {
-                    CorrectionKind::Mydealz => mydealz_key(&url),
-                    _ => url.clone(),
-                };
-                if emitted.insert(key) {
-                    let prefix = match candidate.kind {
-                        CorrectionKind::Mydealz => "🔗",
-                        CorrectionKind::Reddit => "BRUH 👉",
-                        CorrectionKind::XTwitter => "🐦",
-                    };
+                if let Some((prefix, url)) = new_result(&mut emitted, candidate.kind, url) {
                     sender.reply(p, format!("{prefix} {url}")).await;
                 }
             }
@@ -520,6 +545,14 @@ mod tests {
         // trailing slash, extra segment, junk id rejected
         assert!(kinds("https://www.reddit.com/r/rust/s/AbC1/x", &s).is_empty());
         assert!(kinds("https://www.reddit.com/r/rust/s/Ab_C1!", &s).is_empty());
+        // empty interior segments are not collapsed into a valid share path
+        assert!(kinds("https://www.reddit.com/r//rust/s/AbC1", &s).is_empty());
+        assert!(kinds("https://www.reddit.com/r/rust/s//AbC1", &s).is_empty());
+        // trailing slash is fine
+        assert_eq!(kinds("https://www.reddit.com/r/rust/s/AbC1/", &s).len(), 1);
+        // password-only userinfo is credentials too
+        assert!(kinds("https://:secret@www.mydealz.de/deals/a", &s).is_empty());
+        assert!(kinds("https://user:pw@x.com/Alice", &s).is_empty());
     }
 
     #[test]
@@ -542,8 +575,15 @@ mod tests {
         let found = kinds("https://mobile.twitter.com/Bob/status/123/photo/2", &s);
         assert_eq!(found[0].1, "https://xnotme.com/Bob/status/123/photo/2");
 
-        let found = kinds("twitter.com/Alice/status/123/video/", &s);
+        // X raised the photo cap from 4 to 20; any positive index is kept.
+        let found = kinds("x.com/Alice/status/123/photo/20", &s);
+        assert_eq!(found[0].1, "https://xnotme.com/Alice/status/123/photo/20");
+
+        let found = kinds("twitter.com/Alice/status/123/video/1", &s);
         assert_eq!(found[0].1, "https://xnotme.com/Alice/status/123/video/1");
+
+        let found = kinds("twitter.com/Alice/status/123/video/3", &s);
+        assert_eq!(found[0].1, "https://xnotme.com/Alice/status/123/video/3");
     }
 
     #[test]
@@ -553,8 +593,13 @@ mod tests {
             "x.com/home",
             "x.com/search?q=a",
             "x.com/i/flow/login",
-            "x.com/Alice/status/123/photo/5",
+            "x.com/Alice/status/123/photo/0",
+            "x.com/Alice/status/123/photo/abc",
+            "x.com/Alice/status/123/video/",
+            "x.com/Alice/status/123/video/0",
             "x.com/Alice/status/abc",
+            "x.com//Alice",
+            "x.com/Alice//status//123",
             "x.com/thisusernameiswaytoolongforx",
             "fxtwitter.com/Alice",
             "vxtwitter.com/Alice",
@@ -615,6 +660,13 @@ mod tests {
             Url::parse("https://mydealz.de/deals/canonical?utm_campaign=z#frag").unwrap();
         let cleaned = clean_mydealz(&source, &canonical).expect("cleaned");
         assert_eq!(cleaned.as_str(), "https://mydealz.de/deals/canonical");
+
+        // bare-host source redirecting to the bare host unchanged: the
+        // comparison must be on normalized keys, not raw host forms.
+        let bare = Url::parse("https://mydealz.de/deals/a").unwrap();
+        assert!(clean_mydealz(&bare, &bare).is_none());
+        let www = Url::parse("https://www.mydealz.de/deals/a").unwrap();
+        assert!(clean_mydealz(&bare, &www).is_none());
     }
 
     #[test]
@@ -687,17 +739,21 @@ mod tests {
             Url::parse(&format!("https://old.reddit.com{}", resolved.path())).unwrap();
         let canonical = canonical_reddit(&resolved_reddit).expect("canonical");
 
-        let mut replies = Vec::new();
         let mut emitted: HashSet<Url> = HashSet::new();
+        let mut replies = Vec::new();
+        // The same production helper `handle_message` uses, called once per
+        // share link: the second call must be suppressed.
         for _ in 0..2 {
-            if emitted.insert(canonical.clone()) {
-                replies.push(canonical.clone());
+            if let Some((prefix, url)) =
+                new_result(&mut emitted, CorrectionKind::Reddit, canonical.clone())
+            {
+                replies.push(format!("{prefix} {url}"));
             }
         }
         assert_eq!(
-            replies.len(),
-            1,
-            "one canonical post, one reply: {replies:?}"
+            replies,
+            ["BRUH 👉 https://www.reddit.com/r/rust/comments/1abc/"],
+            "one canonical post, one BRUH reply"
         );
     }
 

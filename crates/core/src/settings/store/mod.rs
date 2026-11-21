@@ -301,6 +301,7 @@ mod tests {
                 .expect("reopen")
                 .1;
         assert!(!dropped_handle.load().link_correction.mydealz);
+        assert!(dropped_handle.load().link_correction.reddit);
         assert!(!dropped_handle.load().link_correction.x_twitter);
         assert_eq!(dropped_handle.load().link_correction.max_links, 4);
 
