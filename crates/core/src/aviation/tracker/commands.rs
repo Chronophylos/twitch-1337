@@ -20,7 +20,7 @@ use super::metadata::aircraft_callsign;
 use super::{
     CachedFlightInfo, FlightIdentifier, FlightPhase, FlightTrackerState, HexSource,
     TargetConfirmation, TrackedFlight, TrackerCommand, build_flight_view,
-    debug_journal::{DebugHttpOutcome, FlightTrackerDebugEvent, append_debug_event},
+    decision_event::{DebugHttpOutcome, FlightTrackerDebugEvent},
     format::{msg_aviationstack_info, msg_flight_status, msg_flights_list, msg_track_started},
     metadata::{
         apply_aviationstack_metadata, metadata_callsign, normalize_flight_code, seed_flight_aliases,
@@ -361,12 +361,8 @@ pub(crate) async fn remove_flight_at(
         .as_deref()
         .unwrap_or(flight.identifier.as_str())
         .to_owned();
-    append_debug_event(
-        data_dir,
-        now,
-        FlightTrackerDebugEvent::tracking_removal(flight, source, last_seen_age_secs(flight, now)),
-    )
-    .await;
+    FlightTrackerDebugEvent::tracking_removal(flight, source, last_seen_age_secs(flight, now))
+        .emit();
     state.flights.remove(idx);
     save_tracker_state(data_dir, state).await;
     info!(identifier = %query, source = %source, "Flight untracked");
@@ -584,17 +580,13 @@ async fn handle_track<T, L>(
         } else {
             DebugHttpOutcome::miss("aviationstack", "flight_metadata")
         };
-        append_debug_event(
-            data_dir,
-            now,
-            FlightTrackerDebugEvent::aviationstack_metadata(
-                &identifier,
-                resolved_callsign.as_deref(),
-                outcome,
-                metadata.as_ref(),
-            ),
+        FlightTrackerDebugEvent::aviationstack_metadata(
+            &identifier,
+            resolved_callsign.as_deref(),
+            outcome,
+            metadata.as_ref(),
         )
-        .await;
+        .emit();
     }
     let aviationstack_fallback = aviationstack_checked
         && metadata.is_none()
@@ -711,17 +703,13 @@ async fn handle_track<T, L>(
         } else {
             DebugHttpOutcome::miss("aviationstack", "flight_metadata")
         };
-        append_debug_event(
-            data_dir,
-            now,
-            FlightTrackerDebugEvent::aviationstack_metadata(
-                &identifier,
-                flight.callsign.as_deref(),
-                outcome,
-                lookup.metadata.as_ref(),
-            ),
+        FlightTrackerDebugEvent::aviationstack_metadata(
+            &identifier,
+            flight.callsign.as_deref(),
+            outcome,
+            lookup.metadata.as_ref(),
         )
-        .await;
+        .emit();
         if let Some(metadata) = lookup.metadata {
             apply_aviationstack_metadata(&mut flight, metadata);
         }
@@ -744,7 +732,7 @@ async fn handle_track<T, L>(
         return;
     }
 
-    resolve_route_if_needed(&mut flight, aviation_client, data_dir, now).await;
+    resolve_route_if_needed(&mut flight, aviation_client).await;
 
     let mut response = track_started_response(
         &flight,
@@ -753,16 +741,11 @@ async fn handle_track<T, L>(
     );
     if let Some(update) = first_cycle {
         for event in update.debug {
-            append_debug_event(data_dir, now, event).await;
+            event.emit();
         }
         append_consumed_emits(&mut response, &flight, &update.emits, now);
     }
-    append_debug_event(
-        data_dir,
-        now,
-        FlightTrackerDebugEvent::track_started(&flight),
-    )
-    .await;
+    FlightTrackerDebugEvent::track_started(&flight).emit();
     state.flights.push(flight);
     save_tracker_state(data_dir, state).await;
 
@@ -914,18 +897,13 @@ async fn handle_status<T, L>(
 /// On the `!track` initial poll: if the flight has a callsign and no route yet,
 /// resolve it. Keyed on `flight.callsign` so it covers both a callsign the Seed
 /// just resolved (hex track) and one known from the request.
-async fn resolve_route_if_needed(
-    flight: &mut TrackedFlight,
-    aviation_client: &AviationClient,
-    data_dir: &Path,
-    now: Timestamp,
-) {
+async fn resolve_route_if_needed(flight: &mut TrackedFlight, aviation_client: &AviationClient) {
     if flight.route.is_none()
         && let Some(callsign) = flight.callsign.clone()
     {
         let outcome = fetch_route(aviation_client, &callsign).await;
         for event in apply_route_outcome(flight, &callsign, outcome) {
-            append_debug_event(data_dir, now, event).await;
+            event.emit();
         }
     }
 }
@@ -1003,11 +981,8 @@ where
             PollPlan::Skip => continue,
             PollPlan::Apply(update) => {
                 let identifier = flight.identifier.clone();
-                for event in update.debug {
-                    if lifecycle.is_cancelled() {
-                        return Ok(None);
-                    }
-                    append_debug_event(data_dir, now, event).await;
+                for event in &update.debug {
+                    event.emit();
                 }
                 debug_assert!(
                     update.followups.is_empty(),
@@ -1168,11 +1143,8 @@ where
         }
         changed = true;
 
-        for event in update.debug {
-            if lifecycle.is_cancelled() {
-                return Ok(None);
-            }
-            append_debug_event(data_dir, now, event).await;
+        for event in &update.debug {
+            event.emit();
         }
         debug_assert!(
             update.followups.is_empty(),

@@ -1,6 +1,6 @@
 pub(crate) mod advance;
 pub(crate) mod commands;
-pub(crate) mod debug_journal;
+pub(crate) mod decision_event;
 pub(crate) mod divert;
 pub(crate) mod format;
 pub(crate) mod loop_run;

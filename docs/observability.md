@@ -24,6 +24,7 @@ A trace is one unit of work started by one stimulus.
 |Inbound IRC message|`irc.message` (router, carried on the `Inbound` envelope)|
 |Schedule due|`schedule.fire`|
 |Flight tracker tick|`tracker.poll_cycle`|
+|Flight tracker command outside a poll|`tracker.command`|
 |Alert feed tick|`alerts.poll`, one per feed polled|
 |Dreamer run|`dreamer.ritual`|
 |Daily 13:37 window|`tracker_1337.window`, from the 13:36 wake through the stats post|
@@ -139,6 +140,12 @@ field syntax needs literals, so spans and logs rely on this table).
 |`aviation.flight.phase`|Flight Phase|yes|
 |`aviation.provider`|ADS-B / Aviationstack source|yes|
 |`aviation.tracker.flights`|Tracked Flights at the start of a poll cycle|no (value)|
+|`aviation.tracker.command`|flight tracker command kind (`track`, `untrack`, `status`, `info`, `snapshot`, `delete_from_web`)|yes|
+|`aviation.flight.identifier`|identifier a Tracked Flight was requested by (callsign or hex)|**no**|
+|`aviation.flight.hex`|Tracked Flight ICAO 24-bit hex|**no**|
+|`aviation.flight.target_confirmation`|Target Confirmation of a Tracked Flight|yes|
+|`aviation.tracker.decision`|flight tracker decision kind (`adsb_poll_result`, `phase_transition`, `diversion_decision`, `tracking_removal`, `flight_route_lookup`, `aviationstack_metadata`, `track_started`)|yes|
+|`aviation.tracker.detail`|JSON payload of a flight tracker decision, secrets stripped|**no**|
 |`bot.persist.file`|file written by `util::persist`: RON file name (`pings.ron`, …) or a fixed kind (`memory`); never a path|yes|
 |`alerts.feed`|`quake`, `solar`, `cme`|yes|
 
