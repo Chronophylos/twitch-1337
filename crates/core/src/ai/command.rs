@@ -308,7 +308,7 @@ where
             cancellation: ctx.cancellation.clone(),
         };
 
-        let outcome = self.turn.run_turn(input).await?;
+        let outcome = Box::pin(self.turn.run_turn(input)).await?;
         ctx.cancellation.check()?;
         let (line, display_name) = match outcome {
             TurnOutcome::Reply { text, display_name } => (text, display_name),

@@ -60,6 +60,8 @@ pub struct MediaClient {
     http: reqwest::Client,
     /// `AiProvider` name of the profile, recorded as `gen_ai.provider.name`.
     provider_name: &'static str,
+    /// Profile name, the `ai.profile` label of `llm.tokens` / `llm.cost`.
+    profile: String,
     base_url: String,
     api_key: Option<SecretString>,
     model: String,
@@ -70,6 +72,7 @@ impl MediaClient {
     pub fn new(
         http: reqwest::Client,
         provider_name: &'static str,
+        profile: String,
         base_url: String,
         api_key: Option<SecretString>,
         model: String,
@@ -78,6 +81,7 @@ impl MediaClient {
         Self {
             http,
             provider_name,
+            profile,
             base_url,
             api_key,
             model,
@@ -144,12 +148,23 @@ impl MediaClient {
 
         if let Some(usage) = value.get("usage") {
             let span = Span::current();
-            if let Some(n) = usage.get("prompt_tokens").and_then(Value::as_u64) {
+            let input = usage.get("prompt_tokens").and_then(Value::as_u64);
+            let output = usage.get("completion_tokens").and_then(Value::as_u64);
+            if let Some(n) = input {
                 span.record("gen_ai.usage.input_tokens", n);
             }
-            if let Some(n) = usage.get("completion_tokens").and_then(Value::as_u64) {
+            if let Some(n) = output {
                 span.record("gen_ai.usage.output_tokens", n);
             }
+            let tokens = |n: Option<u64>| n.map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX));
+            crate::util::observability::metrics::record_llm_usage_on_profile(
+                &self.profile,
+                &llm::TokenUsage {
+                    input_tokens: tokens(input),
+                    output_tokens: tokens(output),
+                    cost_usd: usage.get("cost").and_then(Value::as_f64),
+                },
+            );
         }
 
         let answer = value
@@ -226,6 +241,7 @@ mod tests {
         MediaClient::new(
             reqwest::Client::new(),
             "open_ai_compatible",
+            "media".to_string(),
             "https://example.invalid/v1".to_string(),
             None,
             "test-model".to_string(),
@@ -310,6 +326,7 @@ mod tests {
         let c = MediaClient::new(
             reqwest::Client::new(),
             "open_ai_compatible",
+            "media".to_string(),
             format!("{}/v1", server.uri()),
             None,
             "x".into(),
@@ -339,6 +356,7 @@ mod tests {
         let c = MediaClient::new(
             reqwest::Client::new(),
             "open_ai_compatible",
+            "media".to_string(),
             format!("{}/v1", server.uri()),
             None,
             "x".into(),

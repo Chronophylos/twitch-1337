@@ -29,6 +29,8 @@ pub const GEN_AI_TOOL_NAME: &str = "gen_ai.tool.name";
 pub const GEN_AI_USAGE_INPUT_TOKENS: &str = "gen_ai.usage.input_tokens";
 /// Completion token count. A value, never a label.
 pub const GEN_AI_USAGE_OUTPUT_TOKENS: &str = "gen_ai.usage.output_tokens";
+/// Token direction of an `llm.tokens` count: `input` or `output`. Label.
+pub const GEN_AI_TOKEN_TYPE: &str = "gen_ai.token.type";
 
 /// Channel login. Label.
 pub const TWITCH_CHANNEL: &str = "twitch.channel";
@@ -48,14 +50,18 @@ pub const BOT_SCHEDULE_NAME: &str = "bot.schedule.name";
 /// Ping name. Label.
 pub const PING_NAME: &str = "ping.name";
 
-/// Agent: `aurora`, `grok`, `dreamer`, …. Label.
+/// Agent, or the feature calling the LLM outside one: `aurora`, `grok`,
+/// `dreamer`, `recap`, `haiku`, `news`, `tldr`, `spoiler`, `profile_test`;
+/// `unknown` outside `metrics::with_llm_scope`. Label.
 pub const AI_AGENT: &str = "ai.agent";
-/// AI profile name. Label.
+/// AI profile name; `unknown` outside `metrics::with_llm_scope`. Label.
 pub const AI_PROFILE: &str = "ai.profile";
 /// Turn session nonce (the Langfuse session). Never a label.
 pub const AI_TURN_SESSION_ID: &str = "ai.turn.session_id";
 /// How a Turn ended: `reply`, `notice`, `silent`. Label.
 pub const AI_TURN_OUTCOME: &str = "ai.turn.outcome";
+/// Memory file kind: `soul`, `lore`, `character_sheet`, `scratch`. Label.
+pub const MEMORY_KIND: &str = "memory.kind";
 
 /// Tracked Flight callsign. Never a label.
 pub const AVIATION_FLIGHT_CALLSIGN: &str = "aviation.flight.callsign";

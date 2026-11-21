@@ -12,7 +12,7 @@ use crate::twitch::ChatSender;
 use crate::util::clock::Clock;
 
 use super::{
-    TrackerCommand,
+    FlightPhase, TrackedFlight, TrackerCommand,
     commands::{process_command, try_poll_all_flights_with_commands},
     schedule::next_poll_at,
     state::load_tracker_state,
@@ -49,6 +49,8 @@ where
             info!("Flight tracker lifecycle cancelled, shutting down");
             return Ok(());
         }
+        // Startup, and after every command or poll cycle.
+        record_flights_tracked(&state.flights);
 
         if state.flights.is_empty() {
             let cmd = tokio::select! {
@@ -160,6 +162,7 @@ where
             let Some(next_at) = next_at else {
                 return Ok(());
             };
+            record_flights_tracked(&state.flights);
 
             let cmd = tokio::select! {
                 biased;
@@ -204,4 +207,12 @@ fn command_span(cmd: &TrackerCommand) -> Span {
         TrackerCommand::DeleteFromWeb { .. } => "delete_from_web",
     };
     info_span!(parent: None, "tracker.command", aviation.tracker.command = kind)
+}
+
+/// `tracker.flights.tracked` per Flight Phase, empty phases as 0.
+fn record_flights_tracked(flights: &[TrackedFlight]) {
+    crate::util::observability::metrics::flights_tracked(FlightPhase::ALL.map(|phase| {
+        let count = flights.iter().filter(|f| f.phase == phase).count();
+        (phase.label(), count as u64)
+    }));
 }

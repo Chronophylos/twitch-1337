@@ -102,6 +102,7 @@ pub async fn run_latency_handler<T, L>(
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {
                                 warn!(skipped = n, "Latency handler lagged during PONG wait");
+                                crate::util::observability::metrics::broadcast_lagged("latency", n);
                             }
                             _ => {}
                         }

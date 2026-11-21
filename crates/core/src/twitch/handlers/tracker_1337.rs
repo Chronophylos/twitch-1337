@@ -561,6 +561,7 @@ async fn monitor_1337_messages(
             }
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
                 error!(skipped, "1337 handler lagged, skipped messages");
+                crate::util::observability::metrics::broadcast_lagged("tracker_1337", skipped);
             }
             Err(broadcast::error::RecvError::Closed) => {
                 debug!("Broadcast channel closed, 1337 monitor exiting");

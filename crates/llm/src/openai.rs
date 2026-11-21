@@ -6,12 +6,12 @@ use tracing::{debug, error, instrument, trace, warn};
 
 use crate::client::LlmClient;
 use crate::error::{LlmError, Result};
-use crate::observe::TokenUsage;
 use crate::types::{
     ChatCompletionRequest, ToolArgsError, ToolCall, ToolChatCompletionRequest,
     ToolChatCompletionResponse, TraceIds,
 };
-use crate::util::{record_chat_outcome, truncate_for_echo};
+use crate::usage::TokenUsage;
+use crate::util::{record_chat_outcome, reported_usage, truncate_for_echo};
 
 // --- Internal serde types for OpenAI-compatible API ---
 
@@ -581,7 +581,7 @@ impl LlmClient for OpenAiClient {
         );
         let result = self.chat_completion_untraced(request).await;
         crate::observe::finish_generation(rec, &result, |(text, usage)| (text.clone(), *usage));
-        record_chat_outcome(&result, token_counts(&result));
+        record_chat_outcome(&result, reported_usage(&result));
         result.map(|(text, _)| text)
     }
 
@@ -610,15 +610,9 @@ impl LlmClient for OpenAiClient {
         crate::observe::finish_generation(rec, &result, |(resp, usage)| {
             (format_tool_output(resp), *usage)
         });
-        record_chat_outcome(&result, token_counts(&result));
+        record_chat_outcome(&result, reported_usage(&result));
         result.map(|(resp, _)| resp)
     }
-}
-
-/// Input/output token counts of a finished completion, if reported.
-fn token_counts<T>(result: &Result<(T, Option<TokenUsage>)>) -> Option<(u64, u64)> {
-    let usage = result.as_ref().ok()?.1?;
-    Some((usage.input_tokens.into(), usage.output_tokens.into()))
 }
 
 fn format_tool_output(resp: &ToolChatCompletionResponse) -> String {

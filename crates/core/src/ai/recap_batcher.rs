@@ -552,7 +552,7 @@ pub async fn run_recap_batcher(
                     );
                     continue;
                 };
-                recap_batcher_tick(BatcherTickParams {
+                let tick = recap_batcher_tick(BatcherTickParams {
                     handle: &handle,
                     settings: &settings,
                     llm: client.as_ref(),
@@ -561,8 +561,8 @@ pub async fn run_recap_batcher(
                     self_logins: &self_logins,
                     last_seen_profile: &mut last_seen_profile,
                     backoff: &mut backoff,
-                })
-                .await;
+                });
+                crate::util::observability::metrics::with_llm_scope("recap", name, tick).await;
             }
         }
     }

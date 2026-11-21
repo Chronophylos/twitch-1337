@@ -106,21 +106,23 @@ pub async fn check(
         }
     };
     let req = request(profile, input, game);
-    let resp = match decide(
+    let call = decide(
         api,
         &prepared.endpoint,
         Some(prepared.key.expose_secret()),
         &req,
         Duration::from_secs(profile.timeout),
-    )
-    .await
-    {
-        Ok(resp) => resp,
-        Err(error) => {
-            error!(?error, model = %profile.model, "spoiler decision call failed");
-            return Outcome::Broken;
-        }
-    };
+    );
+    let resp =
+        match crate::util::observability::metrics::with_llm_scope("spoiler", &profile.name, call)
+            .await
+        {
+            Ok(resp) => resp,
+            Err(error) => {
+                error!(?error, model = %profile.model, "spoiler decision call failed");
+                return Outcome::Broken;
+            }
+        };
     let Some(answer) = resp.answers.get(QUESTION_KEY) else {
         error!(model = %resp.model, "spoiler decision response has no answer");
         return Outcome::Broken;

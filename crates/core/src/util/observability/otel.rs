@@ -45,7 +45,7 @@ use crate::settings::{OtelSettings, SettingsHandle, Subscription};
 use crate::util::redact::redact_secrets;
 
 /// `service.name` on every signal.
-const SERVICE_NAME: &str = "twitch-1337";
+pub(super) const SERVICE_NAME: &str = "twitch-1337";
 
 /// Per-request deadline, retries included. The collector is on the LAN; a
 /// slower answer means it is down, and the batch is dropped.

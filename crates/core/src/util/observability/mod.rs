@@ -7,6 +7,7 @@
 //! once config.toml and the settings store are loaded.
 
 pub mod attr;
+pub mod metrics;
 mod otel;
 mod report;
 
@@ -117,6 +118,7 @@ impl Observability {
     ) -> Option<OtelExport> {
         let export = self.otel.enable(config?, settings)?;
         export.set_global_meter_provider();
+        metrics::init(opentelemetry::global::meter(otel::SERVICE_NAME));
         Some(export)
     }
 }

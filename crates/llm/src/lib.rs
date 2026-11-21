@@ -9,6 +9,7 @@ pub mod openai;
 
 mod client;
 mod types;
+mod usage;
 mod util;
 
 pub use agent::{
@@ -17,7 +18,7 @@ pub use agent::{
 pub use client::LlmClient;
 pub use error::{LlmError, Result};
 pub use observe::{
-    GenerationEvent, LlmObserver, SpanEvent, TokenUsage, TurnParams, with_optional_turn, with_turn,
+    GenerationEvent, LlmObserver, SpanEvent, TurnParams, with_optional_turn, with_turn,
 };
 pub use ollama::OllamaClient;
 pub use openai::OpenAiClient;
@@ -26,3 +27,4 @@ pub use types::{
     ToolChatCompletionRequest, ToolChatCompletionResponse, ToolDefinition, ToolResultMessage,
     TraceIds,
 };
+pub use usage::{TokenUsage, set_usage_hook};

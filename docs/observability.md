@@ -121,12 +121,23 @@ licence: secrets still stay in `SecretString` and out of log fields.
   derived by the collector. Never hand-write a counter or histogram for
   something a span already measures; add a bounded attribute to the span
   instead.
-- **Instruments only for state** spans cannot express: `irc.latency` (gauge),
-  `tracker.flights.tracked` (gauge, by phase), `broadcast.lagged` (counter, by
-  handler), `llm.tokens` / `llm.cost` (counter, by agent and profile),
-  `memory.bytes` (gauge, by file kind), dropped-export counters
-  (`otel.sdk.exporter.span.exported` / `otel.sdk.exporter.log.exported`,
-  failures labelled `error.type`).
+- **Instruments only for state** spans cannot express. All are built in
+  `util::observability::metrics` once `enable_otel` has set the meter
+  provider; without `[otel]` every recording call returns at once.
+
+  |Instrument|Kind|Labels|Recorded|
+  |---|---|---|---|
+  |`irc.latency` (ms)|gauge|—|latency EMA, read at each export|
+  |`tracker.flights.tracked`|gauge|`aviation.flight.phase`|every phase (zeros included) after each tracker command and poll cycle|
+  |`broadcast.lagged`|counter|`bot.handler`|messages skipped on `RecvError::Lagged`|
+  |`llm.tokens`|counter|`ai.agent`, `ai.profile`, `gen_ai.token.type`|every completion that reports usage|
+  |`llm.cost` (USD)|counter|`ai.agent`, `ai.profile`|every completion that reports a cost (OpenRouter)|
+  |`memory.bytes`|gauge|`memory.kind`|`*.md` bytes on disk, sampled every 60 s on a blocking thread; the export reads the cached sizes|
+  |`otel.sdk.exporter.span.exported` / `otel.sdk.exporter.log.exported`|counter|`error.type` on failures|items per finished export; a failed export is a dropped batch|
+
+  `llm` hands usage to a hook (`llm::set_usage_hook`); the counters take
+  `ai.agent` / `ai.profile` from the enclosing `metrics::with_llm_scope`, or
+  `unknown` outside one. Wrap every new LLM call site in a scope.
 - **Labels are bounded sets.** Never a user id, login, message text, callsign,
   or other open-ended value as a metric label — those belong on spans and logs.
 
@@ -146,6 +157,7 @@ field syntax needs literals, so spans and logs rely on this table).
 |`gen_ai.operation.name`|`chat`, `execute_tool`, …|yes|
 |`gen_ai.tool.name`|tool called by the model; `unknown` when it names a tool the request did not offer|yes|
 |`gen_ai.usage.input_tokens` / `output_tokens`|token counts|no (value)|
+|`gen_ai.token.type`|token direction of an `llm.tokens` count: `input`, `output`|yes|
 |`http.request.method`, `http.response.status_code`, `http.route`|HTTP, client and server|yes (`url.full` no)|
 |`server.address`|upstream host; `dynamic` for a URL a viewer or the model supplied (`read_url`, link resolution)|yes|
 |`error.type`|error variant name; for HTTP the status code (`503`) or the failure class (`timeout`, `connect`, `decode`, `body`, `TooLarge`, …)|yes|
@@ -156,12 +168,13 @@ field syntax needs literals, so spans and logs rely on this table).
 |`bot.command.name`|canonical command ID (`ai`, `news`, `ping_trigger`), the same for every alias and ping|yes|
 |`bot.schedule.name`|schedule|yes|
 |`ping.name`|Ping|yes|
-|`ai.agent`|`aurora`, `grok`, `dreamer`, …|yes|
-|`ai.profile`|profile name|yes|
+|`ai.agent`|agent, or the feature calling the LLM outside one: `aurora`, `grok`, `dreamer`, `recap`, `haiku`, `news`, `tldr`, `spoiler`, `profile_test`; `unknown` for a call outside `with_llm_scope`|yes|
+|`ai.profile`|profile name; `unknown` for a call outside `with_llm_scope`|yes|
+|`memory.kind`|Memory / Scratch file kind: `soul`, `lore`, `character_sheet`, `scratch`|yes|
 |`ai.turn.session_id`|Turn session nonce (Langfuse session)|**no**|
 |`ai.turn.outcome`|how a Turn ended: `reply`, `notice`, `silent`|yes|
 |`aviation.flight.callsign`|Tracked Flight callsign|**no**|
-|`aviation.flight.phase`|Flight Phase|yes|
+|`aviation.flight.phase`|Flight Phase: `unknown`, `ground`, `takeoff`, `climb`, `cruise`, `descent`, `approach`, `landing`|yes|
 |`aviation.provider`|ADS-B / Aviationstack source|yes|
 |`aviation.tracker.flights`|Tracked Flights at the start of a poll cycle|no (value)|
 |`aviation.tracker.command`|flight tracker command kind (`track`, `untrack`, `status`, `info`, `snapshot`, `delete_from_web`)|yes|

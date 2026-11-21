@@ -30,7 +30,10 @@ pub async fn run_transcript_tap(
         }
         let inbound = match message {
             Ok(inbound) => inbound,
-            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                crate::util::observability::metrics::broadcast_lagged("transcript", skipped);
+                continue;
+            }
             Err(_) => return,
         };
         let ServerMessage::Privmsg(p) = &inbound.msg else {

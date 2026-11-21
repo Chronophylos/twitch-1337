@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use parking_lot::Mutex;
 
 use crate::types::{Message, ToolCall, ToolResultMessage};
+use crate::usage::TokenUsage;
 
 /// Sink for finished generations and nested spans. Implemented by the
 /// Langfuse exporter in `core`; tests use a recording double.
@@ -28,16 +29,6 @@ pub struct TurnParams {
     pub user: Option<String>,
     pub session_id: Option<String>,
     pub tags: Vec<String>,
-}
-
-/// Token counts plus optional billed USD from the provider response.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TokenUsage {
-    pub input_tokens: u32,
-    pub output_tokens: u32,
-    /// OpenRouter `usage.cost` (USD credits). `None` for providers that
-    /// only return token counts.
-    pub cost_usd: Option<f64>,
 }
 
 /// A finished LLM generation observation.
