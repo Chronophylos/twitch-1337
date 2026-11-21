@@ -521,7 +521,9 @@ mod tests {
             })
             .await
         };
-        with_turn("aurora", "main", "sess-1", Some("alice"), turn).instrument(command).await;
+        with_turn("aurora", "main", "sess-1", Some("alice"), turn)
+            .instrument(command)
+            .await;
     }
 
     /// The Turn tree reaches Langfuse with `[otel]` absent: the Turn as the
